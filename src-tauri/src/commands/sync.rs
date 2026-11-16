@@ -4260,6 +4260,7 @@ pub(crate) mod tests {
             let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
 
             let s_data_dir = data_dir.clone();
+            let s_base_url = base_url.clone();
             let s_admin_pub = Arc::clone(&admin_pub);
             let s_members = Arc::clone(&members);
             let s_channel_members = Arc::clone(&channel_members);
@@ -4276,6 +4277,7 @@ pub(crate) mod tests {
                         }
                         Ok((mut stream, _)) = listener.accept() => {
                             let data_dir = s_data_dir.clone();
+                            let base_url = s_base_url.clone();
                             let admin_pub = Arc::clone(&s_admin_pub);
                             let members = Arc::clone(&s_members);
                             let channel_members = Arc::clone(&s_channel_members);
@@ -4352,7 +4354,7 @@ pub(crate) mod tests {
                                     let cur_admin = admin_pub.lock().unwrap().clone();
                                     let info_json = serde_json::json!({
                                         "drop_pub": cur_admin,
-                                        "read_url": format!("http://localhost/{}", data_dir),
+                                        "read_url": format!("{}/{}", base_url, data_dir),
                                         "register_url": null,
                                         "channels": ["card", "wot", "backup", "post"]
                                     });

@@ -12,8 +12,10 @@ use tauri::Manager;
 const PROFILE_METADATA_FILE: &str = "profile_metadata.json";
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-struct ProfileMetadata {
-    last_used: String,
+pub(crate) struct ProfileMetadata {
+    pub(crate) last_used: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) user_id: Option<String>,
 }
 
 fn get_metadata_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -36,6 +38,20 @@ fn load_profile_metadata(app: &tauri::AppHandle) -> Result<HashMap<String, Profi
         .map_err(|e| format!("Failed to parse profile metadata: {}", e))
 }
 
+pub(crate) fn load_profile_metadata_map_from_dir(wallet_data_dir: &std::path::Path) -> HashMap<String, (String, Option<String>)> {
+    let metadata_path = wallet_data_dir.join(PROFILE_METADATA_FILE);
+    if !metadata_path.exists() {
+        return HashMap::new();
+    }
+    let Ok(content) = fs::read_to_string(&metadata_path) else {
+        return HashMap::new();
+    };
+    let Ok(map) = serde_json::from_str::<HashMap<String, ProfileMetadata>>(&content) else {
+        return HashMap::new();
+    };
+    map.into_iter().map(|(k, v)| (k, (v.last_used, v.user_id))).collect()
+}
+
 fn save_profile_metadata(app: &tauri::AppHandle, metadata: &HashMap<String, ProfileMetadata>) -> Result<(), String> {
     let metadata_path = get_metadata_path(app)?;
     
@@ -52,17 +68,80 @@ fn save_profile_metadata(app: &tauri::AppHandle, metadata: &HashMap<String, Prof
         .map_err(|e| format!("Failed to write profile metadata: {}", e))
 }
 
-fn update_profile_last_used(app: &tauri::AppHandle, folder_name: &str) -> Result<(), String> {
-    let mut metadata = load_profile_metadata(app)?;
-    
+pub(crate) fn record_profile_metadata_in_dir(
+    wallet_data_dir: &std::path::Path,
+    folder_name: &str,
+    user_id: Option<String>,
+) -> Result<(), String> {
+    let metadata_path = wallet_data_dir.join(PROFILE_METADATA_FILE);
+    let mut metadata: HashMap<String, ProfileMetadata> = if metadata_path.exists() {
+        fs::read_to_string(&metadata_path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
+    } else {
+        HashMap::new()
+    };
+
+    let existing_uid = metadata.get(folder_name).and_then(|m| m.user_id.clone());
     metadata.insert(
         folder_name.to_string(),
         ProfileMetadata {
             last_used: Utc::now().to_rfc3339(),
+            user_id: user_id.or(existing_uid),
         },
     );
-    
+
+    if let Some(parent) = metadata_path.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("Failed to create metadata directory: {}", e))?;
+    }
+    let content = serde_json::to_string_pretty(&metadata).map_err(|e| e.to_string())?;
+    fs::write(&metadata_path, content).map_err(|e| e.to_string())
+}
+
+pub(crate) fn record_profile_metadata(
+    app: &tauri::AppHandle,
+    folder_name: &str,
+    user_id: Option<String>,
+) -> Result<(), String> {
+    let mut metadata = load_profile_metadata(app).unwrap_or_default();
+    let existing_uid = metadata.get(folder_name).and_then(|m| m.user_id.clone());
+    metadata.insert(
+        folder_name.to_string(),
+        ProfileMetadata {
+            last_used: Utc::now().to_rfc3339(),
+            user_id: user_id.or(existing_uid),
+        },
+    );
     save_profile_metadata(app, &metadata)
+}
+
+pub(crate) fn remove_profile_metadata_entry_in_dir(
+    wallet_data_dir: &std::path::Path,
+    folder_name: &str,
+) -> Result<(), String> {
+    let metadata_path = wallet_data_dir.join(PROFILE_METADATA_FILE);
+    if !metadata_path.exists() {
+        return Ok(());
+    }
+    let mut metadata: HashMap<String, ProfileMetadata> = fs::read_to_string(&metadata_path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    if metadata.remove(folder_name).is_some() {
+        let content = serde_json::to_string_pretty(&metadata).map_err(|e| e.to_string())?;
+        fs::write(&metadata_path, content).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+pub(crate) fn remove_profile_metadata_entry(app: &tauri::AppHandle, folder_name: &str) -> Result<(), String> {
+    if let Ok(mut metadata) = load_profile_metadata(app) {
+        if metadata.remove(folder_name).is_some() {
+            save_profile_metadata(app, &metadata)?;
+        }
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -129,7 +208,7 @@ pub fn list_profiles(state: tauri::State<AppState>, app: tauri::AppHandle) -> Re
 
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
-pub fn create_profile(
+pub async fn create_profile(
     profile_name: String,
     mnemonic: String,
     passphrase: Option<String>,
@@ -139,7 +218,8 @@ pub fn create_profile(
     language: MnemonicLanguage,
     retain_mnemonic: Option<bool>,
     initial_reach_preset: Option<String>,
-    state: tauri::State<AppState>,
+    initial_sync_targets: Option<Vec<crate::models::ResolvedSyncTargetDto>>,
+    state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<(), FrontendError> {
     info!("Attempting to create profile '{}' with language {:?}...", profile_name, language);
@@ -147,25 +227,38 @@ pub fn create_profile(
         let mut service = state.service.lock().unwrap();
         let core_language = language.into();
         let retain = retain_mnemonic.unwrap_or(true);
-        match service.create_profile(&profile_name, &mnemonic, passphrase.as_deref(), user_prefix.as_deref(), &password, core_language, local_instance_id, retain) {
+        let cleaned_prefix = user_prefix
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        match service.create_profile(
+            &profile_name,
+            &mnemonic,
+            passphrase.as_deref(),
+            cleaned_prefix,
+            &password,
+            core_language,
+            local_instance_id,
+            retain,
+        ) {
             Ok(()) => {
                 info!("Profile created successfully!");
 
-                // Get the folder_name by listing profiles and finding the one matching profile_name
                 let folder_name = service.list_profiles()
                     .ok()
                     .and_then(|profiles| profiles.into_iter().find(|p| p.profile_name == profile_name))
                     .map(|p| p.folder_name);
+                let user_id = service
+                    .with_wallet_and_identity(|_, id| id.user_id.clone())
+                    .ok();
 
-                // Update last_used timestamp for the new profile
                 if let Some(ref folder) = folder_name {
-                    if let Err(e) = update_profile_last_used(&app, folder) {
-                        error!("Failed to update profile last_used timestamp: {}", e);
-                        // Don't fail profile creation if metadata update fails
+                    if let Err(e) = record_profile_metadata(&app, folder, user_id) {
+                        error!("Failed to update profile metadata: {}", e);
                     }
                 }
 
-                // 1. Initialisiere und speichere Standard-Einstellungen für das neue Profil
+                // 1. Initialize and save default settings for the new profile
                 let default_settings = AppSettings::default();
                 let settings_bytes = serde_json::to_vec(&default_settings).map_err(|e| FrontendError::from(e.to_string()))?;
 
@@ -173,7 +266,7 @@ pub fn create_profile(
                     .save_encrypted_data(SETTINGS_KEY, &settings_bytes, Some(&password))
                     .map_err(|e| FrontendError::from(format!("Failed to save default settings: {}", e)))?;
 
-                // 2. Initialisiere die Session und den Cache (lädt Settings & leere History)
+                // 2. Initialize session and cache
                 state.initialize_profile_session(&mut service, &password).map_err(FrontendError::from)?;
             }
             Err(e) => {
@@ -185,7 +278,22 @@ pub fn create_profile(
 
     if let Some(preset) = initial_reach_preset {
         if matches!(preset.as_str(), "near" | "medium" | "far") {
-            crate::commands::settings_cmd::apply_reach_preset_impl(preset, Some(password), &state)?;
+            crate::commands::settings_cmd::apply_reach_preset_impl(preset, Some(password.clone()), &state)?;
+        }
+    }
+
+    if let Some(targets) = initial_sync_targets {
+        for target in targets {
+            let _ = crate::commands::sync::save_public_sync_impl(
+                target.write_url,
+                target.read_url,
+                target.drop_pub,
+                target.register_url,
+                true,
+                Some(password.clone()),
+                &state,
+            )
+            .await;
         }
     }
 
@@ -208,13 +316,13 @@ pub fn login(
         Ok(()) => {
             info!("Login successful!");
 
-            // Update last_used timestamp for this profile
-            if let Err(e) = update_profile_last_used(&app, &folder_name) {
-                error!("Failed to update profile last_used timestamp: {}", e);
-                // Don't fail login if metadata update fails
+            let user_id = service
+                .with_wallet_and_identity(|_, id| id.user_id.clone())
+                .ok();
+            if let Err(e) = record_profile_metadata(&app, &folder_name, user_id) {
+                error!("Failed to update profile metadata: {}", e);
             }
 
-            // Initialisiere die Session und den Cache
             state.initialize_profile_session(&mut service, &password).map_err(FrontendError::from)?;
 
             let app_handle = app.clone();
@@ -251,9 +359,14 @@ pub fn recover_wallet_and_set_new_password(
     match service.recover_wallet_and_set_new_password(&folder_name, &mnemonic, passphrase.as_deref(), &new_password, core_language, local_instance_id) {
         Ok(()) => {
             info!("Wallet recovered and new password set successfully!");
-            
-            // NEU: Nach der Recovery müssen wir die Session und den Cache ebenfalls initialisieren,
-            // da der User im Frontend direkt ins Dashboard (logged_in) wechselt.
+
+            let user_id = service
+                .with_wallet_and_identity(|_, id| id.user_id.clone())
+                .ok();
+            if let Err(e) = record_profile_metadata(&app, &folder_name, user_id) {
+                error!("Failed to update profile metadata: {}", e);
+            }
+
             state.initialize_profile_session(&mut service, &new_password).map_err(FrontendError::from)?;
 
             let app_handle = app.clone();
@@ -286,13 +399,14 @@ pub fn handover_to_this_device(
     match service.handover_to_this_device(&folder_name, &password, local_instance_id) {
         Ok(()) => {
             info!("Handover successful! Device bound to wallet.");
-            
-            // Update last_used timestamp
-            if let Err(e) = update_profile_last_used(&app, &folder_name) {
-                error!("Failed to update profile last_used timestamp: {}", e);
+
+            let user_id = service
+                .with_wallet_and_identity(|_, id| id.user_id.clone())
+                .ok();
+            if let Err(e) = record_profile_metadata(&app, &folder_name, user_id) {
+                error!("Failed to update profile metadata: {}", e);
             }
 
-            // Initialisiere die Session und den Cache
             state.initialize_profile_session(&mut service, &password).map_err(FrontendError::from)?;
 
             let app_handle = app.clone();
@@ -371,11 +485,7 @@ pub fn delete_profile(folder_name: String, password: String, state: tauri::State
     service.delete_profile(&folder_name, &password).map_err(FrontendError::from)?;
     
     // 2. Remove metadata entry
-    if let Ok(mut metadata) = load_profile_metadata(&app) {
-        if metadata.remove(&folder_name).is_some() {
-            let _ = save_profile_metadata(&app, &metadata);
-        }
-    }
+    let _ = remove_profile_metadata_entry(&app, &folder_name);
     
     info!("Profile '{}' deleted successfully.", folder_name);
     Ok(())
@@ -409,6 +519,7 @@ mod tests {
         // Test that ProfileMetadata can be serialized and deserialized
         let metadata = ProfileMetadata {
             last_used: Utc::now().to_rfc3339(),
+            user_id: None,
         };
 
         let serialized = serde_json::to_string(&metadata);

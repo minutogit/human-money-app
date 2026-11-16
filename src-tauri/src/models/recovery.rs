@@ -116,6 +116,8 @@ pub struct ActiveRecoverySessionDto {
     pub created_at: u64,
     pub name_hint: Option<String>,
     pub request_uri: String,
+    pub session_mode: String,
+    pub target_folder_name: Option<String>,
     pub owner_did: Option<String>,
     pub owner_display_name: Option<String>,
     pub rotation_epoch: Option<u32>,
@@ -135,6 +137,8 @@ pub struct ActiveRecoverySessionFile {
     pub created_at: u64,
     pub name_hint: Option<String>,
     pub request_uri: String,
+    pub session_mode: String,
+    pub target_folder_name: Option<String>,
     pub replies: Vec<humoco_market::GuardianReleasePayload>,
 }
 
@@ -157,30 +161,33 @@ pub struct ApproveGuardianRecoveryResultDto {
     pub owner_display_name: String,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// Decoded emergency kit URI payload for pre-filling the unified words/sheet UI.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct EmergencyKitRestoreInput {
-    #[serde(default)]
-    pub kit_uri: Option<String>,
-    #[serde(default)]
-    pub manual_mnemonic: Option<String>,
-    #[serde(default)]
-    pub manual_language_code: Option<u8>,
-    #[serde(default)]
-    pub manual_passphrase: Option<String>,
-    #[serde(default)]
-    pub manual_user_prefix: Option<String>,
-    #[serde(default)]
-    pub manual_sync_urls: Vec<String>,
+pub struct InspectedEmergencyKitDto {
+    pub phrase: String,
+    pub word_count: usize,
+    pub language: crate::models::MnemonicLanguage,
+    pub has_bip39_passphrase: bool,
+    pub user_prefix: Option<String>,
+    pub sync_urls: Vec<String>,
+    pub sync_descriptors_json: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecoveryCompletionResultDto {
+    pub folder_name: String,
     pub profile_name: String,
     pub mode: String,
     pub outcome: String,
     pub backup_epoch: Option<u64>,
     pub backup_tx_nonce: Option<u64>,
+    pub active_voucher_queries_count: usize,
+    pub reconciled_spent_count: usize,
+    pub restored_standards_count: usize,
+    pub l2_reconciliation_status: String,
     pub pending_restore_l2_reconciliation: bool,
+    pub local_collision: Option<crate::models::LocalProfileCollisionDto>,
+    pub resolved_sync_targets: Vec<crate::models::ResolvedSyncTargetDto>,
 }

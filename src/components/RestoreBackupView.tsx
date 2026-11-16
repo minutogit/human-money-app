@@ -1,5 +1,5 @@
 // src/components/RestoreBackupView.tsx
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { open } from '@tauri-apps/plugin-dialog';
 import { AuthLayout } from './AuthLayout';
@@ -8,23 +8,33 @@ import { Button } from './ui/Button';
 import { BackButton } from './ui/BackButton';
 import { AlertBanner } from './ui/AlertBanner';
 import { Input } from './ui/Input';
-import { Textarea } from './ui/Textarea';
-import { HelpIcon } from './ui/HelpIcon';
+import { SeedPhraseInput, SeedPhraseValue } from './ui/SeedPhraseInput';
+import { SocialRecoveryFlow } from './SocialRecoveryFlow';
 import { backupService } from '../services/backupService';
+import { recoveryService } from '../services/recoveryService';
+import { profileService } from '../services/profileService';
 import { authService } from '../services/authService';
-import { BackupProbeDto, BackupInspectionDto, RestoreOutcomeDto, MnemonicLanguage } from '../types';
-import { cleanSeedText } from '../utils/seedUtils';
+import {
+    ActiveRecoverySessionDto,
+    BackupProbeDto,
+    BackupInspectionDto,
+    LocalProfileCollisionDto,
+    ResolvedSyncTargetDto,
+    RestoreOutcomeDto,
+    SyncBackupProbeResultDto,
+} from '../types';
 import { translateError, stringifyError } from '../utils/errorHelper';
 import { logger } from '../utils/log';
-import { SocialAndSheetRecoveryFlow } from './SocialAndSheetRecoveryFlow';
-import { 
-    FolderSync, 
-    FileArchive, 
-    KeyRound, 
-    Lock, 
-    CheckCircle2, 
-    ShieldCheck, 
-    ArrowRight, 
+import {
+    Users,
+    KeyRound,
+    FileArchive,
+    FolderSync,
+    Lock,
+    CheckCircle2,
+    ShieldCheck,
+    ArrowRight,
+    ArrowLeft,
     RefreshCw,
     Folder,
     FileText,
@@ -32,63 +42,413 @@ import {
     Layers,
     Hash,
     Server,
-    Search,
     AlertTriangle,
-    ChevronDown
+    UploadCloud,
+    Sparkles,
 } from 'lucide-react';
 
 export interface RestoreBackupViewProps {
     onRestoreSuccess: (outcome: RestoreOutcomeDto) => void;
-    onSwitchToRecreate: () => void;
     onBack: () => void;
     initialPayload?: string;
+    initialBackupPath?: string;
+    initialMethod?: 'social' | 'words_or_sheet' | 'file_or_folder';
 }
 
-type WizardStep = 'select_source' | 'sync_source' | 'unlock_and_inspect' | 'completed';
+type TopMethod = 'choose' | 'social' | 'words_or_sheet' | 'file_or_folder' | 'completed';
+type WordsSubPhase = 'input' | 'direct_setup' | 'sync_found' | 'sync_not_found' | 'sync_unreachable';
+
+const EMPTY_SEED_STATE: SeedPhraseValue = {
+    mnemonic: '',
+    wordCount: 12,
+    language: 'english',
+    passphrase: '',
+    userPrefix: '',
+    isValid: false,
+    detectedKit: null,
+};
 
 export const RestoreBackupView: React.FC<RestoreBackupViewProps> = ({
     onRestoreSuccess,
-    onSwitchToRecreate,
     onBack,
     initialPayload,
+    initialBackupPath,
+    initialMethod,
 }) => {
     const { t } = useTranslation();
 
-    const [step, setStep] = useState<WizardStep>('select_source');
+    const [method, setMethod] = useState<TopMethod>(() => {
+        if (initialMethod) return initialMethod;
+        if (initialBackupPath) return 'file_or_folder';
+        if (initialPayload?.includes('humoco://recovery-reply')) return 'social';
+        if (initialPayload?.includes('humoco://kit')) return 'words_or_sheet';
+        return 'choose';
+    });
+
+    // Active social session banner state
+    const [activeSocialSession, setActiveSocialSession] =
+        useState<ActiveRecoverySessionDto | null>(null);
+
+    // Words / Emergency Sheet flow state
+    const [wordsPhase, setWordsPhase] = useState<WordsSubPhase>('input');
+    const [seedState, setSeedState] = useState<SeedPhraseValue>(EMPTY_SEED_STATE);
+    const [syncInput, setSyncInput] = useState<string>('');
+    const [syncEdited, setSyncEdited] = useState<boolean>(false);
+    const [lastSyncInputs, setLastSyncInputs] = useState<string[]>([]);
+    const [syncProbe, setSyncProbe] = useState<SyncBackupProbeResultDto | null>(null);
+    const [resolvedSyncTargets, setResolvedSyncTargets] = useState<ResolvedSyncTargetDto[]>([]);
+    const [matchedSyncKeyKind, setMatchedSyncKeyKind] = useState<string | null>(null);
+    const [focusPrefixTrigger, setFocusPrefixTrigger] = useState<number>(0);
+
+    // File / Folder flow state
     const [sourcePath, setSourcePath] = useState<string>('');
     const [probe, setProbe] = useState<BackupProbeDto | null>(null);
-
-    // Drop restore state
-    const [syncInput, setSyncInput] = useState('');
-    const [isFetchingSync, setIsFetchingSync] = useState(false);
-    const [matchedSyncKeyKind, setMatchedSyncKeyKind] = useState<string | null>(null);
-    const [isReconcilingL2, setIsReconcilingL2] = useState(false);
-
-    // Credential state
     const [credentialMode, setCredentialMode] = useState<'password' | 'mnemonic'>('password');
-    const [backupPassword, setBackupPassword] = useState('');
-    const [selectedLanguage, setSelectedLanguage] = useState<MnemonicLanguage>('english');
-    const [wordCount, setWordCount] = useState<12 | 24>(12);
-    const [mnemonicWords, setMnemonicWords] = useState<string[]>(Array(12).fill(''));
-    const [inputMode, setInputMode] = useState<'words' | 'phrase'>('words');
-    const [rawPhrase, setRawPhrase] = useState('');
-    const [passphrase, setPassphrase] = useState('');
-    const [userPrefix, setUserPrefix] = useState('');
+    const [backupPassword, setBackupPassword] = useState<string>('');
+    const [fileSeedState, setFileSeedState] = useState<SeedPhraseValue>(EMPTY_SEED_STATE);
+    const [isDraggingBackup, setIsDraggingBackup] = useState<boolean>(false);
 
-    // Inspection state
-    const [isInspecting, setIsInspecting] = useState(false);
+    // Shared Inspection / Collision / Credentials / Completion state
     const [inspection, setInspection] = useState<BackupInspectionDto | null>(null);
-
-    // New device password state
-    const [newPassword, setNewPassword] = useState('');
-    const [confirmNewPassword, setConfirmNewPassword] = useState('');
-    const [isRestoring, setIsRestoring] = useState(false);
+    const [activeCollision, setActiveCollision] = useState<LocalProfileCollisionDto | null>(null);
+    const [collisionChoice, setCollisionChoice] = useState<'reset_pw' | 'replace'>('reset_pw');
+    const [profileName, setProfileName] = useState<string>('');
+    const [newPassword, setNewPassword] = useState<string>('');
+    const [confirmNewPassword, setConfirmNewPassword] = useState<string>('');
     const [restoreOutcome, setRestoreOutcome] = useState<RestoreOutcomeDto | null>(null);
 
-    // Feedback
-    const [feedback, setFeedback] = useState<{ type: 'error' | 'success'; message: string } | null>(null);
+    // Busy & feedback flags
+    const [isBusy, setIsBusy] = useState<boolean>(false);
+    const [isReconcilingL2, setIsReconcilingL2] = useState<boolean>(false);
+    const [feedback, setFeedback] = useState<{ type: 'error' | 'success'; message: string } | null>(
+        null
+    );
 
-    // Step 1: Probe a file or folder
+    // Load active social recovery session for resume banner
+    useEffect(() => {
+        let active = true;
+        recoveryService
+            .getActiveRecoverySession()
+            .then((session) => {
+                if (!active || !session) return;
+                if (!session.sessionMode || session.sessionMode === 'restore_new_device') {
+                    setActiveSocialSession(session);
+                }
+            })
+            .catch(() => {
+                // Ignore session load failure
+            });
+        return () => {
+            active = false;
+        };
+    }, []);
+
+    // React to dynamic prop updates (deep links or dropped files)
+    useEffect(() => {
+        if (initialMethod) {
+            setMethod(initialMethod);
+        } else if (initialPayload?.includes('humoco://recovery-reply')) {
+            setMethod('social');
+        } else if (initialPayload?.includes('humoco://kit')) {
+            setMethod('words_or_sheet');
+        }
+    }, [initialMethod, initialPayload]);
+
+    const probeAndAdvanceFile = useCallback(
+        async (path: string) => {
+            setFeedback(null);
+            setIsBusy(true);
+            try {
+                const probeResult = await backupService.probeBackup(path);
+                setSourcePath(path);
+                setProbe(probeResult);
+                setInspection(null);
+                setActiveCollision(null);
+                setMatchedSyncKeyKind(null);
+                setCredentialMode(probeResult.supportsPasswordRestore ? 'password' : 'mnemonic');
+                setMethod('file_or_folder');
+            } catch (err) {
+                logger.error(`Failed to probe backup at ${path}: ${stringifyError(err)}`);
+                setFeedback({ type: 'error', message: translateError(err, t) });
+            } finally {
+                setIsBusy(false);
+            }
+        },
+        [t]
+    );
+
+    useEffect(() => {
+        if (initialBackupPath) {
+            void probeAndAdvanceFile(initialBackupPath);
+        }
+    }, [initialBackupPath, probeAndAdvanceFile]);
+
+    const handleSeedStateChange = useCallback(
+        (next: SeedPhraseValue) => {
+            setSeedState(next);
+            if (!syncEdited && next.detectedKit && next.detectedKit.syncUrls.length > 0) {
+                setSyncInput(next.detectedKit.syncUrls.join(', '));
+            }
+        },
+        [syncEdited]
+    );
+
+    const resolveDefaultCollisionChoice = useCallback(
+        (coll: LocalProfileCollisionDto, insp: BackupInspectionDto): 'reset_pw' | 'replace' => {
+            const localEpoch = coll.localEpoch ?? 0;
+            const localNonce = coll.localTxNonce ?? 0;
+            const localNewerOrEqual =
+                localEpoch > insp.epoch || (localEpoch === insp.epoch && localNonce >= insp.txNonce);
+            if (localNewerOrEqual && !coll.isLockedOrConflicted) {
+                return 'reset_pw';
+            }
+            return 'replace';
+        },
+        []
+    );
+
+    // --- Header Back Navigation ---
+    const handleHeaderBack = () => {
+        setFeedback(null);
+        if (method === 'words_or_sheet') {
+            if (wordsPhase !== 'input') {
+                setWordsPhase('input');
+                setInspection(null);
+                setActiveCollision(null);
+                return;
+            }
+            setMethod('choose');
+            return;
+        }
+        if (method === 'file_or_folder') {
+            if (inspection) {
+                setInspection(null);
+                setActiveCollision(null);
+                return;
+            }
+            if (probe) {
+                setProbe(null);
+                setSourcePath('');
+                return;
+            }
+            setMethod('choose');
+            return;
+        }
+        if (method === 'social') {
+            setMethod('choose');
+            return;
+        }
+        onBack();
+    };
+
+    // --- Card 2: Words / Sheet / Subaccount / Sync Handlers ---
+    const runSyncProbe = async (inputsToProbe: string[]) => {
+        setIsBusy(true);
+        setFeedback(null);
+        try {
+            const probeRes = await backupService.probeSyncBackup({
+                syncInputs: inputsToProbe,
+                mnemonic: seedState.mnemonic,
+                passphrase: seedState.passphrase || null,
+                userPrefix: seedState.userPrefix.trim() || null,
+                language: seedState.language,
+            });
+            setLastSyncInputs(inputsToProbe);
+            setSyncProbe(probeRes);
+            setResolvedSyncTargets(probeRes.resolvedSyncTargets);
+            setNewPassword('');
+            setConfirmNewPassword('');
+
+            if (probeRes.status === 'found' && probeRes.stagedPath && probeRes.inspection) {
+                setSourcePath(probeRes.stagedPath);
+                setInspection(probeRes.inspection);
+                setMatchedSyncKeyKind(probeRes.matchedKeyKind);
+                setCredentialMode('mnemonic');
+                setProbe({
+                    sourceKind: 'file',
+                    protectionMode: probeRes.inspection.protectionMode,
+                    supportsPasswordRestore: false,
+                    supportsMnemonicRestore: true,
+                    blobCount: probeRes.inspection.blobCount,
+                    customStandardCount: probeRes.inspection.customStandardCount,
+                });
+                const coll = probeRes.inspection.localCollision ?? probeRes.localCollision;
+                setActiveCollision(coll);
+                if (coll) {
+                    setCollisionChoice(resolveDefaultCollisionChoice(coll, probeRes.inspection));
+                }
+                setWordsPhase('sync_found');
+            } else if (probeRes.status === 'not_found') {
+                setInspection(null);
+                setActiveCollision(probeRes.localCollision);
+                setWordsPhase('sync_not_found');
+            } else {
+                setInspection(null);
+                setActiveCollision(probeRes.localCollision);
+                setWordsPhase('sync_unreachable');
+            }
+        } catch (err) {
+            logger.error(`Probe sync backup failed: ${stringifyError(err)}`);
+            setFeedback({ type: 'error', message: translateError(err, t) });
+        } finally {
+            setIsBusy(false);
+        }
+    };
+
+    const handleWordsContinue = async (e?: React.FormEvent) => {
+        e?.preventDefault();
+        setFeedback(null);
+
+        if (!seedState.isValid) {
+            setFeedback({ type: 'error', message: t('auth.enterValidSeed') });
+            return;
+        }
+
+        const trimmedSync = syncInput.trim();
+        let effectiveSyncInputs: string[] = [];
+        if (trimmedSync) {
+            if (
+                !syncEdited &&
+                seedState.detectedKit &&
+                seedState.detectedKit.syncDescriptorsJson.length > 0 &&
+                trimmedSync === seedState.detectedKit.syncUrls.join(', ')
+            ) {
+                effectiveSyncInputs = seedState.detectedKit.syncDescriptorsJson;
+            } else if (trimmedSync.startsWith('{')) {
+                effectiveSyncInputs = [trimmedSync];
+            } else {
+                effectiveSyncInputs = trimmedSync
+                    .split(/[\s,;\n]+/)
+                    .map((s) => s.trim())
+                    .filter(Boolean);
+            }
+        }
+
+        if (effectiveSyncInputs.length === 0) {
+            setIsBusy(true);
+            try {
+                const preview = await backupService.previewMnemonicIdentity({
+                    mnemonic: seedState.mnemonic,
+                    passphrase: seedState.passphrase || null,
+                    userPrefix: seedState.userPrefix.trim() || null,
+                    language: seedState.language,
+                });
+                setSyncProbe(null);
+                setResolvedSyncTargets([]);
+                setInspection(null);
+                setActiveCollision(preview.localCollision);
+                setNewPassword('');
+                setConfirmNewPassword('');
+                setWordsPhase('direct_setup');
+            } catch (err) {
+                setFeedback({ type: 'error', message: translateError(err, t) });
+            } finally {
+                setIsBusy(false);
+            }
+            return;
+        }
+
+        await runSyncProbe(effectiveSyncInputs);
+    };
+
+    const handleDirectOpenProfile = async (e: React.FormEvent) => {
+        e.preventDefault();
+        setFeedback(null);
+
+        const effectiveProfileName = profileName.trim() || seedState.userPrefix.trim();
+        if (!effectiveProfileName) {
+            setFeedback({ type: 'error', message: t('profile.profileNameRequired') });
+            return;
+        }
+        if (newPassword.length < 8) {
+            setFeedback({ type: 'error', message: t('profile.passwordMinLength') });
+            return;
+        }
+        if (newPassword !== confirmNewPassword) {
+            setFeedback({ type: 'error', message: t('profile.passwordMismatch') });
+            return;
+        }
+
+        setIsBusy(true);
+        try {
+            const localInstanceId = await authService.getLocalInstanceId();
+            await profileService.createProfile({
+                profileName: effectiveProfileName,
+                mnemonic: seedState.mnemonic,
+                passphrase: seedState.passphrase || undefined,
+                userPrefix: seedState.userPrefix.trim() || undefined,
+                password: newPassword,
+                localInstanceId,
+                language: seedState.language,
+                retainMnemonic: true,
+                initialReachPreset: 'medium',
+                initialSyncTargets:
+                    resolvedSyncTargets.length > 0 ? resolvedSyncTargets : undefined,
+            });
+            onRestoreSuccess({
+                folderName: '',
+                profileName: effectiveProfileName,
+                activeVoucherQueriesCount: 0,
+                reconciledSpentCount: 0,
+                restoredStandardsCount: 0,
+                l2ReconciliationStatus: 'no_servers',
+            });
+        } catch (err) {
+            logger.error(`Direct profile open failed: ${stringifyError(err)}`);
+            setFeedback({ type: 'error', message: translateError(err, t) });
+        } finally {
+            setIsBusy(false);
+        }
+    };
+
+    const handleDirectCollisionResetPassword = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!activeCollision) return;
+        setFeedback(null);
+
+        if (newPassword.length < 8) {
+            setFeedback({ type: 'error', message: t('profile.passwordMinLength') });
+            return;
+        }
+        if (newPassword !== confirmNewPassword) {
+            setFeedback({ type: 'error', message: t('profile.passwordMismatch') });
+            return;
+        }
+
+        setIsBusy(true);
+        try {
+            const localInstanceId = await authService.getLocalInstanceId();
+            await profileService.recoverWallet({
+                folderName: activeCollision.folderName,
+                mnemonic: seedState.mnemonic,
+                passphrase: seedState.passphrase || undefined,
+                newPassword,
+                localInstanceId,
+                language: seedState.language,
+            });
+            onRestoreSuccess({
+                folderName: activeCollision.folderName,
+                profileName: activeCollision.profileName,
+                activeVoucherQueriesCount: 0,
+                reconciledSpentCount: 0,
+                restoredStandardsCount: 0,
+                l2ReconciliationStatus: 'reconciled',
+            });
+        } catch (err) {
+            setFeedback({ type: 'error', message: translateError(err, t) });
+        } finally {
+            setIsBusy(false);
+        }
+    };
+
+    const handleSwitchToSubaccountFromCollision = () => {
+        setFeedback(null);
+        setActiveCollision(null);
+        setWordsPhase('input');
+        setFocusPrefixTrigger((n) => n + 1);
+    };
+
+    // --- Card 3: File / Folder Handlers ---
     const handleSelectFile = async () => {
         setFeedback(null);
         try {
@@ -97,10 +457,9 @@ export const RestoreBackupView: React.FC<RestoreBackupViewProps> = ({
                 directory: false,
                 filters: [{ name: 'Human Money Backup', extensions: ['hmcbackup'] }],
             });
-
             if (!selected) return;
             const path = typeof selected === 'string' ? selected : selected[0];
-            await probeAndAdvance(path);
+            await probeAndAdvanceFile(path);
         } catch (err) {
             logger.error(`Failed to open backup file: ${stringifyError(err)}`);
             setFeedback({ type: 'error', message: translateError(err, t) });
@@ -114,154 +473,157 @@ export const RestoreBackupView: React.FC<RestoreBackupViewProps> = ({
                 multiple: false,
                 directory: true,
             });
-
             if (!selected) return;
             const path = typeof selected === 'string' ? selected : selected[0];
-            await probeAndAdvance(path);
+            await probeAndAdvanceFile(path);
         } catch (err) {
             logger.error(`Failed to open backup folder: ${stringifyError(err)}`);
             setFeedback({ type: 'error', message: translateError(err, t) });
         }
     };
 
-    const probeAndAdvance = async (path: string) => {
+    const handleInlineDrop = async (e: React.DragEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsDraggingBackup(false);
+        const file = e.dataTransfer?.files?.[0];
+        if (!file) return;
         setFeedback(null);
+        setIsBusy(true);
         try {
-            const probeResult = await backupService.probeBackup(path);
-            setSourcePath(path);
-            setProbe(probeResult);
-            // Default credential mode based on what the probe supports
-            if (probeResult.supportsPasswordRestore) {
-                setCredentialMode('password');
-            } else {
-                setCredentialMode('mnemonic');
-            }
-            setStep('unlock_and_inspect');
+            const buf = await file.arrayBuffer();
+            const staged = await backupService.stageDroppedBackupBytes(
+                Array.from(new Uint8Array(buf))
+            );
+            await probeAndAdvanceFile(staged);
         } catch (err) {
-            logger.error(`Failed to probe backup at ${path}: ${stringifyError(err)}`);
             setFeedback({ type: 'error', message: translateError(err, t) });
+        } finally {
+            setIsBusy(false);
         }
     };
 
-    // Word helpers for mnemonic input
-    const handleWordCountChange = (count: 12 | 24) => {
-        setWordCount(count);
-        setMnemonicWords((prev) => {
-            const current = prev.join(' ').split(' ').filter(Boolean);
-            return Array(count).fill('').map((_, i) => current[i] || '');
-        });
-    };
-
-    const handleWordChange = (index: number, val: string) => {
-        const cleaned = cleanSeedText(val);
-        const parts = cleaned.split(' ').filter(Boolean);
-        const next = [...mnemonicWords];
-
-        if (parts.length > 1) {
-            for (let i = 0; i < parts.length; i++) {
-                if (index + i < wordCount) {
-                    next[index + i] = parts[i];
-                }
-            }
-            setMnemonicWords(next);
-            const nextIdx = index + parts.length;
-            if (nextIdx < wordCount) {
-                document.getElementById(`restore-word-${nextIdx}`)?.focus();
-            }
-        } else {
-            next[index] = cleaned;
-            setMnemonicWords(next);
-        }
-    };
-
-    const getFullMnemonic = (): string => {
-        if (inputMode === 'phrase') {
-            return cleanSeedText(rawPhrase);
-        }
-        return mnemonicWords.map((w) => w.trim()).filter(Boolean).join(' ');
-    };
-
-    // Step 2: Inspect Backup
-    const handleInspectBackup = async () => {
+    const handleInspectFileBackup = async () => {
         setFeedback(null);
-
         if (credentialMode === 'password') {
             if (!backupPassword) {
                 setFeedback({ type: 'error', message: t('settings.backupPasswordMinLength') });
                 return;
             }
-        } else {
-            const mnemonic = getFullMnemonic();
-            const words = mnemonic.split(' ').filter(Boolean);
-            if (words.length !== 12 && words.length !== 24) {
-                setFeedback({ type: 'error', message: t('auth.enterValidSeed') });
-                return;
-            }
+        } else if (!fileSeedState.isValid) {
+            setFeedback({ type: 'error', message: t('auth.enterValidSeed') });
+            return;
         }
 
-        setIsInspecting(true);
+        setIsBusy(true);
         try {
             const result = await backupService.inspectBackup({
                 sourcePath,
                 credentialMode,
                 backupPassword: credentialMode === 'password' ? backupPassword : null,
-                mnemonic: credentialMode === 'mnemonic' ? getFullMnemonic() : null,
-                passphrase: credentialMode === 'mnemonic' && passphrase ? passphrase : null,
-                userPrefix: credentialMode === 'mnemonic' && userPrefix ? userPrefix : null,
-                language: credentialMode === 'mnemonic' ? selectedLanguage : null,
+                mnemonic: credentialMode === 'mnemonic' ? fileSeedState.mnemonic : null,
+                passphrase:
+                    credentialMode === 'mnemonic' && fileSeedState.passphrase
+                        ? fileSeedState.passphrase
+                        : null,
+                userPrefix:
+                    credentialMode === 'mnemonic' && fileSeedState.userPrefix.trim()
+                        ? fileSeedState.userPrefix.trim()
+                        : null,
+                language: credentialMode === 'mnemonic' ? fileSeedState.language : null,
             });
-
             setInspection(result);
-            logger.info(`Backup inspected successfully: ${result.profileName}`);
+            setActiveCollision(result.localCollision);
+            if (result.localCollision) {
+                setCollisionChoice(resolveDefaultCollisionChoice(result.localCollision, result));
+            }
         } catch (err) {
             logger.error(`Inspect backup failed: ${stringifyError(err)}`);
             setFeedback({ type: 'error', message: translateError(err, t) });
         } finally {
-            setIsInspecting(false);
+            setIsBusy(false);
         }
     };
 
-    const handleFetchAndInspectBackup = async () => {
+    // Shared restore / collision submit when an inspected backup exists (Sync or File/Folder)
+    const handleRestoreFromInspectedBackup = async (e: React.FormEvent) => {
+        e.preventDefault();
         setFeedback(null);
-        const mnemonic = getFullMnemonic();
-        const words = mnemonic.split(' ').filter(Boolean);
-        if (words.length !== 12 && words.length !== 24) {
-            setFeedback({ type: 'error', message: t('auth.enterValidSeed') });
+
+        if (newPassword.length < 8) {
+            setFeedback({ type: 'error', message: t('profile.passwordMinLength') });
             return;
         }
-        if (!syncInput.trim()) {
-            setFeedback({ type: 'error', message: t('profile.backupRestoreSyncAddressRequired', 'Bitte gib eine Sync-Dienst-Adresse oder einen Deskriptor ein.') });
+        if (newPassword !== confirmNewPassword) {
+            setFeedback({ type: 'error', message: t('profile.passwordMismatch') });
             return;
         }
 
-        setIsFetchingSync(true);
+        const activeCredSeed = method === 'words_or_sheet' ? seedState : fileSeedState;
+        const effectiveCredMode = method === 'words_or_sheet' ? 'mnemonic' : credentialMode;
+
+        setIsBusy(true);
         try {
-            const result = await backupService.fetchAndInspectBackup({
-                syncInput: syncInput.trim(),
-                mnemonic,
-                passphrase: passphrase || null,
-                userPrefix: userPrefix || null,
-                language: selectedLanguage,
-            });
+            const localInstanceId = await authService.getLocalInstanceId();
 
-            setSourcePath(result.stagedPath);
-            setInspection(result.inspection);
-            setMatchedSyncKeyKind(result.matchedKeyKind);
-            setCredentialMode('mnemonic');
-            setProbe({
-                sourceKind: 'file',
-                protectionMode: result.inspection.protectionMode,
-                supportsPasswordRestore: false,
-                supportsMnemonicRestore: true,
-                blobCount: result.inspection.blobCount,
-                customStandardCount: result.inspection.customStandardCount,
+            if (activeCollision && collisionChoice === 'reset_pw') {
+                await backupService.resetLocalPasswordViaBackup({
+                    targetFolderName: activeCollision.folderName,
+                    sourcePath,
+                    credentialMode: effectiveCredMode,
+                    backupPassword: effectiveCredMode === 'password' ? backupPassword : null,
+                    mnemonic: effectiveCredMode === 'mnemonic' ? activeCredSeed.mnemonic : null,
+                    passphrase:
+                        effectiveCredMode === 'mnemonic' && activeCredSeed.passphrase
+                            ? activeCredSeed.passphrase
+                            : null,
+                    userPrefix:
+                        effectiveCredMode === 'mnemonic' && activeCredSeed.userPrefix.trim()
+                            ? activeCredSeed.userPrefix.trim()
+                            : null,
+                    language: effectiveCredMode === 'mnemonic' ? activeCredSeed.language : null,
+                    newPassword,
+                    localInstanceId,
+                });
+                onRestoreSuccess({
+                    folderName: activeCollision.folderName,
+                    profileName: activeCollision.profileName,
+                    activeVoucherQueriesCount: 0,
+                    reconciledSpentCount: 0,
+                    restoredStandardsCount: 0,
+                    l2ReconciliationStatus: 'reconciled',
+                });
+                return;
+            }
+
+            const outcome = await backupService.restoreBackup({
+                sourcePath,
+                credentialMode: effectiveCredMode,
+                backupPassword: effectiveCredMode === 'password' ? backupPassword : null,
+                mnemonic: effectiveCredMode === 'mnemonic' ? activeCredSeed.mnemonic : null,
+                passphrase:
+                    effectiveCredMode === 'mnemonic' && activeCredSeed.passphrase
+                        ? activeCredSeed.passphrase
+                        : null,
+                userPrefix:
+                    effectiveCredMode === 'mnemonic' && activeCredSeed.userPrefix.trim()
+                        ? activeCredSeed.userPrefix.trim()
+                        : null,
+                language: effectiveCredMode === 'mnemonic' ? activeCredSeed.language : null,
+                newPassword,
+                localInstanceId,
+                replaceFolderName:
+                    activeCollision && collisionChoice === 'replace'
+                        ? activeCollision.folderName
+                        : null,
             });
-            setStep('unlock_and_inspect');
+            setRestoreOutcome(outcome);
+            setMethod('completed');
         } catch (err) {
-            logger.error(`Fetch sync backup failed: ${stringifyError(err)}`);
+            logger.error(`Restore backup failed: ${stringifyError(err)}`);
             setFeedback({ type: 'error', message: translateError(err, t) });
         } finally {
-            setIsFetchingSync(false);
+            setIsBusy(false);
         }
     };
 
@@ -280,87 +642,391 @@ export const RestoreBackupView: React.FC<RestoreBackupViewProps> = ({
             if (res.l2ReconciliationStatus === 'reconciled') {
                 setFeedback({
                     type: 'success',
-                    message: t('profile.backupRestoreReconcileSuccess', 'Online-Abgleich erfolgreich! Alle Gutscheine und Siegel wurden geprüft.'),
+                    message: t('profile.backupRestoreReconcileSuccess'),
                 });
             } else {
                 setFeedback({
                     type: 'error',
-                    message: t('profile.backupRestoreReconcileOffline', 'Netzwerk nicht erreichbar. Bitte prüfe deine Internetverbindung.'),
+                    message: t('profile.backupRestoreReconcileOffline'),
                 });
             }
         } catch (err) {
-            logger.error(`Reconcile L2 failed: ${stringifyError(err)}`);
             setFeedback({ type: 'error', message: translateError(err, t) });
         } finally {
             setIsReconcilingL2(false);
         }
     };
 
-    // Step 3: Set Local Password & Restore
-    const handleRestoreSubmit = async (e: React.FormEvent) => {
-        e.preventDefault();
-        setFeedback(null);
+    const renderCollisionWithBackupCard = (coll: LocalProfileCollisionDto, insp: BackupInspectionDto) => {
+        const localEpoch = coll.localEpoch ?? 0;
+        const localNonce = coll.localTxNonce ?? 0;
+        const localNewerOrEqual =
+            localEpoch > insp.epoch || (localEpoch === insp.epoch && localNonce >= insp.txNonce);
 
-        if (newPassword.length < 8) {
-            setFeedback({ type: 'error', message: t('profile.passwordMinLength') });
-            return;
-        }
+        return (
+            <div
+                data-testid="local-collision-card"
+                className="p-5 bg-amber-50 border border-amber-200 rounded-2xl space-y-4"
+            >
+                <div className="flex items-start gap-2.5">
+                    <AlertTriangle size={18} className="text-amber-600 shrink-0 mt-0.5" />
+                    <div className="space-y-1">
+                        <h4 className="text-sm font-black text-amber-900">
+                            {t('backup.collisionDetectedTitle', { name: coll.profileName })}
+                        </h4>
+                        <p className="text-xs text-amber-800 leading-relaxed">
+                            {t('backup.collisionComparisonDesc', {
+                                name: coll.profileName,
+                                localEpoch,
+                                localNonce,
+                                backupEpoch: insp.epoch,
+                                backupNonce: insp.txNonce,
+                            })}
+                        </p>
+                    </div>
+                </div>
 
-        if (newPassword !== confirmNewPassword) {
-            setFeedback({ type: 'error', message: t('profile.passwordMismatch') });
-            return;
-        }
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <button
+                        type="button"
+                        data-testid="collision-choice-reset-pw"
+                        onClick={() => setCollisionChoice('reset_pw')}
+                        className={`p-3.5 rounded-xl border-2 text-left transition-all cursor-pointer ${
+                            collisionChoice === 'reset_pw'
+                                ? 'bg-white border-theme-primary shadow-sm'
+                                : 'bg-white/60 border-amber-200 hover:bg-white'
+                        }`}
+                    >
+                        <div className="flex items-center justify-between gap-2 mb-1">
+                            <span className="text-xs font-bold text-theme-secondary">
+                                {t('backup.collisionResetPasswordBtn', { name: coll.profileName })}
+                            </span>
+                            {localNewerOrEqual && !coll.isLockedOrConflicted && (
+                                <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-emerald-100 text-emerald-800">
+                                    {t('common.recommended')}
+                                </span>
+                            )}
+                        </div>
+                        <p className="text-[11px] text-theme-light leading-relaxed">
+                            {t('backup.collisionResetPasswordDesc')}
+                        </p>
+                    </button>
 
-        setIsRestoring(true);
-        try {
-            const localInstanceId = await authService.getLocalInstanceId();
-            const outcome = await backupService.restoreBackup({
-                sourcePath,
-                credentialMode,
-                backupPassword: credentialMode === 'password' ? backupPassword : null,
-                mnemonic: credentialMode === 'mnemonic' ? getFullMnemonic() : null,
-                passphrase: credentialMode === 'mnemonic' && passphrase ? passphrase : null,
-                userPrefix: credentialMode === 'mnemonic' && userPrefix ? userPrefix : null,
-                language: credentialMode === 'mnemonic' ? selectedLanguage : null,
-                newPassword,
-                localInstanceId,
-            });
-
-            setRestoreOutcome(outcome);
-            setStep('completed');
-            logger.info(`Wallet restored successfully: ${JSON.stringify(outcome)}`);
-        } catch (err) {
-            logger.error(`Restore backup failed: ${stringifyError(err)}`);
-            setFeedback({ type: 'error', message: translateError(err, t) });
-        } finally {
-            setIsRestoring(false);
-        }
+                    <button
+                        type="button"
+                        data-testid="collision-choice-replace"
+                        onClick={() => setCollisionChoice('replace')}
+                        className={`p-3.5 rounded-xl border-2 text-left transition-all cursor-pointer ${
+                            collisionChoice === 'replace'
+                                ? 'bg-white border-theme-primary shadow-sm'
+                                : 'bg-white/60 border-amber-200 hover:bg-white'
+                        }`}
+                    >
+                        <div className="flex items-center justify-between gap-2 mb-1">
+                            <span className="text-xs font-bold text-theme-secondary">
+                                {t('backup.collisionReplaceProfileBtn', { name: coll.profileName })}
+                            </span>
+                            {(!localNewerOrEqual || coll.isLockedOrConflicted) && (
+                                <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-emerald-100 text-emerald-800">
+                                    {t('common.recommended')}
+                                </span>
+                            )}
+                        </div>
+                        <p className="text-[11px] text-theme-light leading-relaxed">
+                            {t('backup.collisionReplaceProfileDesc')}
+                        </p>
+                    </button>
+                </div>
+            </div>
+        );
     };
+
+    const renderCollisionWithoutBackupCard = (coll: LocalProfileCollisionDto) => (
+        <div
+            data-testid="local-collision-card"
+            className="p-5 bg-amber-50 border border-amber-200 rounded-2xl space-y-5"
+        >
+            <div className="flex items-start gap-2.5">
+                <AlertTriangle size={18} className="text-amber-600 shrink-0 mt-0.5" />
+                <div className="space-y-1">
+                    <h4 className="text-sm font-black text-amber-900">
+                        {t('backup.collisionDetectedTitle', { name: coll.profileName })}
+                    </h4>
+                    <p className="text-xs text-amber-800 leading-relaxed">
+                        {t('backup.collisionWithoutBackupDesc', { name: coll.profileName })}
+                    </p>
+                </div>
+            </div>
+
+            <form onSubmit={handleDirectCollisionResetPassword} className="space-y-3 bg-white p-4 rounded-2xl border border-amber-200">
+                <h5 className="text-xs font-black uppercase tracking-wider text-theme-secondary">
+                    {t('backup.collisionResetPasswordBtn', { name: coll.profileName })}
+                </h5>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <Input
+                        type="password"
+                        showToggle
+                        data-testid="collision-new-password-input"
+                        value={newPassword}
+                        onChange={(e) => setNewPassword(e.target.value)}
+                        placeholder={t('profile.backupRestoreNewPasswordLabel')}
+                        autoComplete="new-password"
+                    />
+                    <Input
+                        type="password"
+                        showToggle
+                        data-testid="collision-confirm-password-input"
+                        value={confirmNewPassword}
+                        onChange={(e) => setConfirmNewPassword(e.target.value)}
+                        placeholder={t('profile.backupRestoreConfirmPasswordLabel')}
+                        autoComplete="new-password"
+                    />
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                    <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        data-testid="collision-create-subaccount-btn"
+                        onClick={handleSwitchToSubaccountFromCollision}
+                    >
+                        {t('backup.collisionCreateSubaccountBtn')}
+                    </Button>
+                    <Button
+                        type="submit"
+                        variant="primary"
+                        size="sm"
+                        data-testid="collision-reset-pw-direct-btn"
+                        disabled={isBusy}
+                    >
+                        {isBusy ? t('common.loading') : t('backup.collisionResetPasswordAction')}
+                    </Button>
+                </div>
+            </form>
+        </div>
+    );
+
+    const renderInspectedManifestCard = (insp: BackupInspectionDto) => (
+        <Card className="border-emerald-200 bg-emerald-50/50">
+            <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                    <span className="px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider bg-emerald-600 text-white flex items-center gap-1.5 shadow-sm">
+                        <CheckCircle2 size={12} />
+                        {t('profile.backupRestoreVerifiedBadge')}
+                    </span>
+                    <span className="text-xs text-emerald-800 font-mono">
+                        {new Date(insp.sealTimestamp).toLocaleString()}
+                    </span>
+                </div>
+
+                <div>
+                    <h3 className="text-base font-black text-theme-secondary">{insp.profileName}</h3>
+                    <p className="text-[11px] font-mono text-theme-light truncate">
+                        {t('profile.userId')}: {insp.userId}
+                    </p>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2">
+                    <div className="p-3 bg-white rounded-xl border border-emerald-100 flex items-center gap-2.5">
+                        <FileText size={16} className="text-emerald-600 shrink-0" />
+                        <div>
+                            <p className="text-xs font-black text-theme-secondary">{insp.blobCount}</p>
+                            <p className="text-[10px] text-theme-light">{t('backup.dataBlobs')}</p>
+                        </div>
+                    </div>
+                    <div className="p-3 bg-white rounded-xl border border-emerald-100 flex items-center gap-2.5">
+                        <History size={16} className="text-emerald-600 shrink-0" />
+                        <div>
+                            <p className="text-xs font-black text-theme-secondary">{insp.epoch}</p>
+                            <p className="text-[10px] text-theme-light">{t('backup.epoch')}</p>
+                        </div>
+                    </div>
+                    <div className="p-3 bg-white rounded-xl border border-emerald-100 flex items-center gap-2.5">
+                        <Hash size={16} className="text-emerald-600 shrink-0" />
+                        <div>
+                            <p className="text-xs font-black text-theme-secondary">{insp.txNonce}</p>
+                            <p className="text-[10px] text-theme-light">{t('backup.txNonce')}</p>
+                        </div>
+                    </div>
+                    <div className="p-3 bg-white rounded-xl border border-emerald-100 flex items-center gap-2.5">
+                        <Layers size={16} className="text-emerald-600 shrink-0" />
+                        <div>
+                            <p className="text-xs font-black text-theme-secondary">
+                                {insp.customStandardCount}
+                            </p>
+                            <p className="text-[10px] text-theme-light">{t('backup.standards')}</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </Card>
+    );
+
+    const renderDevicePasswordRestoreForm = (coll: LocalProfileCollisionDto | null) => (
+        <form
+            onSubmit={handleRestoreFromInspectedBackup}
+            className="space-y-4 p-5 bg-white border border-theme-subtle rounded-3xl shadow-sm"
+        >
+            <div className="space-y-1">
+                <h3 className="text-sm font-black uppercase tracking-widest text-theme-secondary flex items-center gap-2">
+                    <Lock size={16} className="text-theme-primary" />
+                    {t('profile.backupRestoreDevicePasswordTitle')}
+                </h3>
+                <p className="text-xs text-theme-light">
+                    {t('profile.backupRestoreDevicePasswordDesc')}
+                </p>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
+                <div>
+                    <label className="block text-xs font-bold text-theme-secondary mb-1">
+                        {t('profile.backupRestoreNewPasswordLabel')}
+                    </label>
+                    <Input
+                        data-testid="new-device-password-input"
+                        type="password"
+                        showToggle
+                        value={newPassword}
+                        onChange={(e) => setNewPassword(e.target.value)}
+                        placeholder={t('auth.passwordMinChars')}
+                        autoComplete="new-password"
+                    />
+                </div>
+                <div>
+                    <label className="block text-xs font-bold text-theme-secondary mb-1">
+                        {t('profile.backupRestoreConfirmPasswordLabel')}
+                    </label>
+                    <Input
+                        data-testid="confirm-device-password-input"
+                        type="password"
+                        showToggle
+                        value={confirmNewPassword}
+                        onChange={(e) => setConfirmNewPassword(e.target.value)}
+                        placeholder={t('auth.repeatPassword')}
+                        autoComplete="new-password"
+                    />
+                </div>
+            </div>
+
+            <Button
+                data-testid="restore-submit-btn"
+                type="submit"
+                variant="primary"
+                disabled={isBusy}
+                className="w-full mt-2"
+            >
+                {isBusy ? (
+                    <>
+                        <RefreshCw size={14} className="animate-spin mr-2" />
+                        {t('profile.backupRestoreRestoring')}
+                    </>
+                ) : (
+                    <>
+                        <ShieldCheck size={16} className="mr-2" />
+                        {coll && collisionChoice === 'reset_pw'
+                            ? t('backup.collisionResetPasswordBtn', { name: coll.profileName })
+                            : coll && collisionChoice === 'replace'
+                              ? t('backup.collisionReplaceProfileBtn', { name: coll.profileName })
+                              : t('profile.backupRestoreSubmitButton')}
+                    </>
+                )}
+            </Button>
+        </form>
+    );
+
+    const renderDirectProfileSetupForm = () => (
+        <form
+            onSubmit={handleDirectOpenProfile}
+            className="space-y-4 p-5 bg-white border border-theme-subtle rounded-3xl shadow-sm"
+        >
+            <div className="space-y-1">
+                <h3 className="text-sm font-black uppercase tracking-wider text-theme-secondary flex items-center gap-2">
+                    <Sparkles size={16} className="text-theme-primary" />
+                    {seedState.userPrefix.trim()
+                        ? t('backup.directSubaccountTitle', { prefix: seedState.userPrefix.trim() })
+                        : t('backup.directOpenProfileTitle')}
+                </h3>
+                <p className="text-xs text-theme-light">
+                    {t('backup.directOpenProfileDesc')}
+                </p>
+            </div>
+
+            <div className="space-y-1.5">
+                <label className="block text-xs font-bold text-theme-secondary">
+                    {t('backup.profileNameLabel')}
+                </label>
+                <Input
+                    data-testid="direct-profile-name-input"
+                    type="text"
+                    value={profileName}
+                    onChange={(e) => setProfileName(e.target.value)}
+                    placeholder={t('profile.profileNamePlaceholder')}
+                />
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                    <label className="block text-xs font-bold text-theme-secondary mb-1">
+                        {t('profile.backupRestoreNewPasswordLabel')}
+                    </label>
+                    <Input
+                        data-testid="new-device-password-input"
+                        type="password"
+                        showToggle
+                        value={newPassword}
+                        onChange={(e) => setNewPassword(e.target.value)}
+                        placeholder={t('auth.passwordMinChars')}
+                        autoComplete="new-password"
+                    />
+                </div>
+                <div>
+                    <label className="block text-xs font-bold text-theme-secondary mb-1">
+                        {t('profile.backupRestoreConfirmPasswordLabel')}
+                    </label>
+                    <Input
+                        data-testid="confirm-device-password-input"
+                        type="password"
+                        showToggle
+                        value={confirmNewPassword}
+                        onChange={(e) => setConfirmNewPassword(e.target.value)}
+                        placeholder={t('auth.repeatPassword')}
+                        autoComplete="new-password"
+                    />
+                </div>
+            </div>
+
+            <Button
+                data-testid="direct-open-profile-submit-btn"
+                type="submit"
+                variant="primary"
+                disabled={isBusy}
+                className="w-full mt-2"
+            >
+                {isBusy ? (
+                    <>
+                        <RefreshCw size={14} className="animate-spin mr-2" />
+                        {t('profile.creatingProgress')}
+                    </>
+                ) : (
+                    <>
+                        <CheckCircle2 size={16} className="mr-2" />
+                        {t('backup.directOpenProfileSubmit')}
+                    </>
+                )}
+            </Button>
+        </form>
+    );
 
     return (
         <AuthLayout maxWidth="max-w-3xl">
             {/* Header */}
             <div className="flex flex-wrap items-center justify-between gap-3 pb-2 border-b border-theme-subtle">
-                <div
-                    data-testid="restore-back-btn"
-                    onClick={(e) => {
-                        if (e.target === e.currentTarget) {
-                            if (step === 'unlock_and_inspect' || step === 'sync_source') {
-                                setStep('select_source');
-                            } else {
-                                onBack();
-                            }
-                        }
-                    }}
-                >
-                    <BackButton
-                        onClick={step === 'unlock_and_inspect' || step === 'sync_source' ? () => setStep('select_source') : onBack}
-                        label={t('common.back')}
-                    />
+                <div data-testid="restore-back-btn">
+                    <BackButton onClick={handleHeaderBack} label={t('common.back')} />
                 </div>
                 <div className="text-right">
                     <span className="text-[10px] font-black uppercase tracking-widest text-theme-primary">
-                        Human Money Backup
+                        {t('backup.openRestoreBadge')}
                     </span>
                 </div>
             </div>
@@ -375,673 +1041,567 @@ export const RestoreBackupView: React.FC<RestoreBackupViewProps> = ({
                 </p>
             </div>
 
-            {/* Top Choice Link: Recreate empty identity instead */}
-            {step !== 'completed' && (
-                <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-2xl flex items-center justify-between gap-3 text-xs">
-                    <span className="text-theme-light font-medium">
-                        {t('profile.backupRestoreNoFileLink')}
-                    </span>
-                    <Button
-                        variant="secondary"
-                        size="xs"
-                        onClick={onSwitchToRecreate}
-                        className="shrink-0"
-                    >
-                        <RefreshCw size={12} className="mr-1" />
-                        {t('profile.backupRestoreRecreateEmptyBtn')}
-                    </Button>
-                </div>
-            )}
-
-            {/* Feedback Alert */}
+            {/* Feedback Banner */}
             {feedback && (
-                <AlertBanner variant={feedback.type}>
+                <AlertBanner variant={feedback.type} onDismiss={() => setFeedback(null)}>
                     {feedback.message}
                 </AlertBanner>
             )}
 
-            {/* STEP 1: Select Backup Source */}
-            {step === 'select_source' && (
-                <div className="space-y-6">
-                    {/* Primary Action Tiles: Social & Sheet Recovery */}
-                    <SocialAndSheetRecoveryFlow
-                        mode="restore_new_device"
-                        initialPayload={initialPayload}
-                        onSuccess={() => onRestoreSuccess({
-                            folderName: '',
-                            profileName: '',
-                            activeVoucherQueriesCount: 0,
-                            reconciledSpentCount: 0,
-                            restoredStandardsCount: 0,
-                            l2ReconciliationStatus: 'reconciled',
-                        })}
-                    />
-
-                    {/* Collapsible Section: Advanced Restore */}
-                    <details open className="group border border-theme-subtle rounded-3xl p-5 bg-bg-surface/50">
-                        <summary className="font-bold text-xs uppercase tracking-wider text-theme-light hover:text-theme-secondary cursor-pointer select-none flex items-center justify-between">
-                            <span>{t('backup.advancedRestoreCollapsible')}</span>
-                            <ChevronDown className="transition-transform group-open:rotate-180" size={16} />
-                        </summary>
-
-                        <div className="mt-4 pt-4 border-t border-theme-subtle/50 space-y-4">
-                            <div className="text-left space-y-1">
-                                <h2 className="text-sm font-black uppercase tracking-widest text-theme-secondary">
-                                    {t('profile.backupRestoreSourceTitle')}
-                                </h2>
-                            </div>
-
-                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
-                                {/* File Option */}
-                                <button
+            {/* TOP LEVEL: 3 Equal Cards */}
+            {method === 'choose' && (
+                <div className="space-y-5 animate-in fade-in duration-300">
+                    {activeSocialSession && (
+                        <AlertBanner
+                            variant="info"
+                            data-testid="resume-social-session-banner"
+                            action={
+                                <Button
                                     type="button"
-                                    onClick={handleSelectFile}
-                                    className="p-6 bg-white border-2 border-theme-subtle hover:border-theme-primary/50 hover:bg-theme-primary/5 rounded-3xl text-left transition-all flex flex-col justify-between gap-4 cursor-pointer group shadow-sm hover:shadow-md"
+                                    variant="primary"
+                                    size="xs"
+                                    data-testid="resume-social-session-btn"
+                                    onClick={() => setMethod('social')}
                                 >
-                                    <div className="w-12 h-12 rounded-2xl bg-theme-primary/10 text-theme-primary flex items-center justify-center group-hover:scale-105 transition-transform">
-                                        <FileArchive size={24} />
-                                    </div>
-                                    <div className="space-y-1">
-                                        <h3 className="text-sm font-black text-theme-secondary group-hover:text-theme-primary">
-                                            {t('profile.backupRestoreSelectFile')}
-                                        </h3>
-                                        <p className="text-xs text-theme-light font-medium leading-relaxed">
-                                            {t('profile.backupRestoreSelectFileDesc')}
-                                        </p>
-                                    </div>
-                                    <div className="flex items-center gap-1 text-[11px] font-bold text-theme-primary">
-                                        <span>Browse file (.hmcbackup)</span>
-                                        <ArrowRight size={14} />
-                                    </div>
-                                </button>
-
-                                {/* Folder Option */}
-                                <button
-                                    type="button"
-                                    onClick={handleSelectFolder}
-                                    className="p-6 bg-white border-2 border-theme-subtle hover:border-theme-primary/50 hover:bg-theme-primary/5 rounded-3xl text-left transition-all flex flex-col justify-between gap-4 cursor-pointer group shadow-sm hover:shadow-md"
-                                >
-                                    <div className="w-12 h-12 rounded-2xl bg-theme-primary/10 text-theme-primary flex items-center justify-center group-hover:scale-105 transition-transform">
-                                        <FolderSync size={24} />
-                                    </div>
-                                    <div className="space-y-1">
-                                        <h3 className="text-sm font-black text-theme-secondary group-hover:text-theme-primary">
-                                            {t('profile.backupRestoreSelectFolder')}
-                                        </h3>
-                                        <p className="text-xs text-theme-light font-medium leading-relaxed">
-                                            {t('profile.backupRestoreSelectFolderDesc')}
-                                        </p>
-                                    </div>
-                                    <div className="flex items-center gap-1 text-[11px] font-bold text-theme-primary">
-                                        <span>{t('backup.selectDirectory', 'Verzeichnis auswählen')}</span>
-                                        <ArrowRight size={14} />
-                                    </div>
-                                </button>
-
-                                {/* Sync Service Option */}
-                                <button
-                                    type="button"
-                                    data-testid="restore-select-sync-btn"
-                                    onClick={() => {
-                                        setFeedback(null);
-                                        setCredentialMode('mnemonic');
-                                        setStep('sync_source');
-                                    }}
-                                    className="p-6 bg-white border-2 border-theme-subtle hover:border-theme-primary/50 hover:bg-theme-primary/5 rounded-3xl text-left transition-all flex flex-col justify-between gap-4 cursor-pointer group shadow-sm hover:shadow-md"
-                                >
-                                    <div className="w-12 h-12 rounded-2xl bg-theme-primary/10 text-theme-primary flex items-center justify-center group-hover:scale-105 transition-transform">
-                                        <Server size={24} />
-                                    </div>
-                                    <div className="space-y-1">
-                                        <h3 className="text-sm font-black text-theme-secondary group-hover:text-theme-primary">
-                                            {t('profile.backupRestoreSelectSync', 'Von Sync-Dienst wiederherstellen')}
-                                        </h3>
-                                        <p className="text-xs text-theme-light font-medium leading-relaxed">
-                                            {t('profile.backupRestoreSelectSyncDesc', 'Freundes-, eigenen oder öffentlichen Sync-Dienst mit Mnemonic abrufen')}
-                                        </p>
-                                    </div>
-                                    <div className="flex items-center gap-1 text-[11px] font-bold text-theme-primary">
-                                        <span>{t('profile.backupRestoreSelectSyncAction', 'Sync-Dienst abrufen')}</span>
-                                        <ArrowRight size={14} />
-                                    </div>
-                                </button>
-                            </div>
-                        </div>
-                    </details>
-                </div>
-            )}
-
-            {/* STEP 1b: Sync Source (Von Sync-Dienst wiederherstellen) */}
-            {step === 'sync_source' && (
-                <div className="space-y-6">
-                    <div className="p-4 bg-theme-primary/5 border border-theme-primary/20 rounded-2xl flex items-center justify-between gap-4">
-                        <div className="flex items-center gap-3 min-w-0">
-                            <Server size={20} className="text-theme-primary shrink-0" />
-                            <div className="min-w-0">
-                                <p className="text-[10px] font-black uppercase tracking-wider text-theme-primary">
-                                    {t('profile.backupRestoreSyncHeader', 'Von Sync-Dienst wiederherstellen')}
-                                </p>
-                                <p className="text-xs text-theme-secondary font-medium">
-                                    {t('profile.backupRestoreSyncSubtitle', 'Gib deine Mnemonic-Wörter und die Adresse des Sync-Dienstes ein.')}
-                                </p>
-                            </div>
-                        </div>
-                        <Button
-                            variant="secondary"
-                            size="xs"
-                            onClick={() => setStep('select_source')}
+                                    {t('backup.resumeSessionBtn')}
+                                </Button>
+                            }
                         >
-                            {t('common.change', 'Ändern')}
-                        </Button>
-                    </div>
+                            {t('backup.resumeSessionDesc', {
+                                code: activeSocialSession.sasCode,
+                                collected: activeSocialSession.collectedCount,
+                                required: activeSocialSession.thresholdM ?? '?',
+                            })}
+                        </AlertBanner>
+                    )}
 
-                    {/* Mnemonic Inputs */}
-                    <div className="space-y-4 bg-white p-6 rounded-3xl border border-theme-subtle shadow-sm">
-                        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-theme-subtle pb-3">
-                            <div className="flex items-center gap-2">
-                                <KeyRound size={16} className="text-theme-primary" />
-                                <h3 className="text-xs font-black uppercase tracking-wider text-theme-secondary">
-                                    {t('profile.backupRestoreMnemonicTitle', 'Wiederherstellungs-Wörter (Mnemonic)')}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        {/* Card 1: Trusted Contacts */}
+                        <button
+                            type="button"
+                            onClick={() => setMethod('social')}
+                            data-testid="choose-social-recovery-btn"
+                            className="p-6 bg-bg-surface hover:bg-theme-subtle/30 border-2 border-theme-subtle hover:border-theme-primary rounded-3xl text-left transition-all group shadow-sm flex flex-col justify-between cursor-pointer"
+                        >
+                            <div className="space-y-3">
+                                <div className="w-12 h-12 rounded-2xl bg-theme-primary/10 text-theme-primary flex items-center justify-center group-hover:scale-105 transition-transform">
+                                    <Users size={24} />
+                                </div>
+                                <h3 className="font-black text-base text-theme-secondary tracking-tight">
+                                    {t('backup.restorePrimaryContacts')}
                                 </h3>
+                                <p className="text-xs text-theme-light leading-relaxed">
+                                    {t('backup.restorePrimaryContactsDesc')}
+                                </p>
                             </div>
-                            <div className="flex items-center gap-2">
-                                <select
-                                    value={selectedLanguage}
-                                    onChange={(e) => setSelectedLanguage(e.target.value as MnemonicLanguage)}
-                                    className="text-xs bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 font-medium text-theme-secondary"
-                                >
-                                    <option value="english">English</option>
-                                    <option value="german">Deutsch</option>
-                                    <option value="spanish">Español</option>
-                                    <option value="french">Français</option>
-                                    <option value="italian">Italiano</option>
-                                </select>
-                                <div className="flex bg-slate-100 p-0.5 rounded-lg text-[11px] font-bold">
-                                    <button
-                                        type="button"
-                                        onClick={() => handleWordCountChange(12)}
-                                        className={`px-2 py-0.5 rounded ${wordCount === 12 ? 'bg-white shadow-xs text-theme-primary' : 'text-theme-light'}`}
-                                    >
-                                        12
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={() => handleWordCountChange(24)}
-                                        className={`px-2 py-0.5 rounded ${wordCount === 24 ? 'bg-white shadow-xs text-theme-primary' : 'text-theme-light'}`}
-                                    >
-                                        24
-                                    </button>
-                                </div>
-                                <button
-                                    type="button"
-                                    onClick={() => setInputMode(inputMode === 'words' ? 'phrase' : 'words')}
-                                    className="text-xs font-semibold text-theme-primary hover:underline ml-1"
-                                >
-                                    {inputMode === 'words' ? t('auth.enterFullPhrase') : t('auth.useSingleFields')}
-                                </button>
+                            <div className="flex items-center gap-1.5 text-xs font-bold text-theme-primary pt-4">
+                                <span>{t('common.select')}</span>
+                                <ArrowRight size={14} />
                             </div>
-                        </div>
+                        </button>
 
-                        {/* Words grid OR Textarea */}
-                        {inputMode === 'words' ? (
-                            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 pt-1">
-                                {mnemonicWords.map((word, idx) => (
-                                    <div key={idx} className="relative flex items-center">
-                                        <span className="absolute left-2.5 text-[10px] font-mono text-slate-400 select-none">
-                                            {idx + 1}.
-                                        </span>
-                                        <input
-                                            id={`restore-sync-word-${idx}`}
-                                            data-testid={`restore-sync-word-${idx}`}
-                                            type="text"
-                                            value={word}
-                                            onChange={(e) => handleWordChange(idx, e.target.value)}
-                                            className="w-full pl-7 pr-2 py-1.5 text-xs font-mono bg-slate-50 border border-slate-200 focus:bg-white focus:border-theme-primary rounded-xl outline-hidden transition-all"
-                                            autoCapitalize="none"
-                                            autoCorrect="off"
-                                        />
-                                    </div>
-                                ))}
-                            </div>
-                        ) : (
-                            <Textarea
-                                data-testid="restore-sync-phrase-textarea"
-                                value={rawPhrase}
-                                onChange={(e) => setRawPhrase(e.target.value)}
-                                placeholder={t('profile.pasteSeedPhrasePlaceholder')}
-                                rows={4}
-                                className="font-mono text-xs"
-                            />
-                        )}
-
-                        {/* Optional Passphrase & User/Device Prefix */}
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
-                            <div>
-                                <label className="text-[11px] font-bold text-theme-secondary mb-1 flex items-center gap-1.5">
-                                    <span>{t('profile.optionalPassphraseLabel', 'Optionale Passphrase (13./25. Wort)')}</span>
-                                    <HelpIcon topic="passphrase" size={12} />
-                                </label>
-                                <Input
-                                    data-testid="restore-sync-passphrase-input"
-                                    type="password"
-                                    value={passphrase}
-                                    onChange={(e) => setPassphrase(e.target.value)}
-                                    placeholder={t('auth.passphrasePlaceholder', 'Zusätzliches Wort eingeben, falls bei der Erstellung verwendet')}
-                                    className="text-xs"
-                                    autoComplete="off"
-                                />
-                            </div>
-                            <div>
-                                <label className="block text-[11px] font-bold text-theme-secondary mb-1">
-                                    {t('profile.backupRestoreUserPrefixLabel', 'Account / Device Prefix (Optional)')}
-                                </label>
-                                <Input
-                                    data-testid="restore-sync-user-prefix-input"
-                                    type="text"
-                                    value={userPrefix}
-                                    onChange={(e) => setUserPrefix(e.target.value)}
-                                    placeholder={t('profile.backupRestoreUserPrefixPlaceholder', 'Standard (leer lassen)')}
-                                    className="text-xs font-mono"
-                                />
-                            </div>
-                        </div>
-
-                        {/* Sync Address Input */}
-                        <div className="space-y-1.5 pt-3 border-t border-theme-subtle">
-                            <label className="text-xs font-bold text-theme-secondary flex items-center justify-between">
-                                <span>{t('profile.backupRestoreSyncAddressLabel', 'Sync-Dienst-Adresse oder Deskriptor')}</span>
-                            </label>
-                            <Input
-                                data-testid="restore-sync-input"
-                                type="text"
-                                placeholder={t('profile.backupRestoreSyncAddressPlaceholder', 'z. B. sync.verein.de, https://freund.de/sync.php oder JSON-Deskriptor')}
-                                value={syncInput}
-                                onChange={(e) => setSyncInput(e.target.value)}
-                                disabled={isFetchingSync}
-                            />
-                            <p className="text-[11px] text-theme-light">
-                                {t('profile.backupRestoreSyncAddressHint', 'Webspace-Adresse eines eigenen, Freundes- oder öffentlichen Sync-Dienstes.')}
-                            </p>
-                        </div>
-
-                        <Button
-                            data-testid="restore-sync-fetch-btn"
-                            variant="primary"
-                            onClick={handleFetchAndInspectBackup}
-                            disabled={isFetchingSync}
-                            className="w-full mt-2"
+                        {/* Card 2: Recovery Words / Emergency Sheet / Subaccount */}
+                        <button
+                            type="button"
+                            onClick={() => {
+                                setWordsPhase('input');
+                                setMethod('words_or_sheet');
+                            }}
+                            data-testid="choose-words-or-sheet-btn"
+                            className="p-6 bg-bg-surface hover:bg-theme-subtle/30 border-2 border-theme-subtle hover:border-theme-primary rounded-3xl text-left transition-all group shadow-sm flex flex-col justify-between cursor-pointer"
                         >
-                            {isFetchingSync ? (
-                                <>
-                                    <RefreshCw size={14} className="animate-spin mr-2" />
-                                    {t('profile.backupRestoreFetchingSync', 'Sync-Dienst wird durchsucht...')}
-                                </>
-                            ) : (
-                                <>
-                                    <Search size={14} className="mr-2" />
-                                    {t('profile.backupRestoreFetchSyncBtn', 'Sicherung suchen & laden')}
-                                </>
-                            )}
-                        </Button>
+                            <div className="space-y-3">
+                                <div className="w-12 h-12 rounded-2xl bg-amber-500/10 text-amber-600 flex items-center justify-center group-hover:scale-105 transition-transform">
+                                    <KeyRound size={24} />
+                                </div>
+                                <h3 className="font-black text-base text-theme-secondary tracking-tight">
+                                    {t('backup.restoreCardWordsTitle')}
+                                </h3>
+                                <p className="text-xs text-theme-light leading-relaxed">
+                                    {t('backup.restoreCardWordsDesc')}
+                                </p>
+                            </div>
+                            <div className="flex items-center gap-1.5 text-xs font-bold text-amber-600 pt-4">
+                                <span>{t('common.select')}</span>
+                                <ArrowRight size={14} />
+                            </div>
+                        </button>
+
+                        {/* Card 3: Backup File / Folder */}
+                        <button
+                            type="button"
+                            onClick={() => setMethod('file_or_folder')}
+                            data-testid="choose-file-or-folder-btn"
+                            className="p-6 bg-bg-surface hover:bg-theme-subtle/30 border-2 border-theme-subtle hover:border-theme-primary rounded-3xl text-left transition-all group shadow-sm flex flex-col justify-between cursor-pointer"
+                        >
+                            <div className="space-y-3">
+                                <div className="w-12 h-12 rounded-2xl bg-theme-primary/10 text-theme-primary flex items-center justify-center group-hover:scale-105 transition-transform">
+                                    <FileArchive size={24} />
+                                </div>
+                                <h3 className="font-black text-base text-theme-secondary tracking-tight">
+                                    {t('backup.restoreCardFileTitle')}
+                                </h3>
+                                <p className="text-xs text-theme-light leading-relaxed">
+                                    {t('backup.restoreCardFileDesc')}
+                                </p>
+                            </div>
+                            <div className="flex items-center gap-1.5 text-xs font-bold text-theme-primary pt-4">
+                                <span>{t('common.select')}</span>
+                                <ArrowRight size={14} />
+                            </div>
+                        </button>
                     </div>
                 </div>
             )}
 
-            {/* STEP 2 & 3: Unlock & Inspect, and Device Password */}
-            {step === 'unlock_and_inspect' && (
-                <div className="space-y-6">
-                    {/* Source Selected Banner */}
-                    <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl flex items-center justify-between gap-4">
-                        <div className="flex items-center gap-3 min-w-0">
-                            {matchedSyncKeyKind ? (
-                                <Server size={18} className="text-theme-primary shrink-0" />
-                            ) : (
-                                <Folder size={18} className="text-theme-primary shrink-0" />
-                            )}
-                            <div className="min-w-0">
-                                <p className="text-[10px] font-black uppercase tracking-wider text-theme-light flex items-center gap-2">
-                                    <span>{matchedSyncKeyKind ? 'Sync-Dienst-Sicherung' : (probe?.sourceKind === 'folder' ? 'Backup Folder' : 'Backup Archive')}</span>
-                                    {matchedSyncKeyKind && (
-                                        <span className="px-2 py-0.5 rounded-full bg-theme-primary/10 text-theme-primary font-bold">
-                                            {matchedSyncKeyKind === 'stealth' && 'Stealth-Schlüssel'}
-                                            {matchedSyncKeyKind === 'public' && 'Öffentlicher Sync-Dienst'}
-                                            {matchedSyncKeyKind === 'grace' && 'Grace-Schlüssel'}
-                                            {matchedSyncKeyKind === 'own' && 'Eigener Sync-Dienst'}
-                                        </span>
-                                    )}
-                                </p>
-                                <p className="text-xs font-mono text-theme-secondary truncate max-w-md">
-                                    {sourcePath}
-                                </p>
-                            </div>
+            {/* BRANCH 1: Social Recovery */}
+            {method === 'social' && (
+                <SocialRecoveryFlow
+                    mode="restore_new_device"
+                    initialPayload={initialPayload}
+                    existingSession={activeSocialSession}
+                    onBack={() => setMethod('choose')}
+                    onSuccess={(res) => {
+                        if (res.outcome === 'restored_from_sync') {
+                            setRestoreOutcome({
+                                folderName: res.folderName,
+                                profileName: res.profileName,
+                                activeVoucherQueriesCount: res.activeVoucherQueriesCount,
+                                reconciledSpentCount: res.reconciledSpentCount,
+                                restoredStandardsCount: res.restoredStandardsCount,
+                                l2ReconciliationStatus: res.l2ReconciliationStatus,
+                            });
+                            setMethod('completed');
+                        } else {
+                            onRestoreSuccess({
+                                folderName: res.folderName,
+                                profileName: res.profileName,
+                                activeVoucherQueriesCount: res.activeVoucherQueriesCount,
+                                reconciledSpentCount: res.reconciledSpentCount,
+                                restoredStandardsCount: res.restoredStandardsCount,
+                                l2ReconciliationStatus: res.l2ReconciliationStatus,
+                            });
+                        }
+                    }}
+                />
+            )}
+
+            {/* BRANCH 2: Words / Emergency Sheet / No Backup / Subaccount */}
+            {method === 'words_or_sheet' && (
+                <div className="space-y-5 animate-in fade-in duration-300">
+                    <div className="flex items-center justify-between pb-3 border-b border-theme-subtle/60">
+                        <div className="flex items-center gap-2">
+                            <KeyRound className="text-amber-600" size={20} />
+                            <h3 className="font-black text-sm uppercase tracking-wider text-theme-secondary">
+                                {t('backup.restoreCardWordsTitle')}
+                            </h3>
                         </div>
-                        <Button
-                            variant="secondary"
-                            size="xs"
-                            onClick={() => {
-                                setInspection(null);
-                                setStep('select_source');
-                            }}
+                        <button
+                            type="button"
+                            onClick={handleHeaderBack}
+                            className="text-xs font-bold text-theme-light hover:text-theme-secondary flex items-center gap-1 cursor-pointer"
                         >
-                            Change
-                        </Button>
+                            <ArrowLeft size={14} />
+                            <span>{t('common.back')}</span>
+                        </button>
                     </div>
 
-                    {/* Step 2 Section: Credential Unlock */}
-                    <div className="space-y-4">
-                        <div className="flex items-center justify-between">
-                            <h2 className="text-sm font-black uppercase tracking-widest text-theme-secondary flex items-center gap-2">
-                                <KeyRound size={16} className="text-theme-primary" />
-                                {t('profile.backupRestoreUnlockTitle')}
-                            </h2>
+                    {wordsPhase === 'input' && (
+                        <form onSubmit={handleWordsContinue} className="space-y-5">
+                            <SeedPhraseInput
+                                allowKitUri
+                                showUserPrefix
+                                initialPayload={initialPayload}
+                                focusPrefixTrigger={focusPrefixTrigger}
+                                onChange={handleSeedStateChange}
+                                idPrefix="restore-words"
+                            />
 
-                            {/* Tabs if password is supported */}
-                            {probe?.supportsPasswordRestore && (
-                                <div className="flex bg-slate-100 p-1 rounded-xl">
-                                    <button
-                                        type="button"
-                                        onClick={() => {
-                                            setCredentialMode('password');
-                                            setInspection(null);
-                                        }}
-                                        className={`px-3 py-1 text-xs font-bold rounded-lg transition-all ${
-                                            credentialMode === 'password'
-                                                ? 'bg-white text-theme-primary shadow-sm'
-                                                : 'text-theme-light hover:text-theme-secondary'
-                                        }`}
-                                    >
-                                        {t('profile.backupRestorePasswordTab')}
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={() => {
-                                            setCredentialMode('mnemonic');
-                                            setInspection(null);
-                                        }}
-                                        className={`px-3 py-1 text-xs font-bold rounded-lg transition-all ${
-                                            credentialMode === 'mnemonic'
-                                                ? 'bg-white text-theme-primary shadow-sm'
-                                                : 'text-theme-light hover:text-theme-secondary'
-                                        }`}
-                                    >
-                                        {t('profile.backupRestoreMnemonicTab')}
-                                    </button>
-                                </div>
-                            )}
-                        </div>
-
-                        {/* Password credential input */}
-                        {credentialMode === 'password' && (
-                            <div className="space-y-3 p-4 bg-white border border-theme-subtle rounded-2xl">
-                                <label className="block text-xs font-bold text-theme-secondary">
-                                    {t('settings.backupPasswordLabel')}
+                            {/* Optional Sync Address */}
+                            <div className="p-4 bg-white border border-theme-subtle rounded-2xl space-y-2 shadow-sm">
+                                <label
+                                    htmlFor="restore-sync-input"
+                                    className="text-xs font-bold text-theme-secondary flex items-center gap-1.5"
+                                >
+                                    <Server size={14} className="text-theme-primary" />
+                                    <span>{t('backup.optionalSyncAddressLabel')}</span>
                                 </label>
                                 <Input
-                                    data-testid="backup-password-input"
-                                    type="password"
-                                    value={backupPassword}
-                                    onChange={(e) => setBackupPassword(e.target.value)}
-                                    placeholder={t('settings.backupPasswordPlaceholder')}
-                                    className="font-mono"
+                                    id="restore-sync-input"
+                                    data-testid="restore-sync-input"
+                                    type="text"
+                                    value={syncInput}
+                                    onChange={(e) => {
+                                        setSyncInput(e.target.value);
+                                        setSyncEdited(true);
+                                    }}
+                                    placeholder={t('profile.backupRestoreSyncAddressPlaceholder')}
+                                    disabled={isBusy}
                                 />
+                                <p className="text-[11px] text-theme-light leading-relaxed">
+                                    {t('backup.optionalSyncAddressHint')}
+                                </p>
                             </div>
-                        )}
 
-                        {/* Mnemonic credential input */}
-                        {credentialMode === 'mnemonic' && (
-                            <div className="space-y-4 p-4 bg-white border border-theme-subtle rounded-2xl">
-                                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-theme-subtle pb-3">
-                                    <div className="flex items-center gap-2">
-                                        <select
-                                            value={selectedLanguage}
-                                            onChange={(e) => setSelectedLanguage(e.target.value as MnemonicLanguage)}
-                                            className="px-2.5 py-1 text-xs border border-theme-subtle rounded-lg bg-bg-input text-theme-secondary focus:ring-2 focus:ring-theme-primary"
-                                        >
-                                            <option value="english">English</option>
-                                            <option value="german">Deutsch</option>
-                                            <option value="spanish">Español</option>
-                                            <option value="french">Français</option>
-                                            <option value="italian">Italiano</option>
-                                        </select>
-                                        <select
-                                            value={wordCount}
-                                            onChange={(e) => handleWordCountChange(Number(e.target.value) as 12 | 24)}
-                                            className="px-2.5 py-1 text-xs border border-theme-subtle rounded-lg bg-bg-input text-theme-secondary focus:ring-2 focus:ring-theme-primary"
-                                        >
-                                            <option value={12}>{t('profile.wordCount12')}</option>
-                                            <option value={24}>{t('profile.wordCount24')}</option>
-                                        </select>
-                                    </div>
-                                    <button
-                                        type="button"
-                                        onClick={() => setInputMode(inputMode === 'words' ? 'phrase' : 'words')}
-                                        className="text-xs font-semibold text-theme-primary hover:underline"
-                                    >
-                                        {inputMode === 'words' ? t('auth.enterFullPhrase') : t('auth.useSingleFields')}
-                                    </button>
-                                </div>
-
-                                {inputMode === 'words' ? (
-                                    <div className="grid grid-cols-3 sm:grid-cols-4 gap-2.5">
-                                        {mnemonicWords.map((word, index) => (
-                                            <div key={index} className="relative">
-                                                <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[10px] text-theme-light select-none">
-                                                    {index + 1}.
-                                                </span>
-                                                <Input
-                                                    id={`restore-word-${index}`}
-                                                    type="text"
-                                                    value={word}
-                                                    onChange={(e) => handleWordChange(index, e.target.value)}
-                                                    className="pl-7 text-xs font-mono"
-                                                    autoComplete="off"
-                                                />
-                                            </div>
-                                        ))}
-                                    </div>
-                                ) : (
-                                    <Textarea
-                                        value={rawPhrase}
-                                        onChange={(e) => setRawPhrase(e.target.value)}
-                                        placeholder={t('profile.pasteSeedPhrasePlaceholder')}
-                                        rows={4}
-                                        className="font-mono text-xs"
-                                    />
-                                )}
-
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
-                                    <div>
-                                        <label className="text-[11px] font-bold text-theme-secondary mb-1 flex items-center gap-1.5">
-                                            <span>{t('profile.optionalPassphraseLabel', 'Optionale Passphrase (13./25. Wort)')}</span>
-                                            <HelpIcon topic="passphrase" size={12} />
-                                        </label>
-                                        <Input
-                                            data-testid="restore-unlock-passphrase-input"
-                                            type="password"
-                                            value={passphrase}
-                                            onChange={(e) => setPassphrase(e.target.value)}
-                                            placeholder={t('auth.passphrasePlaceholder', 'Zusätzliches Wort eingeben, falls bei der Erstellung verwendet')}
-                                            className="text-xs"
-                                            autoComplete="off"
-                                        />
-                                    </div>
-                                    <div>
-                                        <label className="block text-[11px] font-bold text-theme-secondary mb-1">
-                                            {t('profile.backupRestoreUserPrefixLabel', 'Account / Device Prefix (Optional)')}
-                                        </label>
-                                        <Input
-                                            data-testid="restore-unlock-user-prefix-input"
-                                            type="text"
-                                            value={userPrefix}
-                                            onChange={(e) => setUserPrefix(e.target.value)}
-                                            placeholder={t('profile.backupRestoreUserPrefixPlaceholder', 'Standard (leer lassen)')}
-                                            className="text-xs font-mono"
-                                        />
-                                    </div>
-                                </div>
-                            </div>
-                        )}
-
-                        {/* Verify button */}
-                        {!inspection && (
                             <Button
+                                type="submit"
                                 variant="primary"
-                                onClick={handleInspectBackup}
-                                disabled={isInspecting}
-                                className="w-full"
+                                data-testid="words-continue-btn"
+                                disabled={!seedState.isValid || isBusy}
+                                className="w-full py-3.5"
                             >
-                                {isInspecting ? (
+                                {isBusy ? (
                                     <>
-                                        <RefreshCw size={14} className="animate-spin mr-2" />
-                                        {t('profile.backupRestoreVerifying')}
+                                        <RefreshCw size={15} className="animate-spin mr-2" />
+                                        {t('profile.backupRestoreFetchingSync')}
                                     </>
                                 ) : (
                                     <>
-                                        <ShieldCheck size={16} className="mr-2" />
-                                        {t('profile.backupRestoreVerifyButton')}
+                                        <span>{t('profile.nextStep')}</span>
+                                        <ArrowRight size={16} className="ml-2" />
                                     </>
                                 )}
                             </Button>
-                        )}
-                    </div>
+                        </form>
+                    )}
 
-                    {/* Verified Manifest Preview Card */}
-                    {inspection && (
-                        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
-                            <Card className="border-emerald-200 bg-emerald-50/50">
-                                <div className="space-y-4">
-                                    <div className="flex items-center justify-between">
-                                        <div className="flex items-center gap-2">
-                                            <span className="px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider bg-emerald-600 text-white flex items-center gap-1.5 shadow-sm">
-                                                <CheckCircle2 size={12} />
-                                                {t('profile.backupRestoreVerifiedBadge')}
-                                            </span>
-                                        </div>
-                                        <span className="text-xs text-emerald-800 font-mono">
-                                            {new Date(inspection.sealTimestamp).toLocaleString()}
-                                        </span>
-                                    </div>
+                    {/* Phase: Direct Open without Backup */}
+                    {wordsPhase === 'direct_setup' && (
+                        <div className="space-y-5">
+                            {activeCollision
+                                ? renderCollisionWithoutBackupCard(activeCollision)
+                                : renderDirectProfileSetupForm()}
+                        </div>
+                    )}
 
-                                    <div>
-                                        <h3 className="text-base font-black text-theme-secondary">
-                                            {inspection.profileName}
-                                        </h3>
-                                        <p className="text-[11px] font-mono text-theme-light truncate">
-                                            User ID: {inspection.userId}
-                                        </p>
-                                    </div>
+                    {/* Phase: Sync Reachable, Slot Empty -> Calm Info + Open Profile + Subaccount/Passphrase Check */}
+                    {wordsPhase === 'sync_not_found' && (
+                        <div className="space-y-5">
+                            <AlertBanner
+                                variant="info"
+                                data-testid="sync-not-found-banner"
+                                action={
+                                    <Button
+                                        type="button"
+                                        variant="secondary"
+                                        size="xs"
+                                        data-testid="check-passphrase-prefix-btn"
+                                        onClick={() => setWordsPhase('input')}
+                                    >
+                                        {t('backup.checkPassphraseOrPrefixBtn')}
+                                    </Button>
+                                }
+                            >
+                                {t('backup.syncNotFoundDesc')}
+                            </AlertBanner>
 
-                                    {/* Stats grid */}
-                                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2">
-                                        <div className="p-3 bg-white rounded-xl border border-emerald-100 flex items-center gap-2.5">
-                                            <FileText size={16} className="text-emerald-600 shrink-0" />
-                                            <div>
-                                                <p className="text-xs font-black text-theme-secondary">
-                                                    {inspection.blobCount}
-                                                </p>
-                                                <p className="text-[10px] text-theme-light">{t('backup.dataBlobs', 'Datenblöcke')}</p>
-                                            </div>
-                                        </div>
-                                        <div className="p-3 bg-white rounded-xl border border-emerald-100 flex items-center gap-2.5">
-                                            <History size={16} className="text-emerald-600 shrink-0" />
-                                            <div>
-                                                <p className="text-xs font-black text-theme-secondary">
-                                                    {inspection.epoch}
-                                                </p>
-                                                <p className="text-[10px] text-theme-light">{t('backup.epoch', 'Epoche')}</p>
-                                            </div>
-                                        </div>
-                                        <div className="p-3 bg-white rounded-xl border border-emerald-100 flex items-center gap-2.5">
-                                            <Hash size={16} className="text-emerald-600 shrink-0" />
-                                            <div>
-                                                <p className="text-xs font-black text-theme-secondary">
-                                                    {inspection.txNonce}
-                                                </p>
-                                                <p className="text-[10px] text-theme-light">{t('backup.txNonce', 'Tx-Nonce')}</p>
-                                            </div>
-                                        </div>
-                                        <div className="p-3 bg-white rounded-xl border border-emerald-100 flex items-center gap-2.5">
-                                            <Layers size={16} className="text-emerald-600 shrink-0" />
-                                            <div>
-                                                <p className="text-xs font-black text-theme-secondary">
-                                                    {inspection.customStandardCount}
-                                                </p>
-                                                <p className="text-[10px] text-theme-light">{t('backup.standards', 'Standards')}</p>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                            </Card>
+                            {activeCollision
+                                ? renderCollisionWithoutBackupCard(activeCollision)
+                                : renderDirectProfileSetupForm()}
+                        </div>
+                    )}
 
-                            {/* STEP 3: Set Local Device Password & Restore */}
-                            <form onSubmit={handleRestoreSubmit} className="space-y-4 p-5 bg-white border border-theme-subtle rounded-3xl shadow-sm">
+                    {/* Phase: Sync Unreachable -> Hard Stop with Retry & Explicit Secondary Bypass */}
+                    {wordsPhase === 'sync_unreachable' && (
+                        <div
+                            data-testid="sync-unreachable-card"
+                            className="p-6 bg-amber-50 border border-amber-200 rounded-3xl space-y-4"
+                        >
+                            <div className="flex items-start gap-3">
+                                <AlertTriangle size={20} className="text-amber-600 shrink-0 mt-0.5" />
                                 <div className="space-y-1">
-                                    <h3 className="text-sm font-black uppercase tracking-widest text-theme-secondary flex items-center gap-2">
-                                        <Lock size={16} className="text-theme-primary" />
-                                        {t('profile.backupRestoreDevicePasswordTitle')}
-                                    </h3>
-                                    <p className="text-xs text-theme-light">
-                                        {t('profile.backupRestoreDevicePasswordDesc')}
+                                    <h4 className="text-sm font-black text-amber-900">
+                                        {t('backup.syncUnreachableTitle')}
+                                    </h4>
+                                    <p className="text-xs text-amber-800 leading-relaxed">
+                                        {syncProbe?.error || t('backup.syncUnreachableDesc')}
                                     </p>
                                 </div>
+                            </div>
 
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
-                                    <div>
-                                        <label className="block text-xs font-bold text-theme-secondary mb-1">
-                                            {t('profile.backupRestoreNewPasswordLabel')}
-                                        </label>
-                                        <Input
-                                            data-testid="new-device-password-input"
-                                            type="password"
-                                            value={newPassword}
-                                            onChange={(e) => setNewPassword(e.target.value)}
-                                            placeholder="Min. 8 characters"
-                                            autoComplete="new-password"
-                                        />
-                                    </div>
-                                    <div>
-                                        <label className="block text-xs font-bold text-theme-secondary mb-1">
-                                            {t('profile.backupRestoreConfirmPasswordLabel')}
-                                        </label>
-                                        <Input
-                                            data-testid="confirm-device-password-input"
-                                            type="password"
-                                            value={confirmNewPassword}
-                                            onChange={(e) => setConfirmNewPassword(e.target.value)}
-                                            placeholder="Min. 8 characters"
-                                            autoComplete="new-password"
-                                        />
-                                    </div>
-                                </div>
-
+                            <div className="flex flex-wrap items-center gap-2 pt-1">
                                 <Button
-                                    data-testid="restore-submit-btn"
-                                    type="submit"
+                                    type="button"
                                     variant="primary"
-                                    disabled={isRestoring}
-                                    className="w-full mt-2"
+                                    size="sm"
+                                    data-testid="retry-sync-probe-btn"
+                                    disabled={isBusy}
+                                    onClick={() => void runSyncProbe(lastSyncInputs)}
                                 >
-                                    {isRestoring ? (
-                                        <>
-                                            <RefreshCw size={14} className="animate-spin mr-2" />
-                                            {t('profile.backupRestoreRestoring')}
-                                        </>
-                                    ) : (
-                                        <>
-                                            <ShieldCheck size={16} className="mr-2" />
-                                            {t('profile.backupRestoreSubmitButton')}
-                                        </>
-                                    )}
+                                    <RefreshCw size={14} className={`mr-1.5 ${isBusy ? 'animate-spin' : ''}`} />
+                                    {t('common.retry')}
                                 </Button>
-                            </form>
+                                <Button
+                                    type="button"
+                                    variant="secondary"
+                                    size="sm"
+                                    data-testid="edit-sync-address-btn"
+                                    onClick={() => setWordsPhase('input')}
+                                >
+                                    {t('backup.editSyncAddressBtn')}
+                                </Button>
+                                <button
+                                    type="button"
+                                    data-testid="proceed-without-backup-btn"
+                                    onClick={() => {
+                                        setResolvedSyncTargets([]);
+                                        setWordsPhase('direct_setup');
+                                    }}
+                                    className="text-xs font-semibold text-theme-light hover:text-theme-secondary underline ml-auto cursor-pointer"
+                                >
+                                    {t('backup.proceedWithoutBackupLink')}
+                                </button>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Phase: Sync Backup Found */}
+                    {wordsPhase === 'sync_found' && inspection && (
+                        <div className="space-y-5">
+                            {matchedSyncKeyKind && (
+                                <div className="flex items-center justify-between px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl text-xs">
+                                    <span className="font-semibold text-theme-secondary flex items-center gap-2">
+                                        <Server size={15} className="text-theme-primary" />
+                                        {syncProbe?.sourceUrl}
+                                    </span>
+                                    <span className="px-2 py-0.5 rounded-full bg-theme-primary/10 text-theme-primary font-bold text-[10px] uppercase">
+                                        {matchedSyncKeyKind}
+                                    </span>
+                                </div>
+                            )}
+
+                            {renderInspectedManifestCard(inspection)}
+                            {activeCollision && renderCollisionWithBackupCard(activeCollision, inspection)}
+                            {renderDevicePasswordRestoreForm(activeCollision)}
                         </div>
                     )}
                 </div>
             )}
 
-            {/* STEP 4: Completion State */}
-            {step === 'completed' && restoreOutcome && (
-                <div className="space-y-6 text-center animate-in zoom-in-95 duration-400">
+            {/* BRANCH 3: File / Folder Restore */}
+            {method === 'file_or_folder' && (
+                <div className="space-y-5 animate-in fade-in duration-300">
+                    <div className="flex items-center justify-between pb-3 border-b border-theme-subtle/60">
+                        <div className="flex items-center gap-2">
+                            <FileArchive className="text-theme-primary" size={20} />
+                            <h3 className="font-black text-sm uppercase tracking-wider text-theme-secondary">
+                                {t('backup.restoreCardFileTitle')}
+                            </h3>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={handleHeaderBack}
+                            className="text-xs font-bold text-theme-light hover:text-theme-secondary flex items-center gap-1 cursor-pointer"
+                        >
+                            <ArrowLeft size={14} />
+                            <span>{t('common.back')}</span>
+                        </button>
+                    </div>
+
+                    {!probe && (
+                        <div className="space-y-4">
+                            <div
+                                data-testid="backup-file-dropzone"
+                                onDragEnter={(e) => {
+                                    e.preventDefault();
+                                    setIsDraggingBackup(true);
+                                }}
+                                onDragOver={(e) => e.preventDefault()}
+                                onDragLeave={(e) => {
+                                    e.preventDefault();
+                                    setIsDraggingBackup(false);
+                                }}
+                                onDrop={(e) => void handleInlineDrop(e)}
+                                className={`p-8 border-2 border-dashed rounded-3xl text-center space-y-3 transition-all ${
+                                    isDraggingBackup
+                                        ? 'border-theme-primary bg-theme-primary/10'
+                                        : 'border-theme-subtle bg-slate-50/70'
+                                }`}
+                            >
+                                <div className="w-12 h-12 rounded-2xl bg-theme-primary/10 text-theme-primary flex items-center justify-center mx-auto">
+                                    <UploadCloud size={24} />
+                                </div>
+                                <div className="space-y-1">
+                                    <p className="text-sm font-bold text-theme-secondary">
+                                        {t('backup.dropBackupHereTitle')}
+                                    </p>
+                                    <p className="text-xs text-theme-light">
+                                        {t('backup.dropBackupHereDesc')}
+                                    </p>
+                                </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                <button
+                                    type="button"
+                                    data-testid="select-backup-file-btn"
+                                    onClick={handleSelectFile}
+                                    className="p-5 bg-white border-2 border-theme-subtle hover:border-theme-primary/50 hover:bg-theme-primary/5 rounded-3xl text-left transition-all flex items-center gap-4 cursor-pointer shadow-sm"
+                                >
+                                    <div className="w-11 h-11 rounded-2xl bg-theme-primary/10 text-theme-primary flex items-center justify-center shrink-0">
+                                        <FileArchive size={22} />
+                                    </div>
+                                    <div className="space-y-0.5 min-w-0">
+                                        <h4 className="text-sm font-black text-theme-secondary">
+                                            {t('profile.backupRestoreSelectFile')}
+                                        </h4>
+                                        <p className="text-xs text-theme-light">
+                                            {t('profile.backupRestoreSelectFileDesc')}
+                                        </p>
+                                    </div>
+                                </button>
+
+                                <button
+                                    type="button"
+                                    data-testid="select-backup-folder-btn"
+                                    onClick={handleSelectFolder}
+                                    className="p-5 bg-white border-2 border-theme-subtle hover:border-theme-primary/50 hover:bg-theme-primary/5 rounded-3xl text-left transition-all flex items-center gap-4 cursor-pointer shadow-sm"
+                                >
+                                    <div className="w-11 h-11 rounded-2xl bg-theme-primary/10 text-theme-primary flex items-center justify-center shrink-0">
+                                        <FolderSync size={22} />
+                                    </div>
+                                    <div className="space-y-0.5 min-w-0">
+                                        <h4 className="text-sm font-black text-theme-secondary">
+                                            {t('profile.backupRestoreSelectFolder')}
+                                        </h4>
+                                        <p className="text-xs text-theme-light">
+                                            {t('profile.backupRestoreSelectFolderDesc')}
+                                        </p>
+                                    </div>
+                                </button>
+                            </div>
+                        </div>
+                    )}
+
+                    {probe && (
+                        <div className="space-y-5">
+                            <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl flex items-center justify-between gap-4">
+                                <div className="flex items-center gap-3 min-w-0">
+                                    <Folder size={18} className="text-theme-primary shrink-0" />
+                                    <div className="min-w-0">
+                                        <p className="text-[10px] font-black uppercase tracking-wider text-theme-light">
+                                            {probe.sourceKind === 'folder'
+                                                ? t('backup.sourceKindFolder')
+                                                : t('backup.sourceKindArchive')}
+                                        </p>
+                                        <p className="text-xs font-mono text-theme-secondary truncate max-w-md">
+                                            {sourcePath}
+                                        </p>
+                                    </div>
+                                </div>
+                                <Button
+                                    variant="secondary"
+                                    size="xs"
+                                    onClick={() => {
+                                        setProbe(null);
+                                        setInspection(null);
+                                        setActiveCollision(null);
+                                        setSourcePath('');
+                                    }}
+                                >
+                                    {t('common.change')}
+                                </Button>
+                            </div>
+
+                            {/* Unlock credentials */}
+                            {!inspection && (
+                                <div className="space-y-4">
+                                    <div className="flex items-center justify-between flex-wrap gap-2">
+                                        <h4 className="text-sm font-black uppercase tracking-widest text-theme-secondary flex items-center gap-2">
+                                            <KeyRound size={16} className="text-theme-primary" />
+                                            {t('profile.backupRestoreUnlockTitle')}
+                                        </h4>
+
+                                        {probe.supportsPasswordRestore && (
+                                            <div className="flex bg-slate-100 p-1 rounded-xl">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setCredentialMode('password')}
+                                                    className={`px-3 py-1 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+                                                        credentialMode === 'password'
+                                                            ? 'bg-white text-theme-primary shadow-sm'
+                                                            : 'text-theme-light hover:text-theme-secondary'
+                                                    }`}
+                                                >
+                                                    {t('profile.backupRestorePasswordTab')}
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setCredentialMode('mnemonic')}
+                                                    className={`px-3 py-1 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+                                                        credentialMode === 'mnemonic'
+                                                            ? 'bg-white text-theme-primary shadow-sm'
+                                                            : 'text-theme-light hover:text-theme-secondary'
+                                                    }`}
+                                                >
+                                                    {t('profile.backupRestoreMnemonicTab')}
+                                                </button>
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    {credentialMode === 'password' ? (
+                                        <div className="space-y-2 p-4 bg-white border border-theme-subtle rounded-2xl">
+                                            <label className="block text-xs font-bold text-theme-secondary">
+                                                {t('settings.backupPasswordLabel')}
+                                            </label>
+                                            <Input
+                                                data-testid="backup-password-input"
+                                                type="password"
+                                                showToggle
+                                                value={backupPassword}
+                                                onChange={(e) => setBackupPassword(e.target.value)}
+                                                placeholder={t('settings.backupPasswordPlaceholder')}
+                                                className="font-mono"
+                                            />
+                                        </div>
+                                    ) : (
+                                        <SeedPhraseInput
+                                            allowKitUri={false}
+                                            showUserPrefix
+                                            idPrefix="restore-file"
+                                            onChange={setFileSeedState}
+                                        />
+                                    )}
+
+                                    <Button
+                                        variant="primary"
+                                        data-testid="inspect-file-backup-btn"
+                                        onClick={handleInspectFileBackup}
+                                        disabled={isBusy}
+                                        className="w-full"
+                                    >
+                                        {isBusy ? (
+                                            <>
+                                                <RefreshCw size={14} className="animate-spin mr-2" />
+                                                {t('profile.backupRestoreVerifying')}
+                                            </>
+                                        ) : (
+                                            <>
+                                                <ShieldCheck size={16} className="mr-2" />
+                                                {t('profile.backupRestoreVerifyButton')}
+                                            </>
+                                        )}
+                                    </Button>
+                                </div>
+                            )}
+
+                            {inspection && (
+                                <div className="space-y-5">
+                                    {renderInspectedManifestCard(inspection)}
+                                    {activeCollision &&
+                                        renderCollisionWithBackupCard(activeCollision, inspection)}
+                                    {renderDevicePasswordRestoreForm(activeCollision)}
+                                </div>
+                            )}
+                        </div>
+                    )}
+                </div>
+            )}
+
+            {/* UNIFIED COMPLETION STATE */}
+            {method === 'completed' && restoreOutcome && (
+                <div className="space-y-6 text-center animate-in zoom-in-95 duration-300">
                     <div className="w-16 h-16 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto shadow-inner">
                         <CheckCircle2 size={36} />
                     </div>
@@ -1055,29 +1615,33 @@ export const RestoreBackupView: React.FC<RestoreBackupViewProps> = ({
                         </p>
                     </div>
 
-                    {/* Outcome Stats */}
                     <div className="grid grid-cols-3 gap-3 p-4 bg-slate-50 border border-slate-200 rounded-2xl max-w-md mx-auto">
                         <div>
                             <p className="text-lg font-black text-theme-primary">
                                 {restoreOutcome.activeVoucherQueriesCount}
                             </p>
-                            <p className="text-[10px] uppercase font-bold text-theme-light">{t('backup.active', 'Aktiv')}</p>
+                            <p className="text-[10px] uppercase font-bold text-theme-light">
+                                {t('backup.active')}
+                            </p>
                         </div>
                         <div>
                             <p className="text-lg font-black text-slate-700">
                                 {restoreOutcome.reconciledSpentCount}
                             </p>
-                            <p className="text-[10px] uppercase font-bold text-theme-light">{t('backup.spent', 'Ausgegeben')}</p>
+                            <p className="text-[10px] uppercase font-bold text-theme-light">
+                                {t('backup.spent')}
+                            </p>
                         </div>
                         <div>
                             <p className="text-lg font-black text-slate-700">
                                 {restoreOutcome.restoredStandardsCount}
                             </p>
-                            <p className="text-[10px] uppercase font-bold text-theme-light">{t('backup.standards', 'Standards')}</p>
+                            <p className="text-[10px] uppercase font-bold text-theme-light">
+                                {t('backup.standards')}
+                            </p>
                         </div>
                     </div>
 
-                    {/* Notice */}
                     <div className="p-3.5 rounded-xl bg-slate-100 text-xs text-theme-secondary max-w-md mx-auto leading-relaxed">
                         {restoreOutcome.l2ReconciliationStatus === 'no_servers'
                             ? t('profile.backupRestoreOfflineNotice')
@@ -1087,38 +1651,38 @@ export const RestoreBackupView: React.FC<RestoreBackupViewProps> = ({
                               })}
                     </div>
 
-                    {/* Mandatory SST-V4 L2 Warning Banner */}
-                    {restoreOutcome.l2ReconciliationStatus !== 'reconciled' && restoreOutcome.activeVoucherQueriesCount > 0 && (
-                        <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 text-xs text-left space-y-2 max-w-md mx-auto">
-                            <div className="flex items-center gap-2 font-bold text-amber-800">
-                                <AlertTriangle size={16} className="shrink-0" />
-                                <span>{t('profile.backupRestoreL2WarningTitle', 'Online-Sicherheitsabgleich erforderlich')}</span>
+                    {restoreOutcome.l2ReconciliationStatus !== 'reconciled' &&
+                        restoreOutcome.activeVoucherQueriesCount > 0 && (
+                            <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 text-xs text-left space-y-2 max-w-md mx-auto">
+                                <div className="flex items-center gap-2 font-bold text-amber-800">
+                                    <AlertTriangle size={16} className="shrink-0" />
+                                    <span>{t('profile.backupRestoreL2WarningTitle')}</span>
+                                </div>
+                                <p className="leading-relaxed">
+                                    {t('profile.backupRestoreL2WarningDesc')}
+                                </p>
+                                <Button
+                                    data-testid="restore-reconcile-l2-btn"
+                                    variant="secondary"
+                                    size="sm"
+                                    disabled={isReconcilingL2}
+                                    onClick={handleReconcileL2}
+                                    className="w-full mt-1"
+                                >
+                                    {isReconcilingL2 ? (
+                                        <>
+                                            <RefreshCw size={14} className="animate-spin mr-2" />
+                                            {t('profile.backupRestoreReconcilingL2')}
+                                        </>
+                                    ) : (
+                                        <>
+                                            <RefreshCw size={14} className="mr-2" />
+                                            {t('profile.backupRestoreReconcileL2Btn')}
+                                        </>
+                                    )}
+                                </Button>
                             </div>
-                            <p className="leading-relaxed">
-                                {t('profile.backupRestoreL2WarningDesc', 'Vor dem ersten Ausgeben von Gutscheinen ist ein einmaliger Online-Sicherheitsabgleich mit dem Layer-2-Netzwerk erforderlich, um Offline-Ausgaben vor dem Geräteverlust zu prüfen.')}
-                            </p>
-                            <Button
-                                data-testid="restore-reconcile-l2-btn"
-                                variant="secondary"
-                                size="sm"
-                                disabled={isReconcilingL2}
-                                onClick={handleReconcileL2}
-                                className="w-full mt-1"
-                            >
-                                {isReconcilingL2 ? (
-                                    <>
-                                        <RefreshCw size={14} className="animate-spin mr-2" />
-                                        {t('profile.backupRestoreReconcilingL2', 'Gleiche mit Layer 2 ab...')}
-                                    </>
-                                ) : (
-                                    <>
-                                        <RefreshCw size={14} className="mr-2" />
-                                        {t('profile.backupRestoreReconcileL2Btn', 'Jetzt online abgleichen')}
-                                    </>
-                                )}
-                            </Button>
-                        </div>
-                    )}
+                        )}
 
                     <Button
                         variant="primary"

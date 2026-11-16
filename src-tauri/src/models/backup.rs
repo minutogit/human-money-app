@@ -39,6 +39,36 @@ pub struct FrontendBackupProbeDto {
     pub custom_standard_count: usize,
 }
 
+/// Metadata describing an already existing local profile that shares the same `user_id`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalProfileCollisionDto {
+    pub folder_name: String,
+    pub profile_name: String,
+    pub user_id: String,
+    pub local_epoch: Option<u64>,
+    pub local_tx_nonce: Option<u64>,
+    pub is_locked_or_conflicted: bool,
+}
+
+/// Canonical resolved sync service target discovered from a sync URL/descriptor.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolvedSyncTargetDto {
+    pub write_url: String,
+    pub read_url: String,
+    pub drop_pub: String,
+    pub register_url: Option<String>,
+}
+
+/// Preview of the cryptographic identity derived from mnemonic + optional passphrase/prefix.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct MnemonicIdentityPreviewDto {
+    pub user_id: String,
+    pub local_collision: Option<LocalProfileCollisionDto>,
+}
+
 /// Detailed metadata obtained after decrypting the manifest with credentials.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -51,6 +81,7 @@ pub struct FrontendBackupInspectionDto {
     pub blob_count: usize,
     pub custom_standard_count: usize,
     pub protection_mode: String,
+    pub local_collision: Option<LocalProfileCollisionDto>,
 }
 
 /// Statistics and metadata from an export or folder synchronization run.
@@ -104,14 +135,19 @@ pub struct FrontendBackupSyncResult {
     pub retry_after_secs: Option<u64>,
 }
 
-/// Metadata and staged path of a backup fetched from a sync service during recovery wizard.
+/// Non-silent probe result when searching sync services for an encrypted backup.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
-pub struct FrontendBackupFetchDto {
-    pub staged_path: String,
-    pub matched_key_kind: String, // "stealth" | "public" | "grace" | "own"
-    pub source_url: String,
-    pub inspection: FrontendBackupInspectionDto,
+pub struct SyncBackupProbeResultDto {
+    pub status: String, // "found" | "not_found" | "unreachable"
+    pub staged_path: Option<String>,
+    pub matched_key_kind: Option<String>, // "stealth" | "public" | "grace" | "slot_id" | "own"
+    pub source_url: Option<String>,
+    pub inspection: Option<FrontendBackupInspectionDto>,
+    pub user_id: String,
+    pub local_collision: Option<LocalProfileCollisionDto>,
+    pub resolved_sync_targets: Vec<ResolvedSyncTargetDto>,
+    pub error: Option<String>,
 }
 
 /// Outcome of reconciling a restored wallet against online L2 gateways.

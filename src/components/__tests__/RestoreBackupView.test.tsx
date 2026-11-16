@@ -1,52 +1,42 @@
-/* eslint-disable @typescript-eslint/no-require-imports, no-undef, @typescript-eslint/no-explicit-any */
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { RestoreBackupView } from '../RestoreBackupView';
 import { backupService } from '../../services/backupService';
+import { recoveryService } from '../../services/recoveryService';
+import { profileService } from '../../services/profileService';
 import { authService } from '../../services/authService';
 import { open } from '@tauri-apps/plugin-dialog';
-
-vi.mock('react-i18next', () => {
-    const fs = require('fs');
-    const path = require('path');
-    const enPath = path.resolve(process.cwd(), 'src/locales/en.json');
-    let enTranslations = {};
-    try {
-        enTranslations = JSON.parse(fs.readFileSync(enPath, 'utf-8'));
-    } catch (err) {
-        console.error(err);
-    }
-
-    const stableT = (key: string, options?: any) => {
-        let val = (enTranslations as Record<string, string>)[key] || key;
-        if (options && typeof options === 'object') {
-            for (const [k, v] of Object.entries(options)) {
-                val = val.replace(new RegExp(`\\{\\{\\s*${k}\\s*\\}\\}`, 'g'), String(v));
-            }
-        }
-        return val;
-    };
-
-    return {
-        useTranslation: () => ({
-            t: stableT,
-            i18n: { language: 'en', changeLanguage: vi.fn() },
-            ready: true,
-        }),
-    };
-});
-
-vi.mock('@tauri-apps/plugin-dialog', () => ({
-    open: vi.fn(),
-}));
 
 vi.mock('../../services/backupService', () => ({
     backupService: {
         probeBackup: vi.fn(),
         inspectBackup: vi.fn(),
         restoreBackup: vi.fn(),
-        fetchAndInspectBackup: vi.fn(),
+        resetLocalPasswordViaBackup: vi.fn(),
+        previewMnemonicIdentity: vi.fn(),
+        stageDroppedBackupBytes: vi.fn(),
+        probeSyncBackup: vi.fn(),
         reconcileRestoredWalletL2: vi.fn(),
+    },
+}));
+
+vi.mock('../../services/recoveryService', () => ({
+    recoveryService: {
+        getActiveRecoverySession: vi.fn(),
+        inspectEmergencyKitUri: vi.fn(),
+        startSocialRecoverySession: vi.fn(),
+        cancelSocialRecoverySession: vi.fn(),
+        importGuardianRecoveryReply: vi.fn(),
+        completeSocialRecovery: vi.fn(),
+    },
+}));
+
+vi.mock('../../services/profileService', () => ({
+    profileService: {
+        getWordlist: vi.fn(),
+        validateMnemonic: vi.fn(),
+        createProfile: vi.fn(),
+        recoverWallet: vi.fn(),
     },
 }));
 
@@ -65,378 +55,412 @@ vi.mock('../../utils/log', () => ({
     },
 }));
 
+const VALID_12 =
+    'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
+
 describe('RestoreBackupView', () => {
     const onRestoreSuccess = vi.fn();
-    const onSwitchToRecreate = vi.fn();
     const onBack = vi.fn();
 
     beforeEach(() => {
         vi.clearAllMocks();
+        localStorage.clear();
+        vi.mocked(recoveryService.getActiveRecoverySession).mockResolvedValue(null);
+        vi.mocked(profileService.getWordlist).mockResolvedValue(['abandon', 'about']);
+        vi.mocked(profileService.validateMnemonic).mockResolvedValue(undefined);
+        vi.mocked(authService.getLocalInstanceId).mockResolvedValue('device-uuid-123');
     });
 
-    it('renders initial source selection screen and links', () => {
-        render(
-            <RestoreBackupView
-                onRestoreSuccess={onRestoreSuccess}
-                onSwitchToRecreate={onSwitchToRecreate}
-                onBack={onBack}
-            />
-        );
+    it('renders 3 equal method cards and active social session banner when present', async () => {
+        vi.mocked(recoveryService.getActiveRecoverySession).mockResolvedValue({
+            sasCode: '123-456',
+            createdAt: 1700000000,
+            nameHint: 'Alice',
+            requestUri: 'humoco://recovery-req?v=1&pk=abc',
+            sessionMode: 'restore_new_device',
+            targetFolderName: null,
+            ownerDid: null,
+            ownerDisplayName: null,
+            rotationEpoch: null,
+            thresholdM: 2,
+            collectedCount: 1,
+            questionIds: null,
+            hasEnoughShares: false,
+            discoveredSyncUrls: [],
+        });
 
-        expect(screen.getByText(/Restore (Profile|Wallet) from Backup/i)).toBeInTheDocument();
-        expect(screen.getByText('Select Backup Source')).toBeInTheDocument();
-        expect(screen.getByText('Select .hmcbackup File')).toBeInTheDocument();
-        expect(screen.getByText('Select Backup Sync Folder')).toBeInTheDocument();
+        render(<RestoreBackupView onRestoreSuccess={onRestoreSuccess} onBack={onBack} />);
 
-        // Top choice link to recreate
-        const recreateBtn = screen.getByRole('button', { name: /Recreate/i });
-        fireEvent.click(recreateBtn);
-        expect(onSwitchToRecreate).toHaveBeenCalled();
+        await waitFor(() => {
+            expect(screen.getByTestId('resume-social-session-banner')).toBeInTheDocument();
+        });
 
-        // Back button
-        const backBtn = screen.getByTestId('restore-back-btn');
-        fireEvent.click(backBtn);
+        expect(screen.getByTestId('choose-social-recovery-btn')).toBeInTheDocument();
+        expect(screen.getByTestId('choose-words-or-sheet-btn')).toBeInTheDocument();
+        expect(screen.getByTestId('choose-file-or-folder-btn')).toBeInTheDocument();
+
+        fireEvent.click(screen.getByTestId('restore-back-btn').querySelector('button')!);
         expect(onBack).toHaveBeenCalled();
     });
 
-    it('handles probing a backup file and transitions to unlock screen', async () => {
-        vi.mocked(open).mockResolvedValue('/tmp/my-backup.hmcbackup');
-        vi.mocked(backupService.probeBackup).mockResolvedValue({
-            sourceKind: 'file',
-            protectionMode: 'custom_password',
-            supportsPasswordRestore: true,
-            supportsMnemonicRestore: true,
-            blobCount: 15,
-            customStandardCount: 1,
+    it('opens a profile directly from words without sync address (no backup path)', async () => {
+        vi.mocked(backupService.previewMnemonicIdentity).mockResolvedValue({
+            userId: 'did:key:z6MkAlice',
+            localCollision: null,
         });
+        vi.mocked(profileService.createProfile).mockResolvedValue(undefined);
+
+        render(<RestoreBackupView onRestoreSuccess={onRestoreSuccess} onBack={onBack} />);
+
+        fireEvent.click(screen.getByTestId('choose-words-or-sheet-btn'));
+
+        fireEvent.change(screen.getByTestId('restore-words-word-0'), {
+            target: { value: VALID_12 },
+        });
+
+        await waitFor(() => {
+            expect(screen.getByTestId('words-continue-btn')).not.toBeDisabled();
+        });
+
+        fireEvent.click(screen.getByTestId('words-continue-btn'));
+
+        await waitFor(() => {
+            expect(backupService.previewMnemonicIdentity).toHaveBeenCalled();
+            expect(screen.getByTestId('direct-profile-name-input')).toBeInTheDocument();
+        });
+
+        fireEvent.change(screen.getByTestId('direct-profile-name-input'), {
+            target: { value: 'Alice Ohne Backup' },
+        });
+        fireEvent.change(screen.getByTestId('new-device-password-input'), {
+            target: { value: 'StrongPass123!' },
+        });
+        fireEvent.change(screen.getByTestId('confirm-device-password-input'), {
+            target: { value: 'StrongPass123!' },
+        });
+
+        fireEvent.click(screen.getByTestId('direct-open-profile-submit-btn'));
+
+        await waitFor(() => {
+            expect(profileService.createProfile).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    profileName: 'Alice Ohne Backup',
+                    mnemonic: VALID_12,
+                    initialReachPreset: 'medium',
+                    initialSyncTargets: undefined,
+                })
+            );
+            expect(onRestoreSuccess).toHaveBeenCalled();
+        });
+    });
+
+    it('handles subaccount creation with userPrefix and sync not_found adopting initialSyncTargets', async () => {
+        vi.mocked(backupService.probeSyncBackup).mockResolvedValue({
+            status: 'not_found',
+            stagedPath: null,
+            matchedKeyKind: null,
+            sourceUrl: null,
+            inspection: null,
+            userId: 'mobil:did:key:z6MkAlice',
+            localCollision: null,
+            resolvedSyncTargets: [
+                {
+                    writeUrl: 'https://sync.humoco.org/sync.php',
+                    readUrl: 'https://sync.humoco.org/data',
+                    dropPub: 'dp_1',
+                    registerUrl: null,
+                },
+            ],
+            error: null,
+        });
+        vi.mocked(profileService.createProfile).mockResolvedValue(undefined);
 
         render(
             <RestoreBackupView
                 onRestoreSuccess={onRestoreSuccess}
-                onSwitchToRecreate={onSwitchToRecreate}
                 onBack={onBack}
+                initialMethod="words_or_sheet"
             />
         );
 
-        fireEvent.click(screen.getByText('Select .hmcbackup File'));
+        fireEvent.change(screen.getByTestId('restore-words-word-0'), {
+            target: { value: VALID_12 },
+        });
+
+        fireEvent.click(screen.getByTestId('seed-advanced-toggle'));
+        fireEvent.change(screen.getByTestId('seed-user-prefix-input'), {
+            target: { value: 'mobil' },
+        });
+        fireEvent.change(screen.getByTestId('restore-sync-input'), {
+            target: { value: 'https://sync.humoco.org/sync.php' },
+        });
 
         await waitFor(() => {
-            expect(backupService.probeBackup).toHaveBeenCalledWith('/tmp/my-backup.hmcbackup');
-            expect(screen.getByText('Unlock & Preview Backup')).toBeInTheDocument();
-            expect(screen.getByText('/tmp/my-backup.hmcbackup')).toBeInTheDocument();
+            expect(screen.getByTestId('words-continue-btn')).not.toBeDisabled();
+        });
+        fireEvent.click(screen.getByTestId('words-continue-btn'));
+
+        await waitFor(() => {
+            expect(screen.getByTestId('sync-not-found-banner')).toBeInTheDocument();
+        });
+
+        fireEvent.change(screen.getByTestId('direct-profile-name-input'), {
+            target: { value: 'Alice Mobil' },
+        });
+        fireEvent.change(screen.getByTestId('new-device-password-input'), {
+            target: { value: 'StrongPass123!' },
+        });
+        fireEvent.change(screen.getByTestId('confirm-device-password-input'), {
+            target: { value: 'StrongPass123!' },
+        });
+        fireEvent.click(screen.getByTestId('direct-open-profile-submit-btn'));
+
+        await waitFor(() => {
+            expect(profileService.createProfile).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    profileName: 'Alice Mobil',
+                    userPrefix: 'mobil',
+                    initialSyncTargets: [
+                        expect.objectContaining({ writeUrl: 'https://sync.humoco.org/sync.php' }),
+                    ],
+                })
+            );
+            expect(onRestoreSuccess).toHaveBeenCalled();
         });
     });
 
-    it('allows inspecting backup with password and then restoring with new device password', async () => {
-        vi.mocked(open).mockResolvedValue('/tmp/my-backup.hmcbackup');
-        vi.mocked(backupService.probeBackup).mockResolvedValue({
-            sourceKind: 'file',
-            protectionMode: 'custom_password',
-            supportsPasswordRestore: true,
-            supportsMnemonicRestore: true,
-            blobCount: 15,
-            customStandardCount: 1,
-        });
-
-        vi.mocked(backupService.inspectBackup).mockResolvedValue({
-            profileName: 'Alice',
-            userId: 'hmc1alice1234567890',
-            epoch: 2,
-            txNonce: 18,
-            sealTimestamp: '2026-10-30T10:00:00Z',
-            blobCount: 15,
-            customStandardCount: 1,
-            protectionMode: 'custom_password',
-        });
-
-        vi.mocked(authService.getLocalInstanceId).mockResolvedValue('device-uuid-123');
-        vi.mocked(backupService.restoreBackup).mockResolvedValue({
-            folderName: 'profile_alice',
-            profileName: 'Alice',
-            activeVoucherQueriesCount: 5,
-            reconciledSpentCount: 2,
-            restoredStandardsCount: 1,
-            l2ReconciliationStatus: 'no_servers',
-        });
-
-        render(
-            <RestoreBackupView
-                onRestoreSuccess={onRestoreSuccess}
-                onSwitchToRecreate={onSwitchToRecreate}
-                onBack={onBack}
-            />
-        );
-
-        // 1. Select source
-        fireEvent.click(screen.getByText('Select .hmcbackup File'));
-
-        await waitFor(() => {
-            expect(screen.getByText('Unlock & Preview Backup')).toBeInTheDocument();
-        });
-
-        // 2. Input backup password
-        const pwInput = screen.getByTestId('backup-password-input');
-        fireEvent.change(pwInput, { target: { value: 'backupSecret123' } });
-
-        // Click Verify & Preview
-        fireEvent.click(screen.getByRole('button', { name: /Verify & Preview Backup/i }));
-
-        await waitFor(() => {
-            expect(backupService.inspectBackup).toHaveBeenCalledWith({
-                sourcePath: '/tmp/my-backup.hmcbackup',
-                credentialMode: 'password',
-                backupPassword: 'backupSecret123',
-                mnemonic: null,
-                passphrase: null,
-                userPrefix: null,
-                language: null,
-            });
-            expect(screen.getByText('Verified Backup Manifest')).toBeInTheDocument();
-            expect(screen.getByText('Alice')).toBeInTheDocument();
-            expect(screen.getByText(/User ID: hmc1alice1234567890/i)).toBeInTheDocument();
-        });
-
-        // 3. Step 3: Set local device password & restore
-        expect(screen.getByText('Set Local Device Password')).toBeInTheDocument();
-        const newPasswordInput = screen.getByTestId('new-device-password-input');
-        const confirmNewPasswordInput = screen.getByTestId('confirm-device-password-input');
-
-        fireEvent.change(newPasswordInput, { target: { value: 'devicePassword123' } });
-        fireEvent.change(confirmNewPasswordInput, { target: { value: 'devicePassword123' } });
-
-        fireEvent.click(screen.getByTestId('restore-submit-btn'));
-
-        await waitFor(() => {
-            expect(authService.getLocalInstanceId).toHaveBeenCalled();
-            expect(backupService.restoreBackup).toHaveBeenCalledWith({
-                sourcePath: '/tmp/my-backup.hmcbackup',
-                credentialMode: 'password',
-                backupPassword: 'backupSecret123',
-                mnemonic: null,
-                passphrase: null,
-                userPrefix: null,
-                language: null,
-                newPassword: 'devicePassword123',
-                localInstanceId: 'device-uuid-123',
-            });
-            expect(screen.getByText(/(Profile|Wallet) Successfully Restored!/i)).toBeInTheDocument();
-            expect(screen.getByText('Restored offline. No L2 reconciliation servers are configured yet.')).toBeInTheDocument();
-        });
-
-        // 4. Open Wallet button
-        fireEvent.click(screen.getByRole('button', { name: /Open (Profile|Wallet)|Go to My Vouchers/i }));
-        expect(onRestoreSuccess).toHaveBeenCalledWith(
-            expect.objectContaining({
-                folderName: 'profile_alice',
-                activeVoucherQueriesCount: 5,
-            })
-        );
-    });
-
-    it('allows restoring from a drop using mnemonic and drop address', async () => {
-        vi.mocked(backupService.fetchAndInspectBackup).mockResolvedValue({
-            stagedPath: '/tmp/drop_restore_123.hmcbackup',
+    it('restores from sync service when backup is found and reconciles L2', async () => {
+        vi.mocked(backupService.probeSyncBackup).mockResolvedValue({
+            status: 'found',
+            stagedPath: '/tmp/sync_restore.hmcbackup',
+            matchedKeyKind: 'stealth',
+            sourceUrl: 'https://drop.example.org/data',
             inspection: {
                 profileName: 'Bob',
-                userId: 'hmc1bob1234567890',
-                epoch: 1,
-                txNonce: 5,
+                userId: 'did:key:z6MkBob',
+                epoch: 2,
+                txNonce: 9,
                 sealTimestamp: '2026-11-01T10:00:00Z',
                 blobCount: 10,
-                customStandardCount: 0,
+                customStandardCount: 1,
                 protectionMode: 'mnemonic_only',
+                localCollision: null,
             },
-            sourceUrl: 'https://drop.example.org',
-            matchedKeyKind: 'stealth',
+            userId: 'did:key:z6MkBob',
+            localCollision: null,
+            resolvedSyncTargets: [],
+            error: null,
         });
-
-        vi.mocked(authService.getLocalInstanceId).mockResolvedValue('device-uuid-456');
         vi.mocked(backupService.restoreBackup).mockResolvedValue({
             folderName: 'profile_bob',
             profileName: 'Bob',
             activeVoucherQueriesCount: 2,
             reconciledSpentCount: 0,
-            restoredStandardsCount: 0,
-            l2ReconciliationStatus: 'offline_or_failed',
+            restoredStandardsCount: 1,
+            l2ReconciliationStatus: 'offline',
         });
-
         vi.mocked(backupService.reconcileRestoredWalletL2).mockResolvedValue({
-            l2ReconciliationStatus: 'reconciled',
             activeVoucherQueriesCount: 2,
             reconciledSpentCount: 0,
+            l2ReconciliationStatus: 'reconciled',
             pendingRestoreL2Reconciliation: false,
         });
 
         render(
             <RestoreBackupView
                 onRestoreSuccess={onRestoreSuccess}
-                onSwitchToRecreate={onSwitchToRecreate}
                 onBack={onBack}
+                initialMethod="words_or_sheet"
             />
         );
 
-        // 1. Click "Restore from Sync Service"
-        fireEvent.click(screen.getByText('Restore from Sync Service'));
-
-        await waitFor(() => {
-            expect(screen.getByText('Load Backup from Sync Service')).toBeInTheDocument();
-            expect(screen.getByText('Find & Load Backup')).toBeInTheDocument();
+        fireEvent.change(screen.getByTestId('restore-words-word-0'), {
+            target: { value: VALID_12 },
+        });
+        fireEvent.change(screen.getByTestId('restore-sync-input'), {
+            target: { value: 'https://drop.example.org/sync.php' },
         });
 
-        // Enter mnemonic words (paste phrase into first word input)
-        const firstWordInput = screen.getByTestId('restore-sync-word-0');
-        fireEvent.change(firstWordInput, {
-            target: {
-                value: 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about',
-            },
-        });
-
-        // Enter drop address
-        const dropAddressInput = screen.getByTestId('restore-sync-input');
-        fireEvent.change(dropAddressInput, { target: { value: 'https://drop.example.org' } });
-
-        // Click Find & Load Backup
-        fireEvent.click(screen.getByText('Find & Load Backup'));
+        await waitFor(() => expect(screen.getByTestId('words-continue-btn')).not.toBeDisabled());
+        fireEvent.click(screen.getByTestId('words-continue-btn'));
 
         await waitFor(() => {
-            expect(backupService.fetchAndInspectBackup).toHaveBeenCalledWith({
-                syncInput: 'https://drop.example.org',
-                mnemonic: 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about',
-                passphrase: null,
-                userPrefix: null,
-                language: 'english',
-            });
             expect(screen.getByText('Verified Backup Manifest')).toBeInTheDocument();
             expect(screen.getByText('Bob')).toBeInTheDocument();
         });
 
-        // Set device password and restore
-        const newPasswordInput = screen.getByTestId('new-device-password-input');
-        const confirmNewPasswordInput = screen.getByTestId('confirm-device-password-input');
-
-        fireEvent.change(newPasswordInput, { target: { value: 'devicePassword456' } });
-        fireEvent.change(confirmNewPasswordInput, { target: { value: 'devicePassword456' } });
-
+        fireEvent.change(screen.getByTestId('new-device-password-input'), {
+            target: { value: 'DevicePass456!' },
+        });
+        fireEvent.change(screen.getByTestId('confirm-device-password-input'), {
+            target: { value: 'DevicePass456!' },
+        });
         fireEvent.click(screen.getByTestId('restore-submit-btn'));
 
         await waitFor(() => {
-            expect(backupService.restoreBackup).toHaveBeenCalledWith(
-                expect.objectContaining({
-                    sourcePath: '/tmp/drop_restore_123.hmcbackup',
-                    credentialMode: 'mnemonic',
-                    newPassword: 'devicePassword456',
-                })
-            );
-            expect(screen.getByText('Online Security Reconciliation Recommended')).toBeInTheDocument();
+            expect(screen.getByTestId('restore-reconcile-l2-btn')).toBeInTheDocument();
         });
 
-        // Click Reconcile online now
-        fireEvent.click(screen.getByRole('button', { name: /Reconcile online now/i }));
+        fireEvent.click(screen.getByTestId('restore-reconcile-l2-btn'));
 
         await waitFor(() => {
             expect(backupService.reconcileRestoredWalletL2).toHaveBeenCalled();
-            expect(screen.getByText(/Online security reconciliation completed successfully/i)).toBeInTheDocument();
+            expect(
+                screen.getByText(/Online security reconciliation completed successfully/i)
+            ).toBeInTheDocument();
         });
     });
 
-    it('allows restoring from a sync service using full phrase textarea, optional passphrase and user prefix', async () => {
-        vi.mocked(backupService.fetchAndInspectBackup).mockResolvedValue({
-            stagedPath: '/tmp/drop_restore_789.hmcbackup',
-            inspection: {
-                profileName: 'Charlie',
-                userId: 'hmc1charlie1234567890',
-                epoch: 1,
-                txNonce: 3,
-                sealTimestamp: '2026-11-01T10:00:00Z',
-                blobCount: 5,
-                customStandardCount: 0,
-                protectionMode: 'mnemonic_only',
-            },
-            sourceUrl: 'https://sync.example.org',
-            matchedKeyKind: 'public',
-        });
-
-        vi.mocked(authService.getLocalInstanceId).mockResolvedValue('device-uuid-789');
-        vi.mocked(backupService.restoreBackup).mockResolvedValue({
-            folderName: 'profile_charlie',
-            profileName: 'Charlie',
-            activeVoucherQueriesCount: 0,
-            reconciledSpentCount: 0,
-            restoredStandardsCount: 0,
-            l2ReconciliationStatus: 'reconciled',
+    it('blocks silently creating an empty profile on unreachable sync and offers retry or explicit bypass', async () => {
+        vi.mocked(backupService.probeSyncBackup).mockResolvedValue({
+            status: 'unreachable',
+            stagedPath: null,
+            matchedKeyKind: null,
+            sourceUrl: null,
+            inspection: null,
+            userId: 'did:key:z6MkAlice',
+            localCollision: null,
+            resolvedSyncTargets: [],
+            error: 'Connection refused',
         });
 
         render(
             <RestoreBackupView
                 onRestoreSuccess={onRestoreSuccess}
-                onSwitchToRecreate={onSwitchToRecreate}
                 onBack={onBack}
+                initialMethod="words_or_sheet"
             />
         );
 
-        // Click "Restore from Sync Service"
-        fireEvent.click(screen.getByText('Restore from Sync Service'));
-
-        await waitFor(() => {
-            expect(screen.getByText('Load Backup from Sync Service')).toBeInTheDocument();
+        fireEvent.change(screen.getByTestId('restore-words-word-0'), {
+            target: { value: VALID_12 },
+        });
+        fireEvent.change(screen.getByTestId('restore-sync-input'), {
+            target: { value: 'https://down.example.org/sync.php' },
         });
 
-        // Switch to full phrase mode
-        fireEvent.click(screen.getByText(/enter full phrase/i));
+        await waitFor(() => expect(screen.getByTestId('words-continue-btn')).not.toBeDisabled());
+        fireEvent.click(screen.getByTestId('words-continue-btn'));
 
-        // Enter mnemonic into textarea
-        const textarea = screen.getByTestId('restore-sync-phrase-textarea');
-        fireEvent.change(textarea, {
-            target: {
-                value: 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about',
+        await waitFor(() => {
+            expect(screen.getByTestId('sync-unreachable-card')).toBeInTheDocument();
+            expect(screen.getByTestId('retry-sync-probe-btn')).toBeInTheDocument();
+            expect(screen.getByTestId('proceed-without-backup-btn')).toBeInTheDocument();
+        });
+
+        fireEvent.click(screen.getByTestId('proceed-without-backup-btn'));
+        expect(screen.getByTestId('direct-profile-name-input')).toBeInTheDocument();
+    });
+
+    it('shows Smart Local Collision Card when profile exists locally and handles reset_pw or replace', async () => {
+        vi.mocked(open).mockResolvedValue('/tmp/my-backup.hmcbackup');
+        vi.mocked(backupService.probeBackup).mockResolvedValue({
+            sourceKind: 'file',
+            protectionMode: 'custom_password',
+            supportsPasswordRestore: true,
+            supportsMnemonicRestore: true,
+            blobCount: 15,
+            customStandardCount: 1,
+        });
+        vi.mocked(backupService.inspectBackup).mockResolvedValue({
+            profileName: 'Alice',
+            userId: 'did:key:z6MkAlice',
+            epoch: 2,
+            txNonce: 10,
+            sealTimestamp: '2026-10-30T10:00:00Z',
+            blobCount: 15,
+            customStandardCount: 1,
+            protectionMode: 'custom_password',
+            localCollision: {
+                folderName: 'alice_local',
+                profileName: 'Alice',
+                userId: 'did:key:z6MkAlice',
+                localEpoch: 3,
+                localTxNonce: 12,
+                isLockedOrConflicted: false,
             },
         });
+        vi.mocked(backupService.resetLocalPasswordViaBackup).mockResolvedValue(undefined);
 
-        // Enter passphrase
-        const passphraseInput = screen.getByTestId('restore-sync-passphrase-input');
-        fireEvent.change(passphraseInput, { target: { value: 'my-secret-bip39-pass' } });
+        render(<RestoreBackupView onRestoreSuccess={onRestoreSuccess} onBack={onBack} />);
 
-        // Enter user prefix
-        const prefixInput = screen.getByTestId('restore-sync-user-prefix-input');
-        fireEvent.change(prefixInput, { target: { value: 'mobile-app' } });
-
-        // Enter sync address
-        const dropAddressInput = screen.getByTestId('restore-sync-input');
-        fireEvent.change(dropAddressInput, { target: { value: 'https://sync.example.org' } });
-
-        // Submit fetch
-        fireEvent.click(screen.getByText('Find & Load Backup'));
+        fireEvent.click(screen.getByTestId('choose-file-or-folder-btn'));
+        fireEvent.click(screen.getByTestId('select-backup-file-btn'));
 
         await waitFor(() => {
-            expect(backupService.fetchAndInspectBackup).toHaveBeenCalledWith({
-                syncInput: 'https://sync.example.org',
-                mnemonic: 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about',
-                passphrase: 'my-secret-bip39-pass',
-                userPrefix: 'mobile-app',
-                language: 'english',
-            });
-            expect(screen.getByText('Charlie')).toBeInTheDocument();
+            expect(screen.getByTestId('backup-password-input')).toBeInTheDocument();
         });
 
-        // Set device password and restore
-        const newPasswordInput = screen.getByTestId('new-device-password-input');
-        const confirmNewPasswordInput = screen.getByTestId('confirm-device-password-input');
+        fireEvent.change(screen.getByTestId('backup-password-input'), {
+            target: { value: 'backupSecret123' },
+        });
+        fireEvent.click(screen.getByTestId('inspect-file-backup-btn'));
 
-        fireEvent.change(newPasswordInput, { target: { value: 'devicePassword456' } });
-        fireEvent.change(confirmNewPasswordInput, { target: { value: 'devicePassword456' } });
+        await waitFor(() => {
+            expect(screen.getByTestId('local-collision-card')).toBeInTheDocument();
+            expect(screen.getByTestId('collision-choice-reset-pw')).toBeInTheDocument();
+            expect(screen.getByTestId('collision-choice-replace')).toBeInTheDocument();
+        });
 
+        // Default is reset_pw because localEpoch (3) > backupEpoch (2)
+        fireEvent.change(screen.getByTestId('new-device-password-input'), {
+            target: { value: 'NewLocalPass123' },
+        });
+        fireEvent.change(screen.getByTestId('confirm-device-password-input'), {
+            target: { value: 'NewLocalPass123' },
+        });
         fireEvent.click(screen.getByTestId('restore-submit-btn'));
 
         await waitFor(() => {
-            expect(backupService.restoreBackup).toHaveBeenCalledWith(
+            expect(backupService.resetLocalPasswordViaBackup).toHaveBeenCalledWith(
                 expect.objectContaining({
-                    sourcePath: '/tmp/drop_restore_789.hmcbackup',
-                    credentialMode: 'mnemonic',
-                    passphrase: 'my-secret-bip39-pass',
-                    userPrefix: 'mobile-app',
-                    newPassword: 'devicePassword456',
+                    targetFolderName: 'alice_local',
+                    sourcePath: '/tmp/my-backup.hmcbackup',
+                    credentialMode: 'password',
+                    backupPassword: 'backupSecret123',
+                    newPassword: 'NewLocalPass123',
                 })
             );
+            expect(onRestoreSuccess).toHaveBeenCalled();
+        });
+    });
+
+    it('allows switching collision without backup to subaccount setup', async () => {
+        vi.mocked(backupService.previewMnemonicIdentity).mockResolvedValue({
+            userId: 'did:key:z6MkAlice',
+            localCollision: {
+                folderName: 'alice_local',
+                profileName: 'Alice',
+                userId: 'did:key:z6MkAlice',
+                localEpoch: 0,
+                localTxNonce: 1,
+                isLockedOrConflicted: false,
+            },
+        });
+
+        render(
+            <RestoreBackupView
+                onRestoreSuccess={onRestoreSuccess}
+                onBack={onBack}
+                initialMethod="words_or_sheet"
+            />
+        );
+
+        fireEvent.change(screen.getByTestId('restore-words-word-0'), {
+            target: { value: VALID_12 },
+        });
+        await waitFor(() => expect(screen.getByTestId('words-continue-btn')).not.toBeDisabled());
+        fireEvent.click(screen.getByTestId('words-continue-btn'));
+
+        await waitFor(() => {
+            expect(screen.getByTestId('local-collision-card')).toBeInTheDocument();
+            expect(screen.getByTestId('collision-create-subaccount-btn')).toBeInTheDocument();
+        });
+
+        fireEvent.click(screen.getByTestId('collision-create-subaccount-btn'));
+
+        await waitFor(() => {
+            expect(screen.getByTestId('seed-user-prefix-input')).toBeInTheDocument();
         });
     });
 });

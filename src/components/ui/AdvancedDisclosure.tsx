@@ -12,6 +12,7 @@ export interface AdvancedDisclosureProps {
     isCustom?: boolean;
     hasError?: boolean;
     defaultOpen?: boolean;
+    forceOpen?: boolean;
     toggleTestId?: string;
     contentTestId?: string;
     className?: string;
@@ -63,6 +64,7 @@ export const AdvancedDisclosure: React.FC<AdvancedDisclosureProps> = ({
     isCustom = false,
     hasError = false,
     defaultOpen = false,
+    forceOpen = false,
     toggleTestId,
     contentTestId,
     className = 'border border-theme-subtle rounded-2xl overflow-hidden bg-white/50 dark:bg-slate-900/50',
@@ -83,7 +85,13 @@ export const AdvancedDisclosure: React.FC<AdvancedDisclosureProps> = ({
     const isOpen =
         hasError ||
         errorOpened ||
-        (isManualForCurrentMode ? manualState.open : modeDefaultOpen);
+        (isManualForCurrentMode ? manualState.open : (modeDefaultOpen || forceOpen));
+
+    useEffect(() => {
+        if (forceOpen) {
+            setManualState({ forMode: mode, open: true });
+        }
+    }, [forceOpen, mode]);
 
     useEffect(() => {
         if (!hasError && !errorOpened) return;

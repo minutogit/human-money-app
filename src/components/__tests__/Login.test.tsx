@@ -13,21 +13,8 @@ vi.mock('../../context/NavigationContext', () => ({
   }),
 }));
 
-// Mock the Tauri API
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(),
-}));
-
-vi.mock('@tauri-apps/plugin-log', () => ({
-  info: vi.fn(),
-  error: vi.fn(),
-}));
-
-vi.mock('../../utils/log', () => ({
-  logger: {
-    info: vi.fn(),
-    error: vi.fn(),
-  },
 }));
 
 vi.mock('@tauri-apps/plugin-log', () => ({
@@ -50,7 +37,7 @@ describe('Login Component', () => {
 
   const mockOnLoginSuccess = vi.fn();
   const mockOnSwitchToCreate = vi.fn();
-  const mockOnSwitchToRecreate = vi.fn();
+  const mockOnSwitchToRestoreBackup = vi.fn();
   const mockOnSwitchToReset = vi.fn();
 
   beforeEach(() => {
@@ -74,7 +61,7 @@ describe('Login Component', () => {
       <Login
         onLoginSuccess={mockOnLoginSuccess}
         onSwitchToCreate={mockOnSwitchToCreate}
-        onSwitchToRecreate={mockOnSwitchToRecreate}
+        onSwitchToRestoreBackup={mockOnSwitchToRestoreBackup}
         onSwitchToReset={mockOnSwitchToReset}
       />
     );
@@ -90,7 +77,7 @@ describe('Login Component', () => {
       <Login
         onLoginSuccess={mockOnLoginSuccess}
         onSwitchToCreate={mockOnSwitchToCreate}
-        onSwitchToRecreate={mockOnSwitchToRecreate}
+        onSwitchToRestoreBackup={mockOnSwitchToRestoreBackup}
         onSwitchToReset={mockOnSwitchToReset}
       />
     );
@@ -101,52 +88,57 @@ describe('Login Component', () => {
     });
   });
 
-  it('shows navigation buttons for creating and recreating profiles', async () => {
+  it('shows navigation buttons for creating, opening/restoring, and forgot password', async () => {
     render(
       <Login
         onLoginSuccess={mockOnLoginSuccess}
         onSwitchToCreate={mockOnSwitchToCreate}
-        onSwitchToRecreate={mockOnSwitchToRecreate}
+        onSwitchToRestoreBackup={mockOnSwitchToRestoreBackup}
         onSwitchToReset={mockOnSwitchToReset}
       />
     );
 
     await waitFor(() => {
       expect(screen.getByText(/\[\+\] CREATE NEW (PROFILE|WALLET)/i)).toBeInTheDocument();
-      expect(screen.getByText(/\[→\] RESTORE FROM BACKUP/i)).toBeInTheDocument();
+      expect(screen.getByText(/OPEN \/ RESTORE EXISTING PROFILE/i)).toBeInTheDocument();
       expect(screen.getByText(/Forgot password\?/i)).toBeInTheDocument();
     });
+
+    fireEvent.click(screen.getByText(/OPEN \/ RESTORE EXISTING PROFILE/i));
+    expect(mockOnSwitchToRestoreBackup).toHaveBeenCalled();
+
+    fireEvent.click(screen.getByText(/Forgot password\?/i));
+    expect(mockOnSwitchToReset).toHaveBeenCalled();
   });
 
   it('calls onLoginSuccess on valid credentials', async () => {
-    const mockOnLoginSuccess = vi.fn();
+    const onSuccess = vi.fn();
     render(
-      <Login 
-        onLoginSuccess={mockOnLoginSuccess} 
-        onSwitchToCreate={() => {}} 
-        onSwitchToRecreate={() => {}} 
-        onSwitchToReset={() => {}} 
+      <Login
+        onLoginSuccess={onSuccess}
+        onSwitchToCreate={() => {}}
+        onSwitchToRestoreBackup={() => {}}
+        onSwitchToReset={() => {}}
       />
     );
 
-    // Wait for profiles to load
     const passwordInput = await screen.findByLabelText(/Password/i);
     const loginButton = screen.getByRole('button', { name: /Login/i });
 
-    // Fill form
     fireEvent.change(passwordInput, { target: { value: 'password123' } });
-    
-    // We need to wait for the button to be enabled (profiles loaded)
+
     await waitFor(() => {
-        expect(loginButton).not.toBeDisabled();
+      expect(loginButton).not.toBeDisabled();
     });
 
     fireEvent.click(loginButton);
 
-    // Wait and check if callback was called
-    await waitFor(() => {
-      expect(mockOnLoginSuccess).toHaveBeenCalled();
-    }, { timeout: 3000 });
+    await waitFor(
+      () => {
+        expect(onSuccess).toHaveBeenCalled();
+      },
+      { timeout: 3000 }
+    );
   });
 
   it('shows error message inside password prompt modal when verifyProfilePassword fails', async () => {
@@ -167,24 +159,20 @@ describe('Login Component', () => {
       <Login
         onLoginSuccess={mockOnLoginSuccess}
         onSwitchToCreate={mockOnSwitchToCreate}
-        onSwitchToRecreate={mockOnSwitchToRecreate}
+        onSwitchToRestoreBackup={mockOnSwitchToRestoreBackup}
         onSwitchToReset={mockOnSwitchToReset}
       />
     );
 
-    // Wait for trash button and click it to open delete password prompt modal
     const trashButton = await screen.findByTitle(/Delete Profile/i);
     fireEvent.click(trashButton);
 
-    // Modal is open, find the password input and the submit button
     const passwordInput = await screen.findByLabelText(/(Profile|Wallet) Password/i);
     const verifyButton = screen.getByRole('button', { name: /Verify/i });
 
-    // Enter incorrect password and click verify
     fireEvent.change(passwordInput, { target: { value: 'wrong-password' } });
     fireEvent.click(verifyButton);
 
-    // Verify error is shown inside the modal
     await waitFor(() => {
       expect(screen.getByText(/Authentication Error: Invalid password/i)).toBeInTheDocument();
     });
@@ -212,7 +200,7 @@ describe('Login Component', () => {
       <Login
         onLoginSuccess={mockOnLoginSuccess}
         onSwitchToCreate={mockOnSwitchToCreate}
-        onSwitchToRecreate={mockOnSwitchToRecreate}
+        onSwitchToRestoreBackup={mockOnSwitchToRestoreBackup}
         onSwitchToReset={mockOnSwitchToReset}
       />
     );
@@ -232,7 +220,7 @@ describe('Login Component', () => {
     });
   });
 
-  it('shows clone security alert UI when login fails with concurrentCloneDetected', async () => {
+  it('shows clone security alert UI when login fails with concurrentCloneDetected and navigates via onSwitchToRestoreBackup', async () => {
     (invoke as Mock).mockImplementation((cmd: string) => {
       if (cmd === 'list_profiles') {
         return Promise.resolve(mockProfiles);
@@ -253,7 +241,7 @@ describe('Login Component', () => {
       <Login
         onLoginSuccess={mockOnLoginSuccess}
         onSwitchToCreate={mockOnSwitchToCreate}
-        onSwitchToRecreate={mockOnSwitchToRecreate}
+        onSwitchToRestoreBackup={mockOnSwitchToRestoreBackup}
         onSwitchToReset={mockOnSwitchToReset}
       />
     );
@@ -267,7 +255,13 @@ describe('Login Component', () => {
 
     await waitFor(() => {
       expect(screen.getByText(/Multi-Device Conflict Detected/i)).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: /Recover (Profile|Wallet) with (Seed Phrase|Recovery Words)/i })).toBeInTheDocument();
     });
+
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: /Recover (Profile|Wallet) with (Seed Phrase|Recovery Words)/i,
+      })
+    );
+    expect(mockOnSwitchToRestoreBackup).toHaveBeenCalled();
   });
 });

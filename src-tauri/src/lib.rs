@@ -151,7 +151,8 @@ pub fn run() {
             check_wallet_integrity, repair_wallet_integrity, export_double_spend_proof, import_double_spend_proof,
             // Wallet Backups
             probe_wallet_backup, export_wallet_backup_file, sync_wallet_backup_folder, inspect_wallet_backup, restore_wallet_backup,
-            get_backup_status, run_auto_backup_sync, sync_backup, fetch_and_inspect_backup, reconcile_restored_wallet_l2,
+            get_backup_status, run_auto_backup_sync, sync_backup, probe_sync_backup, preview_mnemonic_identity,
+            stage_dropped_backup_bytes, reset_local_password_via_backup, reconcile_restored_wallet_l2,
             // Web of Trust (WoT)
             get_wot_summary, set_wot_max_hops, export_wot_package, import_wot_package, evaluate_voucher_trust_preview,
             get_wot_providers, set_wot_provider_trust, remove_wot_provider, refresh_wot_provider_url,
@@ -212,7 +213,7 @@ pub fn run() {
             inspect_guardian_recovery_request,
             approve_guardian_recovery_request,
             complete_social_recovery,
-            restore_from_emergency_kit_uri,
+            inspect_emergency_kit_uri,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

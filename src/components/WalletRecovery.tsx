@@ -1,250 +1,155 @@
 // src/components/WalletRecovery.tsx
-import { useState, useEffect, useRef } from "react";
-import { useTranslation } from "react-i18next";
-import logo from "../assets/logo.png";
-import { profileService } from "../services/profileService";
-import { authService } from "../services/authService";
-import { AuthLayout } from "./AuthLayout";
-import { logger } from "../utils/log";
-import { Button } from "./ui/Button";
-import { Input } from "./ui/Input";
-import { Card } from "./ui/Card";
-import { ProfileInfo, MnemonicLanguage } from "../types";
-import { translateError, stringifyError } from "../utils/errorHelper";
-import { cleanSeedText } from "../utils/seedUtils";
-import { HelpIcon } from "./ui/HelpIcon";
-import { SocialAndSheetRecoveryFlow } from "./SocialAndSheetRecoveryFlow";
+import { useState, useEffect, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
+import logo from '../assets/logo.png';
+import { profileService } from '../services/profileService';
+import { authService } from '../services/authService';
+import { AuthLayout } from './AuthLayout';
+import { logger } from '../utils/log';
+import { Button } from './ui/Button';
+import { Input } from './ui/Input';
+import { Card } from './ui/Card';
+import { AlertBanner } from './ui/AlertBanner';
+import { SeedPhraseInput, SeedPhraseValue } from './ui/SeedPhraseInput';
+import { SocialRecoveryFlow } from './SocialRecoveryFlow';
+import { ProfileInfo } from '../types';
+import { translateError } from '../utils/errorHelper';
 import {
-    Key,
+    Users,
+    KeyRound,
     Lock,
     Fingerprint,
-    Languages,
-    BookOpen,
-    CheckCircle2,
     ArrowLeft,
+    ArrowRight,
     RefreshCw,
     ShieldAlert,
-    Info,
     User,
-    Grid,
-    Type
-} from "lucide-react";
+    Info,
+} from 'lucide-react';
 
 interface WalletRecoveryProps {
     onRecoverySuccess: () => void;
     onSwitchToLogin: () => void;
-    defaultMethod?: 'flow' | 'phrase';
+    initialPayload?: string;
+    defaultMethod?: 'choose' | 'social' | 'words';
 }
-type InputMode = "words" | "phrase";
 
-export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin, defaultMethod }: WalletRecoveryProps) {
+const EMPTY_SEED: SeedPhraseValue = {
+    mnemonic: '',
+    wordCount: 12,
+    language: 'english',
+    passphrase: '',
+    userPrefix: '',
+    isValid: false,
+    detectedKit: null,
+};
+
+export function WalletRecovery({
+    onRecoverySuccess,
+    onSwitchToLogin,
+    initialPayload,
+    defaultMethod,
+}: WalletRecoveryProps) {
     const { t } = useTranslation();
-    const [recoveryMethod, setRecoveryMethod] = useState<'flow' | 'phrase'>(defaultMethod ?? 'flow');
+
+    const [method, setMethod] = useState<'choose' | 'social' | 'words'>(() => {
+        if (defaultMethod) return defaultMethod;
+        if (initialPayload?.includes('humoco://recovery-reply')) return 'social';
+        if (initialPayload?.includes('humoco://kit')) return 'words';
+        return 'choose';
+    });
+
     const [profiles, setProfiles] = useState<ProfileInfo[]>([]);
-    const [selectedProfile, setSelectedProfile] = useState<string>("");
+    const [selectedProfile, setSelectedProfile] = useState<string>('');
+    const [seedState, setSeedState] = useState<SeedPhraseValue>(EMPTY_SEED);
 
-    const [wordCount, setWordCount] = useState<12 | 24>(12);
-    const [selectedLanguage, setSelectedLanguage] = useState<MnemonicLanguage>("english");
-    const [mnemonicWords, setMnemonicWords] = useState<string[]>(Array(12).fill(""));
-    const [inputMode, setInputMode] = useState<InputMode>("words");
-
-    const [passphrase, setPassphrase] = useState("");
-    const [newPassword, setNewPassword] = useState("");
-    const [confirmPassword, setConfirmPassword] = useState("");
-
-    const [feedbackMsg, setFeedbackMsg] = useState("");
-    const [feedbackType, setFeedbackType] = useState<"error" | "success" | "info" | null>(null);
-
-    const setFeedback = (msg: string, type: "error" | "success" | "info" | null) => {
-        setFeedbackMsg(msg);
-        setFeedbackType(type);
-    };
+    const [newPassword, setNewPassword] = useState('');
+    const [confirmPassword, setConfirmPassword] = useState('');
+    const [feedbackMsg, setFeedbackMsg] = useState('');
+    const [feedbackType, setFeedbackType] = useState<'error' | 'success' | 'info' | null>(null);
     const [isLoading, setIsLoading] = useState(false);
-    const [isValidMnemonic, setIsValidMnemonic] = useState(false);
-
-    const [rawPhrase, setRawPhrase] = useState("");
-    const [bip39Wordlist, setBip39Wordlist] = useState<string[]>([]);
-    const textareaRef = useRef<HTMLTextAreaElement>(null);
-    const prevRawPhraseRef = useRef("");
 
     useEffect(() => {
-        logger.info("WalletRecovery component displayed");
-        const systemLang = navigator.language || "en";
-        let detectedLanguage: MnemonicLanguage = "english";
-        const langMap: Record<string, MnemonicLanguage> = {
-            "de": "german", "es": "spanish", "fr": "french", "it": "italian",
-            "ja": "japanese", "ko": "korean", "pt": "portuguese", "cs": "czech",
-            "zh-CN": "chineseSimplified", "zh-TW": "chineseTraditional"
-        };
-        for (const [key, val] of Object.entries(langMap)) {
-            if (systemLang.startsWith(key)) { detectedLanguage = val; break; }
+        if (initialPayload?.includes('humoco://recovery-reply')) {
+            setMethod('social');
+        } else if (initialPayload?.includes('humoco://kit')) {
+            setMethod('words');
         }
-        setSelectedLanguage(detectedLanguage);
+    }, [initialPayload]);
 
-        async function fetchProfiles() {
-            setIsLoading(true);
-            try {
-                const availableProfiles = await authService.listProfiles();
-                setProfiles(availableProfiles);
-                if (availableProfiles.length > 0) setSelectedProfile(availableProfiles[0].folderName);
-                else                 setFeedback(t('auth.noProfilesToRecover'), "error");
-            } catch (e) {
-                setFeedback(`${t('profile.errorPrefix')}: ${translateError(e, t)}`, "error");
-            } finally {
-                setIsLoading(false);
-            }
-        }
-        fetchProfiles();
+    useEffect(() => {
+        let active = true;
+        logger.info('WalletRecovery component displayed');
+        setIsLoading(true);
+        authService
+            .listProfiles()
+            .then((available) => {
+                if (!active) return;
+                setProfiles(available);
+                if (available.length > 0) {
+                    setSelectedProfile((prev) => prev || available[0].folderName);
+                } else {
+                    setFeedbackMsg(t('auth.noProfilesToRecover'));
+                    setFeedbackType('error');
+                }
+            })
+            .catch((e) => {
+                if (!active) return;
+                setFeedbackMsg(`${t('profile.errorPrefix')}: ${translateError(e, t)}`);
+                setFeedbackType('error');
+            })
+            .finally(() => {
+                if (active) setIsLoading(false);
+            });
+        return () => {
+            active = false;
+        };
     }, [t]);
 
-    useEffect(() => {
-        setMnemonicWords(prev => {
-            const currentWords = prev.join(" ").split(" ").filter(Boolean);
-            return Array(wordCount).fill("").map((_, i) => currentWords[i] || "");
-        });
-    }, [wordCount]);
+    const handleSeedChange = useCallback((next: SeedPhraseValue) => {
+        setSeedState(next);
+    }, []);
 
-    useEffect(() => {
-        let active = true;
-        async function fetchWordlist() {
-            try {
-                const list = await profileService.getWordlist(selectedLanguage);
-                if (!active) return;
-                setBip39Wordlist(list);
-            } catch (e) {
-                if (!active) return;
-                logger.error(`Failed to fetch BIP-39 wordlist: ${stringifyError(e)}`);
-            }
-        }
-        fetchWordlist();
-        return () => { active = false; };
-    }, [selectedLanguage, t]);
-
-    useEffect(() => {
-        if (inputMode !== 'phrase') return;
-        const prevPhrase = prevRawPhraseRef.current;
-
-        const cleaned = cleanSeedText(rawPhrase);
-        if (cleaned !== rawPhrase && rawPhrase.length > 0) {
-            // Check if we should auto-apply cleaning.
-            // Apply it if there are numbers, punctuation, or multiple spaces.
-            if (/[0-9.,\-:]/.test(rawPhrase) || /[\r\n\t]/.test(rawPhrase) || /\s\s/.test(rawPhrase)) {
-                setRawPhrase(cleaned);
-                return;
-            }
-        }
-
-        const words = rawPhrase.trim().replace(/\s+/g, ' ').split(' ').filter(Boolean);
-        setMnemonicWords(Array(wordCount).fill("").map((_, i) => words[i] || ""));
-        if (words.length === 12 || words.length === 24) {
-            setWordCount(words.length);
-        }
-
-        const lastWord = words[words.length - 1];
-        if (rawPhrase.length > prevPhrase.length && lastWord && !rawPhrase.endsWith(' ') && bip39Wordlist.length > 0) {
-            const filteredSuggestions = bip39Wordlist.filter(w => w.startsWith(lastWord.toLowerCase()));
-            if (filteredSuggestions.length === 1 && filteredSuggestions[0] !== lastWord) {
-                const suggestion = filteredSuggestions[0];
-                const newWords = [...words];
-                newWords[words.length - 1] = suggestion;
-                const newPhrase = newWords.join(' ');
-                setRawPhrase(newPhrase);
-                setTimeout(() => {
-                    const el = textareaRef.current;
-                    if (el) {
-                        const selectionStart = newPhrase.length - (suggestion.length - lastWord.length);
-                        const selectionEnd = newPhrase.length;
-                        el.setSelectionRange(selectionStart, selectionEnd);
-                    }
-                }, 0);
-            }
-        }
-        prevRawPhraseRef.current = rawPhrase;
-    }, [rawPhrase, inputMode, bip39Wordlist, wordCount]);
-
-    useEffect(() => {
-        let active = true;
-        const validate = async () => {
-            const nonEmptyWords = mnemonicWords.filter(Boolean);
-            if (nonEmptyWords.length > 0 && mnemonicWords.every(word => word && word.length > 1)) {
-                const fullMnemonic = mnemonicWords.join(" ");
-                try {
-                    await profileService.validateMnemonic(fullMnemonic, selectedLanguage);
-                    if (!active) return;
-                    setIsValidMnemonic(true);
-                    setFeedback(t('auth.seedPhraseValid'), "success");
-                } catch (e) {
-                    if (!active) return;
-                    setIsValidMnemonic(false);
-                    setFeedback(`${t('profile.errorPrefix')}: ${translateError(e, t)}`, "error");
-                }
-            } else {
-                if (!active) return;
-                setIsValidMnemonic(false);
-                setFeedback(nonEmptyWords.length > 0 ? t('auth.awaitingSequence') : "", nonEmptyWords.length > 0 ? "info" : null);
-            }
-        };
-        validate();
-        return () => { active = false; };
-    }, [mnemonicWords, selectedLanguage, wordCount, t]);
-
-    const handleWordChange = (index: number, value: string) => {
-        if (!value) {
-            const newWords = [...mnemonicWords];
-            newWords[index] = "";
-            setMnemonicWords(newWords);
+    async function handleWordsRecovery(e: React.FormEvent) {
+        e.preventDefault();
+        if (!selectedProfile) {
+            setFeedbackMsg(t('auth.selectProfileToRecover'));
+            setFeedbackType('error');
             return;
         }
-
-        const cleanedText = cleanSeedText(value);
-
-        const pastedWords = cleanedText.split(' ').filter(Boolean);
-        if (pastedWords.length === 0) {
-            const newWords = [...mnemonicWords];
-            newWords[index] = "";
-            setMnemonicWords(newWords);
+        if (!seedState.isValid) {
+            setFeedbackMsg(t('auth.seedPhraseInvalid'));
+            setFeedbackType('error');
             return;
         }
-
-        const newWords = [...mnemonicWords];
-        for (let i = 0; i < pastedWords.length; i++) {
-            const targetIndex = index + i;
-            if (targetIndex < wordCount) newWords[targetIndex] = pastedWords[i];
+        if (newPassword !== confirmPassword) {
+            setFeedbackMsg(t('auth.passwordsDontMatch'));
+            setFeedbackType('error');
+            return;
         }
-        setMnemonicWords(newWords);
-        if (pastedWords.length > 1) {
-            const nextIndex = index + pastedWords.length;
-            if (nextIndex < wordCount) document.getElementById(`word-${nextIndex}`)?.focus();
+        if (newPassword.length < 8) {
+            setFeedbackMsg(t('auth.passwordMinLength'));
+            setFeedbackType('error');
+            return;
         }
-    };
-
-    const handleInputModeToggle = () => {
-        const newMode = inputMode === "words" ? "phrase" : "words";
-        if (newMode === 'phrase') setRawPhrase(mnemonicWords.join(" ").trim());
-        setInputMode(newMode);
-    };
-
-    async function handleRecovery() {
-        if (!selectedProfile) { setFeedback(t('auth.selectProfileToRecover'), "error"); return; }
-        if (!isValidMnemonic) { setFeedback(t('auth.seedPhraseInvalid'), "error"); return; }
-        if (newPassword !== confirmPassword) { setFeedback(t('auth.passwordsDontMatch'), "error"); return; }
-        if (newPassword.length < 8) { setFeedback(t('auth.passwordMinLength'), "error"); return; }
 
         setIsLoading(true);
-        setFeedback(t('auth.recoveringWallet'), "info");
+        setFeedbackMsg(t('auth.recoveringWallet'));
+        setFeedbackType('info');
         try {
             const localInstanceId = await authService.getLocalInstanceId();
             await profileService.recoverWallet({
                 folderName: selectedProfile,
-                mnemonic: mnemonicWords.join(" "),
-                passphrase: passphrase || undefined,
+                mnemonic: seedState.mnemonic,
+                passphrase: seedState.passphrase || undefined,
                 newPassword,
                 localInstanceId,
-                language: selectedLanguage,
+                language: seedState.language,
             });
             onRecoverySuccess();
-        } catch (e) {
-            setFeedback(`${t('auth.errorRecoveringWallet')}: ${translateError(e, t)}`, "error");
+        } catch (err) {
+            setFeedbackMsg(`${t('auth.errorRecoveringWallet')}: ${translateError(err, t)}`);
+            setFeedbackType('error');
         } finally {
             setIsLoading(false);
         }
@@ -259,206 +164,243 @@ export function WalletRecovery({ onRecoverySuccess, onSwitchToLogin, defaultMeth
                     className="w-12 h-12 sm:w-20 sm:h-20 object-contain drop-shadow-sm"
                 />
                 <div className="text-left space-y-0 sm:space-y-0.5">
-                    <h1 className="text-2xl sm:text-4xl font-black text-theme-primary tracking-tighter leading-none">HUMAN MONEY</h1>
-                    <p className="text-[9px] sm:text-[10px] font-black uppercase tracking-[0.4em] text-theme-light">{t('auth.recoverWallet')}</p>
+                    <h1 className="text-2xl sm:text-4xl font-black text-theme-primary tracking-tighter leading-none">
+                        HUMAN MONEY
+                    </h1>
+                    <p className="text-[9px] sm:text-[10px] font-black uppercase tracking-[0.4em] text-theme-light">
+                        {t('auth.recoverWallet')}
+                    </p>
                 </div>
             </div>
 
-            {recoveryMethod === "flow" ? (
-                <div className="space-y-6">
-                    {profiles.length > 0 && (
-                        <Card header={<div className="flex items-center gap-2"><User size={14}/><label htmlFor="profile-select-flow" className="font-black text-[10px] uppercase tracking-widest cursor-pointer">{t('profile.selectProfile')}</label></div>}>
-                            <div className="space-y-4">
-                                <select
-                                    id="profile-select-flow"
-                                    value={selectedProfile}
-                                    onChange={(e) => setSelectedProfile(e.target.value)}
-                                    data-testid="profile-select-flow"
-                                    className="w-full bg-white border border-theme-subtle rounded-2xl px-4 py-3.5 text-sm font-bold text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft appearance-none transition-all"
-                                >
-                                    {profiles.map((profile) => (
-                                        <option key={profile.folderName} value={profile.folderName}>
-                                            {profile.profileName}
-                                        </option>
-                                    ))}
-                                </select>
-                            </div>
-                        </Card>
-                    )}
-                    <SocialAndSheetRecoveryFlow
-                        mode="reset_local_password"
-                        targetFolderName={selectedProfile}
-                        onSuccess={onRecoverySuccess}
-                        onCancel={onSwitchToLogin}
-                    />
-                    <div className="text-center pt-2">
+            {/* Profile Selector Card */}
+            <Card
+                header={
+                    <div className="flex items-center gap-2">
+                        <User size={14} />
+                        <label
+                            htmlFor="profile-select"
+                            className="font-black text-[10px] uppercase tracking-widest cursor-pointer"
+                        >
+                            {t('profile.selectProfile')}
+                        </label>
+                    </div>
+                }
+            >
+                {profiles.length > 0 ? (
+                    <select
+                        id="profile-select"
+                        value={selectedProfile}
+                        onChange={(e) => setSelectedProfile(e.target.value)}
+                        data-testid="profile-select"
+                        className="w-full bg-white border border-theme-subtle rounded-2xl px-4 py-3.5 text-sm font-bold text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft appearance-none transition-all"
+                    >
+                        {profiles.map((profile) => (
+                            <option key={profile.folderName} value={profile.folderName}>
+                                {profile.profileName}
+                            </option>
+                        ))}
+                    </select>
+                ) : (
+                    <div className="p-4 bg-rose-50 border border-rose-100 rounded-2xl flex items-center gap-3">
+                        <ShieldAlert size={20} className="text-rose-500" />
+                        <p className="text-xs font-bold text-rose-800">
+                            {t('auth.noProfilesToRecover')}
+                        </p>
+                    </div>
+                )}
+            </Card>
+
+            {/* Top Choice: 2 Equal Cards */}
+            {method === 'choose' && (
+                <div className="space-y-5 animate-in fade-in duration-300">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <button
                             type="button"
-                            onClick={() => setRecoveryMethod('phrase')}
-                            className="text-xs font-bold text-theme-light hover:text-theme-primary transition-colors underline"
-                            data-testid="switch-to-phrase-recovery"
+                            onClick={() => setMethod('social')}
+                            data-testid="wallet-recovery-choose-social"
+                            className="p-6 bg-bg-surface hover:bg-theme-subtle/30 border-2 border-theme-subtle hover:border-theme-primary rounded-3xl text-left transition-all group shadow-sm flex flex-col justify-between cursor-pointer"
                         >
-                            {t('auth.recoverWalletSeed')}
+                            <div className="space-y-3">
+                                <div className="w-12 h-12 rounded-2xl bg-theme-primary/10 text-theme-primary flex items-center justify-center group-hover:scale-105 transition-transform">
+                                    <Users size={24} />
+                                </div>
+                                <h3 className="font-black text-base text-theme-secondary tracking-tight">
+                                    {t('backup.restorePrimaryContacts')}
+                                </h3>
+                                <p className="text-xs text-theme-light leading-relaxed">
+                                    {t('backup.resetPasswordContactsDesc')}
+                                </p>
+                            </div>
+                            <div className="flex items-center gap-1.5 text-xs font-bold text-theme-primary pt-4">
+                                <span>{t('common.select')}</span>
+                                <ArrowRight size={14} />
+                            </div>
+                        </button>
+
+                        <button
+                            type="button"
+                            onClick={() => setMethod('words')}
+                            data-testid="wallet-recovery-choose-words"
+                            className="p-6 bg-bg-surface hover:bg-theme-subtle/30 border-2 border-theme-subtle hover:border-theme-primary rounded-3xl text-left transition-all group shadow-sm flex flex-col justify-between cursor-pointer"
+                        >
+                            <div className="space-y-3">
+                                <div className="w-12 h-12 rounded-2xl bg-amber-500/10 text-amber-600 flex items-center justify-center group-hover:scale-105 transition-transform">
+                                    <KeyRound size={24} />
+                                </div>
+                                <h3 className="font-black text-base text-theme-secondary tracking-tight">
+                                    {t('backup.restoreCardWordsTitle')}
+                                </h3>
+                                <p className="text-xs text-theme-light leading-relaxed">
+                                    {t('auth.resetPasswordWithSeedDesc')}
+                                </p>
+                            </div>
+                            <div className="flex items-center gap-1.5 text-xs font-bold text-amber-600 pt-4">
+                                <span>{t('common.select')}</span>
+                                <ArrowRight size={14} />
+                            </div>
                         </button>
                     </div>
+
+                    <div className="flex justify-center pt-1">
+                        <Button type="button" variant="secondary" onClick={onSwitchToLogin} className="gap-2">
+                            <ArrowLeft size={16} />
+                            {t('auth.backToLogin')}
+                        </Button>
+                    </div>
                 </div>
-            ) : (
-                <>
-                    <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl text-xs text-theme-light flex items-start gap-2.5">
-                        <Info size={16} className="text-theme-primary shrink-0 mt-0.5" />
-                        <span>{t('auth.resetPasswordWithSeedDesc')}</span>
+            )}
+
+            {/* Branch A: Social Recovery */}
+            {method === 'social' && (
+                <div className="space-y-4">
+                    <SocialRecoveryFlow
+                        mode="reset_local_password"
+                        targetFolderName={selectedProfile}
+                        initialPayload={initialPayload}
+                        onBack={() => setMethod('choose')}
+                        onSuccess={() => onRecoverySuccess()}
+                    />
+                    <div className="flex justify-center pt-1">
+                        <Button type="button" variant="outline" size="sm" onClick={onSwitchToLogin}>
+                            {t('auth.backToLogin')}
+                        </Button>
+                    </div>
+                </div>
+            )}
+
+            {/* Branch B: Recovery Words / Emergency Sheet */}
+            {method === 'words' && (
+                <form onSubmit={handleWordsRecovery} className="space-y-6 animate-in fade-in duration-300">
+                    <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl text-xs text-theme-light flex items-start justify-between gap-3">
+                        <div className="flex items-start gap-2.5">
+                            <Info size={16} className="text-theme-primary shrink-0 mt-0.5" />
+                            <span>{t('auth.resetPasswordWithSeedDesc')}</span>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={() => setMethod('choose')}
+                            className="text-xs font-bold text-theme-primary hover:underline shrink-0 cursor-pointer"
+                        >
+                            {t('common.back')}
+                        </button>
                     </div>
 
-                    <form className="space-y-8" onSubmit={(e) => { e.preventDefault(); handleRecovery(); }}>
-                        <Card header={<div className="flex items-center gap-2"><User size={14}/><label htmlFor="profile-select" className="font-black text-[10px] uppercase tracking-widest cursor-pointer">{t('profile.selectProfile')}</label></div>}>
-                            <div className="space-y-4">
-                                {profiles.length > 0 ? (
-                                    <select
-                                        id="profile-select"
-                                        value={selectedProfile}
-                                        onChange={(e) => setSelectedProfile(e.target.value)}
-                                        data-testid="profile-select"
-                                        className="w-full bg-white border border-theme-subtle rounded-2xl px-4 py-3.5 text-sm font-bold text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft appearance-none transition-all"
-                                    >
-                                        {profiles.map((profile) => (
-                                            <option key={profile.folderName} value={profile.folderName}>
-                                                {profile.profileName}
-                                            </option>
-                                        ))}
-                                    </select>
-                                ) : (
-                                    <div className="p-4 bg-rose-50 border border-rose-100 rounded-2xl flex items-center gap-3">
-                                        <ShieldAlert size={20} className="text-rose-500" />
-                                        <p className="text-xs font-bold text-rose-800">{t('auth.noProfilesToRecover')}</p>
-                                    </div>
-                                )}
+                    <SeedPhraseInput
+                        allowKitUri
+                        showUserPrefix={false}
+                        initialPayload={initialPayload}
+                        onChange={handleSeedChange}
+                        idPrefix="recovery-word"
+                    />
+
+                    <Card
+                        header={
+                            <div className="flex items-center gap-2">
+                                <Lock size={14} />
+                                <span className="font-black text-[10px] uppercase tracking-widest">
+                                    {t('auth.reEncryptionCredentials')}
+                                </span>
                             </div>
-                        </Card>
-
-                        <Card header={
-                            <div className="flex items-center justify-between">
-                                <div className="flex items-center gap-2">
-                                    <Key size={14}/>
-                                    <span className="font-black text-[10px] uppercase tracking-widest">{t('auth.enterMasterKey')}</span>
-                                    <HelpIcon topic="mnemonic" size={12} />
-                                </div>
-                                <button type="button" onClick={handleInputModeToggle} className="px-3 py-1 bg-theme-primary/5 border border-theme-primary/10 rounded-full text-[9px] font-black uppercase tracking-widest text-theme-primary hover:bg-theme-primary/10 transition-all flex items-center gap-2">
-                                    {inputMode === "words" ? <Type size={10}/> : <Grid size={10}/>}
-                                    {inputMode === "words" ? t('auth.enterFullPhrase') : t('auth.useSingleFields')}
-                                </button>
+                        }
+                    >
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div className="space-y-2">
+                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">
+                                    {t('auth.newWalletPassword')}
+                                </label>
+                                <Input
+                                    type="password"
+                                    showToggle
+                                    data-testid="recovery-new-password-input"
+                                    value={newPassword}
+                                    onChange={(e) => {
+                                        setNewPassword(e.target.value);
+                                        if (feedbackType === 'error') {
+                                            setFeedbackMsg('');
+                                            setFeedbackType(null);
+                                        }
+                                    }}
+                                    placeholder={t('auth.passwordMinChars')}
+                                    autoComplete="new-password"
+                                />
                             </div>
-                        }>
-                            <div className="space-y-6">
-                                <div className="grid grid-cols-2 gap-4">
-                                    <div className="space-y-2">
-                                        <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><Languages size={10}/> {t('common.dictionary')}</label>
-                                        <select value={selectedLanguage} onChange={(e) => setSelectedLanguage(e.target.value as MnemonicLanguage)} className="w-full bg-white border border-theme-subtle rounded-2xl px-4 py-2.5 text-xs font-bold text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft appearance-none">
-                                            <option value="english">English</option>
-                                            <option value="german">Deutsch</option>
-                                            <option value="spanish">Español</option>
-                                            <option value="french">Français</option>
-                                            <option value="italian">Italiano</option>
-                                            <option value="japanese">日本語</option>
-                                            <option value="korean">한국어</option>
-                                            <option value="portuguese">Português</option>
-                                            <option value="czech">Čeština</option>
-                                            <option value="chineseSimplified">简体中文</option>
-                                            <option value="chineseTraditional">繁體中文</option>
-                                        </select>
-                                    </div>
-                                    <div className="space-y-2">
-                                        <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><BookOpen size={10}/> {t('auth.sequenceDepth')}</label>
-                                        <select value={wordCount} onChange={(e) => setWordCount(parseInt(e.target.value, 10) as 12 | 24)} className="w-full bg-white border border-theme-subtle rounded-2xl px-4 py-2.5 text-xs font-bold text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft appearance-none">
-                                            <option value={12}>{t('profile.wordCount12')}</option>
-                                            <option value={24}>{t('profile.wordCount24')}</option>
-                                        </select>
-                                    </div>
-                                </div>
-
-                                {inputMode === 'words' ? (
-                                    <div className="grid grid-cols-3 sm:grid-cols-4 gap-3">
-                                        {mnemonicWords.map((word, index) => (
-                                            <div key={index} className="relative group">
-                                                <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[9px] font-black text-theme-primary/30 w-4">{index + 1}</span>
-                                                <Input
-                                                    id={`word-${index}`}
-                                                    data-testid={`word-input-${index}`}
-                                                    value={word}
-                                                    onChange={(e) => handleWordChange(index, e.target.value)}
-                                                    className="pl-7 font-mono font-bold text-xs py-2.5 group-hover:border-theme-primary/30"
-                                                    autoComplete="off"
-                                                />
-                                            </div>
-                                        ))}
-                                    </div>
-                                ) : (
-                                    <div className="space-y-3">
-                                        <textarea
-                                            ref={textareaRef}
-                                            value={rawPhrase}
-                                            onChange={(e) => setRawPhrase(e.target.value)}
-                                            placeholder={t('auth.seedPhrasePlaceholder')}
-                                            className="w-full h-32 px-4 py-3 bg-white border border-theme-subtle rounded-2xl text-theme-primary font-mono text-sm focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft transition-all"
-                                            rows={4}
-                                        />
-                                        <p className="text-[9px] font-bold text-theme-light italic flex items-center gap-1.5"><Info size={10}/> {t('auth.autoCleaned')}</p>
-                                    </div>
-                                )}
-
-                                <div className="space-y-2 pt-4 border-t border-theme-primary/10">
-                                    <div className="flex items-center gap-1.5">
-                                        <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1">
-                                            <Lock size={10}/> 
-                                            <span>{t('auth.passphraseIfUsed')}</span>
-                                        </label>
-                                        <HelpIcon topic="passphrase" size={12} />
-                                    </div>
-                                    <Input type="password" value={passphrase} onChange={(e) => setPassphrase(e.target.value)} placeholder={t('auth.passphrasePlaceholder')} />
-                                </div>
+                            <div className="space-y-2">
+                                <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">
+                                    {t('auth.confirmPassword')}
+                                </label>
+                                <Input
+                                    type="password"
+                                    showToggle
+                                    data-testid="recovery-confirm-password-input"
+                                    value={confirmPassword}
+                                    onChange={(e) => setConfirmPassword(e.target.value)}
+                                    placeholder={t('auth.repeatPassword')}
+                                    autoComplete="new-password"
+                                />
                             </div>
-                        </Card>
-
-                        <Card header={<div className="flex items-center gap-2"><Lock size={14}/><span className="font-black text-[10px] uppercase tracking-widest">{t('auth.reEncryptionCredentials')}</span></div>}>
-                            <div className="space-y-6">
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                                    <div className="space-y-2">
-                                        <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('auth.newWalletPassword')}</label>
-                                        <Input type="password" value={newPassword} onChange={(e) => { setNewPassword(e.target.value); if (feedbackType === 'error') setFeedback("", null); }} placeholder={t('auth.passwordMinChars')} onFocus={() => setFeedback("", null)} />
-                                    </div>
-                                    <div className="space-y-2">
-                                        <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('auth.confirmPassword')}</label>
-                                        <Input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} placeholder={t('auth.repeatPassword')} />
-                                    </div>
-                                </div>
-                            </div>
-                        </Card>
-
-                        <div className="flex flex-col items-center gap-4 pt-4">
-                            <Button type="submit" disabled={isLoading || !isValidMnemonic || profiles.length === 0} className="w-full py-5 rounded-3xl shadow-premium-lg text-lg gap-3">
-                                {isLoading ? <RefreshCw className="animate-spin" size={24} /> : <Fingerprint size={24} />}
-                                {isLoading ? t('auth.loadingWallet') : t('auth.recoverWalletAndLogin')}
-                            </Button>
-                            <Button type="button" variant="secondary" onClick={onSwitchToLogin} className="w-full py-4 rounded-2xl shadow-sm gap-2">
-                                <ArrowLeft size={18} /> {t('auth.backToLogin')}
-                            </Button>
-                            <button
-                                type="button"
-                                onClick={() => setRecoveryMethod('flow')}
-                                className="text-xs font-bold text-theme-light hover:text-theme-primary transition-colors underline pt-2"
-                                data-testid="switch-to-flow-recovery"
-                            >
-                                {t('backup.restorePrimaryContacts')} / {t('backup.restorePrimarySheet')}
-                            </button>
                         </div>
+                    </Card>
 
-                        {feedbackMsg && (
-                            <div data-testid="feedback-message" className={`p-4 rounded-2xl flex items-center gap-3 border animate-in slide-in-from-bottom-2 ${feedbackType === 'error' ? 'bg-rose-50 border-rose-100 text-rose-800' : 'bg-emerald-50 border-emerald-100 text-emerald-800'}`}>
-                                {feedbackType === 'error' ? <ShieldAlert size={18} className="text-rose-500 shrink-0" /> : <CheckCircle2 size={18} className="text-emerald-500 shrink-0" />}
-                                <p className="text-xs font-bold leading-tight">{feedbackMsg}</p>
-                            </div>
-                        )}
-                    </form>
-                </>
+                    {feedbackMsg && (
+                        <AlertBanner
+                            data-testid="feedback-message"
+                            variant={
+                                feedbackType === 'error'
+                                    ? 'error'
+                                    : feedbackType === 'success'
+                                      ? 'success'
+                                      : 'info'
+                            }
+                        >
+                            {feedbackMsg}
+                        </AlertBanner>
+                    )}
+
+                    <div className="flex flex-col items-center gap-3 pt-2">
+                        <Button
+                            type="submit"
+                            data-testid="recovery-submit-btn"
+                            disabled={isLoading || !seedState.isValid || profiles.length === 0}
+                            className="w-full py-5 rounded-3xl shadow-premium-lg text-lg gap-3"
+                        >
+                            {isLoading ? (
+                                <RefreshCw className="animate-spin" size={24} />
+                            ) : (
+                                <Fingerprint size={24} />
+                            )}
+                            {isLoading ? t('auth.loadingWallet') : t('auth.recoverWalletAndLogin')}
+                        </Button>
+                        <Button
+                            type="button"
+                            variant="secondary"
+                            onClick={onSwitchToLogin}
+                            className="w-full py-4 rounded-2xl shadow-sm gap-2"
+                        >
+                            <ArrowLeft size={18} /> {t('auth.backToLogin')}
+                        </Button>
+                    </div>
+                </form>
             )}
         </AuthLayout>
     );

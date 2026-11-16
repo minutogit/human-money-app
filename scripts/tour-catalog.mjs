@@ -37,18 +37,18 @@ export const TOUR_STEPS = [
     {
         id: '1.3',
         chapter: 1,
-        title: 'Profil aus Seed wiederherstellen',
-        file: 'src/components/RecreateProfile.tsx',
-        description: 'Wiederherstellung einer bestehenden Identität über 12/24 Wörter BIP-39 Mnemonic.',
+        title: 'Profil öffnen oder wiederherstellen (Wörter / Notfall-Blatt)',
+        file: 'src/components/RestoreBackupView.tsx',
+        description: 'Öffnen eines bestehenden Profils oder Unterkontos über 12/24 Wiederherstellungswörter, Notfall-Blatt oder Sync-Dienst.',
         auth: false,
-        appState: { view: 'recreate_profile' }
+        appState: { view: 'restore_backup', initialMethod: 'words_or_sheet' }
     },
     {
         id: '1.4',
         chapter: 1,
-        title: 'Backup-Datei wiederherstellen',
+        title: 'Bestehendes Profil öffnen / wiederherstellen (Übersicht)',
         file: 'src/components/RestoreBackupView.tsx',
-        description: 'Prüfung und Import eines verschlüsselten Wallet-Backups mit L2 Reconcile.',
+        description: '3 gleichberechtigte Wege: Vertrauenskontakte, Wiederherstellungswörter/Notfall-Blatt oder Sicherungsdatei/-ordner.',
         auth: false,
         appState: { view: 'restore_backup' }
     },
@@ -1192,7 +1192,8 @@ export function getTauriMockInitScript(initialScenario = 'normal') {
             sealTimestamp: "2026-11-10T07:00:00Z",
             blobCount: 42,
             customStandardCount: 2,
-            protectionMode: "password"
+            protectionMode: "password",
+            localCollision: null
         }),
         "restore_wallet_backup": () => ({
             folderName: "alice_wallet",
@@ -1202,13 +1203,29 @@ export function getTauriMockInitScript(initialScenario = 'normal') {
             restoredStandardsCount: 2,
             l2ReconciliationStatus: "reconciled"
         }),
+        "reset_local_password_via_backup": () => null,
+        "preview_mnemonic_identity": () => ({
+            userId: MOCK_USER_DID,
+            localCollision: null
+        }),
+        "stage_dropped_backup_bytes": () => "/tmp/staged_dropped.hmcbackup",
         "run_auto_backup_sync": () => handlers["get_backup_status"](),
         "sync_backup": () => ({ uploadedTo: 1, authorizedTargets: 1, paddedBytes: 4096, errors: [] }),
-        "fetch_and_inspect_backup": () => ({
+        "probe_sync_backup": () => ({
+            status: "found",
             stagedPath: "/tmp/staged_backup",
-            matchedKeyKind: "password",
+            matchedKeyKind: "stealth",
             sourceUrl: "https://sync.humoco.org",
-            inspection: handlers["inspect_wallet_backup"]()
+            inspection: handlers["inspect_wallet_backup"](),
+            userId: MOCK_USER_DID,
+            localCollision: null,
+            resolvedSyncTargets: [{
+                writeUrl: "https://sync.humoco.org/sync.php",
+                readUrl: "https://sync.humoco.org/data",
+                dropPub: "drop_pub_01",
+                registerUrl: null
+            }],
+            error: null
         }),
         "reconcile_restored_wallet_l2": () => ({
             activeVoucherQueriesCount: 2,
@@ -1336,11 +1353,22 @@ export function getTauriMockInitScript(initialScenario = 'normal') {
             postSyncResult: { fetchedItems: 0, processedItems: 0, errors: [] },
             backupSyncResult: null
         }),
+        "inspect_emergency_kit_uri": () => ({
+            phrase: "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+            wordCount: 12,
+            language: "english",
+            hasBip39Passphrase: false,
+            userPrefix: null,
+            syncUrls: ["https://sync.humoco.org"],
+            syncDescriptorsJson: []
+        }),
         "start_social_recovery_session": () => ({
             sasCode: "482-910",
             createdAt: Math.floor(Date.now() / 1000),
             nameHint: "Alice",
             requestUri: "humoco://recovery-req?v=1&pk=abcdef&ts=" + Math.floor(Date.now() / 1000) + "&name=Alice",
+            sessionMode: "restore_new_device",
+            targetFolderName: null,
             ownerDid: null,
             ownerDisplayName: null,
             rotationEpoch: null,
@@ -1357,6 +1385,8 @@ export function getTauriMockInitScript(initialScenario = 'normal') {
             createdAt: Math.floor(Date.now() / 1000),
             nameHint: "Alice",
             requestUri: "humoco://recovery-req?v=1&pk=abcdef&ts=" + Math.floor(Date.now() / 1000) + "&name=Alice",
+            sessionMode: "restore_new_device",
+            targetFolderName: null,
             ownerDid: MOCK_USER_DID,
             ownerDisplayName: "Alice",
             rotationEpoch: 1,
@@ -1389,20 +1419,19 @@ export function getTauriMockInitScript(initialScenario = 'normal') {
             ownerDisplayName: "Alice"
         }),
         "complete_social_recovery": () => ({
+            folderName: "alice_wallet",
             profileName: "Alice",
             mode: "restore_new_device",
-            outcome: "restored_full_sync",
+            outcome: "restored_from_sync",
             backupEpoch: 1,
             backupTxNonce: 2,
-            pendingRestoreL2Reconciliation: false
-        }),
-        "restore_from_emergency_kit_uri": () => ({
-            profileName: "Alice",
-            mode: "restore_new_device",
-            outcome: "restored_full_sync",
-            backupEpoch: 1,
-            backupTxNonce: 2,
-            pendingRestoreL2Reconciliation: false
+            activeVoucherQueriesCount: 2,
+            reconciledSpentCount: 0,
+            restoredStandardsCount: 1,
+            l2ReconciliationStatus: "reconciled",
+            pendingRestoreL2Reconciliation: false,
+            localCollision: null,
+            resolvedSyncTargets: []
         }),
 
         // --- Logs & Diagnostics ---

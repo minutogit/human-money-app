@@ -8,16 +8,37 @@ import {
     MnemonicLanguage,
     FrontendAutoBackupStatusDto,
     FrontendBackupSyncResult,
-    FrontendBackupFetchDto,
+    SyncBackupProbeResultDto,
+    MnemonicIdentityPreviewDto,
     FrontendRestoreReconcileResultDto,
 } from "../types";
 
-export interface FetchAndInspectBackupArgs {
-    syncInput: string;
+export interface ProbeSyncBackupArgs {
+    syncInputs: string[];
     mnemonic: string;
     passphrase?: string | null;
     userPrefix?: string | null;
     language?: MnemonicLanguage | null;
+}
+
+export interface PreviewMnemonicIdentityArgs {
+    mnemonic: string;
+    passphrase?: string | null;
+    userPrefix?: string | null;
+    language?: MnemonicLanguage | null;
+}
+
+export interface ResetLocalPasswordViaBackupArgs {
+    targetFolderName: string;
+    sourcePath: string;
+    credentialMode: "password" | "mnemonic";
+    backupPassword?: string | null;
+    mnemonic?: string | null;
+    passphrase?: string | null;
+    userPrefix?: string | null;
+    language?: MnemonicLanguage | null;
+    newPassword: string;
+    localInstanceId: string;
 }
 
 export interface ExportBackupFileArgs {
@@ -55,6 +76,7 @@ export interface RestoreBackupArgs {
     language?: MnemonicLanguage | null;
     newPassword: string;
     localInstanceId: string;
+    replaceFolderName?: string | null;
 }
 
 export const backupService = {
@@ -104,7 +126,36 @@ export const backupService = {
             language: args.language ?? null,
             newPassword: args.newPassword,
             localInstanceId: args.localInstanceId,
+            replaceFolderName: args.replaceFolderName ?? null,
         });
+    },
+
+    resetLocalPasswordViaBackup: async (args: ResetLocalPasswordViaBackupArgs): Promise<void> => {
+        return await invoke<void>("reset_local_password_via_backup", {
+            targetFolderName: args.targetFolderName,
+            sourcePath: args.sourcePath,
+            credentialMode: args.credentialMode,
+            backupPassword: args.backupPassword ?? null,
+            mnemonic: args.mnemonic ?? null,
+            passphrase: args.passphrase ?? null,
+            userPrefix: args.userPrefix ?? null,
+            language: args.language ?? null,
+            newPassword: args.newPassword,
+            localInstanceId: args.localInstanceId,
+        });
+    },
+
+    previewMnemonicIdentity: async (args: PreviewMnemonicIdentityArgs): Promise<MnemonicIdentityPreviewDto> => {
+        return await invoke<MnemonicIdentityPreviewDto>("preview_mnemonic_identity", {
+            mnemonic: args.mnemonic,
+            passphrase: args.passphrase ?? null,
+            userPrefix: args.userPrefix ?? null,
+            language: args.language ?? null,
+        });
+    },
+
+    stageDroppedBackupBytes: async (bytes: number[]): Promise<string> => {
+        return await invoke<string>("stage_dropped_backup_bytes", { bytes });
     },
 
     getBackupStatus: async (): Promise<FrontendAutoBackupStatusDto> => {
@@ -121,9 +172,9 @@ export const backupService = {
         });
     },
 
-    fetchAndInspectBackup: async (args: FetchAndInspectBackupArgs): Promise<FrontendBackupFetchDto> => {
-        return await invoke<FrontendBackupFetchDto>("fetch_and_inspect_backup", {
-            syncInput: args.syncInput,
+    probeSyncBackup: async (args: ProbeSyncBackupArgs): Promise<SyncBackupProbeResultDto> => {
+        return await invoke<SyncBackupProbeResultDto>("probe_sync_backup", {
+            syncInputs: args.syncInputs,
             mnemonic: args.mnemonic,
             passphrase: args.passphrase ?? null,
             userPrefix: args.userPrefix ?? null,

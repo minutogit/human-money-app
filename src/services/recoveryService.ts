@@ -3,9 +3,9 @@ import {
     ActiveRecoverySessionDto,
     ApproveGuardianRecoveryResultDto,
     ConfirmEmergencySheetResultDto,
-    EmergencyKitRestoreInput,
     ExportedMnemonicKitDto,
     GuardianRecoveryRequestInspectionDto,
+    InspectedEmergencyKitDto,
     RecoveryCompletionResultDto,
     RecoveryProtectionStatusDto,
     RevokeSocialRecoveryResultDto,
@@ -30,20 +30,17 @@ export interface CompleteSocialRecoveryParams {
     profileName?: string;
     targetFolderName?: string;
     localInstanceId: string;
-}
-
-export interface RestoreFromEmergencyKitParams {
-    kitUriOrManual: EmergencyKitRestoreInput;
-    mode: 'restore_new_device' | 'reset_local_password';
-    newPassword: string;
-    profileName?: string;
-    targetFolderName?: string;
-    localInstanceId: string;
+    allowEmptyFallback?: boolean;
+    replaceFolderName?: string;
 }
 
 export const recoveryService = {
     exportProfileMnemonic: async (password: string): Promise<ExportedMnemonicKitDto | null> => {
         return await invoke<ExportedMnemonicKitDto | null>('export_profile_mnemonic', { password });
+    },
+
+    inspectEmergencyKitUri: async (uri: string): Promise<InspectedEmergencyKitDto> => {
+        return await invoke<InspectedEmergencyKitDto>('inspect_emergency_kit_uri', { uri });
     },
 
     confirmEmergencySheetSaved: async (
@@ -78,8 +75,16 @@ export const recoveryService = {
         return await invoke<RevokeSocialRecoveryResultDto>('revoke_social_recovery', { password });
     },
 
-    startSocialRecoverySession: async (nameHint?: string): Promise<ActiveRecoverySessionDto> => {
-        return await invoke<ActiveRecoverySessionDto>('start_social_recovery_session', { nameHint });
+    startSocialRecoverySession: async (
+        nameHint?: string,
+        sessionMode?: 'restore_new_device' | 'reset_local_password',
+        targetFolderName?: string
+    ): Promise<ActiveRecoverySessionDto> => {
+        return await invoke<ActiveRecoverySessionDto>('start_social_recovery_session', {
+            nameHint: nameHint ?? null,
+            sessionMode: sessionMode ?? null,
+            targetFolderName: targetFolderName ?? null,
+        });
     },
 
     getActiveRecoverySession: async (): Promise<ActiveRecoverySessionDto | null> => {
@@ -129,19 +134,8 @@ export const recoveryService = {
             profileName: params.profileName,
             targetFolderName: params.targetFolderName,
             localInstanceId: params.localInstanceId,
-        });
-    },
-
-    restoreFromEmergencyKitUri: async (
-        params: RestoreFromEmergencyKitParams
-    ): Promise<RecoveryCompletionResultDto> => {
-        return await invoke<RecoveryCompletionResultDto>('restore_from_emergency_kit_uri', {
-            kitUriOrManual: params.kitUriOrManual,
-            mode: params.mode,
-            newPassword: params.newPassword,
-            profileName: params.profileName,
-            targetFolderName: params.targetFolderName,
-            localInstanceId: params.localInstanceId,
+            allowEmptyFallback: params.allowEmptyFallback ?? null,
+            replaceFolderName: params.replaceFolderName ?? null,
         });
     },
 };

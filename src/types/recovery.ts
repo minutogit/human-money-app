@@ -83,11 +83,15 @@ export interface RevokeSocialRecoveryResultDto {
     backupSyncResult: unknown | null;
 }
 
+import { LocalProfileCollisionDto, ResolvedSyncTargetDto, MnemonicLanguage } from '../types';
+
 export interface ActiveRecoverySessionDto {
     sasCode: string;
     createdAt: number;
     nameHint: string | null;
     requestUri: string;
+    sessionMode: 'restore_new_device' | 'reset_local_password' | string;
+    targetFolderName: string | null;
     ownerDid: string | null;
     ownerDisplayName: string | null;
     rotationEpoch: number | null;
@@ -113,20 +117,28 @@ export interface ApproveGuardianRecoveryResultDto {
     ownerDisplayName: string;
 }
 
-export interface EmergencyKitRestoreInput {
-    kitUri?: string;
-    manualMnemonic?: string;
-    manualLanguageCode?: number;
-    manualPassphrase?: string;
-    manualUserPrefix?: string;
-    manualSyncUrls?: string[];
+export interface InspectedEmergencyKitDto {
+    phrase: string;
+    wordCount: number;
+    language: MnemonicLanguage;
+    hasBip39Passphrase: boolean;
+    userPrefix: string | null;
+    syncUrls: string[];
+    syncDescriptorsJson: string[];
 }
 
 export interface RecoveryCompletionResultDto {
+    folderName: string;
     profileName: string;
     mode: string;
     outcome: string;
     backupEpoch: number | null;
     backupTxNonce: number | null;
+    activeVoucherQueriesCount: number;
+    reconciledSpentCount: number;
+    restoredStandardsCount: number;
+    l2ReconciliationStatus: 'no_servers' | 'offline' | 'reconciled' | string;
     pendingRestoreL2Reconciliation: boolean;
+    localCollision: LocalProfileCollisionDto | null;
+    resolvedSyncTargets: ResolvedSyncTargetDto[];
 }

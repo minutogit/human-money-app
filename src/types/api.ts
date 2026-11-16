@@ -159,9 +159,14 @@ export type AppState =
     | { view: "needs_profile" }
     | { view: "needs_login" }
     | { view: "logged_in" }
-    | { view: "recreate_profile" }
-    | { view: "restore_backup"; previousView?: AppState; initialPayload?: string }
-    | { view: "needs_recovery" }
+    | {
+          view: "restore_backup";
+          previousView?: AppState;
+          initialPayload?: string;
+          initialBackupPath?: string;
+          initialMethod?: 'social' | 'words_or_sheet' | 'file_or_folder';
+      }
+    | { view: "needs_recovery"; initialPayload?: string }
     | { view: "settings"; initialSection?: 'sync' | 'backup' | 'network' | 'profile' | 'standards' | 'security' | 'connection' | 'advanced' }
     | { view: "support" }
     | { view: "bug_report" }

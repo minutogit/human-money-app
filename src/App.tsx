@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import "./App.css";
 import { ForkLockOverlay } from './components/ForkLockOverlay';
@@ -18,6 +18,7 @@ import { GlobalFileDropZone } from "./components/GlobalFileDropZone";
 import { GuardianReleaseModal } from "./components/GuardianReleaseModal";
 import { parseCardUri } from "./utils/humocoUri";
 import { marketService } from "./services/marketService";
+import { recoveryService } from "./services/recoveryService";
 import type { HelpTopicId } from "./help/helpTopics";
 
 function AppContent() {
@@ -25,6 +26,9 @@ function AppContent() {
     const { appState, navigate } = useNavigation();
     const { isForkLocked, isRecoveryRequired, clearLocks, isSessionActive, isAuthenticated, protectAction } = useSession();
     const isLoggedIn = isAuthenticated ?? isSessionActive;
+
+    const appStateViewRef = useRef(appState.view);
+    appStateViewRef.current = appState.view;
 
     const [releaseModalOpen, setReleaseModalOpen] = useState(false);
     const [releaseRequestUri, setReleaseRequestUri] = useState<string | undefined>(undefined);
@@ -53,8 +57,25 @@ function AppContent() {
             if (isLoggedIn) {
                 handleUriImport(uri);
             }
-        } else if (uri.includes('humoco://recovery-reply') || uri.includes('humoco://kit')) {
-            navigate({ view: 'restore_backup', initialPayload: uri });
+        } else if (uri.includes('humoco://recovery-reply')) {
+            recoveryService
+                .getActiveRecoverySession()
+                .then((session) => {
+                    if (session?.sessionMode === 'reset_local_password') {
+                        navigate({ view: 'needs_recovery', initialPayload: uri });
+                    } else {
+                        navigate({ view: 'restore_backup', initialMethod: 'social', initialPayload: uri });
+                    }
+                })
+                .catch(() => {
+                    navigate({ view: 'restore_backup', initialMethod: 'social', initialPayload: uri });
+                });
+        } else if (uri.includes('humoco://kit')) {
+            if (appStateViewRef.current === 'needs_recovery') {
+                navigate({ view: 'needs_recovery', initialPayload: uri });
+            } else {
+                navigate({ view: 'restore_backup', initialMethod: 'words_or_sheet', initialPayload: uri });
+            }
         } else if (uri.includes('humoco://recovery-req')) {
             if (isLoggedIn) {
                 setReleaseRequestUri(uri);
@@ -112,7 +133,7 @@ function AppContent() {
     }, [isForkLocked, isRecoveryRequired]);
 
     useEffect(() => {
-        const PUBLIC_VIEWS = ['loading', 'needs_profile', 'needs_login', 'recreate_profile', 'restore_backup', 'needs_recovery', 'help_center'];
+        const PUBLIC_VIEWS = ['loading', 'needs_profile', 'needs_login', 'restore_backup', 'needs_recovery', 'help_center'];
         if (!isLoggedIn && !PUBLIC_VIEWS.includes(appState.view)) {
             logger.warn(`Session is inactive but view is "${appState.view}". Redirecting to "needs_login".`);
             navigate({ view: 'needs_login' });

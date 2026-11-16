@@ -4,6 +4,7 @@ import { UploadCloud, CheckCircle2, AlertCircle, Info, X } from 'lucide-react';
 import { useNavigation } from '../context/NavigationContext';
 import { useSession } from '../context/SessionContext';
 import { marketService } from '../services/marketService';
+import { backupService } from '../services/backupService';
 import { logger } from '../utils/log';
 import { stringifyError, translateError } from '../utils/errorHelper';
 
@@ -114,6 +115,26 @@ export function GlobalFileDropZone({ children }: GlobalFileDropZoneProps) {
         } catch {
           // ignore read failure and proceed
         }
+      }
+
+      if (file.name.toLowerCase().endsWith('.hmcbackup')) {
+        try {
+          const buf = await file.arrayBuffer();
+          const bytes = Array.from(new Uint8Array(buf));
+          const stagedPath = await backupService.stageDroppedBackupBytes(bytes);
+          navigate({
+            view: 'restore_backup',
+            initialMethod: 'file_or_folder',
+            initialBackupPath: stagedPath,
+          });
+        } catch (err) {
+          logger.error("Failed to stage dropped .hmcbackup: " + stringifyError(err));
+          setDropFeedback({
+            status: 'error',
+            message: translateError(err, t),
+          });
+        }
+        return;
       }
 
       if (!isLoggedIn) return;

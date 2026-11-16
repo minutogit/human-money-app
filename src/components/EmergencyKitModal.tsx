@@ -78,8 +78,9 @@ export const EmergencyKitModal: React.FC<EmergencyKitModalProps> = ({
                 setIsNotRetained(true);
             } else {
                 setKitData(dto);
-                // Choose random word index between 1 and 12
-                const rndIndex = Math.floor(Math.random() * 12) + 1;
+                const phraseWords = dto.phrase.trim().split(/\s+/).filter(Boolean);
+                const wordCount = Math.max(12, phraseWords.length);
+                const rndIndex = Math.floor(Math.random() * wordCount) + 1;
                 setControlWordIndex(rndIndex);
                 setStep('view_sheet');
             }
@@ -133,7 +134,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
 </div>
 <h2>HuMoCo Profil-Wiederherstellung (Notfall-Blatt)</h2>
 <div class="section">
-  <h3>12 Wiederherstellungswörter</h3>
+  <h3>${words.length} Wiederherstellungswörter</h3>
   <div class="words-grid">${wordsHtml}</div>
 </div>
 <div class="section">
@@ -315,10 +316,10 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
                                 )}
                             </div>
 
-                            {/* 12 Cleartext Words */}
+                            {/* 12 or 24 Cleartext Words */}
                             <div className="space-y-2">
                                 <span className="text-[11px] font-bold uppercase tracking-wider text-slate-600 block">
-                                    {t('backup.restoreSheetManualWordsLabel')}
+                                    {t('backup.emergencyKitManualWordsTitle', { count: words.length })}
                                 </span>
                                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                                     {words.map((word, idx) => (

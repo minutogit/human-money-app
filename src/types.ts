@@ -24,6 +24,27 @@ export interface BackupProbeDto {
   customStandardCount: number;
 }
 
+export interface LocalProfileCollisionDto {
+  folderName: string;
+  profileName: string;
+  userId: string;
+  localEpoch: number | null;
+  localTxNonce: number | null;
+  isLockedOrConflicted: boolean;
+}
+
+export interface ResolvedSyncTargetDto {
+  writeUrl: string;
+  readUrl: string;
+  dropPub: string;
+  registerUrl: string | null;
+}
+
+export interface MnemonicIdentityPreviewDto {
+  userId: string;
+  localCollision: LocalProfileCollisionDto | null;
+}
+
 export interface BackupInspectionDto {
   profileName: string;
   userId: string;
@@ -33,6 +54,7 @@ export interface BackupInspectionDto {
   blobCount: number;
   customStandardCount: number;
   protectionMode: string;
+  localCollision: LocalProfileCollisionDto | null;
 }
 
 export interface BackupSummaryDto {
@@ -63,11 +85,16 @@ export interface FrontendBackupSyncResult {
   retryAfterSecs?: number | null;
 }
 
-export interface FrontendBackupFetchDto {
-  stagedPath: string;
-  matchedKeyKind: 'stealth' | 'public' | 'grace' | 'own' | string;
-  sourceUrl: string;
-  inspection: BackupInspectionDto;
+export interface SyncBackupProbeResultDto {
+  status: 'found' | 'not_found' | 'unreachable';
+  stagedPath: string | null;
+  matchedKeyKind: 'stealth' | 'public' | 'grace' | 'slot_id' | 'own' | string | null;
+  sourceUrl: string | null;
+  inspection: BackupInspectionDto | null;
+  userId: string;
+  localCollision: LocalProfileCollisionDto | null;
+  resolvedSyncTargets: ResolvedSyncTargetDto[];
+  error: string | null;
 }
 
 export interface FrontendRestoreReconcileResultDto {

@@ -20,7 +20,6 @@ const PUBLIC_VIEWS = new Set([
     'loading',
     'needs_profile',
     'needs_login',
-    'recreate_profile',
     'restore_backup',
     'needs_recovery',
     'help_center'

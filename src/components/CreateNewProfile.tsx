@@ -230,7 +230,7 @@ export function CreateNewProfile({
         if (!isExpertMode) {
             return (
                 <div className="space-y-6 sm:space-y-8 animate-in fade-in duration-500">
-                    {profilesCount === 0 && (
+                    {profilesCount === 0 && onSwitchToRestore && (
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-2">
                             <div className="p-4 rounded-2xl bg-theme-primary/10 border-2 border-theme-primary text-theme-primary font-bold text-xs flex items-center justify-between shadow-sm">
                                 <span>{t('auth.createNewProfileOption')}</span>
@@ -347,6 +347,22 @@ export function CreateNewProfile({
             case "display_seed":
                 return (
                     <div className="space-y-6 sm:space-y-8 animate-in fade-in duration-500">
+                        {profilesCount === 0 && onSwitchToRestore && (
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-2">
+                                <div className="p-4 rounded-2xl bg-theme-primary/10 border-2 border-theme-primary text-theme-primary font-bold text-xs flex items-center justify-between shadow-sm">
+                                    <span>{t('auth.createNewProfileOption')}</span>
+                                    <CheckCircle2 size={16} />
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={onSwitchToRestore}
+                                    className="p-4 rounded-2xl bg-bg-surface hover:bg-theme-subtle/30 border-2 border-theme-subtle hover:border-theme-primary/50 text-theme-secondary font-bold text-xs text-left transition-all flex items-center justify-between cursor-pointer"
+                                >
+                                    <span>{t('auth.restoreExistingProfileOption')}</span>
+                                    <ArrowRight size={14} className="text-theme-light" />
+                                </button>
+                            </div>
+                        )}
                         <div className="flex justify-end">
                             <button
                                 type="button"

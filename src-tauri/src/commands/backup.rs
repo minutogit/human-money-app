@@ -1,27 +1,32 @@
 // src-tauri/src/commands/backup.rs
 use crate::{
     models::{
-        BackupDeltaContainer, FrontendAutoBackupStatusDto, FrontendBackupFetchDto,
-        FrontendBackupInspectionDto, FrontendBackupProbeDto, FrontendBackupSummaryDto,
-        FrontendBackupSyncResult, FrontendError, FrontendRestoreOutcomeDto,
-        FrontendRestoreReconcileResultDto, MnemonicLanguage, PortableBackupContainer,
+        BackupDeltaContainer, FrontendAutoBackupStatusDto, FrontendBackupInspectionDto,
+        FrontendBackupProbeDto, FrontendBackupSummaryDto, FrontendBackupSyncResult,
+        FrontendError, FrontendRestoreOutcomeDto, FrontendRestoreReconcileResultDto,
+        LocalProfileCollisionDto, MnemonicIdentityPreviewDto, MnemonicLanguage,
+        PortableBackupContainer, ResolvedSyncTargetDto, SyncBackupProbeResultDto,
     },
     AppState,
 };
 use sha2::{Digest, Sha256};
 use chrono::Utc;
 use human_money_core::{
-    app_service::AppService,
+    app_service::{AppService, ProfileInfo},
     models::{
         backup::{BackupProtection, BackupRestoreCredentials, EncryptedBackupManifest},
+        seal::{AnchorLockKind, LocalSealRecord, PendingEpochTombstone, SyncStatus, WalletSeal},
+        storage_integrity::StorageIntegrityRecord,
         voucher_standard_definition::VoucherStandardDefinition,
     },
+    storage::{seal_service::SealService, WalletLockGuard},
+    AuthMethod, FileStorage, UserIdentity, Wallet,
 };
 use std::{
     collections::HashMap,
     fs,
     io::Write,
-    path::Path,
+    path::{Path, PathBuf},
 };
 use tauri::Manager;
 
@@ -71,15 +76,6 @@ pub(crate) fn collect_custom_standards_from_dir(standards_dir: &Path) -> HashMap
     map
 }
 
-pub(crate) fn restore_custom_standards(
-    app: &tauri::AppHandle,
-    standards: &HashMap<String, String>,
-) -> Result<usize, FrontendError> {
-    let app_data_dir = app.path().app_data_dir().map_err(|e| FrontendError::from(e.to_string()))?;
-    let standards_base = app_data_dir.join("voucher_standards");
-    restore_custom_standards_to_dir(&standards_base, standards)
-}
-
 pub(crate) fn restore_custom_standards_to_dir(
     standards_base: &Path,
     standards: &HashMap<String, String>,
@@ -103,27 +99,6 @@ pub(crate) fn restore_custom_standards_to_dir(
         }
     }
     Ok(count)
-}
-
-fn update_profile_last_used_internal(app: &tauri::AppHandle, folder_name: &str) -> Result<(), String> {
-    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    let metadata_path = app_data_dir.join("wallet_data").join("profile_metadata.json");
-    let mut map: HashMap<String, serde_json::Value> = if metadata_path.exists() {
-        let content = fs::read_to_string(&metadata_path).map_err(|e| e.to_string())?;
-        serde_json::from_str(&content).unwrap_or_default()
-    } else {
-        HashMap::new()
-    };
-    map.insert(
-        folder_name.to_string(),
-        serde_json::json!({ "last_used": Utc::now().to_rfc3339() }),
-    );
-    if let Some(parent) = metadata_path.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-    let content = serde_json::to_string_pretty(&map).map_err(|e| e.to_string())?;
-    fs::write(&metadata_path, content).map_err(|e| e.to_string())?;
-    Ok(())
 }
 
 fn parse_credentials<'a>(
@@ -268,10 +243,125 @@ pub(crate) fn sync_backup_folder_impl(
     })
 }
 
-pub(crate) fn inspect_backup_impl(
+fn is_safe_folder_name(folder: &str) -> bool {
+    !folder.is_empty()
+        && folder
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+fn verify_integrity_record_signature(
+    record: &StorageIntegrityRecord,
+    target_user_id: &str,
+) -> bool {
+    let Ok(pubkey) = human_money_core::crypto::get_pubkey_from_user_id(target_user_id) else {
+        return false;
+    };
+    let Ok(payload_canonical) = human_money_core::to_canonical_json(&record.payload) else {
+        return false;
+    };
+    let payload_hash = human_money_core::crypto::get_hash(payload_canonical.as_bytes());
+    let Ok(sig_vec) = bs58::decode(&record.signature).into_vec() else {
+        return false;
+    };
+    let Ok(sig_bytes) = <[u8; 64]>::try_from(sig_vec.as_slice()) else {
+        return false;
+    };
+    let signature = ed25519_dalek::Signature::from_bytes(&sig_bytes);
+    human_money_core::crypto::verify_ed25519(&pubkey, payload_hash.as_bytes(), &signature)
+}
+
+pub(crate) fn find_local_profile_collision_impl(
+    wallet_data_dir: &Path,
+    service: &AppService,
+    target_user_id: &str,
+    identity_opt: Option<&UserIdentity>,
+    user_ids_by_folder: &HashMap<String, Option<String>>,
+) -> Option<LocalProfileCollisionDto> {
+    let profiles = service.list_profiles().ok()?;
+
+    for p in &profiles {
+        if !is_safe_folder_name(&p.folder_name) {
+            continue;
+        }
+        let storage = FileStorage::new(wallet_data_dir.join(&p.folder_name));
+        if let Some(id) = identity_opt {
+            if let Ok(Some(rec)) = storage.load_seal(&AuthMethod::RecoveryIdentity(id)) {
+                if rec.seal.payload.user_id == target_user_id {
+                    return Some(LocalProfileCollisionDto {
+                        folder_name: p.folder_name.clone(),
+                        profile_name: p.profile_name.clone(),
+                        user_id: target_user_id.to_string(),
+                        local_epoch: Some(rec.seal.payload.epoch as u64),
+                        local_tx_nonce: Some(rec.seal.payload.tx_nonce),
+                        is_locked_or_conflicted: rec.is_locked() || rec.lock_reason.is_some(),
+                    });
+                }
+            }
+        }
+        if user_ids_by_folder
+            .get(&p.folder_name)
+            .and_then(|u| u.as_deref())
+            == Some(target_user_id)
+        {
+            return Some(LocalProfileCollisionDto {
+                folder_name: p.folder_name.clone(),
+                profile_name: p.profile_name.clone(),
+                user_id: target_user_id.to_string(),
+                local_epoch: None,
+                local_tx_nonce: None,
+                is_locked_or_conflicted: false,
+            });
+        }
+    }
+
+    // Fallback when inspecting a password-protected backup before metadata recorded user_id:
+    // only match root accounts unambiguously by verifying the local integrity signature.
+    if identity_opt.is_none()
+        && human_money_core::crypto::get_prefix_from_user_id(target_user_id).is_none()
+    {
+        let mut sig_matches: Vec<&ProfileInfo> = Vec::new();
+        for p in &profiles {
+            if !is_safe_folder_name(&p.folder_name) {
+                continue;
+            }
+            let storage = FileStorage::new(wallet_data_dir.join(&p.folder_name));
+            if let Ok(Some(ir)) = storage.load_integrity() {
+                if verify_integrity_record_signature(&ir, target_user_id) {
+                    sig_matches.push(p);
+                }
+            }
+        }
+        if sig_matches.len() == 1 {
+            let p = sig_matches[0];
+            return Some(LocalProfileCollisionDto {
+                folder_name: p.folder_name.clone(),
+                profile_name: p.profile_name.clone(),
+                user_id: target_user_id.to_string(),
+                local_epoch: None,
+                local_tx_nonce: None,
+                is_locked_or_conflicted: false,
+            });
+        }
+    }
+
+    None
+}
+
+pub(crate) fn user_ids_from_metadata_dir(wallet_data_dir: &Path) -> HashMap<String, Option<String>> {
+    crate::commands::auth::load_profile_metadata_map_from_dir(wallet_data_dir)
+        .into_iter()
+        .map(|(k, (_ts, uid))| (k, uid))
+        .collect()
+}
+
+pub(crate) fn inspect_backup_with_collision_impl(
     source_path: &Path,
     credentials: &BackupRestoreCredentials<'_>,
     service: &AppService,
+    wallet_data_dir_opt: Option<&Path>,
+    identity_opt: Option<&UserIdentity>,
+    user_ids_by_folder: &HashMap<String, Option<String>>,
 ) -> Result<FrontendBackupInspectionDto, FrontendError> {
     let (manifest_bytes, blob_count, custom_standard_count) = if source_path.is_file() {
         let bytes = fs::read(source_path).map_err(|e| FrontendError::from(format!("Failed to read backup file: {}", e)))?;
@@ -300,6 +390,16 @@ pub(crate) fn inspect_backup_impl(
     let report = service.inspect_backup(&manifest_bytes, credentials)
         .map_err(FrontendError::from)?;
 
+    let local_collision = wallet_data_dir_opt.and_then(|dir| {
+        find_local_profile_collision_impl(
+            dir,
+            service,
+            &report.manifest.seal.payload.user_id,
+            identity_opt,
+            user_ids_by_folder,
+        )
+    });
+
     Ok(FrontendBackupInspectionDto {
         profile_name: report.manifest.profile_name,
         user_id: report.manifest.seal.payload.user_id,
@@ -309,17 +409,34 @@ pub(crate) fn inspect_backup_impl(
         blob_count,
         custom_standard_count,
         protection_mode: enc_manifest.protection_mode,
+        local_collision,
     })
 }
 
-pub(crate) fn restore_backup_impl(
+#[cfg(test)]
+pub(crate) fn inspect_backup_impl(
     source_path: &Path,
-    credentials: BackupRestoreCredentials<'_>,
-    new_password: &str,
-    local_instance_id: String,
-    service: &mut AppService,
-) -> Result<(human_money_core::models::backup::RestoreOutcome, String, HashMap<String, String>), FrontendError> {
-    let (manifest_bytes, blobs, custom_standards) = if source_path.is_file() {
+    credentials: &BackupRestoreCredentials<'_>,
+    service: &AppService,
+) -> Result<FrontendBackupInspectionDto, FrontendError> {
+    inspect_backup_with_collision_impl(
+        source_path,
+        credentials,
+        service,
+        None,
+        None,
+        &HashMap::new(),
+    )
+}
+
+struct BackupParts {
+    manifest_bytes: Vec<u8>,
+    blobs: HashMap<String, Vec<u8>>,
+    custom_standards: HashMap<String, String>,
+}
+
+fn read_backup_parts(source_path: &Path) -> Result<BackupParts, FrontendError> {
+    if source_path.is_file() {
         let bytes = fs::read(source_path).map_err(|e| FrontendError::from(format!("Failed to read backup file: {}", e)))?;
         let container: PortableBackupContainer = serde_json::from_slice(&bytes)
             .map_err(|e| FrontendError::from(format!("Invalid backup container: {}", e)))?;
@@ -331,7 +448,11 @@ pub(crate) fn restore_backup_impl(
                 .map_err(|e| FrontendError::from(format!("Invalid hex encoding for blob {}: {}", name, e)))?;
             blob_map.insert(name, data);
         }
-        (m_bytes, blob_map, container.custom_standards)
+        Ok(BackupParts {
+            manifest_bytes: m_bytes,
+            blobs: blob_map,
+            custom_standards: container.custom_standards,
+        })
     } else if source_path.is_dir() {
         let manifest_path = source_path.join("manifest.enc");
         let m_bytes = fs::read(&manifest_path).map_err(|e| FrontendError::from(format!("Failed to read manifest.enc: {}", e)))?;
@@ -362,14 +483,28 @@ pub(crate) fn restore_backup_impl(
                 }
             }
         }
-        (m_bytes, blob_map, std_map)
+        Ok(BackupParts {
+            manifest_bytes: m_bytes,
+            blobs: blob_map,
+            custom_standards: std_map,
+        })
     } else {
-        return Err(FrontendError::from(format!("Backup path not found: {}", source_path.display())));
-    };
+        Err(FrontendError::from(format!("Backup path not found: {}", source_path.display())))
+    }
+}
+
+pub(crate) fn restore_backup_impl(
+    source_path: &Path,
+    credentials: BackupRestoreCredentials<'_>,
+    new_password: &str,
+    local_instance_id: String,
+    service: &mut AppService,
+) -> Result<(human_money_core::models::backup::RestoreOutcome, String, HashMap<String, String>), FrontendError> {
+    let parts = read_backup_parts(source_path)?;
 
     let outcome = service.restore_backup(
-        &manifest_bytes,
-        &blobs,
+        &parts.manifest_bytes,
+        &parts.blobs,
         credentials,
         new_password,
         local_instance_id,
@@ -386,7 +521,7 @@ pub(crate) fn restore_backup_impl(
         })
         .unwrap_or_else(|| "Restored Profile".to_string());
 
-    Ok((outcome, profile_name, custom_standards))
+    Ok((outcome, profile_name, parts.custom_standards))
 }
 
 #[tauri::command]
@@ -541,72 +676,204 @@ pub fn inspect_wallet_backup(
     user_prefix: Option<String>,
     language: Option<MnemonicLanguage>,
     state: tauri::State<AppState>,
+    app: tauri::AppHandle,
 ) -> Result<FrontendBackupInspectionDto, FrontendError> {
+    let cleaned_prefix = user_prefix
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
     let credentials = parse_credentials(
         &credential_mode,
         backup_password.as_deref(),
         mnemonic.as_deref(),
         passphrase.as_deref(),
-        user_prefix.as_deref(),
+        cleaned_prefix,
         language,
     )?;
+
+    let derived_identity = if credential_mode == "mnemonic" {
+        if let Some(ref phrase) = mnemonic {
+            let core_lang: human_money_core::MnemonicLanguage = language.unwrap_or(MnemonicLanguage::English).into();
+            Wallet::new_from_mnemonic(
+                phrase,
+                passphrase.as_deref(),
+                cleaned_prefix,
+                core_lang,
+                "inspect".to_string(),
+                false,
+            )
+            .ok()
+            .map(|(_, id)| id)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let wallet_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| FrontendError::from(e.to_string()))?
+        .join("wallet_data");
+    let user_ids = user_ids_from_metadata_dir(&wallet_data_dir);
 
     let service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
-    inspect_backup_impl(Path::new(&source_path), &credentials, &service)
+    inspect_backup_with_collision_impl(
+        Path::new(&source_path),
+        &credentials,
+        &service,
+        Some(&wallet_data_dir),
+        derived_identity.as_ref(),
+        &user_ids,
+    )
 }
 
-#[tauri::command]
+fn replace_local_profile_with_restored(
+    wallet_data_dir: &Path,
+    old_folder: &str,
+    new_folder: &str,
+    restored_identity: &UserIdentity,
+    user_ids_by_folder: &HashMap<String, Option<String>>,
+    current_profile_name: String,
+) -> String {
+    if old_folder == new_folder || !is_safe_folder_name(old_folder) {
+        return current_profile_name;
+    }
+
+    let old_dir = wallet_data_dir.join(old_folder);
+    let old_storage = FileStorage::new(old_dir.clone());
+    let seal_matches = old_storage
+        .load_seal(&AuthMethod::RecoveryIdentity(restored_identity))
+        .ok()
+        .flatten()
+        .is_some_and(|rec| rec.seal.payload.user_id == restored_identity.user_id);
+    let meta_matches = user_ids_by_folder
+        .get(old_folder)
+        .and_then(|u| u.as_deref())
+        == Some(restored_identity.user_id.as_str());
+    let integrity_matches =
+        human_money_core::crypto::get_prefix_from_user_id(&restored_identity.user_id).is_none()
+            && old_storage
+                .load_integrity()
+                .ok()
+                .flatten()
+                .is_some_and(|ir| verify_integrity_record_signature(&ir, &restored_identity.user_id));
+
+    if !(seal_matches || meta_matches || integrity_matches) {
+        log::warn!(
+            "Refusing to replace folder '{}' because local user_id ownership could not be verified",
+            old_folder
+        );
+        return current_profile_name;
+    }
+
+    let profiles_path = wallet_data_dir.join("profiles.json");
+    let Ok(profiles_bytes) = fs::read(&profiles_path) else {
+        return current_profile_name;
+    };
+    let Ok(mut profiles) = serde_json::from_slice::<Vec<ProfileInfo>>(&profiles_bytes) else {
+        return current_profile_name;
+    };
+
+    let clean_old_name = profiles
+        .iter()
+        .find(|p| p.folder_name == old_folder)
+        .map(|p| p.profile_name.clone());
+
+    profiles.retain(|p| p.folder_name != old_folder);
+
+    let mut final_name = current_profile_name;
+    if let Some(old_name) = clean_old_name {
+        let name_taken_by_other = profiles
+            .iter()
+            .any(|p| p.folder_name != new_folder && p.profile_name == old_name);
+        if !name_taken_by_other {
+            if let Some(new_entry) = profiles.iter_mut().find(|p| p.folder_name == new_folder) {
+                new_entry.profile_name = old_name.clone();
+                final_name = old_name;
+            }
+        }
+    }
+
+    if let Ok(updated_json) = serde_json::to_vec_pretty(&profiles) {
+        if write_file_atomic(&profiles_path, &updated_json).is_ok() {
+            let _ = fs::remove_dir_all(&old_dir);
+            let _ = crate::commands::auth::remove_profile_metadata_entry_in_dir(
+                wallet_data_dir,
+                old_folder,
+            );
+        }
+    }
+
+    final_name
+}
+
 #[allow(clippy::too_many_arguments)]
-pub async fn restore_wallet_backup(
-    source_path: String,
-    credential_mode: String,
-    backup_password: Option<String>,
-    mnemonic: Option<String>,
-    passphrase: Option<String>,
-    user_prefix: Option<String>,
-    language: Option<MnemonicLanguage>,
-    new_password: String,
+pub(crate) async fn finalize_restored_wallet_and_reconcile_l2(
+    source_path: &Path,
+    credentials: BackupRestoreCredentials<'_>,
+    new_password: &str,
     local_instance_id: String,
-    state: tauri::State<'_, AppState>,
-    app: tauri::AppHandle,
+    replace_folder_name: Option<&str>,
+    wallet_data_dir: &Path,
+    standards_dir: &Path,
+    tmp_restore_dir: &Path,
+    state: &AppState,
+    app_opt: Option<&tauri::AppHandle>,
 ) -> Result<FrontendRestoreOutcomeDto, FrontendError> {
-    if local_instance_id.is_empty() {
-        return Err(FrontendError::from("Device instance ID is required".to_string()));
-    }
-    if new_password.is_empty() {
-        return Err(FrontendError::from("New password cannot be empty".to_string()));
-    }
+    let user_ids_by_folder = user_ids_from_metadata_dir(wallet_data_dir);
 
-    let credentials = parse_credentials(
-        &credential_mode,
-        backup_password.as_deref(),
-        mnemonic.as_deref(),
-        passphrase.as_deref(),
-        user_prefix.as_deref(),
-        language,
-    )?;
-
-    let (outcome, profile_name, custom_standards) = {
-        let mut service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+    let (outcome, mut profile_name, custom_standards) = {
+        let mut service = state
+            .service
+            .lock()
+            .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
         let (outcome, profile_name, custom_standards) = restore_backup_impl(
-            Path::new(&source_path),
+            source_path,
             credentials,
-            &new_password,
+            new_password,
             local_instance_id,
             &mut service,
         )?;
 
-        if let Err(e) = update_profile_last_used_internal(&app, &outcome.folder_name) {
-            log::warn!("Failed to update profile last_used metadata: {}", e);
+        let restored_identity = service
+            .with_wallet_and_identity(|_, id| id.clone())
+            .map_err(FrontendError::from)?;
+
+        let resolved_name = if let Some(old_folder) = replace_folder_name {
+            replace_local_profile_with_restored(
+                wallet_data_dir,
+                old_folder,
+                &outcome.folder_name,
+                &restored_identity,
+                &user_ids_by_folder,
+                profile_name,
+            )
+        } else {
+            profile_name
+        };
+
+        if let Err(e) = crate::commands::auth::record_profile_metadata_in_dir(
+            wallet_data_dir,
+            &outcome.folder_name,
+            Some(restored_identity.user_id.clone()),
+        ) {
+            log::warn!("Failed to update profile metadata: {}", e);
         }
-        if let Err(e) = state.initialize_profile_session(&mut service, &new_password) {
+
+        if let Err(e) = state.initialize_profile_session(&mut service, new_password) {
             log::warn!("Failed to initialize profile session after restore: {}", e);
         }
 
-        (outcome, profile_name, custom_standards)
+        (outcome, resolved_name, custom_standards)
     };
 
-    let restored_standards_count = restore_custom_standards(&app, &custom_standards)?;
+    if profile_name.is_empty() {
+        profile_name = "Restored Profile".to_string();
+    }
+
+    let restored_standards_count = restore_custom_standards_to_dir(standards_dir, &custom_standards)?;
 
     let active_voucher_queries_count = outcome.voucher_queries.len();
     let settings = state.get_cached_settings().map_err(FrontendError::from)?;
@@ -630,8 +897,11 @@ pub async fn restore_wallet_backup(
             };
 
             for base in candidates.iter().take(4) {
-                let Some(url) = crate::gateway_resolver::endpoint(base, "v1/status") else { continue };
-                let mut request = client.post(url.clone())
+                let Some(url) = crate::gateway_resolver::endpoint(base, "v1/status") else {
+                    continue;
+                };
+                let mut request = client
+                    .post(url.clone())
                     .header("Content-Type", "application/json")
                     .body(body_bytes.clone());
 
@@ -644,7 +914,10 @@ pub async fn restore_wallet_backup(
                         request = request.bearer_auth(token);
                     }
                     if let Some(token) = &provider.peer_token {
-                        if token.len() == 36 && token.starts_with("f2f_") && token[4..].bytes().all(|b| b.is_ascii_hexdigit()) {
+                        if token.len() == 36
+                            && token.starts_with("f2f_")
+                            && token[4..].bytes().all(|b| b.is_ascii_hexdigit())
+                        {
                             request = request.header("X-Peer-Token", token);
                         }
                     }
@@ -653,25 +926,32 @@ pub async fn restore_wallet_backup(
                 let response = tokio::time::timeout(
                     std::time::Duration::from_millis(2500),
                     request.send(),
-                ).await;
+                )
+                .await;
 
                 let Ok(Ok(resp)) = response else { continue };
                 at_least_one_gateway_responded = true;
-                if !resp.status().is_success() { continue; }
-                let Ok(resp_bytes) = resp.bytes().await else { continue };
+                if !resp.status().is_success() {
+                    continue;
+                }
+                let Ok(resp_bytes) = resp.bytes().await else {
+                    continue;
+                };
 
-                let verdict_opt = serde_json::from_slice::<human_money_core::models::layer2_api::L2ResponseEnvelope>(&resp_bytes)
-                    .ok()
-                    .map(|e| e.verdict);
+                let verdict_opt = serde_json::from_slice::<
+                    human_money_core::models::layer2_api::L2ResponseEnvelope,
+                >(&resp_bytes)
+                .ok()
+                .map(|e| e.verdict);
 
                 if let Some(verdict) = verdict_opt {
-                    let mut service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
-                    match service.reconcile_voucher_verdict(&local_id, &verdict, Some(&new_password)) {
-                        Ok(human_money_core::models::layer2_api::VoucherReconciliationResult::AlreadySpent { .. }) => {
-                            reconciled_spent_count += 1;
-                            break;
-                        }
-                        Ok(human_money_core::models::layer2_api::VoucherReconciliationResult::ConflictDetected { .. }) => {
+                    let mut service = state
+                        .service
+                        .lock()
+                        .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+                    match service.reconcile_voucher_verdict(&local_id, &verdict, Some(new_password)) {
+                        Ok(human_money_core::models::layer2_api::VoucherReconciliationResult::AlreadySpent { .. })
+                        | Ok(human_money_core::models::layer2_api::VoucherReconciliationResult::ConflictDetected { .. }) => {
                             reconciled_spent_count += 1;
                             break;
                         }
@@ -694,30 +974,36 @@ pub async fn restore_wallet_backup(
     };
 
     // Mandatory SST-V4 offline-spend lock (§5)
-    let pending_restore_l2 = active_voucher_queries_count > 0 && l2_reconciliation_status != "reconciled";
+    let pending_restore_l2 =
+        active_voucher_queries_count > 0 && l2_reconciliation_status != "reconciled";
     if let Ok(mut settings) = state.get_cached_settings() {
         settings.pending_restore_l2_reconciliation = pending_restore_l2;
         if let Ok(mut service) = state.service.lock() {
-            let _ = state.save_settings(&mut service, settings, Some(&new_password));
+            let _ = state.save_settings(&mut service, settings, Some(new_password));
         }
     }
 
-    // Clean up temporary staged file if source_path was from drop restore
-    if let Ok(app_dir) = app.path().app_data_dir() {
-        let tmp_restore_dir = app_dir.join("tmp_restore");
-        let src_p = Path::new(&source_path);
-        if (src_p.starts_with(&tmp_restore_dir) || source_path.contains("tmp_restore")) && src_p.is_file() {
-            let _ = fs::remove_file(src_p);
-        }
+    // Clean up temporary staged file if source_path was from drop/sync staging
+    if (source_path.starts_with(tmp_restore_dir)
+        || source_path.to_string_lossy().contains("tmp_restore"))
+        && source_path.is_file()
+    {
+        let _ = fs::remove_file(source_path);
     }
 
-    let app_handle = app.clone();
-    let pwd = new_password.clone();
-    tauri::async_runtime::spawn(async move {
-        use tauri::Manager;
-        let app_state = app_handle.state::<AppState>();
-        let _ = crate::commands::settings_cmd::flush_pending_anchor_sync_inner(&app_state, Some(&pwd)).await;
-    });
+    if let Some(app) = app_opt {
+        let app_handle = app.clone();
+        let pwd = new_password.to_string();
+        tauri::async_runtime::spawn(async move {
+            use tauri::Manager;
+            let app_state = app_handle.state::<AppState>();
+            let _ = crate::commands::settings_cmd::flush_pending_anchor_sync_inner(
+                &app_state,
+                Some(&pwd),
+            )
+            .await;
+        });
+    }
 
     Ok(FrontendRestoreOutcomeDto {
         folder_name: outcome.folder_name,
@@ -727,6 +1013,378 @@ pub async fn restore_wallet_backup(
         restored_standards_count,
         l2_reconciliation_status,
     })
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn restore_wallet_backup(
+    source_path: String,
+    credential_mode: String,
+    backup_password: Option<String>,
+    mnemonic: Option<String>,
+    passphrase: Option<String>,
+    user_prefix: Option<String>,
+    language: Option<MnemonicLanguage>,
+    new_password: String,
+    local_instance_id: String,
+    replace_folder_name: Option<String>,
+    state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<FrontendRestoreOutcomeDto, FrontendError> {
+    if local_instance_id.is_empty() {
+        return Err(FrontendError::from("Device instance ID is required".to_string()));
+    }
+    if new_password.is_empty() {
+        return Err(FrontendError::from("New password cannot be empty".to_string()));
+    }
+
+    let cleaned_prefix = user_prefix
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let credentials = parse_credentials(
+        &credential_mode,
+        backup_password.as_deref(),
+        mnemonic.as_deref(),
+        passphrase.as_deref(),
+        cleaned_prefix,
+        language,
+    )?;
+
+    let app_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| FrontendError::from(e.to_string()))?;
+    let wallet_data_dir = app_dir.join("wallet_data");
+    let standards_dir = app_dir.join("voucher_standards");
+    let tmp_restore_dir = app_dir.join("tmp_restore");
+
+    finalize_restored_wallet_and_reconcile_l2(
+        Path::new(&source_path),
+        credentials,
+        &new_password,
+        local_instance_id,
+        replace_folder_name.as_deref(),
+        &wallet_data_dir,
+        &standards_dir,
+        &tmp_restore_dir,
+        &state,
+        Some(&app),
+    )
+    .await
+}
+
+struct TempDirGuard(PathBuf);
+
+impl Drop for TempDirGuard {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn reset_local_password_via_backup_impl(
+    target_folder_name: &str,
+    source_path: &Path,
+    credential_mode: &str,
+    backup_password: Option<&str>,
+    mnemonic: Option<&str>,
+    passphrase: Option<&str>,
+    language: Option<MnemonicLanguage>,
+    new_password: &str,
+    local_instance_id: String,
+    wallet_data_dir: &Path,
+    tmp_restore_dir: &Path,
+    state: &AppState,
+    app_opt: Option<&tauri::AppHandle>,
+) -> Result<(), FrontendError> {
+    if !is_safe_folder_name(target_folder_name) {
+        return Err(FrontendError::from("Invalid target profile folder name".to_string()));
+    }
+    if new_password.is_empty() {
+        return Err(FrontendError::from("New password cannot be empty".to_string()));
+    }
+    if local_instance_id.is_empty() {
+        return Err(FrontendError::from("Device instance ID is required".to_string()));
+    }
+
+    if credential_mode == "mnemonic" {
+        let phrase = mnemonic
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| FrontendError::from("Missing mnemonic phrase".to_string()))?;
+        let core_lang: human_money_core::MnemonicLanguage =
+            language.unwrap_or(MnemonicLanguage::English).into();
+
+        let mut service = state
+            .service
+            .lock()
+            .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+        service
+            .recover_wallet_and_set_new_password(
+                target_folder_name,
+                phrase,
+                passphrase,
+                new_password,
+                core_lang,
+                local_instance_id,
+            )
+            .map_err(FrontendError::from)?;
+        let user_id = service
+            .with_wallet_and_identity(|_, id| id.user_id.clone())
+            .ok();
+        let _ = crate::commands::auth::record_profile_metadata_in_dir(
+            wallet_data_dir,
+            target_folder_name,
+            user_id,
+        );
+        state
+            .initialize_profile_session(&mut service, new_password)
+            .map_err(FrontendError::from)?;
+    } else if credential_mode == "password" {
+        let pwd = backup_password
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| FrontendError::from("Missing backup password".to_string()))?;
+
+        fs::create_dir_all(tmp_restore_dir).map_err(|e| FrontendError::from(e.to_string()))?;
+        let temp_dir = tmp_restore_dir.join(format!("pwreset_{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&temp_dir).map_err(|e| FrontendError::from(e.to_string()))?;
+        let _guard_dir = TempDirGuard(temp_dir.clone());
+
+        let parts = read_backup_parts(source_path)?;
+        let temp_local_pw = format!("tmp_{}", uuid::Uuid::new_v4());
+        let mut temp_service =
+            AppService::new(&temp_dir).map_err(FrontendError::from)?;
+        temp_service
+            .restore_backup(
+                &parts.manifest_bytes,
+                &parts.blobs,
+                BackupRestoreCredentials::BackupPassword(pwd),
+                &temp_local_pw,
+                local_instance_id.clone(),
+            )
+            .map_err(FrontendError::from)?;
+
+        let backup_identity = temp_service
+            .with_wallet_and_identity(|_, id| id.clone())
+            .map_err(FrontendError::from)?;
+        let exported_mnemonic = temp_service.export_mnemonic(&temp_local_pw).ok().flatten();
+        temp_service.logout();
+
+        if let Some((phrase, core_lang, false)) = exported_mnemonic {
+            let mut service = state
+                .service
+                .lock()
+                .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+            service
+                .recover_wallet_and_set_new_password(
+                    target_folder_name,
+                    &phrase,
+                    None,
+                    new_password,
+                    core_lang,
+                    local_instance_id,
+                )
+                .map_err(FrontendError::from)?;
+            let user_id = service
+                .with_wallet_and_identity(|_, id| id.user_id.clone())
+                .ok();
+            let _ = crate::commands::auth::record_profile_metadata_in_dir(
+                wallet_data_dir,
+                target_folder_name,
+                user_id,
+            );
+            state
+                .initialize_profile_session(&mut service, new_password)
+                .map_err(FrontendError::from)?;
+        } else {
+            let local_dir = wallet_data_dir.join(target_folder_name);
+            if !local_dir.exists() {
+                return Err(FrontendError::from("Local profile directory not found".to_string()));
+            }
+            if local_dir.join(".wallet.undo.enc").exists() {
+                return Err(FrontendError::from(
+                    "Ein unterbrochener lokaler Schreibvorgang verhindert das Passwort-Zurücksetzen per Backup-Passwort. Bitte nutze die Wiederherstellungswörter oder ersetze das Profil durch die Sicherung.".to_string(),
+                ));
+            }
+
+            let mut service = state
+                .service
+                .lock()
+                .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+            service.logout();
+
+            let mut local_storage = FileStorage::new(local_dir);
+            let lock_guard = WalletLockGuard::new(&local_storage)
+                .map_err(|e| FrontendError::from(e.to_string()))?;
+            let auth_rec = AuthMethod::RecoveryIdentity(&backup_identity);
+            let existing_seal = local_storage
+                .load_seal(&auth_rec)
+                .map_err(|e| FrontendError::from(e.to_string()))?;
+            if let Some(ref seal_rec) = existing_seal {
+                if seal_rec.seal.payload.user_id != backup_identity.user_id {
+                    return Err(FrontendError::from(
+                        "Backup identity does not match target local profile".to_string(),
+                    ));
+                }
+            }
+
+            let (mut local_wallet, local_identity) =
+                Wallet::load(&local_storage, &auth_rec, local_instance_id.clone())
+                    .map_err(FrontendError::from)?;
+            if local_identity.user_id != backup_identity.user_id {
+                return Err(FrontendError::from(
+                    "Backup identity does not match target local profile".to_string(),
+                ));
+            }
+            if !local_wallet.pending_events.is_empty() {
+                local_wallet
+                    .save(&mut local_storage, &local_identity, &auth_rec)
+                    .map_err(|e| FrontendError::from(e.to_string()))?;
+            }
+
+            Wallet::reset_password(&mut local_storage, &local_identity, new_password)
+                .map_err(|e| FrontendError::from(e.to_string()))?;
+
+            let merkle_root = human_money_core::models::seal::calculate_voucher_merkle_root(
+                &local_wallet.voucher_store.vouchers,
+            );
+            let own_fp_hash = SealService::calculate_state_hash(&local_wallet.own_fingerprints)
+                .map_err(FrontendError::from)?;
+            let next_epoch = existing_seal
+                .as_ref()
+                .map_or(1, |r| (r.seal.payload.epoch as u64) + 1);
+            let comp_hash = SealService::calculate_comprehensive_state_hash(
+                next_epoch,
+                0,
+                &merkle_root,
+                &own_fp_hash,
+            );
+            let recovered_seal = WalletSeal::recover_epoch(
+                existing_seal.as_ref().map(|r| &r.seal),
+                &local_identity.user_id,
+                &local_identity,
+                &comp_hash,
+                &local_instance_id,
+            )
+            .map_err(FrontendError::from)?;
+
+            let mut pending_tombstones = existing_seal
+                .as_ref()
+                .map(|r| r.pending_tombstones.clone())
+                .unwrap_or_default();
+            if let Some(old_rec) = &existing_seal {
+                pending_tombstones.push(PendingEpochTombstone {
+                    old_epoch: old_rec.seal.payload.epoch,
+                    old_epoch_valid_until: old_rec.seal.payload.epoch_valid_until.clone(),
+                    target_epoch: recovered_seal.payload.epoch,
+                    kind: AnchorLockKind::SeedRecoveryTombstone,
+                    last_known_checkpoint: old_rec.last_synced_anchor.clone(),
+                });
+            }
+
+            let new_record = LocalSealRecord {
+                seal: recovered_seal,
+                sync_status: SyncStatus::PendingUpload,
+                lock_reason: None,
+                pending_tombstones,
+                last_synced_anchor: None,
+            };
+            let auth_new_pw = AuthMethod::Password(new_password);
+            local_storage
+                .save_seal(&auth_new_pw, &new_record)
+                .map_err(|e| FrontendError::from(e.to_string()))?;
+
+            let item_hashes = local_storage
+                .get_all_item_hashes()
+                .map_err(|e| FrontendError::from(e.to_string()))?;
+            let integrity_record = StorageIntegrityRecord::create_record(
+                &local_identity,
+                &new_record.seal,
+                item_hashes,
+            )
+            .map_err(FrontendError::from)?;
+            local_storage
+                .save_integrity(&integrity_record)
+                .map_err(|e| FrontendError::from(e.to_string()))?;
+
+            drop(lock_guard);
+
+            service
+                .login(target_folder_name, new_password, false, local_instance_id)
+                .map_err(FrontendError::from)?;
+            let _ = crate::commands::auth::record_profile_metadata_in_dir(
+                wallet_data_dir,
+                target_folder_name,
+                Some(local_identity.user_id.clone()),
+            );
+            state
+                .initialize_profile_session(&mut service, new_password)
+                .map_err(FrontendError::from)?;
+        }
+    } else {
+        return Err(FrontendError::from(format!(
+            "Invalid credential mode: {}",
+            credential_mode
+        )));
+    }
+
+    if let Some(app) = app_opt {
+        let app_handle = app.clone();
+        let pwd = new_password.to_string();
+        tauri::async_runtime::spawn(async move {
+            use tauri::Manager;
+            let app_state = app_handle.state::<AppState>();
+            crate::commands::settings_cmd::probe_and_flush_cold_recovery_inner(
+                &app_state,
+                Some(&pwd),
+            )
+            .await;
+        });
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub fn reset_local_password_via_backup(
+    target_folder_name: String,
+    source_path: String,
+    credential_mode: String,
+    backup_password: Option<String>,
+    mnemonic: Option<String>,
+    passphrase: Option<String>,
+    user_prefix: Option<String>,
+    language: Option<MnemonicLanguage>,
+    new_password: String,
+    local_instance_id: String,
+    state: tauri::State<AppState>,
+    app: tauri::AppHandle,
+) -> Result<(), FrontendError> {
+    let _ = user_prefix;
+    let app_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| FrontendError::from(e.to_string()))?;
+    let wallet_data_dir = app_dir.join("wallet_data");
+    let tmp_restore_dir = app_dir.join("tmp_restore");
+
+    reset_local_password_via_backup_impl(
+        &target_folder_name,
+        Path::new(&source_path),
+        &credential_mode,
+        backup_password.as_deref(),
+        mnemonic.as_deref(),
+        passphrase.as_deref(),
+        language,
+        &new_password,
+        local_instance_id,
+        &wallet_data_dir,
+        &tmp_restore_dir,
+        &state,
+        Some(&app),
+    )
 }
 
 pub(crate) fn is_older_than_14_days(last_backup_at: &Option<String>) -> bool {
@@ -1539,149 +2197,528 @@ pub async fn sync_backup(
     sync_backup_impl(password, &state, &app).await
 }
 
+pub(crate) fn preview_mnemonic_identity_impl(
+    mnemonic: &str,
+    passphrase: Option<&str>,
+    user_prefix: Option<&str>,
+    language: Option<MnemonicLanguage>,
+    wallet_data_dir: &Path,
+    service: &AppService,
+) -> Result<MnemonicIdentityPreviewDto, FrontendError> {
+    let cleaned_prefix = user_prefix
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let core_lang: human_money_core::MnemonicLanguage =
+        language.unwrap_or(MnemonicLanguage::English).into();
+    let (_, identity) = Wallet::new_from_mnemonic(
+        mnemonic,
+        passphrase.filter(|p| !p.is_empty()),
+        cleaned_prefix,
+        core_lang,
+        "preview".to_string(),
+        false,
+    )
+    .map_err(FrontendError::from)?;
+
+    let user_ids = user_ids_from_metadata_dir(wallet_data_dir);
+    let local_collision = find_local_profile_collision_impl(
+        wallet_data_dir,
+        service,
+        &identity.user_id,
+        Some(&identity),
+        &user_ids,
+    );
+
+    Ok(MnemonicIdentityPreviewDto {
+        user_id: identity.user_id.clone(),
+        local_collision,
+    })
+}
+
 #[tauri::command]
-pub async fn fetch_and_inspect_backup(
-    sync_input: String,
+pub fn preview_mnemonic_identity(
+    mnemonic: String,
+    passphrase: Option<String>,
+    user_prefix: Option<String>,
+    language: Option<MnemonicLanguage>,
+    state: tauri::State<AppState>,
+    app: tauri::AppHandle,
+) -> Result<MnemonicIdentityPreviewDto, FrontendError> {
+    let wallet_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| FrontendError::from(e.to_string()))?
+        .join("wallet_data");
+    let service = state
+        .service
+        .lock()
+        .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+    preview_mnemonic_identity_impl(
+        &mnemonic,
+        passphrase.as_deref(),
+        user_prefix.as_deref(),
+        language,
+        &wallet_data_dir,
+        &service,
+    )
+}
+
+#[tauri::command]
+pub fn stage_dropped_backup_bytes(
+    bytes: Vec<u8>,
+    app: tauri::AppHandle,
+) -> Result<String, FrontendError> {
+    const MAX_DROPPED_BACKUP_BYTES: usize = 64 * 1024 * 1024;
+    if bytes.is_empty() {
+        return Err(FrontendError::from("Backup file is empty".to_string()));
+    }
+    if bytes.len() > MAX_DROPPED_BACKUP_BYTES {
+        return Err(FrontendError::from(
+            "Backup file exceeds maximum allowed size (64 MiB)".to_string(),
+        ));
+    }
+
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| FrontendError::from(e.to_string()))?;
+    let tmp_restore_dir = app_data_dir.join("tmp_restore");
+    cleanup_stale_tmp_restore_files(&tmp_restore_dir);
+    fs::create_dir_all(&tmp_restore_dir).map_err(|e| FrontendError::from(e.to_string()))?;
+
+    let staged_name = format!("dropped_{}.hmcbackup", uuid::Uuid::new_v4());
+    let staged_path = tmp_restore_dir.join(staged_name);
+    write_file_atomic(&staged_path, &bytes)?;
+    Ok(staged_path.to_string_lossy().to_string())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn probe_sync_backup_impl(
+    sync_inputs: Vec<String>,
+    mnemonic: String,
+    passphrase: Option<String>,
+    user_prefix: Option<String>,
+    language: Option<MnemonicLanguage>,
+    wallet_data_dir: &Path,
+    tmp_restore_dir: &Path,
+    state: &AppState,
+) -> Result<SyncBackupProbeResultDto, FrontendError> {
+    let cleaned_prefix = user_prefix
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let lang_enum = language.unwrap_or(MnemonicLanguage::English);
+    let core_lang: human_money_core::MnemonicLanguage = lang_enum.into();
+    let (_, identity) = Wallet::new_from_mnemonic(
+        &mnemonic,
+        passphrase.as_deref().filter(|p| !p.is_empty()),
+        cleaned_prefix,
+        core_lang,
+        "probe".to_string(),
+        false,
+    )
+    .map_err(FrontendError::from)?;
+
+    let my_ed_sk = identity.signing_key.clone();
+    let master_seed = my_ed_sk.to_bytes();
+    let normalized_prefix = cleaned_prefix.map(str::to_lowercase);
+    let user_ids = user_ids_from_metadata_dir(wallet_data_dir);
+    let local_collision = {
+        let service = state
+            .service
+            .lock()
+            .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+        find_local_profile_collision_impl(
+            wallet_data_dir,
+            &service,
+            &identity.user_id,
+            Some(&identity),
+            &user_ids,
+        )
+    };
+
+    let non_empty_inputs: Vec<String> = sync_inputs
+        .into_iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if non_empty_inputs.is_empty() {
+        return Err(FrontendError::from(
+            "Ablage-Adresse darf nicht leer sein".to_string(),
+        ));
+    }
+
+    struct SyncCandidateTask {
+        read_url: String,
+        pubkey_hex: String,
+        prefix_opt: Option<String>,
+        kind: String,
+        fallback_target: Option<ResolvedSyncTargetDto>,
+    }
+
+    let probe_client = crate::sync_client::create_sync_probe_client();
+    let mut resolved_sync_targets: Vec<ResolvedSyncTargetDto> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+    let mut candidate_tasks: Vec<SyncCandidateTask> = Vec::new();
+
+    for trimmed in non_empty_inputs {
+        let (pasted_write_url, pasted_read_url, pasted_drop_pub, pasted_slot_id, pasted_register_url) =
+            if trimmed.starts_with('{') {
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&trimmed) {
+                    let w = val.get("writeUrl").and_then(|v| v.as_str()).map(|s| s.to_string());
+                    let r = val.get("readUrl").and_then(|v| v.as_str()).map(|s| s.to_string());
+                    let d = val.get("dropPub").and_then(|v| v.as_str()).map(|s| s.to_string());
+                    let sid = val.get("slotId").and_then(|v| v.as_str()).map(|s| s.to_string());
+                    let reg = val.get("registerUrl").and_then(|v| v.as_str()).map(|s| s.to_string());
+                    (w, r, d, sid, reg)
+                } else {
+                    (None, None, None, None, None)
+                }
+            } else {
+                (None, None, None, None, None)
+            };
+
+        let raw_url = pasted_write_url.unwrap_or_else(|| trimmed.clone());
+        let canonical_write_url = match humoco_market::canonicalize_write_url(&raw_url) {
+            Ok(u) => u,
+            Err(e) => {
+                errors.push(e.to_string());
+                continue;
+            }
+        };
+
+        let mut push_candidate = |read_url: String,
+                                  pubkey_hex: String,
+                                  pfx: Option<String>,
+                                  kind: &str,
+                                  fallback_target: Option<ResolvedSyncTargetDto>| {
+            if !read_url.is_empty()
+                && !candidate_tasks.iter().any(|t| {
+                    t.read_url == read_url && t.pubkey_hex == pubkey_hex && t.prefix_opt == pfx
+                })
+            {
+                candidate_tasks.push(SyncCandidateTask {
+                    read_url,
+                    pubkey_hex,
+                    prefix_opt: pfx,
+                    kind: kind.to_string(),
+                    fallback_target,
+                });
+            }
+        };
+
+        match crate::sync_client::fetch_sync_info(&probe_client, &canonical_write_url).await {
+            Ok(info) => {
+                let target = ResolvedSyncTargetDto {
+                    write_url: canonical_write_url.clone(),
+                    read_url: info.read_url.clone(),
+                    drop_pub: info.drop_pub.clone(),
+                    register_url: info.register_url.clone(),
+                };
+                if !resolved_sync_targets
+                    .iter()
+                    .any(|t| t.write_url == target.write_url)
+                {
+                    resolved_sync_targets.push(target.clone());
+                }
+
+                // 1. Current stealth ($P_{aktuell}$)
+                if let Ok(stealth_pk) =
+                    humoco_market::derive_member_stealth_pubkey(&my_ed_sk, &info.drop_pub)
+                {
+                    push_candidate(
+                        info.read_url.clone(),
+                        stealth_pk,
+                        normalized_prefix.clone(),
+                        "stealth",
+                        None,
+                    );
+                }
+
+                // 2. Grace / previous drop key if descriptor carried a different drop_pub
+                if let Some(ref d_pub) = pasted_drop_pub {
+                    if !d_pub.is_empty() && d_pub != &info.drop_pub {
+                        if let Ok(grace_pk) =
+                            humoco_market::derive_member_stealth_pubkey(&my_ed_sk, d_pub)
+                        {
+                            push_candidate(
+                                info.read_url.clone(),
+                                grace_pk.clone(),
+                                normalized_prefix.clone(),
+                                "grace",
+                                None,
+                            );
+                            if let Some(ref p_read) = pasted_read_url {
+                                push_candidate(
+                                    p_read.clone(),
+                                    grace_pk,
+                                    normalized_prefix.clone(),
+                                    "grace",
+                                    None,
+                                );
+                            }
+                        }
+                    }
+                }
+
+                // 3. Public drop anonymous key ($R$)
+                if let Ok((_r_sk, _r_vk, r_hex)) =
+                    humoco_market::derive_public_drop_keypair(&master_seed, &canonical_write_url)
+                {
+                    push_candidate(
+                        info.read_url.clone(),
+                        r_hex,
+                        normalized_prefix.clone(),
+                        "public",
+                        None,
+                    );
+                }
+
+                // 4. Explicit slot_id from descriptor
+                if let Some(ref sid) = pasted_slot_id {
+                    let (base_pk, sid_pfx) =
+                        humoco_market::parse_slot_id(sid).unwrap_or_else(|_| (sid.clone(), None));
+                    let eff_pfx = sid_pfx.or_else(|| normalized_prefix.clone());
+                    push_candidate(info.read_url.clone(), base_pk.clone(), eff_pfx.clone(), "slot_id", None);
+                    if let Some(ref p_read) = pasted_read_url {
+                        push_candidate(p_read.clone(), base_pk, eff_pfx, "slot_id", None);
+                    }
+                }
+
+                // 5. Deterministic Own-Drop fallback
+                let own_data_dir = humoco_market::derive_drop_data_dir(&master_seed, 0);
+                let origin_dir = canonical_write_url
+                    .rsplit_once('/')
+                    .map(|(b, _)| b)
+                    .unwrap_or(&canonical_write_url);
+                let own_read_url = format!("{}/{}", origin_dir.trim_end_matches('/'), own_data_dir);
+                let (admin_sk, admin_vk, _) = humoco_market::derive_drop_admin_keypair(&master_seed, 0);
+                if let Ok(own_stealth) =
+                    humoco_market::derive_member_stealth_pubkey_admin(&admin_sk, &admin_vk)
+                {
+                    push_candidate(
+                        own_read_url,
+                        own_stealth.clone(),
+                        normalized_prefix.clone(),
+                        "own",
+                        None,
+                    );
+                    push_candidate(
+                        info.read_url,
+                        own_stealth,
+                        normalized_prefix.clone(),
+                        "own",
+                        None,
+                    );
+                }
+            }
+            Err(info_err) => {
+                if let (Some(r_url), Some(d_pub)) = (pasted_read_url, pasted_drop_pub) {
+                    let fallback_target = ResolvedSyncTargetDto {
+                        write_url: canonical_write_url.clone(),
+                        read_url: r_url.clone(),
+                        drop_pub: d_pub.clone(),
+                        register_url: pasted_register_url,
+                    };
+                    if let Ok(stealth_pk) =
+                        humoco_market::derive_member_stealth_pubkey(&my_ed_sk, &d_pub)
+                    {
+                        push_candidate(
+                            r_url.clone(),
+                            stealth_pk,
+                            normalized_prefix.clone(),
+                            "stealth",
+                            Some(fallback_target.clone()),
+                        );
+                    }
+                    if let Ok((_r_sk, _r_vk, r_hex)) = humoco_market::derive_public_drop_keypair(
+                        &master_seed,
+                        &canonical_write_url,
+                    ) {
+                        push_candidate(
+                            r_url.clone(),
+                            r_hex,
+                            normalized_prefix.clone(),
+                            "public",
+                            Some(fallback_target.clone()),
+                        );
+                    }
+                    if let Some(ref sid) = pasted_slot_id {
+                        let (base_pk, sid_pfx) = humoco_market::parse_slot_id(sid)
+                            .unwrap_or_else(|_| (sid.clone(), None));
+                        let eff_pfx = sid_pfx.or_else(|| normalized_prefix.clone());
+                        push_candidate(
+                            r_url,
+                            base_pk,
+                            eff_pfx,
+                            "slot_id",
+                            Some(fallback_target),
+                        );
+                    }
+                }
+                errors.push(format!("{}: {}", canonical_write_url, info_err));
+            }
+        }
+    }
+
+    let fetch_client = crate::sync_client::create_sync_http_client();
+    let mut set = tokio::task::JoinSet::new();
+    for task in candidate_tasks {
+        let cl = fetch_client.clone();
+        set.spawn(async move {
+            let bytes_opt = tokio::time::timeout(
+                std::time::Duration::from_millis(5000),
+                fetch_and_merge_backup_slot(
+                    &cl,
+                    &task.read_url,
+                    &task.pubkey_hex,
+                    task.prefix_opt.as_deref(),
+                ),
+            )
+            .await
+            .ok()
+            .flatten();
+            bytes_opt.map(|bytes| (bytes, task.kind, task.read_url, task.fallback_target))
+        });
+    }
+
+    let mut downloaded = Vec::new();
+    while let Some(res) = set.join_next().await {
+        if let Ok(Some(item)) = res {
+            downloaded.push(item);
+        }
+    }
+
+    cleanup_stale_tmp_restore_files(tmp_restore_dir);
+    fs::create_dir_all(tmp_restore_dir).map_err(|e| FrontendError::from(e.to_string()))?;
+
+    let credentials = BackupRestoreCredentials::Mnemonic {
+        phrase: &mnemonic,
+        passphrase: passphrase.as_deref().filter(|p| !p.is_empty()),
+        prefix: cleaned_prefix,
+        language: core_lang,
+    };
+
+    let mut inspected_candidates: Vec<(
+        PathBuf,
+        FrontendBackupInspectionDto,
+        String,
+        String,
+        Option<ResolvedSyncTargetDto>,
+    )> = Vec::new();
+
+    for (unpadded, kind, source_url, fallback_target) in downloaded {
+        let staged_file_name = format!("sync_restore_{}.hmcbackup", uuid::Uuid::new_v4());
+        let staged_path = tmp_restore_dir.join(staged_file_name);
+        if write_file_atomic(&staged_path, &unpadded).is_ok() {
+            let service = state
+                .service
+                .lock()
+                .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+            if let Ok(inspection) = inspect_backup_with_collision_impl(
+                &staged_path,
+                &credentials,
+                &service,
+                Some(wallet_data_dir),
+                Some(&identity),
+                &user_ids,
+            ) {
+                inspected_candidates.push((staged_path, inspection, kind, source_url, fallback_target));
+            } else {
+                let _ = fs::remove_file(&staged_path);
+            }
+        }
+    }
+
+    if !inspected_candidates.is_empty() {
+        inspected_candidates
+            .sort_by(|a, b| (b.1.epoch, b.1.tx_nonce).cmp(&(a.1.epoch, a.1.tx_nonce)));
+        let (best_path, best_inspection, best_kind, best_source, fallback_target) =
+            inspected_candidates.remove(0);
+        for (other_path, _, _, _, _) in inspected_candidates {
+            let _ = fs::remove_file(other_path);
+        }
+        if let Some(ft) = fallback_target {
+            if !resolved_sync_targets
+                .iter()
+                .any(|t| t.write_url == ft.write_url)
+            {
+                resolved_sync_targets.push(ft);
+            }
+        }
+
+        return Ok(SyncBackupProbeResultDto {
+            status: "found".to_string(),
+            staged_path: Some(best_path.to_string_lossy().to_string()),
+            matched_key_kind: Some(best_kind),
+            source_url: Some(best_source),
+            inspection: Some(best_inspection),
+            user_id: identity.user_id.clone(),
+            local_collision,
+            resolved_sync_targets,
+            error: None,
+        });
+    }
+
+    if !resolved_sync_targets.is_empty() {
+        return Ok(SyncBackupProbeResultDto {
+            status: "not_found".to_string(),
+            staged_path: None,
+            matched_key_kind: None,
+            source_url: None,
+            inspection: None,
+            user_id: identity.user_id.clone(),
+            local_collision,
+            resolved_sync_targets,
+            error: None,
+        });
+    }
+
+    Ok(SyncBackupProbeResultDto {
+        status: "unreachable".to_string(),
+        staged_path: None,
+        matched_key_kind: None,
+        source_url: None,
+        inspection: None,
+        user_id: identity.user_id.clone(),
+        local_collision,
+        resolved_sync_targets,
+        error: Some(if errors.is_empty() {
+            "Sync-Dienst konnte nicht erreicht werden.".to_string()
+        } else {
+            errors.join(" | ")
+        }),
+    })
+}
+
+#[tauri::command]
+pub async fn probe_sync_backup(
+    sync_inputs: Vec<String>,
     mnemonic: String,
     passphrase: Option<String>,
     user_prefix: Option<String>,
     language: Option<MnemonicLanguage>,
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
-) -> Result<FrontendBackupFetchDto, FrontendError> {
-    let lang: human_money_core::MnemonicLanguage = language.unwrap_or(MnemonicLanguage::English).into();
-    let (_pk, my_ed_sk) = human_money_core::services::crypto::keys::derive_ed25519_keypair(
-        &mnemonic,
-        passphrase.as_deref(),
-        lang,
-    )
-    .map_err(|e| FrontendError::from(format!("Failed to derive keypair: {}", e)))?;
-    let master_seed = my_ed_sk.to_bytes();
-
-    let trimmed = sync_input.trim();
-    if trimmed.is_empty() {
-        return Err(FrontendError::from("Ablage-Adresse darf nicht leer sein".to_string()));
-    }
-
-    let (pasted_write_url, pasted_read_url, pasted_drop_pub) = if trimmed.starts_with('{') {
-        if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
-            let w = val.get("writeUrl").and_then(|v| v.as_str()).map(|s| s.to_string());
-            let r = val.get("readUrl").and_then(|v| v.as_str()).map(|s| s.to_string());
-            let d = val.get("dropPub").and_then(|v| v.as_str()).map(|s| s.to_string());
-            (w, r, d)
-        } else {
-            (None, None, None)
-        }
-    } else {
-        (None, None, None)
-    };
-
-    let raw_url = pasted_write_url.unwrap_or_else(|| trimmed.to_string());
-    let canonical_write_url = humoco_market::canonicalize_write_url(&raw_url)
+) -> Result<SyncBackupProbeResultDto, FrontendError> {
+    let app_dir = app
+        .path()
+        .app_data_dir()
         .map_err(|e| FrontendError::from(e.to_string()))?;
+    let wallet_data_dir = app_dir.join("wallet_data");
+    let tmp_restore_dir = app_dir.join("tmp_restore");
 
-    let client = crate::sync_client::create_sync_probe_client();
-    let info_opt = crate::sync_client::fetch_sync_info(&client, &canonical_write_url).await.ok();
-
-    let (current_drop_pub, current_read_url) = match info_opt {
-        Some(info) => (info.drop_pub, info.read_url),
-        None => {
-            if let (Some(r_url), Some(d_pub)) = (pasted_read_url, pasted_drop_pub) {
-                (d_pub, r_url)
-            } else {
-                return Err(FrontendError::from(format!(
-                    "Sync-Dienst unter '{}' konnte nicht erreicht werden und keine gültigen Sync-Deskriptor-Daten übergeben.",
-                    canonical_write_url
-                )));
-            }
-        }
-    };
-
-    // Build ordered candidates: (read_url, pubkey_hex64, kind)
-    let mut candidates: Vec<(String, String, String)> = Vec::new();
-
-    // 1. Current stealth ($P_{aktuell}$)
-    if let Ok(stealth_pk) = humoco_market::derive_member_stealth_pubkey(&my_ed_sk, &current_drop_pub) {
-        candidates.push((current_read_url.clone(), stealth_pk, "stealth".to_string()));
-    }
-
-    // 2. Public drop anonymous key ($R$)
-    if let Ok((_r_sk, _r_vk, r_hex)) = humoco_market::derive_public_drop_keypair(&master_seed, &canonical_write_url) {
-        candidates.push((current_read_url.clone(), r_hex, "public".to_string()));
-    }
-
-    // 3. Deterministic Own-Drop fallback
-    let own_data_dir = humoco_market::derive_drop_data_dir(&master_seed, 0);
-    let origin_dir = canonical_write_url.rsplit_once('/').map(|(b, _)| b).unwrap_or(&canonical_write_url);
-    let own_read_url = format!("{}/{}", origin_dir.trim_end_matches('/'), own_data_dir);
-    let (admin_sk, admin_vk, _) = humoco_market::derive_drop_admin_keypair(&master_seed, 0);
-    if let Ok(own_stealth) = humoco_market::derive_member_stealth_pubkey_admin(&admin_sk, &admin_vk) {
-        if !candidates.iter().any(|(r, k, _)| r == &own_read_url && k == &own_stealth) {
-            candidates.push((own_read_url.clone(), own_stealth.clone(), "own".to_string()));
-        }
-        if current_read_url != own_read_url
-            && !candidates.iter().any(|(r, k, _)| r == &current_read_url && k == &own_stealth)
-        {
-            candidates.push((current_read_url.clone(), own_stealth, "own".to_string()));
-        }
-    }
-
-    // Download first candidate that matches
-    let fetch_client = crate::sync_client::create_sync_http_client();
-    let mut downloaded_bytes: Option<(Vec<u8>, String, String)> = None;
-    let normalized_prefix = user_prefix.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_lowercase);
-
-    for (read_url, pubkey_hex, kind) in candidates {
-        if let Some(merged_container_bytes) = fetch_and_merge_backup_slot(
-            &fetch_client,
-            &read_url,
-            &pubkey_hex,
-            normalized_prefix.as_deref(),
-        )
-        .await
-        {
-            downloaded_bytes = Some((merged_container_bytes, kind, read_url));
-            break;
-        }
-    }
-
-    let (unpadded, matched_key_kind, source_url) = downloaded_bytes.ok_or_else(|| {
-        FrontendError::from(
-            "Keine Sicherungsdatei in der angegebenen Ablage gefunden. Bitte prüfe die Eingabe oder den Schlüssel."
-                .to_string(),
-        )
-    })?;
-
-    // Write to <app_data_dir>/tmp_restore/sync_restore_<uuid>.hmcbackup
-    let app_data_dir = app.path().app_data_dir().map_err(|e| FrontendError::from(e.to_string()))?;
-    let tmp_restore_dir = app_data_dir.join("tmp_restore");
-    cleanup_stale_tmp_restore_files(&tmp_restore_dir);
-    fs::create_dir_all(&tmp_restore_dir).map_err(|e| FrontendError::from(e.to_string()))?;
-
-    let staged_file_name = format!("sync_restore_{}.hmcbackup", uuid::Uuid::new_v4());
-    let staged_path = tmp_restore_dir.join(staged_file_name);
-    write_file_atomic(&staged_path, &unpadded)?;
-
-    // Inspect backup using Mnemonic credentials
-    let credentials = BackupRestoreCredentials::Mnemonic {
-        phrase: &mnemonic,
-        passphrase: passphrase.as_deref(),
-        prefix: user_prefix.as_deref(),
-        language: lang,
-    };
-
-    let service = state
-        .service
-        .lock()
-        .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
-    let inspection = inspect_backup_impl(&staged_path, &credentials, &service)?;
-
-    Ok(FrontendBackupFetchDto {
-        staged_path: staged_path.to_string_lossy().to_string(),
-        matched_key_kind,
-        source_url,
-        inspection,
-    })
+    probe_sync_backup_impl(
+        sync_inputs,
+        mnemonic,
+        passphrase,
+        user_prefix,
+        language,
+        &wallet_data_dir,
+        &tmp_restore_dir,
+        &state,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -2441,6 +3478,235 @@ mod tests {
             !server.slots.lock().unwrap().contains_key(&delta_slot_key),
             "orphaned delta slot must be deleted after Base re-upload"
         );
+
+        let _ = fs::remove_dir_all(base_dir);
+    }
+
+    #[test]
+    fn test_preview_mnemonic_identity_collision_and_subaccount() {
+        let base_dir = temp_test_dir("preview_collision");
+        let wallet_dir = base_dir.join("wallet");
+        let password = "TestPassword123!";
+        let mut service = AppService::new(&wallet_dir).unwrap();
+        service
+            .create_profile(
+                "Alice Root",
+                PHRASE,
+                None,
+                None,
+                password,
+                human_money_core::MnemonicLanguage::English,
+                "inst-1".to_string(),
+                true,
+            )
+            .unwrap();
+
+        // Same secrets without prefix -> collides with Alice Root
+        let root_preview = super::preview_mnemonic_identity_impl(
+            PHRASE,
+            None,
+            None,
+            Some(MnemonicLanguage::English),
+            &wallet_dir,
+            &service,
+        )
+        .unwrap();
+        let coll = root_preview.local_collision.expect("root profile must collide");
+        assert_eq!(coll.profile_name, "Alice Root");
+        assert_eq!(coll.local_epoch, Some(0));
+        assert_eq!(coll.local_tx_nonce, Some(1));
+        assert!(!coll.is_locked_or_conflicted);
+
+        // Same mnemonic with new subaccount prefix -> distinct user_id, NO collision
+        let sub_preview = super::preview_mnemonic_identity_impl(
+            PHRASE,
+            None,
+            Some("mobil"),
+            Some(MnemonicLanguage::English),
+            &wallet_dir,
+            &service,
+        )
+        .unwrap();
+        assert!(sub_preview.user_id.starts_with("mobil:"));
+        assert!(sub_preview.local_collision.is_none());
+
+        let _ = fs::remove_dir_all(base_dir);
+    }
+
+    #[tokio::test]
+    async fn test_probe_sync_backup_found_and_not_found() {
+        use crate::commands::sync::tests::{
+            create_test_state, setup_test_app as setup_sync_test_app, MockSyncServer, ALICE_PHRASE,
+        };
+
+        let base_dir = temp_test_dir("probe_sync_backup_test");
+        let wallet_dir = base_dir.join("wallet");
+        let tmp_restore_dir = base_dir.join("tmp_restore");
+        let password = "TestPassword123!";
+        let service = setup_sync_test_app(&wallet_dir, "Alice", ALICE_PHRASE, password);
+        let state = create_test_state(service);
+
+        let (_admin_sk, admin_vk, _) = humoco_market::derive_drop_admin_keypair(&[0x55u8; 32], 0);
+        let drop_pub = hex::encode(admin_vk.to_bytes());
+        let server = MockSyncServer::start("alice_probe".to_string(), drop_pub.clone()).await;
+
+        let stealth_pk = {
+            let s = state.service.lock().unwrap();
+            let my_ed_sk = s
+                .with_wallet_and_identity(|_w, id| id.signing_key.clone())
+                .unwrap();
+            humoco_market::derive_member_stealth_pubkey(&my_ed_sk, &drop_pub).unwrap()
+        };
+        server.members.lock().unwrap().push(stealth_pk.clone());
+
+        let write_url = format!("{}/sync.php", server.base_url);
+        let read_url = format!("{}/alice_probe", server.base_url);
+
+        {
+            let mut s = state.service.lock().unwrap();
+            let mut settings = state.get_cached_settings().unwrap_or_default();
+            settings.sync_backup_enabled = true;
+            settings.market_selected_syncs = vec![crate::models::FrontendSyncDescriptor {
+                write_url: write_url.clone(),
+                read_url: read_url.clone(),
+                drop_pub: drop_pub.clone(),
+                ..Default::default()
+            }];
+            state.save_settings(&mut s, settings, Some(password)).unwrap();
+        }
+
+        // 1. Before any backup is uploaded -> status must be "not_found" + resolved_sync_targets populated
+        let probe_dir_empty = base_dir.join("empty_wallet");
+        let empty_state = create_test_state(AppService::new(&probe_dir_empty).unwrap());
+        let not_found_res = super::probe_sync_backup_impl(
+            vec![write_url.clone()],
+            ALICE_PHRASE.to_string(),
+            None,
+            Some("pc".to_string()),
+            Some(MnemonicLanguage::English),
+            &probe_dir_empty,
+            &tmp_restore_dir,
+            &empty_state,
+        )
+        .await
+        .unwrap();
+        assert_eq!(not_found_res.status, "not_found");
+        assert_eq!(not_found_res.resolved_sync_targets.len(), 1);
+        assert_eq!(not_found_res.resolved_sync_targets[0].drop_pub, drop_pub);
+
+        // 2. Upload backup, then probe with only plain write_url (tests fetch_sync_info + stealth resolution!)
+        let sync_res = super::sync_backup_with_standards_impl(
+            Some(password.to_string()),
+            HashMap::new(),
+            &state,
+        )
+        .await
+        .unwrap();
+        assert_eq!(sync_res.uploaded_to, 1);
+
+        let found_res = super::probe_sync_backup_impl(
+            vec![write_url.clone()],
+            ALICE_PHRASE.to_string(),
+            None,
+            Some("pc".to_string()),
+            Some(MnemonicLanguage::English),
+            &wallet_dir,
+            &tmp_restore_dir,
+            &state,
+        )
+        .await
+        .unwrap();
+        assert_eq!(found_res.status, "found");
+        assert_eq!(found_res.matched_key_kind.as_deref(), Some("stealth"));
+        assert!(found_res.staged_path.as_deref().is_some_and(|p| Path::new(p).exists()));
+        let inspection = found_res.inspection.expect("inspection must be populated");
+        assert_eq!(inspection.profile_name, "Alice");
+        assert!(inspection.local_collision.is_some());
+
+        let _ = fs::remove_dir_all(base_dir);
+    }
+
+    #[tokio::test]
+    async fn test_replace_local_profile_and_reset_password_via_backup() {
+        let base_dir = temp_test_dir("replace_and_pw_reset");
+        let wallet_dir = base_dir.join("wallet");
+        let standards_dir = base_dir.join("voucher_standards");
+        let tmp_restore_dir = base_dir.join("tmp_restore");
+        let old_pass = "OldPassword123!";
+        let new_pass = "NewPassword456!";
+        let bkp_pass = "BackupSecret789!";
+
+        let mut service = setup_test_app(&wallet_dir, "Alice", old_pass);
+        let original_folder = service.list_profiles().unwrap()[0].folder_name.clone();
+        let alice_uid = service.with_wallet(|w| w.get_user_id().to_string()).unwrap();
+
+        let bkp_file = base_dir.join("alice.hmcbackup");
+        super::export_backup_file_impl(
+            &bkp_file,
+            BackupProtection::CustomBackupPassword(bkp_pass),
+            Some(old_pass),
+            &mut service,
+            HashMap::new(),
+        )
+        .unwrap();
+        service.logout();
+
+        let state = crate::commands::sync::tests::create_test_state(service);
+
+        // 1. Reset local password via backup password
+        super::reset_local_password_via_backup_impl(
+            &original_folder,
+            &bkp_file,
+            "password",
+            Some(bkp_pass),
+            None,
+            None,
+            None,
+            new_pass,
+            "inst-pw-reset".to_string(),
+            &wallet_dir,
+            &tmp_restore_dir,
+            &state,
+            None,
+        )
+        .unwrap();
+
+        {
+            let mut s = state.service.lock().unwrap();
+            s.logout();
+            assert!(s.login(&original_folder, old_pass, false, "inst-pw-reset".to_string()).is_err());
+            assert!(s.login(&original_folder, new_pass, false, "inst-pw-reset".to_string()).is_ok());
+            assert_eq!(s.with_wallet(|w| w.get_user_id().to_string()).unwrap(), alice_uid);
+            s.logout();
+        }
+
+        // 2. Restore with replace_folder_name -> keeps clean name "Alice" and deletes original_folder
+        let outcome = super::finalize_restored_wallet_and_reconcile_l2(
+            &bkp_file,
+            BackupRestoreCredentials::BackupPassword(bkp_pass),
+            new_pass,
+            "inst-replace".to_string(),
+            Some(&original_folder),
+            &wallet_dir,
+            &standards_dir,
+            &tmp_restore_dir,
+            &state,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome.profile_name, "Alice");
+        assert_ne!(outcome.folder_name, original_folder);
+        assert!(!wallet_dir.join(&original_folder).exists());
+
+        let remaining_profiles = {
+            let s = state.service.lock().unwrap();
+            s.list_profiles().unwrap()
+        };
+        assert_eq!(remaining_profiles.len(), 1);
+        assert_eq!(remaining_profiles[0].profile_name, "Alice");
+        assert_eq!(remaining_profiles[0].folder_name, outcome.folder_name);
 
         let _ = fs::remove_dir_all(base_dir);
     }

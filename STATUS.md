@@ -3,10 +3,16 @@ project: human-money-app
 version: "0.5.6"
 phase: "beta"
 health: "green"
-last_updated: "2026-11-15"
+last_updated: "2026-11-16"
 blocks: []
 blocked_by: []
 priority_tasks:
+  - id: "APP-UX-10"
+    title: "Unified Profile Open, Restore & Subaccount UX (`SeedPhraseInput`, 3-Card `RestoreBackupView`, Smart Sync Probe & Local Collision Handling)"
+    status: "completed"
+    priority: "high"
+    depends_on: ["APP-UX-09", "APP-SYNC-02"]
+    description: "Replaced fragmented restore and identity-recreation paths with a unified 'Open / Restore Existing Profile' onboarding architecture under strict Zero-Compat cleanup (deleted `RecreateProfile.tsx`, `SocialAndSheetRecoveryFlow.tsx`, `fetch_and_inspect_backup`, and `restore_from_emergency_kit_uri`). Built `src/components/ui/SeedPhraseInput.tsx` featuring 12/24 pill toggle, smart paste (auto-expands 12 to 24 words without truncation, recognizes `humoco://kit` URIs), 11-language auto-detection, and an `<AdvancedDisclosure>` with clear-text reveal (`Input showToggle`) for passphrase, subaccount prefix (`PrefixInfoModal`), and dictionary. Reduced `RestoreBackupView` to 3 equal cards (Trusted Contacts via `SocialRecoveryFlow`, Words/Emergency Sheet/Subaccount/No-Backup, File/Folder w/ logged-out `.hmcbackup` drag & drop), added backend `probe_sync_backup` (`found`/`not_found`/`unreachable` with `resolvedSyncTargets` adoption in `create_profile`), `preview_mnemonic_identity`, `stage_dropped_backup_bytes`, and `reset_local_password_via_backup`, implemented the Smart Local Collision Card (reset local password vs. replace local profile vs. create subaccount), updated `WalletRecovery`, `Login`, `CreateNewProfile`, `EmergencyKitModal` (12 & 24 words dynamically), `App`/`AppRouter`, `tour-catalog.mjs`, and all 5 locales. Verified with 575/575 Vitest tests (77 files), 112/112 src-tauri tests, 99/99 humoco-market tests, cargo clippy --all-targets (0 warnings), npm run i18n:check, npm run lint (0 errors), and npm run build."
   - id: "APP-SYNC-01"
     title: "Sync Reach: ETag / If-None-Match in sync_client::get_slot & Predictable Channel Cooldowns"
     status: "completed"

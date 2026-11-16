@@ -14,7 +14,6 @@ import { Dashboard } from './Dashboard';
 import { WalletView } from './WalletView';
 import { SignRequestView } from './SignRequestView';
 import { WalletRecovery } from './WalletRecovery';
-import { RecreateProfile } from './RecreateProfile';
 import { RestoreBackupView } from './RestoreBackupView';
 import AddressBook from './AddressBook';
 import { ConflictDetailsView } from './ConflictDetailsView';
@@ -53,30 +52,21 @@ export const AppRouter: React.FC = () => {
                     notifyLogin(name);
                     navigate({ view: "logged_in" });
                 }}
-                onSwitchToRecreate={() => navigate({ view: "recreate_profile" })}
                 onSwitchToRestoreBackup={() => navigate({ view: "restore_backup" })}
                 onSwitchToCreate={() => navigate({ view: "needs_profile" })}
                 onSwitchToReset={() => navigate({ view: "needs_recovery" })}
             />;
         case "logged_in":
             return <Dashboard />;
-        case "recreate_profile":
-            return <RecreateProfile
-                onProfileCreated={() => {
-                    notifyLogin();
-                    navigate({ view: "logged_in" });
-                }}
-                onSwitchToLogin={() => navigate({ view: "needs_login" })}
-                onSwitchToRestoreBackup={() => navigate({ view: "restore_backup" })}
-            />;
         case "restore_backup":
             return <RestoreBackupView
                 initialPayload={appState.initialPayload}
+                initialBackupPath={appState.initialBackupPath}
+                initialMethod={appState.initialMethod}
                 onRestoreSuccess={() => {
                     notifyLogin();
                     navigate({ view: "logged_in" });
                 }}
-                onSwitchToRecreate={() => navigate({ view: "recreate_profile" })}
                 onBack={async () => {
                     try {
                         const profiles = await authService.listProfiles();
@@ -100,6 +90,7 @@ export const AppRouter: React.FC = () => {
             return <HelpCenterView initialTopic={appState.topic} onBack={goBack} />;
         case "needs_recovery":
             return <WalletRecovery 
+                initialPayload={appState.initialPayload}
                 onRecoverySuccess={() => {
                     notifyLogin();
                     navigate({ view: "logged_in" });
