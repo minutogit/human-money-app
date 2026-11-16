@@ -776,6 +776,8 @@
   "error.validation.generic": "La validation a échoué.",
   "error.validation.initAmountMismatch": "Le montant initial de la transaction doit correspondre à la valeur nominale. Attendu : {{expected}}, Trouvé : {{found}}.",
   "error.validation.insufficientFunds": "Fonds insuffisants. Nécessaire : {{needed}}, Disponible : {{available}}.",
+  "error.validation.intentPendingL2": "Ce bon attend encore une confirmation de couche 2. Veuillez patienter un instant et réessayer.",
+  "error.validation.splitChangePendingL2": "Le solde restant de votre paiement partiel précédent attend encore la confirmation de couche 2 (env. 30 s).",
   "error.validation.voucherNotActive": "Le titre n'est pas actif.",
   "error.wallet.locked": "Le portefeuille est verrouillé. Veuillez d'abord vous connecter.",
   "gender.female": "Femme",

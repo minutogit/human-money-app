@@ -612,8 +612,17 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote, in
                 standardDefinitionsToml[uuid] = s.content;
             });
 
-            const bundleResult = await protectAction(async (password) => {
-                return await transferService.createBundle({
+            const summableAmounts: Record<string, string> = {};
+            const countableItems: Record<string, number> = {};
+
+            Object.entries(selectionStats).forEach(([displayCurrency, stat]) => {
+                const voucher = availableVouchers.find(v => v.displayCurrency === displayCurrency);
+                const precision = voucher ? (uuidToPrecisionMap.get(voucher.voucherStandardUuid) ?? 2) : 2;
+                summableAmounts[displayCurrency] = stat.total.toFixed(precision);
+            });
+
+            const txOutcome = await protectAction(async (password) => {
+                const bundleResult: CreateBundleResult = await transferService.createBundle({
                     recipientId: state.recipientId,
                     sources,
                     notes: state.notes || null,
@@ -623,52 +632,50 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote, in
                     sendCardOverride: sendCardOverride ?? undefined,
                     password
                 });
-            }) as CreateBundleResult;
 
-            if (!bundleResult) { return; }
+                const record: TransactionRecord = {
+                    id: crypto.randomUUID(),
+                    direction: 'sent',
+                    recipientId: state.recipientId,
+                    senderId: ownUserId,
+                    timestamp: new Date().toISOString(),
+                    summableAmounts,
+                    countableItems,
+                    involvedVouchers: (bundleResult.involvedSourcesDetails as InvolvedVoucherInfo[]).map((d: InvolvedVoucherInfo) => d.localInstanceId),
+                    involvedSourcesDetails: bundleResult.involvedSourcesDetails as InvolvedVoucherInfo[],
+                    bundleData: bundleResult.bundleData,
+                    bundleId: bundleResult.bundleId,
+                    notes: state.notes || undefined,
+                    senderProfileName: senderName || undefined,
+                };
 
-            const summableAmounts: Record<string, string> = {};
-            const countableItems: Record<string, number> = {};
-            
-            Object.entries(selectionStats).forEach(([displayCurrency, stat]) => {
-                const voucher = availableVouchers.find(v => v.displayCurrency === displayCurrency);
-                const precision = voucher ? (uuidToPrecisionMap.get(voucher.voucherStandardUuid) ?? 2) : 2;
-                summableAmounts[displayCurrency] = stat.total.toFixed(precision);
-            });
+                try {
+                    await transferService.saveTransactionRecord(record, password || undefined);
+                } catch (saveErr) {
+                    logger.error(`Failed to persist transaction record after transfer commit: ${stringifyError(saveErr)}`);
+                }
 
-            const record: TransactionRecord = {
-                id: crypto.randomUUID(),
-                direction: 'sent',
-                recipientId: state.recipientId,
-                senderId: ownUserId,
-                timestamp: new Date().toISOString(),
-                summableAmounts,
-                countableItems,
-                involvedVouchers: (bundleResult.involvedSourcesDetails as InvolvedVoucherInfo[]).map((d: InvolvedVoucherInfo) => d.localInstanceId),
-                involvedSourcesDetails: bundleResult.involvedSourcesDetails as InvolvedVoucherInfo[],
-                bundleData: bundleResult.bundleData,
-                bundleId: bundleResult.bundleId,
-                notes: state.notes || undefined,
-                senderProfileName: senderName || undefined,
-            };
-
-            let depositedTo = 0;
-            let depositError: string | undefined = undefined;
-
-            await protectAction(async (password) => {
-                await transferService.saveTransactionRecord(record, password || undefined);
+                let depositedTo = 0;
+                let depositError: string | undefined = undefined;
                 try {
                     const depositRes = await postService.depositTransferToPost(bundleResult.bundleId, password || undefined);
                     depositedTo = depositRes.depositedTo;
                     if (depositRes.errors && depositRes.errors.length > 0) {
                         depositError = depositRes.errors.join('; ');
+                        logger.warn(`Post deposit completed with ${depositRes.errors.length} error(s)`);
                     }
                     // Point G: Fast/prioritized sync after transaction send
                     runPostSyncPass().catch(() => {});
                 } catch (err) {
-                    depositError = String(err);
+                    depositError = translateError(err, t);
+                    logger.warn(`Post deposit failed after transfer commit: ${stringifyError(err)}`);
                 }
+
+                return { bundleResult, depositedTo, depositError };
             });
+
+            if (!txOutcome) { return; }
+            const { bundleResult, depositedTo, depositError } = txOutcome;
 
             const summaryString = Object.entries(selectionStats)
                 .map(([displayCurrency, stat]) => `${formatAmount(stat.total.toString())} ${displayCurrency}`)
@@ -687,6 +694,7 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote, in
                 depositError,
             }), 1500);
         } catch (e) {
+            logger.error(`Transfer failed: ${stringifyError(e)}`);
             dispatch({ type: 'SET_FEEDBACK', msg: t('transfer.transferFailed', { error: translateError(e, t) }) });
             dispatch({ type: 'TOGGLE_CONFIRM', value: false });
         } finally {

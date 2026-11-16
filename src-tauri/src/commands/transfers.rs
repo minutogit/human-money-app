@@ -34,9 +34,10 @@ fn validate_l2_routing(settings:&crate::settings::AppSettings)->Result<(),Fronte
 }
 
 fn open_wallet_archive(
-    app: &tauri::AppHandle,
+    app: Option<&tauri::AppHandle>,
     service: &human_money_core::app_service::AppService,
 ) -> Option<FileVoucherArchive> {
+    let app = app?;
     let app_data_dir = app.path().app_data_dir().ok()?;
     let (user_id, key) = service
         .with_wallet_and_identity(|w, id| {
@@ -53,10 +54,9 @@ fn open_wallet_archive(
     Some(FileVoucherArchive::with_key(archive_dir, key))
 }
 
-#[tauri::command]
 #[allow(clippy::too_many_arguments)]
-pub async fn create_transfer_bundle(
-    app: tauri::AppHandle,
+pub(crate) async fn create_transfer_bundle_impl(
+    app: Option<&tauri::AppHandle>,
     recipient_id: String,
     sources: Vec<FrontendSourceTransfer>,
     notes: Option<String>,
@@ -65,23 +65,28 @@ pub async fn create_transfer_bundle(
     use_privacy_mode: Option<bool>,
     send_card_override: Option<bool>,
     password: Option<String>,
-    state: tauri::State<'_, AppState>,
+    state: &AppState,
 ) -> Result<CreateBundleResult, FrontendError> {
     let recipient_id = recipient_id.trim().to_string();
-    info!(
-        "Attempting to create a transfer bundle for recipient: {}",
-        recipient_id
-    );
+    log::debug!("Creating transfer bundle (sources={})", sources.len());
 
-    let settings=state.get_cached_settings().map_err(FrontendError::from)?;
+    let settings = state.get_cached_settings().map_err(FrontendError::from)?;
     if settings.pending_restore_l2_reconciliation {
         return Err(FrontendError::from(
             "Nach einer Wiederherstellung aus der Sicherung ist vor dem Ausgeben von Gutscheinen ein einmaliger Online-Sicherheitsabgleich erforderlich.".to_string(),
         ));
     }
-    validate_l2_routing(&settings)?;
-    let network=match settings.active_network.to_lowercase().as_str() {"mainnet"=>0,"testnet"=>1,_=>return Err(FrontendError::from("Invalid L2 network".to_string()))};
-    let source_transfers = sources
+    validate_l2_routing(&settings).map_err(|e| {
+        error!("create_transfer_bundle L2 routing validation failed: {}", e.message);
+        e
+    })?;
+    let has_mesh_authority = crate::checkout::configured_policy(&settings)?.is_some();
+    let network = match settings.active_network.to_lowercase().as_str() {
+        "mainnet" => 0,
+        "testnet" => 1,
+        _ => return Err(FrontendError::from("Invalid L2 network".to_string())),
+    };
+    let source_transfers: Vec<SourceTransfer> = sources
         .into_iter()
         .map(|s| SourceTransfer {
             local_instance_id: s.local_instance_id,
@@ -89,8 +94,11 @@ pub async fn create_transfer_bundle(
         })
         .collect();
 
-    let (result,intents) = {
-        let mut service=state.service.lock().map_err(|_|FrontendError::from("Wallet service unavailable".to_string()))?;
+    let (result, intents, mode) = {
+        let mut service = state
+            .service
+            .lock()
+            .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
 
         let mut wot_sync_json: Option<String> = None;
         let mut pending_receipt: Option<humoco_wot::SyncReceipt> = None;
@@ -163,6 +171,8 @@ pub async fn create_transfer_bundle(
             }
         }
 
+        let source_count = source_transfers.len();
+
         let request = MultiTransferRequest {
             recipient_id,
             sources: source_transfers,
@@ -173,8 +183,61 @@ pub async fn create_transfer_bundle(
             contact_card_json,
         };
 
-        let archive = open_wallet_archive(&app, &service);
-        let result=service.create_transfer_bundle_with_l2_intents(request,&standard_definitions_toml,archive.as_ref(),password.as_deref(),network).map_err(FrontendError::from)?;
+        let archive = open_wallet_archive(app, &service);
+        let wallet_has_policy = service
+            .with_wallet(|w| w.profile.l2_regional_mesh_policy.is_some())
+            .unwrap_or(false);
+        let use_durable_mesh = has_mesh_authority && wallet_has_policy;
+        let mode = if use_durable_mesh {
+            "durable_mesh"
+        } else {
+            "best_effort"
+        };
+
+        let (result, intents) = if use_durable_mesh {
+            let result = service
+                .create_transfer_bundle_with_l2_intents(
+                    request,
+                    &standard_definitions_toml,
+                    archive.as_ref(),
+                    password.as_deref(),
+                    network,
+                )
+                .map_err(|e| {
+                    error!(
+                        "create_transfer_bundle failed (mode={}, sources={}): {}",
+                        mode, source_count, e
+                    );
+                    FrontendError::from(e)
+                })?;
+
+            let mut intents = Vec::with_capacity(result.involved_sources_details.len());
+            for source in &result.involved_sources_details {
+                match service.pending_l2_send_intent(&source.local_instance_id) {
+                    Ok(intent) => intents.push(intent),
+                    Err(err) => {
+                        log::warn!("Pending L2 send intent missing or failed: {}", err);
+                    }
+                }
+            }
+            (result, intents)
+        } else {
+            service
+                .create_transfer_bundle_with_best_effort_l2(
+                    request,
+                    &standard_definitions_toml,
+                    archive.as_ref(),
+                    password.as_deref(),
+                    network,
+                )
+                .map_err(|e| {
+                    error!(
+                        "create_transfer_bundle failed (mode={}, sources={}): {}",
+                        mode, source_count, e
+                    );
+                    FrontendError::from(e)
+                })?
+        };
 
         if let Some((peer_pk_bytes, own_v)) = pending_card_sent {
             let mut store: humoco_market::CardStore = service
@@ -200,42 +263,89 @@ pub async fn create_transfer_bundle(
             }
         }
 
-        let mut intents = Vec::with_capacity(result.involved_sources_details.len());
-        for source in &result.involved_sources_details {
-            match service.pending_l2_send_intent(&source.local_instance_id) {
-                Ok(intent) => intents.push(intent),
-                Err(err) => {
-                    log::warn!(
-                        "Pending L2 send intent missing or failed for source {}: {}",
-                        source.local_instance_id,
-                        err
-                    );
-                }
-            }
+        if let Err(error) = state.refresh_events_cache(&mut service, password.as_deref()) {
+            error!("Failed to refresh events after transfer commit: {}", error);
         }
-        if let Err(error)=state.refresh_events_cache(&mut service,password.as_deref()) {error!("Failed to refresh events after transfer commit: {}",error);}
-        (result,intents)
+        (result, intents, mode)
     };
     // The service mutex is released; the managed Core commit has acknowledged
-    // exact bytes before the first HTTP attempt. Uncertain outputs stay pending.
-    let candidates=crate::gateway_resolver::cached_candidates(&settings);
-    let l2_dispatch=crate::gateway_resolver::dispatch_intents(&settings,&candidates,&intents).await;
-    Ok(CreateBundleResult {bundle_data:result.bundle_bytes,bundle_id:result.bundle_id,
-        involved_sources_details:result.involved_sources_details.into_iter().map(Into::into).collect(),l2_dispatch})
+    // exact bytes before the first HTTP attempt.
+    let candidates = crate::gateway_resolver::cached_candidates(&settings);
+    let l2_dispatch = if candidates.is_empty() && mode == "best_effort" {
+        intents
+            .iter()
+            .map(|intent| crate::gateway_resolver::IntentDispatchObservation {
+                local_instance_id: intent.local_instance_id.clone(),
+                status: "offline_skipped".into(),
+                http_status: None,
+            })
+            .collect()
+    } else {
+        let obs = crate::gateway_resolver::dispatch_intents(&settings, &candidates, &intents).await;
+        let accepted = obs
+            .iter()
+            .filter(|o| matches!(o.http_status, Some(code) if code < 400))
+            .count();
+        if !candidates.is_empty() && accepted < obs.len() {
+            let statuses: Vec<Option<u16>> = obs.iter().map(|o| o.http_status).collect();
+            log::warn!(
+                "L2 lock dispatch degraded (mode={}, accepted={}/{}, http_statuses={:?})",
+                mode,
+                accepted,
+                obs.len(),
+                statuses
+            );
+        }
+        obs
+    };
+    Ok(CreateBundleResult {
+        bundle_data: result.bundle_bytes,
+        bundle_id: result.bundle_id,
+        involved_sources_details: result.involved_sources_details.into_iter().map(Into::into).collect(),
+        l2_dispatch,
+    })
 }
 
 #[tauri::command]
-pub fn receive_bundle(
+#[allow(clippy::too_many_arguments)]
+pub async fn create_transfer_bundle(
     app: tauri::AppHandle,
+    recipient_id: String,
+    sources: Vec<FrontendSourceTransfer>,
+    notes: Option<String>,
+    sender_profile_name: Option<String>,
+    standard_definitions_toml: HashMap<String, String>,
+    use_privacy_mode: Option<bool>,
+    send_card_override: Option<bool>,
+    password: Option<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<CreateBundleResult, FrontendError> {
+    create_transfer_bundle_impl(
+        Some(&app),
+        recipient_id,
+        sources,
+        notes,
+        sender_profile_name,
+        standard_definitions_toml,
+        use_privacy_mode,
+        send_card_override,
+        password,
+        &state,
+    )
+    .await
+}
+
+pub(crate) fn receive_bundle_impl(
+    app: Option<&tauri::AppHandle>,
     bundle_data: Vec<u8>,
     standard_definitions_toml: HashMap<String, String>,
     password: Option<String>,
     force_accept_tolerance_bundle: bool,
-    state: tauri::State<AppState>,
+    state: &AppState,
 ) -> Result<ReceiveSuccessPayload, FrontendError> {
     info!("Attempting to receive and process a transfer bundle...");
     let mut service = state.service.lock().unwrap();
-    let archive = open_wallet_archive(&app, &service);
+    let archive = open_wallet_archive(app, &service);
 
     match service.receive_bundle(&bundle_data, &standard_definitions_toml, archive.as_ref(), password.as_deref(), force_accept_tolerance_bundle) {
         Ok(result) => {
@@ -245,9 +355,9 @@ pub fn receive_bundle(
             let warning_count = result.check_result.unverifiable_warnings.len();
 
             if conflict_count > 0 || warning_count > 0 {
-                info!(
-                    "FRAUD DETECTION: Processed bundle from {} | Confirmed Conflicts: {} | Gossip Warnings: {}",
-                    result.header.sender_id, conflict_count, warning_count
+                log::warn!(
+                    "Fraud detection during bundle import: confirmed_conflicts={}, gossip_warnings={}",
+                    conflict_count, warning_count
                 );
             }
 
@@ -315,13 +425,32 @@ pub fn receive_bundle(
 }
 
 #[tauri::command]
+pub fn receive_bundle(
+    app: tauri::AppHandle,
+    bundle_data: Vec<u8>,
+    standard_definitions_toml: HashMap<String, String>,
+    password: Option<String>,
+    force_accept_tolerance_bundle: bool,
+    state: tauri::State<AppState>,
+) -> Result<ReceiveSuccessPayload, FrontendError> {
+    receive_bundle_impl(
+        Some(&app),
+        bundle_data,
+        standard_definitions_toml,
+        password,
+        force_accept_tolerance_bundle,
+        &state,
+    )
+}
+
+#[tauri::command]
 pub fn save_transaction_record(
     record: FrontendTransactionRecord,
     password: Option<String>,
     state: tauri::State<AppState>,
 ) -> Result<(), FrontendError> {
     let record: TransactionRecord = record.into();
-    info!("Saving new transaction record with id: {}", record.id);
+    log::debug!("Saving new transaction record");
     let mut service = state.service.lock().unwrap();
     state.append_to_history(&mut service, record, password.as_deref()).map_err(FrontendError::from)
 }
@@ -383,10 +512,6 @@ pub fn prepare_transfer_plan(
     state: tauri::State<AppState>,
 ) -> Result<FrontendTransferPlan, FrontendError> {
     let recipient_id = recipient_id.trim().to_string();
-    info!(
-        "Preparing transfer plan for recipient {} amount {} filter {:?}",
-        recipient_id, target_amount, standard_uuid_filter
-    );
     let service = state.service.lock().unwrap();
     let bonuses = service.with_wallet(|w| compute_wot_bonuses(&state, w, &recipient_id))
         .map_err(FrontendError::from)?;
@@ -404,10 +529,6 @@ pub fn rank_vouchers_for_recipient(
     state: tauri::State<AppState>,
 ) -> Result<Vec<FrontendRankedVoucher>, FrontendError> {
     let recipient_id = recipient_id.trim().to_string();
-    info!(
-        "Ranking vouchers for recipient {} amount {} filter {:?}",
-        recipient_id, target_amount, standard_uuid_filter
-    );
     let service = state.service.lock().unwrap();
     let bonuses = service.with_wallet(|w| compute_wot_bonuses(&state, w, &recipient_id))
         .map_err(FrontendError::from)?;
@@ -660,10 +781,7 @@ pub fn verify_live_checkout_and_release(
     // record cannot be stored, the release is not handed out to the frontend.
     if checkout_release_gate(&verdict) {
         let record = build_verified_checkout_record(&service, &proof);
-        info!(
-            "Persisting verified checkout record {} in the transaction history",
-            record.id
-        );
+        info!("Persisting verified checkout record in the transaction history");
         state
             .append_to_history(&mut service, record, password.as_deref())
             .map_err(FrontendError::from)?;
@@ -713,7 +831,7 @@ pub fn verify_checkout_response_with_authority(
     password: Option<String>,
     state: tauri::State<AppState>,
 ) -> Result<FrontendCheckoutReleaseVerdict, FrontendError> {
-    info!("Verifying checkout response with authority for voucher {}", local_id);
+    info!("Verifying checkout response with authority");
     let mut service = state.service.lock().unwrap();
 
     let parent_lock = human_money_core::hex::decode(&parent_lock_hex)
@@ -1016,6 +1134,495 @@ mod z01_fail_closed_tests {
     }
 }
 
+#[cfg(test)]
+mod offline_and_degraded_transfer_tests {
+    use super::*;
+    use crate::commands::sync::tests::{
+        create_test_state, setup_test_app, temp_test_dir, ALICE_PHRASE, BOB_PHRASE,
+    };
+    use crate::settings::{AppSettings, CustomServerDto, RegionalSourceDto};
+    use ed25519_dalek::SigningKey;
+    use human_money_core::models::profile::PublicProfile;
+    use human_money_core::models::voucher::ValueDefinition;
+    use human_money_core::wallet::instance::VoucherStatus;
+    use human_money_core::{test_utils, NewVoucherData};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    fn std_map() -> (HashMap<String, String>, String) {
+        let standard_toml = test_utils::generate_signed_standard_toml(
+            "voucher_standards/freetaler_v1/standard.toml",
+        );
+        let mut map = HashMap::new();
+        map.insert(
+            "a1b2c3d4-e5f6-4789-8012-3456789abcde".to_string(),
+            standard_toml.clone(),
+        );
+        (map, standard_toml)
+    }
+
+    fn issue_100_voucher(state: &AppState, standard_toml: &str, password: &str) -> String {
+        let mut s = state.service.lock().unwrap();
+        if state.get_cached_settings().is_err() {
+            state.save_settings(&mut s, AppSettings::default(), Some(password)).unwrap();
+        }
+        let user_id = s.with_wallet(|w| w.get_user_id().to_string()).unwrap();
+        s.create_new_voucher(
+            standard_toml,
+            NewVoucherData {
+                creator_profile: PublicProfile {
+                    id: Some(user_id),
+                    ..Default::default()
+                },
+                nominal_value: ValueDefinition {
+                    amount: "100".to_string(),
+                    unit: "Taler".to_string(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            Some(password),
+        )
+        .unwrap();
+        s.with_wallet_and_identity(|w, id| w.list_vouchers(Some(id), None, None, None))
+            .unwrap()
+            .into_iter()
+            .find(|v| v.status == VoucherStatus::Active)
+            .unwrap()
+            .local_instance_id
+    }
+
+    fn active_voucher_id(state: &AppState) -> String {
+        let s = state.service.lock().unwrap();
+        s.with_wallet_and_identity(|w, id| w.list_vouchers(Some(id), None, None, None))
+            .unwrap()
+            .into_iter()
+            .find(|v| v.status == VoucherStatus::Active)
+            .unwrap()
+            .local_instance_id
+    }
+
+    fn closed_loopback_port() -> u16 {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        port
+    }
+
+    async fn spawn_mock_l2_ok_server() -> (String, Arc<AtomicUsize>, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let hits = Arc::new(AtomicUsize::new(0));
+        let hits_clone = hits.clone();
+
+        let handle = tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    break;
+                };
+                hits_clone.fetch_add(1, Ordering::SeqCst);
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 4096];
+                    let _ = stream.read(&mut buf).await;
+                    let resp = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}";
+                    let _ = stream.write_all(resp.as_bytes()).await;
+                    let _ = stream.shutdown().await;
+                });
+            }
+        });
+        (format!("http://{}", addr), hits, handle)
+    }
+
+    #[tokio::test]
+    async fn test_offline_multi_split_and_receive_without_l2_or_sync() {
+        let base_dir = temp_test_dir("offline_multi_split");
+        let password = "TestPassword123!";
+        let alice_state = create_test_state(setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password));
+        let bob_state = create_test_state(setup_test_app(&base_dir.join("bob"), "Bob", BOB_PHRASE, password));
+
+        let (std_map, standard_toml) = std_map();
+        let v1_id = issue_100_voucher(&alice_state, &standard_toml, password);
+        let bob_did = bob_state.service.lock().unwrap().with_wallet(|w| w.get_user_id().to_string()).unwrap();
+
+        // Split #1: 100 -> 30 (to Bob) + 70 change
+        let res1 = create_transfer_bundle_impl(
+            None,
+            bob_did.clone(),
+            vec![FrontendSourceTransfer { local_instance_id: v1_id, amount_to_send: "30".into() }],
+            None,
+            None,
+            std_map.clone(),
+            Some(false),
+            Some(false),
+            Some(password.into()),
+            &alice_state,
+        )
+        .await
+        .expect("Split #1 must succeed offline");
+        assert_eq!(res1.l2_dispatch.len(), 1);
+        assert_eq!(res1.l2_dispatch[0].http_status, None);
+
+        // Immediate Split #2 on 70 change -> 25 + 45 change
+        let v2_id = active_voucher_id(&alice_state);
+        let res2 = create_transfer_bundle_impl(
+            None,
+            bob_did.clone(),
+            vec![FrontendSourceTransfer { local_instance_id: v2_id, amount_to_send: "25".into() }],
+            None,
+            None,
+            std_map.clone(),
+            Some(false),
+            Some(false),
+            Some(password.into()),
+            &alice_state,
+        )
+        .await
+        .expect("Split #2 on change remainder must succeed offline without blocking");
+
+        // Immediate full spend #3 on 45 change -> 0
+        let v3_id = active_voucher_id(&alice_state);
+        let res3 = create_transfer_bundle_impl(
+            None,
+            bob_did,
+            vec![FrontendSourceTransfer { local_instance_id: v3_id, amount_to_send: "45".into() }],
+            None,
+            None,
+            std_map.clone(),
+            Some(false),
+            Some(false),
+            Some(password.into()),
+            &alice_state,
+        )
+        .await
+        .expect("Final spend #3 of remaining balance must succeed offline");
+
+        {
+            let s = alice_state.service.lock().unwrap();
+            let active_left = s
+                .with_wallet_and_identity(|w, id| w.list_vouchers(Some(id), None, None, None))
+                .unwrap()
+                .into_iter()
+                .filter(|v| v.status == VoucherStatus::Active)
+                .count();
+            assert_eq!(active_left, 0);
+            assert!(s.unresolved_l2_send_intents().unwrap().is_empty());
+        }
+
+        // Bob receives all 3 bundles offline
+        for bundle in [res1.bundle_data, res2.bundle_data, res3.bundle_data] {
+            receive_bundle_impl(None, bundle, std_map.clone(), Some(password.into()), false, &bob_state)
+                .expect("Offline receive_bundle_impl must succeed");
+        }
+
+        let bob_vouchers = {
+            let s = bob_state.service.lock().unwrap();
+            s.with_wallet_and_identity(|w, id| w.list_vouchers(Some(id), None, None, None)).unwrap()
+        };
+        assert_eq!(bob_vouchers.len(), 3);
+        let mut received_amounts: Vec<f64> = bob_vouchers
+            .iter()
+            .map(|v| v.current_amount.parse::<f64>().unwrap())
+            .collect();
+        received_amounts.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        assert_eq!(received_amounts, vec![25.0, 30.0, 45.0]);
+
+        let _ = std::fs::remove_dir_all(&base_dir);
+    }
+
+    #[tokio::test]
+    async fn test_self_heals_orphaned_split_intent_when_no_mesh_policy_configured() {
+        let base_dir = temp_test_dir("self_heal_orphaned_intent");
+        let password = "TestPassword123!";
+        let alice_state = create_test_state(setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password));
+        let bob_state = create_test_state(setup_test_app(&base_dir.join("bob"), "Bob", BOB_PHRASE, password));
+
+        let (std_map, standard_toml) = std_map();
+        let v1_id = issue_100_voucher(&alice_state, &standard_toml, password);
+        let bob_did = bob_state.service.lock().unwrap().with_wallet(|w| w.get_user_id().to_string()).unwrap();
+
+        // Reproduce legacy/bug state: durable split without regional mesh policy
+        {
+            let mut s = alice_state.service.lock().unwrap();
+            s.create_transfer_bundle_with_l2_intents(
+                MultiTransferRequest {
+                    recipient_id: bob_did.clone(),
+                    sources: vec![SourceTransfer {
+                        local_instance_id: v1_id,
+                        amount_to_send: "30".into(),
+                    }],
+                    notes: None,
+                    sender_profile_name: None,
+                    use_privacy_mode: Some(false),
+                    wot_sync_json: None,
+                    contact_card_json: None,
+                },
+                &std_map,
+                None,
+                Some(password),
+                0,
+            )
+            .unwrap();
+            assert_eq!(s.unresolved_l2_send_intents().unwrap().len(), 1);
+        }
+
+        let change_id = active_voucher_id(&alice_state);
+        let res = create_transfer_bundle_impl(
+            None,
+            bob_did,
+            vec![FrontendSourceTransfer { local_instance_id: change_id, amount_to_send: "25".into() }],
+            None,
+            None,
+            std_map,
+            Some(false),
+            Some(false),
+            Some(password.into()),
+            &alice_state,
+        )
+        .await;
+        assert!(res.is_ok(), "Change voucher must self-heal and send cleanly: {:?}", res);
+
+        let unresolved = alice_state.service.lock().unwrap().unresolved_l2_send_intents().unwrap();
+        assert!(unresolved.is_empty());
+
+        let _ = std::fs::remove_dir_all(&base_dir);
+    }
+
+    #[tokio::test]
+    async fn test_half_offline_dead_l2_node_and_best_effort_reachable_l2_node_without_mesh() {
+        let base_dir = temp_test_dir("half_offline_l2");
+        let password = "TestPassword123!";
+        let alice_state = create_test_state(setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password));
+        let bob_state = create_test_state(setup_test_app(&base_dir.join("bob"), "Bob", BOB_PHRASE, password));
+        let (std_map, standard_toml) = std_map();
+        let bob_did = bob_state.service.lock().unwrap().with_wallet(|w| w.get_user_id().to_string()).unwrap();
+
+        // Case A: L2 node configured, but port is closed (dead L2 node, no mesh sources)
+        let closed_port = closed_loopback_port();
+        let dead_settings = AppSettings {
+            custom_servers: vec![CustomServerDto {
+                url: format!("http://127.0.0.1:{}", closed_port),
+                name: "Dead L2".into(),
+                is_active: true,
+                ..Default::default()
+            }],
+            exclusive_custom_servers: true,
+            regional_mesh_sources: Vec::new(),
+            ..Default::default()
+        };
+        {
+            let mut s = alice_state.service.lock().unwrap();
+            alice_state.save_settings(&mut s, dead_settings, Some(password)).unwrap();
+        }
+        let v_a1 = issue_100_voucher(&alice_state, &standard_toml, password);
+        let split_a1 = create_transfer_bundle_impl(
+            None,
+            bob_did.clone(),
+            vec![FrontendSourceTransfer { local_instance_id: v_a1, amount_to_send: "30".into() }],
+            None,
+            None,
+            std_map.clone(),
+            Some(false),
+            Some(false),
+            Some(password.into()),
+            &alice_state,
+        )
+        .await
+        .expect("Split against dead L2 node must succeed on L1");
+        assert_eq!(split_a1.l2_dispatch.len(), 1);
+        assert_eq!(split_a1.l2_dispatch[0].http_status, None);
+
+        let v_a2 = active_voucher_id(&alice_state);
+        create_transfer_bundle_impl(
+            None,
+            bob_did.clone(),
+            vec![FrontendSourceTransfer { local_instance_id: v_a2, amount_to_send: "20".into() }],
+            None,
+            None,
+            std_map.clone(),
+            Some(false),
+            Some(false),
+            Some(password.into()),
+            &alice_state,
+        )
+        .await
+        .expect("Immediate follow-up split against dead L2 node must succeed");
+        assert!(alice_state.service.lock().unwrap().unresolved_l2_send_intents().unwrap().is_empty());
+
+        // Case B: Reachable L2 node returns 200 OK, but regional_mesh_sources is empty
+        let (mock_url, hits, server_handle) = spawn_mock_l2_ok_server().await;
+        let ok_settings = AppSettings {
+            custom_servers: vec![CustomServerDto {
+                url: mock_url,
+                name: "Mock L2".into(),
+                is_active: true,
+                ..Default::default()
+            }],
+            exclusive_custom_servers: true,
+            regional_mesh_sources: Vec::new(),
+            ..Default::default()
+        };
+        {
+            let mut s = alice_state.service.lock().unwrap();
+            alice_state.save_settings(&mut s, ok_settings, Some(password)).unwrap();
+        }
+        let v_b1 = active_voucher_id(&alice_state); // remaining 50
+        let split_b1 = create_transfer_bundle_impl(
+            None,
+            bob_did.clone(),
+            vec![FrontendSourceTransfer { local_instance_id: v_b1, amount_to_send: "20".into() }],
+            None,
+            None,
+            std_map.clone(),
+            Some(false),
+            Some(false),
+            Some(password.into()),
+            &alice_state,
+        )
+        .await
+        .expect("Split with reachable L2 node without mesh sources must succeed");
+        assert_eq!(split_b1.l2_dispatch[0].http_status, Some(200));
+
+        let v_b2 = active_voucher_id(&alice_state); // remaining 30
+        let split_b2 = create_transfer_bundle_impl(
+            None,
+            bob_did,
+            vec![FrontendSourceTransfer { local_instance_id: v_b2, amount_to_send: "15".into() }],
+            None,
+            None,
+            std_map,
+            Some(false),
+            Some(false),
+            Some(password.into()),
+            &alice_state,
+        )
+        .await
+        .expect("Immediate split #2 with reachable L2 node without mesh sources must succeed");
+        assert_eq!(split_b2.l2_dispatch[0].http_status, Some(200));
+        assert!(hits.load(Ordering::SeqCst) >= 2);
+        assert!(alice_state.service.lock().unwrap().unresolved_l2_send_intents().unwrap().is_empty());
+
+        server_handle.abort();
+        let _ = std::fs::remove_dir_all(&base_dir);
+    }
+
+    #[tokio::test]
+    async fn test_active_mesh_authority_enforces_split_lock_with_specific_error_code_and_pos_checkout_fails_closed_when_l2_down() {
+        let base_dir = temp_test_dir("mesh_authority_and_pos_down");
+        let password = "TestPassword123!";
+        let alice_state = create_test_state(setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password));
+        let bob_state = create_test_state(setup_test_app(&base_dir.join("bob"), "Bob", BOB_PHRASE, password));
+        let peer_state = create_test_state(setup_test_app(&base_dir.join("peer"), "Peer", BOB_PHRASE, password));
+
+        let (std_map, standard_toml) = std_map();
+        let closed_port = closed_loopback_port();
+        let dead_url = format!("http://127.0.0.1:{}", closed_port);
+
+        let authority_key = SigningKey::from_bytes(&[42; 32]);
+        let authority_pk_hex = human_money_core::hex::encode(authority_key.verifying_key().to_bytes());
+        let policy = human_money_core::humoco_proto::mesh::RegionalMeshPolicy {
+            network: 0,
+            source_keys: vec![authority_key.verifying_key().to_bytes()],
+        };
+        let mesh_settings = AppSettings {
+            active_network: "mainnet".into(),
+            custom_servers: vec![CustomServerDto {
+                url: dead_url.clone(),
+                name: "Down Gateway".into(),
+                is_active: true,
+                ..Default::default()
+            }],
+            exclusive_custom_servers: true,
+            regional_mesh_sources: vec![RegionalSourceDto {
+                url: dead_url,
+                public_key: authority_pk_hex,
+                bearer_token: None,
+            }],
+            ..Default::default()
+        };
+
+        {
+            let mut s = alice_state.service.lock().unwrap();
+            s.configure_regional_mesh_authority(policy.clone(), Some(password)).unwrap();
+            alice_state.save_settings(&mut s, mesh_settings.clone(), Some(password)).unwrap();
+        }
+        {
+            let mut s = bob_state.service.lock().unwrap();
+            s.configure_regional_mesh_authority(policy, Some(password)).unwrap();
+            bob_state.save_settings(&mut s, mesh_settings, Some(password)).unwrap();
+        }
+
+        let v1_id = issue_100_voucher(&alice_state, &standard_toml, password);
+        let bob_did = bob_state.service.lock().unwrap().with_wallet(|w| w.get_user_id().to_string()).unwrap();
+
+        // Split #1 under active Regional Mesh authority
+        let split1 = create_transfer_bundle_impl(
+            None,
+            bob_did.clone(),
+            vec![FrontendSourceTransfer { local_instance_id: v1_id, amount_to_send: "30".into() }],
+            None,
+            None,
+            std_map.clone(),
+            Some(false),
+            Some(false),
+            Some(password.into()),
+            &alice_state,
+        )
+        .await
+        .expect("First split under active mesh authority must commit");
+
+        // Immediate Split #2 must fail with dedicated error.validation.splitChangePendingL2
+        let v2_id = active_voucher_id(&alice_state);
+        let err = create_transfer_bundle_impl(
+            None,
+            bob_did,
+            vec![FrontendSourceTransfer { local_instance_id: v2_id, amount_to_send: "20".into() }],
+            None,
+            None,
+            std_map.clone(),
+            Some(false),
+            Some(false),
+            Some(password.into()),
+            &alice_state,
+        )
+        .await
+        .expect_err("Immediate split #2 under active mesh authority must block while parent intent is pending");
+        assert_eq!(err.code, "error.validation.splitChangePendingL2");
+
+        // PoS checkout on Bob while L2/Regional sources are down MUST fail closed
+        let checkout_res = crate::checkout::checkout_bundle(
+            &bob_state,
+            "purchase-down-1",
+            &split1.bundle_data,
+            &std_map,
+            Some(password),
+        )
+        .await;
+        assert!(checkout_res.is_err(), "PoS checkout must fail closed when L2 is unreachable");
+        let bob_active_count = bob_state
+            .service
+            .lock()
+            .unwrap()
+            .with_wallet_and_identity(|w, id| w.list_vouchers(Some(id), None, None, None))
+            .unwrap()
+            .len();
+        assert_eq!(bob_active_count, 0);
+
+        // Normal offline L1 receive on an offline peer still succeeds cleanly
+        receive_bundle_impl(
+            None,
+            split1.bundle_data,
+            std_map,
+            Some(password.into()),
+            false,
+            &peer_state,
+        )
+        .expect("Offline L1 receive_bundle_impl must succeed without L2");
+
+        let _ = std::fs::remove_dir_all(&base_dir);
+    }
+}
+
 /// Explicit recipient configuration, authenticated and persisted separately from
 /// checkout proof input. Source keys never come from a payment receipt.
 #[tauri::command]
@@ -1087,7 +1694,7 @@ pub async fn submit_l2_send_intent(
                 Ok(true) => true,
                 Ok(false) => false,
                 Err(err) => {
-                    log::warn!("Retained choice observation for {} detected conflict/mismatch: {}", local_instance_id, err);
+                    log::warn!("Retained choice observation detected conflict/mismatch: {}", err);
                     false
                 }
             }

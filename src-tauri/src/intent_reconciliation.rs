@@ -111,9 +111,8 @@ async fn reconcile_due_intent(
             if let Err(error) = service.complete_intent_reconciliation(
                 local_id, &proof, &views, now, None,
             ) {
-                log::debug!(
-                    "Live intent reconciliation failed for {}: {}",
-                    local_id,
+                log::warn!(
+                    "L2 intent reconciliation verification failed: {}",
                     error
                 );
             }

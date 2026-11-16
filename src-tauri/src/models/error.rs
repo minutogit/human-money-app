@@ -95,6 +95,10 @@ impl From<human_money_core::app_service::AppFacadeError> for FrontendError {
                         details.insert("available".into(), available);
                     }
                     "error.validation.insufficientFunds".to_string()
+                } else if msg.contains("Split change voucher is blocked by unresolved or conflicted parent intent") {
+                    "error.validation.splitChangePendingL2".to_string()
+                } else if msg.contains("Output has an unresolved durable L2 send intent") {
+                    "error.validation.intentPendingL2".to_string()
                 } else {
                     "error.validation.generic".to_string()
                 }
@@ -182,6 +186,14 @@ fn classify_error(msg: &str) -> (String, HashMap<String, String>) {
         return ("error.validation.insufficientFunds".into(), details);
     }
 
+    if msg.contains("Split change voucher is blocked by unresolved or conflicted parent intent") {
+        return ("error.validation.splitChangePendingL2".into(), details);
+    }
+
+    if msg.contains("Output has an unresolved durable L2 send intent") {
+        return ("error.validation.intentPendingL2".into(), details);
+    }
+
     // --- Bundle Processing ---
     if msg.starts_with("Transaction Rejected:") {
         return ("error.transfer.bundleTooOld".into(), details);
@@ -254,5 +266,30 @@ mod tests {
 
         let (code3, _) = classify_error("Security Lockdown: Wallet is locked due to a detected fork in the transaction history. Recovery required.");
         assert_eq!(code3, "error.security.walletLockedDueToFork");
+    }
+
+    #[test]
+    fn test_error_mapping_pending_l2_intents() {
+        let split_err = AppFacadeError::Validation(
+            human_money_core::error::ValidationError::SecurityViolation(
+                "Split change voucher is blocked by unresolved or conflicted parent intent".into(),
+            ),
+        );
+        let mapped_split = FrontendError::from(split_err);
+        assert_eq!(mapped_split.code, "error.validation.splitChangePendingL2");
+
+        let intent_err = AppFacadeError::Validation(
+            human_money_core::error::ValidationError::SecurityViolation(
+                "Output has an unresolved durable L2 send intent".into(),
+            ),
+        );
+        let mapped_intent = FrontendError::from(intent_err);
+        assert_eq!(mapped_intent.code, "error.validation.intentPendingL2");
+
+        let (classified_split, _) = classify_error("Validation Error: Security violation: Split change voucher is blocked by unresolved or conflicted parent intent");
+        assert_eq!(classified_split, "error.validation.splitChangePendingL2");
+
+        let (classified_intent, _) = classify_error("Validation Error: Security violation: Output has an unresolved durable L2 send intent");
+        assert_eq!(classified_intent, "error.validation.intentPendingL2");
     }
 }

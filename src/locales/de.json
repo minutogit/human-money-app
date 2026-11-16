@@ -832,6 +832,8 @@
   "error.validation.generic": "Validierung fehlgeschlagen.",
   "error.validation.initAmountMismatch": "Der anfängliche Transaktionsbetrag muss dem Nennwert entsprechen. Erwartet: {{expected}}, Gefunden: {{found}}.",
   "error.validation.insufficientFunds": "Nicht genügend Guthaben. Benötigt: {{needed}}, Verfügbar: {{available}}.",
+  "error.validation.intentPendingL2": "Für diesen Gutschein läuft noch eine Layer-2-Bestätigung. Bitte warte kurz und versuche es erneut.",
+  "error.validation.splitChangePendingL2": "Der Restbetrag aus deiner vorherigen Teilzahlung wartet noch auf die Layer-2-Bestätigung (ca. 30 Sek.).",
   "error.validation.voucherNotActive": "Der Gutschein ist nicht aktiv.",
   "error.wallet.locked": "Profil ist gesperrt. Bitte melde dich zuerst an.",
   "gender.female": "Weiblich",

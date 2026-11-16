@@ -278,7 +278,7 @@ pub(crate) fn queue_receipt(
     let recipient_pk = match get_pubkey_from_user_id(sender_did) {
         Ok(pk) => pk,
         Err(e) => {
-            warn!("Invalid recipient DID for delivery receipt {}: {}", sender_did, e);
+            warn!("Invalid recipient DID for delivery receipt: {}", e);
             return;
         }
     };
@@ -654,7 +654,14 @@ pub async fn deposit_transfer_to_post_impl(
         fresh_msg_id
     };
 
+    // Persist the sealed outbox entry BEFORE network flush so slow or unreachable
+    // sync servers never lose an outgoing transfer box if the app closes.
+    save_post_state(state, &post_state, password.as_deref())?;
+
     let (deposited_to, errors) = flush_post_slots_impl(state, &mut post_state, password.as_deref()).await;
+    if !errors.is_empty() {
+        warn!("Post deposit degraded: deposited={}, failed={}", deposited_to, errors.len());
+    }
     save_post_state(state, &post_state, password.as_deref())?;
 
     Ok(FrontendPostDepositResult {
@@ -721,7 +728,14 @@ pub async fn send_signing_request_via_post_impl(
         created_at: now_secs,
     });
 
+    // Persist the sealed outbox entry BEFORE network flush so slow or unreachable
+    // sync servers never lose an outgoing transfer box if the app closes.
+    save_post_state(state, &post_state, password.as_deref())?;
+
     let (deposited_to, errors) = flush_post_slots_impl(state, &mut post_state, password.as_deref()).await;
+    if !errors.is_empty() {
+        warn!("Post deposit degraded: deposited={}, failed={}", deposited_to, errors.len());
+    }
     save_post_state(state, &post_state, password.as_deref())?;
 
     Ok(FrontendPostDepositResult {
@@ -941,7 +955,14 @@ pub async fn send_wot_handshake_via_post_impl(
         created_at: now_secs,
     });
 
+    // Persist the sealed outbox entry BEFORE network flush so slow or unreachable
+    // sync servers never lose an outgoing transfer box if the app closes.
+    save_post_state(state, &post_state, password.as_deref())?;
+
     let (deposited_to, errors) = flush_post_slots_impl(state, &mut post_state, password.as_deref()).await;
+    if !errors.is_empty() {
+        warn!("Post deposit degraded: deposited={}, failed={}", deposited_to, errors.len());
+    }
     save_post_state(state, &post_state, password.as_deref())?;
 
     Ok(FrontendPostDepositResult {
@@ -2620,6 +2641,14 @@ pub async fn sync_post_channels_impl(
         }
     }
 
+    if !errors.is_empty() {
+        warn!(
+            "Post sync degraded: error_count={}, imported_payments={}",
+            errors.len(),
+            imported_payments
+        );
+    }
+
     Ok(FrontendPostSyncResult {
         uploaded_to,
         polled_syncs,
@@ -3835,6 +3864,188 @@ mod tests {
             expected_laden_slot
         );
         let _ = privat_did;
+        let _ = std::fs::remove_dir_all(&base_dir);
+    }
+
+    #[tokio::test]
+    async fn test_deposit_transfer_to_post_persists_outbox_when_sync_server_unreachable_and_sync_survives_outage() {
+        let base_dir = temp_test_dir("post_sync_outage_test");
+        let password = "TestPassword123!";
+
+        let alice_state = create_test_state(setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password));
+        let bob_state = create_test_state(setup_test_app(&base_dir.join("bob"), "Bob", BOB_PHRASE, password));
+
+        let alice_did = alice_state.service.lock().unwrap().with_wallet(|w| w.get_user_id().to_string()).unwrap();
+        let bob_did = bob_state.service.lock().unwrap().with_wallet(|w| w.get_user_id().to_string()).unwrap();
+
+        // Bind and drop a loopback listener to obtain a guaranteed unreachable port
+        let closed_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let closed_port = closed_listener.local_addr().unwrap().port();
+        drop(closed_listener);
+        let dead_write_url = format!("http://127.0.0.1:{}/sync.php", closed_port);
+        let dead_read_url = format!("http://127.0.0.1:{}/data", closed_port);
+
+        // Configure Bob's dead sync target in Alice's address book
+        {
+            let mut s_alice = alice_state.service.lock().unwrap();
+            let contact_bob = FrontendContact {
+                did: bob_did.clone(),
+                profile: FrontendUserProfile {
+                    first_name: Some("Bob".to_string()),
+                    ..Default::default()
+                },
+                tags: vec![],
+                added_at: Utc::now().to_rfc3339(),
+                notes: None,
+                trust_level: Some(2),
+                desired_hops: Some(3),
+                has_peer_list: false,
+                peer_list_updated_at: None,
+                syncs: vec![FrontendSyncDescriptor {
+                    write_url: dead_write_url.clone(),
+                    read_url: dead_read_url.clone(),
+                    slot_id: Some(humoco_market::format_slot_id("1111111111111111111111111111111111111111111111111111111111111111", Some("pc")).unwrap()),
+                    drop_pub: DROP_PUB_B.to_string(),
+                    status: "active".to_string(),
+                    ..Default::default()
+                }],
+            };
+            alice_state.save_contact(&mut s_alice, contact_bob, Some(password)).unwrap();
+        }
+
+        // Configure Bob's own public sync to the dead port as well
+        {
+            let mut s_bob = bob_state.service.lock().unwrap();
+            let mut bob_settings = bob_state
+                .load_settings(&mut s_bob, Some(password))
+                .unwrap_or_default();
+            bob_settings.public_syncs.push(crate::settings::StoredPublicSync {
+                write_url: dead_write_url,
+                read_url: dead_read_url,
+                drop_pub: DROP_PUB_B.to_string(),
+                access_pubkey: "1111111111111111111111111111111111111111111111111111111111111111".to_string(),
+                enabled: true,
+                authorized_channels: vec!["pc".to_string()],
+                ..Default::default()
+            });
+            bob_state.save_settings(&mut s_bob, bob_settings, Some(password)).unwrap();
+        }
+
+        // Alice creates a voucher and transfer bundle
+        let standard_toml = test_utils::generate_signed_standard_toml("voucher_standards/freetaler_v1/standard.toml");
+        let mut std_map = HashMap::new();
+        std_map.insert("a1b2c3d4-e5f6-4789-8012-3456789abcde".to_string(), standard_toml.clone());
+
+        {
+            let mut s_alice = alice_state.service.lock().unwrap();
+            alice_state
+                .save_settings(&mut s_alice, crate::settings::AppSettings::default(), Some(password))
+                .unwrap();
+            s_alice.create_new_voucher(
+                &standard_toml,
+                human_money_core::NewVoucherData {
+                    creator_profile: human_money_core::models::profile::PublicProfile {
+                        id: Some(alice_did.clone()),
+                        ..Default::default()
+                    },
+                    nominal_value: human_money_core::models::voucher::ValueDefinition {
+                        amount: "100".to_string(),
+                        unit: "Taler".to_string(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                Some(password),
+            ).unwrap();
+        }
+
+        let local_id = {
+            let s = alice_state.service.lock().unwrap();
+            s.with_wallet_and_identity(|w, id| w.list_vouchers(Some(id), None, None, None))
+                .unwrap()[0]
+                .local_instance_id
+                .clone()
+        };
+
+        let bundle_res = crate::commands::transfers::create_transfer_bundle_impl(
+            None,
+            bob_did.clone(),
+            vec![crate::models::FrontendSourceTransfer {
+                local_instance_id: local_id,
+                amount_to_send: "25".to_string(),
+            }],
+            Some("Sync outage test".to_string()),
+            Some("Alice".to_string()),
+            std_map.clone(),
+            Some(false),
+            Some(false),
+            Some(password.to_string()),
+            &alice_state,
+        )
+        .await
+        .expect("L1 transfer creation must succeed even when Sync and L2 are down");
+
+        {
+            let mut s_alice = alice_state.service.lock().unwrap();
+            let record = crate::models::TransactionRecord {
+                id: uuid::Uuid::new_v4().to_string(),
+                direction: "sent".to_string(),
+                recipient_id: bob_did,
+                sender_id: alice_did,
+                timestamp: Utc::now().to_rfc3339(),
+                summable_amounts: HashMap::from([("Taler".to_string(), "25".to_string())]),
+                countable_items: HashMap::new(),
+                involved_vouchers: bundle_res.involved_sources_details.iter().map(|d| d.local_instance_id.clone()).collect(),
+                involved_sources_details: None,
+                bundle_data: bundle_res.bundle_data.clone(),
+                bundle_id: bundle_res.bundle_id.clone(),
+                notes: None,
+                sender_profile_name: Some("Alice".to_string()),
+            };
+            alice_state.append_to_history(&mut s_alice, record, Some(password)).unwrap();
+        }
+
+        // Deposit against dead sync server returns degraded result, and outbox entry is persisted on disk
+        let dep = deposit_transfer_to_post_impl(
+            bundle_res.bundle_id.clone(),
+            Some(password.to_string()),
+            &alice_state,
+        )
+        .await
+        .expect("deposit_transfer_to_post_impl must degrade gracefully without Err");
+        assert_eq!(dep.deposited_to, 0);
+        assert!(!dep.errors.is_empty());
+
+        let persisted_post_state = load_post_state(&alice_state, Some(password)).unwrap();
+        assert_eq!(persisted_post_state.outbox_entries.len(), 1);
+        assert_eq!(
+            persisted_post_state.outbox_entries[0].bundle_id.as_deref(),
+            Some(bundle_res.bundle_id.as_str())
+        );
+
+        // Bob polling dead sync server returns cleanly with error count, and manual offline receive succeeds
+        let bob_sync = sync_post_channels_impl(
+            None,
+            None,
+            Some(&std_map),
+            Some(password.to_string()),
+            &bob_state,
+        )
+        .await
+        .expect("sync_post_channels_impl must not crash on dead sync server");
+        assert_eq!(bob_sync.imported_payments, 0);
+        assert!(!bob_sync.errors.is_empty());
+
+        crate::commands::transfers::receive_bundle_impl(
+            None,
+            bundle_res.bundle_data,
+            std_map,
+            Some(password.to_string()),
+            false,
+            &bob_state,
+        )
+        .expect("Manual offline receive_bundle_impl must succeed while sync is down");
+
         let _ = std::fs::remove_dir_all(&base_dir);
     }
 }

@@ -626,7 +626,7 @@ impl AppState {
             }
             if let Ok(timestamp) = record.timestamp.parse::<chrono::DateTime<Utc>>() {
                 if Utc::now().signed_duration_since(timestamp) > retention_duration {
-                    info!("Clearing bundle data for old transaction record: {}", record.id);
+                    log::debug!("Clearing bundle data for expired transaction record");
                     record.bundle_data.clear();
                     changed = true;
                 }
@@ -680,7 +680,7 @@ impl AppState {
             }
             Err(e) => {
                 if matches!(&e, AppFacadeError::Storage(human_money_core::StorageError::NotFound)) {
-                    info!("No WoT register found, creating new one for {}", own_can_did);
+                    info!("No WoT register found, creating new one");
                     humoco_wot::TrustRegister::new(&own_can_did, humoco_wot::WotPolicy::default())
                         .map_err(|e| AppFacadeError::Generic(format!("Failed to initialize TrustRegister: {}", e)))?
                 } else if matches!(&e, AppFacadeError::WalletLocked | AppFacadeError::SessionExpired(_) | AppFacadeError::SessionNotActive(_)) {
@@ -975,7 +975,7 @@ impl AppState {
 
         match outcome {
             Ok(humoco_market::AcceptOutcome::Accepted { did, replaced }) => {
-                log::info!("Accepted piggybacked contact card for did: {}, replaced: {}", did, replaced);
+                log::info!("Accepted piggybacked contact card (replaced={})", replaced);
                 if let Ok(bytes) = serde_json::to_vec(&store) {
                     if let Err(e) = service.save_encrypted_data(MARKET_CARD_STORE_KEY, &bytes, password) {
                         log::warn!("Failed to save CardStore after accepting piggybacked card: {}", e);

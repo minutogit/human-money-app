@@ -156,8 +156,13 @@ pub async fn save_app_settings(
     info!("Saving app settings to disk...");
     {
         let mut service = state.service.lock().unwrap();
-        if let Some(policy)=crate::checkout::configured_policy(&settings)? {
-            service.configure_regional_mesh_authority(policy,password.as_deref()).map_err(FrontendError::from)?;
+        if let Some(policy) = crate::checkout::configured_policy(&settings)? {
+            service.configure_regional_mesh_authority(policy, password.as_deref()).map_err(FrontendError::from)?;
+        } else if service
+            .with_wallet(|w| w.profile.l2_regional_mesh_policy.is_some())
+            .unwrap_or(false)
+        {
+            let _ = service.clear_regional_mesh_authority(password.as_deref());
         }
         *state.regional_views.lock().map_err(|_|FrontendError::from("Regional cache unavailable".to_string()))?=None;
         state.save_settings(&mut service, settings, password.as_deref()).map_err(FrontendError::from)?;

@@ -776,6 +776,8 @@
   "error.validation.generic": "Validazione fallita.",
   "error.validation.initAmountMismatch": "L'importo della transazione iniziale deve corrispondere al valore nominale. Previsto: {{expected}}, Trovato: {{found}}.",
   "error.validation.insufficientFunds": "Fondi insufficienti. Necessari: {{needed}}, Disponibili: {{available}}.",
+  "error.validation.intentPendingL2": "Questo buono è ancora in attesa di conferma Layer 2. Attendi un attimo e riprova.",
+  "error.validation.splitChangePendingL2": "Il saldo residuo del pagamento parziale precedente è ancora in attesa di conferma Layer 2 (circa 30 s).",
   "error.validation.voucherNotActive": "Il voucher non è attivo.",
   "error.wallet.locked": "Il wallet è bloccato. Effettua prima l'accesso.",
   "gender.female": "Femmina",

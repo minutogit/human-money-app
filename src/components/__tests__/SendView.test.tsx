@@ -5,6 +5,10 @@ import { invoke } from '@tauri-apps/api/core';
 import { VoucherSummary, VoucherStandardInfo, Contact, AppSettings } from '../../types';
 import { UI_MODE_STORAGE_KEY } from '../../context/UiModeContext';
 
+const { mockNavigate } = vi.hoisted(() => ({
+  mockNavigate: vi.fn(),
+}));
+
 // Mock the Tauri API
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(),
@@ -12,7 +16,9 @@ vi.mock('@tauri-apps/api/core', () => ({
 
 vi.mock('../../utils/log', () => ({
   logger: {
+    debug: vi.fn(),
     info: vi.fn(),
+    warn: vi.fn(),
     error: vi.fn(),
   },
 }));
@@ -27,7 +33,7 @@ vi.mock('../../context/SessionContext', () => ({
 
 vi.mock('../../context/NavigationContext', () => ({
   useNavigation: () => ({
-    navigate: vi.fn(),
+    navigate: mockNavigate,
     goBack: vi.fn(),
     appState: { view: 'send_vouchers' },
   }),
@@ -619,6 +625,101 @@ amount_decimal_places = 4`,
     expect(recipientInput).toHaveValue('did:key:z999');
     const targetAmountInput = document.getElementById('target-amount') as HTMLInputElement;
     expect(targetAmountInput.value).toBe('');
+  });
+
+  it('still navigates to transfer_success with translated depositError when sync server deposit fails', async () => {
+    const baseImpl = (invoke as Mock).getMockImplementation();
+    (invoke as Mock).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === 'create_transfer_bundle') {
+        return Promise.resolve({
+          bundleData: [1, 2, 3],
+          bundleId: 'bundle-123',
+          involvedSourcesDetails: [],
+          l2Dispatch: [],
+        });
+      }
+      if (cmd === 'save_transaction_record') {
+        return Promise.resolve(undefined);
+      }
+      if (cmd === 'deposit_transfer_to_post') {
+        return Promise.reject({
+          code: 'error.network.l2Offline',
+          message: 'Sync server unreachable',
+          details: {},
+        });
+      }
+      return baseImpl ? baseImpl(cmd, args) : Promise.resolve(undefined);
+    });
+
+    render(<SendView />);
+
+    await waitFor(() => expect(screen.getByRole('textbox', { name: /User ID/i })).toBeInTheDocument());
+    fireEvent.change(screen.getByRole('textbox', { name: /User ID/i }), {
+      target: { value: 'did:key:z456' },
+    });
+
+    const amountInput = document.getElementById('target-amount') as HTMLInputElement;
+    fireEvent.change(amountInput, { target: { value: '25' } });
+    await screen.findByText(/1 Vouchers Selected/i, undefined, { timeout: 2000 });
+
+    fireEvent.click(screen.getByRole('button', { name: /Send Vouchers/i }));
+    const confirmBtn = await screen.findByRole('button', { name: /Execute/i });
+    fireEvent.click(confirmBtn);
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('save_transaction_record', expect.any(Object));
+    });
+    expect(screen.queryByText(/Transfer failed/i)).not.toBeInTheDocument();
+
+    await waitFor(
+      () => {
+        expect(mockNavigate).toHaveBeenCalledWith(
+          expect.objectContaining({
+            view: 'transfer_success',
+            bundleId: 'bundle-123',
+            depositedTo: 0,
+            depositError: expect.any(String),
+          })
+        );
+      },
+      { timeout: 2500 }
+    );
+    const navArg = mockNavigate.mock.calls[0][0];
+    expect(navArg.depositError).not.toBe('[object Object]');
+  });
+
+  it('displays dedicated splitChangePendingL2 message instead of generic validation failure', async () => {
+    const baseImpl = (invoke as Mock).getMockImplementation();
+    (invoke as Mock).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === 'create_transfer_bundle') {
+        return Promise.reject({
+          code: 'error.validation.splitChangePendingL2',
+          message: 'Validation Error: Security violation: Split change voucher is blocked by unresolved or conflicted parent intent',
+          details: {},
+        });
+      }
+      return baseImpl ? baseImpl(cmd, args) : Promise.resolve(undefined);
+    });
+
+    render(<SendView />);
+
+    await waitFor(() => expect(screen.getByRole('textbox', { name: /User ID/i })).toBeInTheDocument());
+    fireEvent.change(screen.getByRole('textbox', { name: /User ID/i }), {
+      target: { value: 'did:key:z456' },
+    });
+
+    const amountInput = document.getElementById('target-amount') as HTMLInputElement;
+    fireEvent.change(amountInput, { target: { value: '25' } });
+    await screen.findByText(/1 Vouchers Selected/i, undefined, { timeout: 2000 });
+
+    fireEvent.click(screen.getByRole('button', { name: /Send Vouchers/i }));
+    const confirmBtn = await screen.findByRole('button', { name: /Execute/i });
+    fireEvent.click(confirmBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(/awaiting Layer 2 confirmation/i)).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/Validation failed\./i)).not.toBeInTheDocument();
   });
 });
 

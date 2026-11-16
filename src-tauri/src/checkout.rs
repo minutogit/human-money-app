@@ -257,7 +257,7 @@ pub(crate) async fn checkout_bundle(state:&AppState,purchase_id:&str,bundle:&[u8
     {
         let mut service = state.service.lock().map_err(|_| fail("Wallet service unavailable"))?;
         if let Some(completion) = service.replay_checkout_purchase(purchase_id, bundle).map_err(FrontendError::from)? {
-            log::info!("Purchase {} already completed; returning idempotent replay result without network request", purchase_id);
+            log::info!("Purchase already completed; returning idempotent replay result without network request");
             let receive_payload = build_receive_payload_and_record(
                 state,
                 &mut service,
@@ -281,10 +281,14 @@ pub(crate) async fn checkout_bundle(state:&AppState,purchase_id:&str,bundle:&[u8
     let settings = state.get_cached_settings().map_err(FrontendError::from)?;
     let candidates = crate::gateway_resolver::cached_candidates(&settings);
     if settings.regional_mesh_sources.is_empty() || candidates.is_empty() {
+        log::warn!("PoS checkout aborted: reason=no_servers");
         return Err(FrontendError::from("pos.noServersConfigured".to_string()));
     }
 
-    let (owner,views)=ensure_cached_views(state).await?;
+    let (owner, views) = ensure_cached_views(state).await.map_err(|e| {
+        log::warn!("PoS checkout aborted: reason=views_unavailable");
+        e
+    })?;
     let checkout_req = {
         let mut service = state.service.lock().map_err(|_| fail("Wallet service unavailable"))?;
         service.prepare_checkout_request(purchase_id, bundle, &views, now()?, password).map_err(FrontendError::from)?
@@ -292,7 +296,10 @@ pub(crate) async fn checkout_bundle(state:&AppState,purchase_id:&str,bundle:&[u8
 
     let checkout_resp = match crate::gateway_resolver::fetch_checkout_proof(&settings, &candidates, &checkout_req).await {
         Ok(Some(resp)) => resp,
-        _ => return Err(FrontendError::from("pos.quorumUnavailable".to_string())),
+        _ => {
+            log::warn!("PoS checkout aborted: reason=quorum_unavailable");
+            return Err(FrontendError::from("pos.quorumUnavailable".to_string()));
+        }
     };
 
     let mut service = state.service.lock().map_err(|_| fail("Wallet service unavailable"))?;
@@ -303,6 +310,7 @@ pub(crate) async fn checkout_bundle(state:&AppState,purchase_id:&str,bundle:&[u8
     if let Some(ref conflict_entry) = checkout_resp.conflicting_lock {
         let conflict_recorded = service.record_checkout_upstream_conflict(bundle, conflict_entry, password).unwrap_or(false);
         if checkout_resp.proof.occupancy == human_money_core::humoco_proto::live::LiveSlotOccupancy::Unoccupied && conflict_recorded {
+            log::warn!("PoS checkout aborted: reason=upstream_conflict");
             return Ok(PurchaseCompletion {
                 purchase_id: purchase_id.to_string(),
                 newly_committed: false,
@@ -319,6 +327,7 @@ pub(crate) async fn checkout_bundle(state:&AppState,purchase_id:&str,bundle:&[u8
     }
 
     if checkout_resp.proof.occupancy == human_money_core::humoco_proto::live::LiveSlotOccupancy::Unoccupied {
+        log::warn!("PoS checkout aborted: reason=unoccupied_slot");
         return Err(FrontendError::from("pos.quorumUnavailable".to_string()));
     }
 
