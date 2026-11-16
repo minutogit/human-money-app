@@ -78,10 +78,6 @@ export const marketService = {
         return await invoke<FrontendForwardCardExport>("export_forward_card", { did, password: password || undefined });
     },
 
-    recommendMarketCard: async (did: string, password?: string): Promise<FrontendForwardCardExport> => {
-        return await invoke<FrontendForwardCardExport>("recommend_market_card", { did, password: password || undefined });
-    },
-
     importContactCard: async (payload: string, password?: string): Promise<FrontendImportCardResult> => {
         return await invoke<FrontendImportCardResult>("import_contact_card", { payload, password: password || undefined });
     },

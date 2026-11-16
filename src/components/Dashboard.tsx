@@ -50,7 +50,7 @@ export function Dashboard() {
     const tRef = useRef(t);
     tRef.current = t;
     const { navigate } = useNavigation();
-    const { profileName, integrityReport, protectAction } = useSession();
+    const { profileName, integrityReport } = useSession();
     const { resolveIdentity } = useContactResolver();
 
     const [userId, setUserId] = useState("");
@@ -229,9 +229,7 @@ export function Dashboard() {
     const handleOpenSignRequest = async (req: FrontendPendingSignRequest) => {
         setIsOpeningSignRequest(req.msgId);
         try {
-            const voucherData = await protectAction(async (pwd) => {
-                return await voucherService.openSigningRequest(req.containerBytes, pwd || undefined);
-            });
+            const voucherData = await voucherService.openSigningRequest(req.containerBytes);
             if (voucherData) {
                 navigate({
                     view: 'sign_request',

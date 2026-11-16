@@ -40,7 +40,7 @@ import {
 } from "lucide-react";
 
 interface LoginProps {
-    onLoginSuccess: (profileName: string) => void;
+    onLoginSuccess: (profileName: string, folderName?: string) => void;
     onSwitchToCreate: () => void;
     onSwitchToRestoreBackup: () => void;
     onSwitchToReset: () => void;
@@ -157,7 +157,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRestoreBacku
                 void settingsService.refreshGatewayCache(password).catch(() => undefined);
                 void settingsService.refreshRegionalMeshViews().catch(() => undefined);
                 const loggedInProfile = profiles.find(p => p.folderName === selectedProfile);
-                if (loggedInProfile) onLoginSuccess(loggedInProfile.profileName);
+                if (loggedInProfile) onLoginSuccess(loggedInProfile.profileName, loggedInProfile.folderName);
             } catch (e) {
                 const msg = stringifyError(e);
                 const code = isBackendError(e) ? e.code : '';

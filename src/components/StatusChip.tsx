@@ -303,7 +303,10 @@ export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
     };
 
     // Row 2: Sync-Dienst
-    const syncIsWarning = syncOverview.connectedCount === 0 || syncOverview.ownSyncSoftWarning;
+    const syncIsWarning =
+        syncOverview.connectedCount === 0 ||
+        syncOverview.ownSyncSoftWarning ||
+        (syncOverview.failingCount ?? 0) > 0;
     const syncLevel: StatusLevel = syncIsWarning ? "warning" : "healthy";
 
     const getSyncSummary = (): string => {
@@ -312,6 +315,9 @@ export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
                 return t("statusChip.syncPendingAuth", "Sync wartet auf Freigabe.");
             }
             return t("statusChip.syncNotConfigured", "Kein Sync-Dienst verbunden.");
+        }
+        if ((syncOverview.failingCount ?? 0) > 0) {
+            return t("statusChip.syncFailing", "Mindestens ein Sync-Dienst ist derzeit nicht erreichbar.");
         }
         if (syncOverview.ownSyncSoftWarning) {
             return t("statusChip.syncWarning", "Sync-Dienst benötigt Aufmerksamkeit.");

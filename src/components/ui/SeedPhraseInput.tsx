@@ -11,6 +11,7 @@ import { Input } from './Input';
 import { HelpIcon } from './HelpIcon';
 import { PrefixInfoModal } from './PrefixInfoModal';
 import { AdvancedDisclosure } from './AdvancedDisclosure';
+import { QrScannerModal } from './QrScannerModal';
 import {
     KeyRound,
     CheckCircle2,
@@ -18,6 +19,7 @@ import {
     HelpCircle,
     Languages,
     SlidersHorizontal,
+    QrCode,
 } from 'lucide-react';
 
 export interface SeedPhraseValue {
@@ -97,6 +99,7 @@ export const SeedPhraseInput: React.FC<SeedPhraseInputProps> = ({
     const [wordlist, setWordlist] = useState<string[]>([]);
     const [focusedIndex, setFocusedIndex] = useState<number | null>(null);
     const [showPrefixInfo, setShowPrefixInfo] = useState<boolean>(false);
+    const [isQrScannerOpen, setIsQrScannerOpen] = useState<boolean>(false);
 
     const onChangeRef = useRef(onChange);
     onChangeRef.current = onChange;
@@ -155,7 +158,7 @@ export const SeedPhraseInput: React.FC<SeedPhraseInputProps> = ({
         if (
             allowKitUri &&
             initialPayload &&
-            initialPayload.includes('humoco://kit') &&
+            initialPayload.toLowerCase().includes('humoco://kit') &&
             lastProcessedPayloadRef.current !== initialPayload
         ) {
             lastProcessedPayloadRef.current = initialPayload;
@@ -370,10 +373,22 @@ export const SeedPhraseInput: React.FC<SeedPhraseInputProps> = ({
                         <HelpIcon topic="mnemonic" size={13} />
                     </div>
 
-                    <div className="flex bg-slate-100 p-0.5 rounded-lg text-[11px] font-bold">
-                        <button
-                            type="button"
-                            data-testid="seed-word-count-12"
+                    <div className="flex items-center gap-2 flex-wrap">
+                        {allowKitUri && !detectedKit && (
+                            <button
+                                type="button"
+                                data-testid="seed-scan-kit-qr-btn"
+                                onClick={() => setIsQrScannerOpen(true)}
+                                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-theme-primary/10 text-theme-primary hover:bg-theme-primary/20 text-[11px] font-bold transition-colors cursor-pointer"
+                            >
+                                <QrCode size={13} />
+                                <span>{t('common.scanQrCode')}</span>
+                            </button>
+                        )}
+                        <div className="flex bg-slate-100 p-0.5 rounded-lg text-[11px] font-bold">
+                            <button
+                                type="button"
+                                data-testid="seed-word-count-12"
                             onClick={() => handleWordCountChange(12)}
                             className={`px-2.5 py-1 rounded-md transition-all cursor-pointer ${
                                 wordCount === 12
@@ -395,6 +410,7 @@ export const SeedPhraseInput: React.FC<SeedPhraseInputProps> = ({
                         >
                             {t('backup.words24Label')}
                         </button>
+                        </div>
                     </div>
                 </div>
 
@@ -605,6 +621,16 @@ export const SeedPhraseInput: React.FC<SeedPhraseInputProps> = ({
                 <PrefixInfoModal
                     isOpen={showPrefixInfo}
                     onClose={() => setShowPrefixInfo(false)}
+                />
+            )}
+
+            {allowKitUri && (
+                <QrScannerModal
+                    isOpen={isQrScannerOpen}
+                    onClose={() => setIsQrScannerOpen(false)}
+                    onScan={(decoded) => {
+                        void applyKitUri(decoded);
+                    }}
                 />
             )}
         </div>

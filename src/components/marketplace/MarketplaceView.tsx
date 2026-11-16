@@ -323,6 +323,21 @@ export function MarketplaceView({
         }
     };
 
+    const handleDismissInquiry = async (
+        itemKind: 'seller_inquiry' | 'buyer_inquiry',
+        inquiryId: string
+    ) => {
+        try {
+            await protectAction(async (pwd) => {
+                await postService.dismissPendingPostItem(itemKind, inquiryId, pwd || undefined);
+            });
+            await refreshInbox();
+        } catch (err) {
+            logger.error('Failed to dismiss inquiry: ' + stringifyError(err));
+            setError(translateError(err, t));
+        }
+    };
+
     const handlePayInquiry = (counterpartyDid: string, paymentUri?: string | null) => {
         navigate({
             view: 'send_vouchers',
@@ -336,11 +351,31 @@ export function MarketplaceView({
         setIsSyncing(true);
         setError(null);
         try {
-            await Promise.allSettled([
+            const results = await Promise.allSettled([
                 marketService.syncMarketChannels(),
                 postService.syncPostChannels(),
             ]);
+            const syncErrors: string[] = [];
+            for (const res of results) {
+                if (res.status === 'rejected') {
+                    syncErrors.push(translateError(res.reason, t));
+                } else if (res.value) {
+                    if (res.value.retryAfterSecs && res.value.retryAfterSecs > 0) {
+                        syncErrors.push(
+                            t('marketplace.syncRateLimited', {
+                                seconds: res.value.retryAfterSecs,
+                            })
+                        );
+                    }
+                    if (Array.isArray(res.value.errors) && res.value.errors.length > 0) {
+                        syncErrors.push(...res.value.errors);
+                    }
+                }
+            }
             await refreshData(false);
+            if (syncErrors.length > 0) {
+                setError(syncErrors.join(' · '));
+            }
         } catch (err) {
             logger.error('Failed to sync marketplace manually: ' + stringifyError(err));
             setError(translateError(err, t));
@@ -645,6 +680,7 @@ export function MarketplaceView({
                             onDeleteAd={handleDeleteAd}
                             onReplyInquiry={handleReplyInquiry}
                             onPayInquiry={handlePayInquiry}
+                            onDismissInquiry={handleDismissInquiry}
                         />
                     )}
                 </div>

@@ -122,14 +122,15 @@ export function useVoucherSelection(vouchers: VoucherSummary[]) {
     precision: number = 4,
     isTest: boolean | null = null
   ) => {
-    const target = parseFloat(targetAmountStr);
+    const normalizedTarget = targetAmountStr.trim().replace(',', '.');
+    const target = parseFloat(normalizedTarget);
     if (!target || target <= 0 || !recipientId || recipientId.trim().length < 10) {
       return null;
     }
     const requestId = ++latestRequestId.current;
     try {
       const plan = await transferService.prepareTransferPlan({
-        targetAmount: targetAmountStr,
+        targetAmount: normalizedTarget,
         standardUuidFilter: standardUuid,
         recipientId: recipientId.trim()
       });

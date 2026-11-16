@@ -131,7 +131,7 @@ describe('ForkLockOverlay Component', () => {
         localInstanceId: 'inst_123',
       });
       expect(mockClearLocks).toHaveBeenCalled();
-      expect(mockNotifyLogin).toHaveBeenCalledWith('Alice');
+      expect(mockNotifyLogin).toHaveBeenCalledWith('Alice', 'alice_folder');
     });
   });
 

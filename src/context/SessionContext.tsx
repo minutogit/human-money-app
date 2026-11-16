@@ -28,8 +28,10 @@ export interface SessionContextType {
     isSessionActive: boolean;
     isAuthenticated?: boolean;
     profileName: string;
+    folderName?: string;
     setProfileName: (name: string) => void;
-    notifyLogin: (name?: string) => void;
+    setFolderName?: (folder: string) => void;
+    notifyLogin: (name?: string, folder?: string) => void;
     notifyLogout: () => void;
     isForkLocked: boolean;
     lockdownKind: SecurityLockdownKind;
@@ -59,6 +61,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     const [isSessionActive, setIsSessionActive] = useState(false);
     const [isAuthenticated, setIsAuthenticated] = useState(false);
     const [profileName, setProfileName] = useState<string>("");
+    const [folderName, setFolderName] = useState<string>("");
     const [isForkLocked, setIsForkLocked] = useState(false);
     const [lockdownKind, setLockdownKind] = useState<SecurityLockdownKind>(null);
     const [lockdownDetails, setLockdownDetails] = useState<SecurityLockdownDetails | null>(null);
@@ -110,9 +113,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     }, []);
 
     // Wird von App.tsx nach Login aufgerufen
-    const notifyLogin = useCallback((name?: string) => {
+    const notifyLogin = useCallback((name?: string, folder?: string) => {
         setIsAuthenticated(true);
         if (name) setProfileName(name);
+        if (folder) setFolderName(folder);
         activateSession();
         startSealSyncLoop();
         startAutoBackupLoop();
@@ -140,6 +144,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         setIsSessionActive(false);
         isSessionActiveRef.current = false;
         setProfileName("");
+        setFolderName("");
         stopSealSyncLoop();
         stopAutoBackupLoop();
         stopPostSyncLoop();
@@ -316,7 +321,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     }, []);
 
     return (
-        <SessionContext.Provider value={{ protectAction, isSessionActive, isAuthenticated, profileName, setProfileName, notifyLogin, notifyLogout, isForkLocked, lockdownKind, lockdownDetails, triggerSecurityLockdown, isRecoveryRequired, integrityReport, checkIntegrity, clearLocks, lockSession }}>
+        <SessionContext.Provider value={{ protectAction, isSessionActive, isAuthenticated, profileName, folderName, setProfileName, setFolderName, notifyLogin, notifyLogout, isForkLocked, lockdownKind, lockdownDetails, triggerSecurityLockdown, isRecoveryRequired, integrityReport, checkIntegrity, clearLocks, lockSession }}>
             {children}
             <AuthModal
                 isOpen={isModalOpen}

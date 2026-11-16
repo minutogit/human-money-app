@@ -149,6 +149,7 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote, in
 
     const navigationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const appliedInitialUriRef = useRef<string | null>(null);
+    const preserveInitialVoucherRef = useRef<boolean>(Boolean(initialVoucherId));
 
     useEffect(() => {
         if (initialRecipientId) {
@@ -275,17 +276,22 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote, in
                 );
                 
                 if (!active) return;
+                const resolvedVouchers = activeVouchers.map((v: VoucherSummary) => {
+                    const stdDef = parsedDict[v.voucherStandardUuid];
+                    const allowPartial = stdDef?.immutable?.features?.allowPartialTransfers;
+                    return typeof allowPartial === 'boolean' ? { ...v, allowPartialTransfers: allowPartial } : v;
+                });
                 setStandardsDict(parsedDict);
                 setStandardIdToUuidMap(newIdMap);
                 setUuidToPrecisionMap(newPrecisionMap);
-                setAvailableVouchers(activeVouchers);
+                setAvailableVouchers(resolvedVouchers);
                 setVoucherStandards(standards);
                 setOwnUserId(userId);
                 setAppSettings(settings);
                 setContacts(fetchedContacts);
                 setActiveAssetClasses(activeClasses || []);
                 if (initialVoucherId) {
-                    const targetVoucher = activeVouchers.find((v: VoucherSummary) => v.localInstanceId === initialVoucherId);
+                    const targetVoucher = resolvedVouchers.find((v: VoucherSummary) => v.localInstanceId === initialVoucherId);
                     if (targetVoucher) {
                         const stdId = [...newIdMap.entries()].find(([, uuid]) => uuid === targetVoucher.voucherStandardUuid)?.[0] || targetVoucher.voucherStandardUuid;
                         dispatch({ type: 'SET_STANDARD', id: stdId, isTest: targetVoucher.isTestVoucher });
@@ -350,8 +356,9 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote, in
 
     // Gravitational auto-selection: bei gültigem Empfänger und Betrag optimale Auswahl automatisch vornehmen
     useEffect(() => {
+        if (preserveInitialVoucherRef.current) return;
         let active = true;
-        const amountStr = state.targetAmountStr.trim();
+        const amountStr = state.targetAmountStr.trim().replace(',', '.');
         const recipient = state.recipientId.trim();
         const amt = parseFloat(amountStr);
         if (!recipient || recipient.length < 10 || isNaN(amt) || amt <= 0) return;
@@ -378,6 +385,7 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote, in
     }, [state.targetAmountStr, state.recipientId, state.selectedStandardId, state.selectedIsTest, filteredVouchers, standardIdToUuidMap, uuidToPrecisionMap, autoSelectGravitational, selectAmount]);
 
     const handleTargetAmountChange = (valStr: string) => {
+        preserveInitialVoucherRef.current = false;
         dispatch({ type: 'SET_TARGET_AMOUNT', amount: valStr });
         let effectiveStandardId = state.selectedStandardId;
         let effectiveIsTest = state.selectedIsTest;
@@ -392,7 +400,7 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote, in
         // Auto-selection triggers via effect when recipient is entered;
         // fallback for missing/incomplete recipient: immediate local selection keeping Test/Real isolated
         if (state.recipientId.trim().length < 10) {
-            const val = parseFloat(valStr);
+            const val = parseFloat(valStr.replace(',', '.'));
             const effectiveStandardUuid = effectiveStandardId
                 ? (standardIdToUuidMap.get(effectiveStandardId) || effectiveStandardId)
                 : null;
@@ -501,7 +509,7 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote, in
             dispatch({ type: 'SET_FEEDBACK', msg: t('transfer.emptyClipboard') });
             return false;
         }
-        if (trimmed.includes('humoco://pay')) {
+        if (trimmed.toLowerCase().includes('humoco://pay')) {
             const ok = applyPaymentRequest(trimmed);
             if (!ok) {
                 dispatch({ type: 'SET_FEEDBACK', msg: t('transfer.invalidPaymentRequest') });
@@ -519,10 +527,12 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote, in
     };
 
     const handleVoucherToggle = (v: VoucherSummary) => {
+        preserveInitialVoucherRef.current = false;
         toggleVoucher(v.localInstanceId, v.currentAmount);
     };
 
     const handleAmountChange = (id: string, amt: string) => {
+        preserveInitialVoucherRef.current = false;
         setVoucherAmount(id, amt);
     };
 
@@ -790,7 +800,7 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote, in
                             recipientId={state.recipientId}
                             onRecipientChange={(e) => {
                                 const rawVal = e.target.value;
-                                if (rawVal.includes('humoco://pay')) {
+                                if (rawVal.toLowerCase().includes('humoco://pay')) {
                                     const ok = applyPaymentRequest(rawVal);
                                     if (!ok) {
                                         dispatch({ type: 'SET_FEEDBACK', msg: t('transfer.invalidPaymentRequest') });
@@ -887,6 +897,7 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote, in
                             selectedStandardId={state.selectedStandardId}
                             selectedIsTest={state.selectedIsTest}
                             onStandardSelect={(id, isTest) => {
+                                preserveInitialVoucherRef.current = false;
                                 if (isTest !== null && selectedMap.size > 0) {
                                     const hasOppositeRealm = Array.from(selectedMap.keys()).some(vId => {
                                         const found = availableVouchers.find(v => v.localInstanceId === vId);

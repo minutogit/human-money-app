@@ -1,8 +1,9 @@
 // src/components/marketplace/ImportCardModal.tsx
 import { useState, useRef, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Download, FileText, CheckCircle2, AlertCircle, Info, Upload, Check } from 'lucide-react';
+import { Download, FileText, CheckCircle2, AlertCircle, Info, Upload, Check, QrCode } from 'lucide-react';
 import { ModalShell } from '../ui/ModalShell';
+import { QrScannerModal } from '../ui/QrScannerModal';
 import { Button } from '../ui/Button';
 import { Textarea } from '../ui/Textarea';
 import { marketService } from '../../services/marketService';
@@ -38,6 +39,7 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
     const [partnerName, setPartnerName] = useState<string | null>(null);
     const [selectedTrustLevel, setSelectedTrustLevel] = useState<number | null>(null);
     const [isSavingTrust, setIsSavingTrust] = useState(false);
+    const [isQrOpen, setIsQrOpen] = useState(false);
 
     const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -383,8 +385,8 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
                             </div>
                         )}
 
-                        {/* File Upload Option */}
-                        <div>
+                        {/* File Upload & QR Option */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                             <input
                                 ref={fileInputRef}
                                 type="file"
@@ -401,6 +403,17 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
                             >
                                 <Upload size={16} className="text-theme-primary" />
                                 <span>{t('marketplace.chooseCardFileBtn')}</span>
+                            </Button>
+                            <Button
+                                type="button"
+                                variant="outline"
+                                onClick={() => setIsQrOpen(true)}
+                                disabled={isImporting}
+                                data-testid="import-card-scan-qr-btn"
+                                className="w-full h-auto py-3 px-4 flex items-center justify-center gap-2 border-dashed border-2 border-theme-subtle hover:border-theme-primary/40 bg-bg-app rounded-2xl text-xs font-bold text-theme-secondary cursor-pointer"
+                            >
+                                <QrCode size={16} className="text-theme-primary" />
+                                <span>{t('common.scanQrCode')}</span>
                             </Button>
                         </div>
 
@@ -431,6 +444,15 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
                     </div>
                 )}
             </div>
+
+            <QrScannerModal
+                isOpen={isQrOpen}
+                onClose={() => setIsQrOpen(false)}
+                onScan={(decoded) => {
+                    setPayloadText(decoded);
+                    void processImportPayload(decoded);
+                }}
+            />
         </ModalShell>
     );
 }

@@ -261,7 +261,10 @@ export const PeopleTab: React.FC<PeopleTabProps> = ({
                     <Button
                         size="xs"
                         variant="outline"
-                        onClick={() => setSearchQuery('')}
+                        onClick={() => {
+                            setSearchQuery('');
+                            setEffectiveMaxDistance(null);
+                        }}
                         className="flex items-center gap-1.5 mx-auto"
                     >
                         <RotateCcw size={13} />

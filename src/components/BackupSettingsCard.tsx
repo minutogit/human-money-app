@@ -48,9 +48,6 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
     const [syncFolder, setSyncFolder] = useState<string>(settings?.backupSyncFolder || '');
     const [autoBackupEnabled, setAutoBackupEnabled] = useState<boolean>(settings?.autoBackupEnabled ?? true);
     const [syncBackupEnabled, setSyncBackupEnabled] = useState<boolean>(settings?.syncBackupEnabled ?? true);
-    const [backupFrequency, setBackupFrequency] = useState<'after_mutation' | 'on_close' | 'daily' | 'manual'>(
-        settings?.backupFrequency || 'after_mutation'
-    );
     const [backupStatus, setBackupStatus] = useState<FrontendAutoBackupStatusDto | null>(null);
     const [recoveryProtectionStatus, setRecoveryProtectionStatus] = useState<RecoveryProtectionStatusDto | null>(null);
 
@@ -68,16 +65,13 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
     }, []);
 
     useEffect(() => {
-        if (settings?.backupFrequency) {
-            setBackupFrequency(settings.backupFrequency);
-        }
         if (settings?.autoBackupEnabled !== undefined) {
             setAutoBackupEnabled(settings.autoBackupEnabled);
         }
         if (settings?.syncBackupEnabled !== undefined) {
             setSyncBackupEnabled(settings.syncBackupEnabled);
         }
-    }, [settings?.backupFrequency, settings?.autoBackupEnabled, settings?.syncBackupEnabled]);
+    }, [settings?.autoBackupEnabled, settings?.syncBackupEnabled]);
 
     const [isExporting, setIsExporting] = useState(false);
     const [isSyncing, setIsSyncing] = useState(false);
@@ -128,24 +122,6 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
                 if (onSettingsUpdated) onSettingsUpdated(updated);
             } catch (err) {
                 setSyncBackupEnabled(prev);
-                setFeedback({ type: 'error', message: translateError(err, t) });
-            }
-        }
-    };
-
-    const handleFrequencyChange = async (freq: 'after_mutation' | 'on_close' | 'daily' | 'manual') => {
-        const prev = backupFrequency;
-        setBackupFrequency(freq);
-        if (settings) {
-            const updated: AppSettings = {
-                ...settings,
-                backupFrequency: freq,
-            };
-            try {
-                await settingsService.saveSettings(updated);
-                if (onSettingsUpdated) onSettingsUpdated(updated);
-            } catch (err) {
-                setBackupFrequency(prev);
                 setFeedback({ type: 'error', message: translateError(err, t) });
             }
         }
@@ -434,8 +410,7 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
                         protectionMode !== 'mnemonic_only' ||
                         Boolean(syncFolder) ||
                         !autoBackupEnabled ||
-                        !syncBackupEnabled ||
-                        backupFrequency !== 'after_mutation'
+                        !syncBackupEnabled
                     }
                     toggleTestId="backup-more-options-toggle"
                     contentTestId="backup-more-options-content"
@@ -718,47 +693,6 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
                                     </span>
                                 </div>
                             </label>
-
-                            {/* Backup Frequency Selection */}
-                            <div className="pt-2 border-t border-theme-subtle/50 space-y-1.5">
-                                <label className="text-xs font-bold text-theme-secondary flex items-center gap-1.5">
-                                    <Clock size={13} className="text-theme-primary" />
-                                    {t('settings.backupFrequencyTitle')}
-                                </label>
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
-                                    {[
-                                        { id: 'after_mutation', label: t('settings.backupFreqAfterMutation'), desc: t('settings.backupFreqAfterMutationDesc'), recommended: true },
-                                        { id: 'on_close', label: t('settings.backupFreqOnClose'), desc: t('settings.backupFreqOnCloseDesc'), recommended: false },
-                                        { id: 'daily', label: t('settings.backupFreqDaily'), desc: t('settings.backupFreqDailyDesc'), recommended: false },
-                                        { id: 'manual', label: t('settings.backupFreqManual'), desc: t('settings.backupFreqManualDesc'), recommended: false }
-                                    ].map((freq) => (
-                                        <label
-                                            key={freq.id}
-                                            className={`p-2.5 rounded-xl border transition-all cursor-pointer flex flex-col ${backupFrequency === freq.id ? 'bg-theme-primary/5 border-theme-primary' : 'bg-white dark:bg-slate-800 border-theme-subtle/70 hover:border-theme-primary/40'}`}
-                                        >
-                                            <div className="flex items-center justify-between">
-                                                <span className={`text-xs font-bold flex items-center ${backupFrequency === freq.id ? 'text-theme-primary' : 'text-theme-secondary'}`}>
-                                                    {freq.label}
-                                                    {freq.recommended && (
-                                                        <span className="ml-1.5 px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-300">
-                                                            {t('common.recommended')}
-                                                        </span>
-                                                    )}
-                                                </span>
-                                                <input
-                                                    type="radio"
-                                                    name="backupFrequency"
-                                                    value={freq.id}
-                                                    checked={backupFrequency === freq.id}
-                                                    onChange={() => handleFrequencyChange(freq.id as any)}
-                                                    className="text-theme-primary"
-                                                />
-                                            </div>
-                                            <span className="text-[10px] text-theme-light mt-0.5">{freq.desc}</span>
-                                        </label>
-                                    ))}
-                                </div>
-                            </div>
                         </div>
 
                         <Button

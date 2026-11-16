@@ -1185,6 +1185,24 @@ pub fn get_market_view_impl(
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
         .unwrap_or_default();
 
+    let known_contact_dids: std::collections::HashSet<String> = {
+        let cached = state.contacts.lock().unwrap().clone();
+        let ab_opt = cached.or_else(|| {
+            service
+                .load_encrypted_data(CONTACTS_DATA_NAME, password.as_deref())
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<crate::models::FrontendAddressBook>(&bytes).ok())
+        });
+        ab_opt
+            .map(|ab| {
+                ab.contacts
+                    .keys()
+                    .map(|k| crate::state::canonicalize_did(k).unwrap_or_else(|_| k.clone()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+
     let (raw_persons, own_did, wallet_owner_name) = service
         .with_wallet(|wallet| {
             let own_did = wallet.get_user_id().to_string();
@@ -1274,7 +1292,16 @@ pub fn get_market_view_impl(
 
     let mut persons: Vec<FrontendMarketPerson> = raw_persons
         .into_iter()
-        .filter(|p| settings.market_show_unknown || p.trust == humoco_market::TrustTier::Trusted)
+        .filter(|p| {
+            if p.trust == humoco_market::TrustTier::Hidden {
+                return false;
+            }
+            if settings.market_show_unknown || p.trust == humoco_market::TrustTier::Trusted {
+                return true;
+            }
+            let can_did = crate::state::canonicalize_did(&p.did).unwrap_or_else(|_| p.did.clone());
+            known_contact_dids.contains(&can_did)
+        })
         .map(FrontendMarketPerson::from)
         .collect();
 
@@ -1357,15 +1384,6 @@ pub fn export_forward_card_impl(
 
 #[tauri::command]
 pub fn export_forward_card(
-    did: String,
-    password: Option<String>,
-    state: State<'_, AppState>,
-) -> Result<FrontendForwardCardExport, FrontendError> {
-    export_forward_card_impl(did, password, &state)
-}
-
-#[tauri::command]
-pub fn recommend_market_card(
     did: String,
     password: Option<String>,
     state: State<'_, AppState>,

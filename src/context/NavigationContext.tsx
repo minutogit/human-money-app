@@ -92,8 +92,15 @@ export function NavigationProvider({ children }: { children: ReactNode }) {
             try {
                 const profile = await profileService.getProfile();
                 const displayName = profile.firstName || profile.id;
-                logger.info(`Auto-login successful for profile: ${displayName}`);
-                notifyLoginRef.current(displayName);
+                const profiles = await authService.listProfiles().catch(() => []);
+                const matched = profiles.find((p) => p.userId && p.userId === profile.id);
+                const resolvedName = matched?.profileName || displayName;
+                logger.info(`Auto-login successful for profile: ${resolvedName}`);
+                if (matched?.folderName) {
+                    notifyLoginRef.current(resolvedName, matched.folderName);
+                } else {
+                    notifyLoginRef.current(resolvedName);
+                }
                 if (tourBridge.getState().appState) return;
                 historyRef.current = [];
                 setAppState({ view: "logged_in" });

@@ -321,6 +321,13 @@ pub fn get_double_spend_conflicts(state: tauri::State<AppState>) -> Result<Vec<c
     Ok(conflicts.into_iter().map(|s| s.into()).collect())
 }
 
+pub(crate) fn conflict_role_str(role: human_money_core::models::conflict::ConflictRole) -> &'static str {
+    match role {
+        human_money_core::models::conflict::ConflictRole::Victim => "victim",
+        human_money_core::models::conflict::ConflictRole::Witness => "witness",
+    }
+}
+
 #[tauri::command]
 pub fn get_proof_of_double_spend(proof_id: String, state: tauri::State<AppState>) -> Result<crate::models::FullProofDetails, FrontendError> {
     let service = state.service.lock().unwrap();
@@ -330,10 +337,7 @@ pub fn get_proof_of_double_spend(proof_id: String, state: tauri::State<AppState>
     
     let proof = service.get_proof_of_double_spend(&proof_id).map_err(FrontendError::from)?;
     
-    let conflict_role = match summary.conflict_role {
-        human_money_core::models::conflict::ConflictRole::Victim => "Victim",
-        human_money_core::models::conflict::ConflictRole::Witness => "Witness",
-    };
+    let conflict_role = conflict_role_str(summary.conflict_role);
     
     Ok(crate::models::FullProofDetails {
         proof: proof.into(),
@@ -468,5 +472,12 @@ mod tests {
 
         assert_eq!(total, 740 * FIXED_SCALE);
         assert_eq!(net, -260 * FIXED_SCALE);
+    }
+
+    #[test]
+    fn test_conflict_role_str_is_lowercase() {
+        use human_money_core::models::conflict::ConflictRole;
+        assert_eq!(conflict_role_str(ConflictRole::Victim), "victim");
+        assert_eq!(conflict_role_str(ConflictRole::Witness), "witness");
     }
 }

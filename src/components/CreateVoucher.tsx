@@ -7,7 +7,6 @@ import { ConfirmationModal } from "./ui/ConfirmationModal";
 import { translateError } from "../utils/errorHelper";
 import { PageLayout } from "./ui/PageLayout";
 import { AlertBanner } from "./ui/AlertBanner";
-import { Advanced } from "./ui/Advanced";
 import { useOptionalNavigation } from "../context/NavigationContext";
 import { 
     ShieldAlert, 
@@ -21,7 +20,6 @@ import {
 import { useVoucherCreation, standardRequiresCreatorGender } from "../hooks/useVoucherCreation";
 import { VoucherBasicsForm } from "./voucher/VoucherBasicsForm";
 import { CreatorIdentityForm } from "./voucher/CreatorIdentityForm";
-import { CollateralForm } from "./voucher/CollateralForm";
 
 interface CreateVoucherProps {
     onVoucherCreated: () => void;
@@ -41,7 +39,6 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
         validityUnit,
         nonRedeemable,
         identity,
-        collateral,
         isLoading,
         coordWarning,
         errors,
@@ -50,7 +47,6 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
         setValidityUnit,
         setNonRedeemable,
         setIdentity,
-        setCollateral,
         handleStandardChange,
         handleLoadProfile,
         handleCoordBlur,
@@ -194,13 +190,6 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
                         requiresGender={requiresGender}
                         genderRef={genderRef}
                     />
-
-                    <Advanced>
-                        <CollateralForm 
-                            collateral={collateral}
-                            onCollateralChange={setCollateral}
-                        />
-                    </Advanced>
 
                     <AlertBanner 
                         variant="warning" 

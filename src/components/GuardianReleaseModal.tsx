@@ -2,9 +2,11 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ModalShell } from './ui/ModalShell';
+import { QrScannerModal } from './ui/QrScannerModal';
 import { Button } from './ui/Button';
 import { Input } from './ui/Input';
 import { AlertBanner } from './ui/AlertBanner';
+import { useOptionalSession } from '../context/SessionContext';
 import { recoveryService } from '../services/recoveryService';
 import { postService } from '../services/postService';
 import { GuardianRecoveryRequestInspectionDto, ApproveGuardianRecoveryResultDto } from '../types';
@@ -18,6 +20,7 @@ import {
     UserCheck,
     Clock,
     RefreshCw,
+    QrCode,
 } from 'lucide-react';
 
 interface GuardianReleaseModalProps {
@@ -34,7 +37,9 @@ export const GuardianReleaseModal: React.FC<GuardianReleaseModalProps> = ({
     initialOwnerDid,
 }) => {
     const { t } = useTranslation();
+    const session = useOptionalSession();
     const [requestUri, setRequestUri] = useState<string>(initialRequestUri || '');
+    const [isQrScannerOpen, setIsQrScannerOpen] = useState<boolean>(false);
     const [password, setPassword] = useState<string>('');
     const [selectedOwnerDid, setSelectedOwnerDid] = useState<string>(initialOwnerDid || '');
     const [inspection, setInspection] = useState<GuardianRecoveryRequestInspectionDto | null>(null);
@@ -150,7 +155,13 @@ export const GuardianReleaseModal: React.FC<GuardianReleaseModalProps> = ({
         setIsSyncingInbox(true);
         setErrorMsg('');
         try {
-            await postService.syncPostChannels();
+            if (session?.protectAction) {
+                await session.protectAction(async (pwd) => {
+                    await postService.syncPostChannels(undefined, pwd || undefined);
+                });
+            } else {
+                await postService.syncPostChannels();
+            }
             if (requestUri.trim()) {
                 await inspectUri(requestUri);
             }
@@ -258,6 +269,17 @@ export const GuardianReleaseModal: React.FC<GuardianReleaseModalProps> = ({
                                         placeholder="humoco://recovery-req?v=1&..."
                                         className="text-xs font-mono"
                                     />
+                                    <Button
+                                        type="button"
+                                        variant="outline"
+                                        data-testid="guardian-scan-request-qr-btn"
+                                        onClick={() => setIsQrScannerOpen(true)}
+                                        title={t('common.scanQrCode')}
+                                        className="shrink-0 gap-1.5"
+                                    >
+                                        <QrCode size={15} />
+                                        <span className="hidden sm:inline">{t('common.scanQrCode')}</span>
+                                    </Button>
                                     <Button
                                         type="button"
                                         variant="secondary"
@@ -368,6 +390,25 @@ export const GuardianReleaseModal: React.FC<GuardianReleaseModalProps> = ({
                                     </div>
                                 )}
 
+                                {inspection.wards && inspection.wards.length > 0 && (
+                                    <div className="flex justify-end">
+                                        <Button
+                                            type="button"
+                                            variant="outline"
+                                            size="xs"
+                                            data-testid="sync-inbox-for-ward-btn"
+                                            disabled={isSyncingInbox || isInspecting}
+                                            onClick={() => void handleSyncInboxForWards()}
+                                        >
+                                            <RefreshCw
+                                                size={12}
+                                                className={`mr-1 ${isSyncingInbox ? 'animate-spin' : ''}`}
+                                            />
+                                            {t('backup.syncInboxNowButton')}
+                                        </Button>
+                                    </div>
+                                )}
+
                                 {/* Password Input */}
                                 <div className="space-y-1.5">
                                     <label className="text-xs font-bold text-theme-secondary uppercase tracking-wider flex items-center gap-1.5">
@@ -411,6 +452,15 @@ export const GuardianReleaseModal: React.FC<GuardianReleaseModalProps> = ({
                     </form>
                 )}
             </div>
+
+            <QrScannerModal
+                isOpen={isQrScannerOpen}
+                onClose={() => setIsQrScannerOpen(false)}
+                onScan={(decoded) => {
+                    setRequestUri(decoded);
+                    void inspectUri(decoded);
+                }}
+            />
         </ModalShell>
     );
 };

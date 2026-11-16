@@ -189,8 +189,8 @@ export function RecipientSelector({
     const trimmed = val.trim();
     if (
       onApplyRawCode &&
-      (trimmed.includes('humoco://pay') ||
-        trimmed.includes('humoco://contact') ||
+      (trimmed.toLowerCase().includes('humoco://pay') ||
+        trimmed.toLowerCase().includes('humoco://contact') ||
         trimmed.includes('did:key:') ||
         trimmed.startsWith('did:') ||
         trimmed.includes('@did:'))

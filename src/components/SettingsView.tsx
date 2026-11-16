@@ -27,6 +27,7 @@ import { IdentityRecoveryCard } from './settings/IdentityRecoveryCard';
 import { AutoSyncSummaryCard } from './settings/AutoSyncSummaryCard';
 import { ViewAndLockCard } from './settings/ViewAndLockCard';
 import { DangerZoneCard } from './settings/DangerZoneCard';
+import { NetworkProtectionCard } from './settings/NetworkProtectionCard';
 import { profileService } from '../services/profileService';
 import { AppSettings } from '../types';
 
@@ -305,6 +306,15 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                     onPersistSettings={persistSettingsUpdate}
                 />
             </div>
+
+            {initialOpenSection === 'network' && (
+                <NetworkProtectionCard
+                    settings={settings}
+                    onSettingsUpdated={updateSettingsState}
+                    isDevUnlocked={isDevUnlocked}
+                    initialOpen={true}
+                />
+            )}
 
             {/* Block 6: Gefahrenzone */}
             <div id="settings-danger-section">

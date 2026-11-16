@@ -177,11 +177,12 @@ pub fn list_profiles(state: tauri::State<AppState>, app: tauri::AppHandle) -> Re
         let mut profile_infos: Vec<ProfileInfo> = profiles
             .into_iter()
             .map(|p| {
-                let last_used = metadata.get(&p.folder_name).map(|m| m.last_used.clone());
+                let meta = metadata.get(&p.folder_name);
                 ProfileInfo {
                     profile_name: p.profile_name,
                     folder_name: p.folder_name,
-                    last_used,
+                    last_used: meta.map(|m| m.last_used.clone()),
+                    user_id: meta.and_then(|m| m.user_id.clone()),
                 }
             })
             .collect();
@@ -536,6 +537,7 @@ mod tests {
             profile_name: "Test Profile".to_string(),
             folder_name: "test_folder".to_string(),
             last_used: Some(Utc::now().to_rfc3339()),
+            user_id: Some("did:key:z6MkTest".to_string()),
         };
 
         let serialized = serde_json::to_string(&profile_info);

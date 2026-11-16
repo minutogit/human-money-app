@@ -39,8 +39,8 @@ export const AppRouter: React.FC = () => {
             );
         case "needs_profile":
             return <CreateNewProfile
-                onProfileCreated={() => {
-                    notifyLogin();
+                onProfileCreated={(name, folder) => {
+                    notifyLogin(name, folder);
                     navigate({ view: "logged_in" });
                 }}
                 onSwitchToLogin={() => navigate({ view: "needs_login" })}
@@ -53,8 +53,8 @@ export const AppRouter: React.FC = () => {
             />;
         case "needs_login":
             return <Login
-                onLoginSuccess={(name) => {
-                    notifyLogin(name);
+                onLoginSuccess={(name, folder) => {
+                    notifyLogin(name, folder);
                     navigate({ view: "logged_in" });
                 }}
                 onSwitchToRestoreBackup={() => navigate({ view: "restore_backup" })}
@@ -68,8 +68,8 @@ export const AppRouter: React.FC = () => {
                 initialPayload={appState.initialPayload}
                 initialBackupPath={appState.initialBackupPath}
                 initialMethod={appState.initialMethod}
-                onRestoreSuccess={() => {
-                    notifyLogin();
+                onRestoreSuccess={(outcome) => {
+                    notifyLogin(outcome?.profileName, outcome?.folderName || undefined);
                     navigate({ view: "logged_in" });
                 }}
                 onBack={async () => {
@@ -96,8 +96,8 @@ export const AppRouter: React.FC = () => {
         case "needs_recovery":
             return <WalletRecovery 
                 initialPayload={appState.initialPayload}
-                onRecoverySuccess={() => {
-                    notifyLogin();
+                onRecoverySuccess={(folder) => {
+                    notifyLogin(undefined, folder);
                     navigate({ view: "logged_in" });
                 }} 
                 onSwitchToLogin={() => navigate({ view: "needs_login" })} 

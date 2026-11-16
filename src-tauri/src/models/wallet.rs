@@ -42,6 +42,8 @@ pub struct ProfileInfo {
     pub folder_name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_used: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

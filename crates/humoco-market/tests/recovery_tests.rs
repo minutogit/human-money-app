@@ -847,3 +847,59 @@ fn test_emergency_kit_uri_roundtrip_12_and_24_words() {
     bad_kit.language_code = 15;
     assert!(build_emergency_kit_uri(&bad_kit).is_err());
 }
+
+#[test]
+fn test_recovery_uris_tolerate_chat_punctuation_and_uppercase_scheme() {
+    use rand::rngs::OsRng;
+
+    let owner_sk = make_signing_key(77);
+    let owner_did = create_user_id(&owner_sk.verifying_key(), None).unwrap();
+    let kdf_params = RecoveryKdfParams::new_fast_test();
+    let q_ids = [1, 2, 3];
+    let answers = ["Garten", "Lindenstrasse", "Kroatien"];
+    let master_payload = RecoveryMasterPayload::new(
+        &owner_did,
+        vec![0x11; 16],
+        MnemonicLanguage::German,
+        None,
+        false,
+    );
+    let bundle = create_social_recovery_vault_bundle(
+        &owner_sk,
+        &owner_did,
+        "Alice",
+        1,
+        2,
+        3,
+        &q_ids,
+        &answers,
+        &kdf_params,
+        &master_payload,
+        &[sample_drop_descriptor("1")],
+        1700000123,
+    )
+    .unwrap();
+
+    let eph_sk = x25519_dalek::StaticSecret::random_from_rng(OsRng);
+    let pk_temp = x25519_dalek::PublicKey::from(&eph_sk).to_bytes();
+    let sk_temp = eph_sk.to_bytes();
+
+    let req_uri = build_recovery_request_uri(&pk_temp, 1700000123, Some("Alice"));
+    let upper_scheme_req = req_uri.replacen("humoco://recovery-req?", "HUMOCO://RECOVERY-REQ?", 1);
+    let chat_req = format!("Hallo Max, bitte öffnen: ({}).", upper_scheme_req);
+    let parsed_req = parse_recovery_request_uri(&chat_req).unwrap();
+    assert_eq!(parsed_req.pk_temp, pk_temp);
+    assert_eq!(parsed_req.ts, 1700000123);
+    assert_eq!(parsed_req.name_hint.as_deref(), Some("Alice"));
+
+    let reply_payload = GuardianReleasePayload {
+        entry: bundle[0].clone(),
+        extra_sync_descriptors: vec![],
+        released_at: 1700000200,
+    };
+    let reply_uri = seal_guardian_release_reply(&pk_temp, &reply_payload).unwrap();
+    let upper_scheme_reply = reply_uri.replacen("humoco://recovery-reply?", "HUMOCO://RECOVERY-REPLY?", 1);
+    let chat_reply = format!("Hier deine Antwort: {}!", upper_scheme_reply);
+    let opened = open_and_verify_guardian_release_reply(&sk_temp, &chat_reply).unwrap();
+    assert_eq!(opened, reply_payload);
+}

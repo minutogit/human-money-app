@@ -4,8 +4,10 @@ import { useTranslation } from 'react-i18next';
 import { Button } from './ui/Button';
 import { Input } from './ui/Input';
 import { AlertBanner } from './ui/AlertBanner';
+import { QrScannerModal } from './ui/QrScannerModal';
 import { recoveryService } from '../services/recoveryService';
 import { authService } from '../services/authService';
+import { profileService } from '../services/profileService';
 import { ActiveRecoverySessionDto, RecoveryCompletionResultDto } from '../types';
 import { copyToClipboard } from '../utils/clipboard';
 import { translateError } from '../utils/errorHelper';
@@ -22,6 +24,7 @@ import {
     Clock,
     ShieldCheck,
     Server,
+    QrCode,
 } from 'lucide-react';
 
 export interface SocialRecoveryFlowProps {
@@ -82,6 +85,9 @@ export const SocialRecoveryFlow: React.FC<SocialRecoveryFlowProps> = ({
     const [copiedRequest, setCopiedRequest] = useState<boolean>(false);
     const [copiedChatMsg, setCopiedChatMsg] = useState<boolean>(false);
     const [confirmCancel, setConfirmCancel] = useState<boolean>(false);
+    const [requestQrSvg, setRequestQrSvg] = useState<string | null>(null);
+    const [showRequestQr, setShowRequestQr] = useState<boolean>(false);
+    const [isReplyQrOpen, setIsReplyQrOpen] = useState<boolean>(false);
     const autoImportedRef = useRef<string | null>(null);
 
     useEffect(() => {
@@ -431,7 +437,40 @@ export const SocialRecoveryFlow: React.FC<SocialRecoveryFlowProps> = ({
                                     ? t('backup.requestLinkCopied')
                                     : t('backup.copyRequestLink')}
                             </Button>
+                            <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                data-testid="social-toggle-request-qr-btn"
+                                onClick={async () => {
+                                    if (showRequestQr) {
+                                        setShowRequestQr(false);
+                                        return;
+                                    }
+                                    if (!requestQrSvg && session.requestUri) {
+                                        try {
+                                            const svg = await profileService.encodeTextQrSvg(session.requestUri);
+                                            setRequestQrSvg(svg);
+                                        } catch {
+                                            return;
+                                        }
+                                    }
+                                    setShowRequestQr(true);
+                                }}
+                                className="flex items-center gap-1.5 text-xs"
+                            >
+                                <QrCode size={14} />
+                                {showRequestQr ? t('common.hideQrCode') : t('common.showQrCode')}
+                            </Button>
                         </div>
+                        {showRequestQr && requestQrSvg && (
+                            <div className="pt-2 flex flex-col items-center gap-2">
+                                <div
+                                    className="w-48 h-48 p-2 bg-white rounded-xl border border-theme-subtle shadow-xs [&>svg]:w-full [&>svg]:h-full"
+                                    dangerouslySetInnerHTML={{ __html: requestQrSvg }}
+                                />
+                            </div>
+                        )}
                     </div>
 
                     {/* Step 2: Check Code & Multi-Day Pause */}
@@ -581,6 +620,18 @@ export const SocialRecoveryFlow: React.FC<SocialRecoveryFlowProps> = ({
                                         placeholder={t('backup.pasteReplyLinkPlaceholder')}
                                         className="text-xs font-mono"
                                     />
+                                    <Button
+                                        type="button"
+                                        variant="outline"
+                                        size="sm"
+                                        data-testid="social-scan-reply-qr-btn"
+                                        onClick={() => setIsReplyQrOpen(true)}
+                                        title={t('common.scanQrCode')}
+                                        className="shrink-0 text-xs gap-1.5"
+                                    >
+                                        <QrCode size={14} />
+                                        <span className="hidden sm:inline">{t('common.scanQrCode')}</span>
+                                    </Button>
                                     <Button
                                         type="button"
                                         variant="secondary"
@@ -846,6 +897,15 @@ export const SocialRecoveryFlow: React.FC<SocialRecoveryFlowProps> = ({
                     )}
                 </div>
             )}
+
+            <QrScannerModal
+                isOpen={isReplyQrOpen}
+                onClose={() => setIsReplyQrOpen(false)}
+                onScan={(decoded) => {
+                    setReplyInput(decoded);
+                    void handleImportReply(decoded);
+                }}
+            />
         </div>
     );
 };

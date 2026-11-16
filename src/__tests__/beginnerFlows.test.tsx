@@ -97,7 +97,6 @@ vi.mock('../services/settingsService', () => ({
             customServers: [],
             regionalMeshSources: [],
             backupTargetFolder: '/fake/backup/path',
-            backupFrequency: 'always',
         }),
         saveSettings: vi.fn().mockResolvedValue(undefined),
         getReachPreset: vi.fn().mockResolvedValue('medium'),
@@ -163,7 +162,6 @@ describe('Beginner User Tasks (Integration Flows)', () => {
             customServers: [],
             regionalMeshSources: [],
             backupSyncFolder: '/home/user/Backups',
-            backupFrequency: 'after_mutation',
             marketSyncEnabled: true,
         };
 
@@ -441,7 +439,6 @@ describe('Beginner User Tasks (Integration Flows)', () => {
             customServers: [],
             regionalMeshSources: [],
             backupSyncFolder: '/fake/backup/path',
-            backupFrequency: 'after_mutation',
         };
         const sampleStandard = {
             id: 'std-minuto',

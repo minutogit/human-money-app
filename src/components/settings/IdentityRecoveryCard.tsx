@@ -131,13 +131,17 @@ export const IdentityRecoveryCard: React.FC = () => {
                                     </div>
                                     <span
                                         className={`text-[9px] font-bold px-2 py-0.5 rounded-full ${
-                                            protectionStatus?.guardians && protectionStatus.guardians.length > 0
+                                            protectionStatus?.guardians &&
+                                            protectionStatus.guardians.length > 0 &&
+                                            (protectionStatus.confirmedGuardiansCount ?? 0) >= protectionStatus.requiredThreshold
                                                 ? 'bg-emerald-100 text-emerald-800'
+                                                : protectionStatus?.guardians && protectionStatus.guardians.length > 0
+                                                ? 'bg-amber-100 text-amber-800'
                                                 : 'bg-slate-100 text-slate-600'
                                         }`}
                                     >
                                         {protectionStatus?.guardians && protectionStatus.guardians.length > 0
-                                            ? `${protectionStatus.requiredThreshold}-von-${protectionStatus.guardians.length}`
+                                            ? `${protectionStatus.confirmedGuardiansCount ?? 0}/${protectionStatus.guardians.length} (${protectionStatus.requiredThreshold} ${t('backup.guardiansThresholdRequiredShort')})`
                                             : t('backup.emergencyKitNotConfirmedBadge')}
                                     </span>
                                 </div>

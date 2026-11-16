@@ -1,11 +1,13 @@
 // src/components/settings/AutoSyncSummaryCard.tsx
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Cloud, RefreshCw, CheckCircle2, AlertTriangle, Wifi, Image } from 'lucide-react';
-import { AppSettings, FrontendDiscoveredSync } from '../../types';
+import { Cloud, RefreshCw, CheckCircle2, AlertTriangle, Wifi, Image, ExternalLink, Copy } from 'lucide-react';
+import { openUrl } from '@tauri-apps/plugin-opener';
+import { AppSettings, FrontendDiscoveredSync, StoredPublicSync } from '../../types';
 import { marketService } from '../../services/marketService';
 import { settingsService } from '../../services/settingsService';
 import { notifySyncStatusUpdated, SYNC_STATUS_UPDATED_EVENT } from '../../utils/syncEvents';
+import { copyToClipboard } from '../../utils/clipboard';
 import { translateError } from '../../utils/errorHelper';
 import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
@@ -109,6 +111,70 @@ export const AutoSyncSummaryCard: React.FC<AutoSyncSummaryCardProps> = ({
                   }
                 : prev
         );
+        notifySyncStatusUpdated();
+    };
+
+    const pendingPublicSyncs = useMemo(() => {
+        return (settings?.publicSyncs || []).filter(
+            (pub) =>
+                pub.status !== 'revoked' &&
+                (!pub.enabled || pub.status === 'pending_auth' || (pub.authorizedChannels?.length ?? 0) === 0)
+        );
+    }, [settings?.publicSyncs]);
+
+    const handleOpenPendingRegister = async (drop: StoredPublicSync) => {
+        if (!drop.registerUrl || (!drop.registerUrl.startsWith('https://') && !drop.registerUrl.startsWith('http://'))) {
+            return;
+        }
+        const sep = drop.registerUrl.includes('?') ? '&' : '?';
+        const fullUrl = `${drop.registerUrl}${sep}key=${encodeURIComponent(drop.accessPubkey)}`;
+        try {
+            await openUrl(fullUrl);
+        } catch (err) {
+            setFeedback({ type: 'error', message: translateError(err, t) });
+        }
+    };
+
+    const handleCopyPendingKey = async (drop: StoredPublicSync) => {
+        try {
+            await copyToClipboard(drop.accessPubkey);
+            setFeedback({ type: 'success', message: t('settings.syncPublicKeyCopied') });
+        } catch (err) {
+            setFeedback({ type: 'error', message: translateError(err, t) });
+        }
+    };
+
+    const handleRecheckPendingDrop = async (drop: StoredPublicSync) => {
+        if (typeof marketService?.probePublicSync !== 'function') return;
+        setIsConnecting(true);
+        setFeedback(null);
+        try {
+            const info = await marketService.probePublicSync(drop.writeUrl);
+            if (info) {
+                const hasAuth = (info.authorizedChannels || []).length > 0;
+                await marketService.savePublicSync({
+                    writeUrl: info.writeUrl,
+                    readUrl: info.readUrl,
+                    dropPub: info.dropPub,
+                    registerUrl: info.registerUrl,
+                    enabled: hasAuth,
+                });
+                const fresh = await settingsService.getSettings().catch(() => null);
+                if (fresh) {
+                    onSettingsSynced?.(fresh);
+                }
+                await loadDiscovered();
+                notifySyncStatusUpdated();
+                setFeedback({
+                    type: hasAuth ? 'success' : 'info',
+                    message: hasAuth ? t('settings.syncProbeSuccess') : t('settings.syncProbeUnauthorized'),
+                });
+            }
+        } catch (err) {
+            setFeedback({ type: 'error', message: translateError(err, t) });
+        } finally {
+            setIsConnecting(false);
+        }
     };
 
     const handleQuickConnectCommunity = async () => {
@@ -216,6 +282,59 @@ export const AutoSyncSummaryCard: React.FC<AutoSyncSummaryCardProps> = ({
                             <AlertTriangle size={15} className="shrink-0" />
                         )}
                         <span>{feedback.message}</span>
+                    </div>
+                )}
+
+                {pendingPublicSyncs.length > 0 && (
+                    <div
+                        data-testid="auto-sync-pending-auth-actions"
+                        className="p-3 rounded-xl border border-amber-200/80 bg-amber-50/70 dark:bg-amber-950/20 space-y-2.5"
+                    >
+                        {pendingPublicSyncs.map((drop) => (
+                            <div key={drop.writeUrl} className="space-y-2">
+                                <p className="text-xs font-medium text-amber-900 dark:text-amber-200">
+                                    {t('settings.syncProbeUnauthorized')}
+                                </p>
+                                <div className="flex flex-wrap gap-2">
+                                    {drop.registerUrl && (
+                                        <Button
+                                            type="button"
+                                            size="xs"
+                                            variant="primary"
+                                            onClick={() => void handleOpenPendingRegister(drop)}
+                                            data-testid="auto-sync-open-register-btn"
+                                            className="gap-1.5 text-xs"
+                                        >
+                                            <ExternalLink size={12} />
+                                            <span>{t('settings.syncPublicOpenRegister')}</span>
+                                        </Button>
+                                    )}
+                                    <Button
+                                        type="button"
+                                        size="xs"
+                                        variant="secondary"
+                                        onClick={() => void handleCopyPendingKey(drop)}
+                                        data-testid="auto-sync-copy-access-key-btn"
+                                        className="gap-1.5 text-xs"
+                                    >
+                                        <Copy size={12} />
+                                        <span>{t('settings.syncPublicCopyKey')}</span>
+                                    </Button>
+                                    <Button
+                                        type="button"
+                                        size="xs"
+                                        variant="outline"
+                                        disabled={isConnecting}
+                                        onClick={() => void handleRecheckPendingDrop(drop)}
+                                        data-testid="auto-sync-recheck-auth-btn"
+                                        className="gap-1.5 text-xs"
+                                    >
+                                        <RefreshCw size={12} className={isConnecting ? 'animate-spin' : ''} />
+                                        <span>{t('settings.syncPublicCheckAuth')}</span>
+                                    </Button>
+                                </div>
+                            </div>
+                        ))}
                     </div>
                 )}
 

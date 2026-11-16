@@ -288,6 +288,7 @@ export const BoardTab: React.FC<BoardTabProps> = ({
                         onClick={() => {
                             setSearchQuery('');
                             setFilterKind('all');
+                            setEffectiveMaxDistance(null);
                         }}
                         className="flex items-center gap-1.5 mx-auto"
                     >

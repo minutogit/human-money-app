@@ -19,6 +19,7 @@ export interface ProfileInfo {
     profileName: string;
     folderName: string;
     lastUsed?: string; // ISO 8601 timestamp
+    userId?: string;
 }
 
 export interface Address {

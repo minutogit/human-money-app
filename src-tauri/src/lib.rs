@@ -168,7 +168,6 @@ pub fn run() {
             export_forward_card,
             import_contact_card,
             delete_foreign_contact_card,
-            recommend_market_card,
             // Sync Services
             prepare_sync_setup,
             get_rust_sync_config,

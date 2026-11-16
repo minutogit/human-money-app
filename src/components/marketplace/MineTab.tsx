@@ -47,6 +47,7 @@ export interface MineTabProps {
         paymentUri?: string
     ) => Promise<void>;
     onPayInquiry?: (counterpartyDid: string, paymentUri?: string | null) => void;
+    onDismissInquiry?: (itemKind: 'seller_inquiry' | 'buyer_inquiry', inquiryId: string) => Promise<void>;
 }
 
 export const MineTab: React.FC<MineTabProps> = ({
@@ -62,6 +63,7 @@ export const MineTab: React.FC<MineTabProps> = ({
     onDeleteAd,
     onReplyInquiry,
     onPayInquiry,
+    onDismissInquiry,
 }) => {
     const { t } = useTranslation();
     const [isExpiredOpen, setIsExpiredOpen] = useState(false);
@@ -508,6 +510,7 @@ export const MineTab: React.FC<MineTabProps> = ({
                                     isSeller={true}
                                     onReply={onReplyInquiry}
                                     onPay={onPayInquiry}
+                                    onDismiss={onDismissInquiry ? () => onDismissInquiry('seller_inquiry', inq.inquiryId) : undefined}
                                 />
                             ))}
                         </div>
@@ -525,6 +528,7 @@ export const MineTab: React.FC<MineTabProps> = ({
                                 isSeller={false}
                                 onReply={onReplyInquiry}
                                 onPay={onPayInquiry}
+                                onDismiss={onDismissInquiry ? () => onDismissInquiry('buyer_inquiry', inq.inquiryId) : undefined}
                             />
                         ))}
                     </div>
@@ -548,6 +552,7 @@ interface InquiryItemCardProps {
         paymentUri?: string
     ) => Promise<void>;
     onPay?: (counterpartyDid: string, paymentUri?: string | null) => void;
+    onDismiss?: () => Promise<void>;
 }
 
 const InquiryItemCard: React.FC<InquiryItemCardProps> = ({
@@ -555,11 +560,13 @@ const InquiryItemCard: React.FC<InquiryItemCardProps> = ({
     isSeller,
     onReply,
     onPay,
+    onDismiss,
 }) => {
     const { t } = useTranslation();
     const [isReplying, setIsReplying] = useState(false);
     const [replyNote, setReplyNote] = useState('');
     const [isSubmitting, setIsSubmitting] = useState(false);
+    const [isDismissing, setIsDismissing] = useState(false);
 
     const targetLabel =
         item.target.kind === 'ad'
@@ -593,7 +600,28 @@ const InquiryItemCard: React.FC<InquiryItemCardProps> = ({
                         {isSeller ? `Von: ${counterpartyDisplay}` : `An: ${counterpartyDisplay}`}
                     </h4>
                 </div>
-                <span className="text-[10px] text-theme-light">{dateFormatted}</span>
+                <div className="flex items-center gap-2">
+                    <span className="text-[10px] text-theme-light">{dateFormatted}</span>
+                    {onDismiss && (
+                        <button
+                            type="button"
+                            disabled={isDismissing}
+                            onClick={async () => {
+                                setIsDismissing(true);
+                                try {
+                                    await onDismiss();
+                                } finally {
+                                    setIsDismissing(false);
+                                }
+                            }}
+                            title={t('common.remove', 'Entfernen')}
+                            aria-label={t('common.remove', 'Entfernen')}
+                            className="p-1 rounded-lg text-theme-light hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer disabled:opacity-50"
+                        >
+                            <Trash2 size={13} />
+                        </button>
+                    )}
+                </div>
             </div>
 
             <p className="text-xs text-theme-secondary bg-bg-app p-3 rounded-xl leading-relaxed whitespace-pre-wrap">

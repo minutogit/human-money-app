@@ -292,7 +292,11 @@ export const MarketPersonView: React.FC<MarketPersonViewProps> = ({
                         {existingContact ? (
                             <>
                                 <UserCheck size={15} className="text-theme-success" />
-                                <span>{t('marketplace.editContact', 'Kontakt bearbeiten')}</span>
+                                <span>
+                                    {existingContact.trustLevel == null
+                                        ? t('marketplace.rateTrust', 'Vertrauen einstufen')
+                                        : t('marketplace.editContact', 'Kontakt bearbeiten')}
+                                </span>
                             </>
                         ) : (
                             <>

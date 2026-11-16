@@ -8,11 +8,12 @@ import { ConfirmationModal } from '../ui/ConfirmationModal';
 import { useSession } from '../../context/SessionContext';
 import { useOptionalNavigation } from '../../context/NavigationContext';
 import { authService } from '../../services/authService';
+import { profileService } from '../../services/profileService';
 import { translateError } from '../../utils/errorHelper';
 
 export const DangerZoneCard: React.FC = () => {
     const { t } = useTranslation();
-    const { profileName, notifyLogout, clearLocks, protectAction } = useSession();
+    const { profileName, folderName, notifyLogout, clearLocks, protectAction } = useSession();
     const nav = useOptionalNavigation();
 
     const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -24,9 +25,22 @@ export const DangerZoneCard: React.FC = () => {
         setDeleteError('');
         try {
             const profiles = await authService.listProfiles();
-            const active = profiles.find((p) => p.profileName === profileName) || profiles[0];
+            let active = folderName ? profiles.find((p) => p.folderName === folderName) : undefined;
             if (!active) {
-                throw new Error('No active profile found');
+                try {
+                    const ownUserId = await profileService.getUserId();
+                    if (ownUserId) {
+                        active = profiles.find((p) => p.userId && p.userId === ownUserId);
+                    }
+                } catch {
+                    // Wallet locked or unavailable; fall back only if unambiguous single profile
+                }
+            }
+            if (!active && profiles.length === 1) {
+                active = profiles.find((p) => p.profileName === profileName);
+            }
+            if (!active) {
+                throw new Error(t('settings.activeProfileNotFound'));
             }
             await protectAction(async (pwd) => {
                 await authService.deleteProfile({

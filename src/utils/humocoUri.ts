@@ -45,6 +45,10 @@ const CONTACT_URI_REGEX = /humoco:\/\/contact\?([^\s<>"'`]+)/i;
 const PAY_URI_REGEX = /humoco:\/\/pay\?([^\s<>"'`]+)/i;
 const CARD_URI_REGEX = /humoco:\/\/card\?([^\s<>"'`]+)/i;
 
+function stripTrailingPunctuation(query: string): string {
+  return query.replace(/[.,;:!?)\]]+$/, '');
+}
+
 export interface ParsedCardUri {
   envBase64: string;
   envelopeJson?: string;
@@ -103,7 +107,7 @@ export function parseContactCard(input: string): ParsedContactCard | null {
   const match = input.match(CONTACT_URI_REGEX);
   if (match && match[1]) {
     try {
-      const searchParams = new URLSearchParams(match[1]);
+      const searchParams = new URLSearchParams(stripTrailingPunctuation(match[1]));
       const did = searchParams.get('did')?.trim();
       const name = searchParams.get('name')?.trim() || undefined;
       const rawSync = searchParams.getAll('sync');
@@ -221,7 +225,7 @@ export function parsePaymentRequest(input: string): ParsedPaymentRequest | null 
   if (!match || !match[1]) return null;
 
   try {
-    const searchParams = new URLSearchParams(match[1]);
+    const searchParams = new URLSearchParams(stripTrailingPunctuation(match[1]));
     const to = searchParams.get('to')?.trim();
 
     if (!to || (!to.startsWith('did:') && !to.includes('@did:'))) {
@@ -232,7 +236,8 @@ export function parsePaymentRequest(input: string): ParsedPaymentRequest | null 
     const standardUuid = searchParams.get('std')?.trim() || undefined;
     const standardName = searchParams.get('stdName')?.trim() || undefined;
     const unit = searchParams.get('unit')?.trim() || undefined;
-    const amount = searchParams.get('amount')?.trim() || undefined;
+    const rawAmount = searchParams.get('amount')?.trim();
+    const amount = rawAmount ? rawAmount.replace(',', '.') : undefined;
     const note = searchParams.get('note')?.trim() || undefined;
 
     const testParam = searchParams.get('test');
@@ -272,7 +277,7 @@ export function parseCardUri(input: string): ParsedCardUri | null {
   if (!match || !match[1]) return null;
 
   try {
-    const searchParams = new URLSearchParams(match[1]);
+    const searchParams = new URLSearchParams(stripTrailingPunctuation(match[1]));
     const env = searchParams.get('env')?.trim();
     if (!env) return null;
 

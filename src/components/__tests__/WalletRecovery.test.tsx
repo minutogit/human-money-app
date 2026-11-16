@@ -65,7 +65,7 @@ describe('WalletRecovery Component', () => {
         });
     });
 
-    it('renders profile selector and 2 equal cards on choose screen', async () => {
+    it('renders profile selector without preselecting when multiple profiles exist, and requires conscious choice', async () => {
         render(
             <WalletRecovery
                 onRecoverySuccess={mockOnRecoverySuccess}
@@ -74,10 +74,16 @@ describe('WalletRecovery Component', () => {
         );
 
         await waitFor(() => {
-            expect(screen.getByTestId('profile-select')).toHaveValue('profile1');
+            expect(screen.getByTestId('profile-select')).toHaveValue('');
             expect(screen.getByTestId('wallet-recovery-choose-social')).toBeInTheDocument();
             expect(screen.getByTestId('wallet-recovery-choose-words')).toBeInTheDocument();
         });
+
+        fireEvent.click(screen.getByTestId('wallet-recovery-choose-words'));
+        expect(screen.getByTestId('feedback-message')).toBeInTheDocument();
+
+        fireEvent.change(screen.getByTestId('profile-select'), { target: { value: 'profile1' } });
+        expect(screen.getByTestId('profile-select')).toHaveValue('profile1');
 
         fireEvent.click(screen.getByText('Back to Login'));
         expect(mockOnSwitchToLogin).toHaveBeenCalled();
@@ -95,6 +101,7 @@ describe('WalletRecovery Component', () => {
             expect(screen.getByTestId('wallet-recovery-choose-words')).toBeInTheDocument();
         });
 
+        fireEvent.change(screen.getByTestId('profile-select'), { target: { value: 'profile1' } });
         fireEvent.click(screen.getByTestId('wallet-recovery-choose-words'));
 
         expect(screen.getAllByTestId(/^recovery-word-word-/)).toHaveLength(12);
@@ -175,6 +182,7 @@ describe('WalletRecovery Component', () => {
         );
 
         await waitFor(() => expect(screen.getByTestId('profile-select')).toBeInTheDocument());
+        fireEvent.change(screen.getByTestId('profile-select'), { target: { value: 'profile1' } });
 
         fireEvent.change(screen.getByTestId('recovery-word-word-0'), {
             target: { value: mockSeed12 },
@@ -209,6 +217,7 @@ describe('WalletRecovery Component', () => {
         await waitFor(() =>
             expect(screen.getByTestId('wallet-recovery-choose-social')).toBeInTheDocument()
         );
+        fireEvent.change(screen.getByTestId('profile-select'), { target: { value: 'profile1' } });
         fireEvent.click(screen.getByTestId('wallet-recovery-choose-social'));
 
         await waitFor(() => {

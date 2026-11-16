@@ -41,7 +41,7 @@ interface ConfirmationWord {
 }
 
 interface CreateNewProfileProps {
-    onProfileCreated: () => void;
+    onProfileCreated: (profileName?: string, folderName?: string) => void;
     onSwitchToLogin?: () => void;
     onSwitchToRestore?: (method?: 'social' | 'words_or_sheet' | 'file_or_folder') => void;
     defaultExpertMode?: boolean;
@@ -89,7 +89,11 @@ export function CreateNewProfile({
             .catch(() => setProfilesCount(null));
         recoveryService
             .getActiveRecoverySession?.()
-            ?.then((session) => setActiveSocialSession(session || null))
+            ?.then((session) =>
+                setActiveSocialSession(
+                    session && session.sessionMode !== 'reset_local_password' ? session : null
+                )
+            )
             ?.catch(() => setActiveSocialSession(null));
 
         const systemLang = navigator.language || "en";
@@ -184,8 +188,9 @@ export function CreateNewProfile({
                     mnemonic = await profileService.generateMnemonic(12, selectedLanguage);
                 }
                 const localInstanceId = await authService.getLocalInstanceId();
+                const trimmedName = profileName.trim();
                 await profileService.createProfile({
-                    profileName: profileName.trim(),
+                    profileName: trimmedName,
                     mnemonic,
                     password,
                     localInstanceId,
@@ -193,7 +198,9 @@ export function CreateNewProfile({
                     retainMnemonic: true,
                     initialReachPreset: "medium",
                 });
-                onProfileCreated();
+                const listed = await authService.listProfiles().catch(() => []);
+                const created = Array.isArray(listed) ? listed.find((p) => p.profileName === trimmedName) : undefined;
+                onProfileCreated(trimmedName, created?.folderName);
             } catch (err) {
                 setFeedbackMsg(`${t('profile.errorPrefix')}: ${translateError(err, t)}`);
             } finally {
@@ -204,6 +211,8 @@ export function CreateNewProfile({
 
     async function handleFinalizeExpertProfile(e?: FormEvent) {
         e?.preventDefault();
+        const trimmedName = profileName.trim();
+        if (!trimmedName) { setFeedbackMsg(t('profile.profileNameRequired')); return; }
         if (password !== confirmPassword) { setFeedbackMsg(t('profile.passwordMismatch')); return; }
         if (password.length < 8) { setFeedbackMsg(t('profile.passwordMinLength')); return; }
         if (passphrase !== confirmPassphrase) { setFeedbackMsg(t('profile.passphraseMismatch')); return; }
@@ -214,7 +223,7 @@ export function CreateNewProfile({
             try {
                 const localInstanceId = await authService.getLocalInstanceId();
                 await profileService.createProfile({
-                    profileName,
+                    profileName: trimmedName,
                     mnemonic: generatedSeed.join(' '),
                     passphrase: passphrase || undefined,
                     userPrefix: isSubAccount ? (userPrefix || undefined) : undefined,
@@ -224,7 +233,9 @@ export function CreateNewProfile({
                     retainMnemonic,
                     initialReachPreset: "medium",
                 });
-                onProfileCreated();
+                const listed = await authService.listProfiles().catch(() => []);
+                const created = Array.isArray(listed) ? listed.find((p) => p.profileName === trimmedName) : undefined;
+                onProfileCreated(trimmedName, created?.folderName);
             } catch (e) {
                 setFeedbackMsg(`${t('profile.errorPrefix')}: ${translateError(e, t)}`);
             } finally {
@@ -502,7 +513,8 @@ export function CreateNewProfile({
                                 <textarea
                                     id="bulk-seed-input"
                                     value={bulkSeedInput}
-                                    onChange={(e) => setBulkSeedInput(cleanSeedText(e.target.value))}
+                                    onChange={(e) => setBulkSeedInput(e.target.value)}
+                                    onBlur={() => setBulkSeedInput((prev) => cleanSeedText(prev))}
                                     className="w-full h-32 px-4 py-3 bg-white border border-theme-subtle rounded-2xl text-theme-primary font-mono text-sm focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft transition-all"
                                     placeholder={t('profile.pasteHere')}
                                     required
@@ -712,7 +724,7 @@ export function CreateNewProfile({
                 </div>
             </div>
 
-            {activeSocialSession && onSwitchToRestore && (
+            {activeSocialSession && activeSocialSession.sessionMode !== 'reset_local_password' && onSwitchToRestore && (
                 <AlertBanner
                     variant="info"
                     data-testid="create-profile-resume-social-banner"

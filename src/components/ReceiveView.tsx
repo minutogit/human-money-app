@@ -494,11 +494,43 @@ export function ReceiveView({ onBack, onReceiveSuccess, droppedFile }: ReceiveVi
                     }
                 }
                 
-                const standardTomlContent = (matchedStandardUuid && standardDefinitionsToml[matchedStandardUuid])
-                    || Object.values(standardDefinitionsToml)[0]
-                    || "";
+                const allStandards = Object.values(standardDefinitionsToml);
+                const preferredToml = matchedStandardUuid ? standardDefinitionsToml[matchedStandardUuid] : undefined;
+                const standardCandidates = preferredToml
+                    ? [preferredToml, ...allStandards.filter((s) => s !== preferredToml)]
+                    : allStandards;
+                const tomlCandidates = standardCandidates.length > 0 ? standardCandidates : [""];
+
                 const updatedInstanceId = await protectAction(async (walletPassword) => {
-                    return await voucherService.processAndAttachSignature(fileData, standardTomlContent, password || undefined, walletPassword || undefined);
+                    let lastErr: unknown = null;
+                    for (const stdToml of tomlCandidates) {
+                        try {
+                            return await voucherService.processAndAttachSignature(
+                                fileData,
+                                stdToml,
+                                password || undefined,
+                                walletPassword || undefined
+                            );
+                        } catch (err) {
+                            const errMsg = stringifyError(err);
+                            const errCode = isBackendError(err) ? err.code : '';
+                            if (
+                                errCode === 'error.wallet.locked' ||
+                                errCode === 'error.auth.sessionTimeout' ||
+                                errCode === 'error.auth.passwordRequired' ||
+                                errMsg.includes('Password required') ||
+                                errMsg.includes('Session timed out') ||
+                                errMsg.includes('Wallet is locked') ||
+                                errMsg.toLowerCase().includes('decrypt') ||
+                                errMsg.includes('SymmetricEncryption') ||
+                                errMsg.includes('MacError')
+                            ) {
+                                throw err;
+                            }
+                            lastErr = err;
+                        }
+                    }
+                    throw lastErr;
                 });
                 
                 if (updatedInstanceId) {
@@ -542,11 +574,25 @@ export function ReceiveView({ onBack, onReceiveSuccess, droppedFile }: ReceiveVi
                 const cardResult = await protectAction(async (walletPassword) => {
                     return await marketService.importContactCard(text, walletPassword || undefined);
                 });
-                if (cardResult && navigate) {
-                    navigate({
-                        view: 'marketplace',
-                        selectedDid: cardResult.did ?? undefined,
-                    });
+                if (cardResult) {
+                    if (cardResult.status === 'accepted' && cardResult.did && navigate) {
+                        navigate({
+                            view: 'marketplace',
+                            selectedDid: cardResult.did,
+                        });
+                    } else {
+                        const statusMsg =
+                            cardResult.status === 'ignored_stale'
+                                ? t('marketplace.importIgnoredDesc')
+                                : cardResult.status === 'rejected_expired'
+                                ? t('marketplace.importExpiredDesc')
+                                : cardResult.status === 'rejected_hops'
+                                ? t('marketplace.importHopsDesc')
+                                : cardResult.status === 'rejected_offender'
+                                ? t('marketplace.importOffenderDesc')
+                                : cardResult.status;
+                        setFeedbackMsg(statusMsg);
+                    }
                 }
             }
         } catch (e) {

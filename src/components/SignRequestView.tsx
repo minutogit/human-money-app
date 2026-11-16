@@ -277,6 +277,9 @@ export function SignRequestView({ voucherData, requestMsgId, senderDid, onBack }
                     }
 
                     setSavedSigFilePath(filePath);
+                    if (requestMsgId) {
+                        await postService.dismissPendingPostItem('sign_request', requestMsgId).catch(() => {});
+                    }
                 }
             }
         } catch (e) {

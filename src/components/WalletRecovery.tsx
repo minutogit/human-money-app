@@ -29,7 +29,7 @@ import {
 } from 'lucide-react';
 
 interface WalletRecoveryProps {
-    onRecoverySuccess: () => void;
+    onRecoverySuccess: (folderName?: string) => void;
     onSwitchToLogin: () => void;
     initialPayload?: string;
     defaultMethod?: 'choose' | 'social' | 'words';
@@ -111,9 +111,9 @@ export function WalletRecovery({
             .then((available) => {
                 if (!active) return;
                 setProfiles(available);
-                if (available.length > 0) {
+                if (available.length === 1) {
                     setSelectedProfile((prev) => prev || available[0].folderName);
-                } else {
+                } else if (available.length === 0) {
                     setFeedbackMsg(t('auth.noProfilesToRecover'));
                     setFeedbackType('error');
                 }
@@ -171,7 +171,7 @@ export function WalletRecovery({
                 localInstanceId,
                 language: seedState.language,
             });
-            onRecoverySuccess();
+            onRecoverySuccess(selectedProfile);
         } catch (err) {
             setFeedbackMsg(`${t('auth.errorRecoveringWallet')}: ${translateError(err, t)}`);
             setFeedbackType('error');
@@ -216,11 +216,22 @@ export function WalletRecovery({
                     <select
                         id="profile-select"
                         value={selectedProfile}
-                        onChange={(e) => setSelectedProfile(e.target.value)}
+                        onChange={(e) => {
+                            setSelectedProfile(e.target.value);
+                            if (feedbackType === 'error') {
+                                setFeedbackMsg('');
+                                setFeedbackType(null);
+                            }
+                        }}
                         disabled={Boolean(activeSocialSession?.targetFolderName && method === 'social')}
                         data-testid="profile-select"
                         className="w-full bg-white border border-theme-subtle rounded-2xl px-4 py-3.5 text-sm font-bold text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft appearance-none transition-all disabled:opacity-70"
                     >
+                        {profiles.length > 1 && (
+                            <option value="">
+                                {t('auth.selectProfileToRecover')}
+                            </option>
+                        )}
                         {profiles.map((profile) => (
                             <option key={profile.folderName} value={profile.folderName}>
                                 {profile.profileName}
@@ -240,6 +251,21 @@ export function WalletRecovery({
             {/* Top Choice: 2 Equal Cards */}
             {method === 'choose' && (
                 <div className="space-y-5 animate-in fade-in duration-300">
+                    {feedbackMsg && (
+                        <AlertBanner
+                            data-testid="feedback-message"
+                            variant={
+                                feedbackType === 'error'
+                                    ? 'error'
+                                    : feedbackType === 'success'
+                                      ? 'success'
+                                      : 'info'
+                            }
+                        >
+                            {feedbackMsg}
+                        </AlertBanner>
+                    )}
+
                     {activeSocialSession && (
                         <AlertBanner
                             variant="info"
@@ -267,7 +293,14 @@ export function WalletRecovery({
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <button
                             type="button"
-                            onClick={() => setMethod('social')}
+                            onClick={() => {
+                                if (!selectedProfile) {
+                                    setFeedbackMsg(t('auth.selectProfileToRecover'));
+                                    setFeedbackType('error');
+                                    return;
+                                }
+                                setMethod('social');
+                            }}
                             data-testid="wallet-recovery-choose-social"
                             className="p-6 bg-bg-surface hover:bg-theme-subtle/30 border-2 border-theme-subtle hover:border-theme-primary rounded-3xl text-left transition-all group shadow-sm flex flex-col justify-between cursor-pointer"
                         >
@@ -290,7 +323,14 @@ export function WalletRecovery({
 
                         <button
                             type="button"
-                            onClick={() => setMethod('words')}
+                            onClick={() => {
+                                if (!selectedProfile) {
+                                    setFeedbackMsg(t('auth.selectProfileToRecover'));
+                                    setFeedbackType('error');
+                                    return;
+                                }
+                                setMethod('words');
+                            }}
                             data-testid="wallet-recovery-choose-words"
                             className="p-6 bg-bg-surface hover:bg-theme-subtle/30 border-2 border-theme-subtle hover:border-theme-primary rounded-3xl text-left transition-all group shadow-sm flex flex-col justify-between cursor-pointer"
                         >
@@ -336,7 +376,7 @@ export function WalletRecovery({
                         }
                         initialPayload={initialPayload}
                         onBack={() => setMethod('choose')}
-                        onSuccess={() => onRecoverySuccess()}
+                        onSuccess={() => onRecoverySuccess(selectedProfile)}
                     />
                     <div className="flex justify-center pt-1">
                         <Button type="button" variant="outline" size="sm" onClick={onSwitchToLogin}>

@@ -225,5 +225,19 @@ describe('humocoUri Utilities', () => {
       expect(parseCardUri('humoco://card?other=param')).toBeNull();
       expect(parseCardUri('https://example.com/card?env=123')).toBeNull();
     });
+
+    it('handles trailing punctuation, case-insensitive schemes, and German comma decimals in chat paste', () => {
+      const contactRes = parseContactCard(`Bitte nimm (HUMOCO://CONTACT?did=${encodeURIComponent(sampleDid)}).`);
+      expect(contactRes?.did).toBe(sampleDid);
+
+      const payRes = parsePaymentRequest(
+        `Überweise bitte an HUMOCO://PAY?to=${encodeURIComponent(sampleDid)}&amount=15,50.`
+      );
+      expect(payRes?.to).toBe(sampleDid);
+      expect(payRes?.amount).toBe('15.50');
+
+      const cardRes = parseCardUri(`Meine Karte: humoco://card?env=${sampleB64}!`);
+      expect(cardRes?.envBase64).toBe(sampleB64);
+    });
   });
 });

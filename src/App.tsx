@@ -46,8 +46,8 @@ function AppContent() {
                     const res = await protectAction(async (pwd) => {
                         return await marketService.importContactCard(targetUri, pwd || undefined);
                     });
-                    if (res) {
-                        navigate({ view: 'marketplace', selectedDid: res.did ?? undefined });
+                    if (res && res.status === 'accepted' && res.did) {
+                        navigate({ view: 'marketplace', selectedDid: res.did });
                     }
                 } catch (err) {
                     logger.error("Failed to import card from URI: " + String(err));
@@ -55,25 +55,26 @@ function AppContent() {
             }
         };
 
-        if (uri.includes('humoco://card') || uri.includes('?env=')) {
+        const lowerUri = uri.toLowerCase();
+        if (lowerUri.includes('humoco://card') || lowerUri.includes('?env=')) {
             if (isLoggedIn) {
                 handleUriImport(uri);
             } else {
                 setPendingDeepLink(uri);
             }
-        } else if (uri.includes('humoco://pay')) {
+        } else if (lowerUri.includes('humoco://pay')) {
             if (isLoggedIn) {
                 navigate({ view: 'send_vouchers', initialPaymentUri: uri });
             } else {
                 setPendingDeepLink(uri);
             }
-        } else if (uri.includes('humoco://contact')) {
+        } else if (lowerUri.includes('humoco://contact')) {
             if (isLoggedIn) {
                 navigate({ view: 'address_book', initialContactPayload: uri });
             } else {
                 setPendingDeepLink(uri);
             }
-        } else if (uri.includes('humoco://recovery-reply')) {
+        } else if (lowerUri.includes('humoco://recovery-reply')) {
             recoveryService
                 .getActiveRecoverySession()
                 .then((session) => {
@@ -86,13 +87,13 @@ function AppContent() {
                 .catch(() => {
                     navigate({ view: 'restore_backup', initialMethod: 'social', initialPayload: uri });
                 });
-        } else if (uri.includes('humoco://kit')) {
+        } else if (lowerUri.includes('humoco://kit')) {
             if (appStateViewRef.current === 'needs_recovery') {
                 navigate({ view: 'needs_recovery', initialPayload: uri });
             } else {
                 navigate({ view: 'restore_backup', initialMethod: 'words_or_sheet', initialPayload: uri });
             }
-        } else if (uri.includes('humoco://recovery-req')) {
+        } else if (lowerUri.includes('humoco://recovery-req')) {
             if (isLoggedIn) {
                 setReleaseRequestUri(uri);
                 setReleaseModalOpen(true);
@@ -113,7 +114,7 @@ function AppContent() {
     useEffect(() => {
         if (typeof window !== 'undefined') {
             const currentUrl = window.location.href;
-            if (currentUrl.includes('humoco://') || currentUrl.includes('?env=')) {
+            if (currentUrl.toLowerCase().includes('humoco://') || currentUrl.toLowerCase().includes('?env=')) {
                 handleDeepLink(currentUrl);
             }
 

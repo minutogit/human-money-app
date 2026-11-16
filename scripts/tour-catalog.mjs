@@ -1103,7 +1103,6 @@ export function getTauriMockInitScript(initialScenario = 'normal') {
             return MOCK_MY_MARKET_PROFILE;
         },
         "export_forward_card": () => ({ exportPayload: "humoco://card/alice_payload", targetDid: MOCK_USER_DID }),
-        "recommend_market_card": () => ({ exportPayload: "humoco://card/rec_payload", targetDid: MOCK_USER_DID }),
         "import_contact_card": () => ({ did: MOCK_CAROL_DID, importedCount: 1 }),
         "delete_foreign_contact_card": () => null,
         "preview_contact_trust_change": () => ({ scoreDelta: 0.25, newLevel: 3, bottlenecks: [] }),

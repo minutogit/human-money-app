@@ -92,15 +92,16 @@ export function GlobalFileDropZone({ children }: GlobalFileDropZoneProps) {
 
     // Check plain text drops first (e.g. dragged links)
     const rawText = e.dataTransfer?.getData('text/plain');
+    const rawLower = rawText ? rawText.toLowerCase() : '';
     if (
       rawText &&
-      (rawText.includes('humoco://recovery-reply') ||
-        rawText.includes('humoco://kit') ||
-        rawText.includes('humoco://recovery-req') ||
-        rawText.includes('humoco://card') ||
-        rawText.includes('humoco://pay') ||
-        rawText.includes('humoco://contact') ||
-        rawText.includes('?env='))
+      (rawLower.includes('humoco://recovery-reply') ||
+        rawLower.includes('humoco://kit') ||
+        rawLower.includes('humoco://recovery-req') ||
+        rawLower.includes('humoco://card') ||
+        rawLower.includes('humoco://pay') ||
+        rawLower.includes('humoco://contact') ||
+        rawLower.includes('?env='))
     ) {
       window.dispatchEvent(new CustomEvent('humoco:deeplink', { detail: rawText.trim() }));
       return;
@@ -109,31 +110,23 @@ export function GlobalFileDropZone({ children }: GlobalFileDropZoneProps) {
     const files = e.dataTransfer?.files;
     if (files && files.length > 0) {
       const file = files[0];
+      const lowerName = file.name.toLowerCase();
 
       // Check if dropped text file contains a humoco:// deep link
-      if (file.name.endsWith('.txt') || file.name.endsWith('.html') || file.name.endsWith('.json')) {
+      if (lowerName.endsWith('.txt') || lowerName.endsWith('.html') || lowerName.endsWith('.json')) {
         try {
           const text = await file.text();
-          if (
-            text.includes('humoco://recovery-reply') ||
-            text.includes('humoco://kit') ||
-            text.includes('humoco://recovery-req') ||
-            text.includes('humoco://card') ||
-            text.includes('humoco://pay') ||
-            text.includes('humoco://contact')
-          ) {
-            const match = text.match(/humoco:\/\/(recovery-reply|kit|recovery-req|card|pay|contact)[^\s"'>]+/);
-            if (match) {
-              window.dispatchEvent(new CustomEvent('humoco:deeplink', { detail: match[0] }));
-              return;
-            }
+          const match = text.match(/humoco:\/\/(recovery-reply|kit|recovery-req|card|pay|contact)[^\s"'>]+/i);
+          if (match) {
+            window.dispatchEvent(new CustomEvent('humoco:deeplink', { detail: match[0] }));
+            return;
           }
         } catch {
           // ignore read failure and proceed
         }
       }
 
-      if (file.name.toLowerCase().endsWith('.hmcbackup')) {
+      if (lowerName.endsWith('.hmcbackup')) {
         try {
           const buf = await file.arrayBuffer();
           const bytes = Array.from(new Uint8Array(buf));
@@ -162,7 +155,7 @@ export function GlobalFileDropZone({ children }: GlobalFileDropZoneProps) {
       }
 
       // Handle .hmcard files specifically
-      if (file.name.endsWith('.hmcard')) {
+      if (lowerName.endsWith('.hmcard')) {
         try {
           const text = await file.text();
           const res = await protectAction(async (pwd) => {
@@ -188,10 +181,12 @@ export function GlobalFileDropZone({ children }: GlobalFileDropZoneProps) {
               message: feedback,
               did: res.did ?? undefined,
             });
-            navigate({
-              view: 'marketplace',
-              selectedDid: res.did ?? undefined,
-            });
+            if (res.status === 'accepted' && res.did) {
+              navigate({
+                view: 'marketplace',
+                selectedDid: res.did,
+              });
+            }
           }
         } catch (err) {
           logger.error("Failed to import dropped .hmcard: " + stringifyError(err));
@@ -203,7 +198,7 @@ export function GlobalFileDropZone({ children }: GlobalFileDropZoneProps) {
         return;
       }
 
-      const hasValidExt = VALID_DROP_EXTENSIONS.some(ext => file.name.endsWith(ext));
+      const hasValidExt = VALID_DROP_EXTENSIONS.some(ext => lowerName.endsWith(ext));
       if (hasValidExt) {
         try {
           const buf = await file.arrayBuffer();

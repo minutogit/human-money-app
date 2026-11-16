@@ -30,10 +30,11 @@ interface ForkLockOverlayProps {
 
 export function ForkLockOverlay({ onStartRecovery }: ForkLockOverlayProps) {
     const { t } = useTranslation();
-    const { lockdownKind, lockdownDetails, profileName, clearLocks, notifyLogout, notifyLogin } = useSession();
+    const { lockdownKind, lockdownDetails, profileName, folderName: sessionFolderName, clearLocks, notifyLogout, notifyLogin } = useSession();
     const { navigate } = useNavigation();
 
     const [profiles, setProfiles] = useState<ProfileInfo[]>([]);
+    const [ownUserId, setOwnUserId] = useState<string | null>(null);
     const [showReclaim, setShowReclaim] = useState(false);
     const [reclaimPassword, setReclaimPassword] = useState("");
     const [isReclaiming, setIsReclaiming] = useState(false);
@@ -52,12 +53,20 @@ export function ForkLockOverlay({ onStartRecovery }: ForkLockOverlayProps) {
                 if (active) setProfiles(res);
             })
             .catch(() => {});
+        profileService.getUserId()
+            .then((id) => {
+                if (active && id) setOwnUserId(id);
+            })
+            .catch(() => {});
         return () => {
             active = false;
         };
     }, []);
 
-    const activeProfile = profiles.find(p => p.profileName === profileName) || profiles[0];
+    const activeProfile =
+        (sessionFolderName ? profiles.find(p => p.folderName === sessionFolderName) : undefined) ??
+        (ownUserId ? profiles.find(p => p.userId && p.userId === ownUserId) : undefined) ??
+        (profiles.length === 1 ? profiles.find(p => p.profileName === profileName) : undefined);
     const folderName = activeProfile?.folderName || "";
     const displayName = activeProfile?.profileName || profileName || t('profile.unknown');
 
@@ -87,7 +96,7 @@ export function ForkLockOverlay({ onStartRecovery }: ForkLockOverlayProps) {
                 targetInstanceId: localInstanceId,
             });
             clearLocks();
-            notifyLogin(displayName);
+            notifyLogin(displayName, folderName || undefined);
         } catch (err) {
             setReclaimError(translateError(err, t));
         } finally {
