@@ -463,4 +463,34 @@ describe('RestoreBackupView', () => {
             expect(screen.getByTestId('seed-user-prefix-input')).toBeInTheDocument();
         });
     });
+
+    it('shows missing sync hint in direct words setup and allows switching to contact recovery', async () => {
+        vi.mocked(backupService.previewMnemonicIdentity).mockResolvedValue({
+            userId: 'did:key:z6MkAlice',
+            localCollision: null,
+        });
+
+        render(
+            <RestoreBackupView
+                onRestoreSuccess={onRestoreSuccess}
+                onBack={onBack}
+                initialMethod="words_or_sheet"
+            />
+        );
+
+        fireEvent.change(screen.getByTestId('restore-words-word-0'), {
+            target: { value: VALID_12 },
+        });
+        await waitFor(() => expect(screen.getByTestId('words-continue-btn')).not.toBeDisabled());
+        fireEvent.click(screen.getByTestId('words-continue-btn'));
+
+        await waitFor(() => {
+            expect(screen.getByTestId('direct-open-no-sync-hint')).toBeInTheDocument();
+        });
+
+        fireEvent.click(screen.getByTestId('switch-to-social-from-words-btn'));
+        await waitFor(() => {
+            expect(screen.getByTestId('start-social-recovery-btn')).toBeInTheDocument();
+        });
+    });
 });

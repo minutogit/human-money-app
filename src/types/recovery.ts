@@ -96,10 +96,13 @@ export interface ActiveRecoverySessionDto {
     ownerDisplayName: string | null;
     rotationEpoch: number | null;
     thresholdM: number | null;
+    totalN?: number | null;
     collectedCount: number;
+    collectedShareIndices?: number[];
     questionIds: [number, number, number] | null;
     hasEnoughShares: boolean;
     discoveredSyncUrls: string[];
+    lastImportStatus?: 'added' | 'duplicate' | string | null;
 }
 
 export interface GuardianRecoveryRequestInspectionDto {

@@ -32,6 +32,7 @@ function AppContent() {
 
     const [releaseModalOpen, setReleaseModalOpen] = useState(false);
     const [releaseRequestUri, setReleaseRequestUri] = useState<string | undefined>(undefined);
+    const [releaseInitialOwnerDid, setReleaseInitialOwnerDid] = useState<string | undefined>(undefined);
     const [pendingDeepLink, setPendingDeepLink] = useState<string | null>(null);
 
     const handleDeepLink = useCallback((uri: string) => {
@@ -118,8 +119,9 @@ function AppContent() {
 
     useEffect(() => {
         const onOpenRelease = (e: Event) => {
-            const customEv = e as CustomEvent<{ requestUri?: string } | undefined>;
+            const customEv = e as CustomEvent<{ requestUri?: string; ownerDid?: string } | undefined>;
             setReleaseRequestUri(customEv.detail?.requestUri);
+            setReleaseInitialOwnerDid(customEv.detail?.ownerDid);
             setReleaseModalOpen(true);
         };
         window.addEventListener('humoco:open-guardian-release', onOpenRelease);
@@ -195,8 +197,10 @@ function AppContent() {
                     onClose={() => {
                         setReleaseModalOpen(false);
                         setReleaseRequestUri(undefined);
+                        setReleaseInitialOwnerDid(undefined);
                     }}
                     initialRequestUri={releaseRequestUri}
+                    initialOwnerDid={releaseInitialOwnerDid}
                 />
             </div>
     );

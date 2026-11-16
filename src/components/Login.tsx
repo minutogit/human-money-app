@@ -6,13 +6,15 @@ import logo from "../assets/logo.png";
 
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { authService } from "../services/authService";
+import { recoveryService } from "../services/recoveryService";
 import { AuthLayout } from "./AuthLayout";
 import { profileService } from "../services/profileService";
 import { logger } from "../utils/log";
 import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
 import { Card } from "./ui/Card";
-import { ProfileInfo } from "../types";
+import { AlertBanner } from "./ui/AlertBanner";
+import { ActiveRecoverySessionDto, ProfileInfo } from "../types";
 import { HelpIcon } from "./ui/HelpIcon";
 import { Advanced } from "./ui/Advanced";
 import { useNavigation } from "../context/NavigationContext";
@@ -73,6 +75,8 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRestoreBacku
     const [isDeleting, setIsDeleting] = useState(false);
     const [isVerifyingDelete, setIsVerifyingDelete] = useState(false);
     const [deleteError, setDeleteError] = useState("");
+    const [activeSocialSession, setActiveSocialSession] =
+        useState<ActiveRecoverySessionDto | null>(null);
     
     const passwordInputRef = useRef<HTMLInputElement>(null);
 
@@ -114,6 +118,21 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRestoreBacku
             active = false;
         };
     }, [selectedProfile, t]);
+
+    useEffect(() => {
+        let active = true;
+        recoveryService
+            .getActiveRecoverySession?.()
+            ?.then((session) => {
+                if (active && session) {
+                    setActiveSocialSession(session);
+                }
+            })
+            ?.catch(() => {});
+        return () => {
+            active = false;
+        };
+    }, []);
 
     async function handleLogin() {
         if (!selectedProfile || !password) {
@@ -529,6 +548,36 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRestoreBacku
                             </p>
                         </div>
                     </div>
+
+                    {activeSocialSession && (
+                        <AlertBanner
+                            variant="info"
+                            data-testid="login-resume-social-banner"
+                            action={
+                                <Button
+                                    type="button"
+                                    variant="primary"
+                                    size="xs"
+                                    data-testid="login-resume-social-btn"
+                                    onClick={() => {
+                                        if (activeSocialSession.sessionMode === 'reset_local_password') {
+                                            onSwitchToReset();
+                                        } else {
+                                            navigate({ view: 'restore_backup', initialMethod: 'social' });
+                                        }
+                                    }}
+                                >
+                                    {t('backup.resumeSessionBtn')}
+                                </Button>
+                            }
+                        >
+                            {t('backup.resumeSessionDesc', {
+                                code: activeSocialSession.sasCode,
+                                collected: activeSocialSession.collectedCount,
+                                required: activeSocialSession.thresholdM ?? '?',
+                            })}
+                        </AlertBanner>
+                    )}
 
                     {profiles.length > 0 ? (
                         <form className="space-y-6" onSubmit={(e) => { e.preventDefault(); handleLogin(); }}>

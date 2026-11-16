@@ -126,13 +126,16 @@ export const RestoreBackupView: React.FC<RestoreBackupViewProps> = ({
 
     // Load active social recovery session for resume banner
     useEffect(() => {
+        if (method !== 'choose') return;
         let active = true;
         recoveryService
             .getActiveRecoverySession()
             .then((session) => {
-                if (!active || !session) return;
-                if (!session.sessionMode || session.sessionMode === 'restore_new_device') {
+                if (!active) return;
+                if (session && (!session.sessionMode || session.sessionMode === 'restore_new_device')) {
                     setActiveSocialSession(session);
+                } else {
+                    setActiveSocialSession(null);
                 }
             })
             .catch(() => {
@@ -141,7 +144,7 @@ export const RestoreBackupView: React.FC<RestoreBackupViewProps> = ({
         return () => {
             active = false;
         };
-    }, []);
+    }, [method]);
 
     // React to dynamic prop updates (deep links or dropped files)
     useEffect(() => {
@@ -950,6 +953,26 @@ export const RestoreBackupView: React.FC<RestoreBackupViewProps> = ({
                     {t('backup.directOpenProfileDesc')}
                 </p>
             </div>
+
+            {wordsPhase === 'direct_setup' && !seedState.userPrefix.trim() && !syncInput.trim() && (
+                <AlertBanner
+                    variant="info"
+                    data-testid="direct-open-no-sync-hint"
+                    action={
+                        <Button
+                            type="button"
+                            variant="secondary"
+                            size="xs"
+                            data-testid="switch-to-social-from-words-btn"
+                            onClick={() => setMethod('social')}
+                        >
+                            {t('backup.restorePrimaryContacts')}
+                        </Button>
+                    }
+                >
+                    {t('backup.directOpenNoSyncWarning')}
+                </AlertBanner>
+            )}
 
             <div className="space-y-1.5">
                 <label className="block text-xs font-bold text-theme-secondary">

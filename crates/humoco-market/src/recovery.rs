@@ -921,7 +921,7 @@ pub fn build_recovery_request_uri(
 /// Parses a `humoco://recovery-req` URI.
 pub fn parse_recovery_request_uri(uri: &str) -> Result<RecoveryRequestLink, MarketError> {
     let trimmed = uri.trim();
-    let query_str = if let Some(stripped) = trimmed.strip_prefix("humoco://recovery-req?") {
+    let raw_query = if let Some(stripped) = trimmed.strip_prefix("humoco://recovery-req?") {
         stripped
     } else if let Some(stripped) = trimmed.strip_prefix("recovery-req?") {
         stripped
@@ -932,6 +932,10 @@ pub fn parse_recovery_request_uri(uri: &str) -> Result<RecoveryRequestLink, Mark
             "Invalid recovery request URI: missing 'recovery-req?'".to_string(),
         ));
     };
+    let query_str = raw_query
+        .split(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '>' | ')'))
+        .next()
+        .unwrap_or("");
 
     let mut v: Option<u8> = None;
     let mut pk_opt: Option<[u8; 32]> = None;
@@ -1059,7 +1063,7 @@ pub fn open_and_verify_guardian_release_reply(
     uri: &str,
 ) -> Result<GuardianReleasePayload, MarketError> {
     let trimmed = uri.trim();
-    let query_str = if let Some(stripped) = trimmed.strip_prefix("humoco://recovery-reply?") {
+    let raw_query = if let Some(stripped) = trimmed.strip_prefix("humoco://recovery-reply?") {
         stripped
     } else if let Some(stripped) = trimmed.strip_prefix("recovery-reply?") {
         stripped
@@ -1070,6 +1074,10 @@ pub fn open_and_verify_guardian_release_reply(
             "Invalid recovery reply URI: missing 'recovery-reply?'".to_string(),
         ));
     };
+    let query_str = raw_query
+        .split(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '>' | ')'))
+        .next()
+        .unwrap_or("");
 
     let mut v: Option<u8> = None;
     let mut data_opt: Option<String> = None;

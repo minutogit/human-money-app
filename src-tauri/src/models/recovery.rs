@@ -122,10 +122,16 @@ pub struct ActiveRecoverySessionDto {
     pub owner_display_name: Option<String>,
     pub rotation_epoch: Option<u32>,
     pub threshold_m: Option<u8>,
+    #[serde(default)]
+    pub total_n: Option<u8>,
     pub collected_count: usize,
+    #[serde(default)]
+    pub collected_share_indices: Vec<u8>,
     pub question_ids: Option<[u8; 3]>,
     pub has_enough_shares: bool,
     pub discovered_sync_urls: Vec<String>,
+    #[serde(default)]
+    pub last_import_status: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

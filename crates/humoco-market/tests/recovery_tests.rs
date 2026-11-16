@@ -705,6 +705,24 @@ fn test_guardian_release_reply_sealing_and_verification() {
     // Wrong sk_temp fails
     let wrong_sk = [99u8; 32];
     assert!(open_and_verify_guardian_release_reply(&wrong_sk, &reply_uri).is_err());
+
+    // Chat message wrapping around both request and reply URIs
+    let req_uri = build_recovery_request_uri(&pk_temp, 1700000000, None);
+    let chat_req = format!(
+        "Hallo Bernd!\nKannst du mir helfen?\n{}\nMeine Kontrollzahl ist {}\nDanke!",
+        req_uri,
+        compute_recovery_sas(&pk_temp)
+    );
+    let parsed_req = parse_recovery_request_uri(&chat_req).unwrap();
+    assert_eq!(parsed_req.pk_temp, pk_temp);
+    assert_eq!(parsed_req.ts, 1700000000);
+
+    let chat_reply = format!(
+        "Klar, hier ist meine Freigabe:\n\"{}\"\nSag Bescheid, wenn es geklappt hat!",
+        reply_uri
+    );
+    let opened_from_chat = open_and_verify_guardian_release_reply(&sk_temp, &chat_reply).unwrap();
+    assert_eq!(opened_from_chat, reply_payload);
 }
 
 // ============================================================================

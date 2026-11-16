@@ -59,6 +59,7 @@ import {
     QrCode,
     SlidersHorizontal,
     ShieldCheck,
+    UserCheck,
 } from 'lucide-react';
 import { recoveryService } from '../services/recoveryService';
 import { GuardianSetupModal } from './GuardianSetupModal';
@@ -120,6 +121,7 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, i
     const [isAcceptingHandshake, setIsAcceptingHandshake] = useState<string | null>(null);
 
     const [guardianDids, setGuardianDids] = useState<Set<string>>(new Set());
+    const [guardianWardDids, setGuardianWardDids] = useState<Set<string>>(new Set());
     const [isGuardianSetupOpen, setIsGuardianSetupOpen] = useState(false);
 
     const hasSyncService = (syncOverview?.connectedCount ?? 0) > 0;
@@ -155,6 +157,11 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, i
                 setGuardianDids(new Set(protectionStatus.guardians.map(g => g.userId)));
             } else {
                 setGuardianDids(new Set());
+            }
+            if (Array.isArray(protectionStatus?.guardianWards)) {
+                setGuardianWardDids(new Set(protectionStatus.guardianWards.map(w => w.ownerDid)));
+            } else {
+                setGuardianWardDids(new Set());
             }
             if (postInbox) {
                 setPendingHandshakes(postInbox.pendingWotHandshakes || []);
@@ -675,6 +682,17 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, i
                         <ShieldCheck size={18} />
                         <span>{t('backup.socialRecoveryStatusLabel')}</span>
                     </Button>
+                    <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => window.dispatchEvent(new CustomEvent('humoco:open-guardian-release'))}
+                        className="gap-2"
+                        title={t('backup.helpContactRecoveryBtn')}
+                        data-testid="open-guardian-release-btn"
+                    >
+                        <UserCheck size={18} />
+                        <span>{t('backup.helpContactRecoveryBtn')}</span>
+                    </Button>
                 </>
             }
         >
@@ -1115,6 +1133,24 @@ const AddressBook: React.FC<AddressBookProps> = ({ onBack, initialSearchQuery, i
                                                             <ShieldCheck size={10} />
                                                             {t('backup.socialRecoveryStatusLabel')}
                                                         </span>
+                                                    )}
+                                                    {guardianWardDids.has(contact.did) && (
+                                                        <button
+                                                            type="button"
+                                                            data-testid={`open-ward-release-${contact.did}`}
+                                                            onClick={() =>
+                                                                window.dispatchEvent(
+                                                                    new CustomEvent('humoco:open-guardian-release', {
+                                                                        detail: { ownerDid: contact.did },
+                                                                    })
+                                                                )
+                                                            }
+                                                            title={t('backup.guardianWardBadgeHint')}
+                                                            className="px-2 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wider border shadow-sm bg-sky-50 hover:bg-sky-100 text-sky-800 border-sky-200 flex items-center gap-1 cursor-pointer transition-colors"
+                                                        >
+                                                            <UserCheck size={10} />
+                                                            {t('backup.addressBookOpenRelease')}
+                                                        </button>
                                                     )}
                                                     <span
                                                         title={t('contacts.trustLevelHint')}

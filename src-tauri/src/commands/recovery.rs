@@ -295,6 +295,22 @@ pub(crate) fn delete_active_session_from_path(path: &Path) {
     }
 }
 
+fn resolve_ward_display_name(
+    owner_did: &str,
+    fallback_name: &str,
+    contacts: &[crate::models::FrontendContact],
+) -> String {
+    if let Some(contact) = contacts.iter().find(|c| are_dids_equal(&c.did, owner_did)) {
+        let first = contact.profile.first_name.as_deref().unwrap_or("").trim();
+        let last = contact.profile.last_name.as_deref().unwrap_or("").trim();
+        let full = format!("{} {}", first, last).trim().to_string();
+        if !full.is_empty() {
+            return full;
+        }
+    }
+    fallback_name.to_string()
+}
+
 pub(crate) fn build_active_session_dto(
     session: &ActiveRecoverySessionFile,
 ) -> ActiveRecoverySessionDto {
@@ -316,6 +332,10 @@ pub(crate) fn build_active_session_dto(
     if let Some(((_, epoch), list)) = best_group {
         let first = list[0];
         let threshold_m = first.entry.threshold_m;
+        let total_n = first.entry.total_n;
+        let mut collected_share_indices: Vec<u8> =
+            list.iter().map(|r| r.entry.share.index).collect();
+        collected_share_indices.sort_unstable();
         let mut discovered_sync_urls = Vec::new();
         for r in &list {
             for d in &r.entry.backup_sync_descriptors {
@@ -341,10 +361,13 @@ pub(crate) fn build_active_session_dto(
             owner_display_name: Some(first.entry.owner_display_name.clone()),
             rotation_epoch: Some(epoch),
             threshold_m: Some(threshold_m),
+            total_n: Some(total_n),
             collected_count: list.len(),
+            collected_share_indices,
             question_ids: Some(first.entry.question_ids),
             has_enough_shares: list.len() >= threshold_m as usize,
             discovered_sync_urls,
+            last_import_status: None,
         }
     } else {
         ActiveRecoverySessionDto {
@@ -358,10 +381,13 @@ pub(crate) fn build_active_session_dto(
             owner_display_name: None,
             rotation_epoch: None,
             threshold_m: None,
+            total_n: None,
             collected_count: 0,
+            collected_share_indices: Vec::new(),
             question_ids: None,
             has_enough_shares: false,
             discovered_sync_urls: Vec::new(),
+            last_import_status: None,
         }
     }
 }
@@ -583,14 +609,15 @@ pub fn get_recovery_protection_status_impl(
             .unwrap_or(false)
     };
 
-    let (owner_state, guardian_vault) = {
+    let (owner_state, guardian_vault, contacts) = {
         let mut service = state
             .service
             .lock()
             .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
         let owner = load_recovery_owner_state(&mut service, password)?.unwrap_or_default();
         let vault = load_guardian_vault(&mut service, password)?;
-        (owner, vault)
+        let contacts = state.load_contacts(&mut service, password).unwrap_or_default();
+        (owner, vault, contacts)
     };
 
     let confirmed_guardians_count = owner_state
@@ -645,7 +672,11 @@ pub fn get_recovery_protection_status_impl(
         .values()
         .map(|e| GuardianWardDto {
             owner_did: e.owner_did.clone(),
-            owner_display_name: e.owner_display_name.clone(),
+            owner_display_name: resolve_ward_display_name(
+                &e.owner_did,
+                &e.owner_display_name,
+                &contacts,
+            ),
             rotation_epoch: e.rotation_epoch,
             threshold_m: e.threshold_m,
             total_n: e.total_n,
@@ -1217,6 +1248,32 @@ pub fn import_guardian_recovery_reply_impl(
     let payload = open_and_verify_guardian_release_reply(&session.sk_temp, &reply_uri)
         .map_err(FrontendError::from)?;
 
+    if !session.replies.is_empty() {
+        if !are_dids_equal(&session.replies[0].entry.owner_did, &payload.entry.owner_did) {
+            return Err(FrontendError::from(format!(
+                "Diese Freigabe gehört zu einem anderen Profil ({}) als die bereits gesammelten Freigaben ({}). Bitte prüfe, ob dein Kontakt das richtige Profil ausgewählt hat.",
+                payload.entry.owner_display_name, session.replies[0].entry.owner_display_name
+            )));
+        }
+        let max_epoch = session
+            .replies
+            .iter()
+            .map(|r| r.entry.rotation_epoch)
+            .max()
+            .unwrap_or(0);
+        if payload.entry.rotation_epoch < max_epoch {
+            return Err(FrontendError::from(format!(
+                "Dieser Kontakt hat noch einen veralteten Wiederherstellungs-Stand (Epoche {} statt {}). Bitte ihn, kurz sein Postfach zu synchronisieren und erneut freizugeben.",
+                payload.entry.rotation_epoch, max_epoch
+            )));
+        }
+        if payload.entry.rotation_epoch > max_epoch {
+            session
+                .replies
+                .retain(|r| r.entry.rotation_epoch == payload.entry.rotation_epoch);
+        }
+    }
+
     // Deduplicate reply
     let already_present = session.replies.iter().any(|r| {
         are_dids_equal(&r.entry.owner_did, &payload.entry.owner_did)
@@ -1229,7 +1286,13 @@ pub fn import_guardian_recovery_reply_impl(
         save_active_session_to_path(session_file_path, &session)?;
     }
 
-    Ok(build_active_session_dto(&session))
+    let mut dto = build_active_session_dto(&session);
+    dto.last_import_status = Some(if already_present {
+        "duplicate".to_string()
+    } else {
+        "added".to_string()
+    });
+    Ok(dto)
 }
 
 #[tauri::command]
@@ -1255,12 +1318,14 @@ pub fn inspect_guardian_recovery_request_impl(
     let is_stale_48h = link.is_stale_48h(now_secs);
     let sas_code = compute_recovery_sas(&link.pk_temp);
 
-    let vault = {
+    let (vault, contacts) = {
         let mut service = state
             .service
             .lock()
             .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
-        load_guardian_vault(&mut service, password)?
+        let vault = load_guardian_vault(&mut service, password)?;
+        let contacts = state.load_contacts(&mut service, password).unwrap_or_default();
+        (vault, contacts)
     };
 
     let wards: Vec<GuardianWardDto> = vault
@@ -1268,7 +1333,11 @@ pub fn inspect_guardian_recovery_request_impl(
         .values()
         .map(|e| GuardianWardDto {
             owner_did: e.owner_did.clone(),
-            owner_display_name: e.owner_display_name.clone(),
+            owner_display_name: resolve_ward_display_name(
+                &e.owner_did,
+                &e.owner_display_name,
+                &contacts,
+            ),
             rotation_epoch: e.rotation_epoch,
             threshold_m: e.threshold_m,
             total_n: e.total_n,
@@ -1303,7 +1372,7 @@ pub fn approve_guardian_recovery_request_impl(
     let link = parse_recovery_request_uri(&request_uri).map_err(FrontendError::from)?;
     let sas_code = compute_recovery_sas(&link.pk_temp);
 
-    let (entry, extra_descriptors) = {
+    let (entry, extra_descriptors, resolved_owner_name) = {
         let mut service = state
             .service
             .lock()
@@ -1317,6 +1386,9 @@ pub fn approve_guardian_recovery_request_impl(
             .ok_or_else(|| {
                 FrontendError::from("Kein Schützling mit dieser ID im Tresor gefunden.".to_string())
             })?;
+        let contacts = state.load_contacts(&mut service, password).unwrap_or_default();
+        let resolved_name =
+            resolve_ward_display_name(&entry.owner_did, &entry.owner_display_name, &contacts);
 
         // Collect extra known sync descriptors from contacts/cards + own hosted sync
         let mut extras = Vec::new();
@@ -1330,7 +1402,7 @@ pub fn approve_guardian_recovery_request_impl(
             }
         }
 
-        (entry, extras)
+        (entry, extras, resolved_name)
     };
 
     let now_secs = Utc::now().timestamp() as u64;
@@ -1348,7 +1420,7 @@ pub fn approve_guardian_recovery_request_impl(
         reply_uri,
         reply_qr_svg,
         sas_code,
-        owner_display_name: entry.owner_display_name,
+        owner_display_name: resolved_owner_name,
     })
 }
 
@@ -2645,5 +2717,176 @@ mod tests {
         .unwrap();
         assert_eq!(unreach_res.status, "unreachable");
         assert!(unreach_res.error.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_reply_import_guards_and_ward_contact_name_resolution() {
+        let base_dir = temp_test_dir("reply_import_guards_test");
+        let pass = "TestPassword123!";
+
+        let (alice_state, alice_did) = create_wallet_state(&base_dir, "Privat", ALICE_PHRASE, pass);
+        let (bob_state, bob_did) = create_wallet_state(&base_dir, "Bob", BOB_PHRASE, pass);
+        let (carol_state, carol_did) = create_wallet_state(&base_dir, "Carol", CHARLIE_PHRASE, pass);
+        let (_dave_state, dave_did) = create_wallet_state(&base_dir, "Dave", READER1_PHRASE, pass);
+        let (eve_state, eve_did) = create_wallet_state(&base_dir, "Eve", READER2_PHRASE, pass);
+
+        {
+            let mut s = alice_state.service.lock().unwrap();
+            alice_state.save_contact(&mut s, make_test_contact(&bob_did, "Bob", Some(2)), Some(pass)).unwrap();
+            alice_state.save_contact(&mut s, make_test_contact(&carol_did, "Carol", Some(2)), Some(pass)).unwrap();
+            alice_state.save_contact(&mut s, make_test_contact(&dave_did, "Dave", Some(2)), Some(pass)).unwrap();
+        }
+        {
+            let mut s = eve_state.service.lock().unwrap();
+            eve_state.save_contact(&mut s, make_test_contact(&bob_did, "Bob", Some(2)), Some(pass)).unwrap();
+            eve_state.save_contact(&mut s, make_test_contact(&carol_did, "Carol", Some(2)), Some(pass)).unwrap();
+            eve_state.save_contact(&mut s, make_test_contact(&dave_did, "Dave", Some(2)), Some(pass)).unwrap();
+        }
+        // Bob saves Alice in his AddressBook as "Hans Müller"
+        {
+            let mut s = bob_state.service.lock().unwrap();
+            let mut hans_contact = make_test_contact(&alice_did, "Hans", Some(2));
+            hans_contact.profile.last_name = Some("Müller".to_string());
+            bob_state.save_contact(&mut s, hans_contact, Some(pass)).unwrap();
+        }
+
+        // Alice sets up epoch 1, then rotates to epoch 2
+        setup_social_recovery_guardians_with_params(
+            pass.to_string(),
+            vec![bob_did.clone(), carol_did.clone(), dave_did.clone()],
+            2,
+            [1, 2, 3],
+            ["Alpha123".to_string(), "Bravo456".to_string(), "Charlie789".to_string()],
+            RecoveryKdfParams::new_fast_test(),
+            &alice_state,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let owner_e1 = {
+            let mut s = alice_state.service.lock().unwrap();
+            load_recovery_owner_state(&mut s, Some(pass)).unwrap().unwrap()
+        };
+
+        // Carol keeps epoch 1 (stale)
+        {
+            let carol_rec = owner_e1.guardians.iter().find(|g| g.user_id == carol_did).unwrap();
+            let mut s = carol_state.service.lock().unwrap();
+            let mut vault = load_guardian_vault(&mut s, Some(pass)).unwrap();
+            let _ = vault.upsert_ward(carol_rec.sealed_entry.clone());
+            save_guardian_vault(&mut s, &vault, Some(pass)).unwrap();
+        }
+
+        // Alice rotates to epoch 2 and delivers to Bob
+        setup_social_recovery_guardians_with_params(
+            pass.to_string(),
+            vec![bob_did.clone(), carol_did.clone(), dave_did.clone()],
+            2,
+            [1, 2, 3],
+            ["Alpha123".to_string(), "Bravo456".to_string(), "Charlie789".to_string()],
+            RecoveryKdfParams::new_fast_test(),
+            &alice_state,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let owner_e2 = {
+            let mut s = alice_state.service.lock().unwrap();
+            load_recovery_owner_state(&mut s, Some(pass)).unwrap().unwrap()
+        };
+
+        {
+            let bob_rec = owner_e2.guardians.iter().find(|g| g.user_id == bob_did).unwrap();
+            let mut s = bob_state.service.lock().unwrap();
+            let mut vault = load_guardian_vault(&mut s, Some(pass)).unwrap();
+            let _ = vault.upsert_ward(bob_rec.sealed_entry.clone());
+            save_guardian_vault(&mut s, &vault, Some(pass)).unwrap();
+        }
+
+        // Eve also adds Dave so Bob holds a second ward for mismatch test
+        setup_social_recovery_guardians_with_params(
+            pass.to_string(),
+            vec![bob_did.clone(), carol_did.clone(), dave_did.clone()],
+            2,
+            [1, 2, 3],
+            ["Delta111".to_string(), "Echo2222".to_string(), "Foxtrot3".to_string()],
+            RecoveryKdfParams::new_fast_test(),
+            &eve_state,
+            None,
+        )
+        .await
+        .unwrap();
+        let eve_owner = {
+            let mut s = eve_state.service.lock().unwrap();
+            load_recovery_owner_state(&mut s, Some(pass)).unwrap().unwrap()
+        };
+        {
+            let bob_eve_rec = eve_owner.guardians.iter().find(|g| g.user_id == bob_did).unwrap();
+            let mut s = bob_state.service.lock().unwrap();
+            let mut vault = load_guardian_vault(&mut s, Some(pass)).unwrap();
+            let _ = vault.upsert_ward(bob_eve_rec.sealed_entry.clone());
+            save_guardian_vault(&mut s, &vault, Some(pass)).unwrap();
+        }
+
+        let session_file = base_dir.join("active_recovery_session.json");
+        let sess = start_social_recovery_session_impl(None, None, None, &session_file).unwrap();
+
+        // Bob inspects -> Alice's ward uses AddressBook name "Hans Müller" instead of "Privat"
+        let inspection = inspect_guardian_recovery_request_impl(
+            sess.request_uri.clone(),
+            Some(pass),
+            &bob_state,
+        )
+        .unwrap();
+        let hans_ward = inspection
+            .wards
+            .iter()
+            .find(|w| are_dids_equal(&w.owner_did, &alice_did))
+            .unwrap();
+        assert_eq!(hans_ward.owner_display_name, "Hans Müller");
+
+        // Bob approves Alice (epoch 2)
+        let bob_alice_rep = approve_guardian_recovery_request_impl(
+            sess.request_uri.clone(),
+            alice_did.clone(),
+            Some(pass),
+            &bob_state,
+        )
+        .unwrap();
+        assert_eq!(bob_alice_rep.owner_display_name, "Hans Müller");
+
+        let added = import_guardian_recovery_reply_impl(bob_alice_rep.reply_uri.clone(), &session_file).unwrap();
+        assert_eq!(added.last_import_status.as_deref(), Some("added"));
+        assert_eq!(added.total_n, Some(3));
+        assert_eq!(added.collected_share_indices.len(), 1);
+
+        // Re-importing same reply yields duplicate status
+        let dup = import_guardian_recovery_reply_impl(bob_alice_rep.reply_uri, &session_file).unwrap();
+        assert_eq!(dup.last_import_status.as_deref(), Some("duplicate"));
+        assert_eq!(dup.collected_count, 1);
+
+        // Stale epoch reply from Carol (epoch 1 < epoch 2) is rejected with clear error
+        let carol_stale_rep = approve_guardian_recovery_request_impl(
+            sess.request_uri.clone(),
+            alice_did.clone(),
+            Some(pass),
+            &carol_state,
+        )
+        .unwrap();
+        let stale_err = import_guardian_recovery_reply_impl(carol_stale_rep.reply_uri, &session_file).unwrap_err();
+        assert!(stale_err.message.contains("veralteten"));
+
+        // Mismatched ward reply from Bob (Eve instead of Alice) is rejected
+        let bob_eve_rep = approve_guardian_recovery_request_impl(
+            sess.request_uri,
+            eve_did,
+            Some(pass),
+            &bob_state,
+        )
+        .unwrap();
+        let mismatch_err = import_guardian_recovery_reply_impl(bob_eve_rep.reply_uri, &session_file).unwrap_err();
+        assert!(mismatch_err.message.contains("anderen Profil"));
     }
 }

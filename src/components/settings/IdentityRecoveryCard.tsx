@@ -1,7 +1,7 @@
 // src/components/settings/IdentityRecoveryCard.tsx
 import React, { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ShieldCheck, FileText, Users, Trash2 } from 'lucide-react';
+import { ShieldCheck, FileText, Users, Trash2, UserCheck } from 'lucide-react';
 import { RecoveryProtectionStatusDto } from '../../types';
 import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
@@ -214,6 +214,71 @@ export const IdentityRecoveryCard: React.FC = () => {
                             </div>
                         </div>
                     )}
+
+                    {/* Help contacts recover section */}
+                    <div className="space-y-3 pt-2 border-t border-theme-subtle/50">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                            <div className="space-y-0.5">
+                                <h5 className="text-xs font-bold text-theme-secondary flex items-center gap-1.5">
+                                    <UserCheck size={14} className="text-theme-primary" />
+                                    {t('backup.guardianWardsSectionTitle')}
+                                </h5>
+                                <p className="text-[11px] text-theme-light">
+                                    {t('backup.guardianWardsSectionDesc')}
+                                </p>
+                            </div>
+                            <Button
+                                type="button"
+                                variant="secondary"
+                                size="sm"
+                                data-testid="settings-open-guardian-release-btn"
+                                onClick={() =>
+                                    window.dispatchEvent(new CustomEvent('humoco:open-guardian-release'))
+                                }
+                                className="text-xs shrink-0 gap-1.5"
+                            >
+                                <UserCheck size={14} />
+                                <span>{t('backup.helpContactRecoveryBtn')}</span>
+                            </Button>
+                        </div>
+
+                        {protectionStatus?.guardianWards && protectionStatus.guardianWards.length > 0 && (
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                {protectionStatus.guardianWards.map((ward) => (
+                                    <div
+                                        key={ward.ownerDid}
+                                        className="p-2.5 rounded-xl border border-theme-subtle/70 bg-bg-app flex items-center justify-between gap-2 text-xs"
+                                    >
+                                        <div className="min-w-0">
+                                            <p className="font-bold text-theme-secondary truncate">
+                                                {ward.ownerDisplayName}
+                                            </p>
+                                            <p className="text-[10px] text-theme-light">
+                                                {t('backup.wardThresholdInfo', {
+                                                    threshold: ward.thresholdM,
+                                                    total: ward.totalN,
+                                                })}
+                                            </p>
+                                        </div>
+                                        <Button
+                                            type="button"
+                                            variant="secondary"
+                                            size="xs"
+                                            onClick={() =>
+                                                window.dispatchEvent(
+                                                    new CustomEvent('humoco:open-guardian-release', {
+                                                        detail: { ownerDid: ward.ownerDid },
+                                                    })
+                                                )
+                                            }
+                                        >
+                                            {t('backup.addressBookOpenRelease')}
+                                        </Button>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
 
                     {revokeFeedback && (
                         <AlertBanner variant={revokeFeedback.type}>{revokeFeedback.text}</AlertBanner>

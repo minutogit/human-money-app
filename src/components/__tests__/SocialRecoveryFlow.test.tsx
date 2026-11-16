@@ -3,7 +3,12 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { SocialRecoveryFlow } from '../SocialRecoveryFlow';
 import { recoveryService } from '../../services/recoveryService';
 import { authService } from '../../services/authService';
+import { copyToClipboard } from '../../utils/clipboard';
 import { ActiveRecoverySessionDto } from '../../types';
+
+vi.mock('../../utils/clipboard', () => ({
+    copyToClipboard: vi.fn().mockResolvedValue(true),
+}));
 
 vi.mock('../../services/recoveryService', () => ({
     recoveryService: {
@@ -258,6 +263,60 @@ describe('SocialRecoveryFlow Component', () => {
             expect(onSuccess).toHaveBeenCalledWith(
                 expect.objectContaining({ outcome: 'restored_from_sync' })
             );
+        });
+    });
+
+    it('supports chat message copy, pause across days, duplicate share feedback, and confirmed discard', async () => {
+        const activeSession: ActiveRecoverySessionDto = {
+            ...SESSION_WITH_SHARES,
+            thresholdM: 2,
+            totalN: 3,
+            collectedCount: 1,
+            collectedShareIndices: [2],
+            hasEnoughShares: false,
+            questionIds: null,
+        };
+        vi.mocked(recoveryService.getActiveRecoverySession).mockResolvedValue(activeSession);
+        vi.mocked(recoveryService.importGuardianRecoveryReply).mockResolvedValue({
+            ...activeSession,
+            lastImportStatus: 'duplicate',
+        });
+        vi.mocked(recoveryService.cancelSocialRecoverySession).mockResolvedValue(undefined);
+
+        render(<SocialRecoveryFlow mode="restore_new_device" onSuccess={onSuccess} onBack={onBack} />);
+
+        await waitFor(() => {
+            expect(screen.getByTestId('collected-share-badge-2')).toBeInTheDocument();
+            expect(screen.getByTestId('social-discovered-sync-hint')).toBeInTheDocument();
+        });
+
+        fireEvent.click(screen.getByTestId('copy-social-chat-msg-btn'));
+        await waitFor(() => {
+            expect(copyToClipboard).toHaveBeenCalledWith(
+                expect.stringContaining('humoco://recovery-req?v=1&pk=abc')
+            );
+            expect(copyToClipboard).toHaveBeenCalledWith(expect.stringContaining('482-910'));
+        });
+
+        // Duplicate import shows notice instead of crashing
+        fireEvent.change(screen.getByTestId('social-reply-input'), {
+            target: { value: 'humoco://recovery-reply?v=1&data=dup' },
+        });
+        fireEvent.click(screen.getByTestId('social-add-reply-btn'));
+        await waitFor(() => {
+            expect(screen.getByText(/already been imported/i)).toBeInTheDocument();
+        });
+
+        // Pause button calls onBack without canceling session
+        fireEvent.click(screen.getByTestId('pause-social-session-btn'));
+        expect(onBack).toHaveBeenCalled();
+        expect(recoveryService.cancelSocialRecoverySession).not.toHaveBeenCalled();
+
+        // Two-step cancel confirmation
+        fireEvent.click(screen.getByTestId('request-cancel-session-btn'));
+        fireEvent.click(screen.getByTestId('confirm-cancel-session-btn'));
+        await waitFor(() => {
+            expect(recoveryService.cancelSocialRecoverySession).toHaveBeenCalledTimes(1);
         });
     });
 });

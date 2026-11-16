@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import logo from '../assets/logo.png';
 import { profileService } from '../services/profileService';
 import { authService } from '../services/authService';
+import { recoveryService } from '../services/recoveryService';
 import { AuthLayout } from './AuthLayout';
 import { logger } from '../utils/log';
 import { Button } from './ui/Button';
@@ -12,7 +13,7 @@ import { Card } from './ui/Card';
 import { AlertBanner } from './ui/AlertBanner';
 import { SeedPhraseInput, SeedPhraseValue } from './ui/SeedPhraseInput';
 import { SocialRecoveryFlow } from './SocialRecoveryFlow';
-import { ProfileInfo } from '../types';
+import { ActiveRecoverySessionDto, ProfileInfo } from '../types';
 import { translateError } from '../utils/errorHelper';
 import {
     Users,
@@ -61,6 +62,8 @@ export function WalletRecovery({
 
     const [profiles, setProfiles] = useState<ProfileInfo[]>([]);
     const [selectedProfile, setSelectedProfile] = useState<string>('');
+    const [activeSocialSession, setActiveSocialSession] =
+        useState<ActiveRecoverySessionDto | null>(null);
     const [seedState, setSeedState] = useState<SeedPhraseValue>(EMPTY_SEED);
 
     const [newPassword, setNewPassword] = useState('');
@@ -76,6 +79,25 @@ export function WalletRecovery({
             setMethod('words');
         }
     }, [initialPayload]);
+
+    useEffect(() => {
+        if (method !== 'choose') return;
+        let active = true;
+        recoveryService
+            .getActiveRecoverySession?.()
+            ?.then((session) => {
+                if (!active) return;
+                if (session && session.sessionMode === 'reset_local_password') {
+                    setActiveSocialSession(session);
+                } else {
+                    setActiveSocialSession(null);
+                }
+            })
+            ?.catch(() => {});
+        return () => {
+            active = false;
+        };
+    }, [method]);
 
     useEffect(() => {
         let active = true;
@@ -214,6 +236,30 @@ export function WalletRecovery({
             {/* Top Choice: 2 Equal Cards */}
             {method === 'choose' && (
                 <div className="space-y-5 animate-in fade-in duration-300">
+                    {activeSocialSession && (
+                        <AlertBanner
+                            variant="info"
+                            data-testid="wallet-recovery-resume-banner"
+                            action={
+                                <Button
+                                    type="button"
+                                    variant="primary"
+                                    size="xs"
+                                    data-testid="wallet-recovery-resume-btn"
+                                    onClick={() => setMethod('social')}
+                                >
+                                    {t('backup.resumeSessionBtn')}
+                                </Button>
+                            }
+                        >
+                            {t('backup.resumeSessionDesc', {
+                                code: activeSocialSession.sasCode,
+                                collected: activeSocialSession.collectedCount,
+                                required: activeSocialSession.thresholdM ?? '?',
+                            })}
+                        </AlertBanner>
+                    )}
+
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <button
                             type="button"
