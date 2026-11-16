@@ -6,8 +6,7 @@ import { profileService } from "../services/profileService";
 import { authService } from "../services/authService";
 import { AuthLayout } from "./AuthLayout";
 import { logger } from "../utils/log";
-import { MnemonicLanguage, ReachPresetId } from "../types";
-import { ReachPresetSelector } from "./ReachPresetSelector";
+import { MnemonicLanguage } from "../types";
 import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
 import { Card } from "./ui/Card";
@@ -32,8 +31,7 @@ import {
 import { PrefixInfoModal } from "./ui/PrefixInfoModal";
 import { HelpIcon } from "./ui/HelpIcon";
 
-type WizardStep = "display_seed" | "confirm_seed" | "set_password" | "choose_reach";
-type StandardStep = "details" | "choose_reach";
+type WizardStep = "display_seed" | "confirm_seed" | "set_password";
 
 interface ConfirmationWord {
     index: number;
@@ -59,8 +57,6 @@ export function CreateNewProfile({
     const [profilesCount, setProfilesCount] = useState<number | null>(null);
 
     const [wizardStep, setWizardStep] = useState<WizardStep>("display_seed");
-    const [standardStep, setStandardStep] = useState<StandardStep>("details");
-    const [selectedReachPreset, setSelectedReachPreset] = useState<ReachPresetId>("medium");
     const [generatedSeed, setGeneratedSeed] = useState<string[]>([]);
     const [wordCount, setWordCount] = useState<12 | 24>(12);
     const [selectedLanguage, setSelectedLanguage] = useState<MnemonicLanguage>("english");
@@ -166,16 +162,8 @@ export function CreateNewProfile({
         setTimeout(() => { setFeedbackMsg(""); setWizardStep("set_password"); }, 1000);
     };
 
-    function handleStandardDetailsNext(e: FormEvent) {
-        e.preventDefault();
-        if (!profileName.trim()) { setFeedbackMsg(t('profile.profileNameRequired')); return; }
-        if (password !== confirmPassword) { setFeedbackMsg(t('profile.passwordMismatch')); return; }
-        if (password.length < 8) { setFeedbackMsg(t('profile.passwordMinLength')); return; }
-        setFeedbackMsg("");
-        setStandardStep("choose_reach");
-    }
-
-    async function handleFinalizeStandardProfile() {
+    async function handleFinalizeStandardProfile(e?: FormEvent) {
+        e?.preventDefault();
         if (!profileName.trim()) { setFeedbackMsg(t('profile.profileNameRequired')); return; }
         if (password !== confirmPassword) { setFeedbackMsg(t('profile.passwordMismatch')); return; }
         if (password.length < 8) { setFeedbackMsg(t('profile.passwordMinLength')); return; }
@@ -196,7 +184,7 @@ export function CreateNewProfile({
                     localInstanceId,
                     language: selectedLanguage,
                     retainMnemonic: true,
-                    initialReachPreset: selectedReachPreset,
+                    initialReachPreset: "medium",
                 });
                 onProfileCreated();
             } catch (err) {
@@ -207,16 +195,8 @@ export function CreateNewProfile({
         }, 150);
     }
 
-    function handleExpertPasswordNext(e: FormEvent) {
-        e.preventDefault();
-        if (password !== confirmPassword) { setFeedbackMsg(t('profile.passwordMismatch')); return; }
-        if (password.length < 8) { setFeedbackMsg(t('profile.passwordMinLength')); return; }
-        if (passphrase !== confirmPassphrase) { setFeedbackMsg(t('profile.passphraseMismatch')); return; }
-        setFeedbackMsg("");
-        setWizardStep("choose_reach");
-    }
-
-    async function handleFinalizeExpertProfile() {
+    async function handleFinalizeExpertProfile(e?: FormEvent) {
+        e?.preventDefault();
         if (password !== confirmPassword) { setFeedbackMsg(t('profile.passwordMismatch')); return; }
         if (password.length < 8) { setFeedbackMsg(t('profile.passwordMinLength')); return; }
         if (passphrase !== confirmPassphrase) { setFeedbackMsg(t('profile.passphraseMismatch')); return; }
@@ -235,7 +215,7 @@ export function CreateNewProfile({
                     localInstanceId,
                     language: selectedLanguage,
                     retainMnemonic,
-                    initialReachPreset: selectedReachPreset,
+                    initialReachPreset: "medium",
                 });
                 onProfileCreated();
             } catch (e) {
@@ -248,60 +228,6 @@ export function CreateNewProfile({
 
     const renderContent = () => {
         if (!isExpertMode) {
-            if (standardStep === "choose_reach") {
-                return (
-                    <div className="space-y-6 animate-in slide-in-from-right-8 duration-500">
-                        <div className="text-center space-y-2">
-                            <h2 className="text-2xl font-black text-theme-primary tracking-tight">
-                                {t('settings.reachTitle')}
-                            </h2>
-                            <p className="text-sm font-medium text-theme-light">
-                                {t('profile.reachStepSubtitle')}
-                            </p>
-                        </div>
-
-                        <ReachPresetSelector
-                            localValue={selectedReachPreset}
-                            onLocalChange={setSelectedReachPreset}
-                            disabled={isLoading}
-                        />
-
-                        <div
-                            data-testid="simple-mode-notice"
-                            className="p-3.5 rounded-2xl bg-theme-primary/5 border border-theme-primary/15 text-xs text-theme-secondary leading-relaxed flex items-start gap-2.5"
-                        >
-                            <Info size={16} className="text-theme-primary shrink-0 mt-0.5" />
-                            <span>{t('profile.simpleModeNotice')}</span>
-                        </div>
-
-                        <div className="flex gap-4 pt-2">
-                            <Button
-                                type="button"
-                                variant="secondary"
-                                disabled={isLoading}
-                                onClick={() => {
-                                    setFeedbackMsg("");
-                                    setStandardStep("details");
-                                }}
-                                className="flex-1 py-4 rounded-2xl gap-2"
-                            >
-                                <ArrowLeft size={18} /> {t('profile.back')}
-                            </Button>
-                            <Button
-                                type="button"
-                                disabled={isLoading}
-                                onClick={handleFinalizeStandardProfile}
-                                data-testid="onboarding-finish-button"
-                                className="flex-[2] py-4 rounded-3xl shadow-premium-lg text-base gap-3"
-                            >
-                                {isLoading ? <RefreshCw className="animate-spin" size={20} /> : <Fingerprint size={20} />}
-                                {isLoading ? t('profile.creating') : t('profile.create')}
-                            </Button>
-                        </div>
-                    </div>
-                );
-            }
-
             return (
                 <div className="space-y-6 sm:space-y-8 animate-in fade-in duration-500">
                     {profilesCount === 0 && (
@@ -330,7 +256,7 @@ export function CreateNewProfile({
                         </p>
                     </div>
 
-                    <form onSubmit={handleStandardDetailsNext} className="space-y-6">
+                    <form onSubmit={handleFinalizeStandardProfile} className="space-y-6">
                         <Card header={<div className="flex items-center gap-2"><Lock size={14}/><span className="font-black text-[10px] uppercase tracking-widest">{t('profile.profileDetails')}</span></div>}>
                             <div className="space-y-4">
                                 <div className="space-y-2">
@@ -373,14 +299,22 @@ export function CreateNewProfile({
                             </div>
                         </Card>
 
+                        <div
+                            data-testid="simple-mode-notice"
+                            className="p-3.5 rounded-2xl bg-theme-primary/5 border border-theme-primary/15 text-xs text-theme-secondary leading-relaxed flex items-start gap-2.5"
+                        >
+                            <Info size={16} className="text-theme-primary shrink-0 mt-0.5" />
+                            <span>{t('profile.simpleModeNotice')}</span>
+                        </div>
+
                         <Button
                             type="submit"
                             disabled={isLoading || !password || password !== confirmPassword}
-                            data-testid="onboarding-next-button"
+                            data-testid="onboarding-finish-button"
                             className="w-full py-4 rounded-3xl shadow-premium-lg text-base gap-3"
                         >
-                            <span>{t('profile.nextStep')}</span>
-                            <ArrowRight size={20} />
+                            {isLoading ? <RefreshCw className="animate-spin" size={20} /> : <Fingerprint size={20} />}
+                            {isLoading ? t('profile.creating') : t('profile.create')}
                         </Button>
                     </form>
 
@@ -599,7 +533,7 @@ export function CreateNewProfile({
 
             case "set_password":
                 return (
-                    <form onSubmit={handleExpertPasswordNext} className="space-y-6 sm:space-y-8 animate-in slide-in-from-right-8 duration-500 pb-10">
+                    <form onSubmit={handleFinalizeExpertProfile} className="space-y-6 sm:space-y-8 animate-in slide-in-from-right-8 duration-500 pb-10">
                         <div className="text-center space-y-2">
                             <h2 className="text-2xl font-black text-theme-primary tracking-tight">{t('profile.step3Title')}</h2>
                             <p className="text-sm font-medium text-theme-light">{t('profile.step3Subtitle')}</p>
@@ -718,54 +652,9 @@ export function CreateNewProfile({
                                 <Button type="button" variant="secondary" onClick={() => setWizardStep("confirm_seed")} className="flex-1 py-4 rounded-2xl gap-2">
                                     <ArrowLeft size={18} /> {t('profile.back')}
                                 </Button>
-                                <Button type="submit" disabled={isLoading} className="flex-[2] py-5 rounded-3xl shadow-premium-lg text-lg gap-3">
-                                    <span>{t('profile.nextStep')}</span>
-                                    <ArrowRight size={20} />
-                                </Button>
-                            </div>
-                            <p className="text-[10px] font-bold text-theme-light flex items-center gap-2">
-                                <Lock size={12} /> {t('profile.dataEncrypted')}
-                            </p>
-                        </div>
-                    </form>
-                );
-
-            case "choose_reach":
-                return (
-                    <div className="space-y-6 animate-in slide-in-from-right-8 duration-500 pb-10">
-                        <div className="text-center space-y-2">
-                            <h2 className="text-2xl font-black text-theme-primary tracking-tight">
-                                {t('settings.reachTitle')}
-                            </h2>
-                            <p className="text-sm font-medium text-theme-light">
-                                {t('profile.reachStepSubtitle')}
-                            </p>
-                        </div>
-
-                        <ReachPresetSelector
-                            localValue={selectedReachPreset}
-                            onLocalChange={setSelectedReachPreset}
-                            disabled={isLoading}
-                        />
-
-                        <div className="flex flex-col items-center gap-4 pt-2">
-                            <div className="flex gap-4 w-full">
                                 <Button
-                                    type="button"
-                                    variant="secondary"
+                                    type="submit"
                                     disabled={isLoading}
-                                    onClick={() => {
-                                        setFeedbackMsg("");
-                                        setWizardStep("set_password");
-                                    }}
-                                    className="flex-1 py-4 rounded-2xl gap-2"
-                                >
-                                    <ArrowLeft size={18} /> {t('profile.back')}
-                                </Button>
-                                <Button
-                                    type="button"
-                                    disabled={isLoading}
-                                    onClick={handleFinalizeExpertProfile}
                                     data-testid="onboarding-finish-button"
                                     className="flex-[2] py-5 rounded-3xl shadow-premium-lg text-lg gap-3"
                                 >
@@ -777,7 +666,7 @@ export function CreateNewProfile({
                                 <Lock size={12} /> {t('profile.dataEncrypted')}
                             </p>
                         </div>
-                    </div>
+                    </form>
                 );
         }
     };

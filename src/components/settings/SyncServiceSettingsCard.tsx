@@ -1532,6 +1532,17 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                                             <span>{t('settings.syncHostCopyRustConfig')}</span>
                                         </Button>
                                     </div>
+
+                                    <div className="p-3 bg-bg-app rounded-xl border border-theme-subtle space-y-1.5 text-[11px] text-theme-secondary">
+                                        <p className="font-semibold text-theme-primary">
+                                            {t('settings.syncHostNextStepsTitle', 'Next steps before entering the URL below:')}
+                                        </p>
+                                        <ul className="list-disc pl-4 space-y-1 leading-relaxed">
+                                            <li>{t('settings.syncHostNextStepPhp', 'PHP webspace (humoco-sync-setup.zip): Extract the ZIP archive and upload its contents (sync.php & config) to your webspace directory via FTP/SFTP.')}</li>
+                                            <li>{t('settings.syncHostNextStepRust', 'Rust server (config.toml): Save the copied configuration as config.toml on your server and start humoco-sync-server.')}</li>
+                                            <li>{t('settings.syncHostNextStepVerify', 'Activate: Enter your server\'s public URL in Step 2 below and click "Test & Activate".')}</li>
+                                        </ul>
+                                    </div>
                                 </div>
 
                                 {/* Step 2: URL & Activation */}

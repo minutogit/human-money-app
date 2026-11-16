@@ -55,12 +55,13 @@ describe('Sidebar Component', () => {
         vi.mocked(profileService.getUserId).mockResolvedValue('did:key:z6MkAlice');
     });
 
-    it('renders 4+3 simple navigation without wallet, duplicate appName, Mehr disclosure, or user DID by default', () => {
+    it('renders 5+3 simple navigation including wallet, without duplicate appName, Mehr disclosure, or user DID by default', () => {
         render(<Sidebar openClaimsCount={0} />);
 
-        // 4 main entries in Simple mode
+        // 5 main entries in Simple mode
         expect(screen.getByText('Übersicht')).toBeInTheDocument();
         expect(screen.getByText('dashboard.title')).toBeInTheDocument();
+        expect(screen.getByText('wallet.title')).toBeInTheDocument();
         expect(screen.getByText('history.transactionHistory')).toBeInTheDocument();
 
         expect(screen.getByText('Menschen')).toBeInTheDocument();
@@ -68,7 +69,6 @@ describe('Sidebar Component', () => {
         expect(screen.getByText('marketplace.title')).toBeInTheDocument();
 
         // Expert-only & duplicate elements hidden in Simple mode
-        expect(screen.queryByText('wallet.title')).not.toBeInTheDocument();
         expect(screen.queryByText('common.appName')).not.toBeInTheDocument();
         expect(screen.queryByTestId('sidebar-more-toggle')).not.toBeInTheDocument();
         expect(screen.queryByTestId('sidebar-user-id')).not.toBeInTheDocument();
@@ -103,6 +103,7 @@ describe('Sidebar Component', () => {
             expect(screen.getByTestId('sidebar-user-id')).toBeInTheDocument();
         });
         expect(screen.getByTestId('tech-id-value')).toHaveTextContent('did:key:z6MkAlice');
+        expect(screen.getByTestId('tech-id-value')).toHaveClass('text-[9px]');
 
         // By default collapsed
         expect(screen.queryByTestId('sidebar-more-content')).not.toBeInTheDocument();

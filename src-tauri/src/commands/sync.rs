@@ -455,7 +455,7 @@ pub async fn finalize_sync_setup_impl(
         .map_err(|e| FrontendError::from(e.to_string()))?;
     sync_client::validate_sync_url(&canonical_url).map_err(FrontendError::from)?;
 
-    let (mut admin, admin_sk) = {
+    let (mut admin, admin_sk, original_admin_bytes) = {
         let mut service = state.service.lock().unwrap();
         let bytes = service
             .load_encrypted_data(MARKET_SYNC_ADMIN_KEY, password.as_deref())
@@ -465,26 +465,60 @@ pub async fn finalize_sync_setup_impl(
         let master_seed = get_wallet_master_seed(&mut service)?;
         let (admin_sk, _, _) =
             humoco_market::derive_drop_admin_keypair(&master_seed, admin.sync_index);
-        (admin, admin_sk)
+        (admin, admin_sk, bytes)
     };
 
     let write_url = canonical_url;
     let read_base = write_url.strip_suffix("/sync.php").unwrap_or(&write_url);
     let read_url = format!("{}/{}", read_base, admin.data_dir);
-    admin.descriptor.write_url = write_url.clone();
-    admin.descriptor.read_url = read_url.clone();
 
     let client = sync_client::create_sync_http_client();
 
-    // Push members to all 4 channels
-    push_all_channel_members(
+    // Live-check the running sync server before activating or persisting write_url.
+    let info = sync_client::fetch_sync_info(&client, &write_url)
+        .await
+        .map_err(|e| {
+            FrontendError::from(format!(
+                "Sync server unreachable or invalid at {}: {}",
+                write_url, e
+            ))
+        })?;
+    if !info.drop_pub.is_empty() && info.drop_pub != admin.descriptor.drop_pub {
+        return Err(FrontendError::from(format!(
+            "Sync server admin public key mismatch at {}: expected {}, got {}",
+            write_url, admin.descriptor.drop_pub, info.drop_pub
+        )));
+    }
+    let remote_status = sync_client::fetch_admin_status(&client, &write_url, &admin_sk)
+        .await
+        .map_err(|e| {
+            FrontendError::from(format!(
+                "Sync server admin verification failed at {}: {}",
+                write_url, e
+            ))
+        })?;
+
+    admin.descriptor.write_url = write_url.clone();
+    admin.descriptor.read_url = read_url.clone();
+
+    // Push members to all 4 channels; roll back MARKET_SYNC_ADMIN_KEY if any channel fails.
+    if let Err(err) = push_all_channel_members(
         &client,
         state,
         &mut admin,
         &admin_sk,
         password.as_deref(),
     )
-    .await?;
+    .await
+    {
+        let mut service = state.service.lock().unwrap();
+        let _ = service.save_encrypted_data(
+            MARKET_SYNC_ADMIN_KEY,
+            &original_admin_bytes,
+            password.as_deref(),
+        );
+        return Err(err);
+    }
 
     // Add own drop to settings.market_selected_syncs if < 3
     {
@@ -530,9 +564,9 @@ pub async fn finalize_sync_setup_impl(
         data_dir: admin.data_dir,
         max_members: admin.max_members,
         max_total_storage_mb: admin.max_total_storage_mb,
-        used_bytes: None,
-        max_bytes: Some((admin.max_total_storage_mb as u64) * 1024 * 1024),
-        soft_warning: false,
+        used_bytes: Some(remote_status.used_bytes),
+        max_bytes: Some(remote_status.max_bytes),
+        soft_warning: remote_status.soft_warning,
         card_policy: card_policy.into(),
         allow: admin.allow,
         deny: admin.deny,
@@ -541,7 +575,7 @@ pub async fn finalize_sync_setup_impl(
         hop2_member_count: stats.hop2_count,
         total_member_count: stats.total_count,
         active_slot_ids,
-        channel_counts: BTreeMap::new(),
+        channel_counts: remote_status.channel_counts,
         revocation: admin.revocation.clone(),
     })
 }
@@ -695,6 +729,9 @@ pub async fn get_sync_admin_status_impl(
             Ok(a) => a,
             Err(_) => return Ok(None),
         };
+        if admin.descriptor.write_url.trim().is_empty() {
+            return Ok(None);
+        }
         let master_seed = match get_wallet_master_seed(&mut service) {
             Ok(s) => s,
             Err(_) => return Ok(None),
@@ -6102,5 +6139,79 @@ pub(crate) mod tests {
                 .expect("Forwarded card must be in Bob's CardStore");
             assert_eq!(imported.hops, 2);
         }
+    }
+
+    #[tokio::test]
+    async fn test_sync_admin_status_requires_finalized_live_server() {
+        let base_dir = temp_test_dir("admin_status_finalized");
+        let password = "pw";
+        let alice_service = setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
+        let state = create_test_state(alice_service);
+
+        // Before any setup, admin status is None
+        assert!(
+            get_sync_admin_status_impl(Some(password.to_string()), &state)
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        // Preparing setup (copying config.toml / saving ZIP) must NOT mark service as active
+        let draft = prepare_sync_setup_impl(None, None, None, Some(password.to_string()), &state)
+            .unwrap();
+        let _toml = get_rust_sync_config_impl(Some(password.to_string()), &state).unwrap();
+        let zip_path = base_dir.join("humoco-sync-setup.zip");
+        save_sync_setup_zip_impl(
+            zip_path.to_string_lossy().to_string(),
+            Some(password.to_string()),
+            &state,
+        )
+        .unwrap();
+        assert!(
+            get_sync_admin_status_impl(Some(password.to_string()), &state)
+                .await
+                .unwrap()
+                .is_none(),
+            "Prepared draft with empty write_url must still return None"
+        );
+
+        // Finalizing against an unreachable server must fail and keep status as None
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let closed_port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let dead_url = format!("http://127.0.0.1:{}/sync.php", closed_port);
+
+        let err = finalize_sync_setup_impl(dead_url, Some(password.to_string()), &state)
+            .await
+            .expect_err("Finalizing against unreachable server must fail");
+        assert!(
+            !err.message.is_empty(),
+            "Unreachable server must return a clear error"
+        );
+        assert!(
+            get_sync_admin_status_impl(Some(password.to_string()), &state)
+                .await
+                .unwrap()
+                .is_none(),
+            "Failed finalize must not persist active admin status"
+        );
+
+        // Finalizing against a live, valid server succeeds and activates admin status
+        let server = MockSyncServer::start(draft.data_dir.clone(), draft.admin_pubkey.clone()).await;
+        let finalized = finalize_sync_setup_impl(
+            server.base_url.clone(),
+            Some(password.to_string()),
+            &state,
+        )
+        .await
+        .unwrap();
+        let expected_write_url = format!("{}/sync.php", server.base_url);
+        assert_eq!(finalized.descriptor.write_url, expected_write_url);
+
+        let status = get_sync_admin_status_impl(Some(password.to_string()), &state)
+            .await
+            .unwrap()
+            .expect("Finalized service must return Some(FrontendSyncAdminStatus)");
+        assert_eq!(status.descriptor.write_url, expected_write_url);
     }
 }

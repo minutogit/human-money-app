@@ -128,7 +128,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ openClaimsCount }) => {
       label: t('sidebar.groupOverview', 'Übersicht'),
       items: [
         { id: 'logged_in', label: t('dashboard.title'), icon: LayoutDashboard, view: { view: 'logged_in' } },
-        { id: 'wallet', label: t('wallet.title'), icon: Wallet, view: { view: 'wallet' }, mode: 'expert' },
+        { id: 'wallet', label: t('wallet.title'), icon: Wallet, view: { view: 'wallet' } },
         { id: 'transaction_history', label: t('history.transactionHistory'), icon: History, view: { view: 'transaction_history' } },
       ]
     },
@@ -205,7 +205,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ openClaimsCount }) => {
                   data-testid="sidebar-user-id"
                   onClick={(e) => e.stopPropagation()}
                 >
-                  <TechId value={userId} kind="did" />
+                  <TechId value={userId} kind="did" compact />
                 </div>
               )}
             </div>

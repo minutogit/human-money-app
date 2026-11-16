@@ -618,4 +618,18 @@ describe('SyncServiceSettingsCard Component', () => {
             expect(copyToClipboard).toHaveBeenCalledWith(sampleToml);
         });
     });
+
+    it('renders concise PHP ZIP and Rust config.toml setup instructions in host wizard', async () => {
+        render(
+            <SyncServiceSettingsCard
+                settings={defaultSettings}
+                onSettingsUpdated={vi.fn()}
+                mode="host"
+            />
+        );
+
+        expect(await screen.findByText(/Next steps before entering the URL below:/i)).toBeInTheDocument();
+        expect(screen.getByText(/PHP webspace \(humoco-sync-setup\.zip\)/i)).toBeInTheDocument();
+        expect(screen.getByText(/Rust server \(config\.toml\)/i)).toBeInTheDocument();
+    });
 });

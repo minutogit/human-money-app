@@ -13,6 +13,7 @@ export interface TechIdProps {
     kind?: TechIdKind;
     label?: string;
     copyable?: boolean;
+    compact?: boolean;
     className?: string;
 }
 
@@ -34,6 +35,7 @@ export const TechId: React.FC<TechIdProps> = ({
     kind = 'did',
     label,
     copyable = true,
+    compact = false,
     className = '',
 }) => {
     const { t } = useTranslation();
@@ -68,39 +70,47 @@ export const TechId: React.FC<TechIdProps> = ({
 
     return (
         <span
-            className={`inline-flex items-center gap-1.5 max-w-full rounded-lg border border-theme-subtle/70 bg-bg-app/70 px-2 py-0.5 text-xs text-theme-secondary ${className}`}
+            className={`inline-flex items-center max-w-full border border-theme-subtle/70 bg-bg-app/70 text-theme-secondary ${
+                compact
+                    ? 'gap-1 rounded-md px-1.5 py-0 text-[10px]'
+                    : 'gap-1.5 rounded-lg px-2 py-0.5 text-xs'
+            } ${className}`}
             data-testid="tech-id"
             data-mode={isExpert ? 'expert' : 'simple'}
         >
             {showAvatar ? (
                 <span className="shrink-0 inline-flex items-center" aria-hidden="true">
                     <Avatar
-                        size={18}
+                        size={compact ? 12 : 18}
                         name={value}
                         variant="beam"
                         colors={AVATAR_COLORS}
                     />
                 </span>
             ) : (
-                <Hash size={12} className="shrink-0 text-theme-light" aria-hidden="true" />
+                <Hash size={compact ? 10 : 12} className="shrink-0 text-theme-light" aria-hidden="true" />
             )}
 
             {label && (
-                <span className="text-[11px] font-medium text-theme-light shrink-0">
+                <span className={`${compact ? 'text-[9px]' : 'text-[11px]'} font-medium text-theme-light shrink-0`}>
                     {label}:
                 </span>
             )}
 
             {isExpert ? (
                 <code
-                    className="font-mono text-[11px] text-theme-secondary break-all select-all"
+                    className={`font-mono text-theme-secondary break-all select-all ${
+                        compact ? 'text-[9px] leading-tight' : 'text-[11px]'
+                    }`}
                     data-testid="tech-id-value"
                 >
                     {value}
                 </code>
             ) : (
                 <span
-                    className="font-mono text-[11px] font-semibold text-theme-secondary"
+                    className={`font-mono font-semibold text-theme-secondary ${
+                        compact ? 'text-[9px] leading-tight' : 'text-[11px]'
+                    }`}
                     data-testid="tech-id-value"
                 >
                     {shortFingerprint}
@@ -117,9 +127,9 @@ export const TechId: React.FC<TechIdProps> = ({
                     data-testid="tech-id-copy"
                 >
                     {copied ? (
-                        <Check size={12} className="text-theme-success" />
+                        <Check size={compact ? 10 : 12} className="text-theme-success" />
                     ) : (
-                        <Copy size={12} />
+                        <Copy size={compact ? 10 : 12} />
                     )}
                 </button>
             )}
