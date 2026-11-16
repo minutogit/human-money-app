@@ -1390,7 +1390,7 @@ pub fn build_emergency_kit_uri(kit: &EmergencyKitData) -> Result<String, MarketE
 /// Parses a `humoco://kit` URI.
 pub fn parse_emergency_kit_uri(uri: &str) -> Result<EmergencyKitData, MarketError> {
     let trimmed = uri.trim();
-    let query_str = if let Some(stripped) = trimmed.strip_prefix("humoco://kit?") {
+    let raw_query = if let Some(stripped) = trimmed.strip_prefix("humoco://kit?") {
         stripped
     } else if let Some(stripped) = trimmed.strip_prefix("kit?") {
         stripped
@@ -1401,6 +1401,11 @@ pub fn parse_emergency_kit_uri(uri: &str) -> Result<EmergencyKitData, MarketErro
             "Invalid emergency kit URI: missing 'kit?'".to_string(),
         ));
     };
+    let query_str = raw_query
+        .split(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '>' | ')'))
+        .next()
+        .unwrap_or("")
+        .trim_end_matches(&['.', ',', ';', '!', ']'][..]);
 
     let mut v: Option<u8> = None;
     let mut ent: Option<String> = None;

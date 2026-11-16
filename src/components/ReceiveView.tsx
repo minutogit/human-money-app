@@ -63,6 +63,8 @@ interface ReceiveViewProps {
     droppedFile?: { name: string; bytes: number[] };
 }
 
+const POS_ACTIVE_STORAGE_KEY = 'humoco_pos_cashier_active';
+
 export function ReceiveView({ onBack, onReceiveSuccess, droppedFile }: ReceiveViewProps) {
     const { t } = useTranslation();
     const { protectAction } = useSession();
@@ -84,6 +86,8 @@ export function ReceiveView({ onBack, onReceiveSuccess, droppedFile }: ReceiveVi
     const [isProcessing, setIsProcessing] = useState(false);
     const [bundlePassword, setBundlePassword] = useState("");
     const [isPosMode, setIsPosMode] = useState(false);
+    const [isSettingsLoaded, setIsSettingsLoaded] = useState(false);
+    const processedDroppedFileRef = React.useRef<{ name: string; bytes: number[] } | null>(null);
     const [purchaseId, setPurchaseId] = useState("");
     const [settings, setSettings] = useState<AppSettings | null>(null);
     const [resultModal, setResultModal] = useState<{
@@ -141,6 +145,9 @@ export function ReceiveView({ onBack, onReceiveSuccess, droppedFile }: ReceiveVi
                     setReqStandardId(standards[0].id);
                 }
                 setSettings(currentSettings);
+                if (currentSettings?.enablePosMode && typeof localStorage !== 'undefined' && localStorage.getItem(POS_ACTIVE_STORAGE_KEY) === 'true') {
+                    setIsPosMode(true);
+                }
                 setOwnUserId(userId);
                 setOwnProfile(profile);
             } catch (e) {
@@ -148,6 +155,8 @@ export function ReceiveView({ onBack, onReceiveSuccess, droppedFile }: ReceiveVi
                 const msg = `Failed to fetch initial data: ${translateError(e, t)}`;
                 logger.error(msg);
                 setFeedbackMsg(msg);
+            } finally {
+                if (active) setIsSettingsLoaded(true);
             }
         }
         fetchData();
@@ -155,7 +164,8 @@ export function ReceiveView({ onBack, onReceiveSuccess, droppedFile }: ReceiveVi
     }, [t]);
 
     useEffect(() => {
-        if (droppedFile) {
+        if (droppedFile && isSettingsLoaded && processedDroppedFileRef.current !== droppedFile) {
+            processedDroppedFileRef.current = droppedFile;
             setBundlePath(droppedFile.name);
             setBundleName(droppedFile.name);
             setDroppedFileContent(droppedFile.bytes);
@@ -172,12 +182,16 @@ export function ReceiveView({ onBack, onReceiveSuccess, droppedFile }: ReceiveVi
                 else if (droppedFile.name.endsWith('.hmcard')) detectedType = 'card';
 
                 if (detectedType) {
-                    executeReceiveDirectly(droppedFile.bytes, detectedType, droppedFile.name);
+                    const forcePos = Boolean(
+                        settings?.enablePosMode &&
+                        (isPosMode || (typeof localStorage !== 'undefined' && localStorage.getItem(POS_ACTIVE_STORAGE_KEY) === 'true'))
+                    );
+                    executeReceiveDirectly(droppedFile.bytes, detectedType, droppedFile.name, undefined, forcePos);
                 }
             }
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [droppedFile]);
+    }, [droppedFile, isSettingsLoaded]);
 
     const processStandardFile = async (fileData: number[]) => {
         setIsProcessing(true);
@@ -344,7 +358,8 @@ export function ReceiveView({ onBack, onReceiveSuccess, droppedFile }: ReceiveVi
         fileData: number[],
         type: 'transfer' | 'ask' | 'sig' | 'wot' | 'proof' | 'card',
         name: string,
-        password?: string
+        password?: string,
+        forcePos?: boolean
     ) {
         setIsProcessing(true);
         setFeedbackMsg('');
@@ -365,7 +380,7 @@ export function ReceiveView({ onBack, onReceiveSuccess, droppedFile }: ReceiveVi
                     if (uuidMatch && uuidMatch[1]) standardDefinitionsToml[uuidMatch[1]] = standard.content;
                 });
 
-                if (isPosMode || purchaseId.trim().length > 0) {
+                if (forcePos || isPosMode || purchaseId.trim().length > 0) {
                     const activePurchaseId = purchaseId.trim() || `pos-${Date.now()}`;
                     if (!purchaseId.trim()) {
                         setPurchaseId(activePurchaseId);
@@ -1024,7 +1039,13 @@ export function ReceiveView({ onBack, onReceiveSuccess, droppedFile }: ReceiveVi
                                         <input
                                             type="checkbox"
                                             checked={isPosMode}
-                                            onChange={(e) => setIsPosMode(e.target.checked)}
+                                            onChange={(e) => {
+                                                const checked = e.target.checked;
+                                                setIsPosMode(checked);
+                                                if (typeof localStorage !== 'undefined') {
+                                                    localStorage.setItem(POS_ACTIVE_STORAGE_KEY, checked ? 'true' : 'false');
+                                                }
+                                            }}
                                             className="rounded accent-theme-primary h-4 w-4"
                                         />
                                         <span className="text-xs font-bold text-theme-secondary">

@@ -659,8 +659,7 @@ pub fn get_recovery_protection_status_impl(
     let settings = get_or_load_settings_from_state(state, password);
     let candidate_syncs = collect_candidate_backup_sync_descriptors(state, password)?;
     let sync_backup_count = candidate_syncs.len();
-    let has_sync_backup = settings.sync_backup_enabled
-        && (sync_backup_count > 0 || settings.last_sync_backup_at.is_some());
+    let has_sync_backup = settings.sync_backup_enabled && settings.last_sync_backup_at.is_some();
     let has_local_backup = settings
         .backup_sync_folder
         .as_ref()
@@ -1810,6 +1809,15 @@ pub async fn complete_social_recovery_impl(
             local_collision,
             resolved_sync_targets: resolved_targets,
         });
+    }
+
+    if let Some(ref rf) = replace_folder_name {
+        if !rf.trim().is_empty() {
+            return Err(FrontendError::from(
+                "Cannot replace local profile without a backup; use reset_local_password instead."
+                    .to_string(),
+            ));
+        }
     }
 
     // Confirmed seed-only profile setup (either no sync descriptors existed or user explicitly confirmed empty start)

@@ -37,7 +37,8 @@ import {
     UserCheck,
     X,
     RefreshCw,
-    Layers
+    Layers,
+    MessageSquare
 } from "lucide-react";
 import { truncateUserId } from "../utils/userIdHelper";
 import { stringifyError, translateError } from "../utils/errorHelper";
@@ -50,7 +51,7 @@ export function Dashboard() {
     const tRef = useRef(t);
     tRef.current = t;
     const { navigate } = useNavigation();
-    const { profileName, integrityReport } = useSession();
+    const { profileName, integrityReport, protectAction } = useSession();
     const { resolveIdentity } = useContactResolver();
 
     const [userId, setUserId] = useState("");
@@ -65,6 +66,7 @@ export function Dashboard() {
     // Channel post inbox items (§6.4.1 & §6.4.2)
     const [pendingSignRequests, setPendingSignRequests] = useState<FrontendPendingSignRequest[]>([]);
     const [pendingWotHandshakes, setPendingWotHandshakes] = useState<FrontendPendingWotHandshake[]>([]);
+    const [openSellerInquiriesCount, setOpenSellerInquiriesCount] = useState(0);
     const [isOpeningSignRequest, setIsOpeningSignRequest] = useState<string | null>(null);
     const [expiringSoonCount, setExpiringSoonCount] = useState(0);
     const [isLoading, setIsLoading] = useState(true);
@@ -187,8 +189,11 @@ export function Dashboard() {
                 const hasRealActiveVouchers = (voucherSummaries || []).some(
                     (v: VoucherSummary) => v.status === "active" && !v.isTestVoucher
                 );
-                const isBackupOutdatedOrMissing = !userSettings?.lastBackupAt || (() => {
-                    const backupDate = new Date(userSettings.lastBackupAt);
+                const effectiveBackupAt = [userSettings?.lastBackupAt, userSettings?.lastSyncBackupAt]
+                    .filter((d): d is string => Boolean(d) && !isNaN(new Date(d as string).getTime()))
+                    .sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0] ?? null;
+                const isBackupOutdatedOrMissing = !effectiveBackupAt || (() => {
+                    const backupDate = new Date(effectiveBackupAt);
                     if (isNaN(backupDate.getTime())) return true;
                     const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
                     return backupDate < fourteenDaysAgo;
@@ -212,17 +217,25 @@ export function Dashboard() {
                     if (!active) return;
                     setPendingSignRequests(summary.pendingSignRequests || []);
                     setPendingWotHandshakes(summary.pendingWotHandshakes || []);
+                    setOpenSellerInquiriesCount(
+                        (summary.sellerInquiries || []).filter((inq) => !inq.reply).length
+                    );
                 })
                 .catch(() => {});
         };
 
+        const handlePostInboxUpdated = () => {
+            loadPostInbox();
+            void fetchData();
+        };
+
         loadPostInbox();
         postService.syncPostChannels().catch(() => {});
-        window.addEventListener(POST_INBOX_UPDATED_EVENT, loadPostInbox);
+        window.addEventListener(POST_INBOX_UPDATED_EVENT, handlePostInboxUpdated);
 
         return () => {
             active = false;
-            window.removeEventListener(POST_INBOX_UPDATED_EVENT, loadPostInbox);
+            window.removeEventListener(POST_INBOX_UPDATED_EVENT, handlePostInboxUpdated);
         };
     }, []);
 
@@ -248,7 +261,9 @@ export function Dashboard() {
 
     const handleDismissSignRequest = async (msgId: string) => {
         try {
-            await postService.dismissPendingPostItem('sign_request', msgId);
+            await protectAction(async (pwd) => {
+                await postService.dismissPendingPostItem('sign_request', msgId, pwd || undefined);
+            });
             setPendingSignRequests(prev => prev.filter(r => r.msgId !== msgId));
         } catch (e) {
             logger.error(`Failed to dismiss sign request: ${stringifyError(e)}`);
@@ -543,6 +558,32 @@ export function Dashboard() {
                                     </p>
                                     <p className="text-xs opacity-70">
                                         {t('dashboard.pendingWotHandshakesHint')}
+                                    </p>
+                                </div>
+                            </div>
+                            <ArrowUpRight size={18} className="opacity-30" />
+                        </Card>
+                    )}
+
+                    {/* Incoming Unanswered Marketplace Inquiries */}
+                    {openSellerInquiriesCount > 0 && (
+                        <Card
+                            variant="glass"
+                            className="py-2.5 px-4 flex items-center justify-between border-l-4 border-l-emerald-500 cursor-pointer bg-emerald-50/40"
+                            hover
+                            onClick={() => navigate({ view: 'marketplace', initialTab: 'mine' })}
+                            data-testid="pending-seller-inquiries-dashboard-card"
+                        >
+                            <div className="flex items-center gap-4">
+                                <div className="p-2 rounded-xl bg-emerald-600 text-white shrink-0">
+                                    <MessageSquare size={20} />
+                                </div>
+                                <div>
+                                    <p className="font-bold text-sm text-theme-secondary">
+                                        {t('dashboard.openSellerInquiriesCount', { count: openSellerInquiriesCount })}
+                                    </p>
+                                    <p className="text-xs opacity-70">
+                                        {t('dashboard.openSellerInquiriesHint')}
                                     </p>
                                 </div>
                             </div>

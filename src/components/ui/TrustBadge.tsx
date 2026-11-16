@@ -8,12 +8,14 @@ export interface TrustBadgeProps {
   trust?: VoucherTrustDto | null;
   size?: 'sm' | 'md';
   className?: string;
+  binaryTrust?: boolean;
 }
 
 export const TrustBadge: React.FC<TrustBadgeProps> = ({
   trust,
   size = 'md',
   className = '',
+  binaryTrust = false,
 }) => {
   const { t } = useTranslation();
   const [showPopover, setShowPopover] = useState(false);
@@ -107,6 +109,10 @@ export const TrustBadge: React.FC<TrustBadgeProps> = ({
     colorClasses = 'bg-slate-100 text-slate-600 border-slate-200';
     Icon = Shield;
     label = t('voucher.trustUnknown');
+  } else if (binaryTrust) {
+    colorClasses = 'bg-emerald-50 text-emerald-800 border-emerald-200';
+    Icon = ShieldCheck;
+    label = t('marketplace.trustTrusted');
   } else {
     // Score colors when trustPercent > 0
     if (trust.trustPercent >= 60) {
@@ -156,18 +162,18 @@ export const TrustBadge: React.FC<TrustBadgeProps> = ({
       <span
         ref={badgeRef}
         data-testid="trust-badge"
-        onClick={handleClick}
-        onMouseEnter={handleMouseEnter}
-        onMouseLeave={handleMouseLeave}
-        className={`inline-flex items-center font-bold rounded-full border select-none transition-colors cursor-pointer ${sizeClasses} ${colorClasses} ${className}`}
-        role="button"
-        tabIndex={0}
+        onClick={binaryTrust ? undefined : handleClick}
+        onMouseEnter={binaryTrust ? undefined : handleMouseEnter}
+        onMouseLeave={binaryTrust ? undefined : handleMouseLeave}
+        className={`inline-flex items-center font-bold rounded-full border select-none transition-colors ${binaryTrust ? '' : 'cursor-pointer '} ${sizeClasses} ${colorClasses} ${className}`}
+        role={binaryTrust ? undefined : "button"}
+        tabIndex={binaryTrust ? undefined : 0}
       >
         <Icon size={iconSize} className="shrink-0" />
         <span className="truncate">{label}</span>
       </span>
 
-      {showPopover && createPortal(
+      {!binaryTrust && showPopover && createPortal(
         <div
           data-testid="trust-badge-popover"
           onClick={(e) => e.stopPropagation()}

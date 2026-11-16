@@ -129,8 +129,8 @@ export const SeedPhraseInput: React.FC<SeedPhraseInputProps> = ({
 
     const applyKitUri = useCallback(
         async (rawText: string) => {
-            const match = rawText.match(/humoco:\/\/kit[^\s"'>]+/i);
-            const uri = match ? match[0] : rawText.trim();
+            const match = rawText.match(/humoco:\/\/kit[^\s"'<>)]+/i);
+            const uri = match ? match[0].replace(/[.,;:!\]]+$/, '') : rawText.trim();
             try {
                 const kit = await recoveryService.inspectEmergencyKitUri(uri);
                 const kitWords = kit.phrase.trim().split(/\s+/).filter(Boolean);

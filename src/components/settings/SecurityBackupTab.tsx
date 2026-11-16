@@ -41,10 +41,12 @@ export const SecurityBackupTab: React.FC<SecurityBackupTabProps> = ({
             </div>
 
             {/* Identity Recovery Section */}
-            <IdentityRecoveryCard />
+            <div id="settings-security-section">
+                <IdentityRecoveryCard />
+            </div>
 
             {/* Privacy Protocols */}
-            <div id="settings-security-section">
+            <div id="settings-privacy-section">
                 <Card
                     header={
                         <div className="flex items-center gap-2">

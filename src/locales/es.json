@@ -1895,7 +1895,6 @@
   "standards.password": "Contraseña",
   "standards.passwordEncrypted": "Protegido por contraseña",
   "standards.privacyModeLabel": "Modo de privacidad",
-  "standards.rawToml": "Archivo sin formato (.toml)",
   "standards.showRawToml": "Mostrar definición TOML",
   "standards.signaturesRequiredLabel": "Firmas adicionales / Garantes",
   "standards.title": "Estándares de vales",

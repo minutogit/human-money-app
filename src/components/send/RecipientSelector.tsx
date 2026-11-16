@@ -1,11 +1,11 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { User, UserPlus, Search, X, AlertTriangle, ClipboardPaste, QrCode, Camera } from 'lucide-react';
+import { User, UserPlus, Search, X, AlertTriangle, ClipboardPaste, QrCode } from 'lucide-react';
 import Avatar from 'boring-avatars';
 import { Card } from '../ui/Card';
 import { Input } from '../ui/Input';
 import { Button } from '../ui/Button';
-import { ModalShell } from '../ui/ModalShell';
+import { QrScannerModal } from '../ui/QrScannerModal';
 import { ContactBadge } from '../ui/ContactBadge';
 import { Advanced } from '../ui/Advanced';
 import { TechId } from '../ui/TechId';
@@ -13,12 +13,6 @@ import { readFromClipboard } from '../../utils/clipboard';
 import { logger } from '../../utils/log';
 import { stringifyError } from '../../utils/errorHelper';
 import { Contact, TrustStatus } from '../../types';
-
-interface BarcodeDetectorInstance {
-  detect: (source: HTMLVideoElement) => Promise<Array<{ rawValue?: string }>>;
-}
-
-type BarcodeDetectorConstructor = new (options?: { formats?: string[] }) => BarcodeDetectorInstance;
 
 interface RecipientSelectorProps {
   recipientId: string;
@@ -52,111 +46,6 @@ export function RecipientSelector({
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [scannerOpen, setScannerOpen] = useState(false);
-  const [cameraError, setCameraError] = useState<string | null>(null);
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const scanTimerRef = useRef<number | null>(null);
-
-  const stopCamera = useCallback(() => {
-    if (scanTimerRef.current) {
-      clearTimeout(scanTimerRef.current);
-      scanTimerRef.current = null;
-    }
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((track) => track.stop());
-      streamRef.current = null;
-    }
-    if (videoRef.current) {
-      videoRef.current.srcObject = null;
-    }
-  }, []);
-
-  const startCamera = useCallback(async () => {
-    setCameraError(null);
-    if (typeof window !== 'undefined' && !('BarcodeDetector' in window)) {
-      setCameraError(t('common.qrScanUnsupported'));
-      return;
-    }
-    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
-      setCameraError(t('contacts.cameraNotSupported'));
-      return;
-    }
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment' },
-      });
-      streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.play().catch(() => {});
-      }
-    } catch (err) {
-      logger.info(`Camera access not available or denied: ${stringifyError(err)}`);
-      setCameraError(t('contacts.cameraAccessDenied'));
-    }
-  }, [t]);
-
-  useEffect(() => {
-    if (!scannerOpen) {
-      stopCamera();
-      return;
-    }
-    startCamera();
-    return () => {
-      stopCamera();
-    };
-  }, [scannerOpen, startCamera, stopCamera]);
-
-  useEffect(() => {
-    if (!scannerOpen) return;
-    if (typeof window === 'undefined' || !('BarcodeDetector' in window)) {
-      return;
-    }
-    let isScanning = true;
-    let detector: BarcodeDetectorInstance | null = null;
-
-    try {
-      const DetectorCtor = (window as unknown as { BarcodeDetector: BarcodeDetectorConstructor }).BarcodeDetector;
-      detector = new DetectorCtor({ formats: ['qr_code'] });
-    } catch (err) {
-      logger.info(`BarcodeDetector creation failed: ${stringifyError(err)}`);
-      setCameraError(t('common.qrScanUnsupported'));
-      stopCamera();
-      return;
-    }
-
-    const scanLoop = async () => {
-      if (!isScanning) return;
-      if (detector && videoRef.current && videoRef.current.readyState >= 2) {
-        try {
-          const barcodes = await detector.detect(videoRef.current);
-          if (barcodes && barcodes.length > 0 && barcodes[0].rawValue) {
-            const raw = barcodes[0].rawValue;
-            isScanning = false;
-            stopCamera();
-            setScannerOpen(false);
-            onApplyRawCode?.(raw);
-            return;
-          }
-        } catch {
-          // Continue scanning on frame detection errors
-        }
-      }
-      if (isScanning && scannerOpen) {
-        scanTimerRef.current = window.setTimeout(scanLoop, 250);
-      }
-    };
-
-    scanTimerRef.current = window.setTimeout(scanLoop, 400);
-    return () => {
-      isScanning = false;
-      if (scanTimerRef.current) {
-        clearTimeout(scanTimerRef.current);
-        scanTimerRef.current = null;
-      }
-    };
-  }, [scannerOpen, stopCamera, onApplyRawCode, t]);
 
   const suggestions = React.useMemo(() => {
     if (!recipientId || recipientId.length < 2) return [];
@@ -191,6 +80,7 @@ export function RecipientSelector({
       onApplyRawCode &&
       (trimmed.toLowerCase().includes('humoco://pay') ||
         trimmed.toLowerCase().includes('humoco://contact') ||
+        trimmed.toLowerCase().includes('humoco://card') ||
         trimmed.includes('did:key:') ||
         trimmed.startsWith('did:') ||
         trimmed.includes('@did:'))
@@ -343,7 +233,7 @@ export function RecipientSelector({
                     onChange={onRecipientChange}
                     onFocus={() => suggestions.length > 0 && setShowSuggestions(true)}
                     onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
-                    placeholder="did:key:z..."
+                    placeholder={t('transfer.recipientSearchPlaceholder')}
                     className={`py-4 px-5 rounded-2xl font-mono text-xs transition-all ${recipientError ? 'border-rose-500 shadow-rose-100 ring-2 ring-rose-100' : ''}`}
                   />
                   {showSuggestions && (
@@ -383,34 +273,15 @@ export function RecipientSelector({
         )}
       </div>
 
-      <ModalShell
+      <QrScannerModal
         isOpen={scannerOpen}
         onClose={() => setScannerOpen(false)}
-        maxWidth="md"
+        onScan={(raw) => {
+          onApplyRawCode?.(raw);
+        }}
         title={t('transfer.scanQrButton')}
-        description={t('transfer.scanQrHint')}
-      >
-        <div className="space-y-4 py-2">
-          <div className="relative w-full aspect-square max-h-[320px] bg-slate-900 rounded-2xl overflow-hidden flex items-center justify-center border border-slate-700">
-            {cameraError ? (
-              <div className="p-6 text-center space-y-3 max-w-sm">
-                <Camera size={36} className="text-slate-400 mx-auto" />
-                <p className="text-xs text-slate-300 leading-relaxed">{cameraError}</p>
-              </div>
-            ) : (
-              <>
-                <video ref={videoRef} className="w-full h-full object-cover" playsInline muted />
-                <div className="absolute inset-0 border-2 border-white/30 rounded-2xl pointer-events-none flex items-center justify-center">
-                  <div className="w-48 h-48 border-2 border-emerald-400 rounded-2xl shadow-[0_0_0_9999px_rgba(0,0,0,0.4)]" />
-                </div>
-              </>
-            )}
-          </div>
-          <Button type="button" variant="outline" onClick={() => setScannerOpen(false)} className="w-full">
-            {t('common.close')}
-          </Button>
-        </div>
-      </ModalShell>
+        hint={t('transfer.scanQrHint')}
+      />
     </Card>
   );
 }

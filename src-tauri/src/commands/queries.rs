@@ -282,6 +282,13 @@ pub fn get_voucher_summaries(test_filter: Option<bool>, state: tauri::State<AppS
         for s in raw_summaries {
             let mut summary: crate::models::FrontendVoucherSummary = s.into();
             if let Some(instance) = w.voucher_store.vouchers.get(&summary.local_instance_id) {
+                summary.description = instance
+                    .voucher
+                    .nominal_value
+                    .description
+                    .clone()
+                    .or_else(|| instance.voucher.creator_profile.service_offer.clone())
+                    .unwrap_or_default();
                 summary.trust = state.evaluate_voucher_trust(w, &summary.creator_id, &instance.voucher.signatures);
             }
             enriched.push(summary);
@@ -294,9 +301,16 @@ pub fn get_voucher_summaries(test_filter: Option<bool>, state: tauri::State<AppS
 #[tauri::command]
 pub fn get_voucher_details(local_id: String, state: tauri::State<AppState>) -> Result<crate::models::FrontendVoucherDetails, FrontendError> {
     let service = state.service.lock().unwrap();
-    let details = service.with_wallet(|w| -> Result<crate::models::FrontendVoucherDetails, human_money_core::Error> {
+    let details = service.with_wallet_and_identity(|w, id| -> Result<crate::models::FrontendVoucherDetails, human_money_core::Error> {
         let raw_details = w.get_voucher_details(&local_id)?;
         let mut frontend_details: crate::models::FrontendVoucherDetails = raw_details.clone().into();
+        if let Some(summary) = w
+            .list_vouchers(Some(id), None, None, None)
+            .into_iter()
+            .find(|s| s.local_instance_id == local_id)
+        {
+            frontend_details.current_amount = summary.current_amount;
+        }
         let creator_id = raw_details.voucher.creator_profile.id.as_deref().unwrap_or("");
         frontend_details.trust = state.evaluate_voucher_trust(w, creator_id, &raw_details.voucher.signatures);
         Ok(frontend_details)
@@ -338,9 +352,16 @@ pub fn get_proof_of_double_spend(proof_id: String, state: tauri::State<AppState>
     let proof = service.get_proof_of_double_spend(&proof_id).map_err(FrontendError::from)?;
     
     let conflict_role = conflict_role_str(summary.conflict_role);
-    
+    let mut frontend_proof: crate::models::FrontendProofOfDoubleSpend = proof.into();
+    frontend_proof.affected_voucher_name = summary
+        .display_affected_voucher_name
+        .or(summary.affected_voucher_name);
+    frontend_proof.voucher_standard_uuid = summary.voucher_standard_uuid;
+    frontend_proof.is_resolved = Some(summary.is_resolved);
+    frontend_proof.non_redeemable_test_voucher = summary.is_test_voucher;
+
     Ok(crate::models::FullProofDetails {
-        proof: proof.into(),
+        proof: frontend_proof,
         local_override: summary.local_override,
         local_note: summary.local_note,
         conflict_role: conflict_role.to_string(),

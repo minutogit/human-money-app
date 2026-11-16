@@ -216,7 +216,7 @@ export const QrScannerModal: React.FC<QrScannerModalProps> = ({
                 </div>
             }
         >
-            <div className="space-y-4">
+            <div data-testid="qr-scanner-view" className="space-y-4">
                 {cameraError ? (
                     <div
                         data-testid="qr-scanner-camera-error"

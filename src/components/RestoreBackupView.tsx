@@ -14,6 +14,7 @@ import { backupService } from '../services/backupService';
 import { recoveryService } from '../services/recoveryService';
 import { profileService } from '../services/profileService';
 import { authService } from '../services/authService';
+import { useOptionalSession } from '../context/SessionContext';
 import {
     ActiveRecoverySessionDto,
     BackupProbeDto,
@@ -76,6 +77,7 @@ export const RestoreBackupView: React.FC<RestoreBackupViewProps> = ({
     initialMethod,
 }) => {
     const { t } = useTranslation();
+    const session = useOptionalSession();
 
     const [method, setMethod] = useState<TopMethod>(() => {
         if (initialMethod) return initialMethod;
@@ -634,7 +636,14 @@ export const RestoreBackupView: React.FC<RestoreBackupViewProps> = ({
         setIsReconcilingL2(true);
         setFeedback(null);
         try {
-            const res = await backupService.reconcileRestoredWalletL2(newPassword || undefined);
+            const res = newPassword
+                ? await backupService.reconcileRestoredWalletL2(newPassword)
+                : session?.protectAction
+                ? await session.protectAction(async (pwd) => {
+                      return await backupService.reconcileRestoredWalletL2(pwd || undefined);
+                  })
+                : await backupService.reconcileRestoredWalletL2(undefined);
+            if (!res) return;
             if (restoreOutcome) {
                 setRestoreOutcome({
                     ...restoreOutcome,

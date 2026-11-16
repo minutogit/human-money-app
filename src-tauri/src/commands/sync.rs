@@ -1159,7 +1159,7 @@ pub async fn discover_available_syncs_impl(
                             sync_client::current_unix_timestamp(),
                         );
                     }
-                    descriptors.push((desc, "Eigene Ablage".to_string()));
+                    descriptors.push((desc, "Eigener Sync-Dienst".to_string()));
                 }
             }
         }
@@ -1210,7 +1210,7 @@ pub async fn discover_available_syncs_impl(
 
     // 4. From market_selected_syncs
     for sel in &settings.market_selected_syncs {
-        descriptors.push((sel.clone(), "Ausgewählte Ablage".to_string()));
+        descriptors.push((sel.clone(), "Ausgewählter Sync-Dienst".to_string()));
     }
 
     let mut deduped: BTreeMap<String, (FrontendSyncDescriptor, String)> = BTreeMap::new();

@@ -116,9 +116,10 @@ export function GlobalFileDropZone({ children }: GlobalFileDropZoneProps) {
       if (lowerName.endsWith('.txt') || lowerName.endsWith('.html') || lowerName.endsWith('.json')) {
         try {
           const text = await file.text();
-          const match = text.match(/humoco:\/\/(recovery-reply|kit|recovery-req|card|pay|contact)[^\s"'>]+/i);
+          const match = text.match(/humoco:\/\/(recovery-reply|kit|recovery-req|card|pay|contact)[^\s"'<>)]+/i);
           if (match) {
-            window.dispatchEvent(new CustomEvent('humoco:deeplink', { detail: match[0] }));
+            const cleanUri = match[0].replace(/[.,;:!\]]+$/, '');
+            window.dispatchEvent(new CustomEvent('humoco:deeplink', { detail: cleanUri }));
             return;
           }
         } catch {
@@ -214,6 +215,11 @@ export function GlobalFileDropZone({ children }: GlobalFileDropZoneProps) {
           logger.error("Failed to read dropped file globally: " + stringifyError(err));
           setDropFeedback({ status: 'error', message: translateError(err, t) });
         }
+      } else {
+        setDropFeedback({
+          status: 'error',
+          message: t('common.unsupportedFileDrop'),
+        });
       }
     }
   };

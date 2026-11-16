@@ -26,6 +26,7 @@ import {
     FrontendMarketInquiryItem,
 } from '../../types';
 import { Button } from '../ui/Button';
+import { ConfirmationModal } from '../ui/ConfirmationModal';
 import { Advanced } from '../ui/Advanced';
 import { truncateUserId } from '../../utils/userIdHelper';
 
@@ -67,6 +68,8 @@ export const MineTab: React.FC<MineTabProps> = ({
 }) => {
     const { t } = useTranslation();
     const [isExpiredOpen, setIsExpiredOpen] = useState(false);
+    const [confirmDeleteAdId, setConfirmDeleteAdId] = useState<string | null>(null);
+    const [isDeletingAd, setIsDeletingAd] = useState(false);
     const [isTogglingPublish, setIsTogglingPublish] = useState(false);
     const [inquiryTab, setInquiryTab] = useState<'received' | 'sent'>('received');
     const [avatarError, setAvatarError] = useState(false);
@@ -364,7 +367,7 @@ export const MineTab: React.FC<MineTabProps> = ({
                                         <Button
                                             size="xs"
                                             variant="outline"
-                                            onClick={() => onDeleteAd(ad.id)}
+                                            onClick={() => setConfirmDeleteAdId(ad.id)}
                                             className="text-rose-600 hover:bg-rose-50 border-rose-200"
                                             title={t('marketplace.deleteBtn', 'Löschen')}
                                         >
@@ -443,7 +446,7 @@ export const MineTab: React.FC<MineTabProps> = ({
                                             <Button
                                                 size="xs"
                                                 variant="outline"
-                                                onClick={() => onDeleteAd(ad.id)}
+                                                onClick={() => setConfirmDeleteAdId(ad.id)}
                                                 className="text-rose-600 hover:bg-rose-50"
                                             >
                                                 <Trash2 size={12} />
@@ -538,6 +541,27 @@ export const MineTab: React.FC<MineTabProps> = ({
                     </div>
                 )}
             </div>
+
+            <ConfirmationModal
+                isOpen={confirmDeleteAdId !== null}
+                title={t('marketplace.deleteBtn', 'Löschen')}
+                description={t('common.deleteConfirm', 'Diesen Eintrag wirklich dauerhaft löschen?')}
+                confirmText={t('marketplace.deleteBtn', 'Löschen')}
+                cancelText={t('common.cancel', 'Abbrechen')}
+                confirmVariant="danger"
+                isProcessing={isDeletingAd}
+                onCancel={() => setConfirmDeleteAdId(null)}
+                onConfirm={async () => {
+                    if (!confirmDeleteAdId) return;
+                    setIsDeletingAd(true);
+                    try {
+                        await onDeleteAd(confirmDeleteAdId);
+                        setConfirmDeleteAdId(null);
+                    } finally {
+                        setIsDeletingAd(false);
+                    }
+                }}
+            />
         </div>
     );
 };

@@ -210,6 +210,7 @@ export interface Voucher {
 export interface VoucherDetails {
     localInstanceId: string;
     status: VoucherStatus;
+    currentAmount?: string;
     voucher: Voucher;
     displayCurrency: string;
     displayStandardName: string;
@@ -235,7 +236,7 @@ export interface L2QuorumInfo {
 }
 
 export interface VoucherL2StatusDto {
-    status: "no_servers" | "offline" | "unspent" | "spent";
+    status: "no_servers" | "offline" | "unspent" | "spent" | "conflict";
     archived: boolean;
     successorTId?: string;
 }

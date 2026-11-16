@@ -35,9 +35,11 @@ function AppContent() {
     const [releaseRequestUri, setReleaseRequestUri] = useState<string | undefined>(undefined);
     const [releaseInitialOwnerDid, setReleaseInitialOwnerDid] = useState<string | undefined>(undefined);
     const [pendingDeepLink, setPendingDeepLink] = useState<string | null>(null);
+    const [deepLinkFeedback, setDeepLinkFeedback] = useState<string | null>(null);
 
     const handleDeepLink = useCallback((uri: string) => {
         if (!uri) return;
+        setDeepLinkFeedback(null);
 
         const handleUriImport = async (targetUri: string) => {
             const parsed = parseCardUri(targetUri);
@@ -48,9 +50,18 @@ function AppContent() {
                     });
                     if (res && res.status === 'accepted' && res.did) {
                         navigate({ view: 'marketplace', selectedDid: res.did });
+                    } else if (res) {
+                        const statusMap: Record<string, string> = {
+                            ignored_stale: t('marketplace.importIgnoredDesc'),
+                            rejected_expired: t('marketplace.importExpiredDesc'),
+                            rejected_hops: t('marketplace.importHopsDesc'),
+                            rejected_offender: t('marketplace.importOffenderDesc'),
+                        };
+                        setDeepLinkFeedback(statusMap[res.status] || res.status);
                     }
                 } catch (err) {
                     logger.error("Failed to import card from URI: " + String(err));
+                    setDeepLinkFeedback(String(err));
                 }
             }
         };
@@ -180,13 +191,20 @@ function AppContent() {
                                     </AlertBanner>
                                 </div>
                             )}
+                            {deepLinkFeedback && (
+                                <div className="max-w-xl mx-auto mt-3 mb-2" data-testid="deeplink-feedback-banner">
+                                    <AlertBanner variant="warning" onDismiss={() => setDeepLinkFeedback(null)}>
+                                        {deepLinkFeedback}
+                                    </AlertBanner>
+                                </div>
+                            )}
                             <AppRouter />
                         </main>
                     </div>
                 </GlobalFileDropZone>
 
                 {/* Fork detected overlay */}
-                {isForkLocked && (
+                {isForkLocked && appState.view !== 'help_center' && (
                     <ForkLockOverlay 
                         onStartRecovery={() => {
                             clearLocks();
@@ -196,7 +214,7 @@ function AppContent() {
                 )}
                 
                 {/* Fallback for general recovery required (no seal) */}
-                {isRecoveryRequired && !isForkLocked && (
+                {isRecoveryRequired && !isForkLocked && appState.view !== 'help_center' && (
                     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
                          <div className="max-w-md w-full bg-white dark:bg-gray-800 rounded-2xl p-8 text-center shadow-xl">
                             <h2 className="text-xl font-bold mb-4">{t('profile.recoveryRequiredTitle')}</h2>

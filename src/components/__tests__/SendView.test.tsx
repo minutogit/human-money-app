@@ -134,7 +134,7 @@ amount_decimal_places = 4`,
 
     await waitFor(() => {
       expect(screen.getByRole('textbox', { name: /User ID/i })).toBeInTheDocument();
-      expect(screen.getByPlaceholderText(/did:key:z/i)).toBeInTheDocument();
+      expect(screen.getByRole('textbox', { name: /User ID/i })).toBeInTheDocument();
     });
   });
 
@@ -256,8 +256,8 @@ amount_decimal_places = 4`,
 
   it('should strip whitespace from recipient ID on input', async () => {
     render(<SendView />);
-    await waitFor(() => expect(screen.getByPlaceholderText(/did:key:z/i)).toBeInTheDocument());
-    const recipientInput = screen.getByPlaceholderText(/did:key:z/i);
+    await waitFor(() => expect(screen.getByRole('textbox', { name: /User ID/i })).toBeInTheDocument());
+    const recipientInput = screen.getByRole('textbox', { name: /User ID/i });
     fireEvent.change(recipientInput, { target: { value: 'did:key:z456 \t\n' } });
     await waitFor(() => {
       expect(recipientInput).toHaveValue('did:key:z456');
@@ -295,9 +295,9 @@ amount_decimal_places = 4`,
 
   it('applies payment request from recipient input preserving target amount', async () => {
     render(<SendView />);
-    await waitFor(() => expect(screen.getByPlaceholderText(/did:key:z/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('textbox', { name: /User ID/i })).toBeInTheDocument());
 
-    const recipientInput = screen.getByPlaceholderText(/did:key:z/i);
+    const recipientInput = screen.getByRole('textbox', { name: /User ID/i });
     const payUri = 'humoco://pay?to=did:key:z999&amount=42.50&std=FreeTaler&note=Honey';
     fireEvent.change(recipientInput, { target: { value: payUri } });
 
@@ -320,9 +320,9 @@ amount_decimal_places = 4`,
 
   it('shows error feedback on invalid payment request in recipient input', async () => {
     render(<SendView />);
-    await waitFor(() => expect(screen.getByPlaceholderText(/did:key:z/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('textbox', { name: /User ID/i })).toBeInTheDocument());
 
-    const recipientInput = screen.getByPlaceholderText(/did:key:z/i);
+    const recipientInput = screen.getByRole('textbox', { name: /User ID/i });
     fireEvent.change(recipientInput, { target: { value: 'humoco://pay?invalid=true' } });
 
     await waitFor(() => {
@@ -605,9 +605,9 @@ amount_decimal_places = 4`,
 
   it('warns instead of applying target amount when requested standard UUID is missing locally', async () => {
     render(<SendView />);
-    await waitFor(() => expect(screen.getByPlaceholderText(/did:key:z/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('textbox', { name: /User ID/i })).toBeInTheDocument());
 
-    const recipientInput = screen.getByPlaceholderText(/did:key:z/i);
+    const recipientInput = screen.getByRole('textbox', { name: /User ID/i });
     const payUri =
       'humoco://pay?to=did:key:z999&amount=42.50&std=11111111-1111-1111-1111-111111111111&stdName=SonnenTaler';
     fireEvent.change(recipientInput, { target: { value: payUri } });

@@ -27,7 +27,7 @@ import { HelpCenterView } from './HelpCenterView';
 import { MarketplaceView } from './marketplace/MarketplaceView';
 
 export const AppRouter: React.FC = () => {
-    const { notifyLogin } = useSession();
+    const { notifyLogin, isSessionActive } = useSession();
     const { appState, navigate, goBack } = useNavigation();
 
     switch (appState.view) {
@@ -73,6 +73,10 @@ export const AppRouter: React.FC = () => {
                     navigate({ view: "logged_in" });
                 }}
                 onBack={async () => {
+                    if (isSessionActive) {
+                        navigate({ view: "logged_in" });
+                        return;
+                    }
                     try {
                         const profiles = await authService.listProfiles();
                         if (!profiles || profiles.length === 0) {

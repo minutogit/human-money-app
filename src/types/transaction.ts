@@ -132,6 +132,7 @@ export interface ProofOfDoubleSpendSummary {
     localOverride: boolean;
     conflictRole: ConflictRole;
     affectedVoucherName?: string;
+    displayAffectedVoucherName?: string;
     voucherStandardUuid?: string;
     localNote?: string;
     isTestVoucher: boolean;
@@ -150,6 +151,7 @@ export interface ProofOfDoubleSpend {
     resolutions?: ResolutionEndorsement[];
     layer2Verdict?: unknown;
     affectedVoucherName?: string;
+    displayAffectedVoucherName?: string;
     voucherStandardUuid?: string;
     isResolved?: boolean;
     nonRedeemableTestVoucher: boolean;

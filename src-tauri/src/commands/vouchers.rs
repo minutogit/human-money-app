@@ -97,10 +97,12 @@ pub fn open_voucher_signing_request(
             let display_currency = v.nominal_value.unit.clone();
             let display_standard_name = v.voucher_standard.name.clone();
             let is_test_voucher = v.non_redeemable_test_voucher;
+            let current_amount = v.nominal_value.amount.clone();
             
             Ok(crate::models::FrontendVoucherDetails {
                 local_instance_id: format!("external-{}", v.voucher_id.chars().take(8).collect::<String>()),
                 status: "Active".to_string(),
+                current_amount,
                 voucher: v.into(),
                 display_currency,
                 display_standard_name,

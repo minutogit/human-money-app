@@ -1,6 +1,6 @@
 ---
 project: human-money-app
-version: "0.5.6"
+version: "0.5.7"
 phase: "beta"
 health: "green"
 last_updated: "2026-11-16"

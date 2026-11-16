@@ -8,6 +8,7 @@ import { Button } from '../ui/Button';
 import { ReachPresetSelector } from '../ReachPresetSelector';
 import { AppSettings, FrontendMyMarketProfile } from '../../types';
 import { settingsService } from '../../services/settingsService';
+import { useSession } from '../../context/SessionContext';
 import { logger } from '../../utils/log';
 import { stringifyError, translateError } from '../../utils/errorHelper';
 
@@ -33,6 +34,7 @@ export function MarketplaceOptionsPanel({
     className = '',
 }: MarketplaceOptionsPanelProps) {
     const { t } = useTranslation();
+    const { protectAction } = useSession();
 
     const [marketShowUnknown, setMarketShowUnknown] = useState<boolean>(true);
     const [maxStoredCards, setMaxStoredCards] = useState<number>(2000);
@@ -79,7 +81,9 @@ export function MarketplaceOptionsPanel({
             setErrorMsg(null);
             const current = await settingsService.getSettings();
             const updated: AppSettings = { ...current, marketShowUnknown: value };
-            await settingsService.saveSettings(updated);
+            await protectAction(async (pwd) => {
+                await settingsService.saveSettings(updated, pwd || undefined);
+            });
             onSettingsChanged?.();
         } catch (err) {
             logger.error('Failed to save marketShowUnknown: ' + stringifyError(err));
@@ -96,7 +100,9 @@ export function MarketplaceOptionsPanel({
             setErrorMsg(null);
             const current = await settingsService.getSettings();
             const updated: AppSettings = { ...current, maxStoredCards: count };
-            await settingsService.saveSettings(updated);
+            await protectAction(async (pwd) => {
+                await settingsService.saveSettings(updated, pwd || undefined);
+            });
             onSettingsChanged?.();
         } catch (err) {
             logger.error('Failed to save maxStoredCards: ' + stringifyError(err));

@@ -820,6 +820,12 @@ fn test_emergency_kit_uri_roundtrip_12_and_24_words() {
     let parsed_12 = parse_emergency_kit_uri(&uri_12).unwrap();
     assert_eq!(parsed_12, kit_12);
 
+    // HTML tag suffix & trailing chat punctuation must be stripped cleanly
+    let wrapped_html = format!("<div>URI: {}</div>", uri_12);
+    assert_eq!(parse_emergency_kit_uri(&wrapped_html).unwrap(), kit_12);
+    let wrapped_punct = format!("({})!", uri_12);
+    assert_eq!(parse_emergency_kit_uri(&wrapped_punct).unwrap(), kit_12);
+
     // 32-byte entropy (24 words) with passphrase
     let kit_24 = EmergencyKitData {
         version: 1,

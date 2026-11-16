@@ -67,14 +67,6 @@ export const transferService = {
         });
     },
 
-    rankVouchers: async (args: { targetAmount: string; standardUuidFilter?: string | null; recipientId: string }) => {
-        return await invoke<RankedVoucher[]>("rank_vouchers_for_recipient", {
-            targetAmount: args.targetAmount,
-            standardUuidFilter: args.standardUuidFilter ?? null,
-            recipientId: args.recipientId
-        });
-    },
-
     createBundle: async (args: CreateBundleArgs) => {
         const result = await invoke<CreateBundleResult>("create_transfer_bundle", {
             recipientId: args.recipientId,
@@ -118,53 +110,6 @@ export const transferService = {
         return await invoke<WalletEvent[]>("get_event_history", { offset, limit });
     },
 
-    verifyLiveCheckoutAndRelease: async (
-        proofJson: string,
-        expectedContextJson: string,
-        regionalViewsJson?: string | null,
-        explicitMerchantApproval: boolean = false,
-        password?: string | null
-    ) => {
-        return await invoke<import("../types").CheckoutReleaseVerdict>("verify_live_checkout_and_release", {
-            proofJson,
-            expectedContextJson,
-            regionalViewsJson: regionalViewsJson ?? null,
-            explicitMerchantApproval,
-            password: password ?? null,
-        });
-    },
-
-    evaluateCheckoutRelease: async (outcome: string, explicitMerchantApproval: boolean = false) => {
-        return await invoke<import("../types").CheckoutReleaseVerdict>("evaluate_checkout_release", {
-            outcome,
-            explicitMerchantApproval,
-        });
-    },
-
-    verifyCheckoutResponseWithAuthority: async (args: {
-        localId: string;
-        responseBytes: number[];
-        network: number;
-        shardId: number;
-        parentLockHex: string;
-        childLockHex: string;
-        committeePubkeysHex: string[];
-        explicitMerchantApproval?: boolean;
-        password?: string;
-    }) => {
-        return await invoke<import("../types").CheckoutReleaseVerdict>("verify_checkout_response_with_authority", {
-            localId: args.localId,
-            responseBytes: args.responseBytes,
-            network: args.network,
-            shardId: args.shardId,
-            parentLockHex: args.parentLockHex,
-            childLockHex: args.childLockHex,
-            committeePubkeysHex: args.committeePubkeysHex,
-            explicitMerchantApproval: args.explicitMerchantApproval ?? false,
-            password: args.password,
-        });
-    },
-
     checkoutReceivedBundle: async (args: {
         purchaseId: string;
         bundleData: number[];
@@ -180,14 +125,4 @@ export const transferService = {
         triggerAutoBackup();
         return result;
     },
-
-    submitL2SendIntent: async (args: {
-        localInstanceId: string;
-        password?: string | null;
-    }) => {
-        return await invoke<IntentDispatchObservation>("submit_l2_send_intent", {
-            localInstanceId: args.localInstanceId,
-            password: args.password ?? null,
-        });
-    }
 };

@@ -195,6 +195,7 @@ export const PeopleTab: React.FC<PeopleTabProps> = ({
                                                     bestPathNames: [],
                                                 }}
                                                 size="sm"
+                                                binaryTrust
                                             />
                                         </div>
                                     </div>

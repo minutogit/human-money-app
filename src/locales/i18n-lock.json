@@ -13636,16 +13636,6 @@
       "en": "ai-translated"
     }
   },
-  "standards.rawToml": {
-    "source_text": "Raw File (.toml)",
-    "status": {
-      "de": "ai-translated",
-      "es": "ai-translated",
-      "fr": "ai-translated",
-      "it": "ai-translated",
-      "en": "ai-translated"
-    }
-  },
   "standards.showRawToml": {
     "source_text": "Show TOML definition",
     "status": {

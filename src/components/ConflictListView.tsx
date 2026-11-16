@@ -131,7 +131,7 @@ export function ConflictListView({ onBack, onViewConflict }: ConflictListViewPro
                             )}
                         </div>
                         <h3 className="font-semibold text-theme-primary mb-1">
-                            {conflict.affectedVoucherName || t('conflict.unknownVoucher')}
+                            {conflict.displayAffectedVoucherName || conflict.affectedVoucherName || t('conflict.unknownVoucher')}
                         </h3>
                         <p data-testid="conflict-card-summary" className="text-xs text-theme-secondary mb-2 leading-relaxed">
                             {conflict.conflictRole === 'victim' ? t('conflict.listVictimSummary') : t('conflict.listWitnessSummary')}

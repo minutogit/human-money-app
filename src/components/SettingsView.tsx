@@ -121,18 +121,20 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                         setInitialOpenSection('standards');
                     }
                 }
-                const timer = setTimeout(() => {
-                    if (typeof document !== 'undefined') {
-                        const el = document.getElementById(`settings-${sec}-section`);
-                        if (el && typeof el.scrollIntoView === 'function') {
-                            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                if (!isLoading) {
+                    const timer = setTimeout(() => {
+                        if (typeof document !== 'undefined') {
+                            const el = document.getElementById(`settings-${sec}-section`);
+                            if (el && typeof el.scrollIntoView === 'function') {
+                                el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                            }
                         }
-                    }
-                }, 100);
-                return () => clearTimeout(timer);
+                    }, 100);
+                    return () => clearTimeout(timer);
+                }
             }
         }
-    }, [nav?.appState]);
+    }, [nav?.appState, isLoading]);
 
     // Tour bridge tab registration
     useEffect(() => {

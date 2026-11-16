@@ -64,6 +64,7 @@ export function SignRequestView({ voucherData, requestMsgId, senderDid, onBack }
     const [previewTrust, setPreviewTrust] = useState<VoucherTrustDto | null>(null);
     const [savedSigFilePath, setSavedSigFilePath] = useState<string | null>(null);
     const [postSentSuccess, setPostSentSuccess] = useState(false);
+    const [cachedSigBundle, setCachedSigBundle] = useState<{ key: string; bytes: number[] } | null>(null);
     const [selectedGender, setSelectedGender] = useState<string>("1");
     const [isSavingGender, setIsSavingGender] = useState(false);
     const [standardsLoaded, setStandardsLoaded] = useState(false);
@@ -126,6 +127,8 @@ export function SignRequestView({ voucherData, requestMsgId, senderDid, onBack }
                         setFeedbackMsg(t('voucher.signRequest.parseFailed', { error: translateError(e, t) }));
                         setFeedbackType('error');
                     }
+                } else {
+                    setSelectedRole((prev) => prev || 'guarantor');
                 }
             } catch (e) {
                 if (!active) return;
@@ -216,15 +219,24 @@ export function SignRequestView({ voucherData, requestMsgId, senderDid, onBack }
         setFeedbackType(null);
         try {
             const targetCreatorDid = senderDid || voucherData.voucher?.creator?.id;
-            const bundleBytes = await protectAction(async (password) => {
-                return await voucherService.createDetachedSignatureResponseBundle({
-                    voucher: voucherData.voucher,
-                    role: selectedRole,
-                    includeDetails: includeDetails,
-                    config: { type: "TargetDid", value: [targetCreatorDid!, "TrialDecryption"] },
-                    password: password || undefined
+            const bundleKey = `${voucherData.voucher.voucherId}:${selectedRole}:${includeDetails}`;
+            let bundleBytes: number[] | undefined =
+                cachedSigBundle?.key === bundleKey ? cachedSigBundle.bytes : undefined;
+            if (!bundleBytes) {
+                const generatedBytes = await protectAction(async (password) => {
+                    return await voucherService.createDetachedSignatureResponseBundle({
+                        voucher: voucherData.voucher,
+                        role: selectedRole,
+                        includeDetails: includeDetails,
+                        config: { type: "TargetDid", value: [targetCreatorDid!, "TrialDecryption"] },
+                        password: password || undefined
+                    });
                 });
-            });
+                if (Array.isArray(generatedBytes)) {
+                    bundleBytes = generatedBytes;
+                    setCachedSigBundle({ key: bundleKey, bytes: generatedBytes });
+                }
+            }
 
             if (!bundleBytes) return;
 
@@ -435,13 +447,15 @@ export function SignRequestView({ voucherData, requestMsgId, senderDid, onBack }
                                         <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-xl p-3 leading-relaxed">
                                             {t('voucher.unknownStandardRoleHint')}
                                         </p>
-                                        <input
-                                            type="text"
-                                            value={selectedRole}
+                                        <select
+                                            value={selectedRole || 'guarantor'}
                                             onChange={(e) => setSelectedRole(e.target.value)}
-                                            placeholder={t('voucher.customRole')}
-                                            className="w-full bg-white border border-theme-subtle rounded-2xl px-4 py-3 text-sm font-bold text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft transition-all"
-                                        />
+                                            className="w-full bg-white border border-theme-subtle rounded-2xl px-4 py-3 text-sm font-bold text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft appearance-none transition-all"
+                                        >
+                                            <option value="guarantor">
+                                                {t('voucher.role.guarantor', { defaultValue: 'guarantor' })}
+                                            </option>
+                                        </select>
                                     </div>
                                 ) : allowedRoles.length === 1 ? (
                                     <div className="p-4 bg-white border-2 border-theme-primary rounded-2xl flex items-center justify-between shadow-sm">

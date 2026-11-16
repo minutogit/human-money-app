@@ -14,6 +14,8 @@ import { readFile } from '@tauri-apps/plugin-fs';
 import { logger } from '../../utils/log';
 import { translateError, stringifyError } from '../../utils/errorHelper';
 import { truncateUserId } from '../../utils/userIdHelper';
+import { parseContactCard } from '../../utils/humocoUri';
+import { notifySyncStatusUpdated } from '../../utils/syncEvents';
 import { Contact, FrontendMyMarketProfile } from '../../types';
 
 export interface ImportCardModalProps {
@@ -129,8 +131,71 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
         setResultFeedback(null);
 
         try {
+            let effectivePayload = trimmed;
+            const cardUriMatch = trimmed.match(/humoco:\/\/card\?[^\s"'<>)]+/i);
+            if (cardUriMatch) {
+                effectivePayload = cardUriMatch[0].replace(/[.,;:!\]]+$/, '');
+            } else {
+                const firstBrace = trimmed.indexOf('{');
+                const lastBrace = trimmed.lastIndexOf('}');
+                if (firstBrace !== -1 && lastBrace > firstBrace) {
+                    effectivePayload = trimmed.slice(firstBrace, lastBrace + 1);
+                } else {
+                    const parsedContact = parseContactCard(trimmed);
+                    if (parsedContact && parsedContact.did) {
+                        const existingContacts = await contactService.getContacts().catch(() => []);
+                        const existing = existingContacts.find(c => c.did === parsedContact.did);
+                        let firstName = existing?.profile.firstName;
+                        let lastName = existing?.profile.lastName;
+                        if (!firstName && parsedContact.name) {
+                            const parts = parsedContact.name.trim().split(/\s+/);
+                            if (parts.length > 1) {
+                                firstName = parts.slice(0, -1).join(' ');
+                                lastName = parts[parts.length - 1];
+                            } else if (parts[0]) {
+                                firstName = parts[0];
+                            }
+                        }
+                        const mappedSyncs = (parsedContact.syncUrls || []).map((url) => ({
+                            readUrl: url,
+                            writeUrl: url,
+                            dropPub: '',
+                            status: 'unverified',
+                            failCount: 0,
+                        }));
+                        const mergedSyncs = existing?.syncs && existing.syncs.length > 0 ? existing.syncs : mappedSyncs;
+                        const contactToSave: Contact = {
+                            did: parsedContact.did,
+                            profile: {
+                                ...(existing?.profile || {}),
+                                id: parsedContact.did,
+                                firstName: firstName || t('contacts.defaultContactName', 'Kontakt'),
+                                lastName,
+                            },
+                            tags: existing?.tags || [],
+                            addedAt: existing?.addedAt || new Date().toISOString(),
+                            trustLevel: existing?.trustLevel,
+                            syncs: mergedSyncs,
+                        };
+                        await protectAction(async (pwd) => {
+                            await contactService.saveContact(contactToSave, pwd || undefined);
+                        });
+                        marketService.probeContactSyncs?.(false)?.then(() => notifySyncStatusUpdated())?.catch(() => {});
+                        setPartnerName([firstName, lastName].filter(Boolean).join(' ') || null);
+                        setResultFeedback({
+                            type: 'success',
+                            title: t('marketplace.importSuccessTitle'),
+                            message: t('contacts.contactSavedSuccess', 'Kontakt gespeichert.'),
+                            did: parsedContact.did,
+                        });
+                        onImportSuccess(parsedContact.did);
+                        return;
+                    }
+                }
+            }
+
             const res = await protectAction(async (pwd) => {
-                return await marketService.importContactCard(trimmed, pwd || undefined);
+                return await marketService.importContactCard(effectivePayload, pwd || undefined);
             });
 
             if (!res) {

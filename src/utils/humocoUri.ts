@@ -305,3 +305,55 @@ export function parseCardUri(input: string): ParsedCardUri | null {
   }
 }
 
+/**
+ * Normalizes user-entered or pasted Sync Service URLs (extracts embedded http/https URLs from chat text,
+ * enforces https except loopback, strips query/fragment, appends `/sync.php` cleanly).
+ */
+export function normalizeSyncUrlInput(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return '';
+
+  const embeddedUrl = trimmed.match(/https?:\/\/[^\s<>"'`]+/i);
+  let s = embeddedUrl ? embeddedUrl[0].replace(/[.,;:!?)\]]+$/, '') : trimmed;
+
+  if (!s.includes('://')) {
+    s = 'https://' + s;
+  } else if (s.toLowerCase().startsWith('http://')) {
+    const after = s.slice(7);
+    const host = after.split(/[/:]/)[0].toLowerCase();
+    if (host !== 'localhost' && host !== '127.0.0.1' && host !== '[::1]') {
+      s = 'https://' + after;
+    }
+  }
+
+  s = s.replace(/[#?].*$/, '');
+
+  const schemeIdx = s.indexOf('://');
+  const scheme = s.substring(0, schemeIdx + 3).toLowerCase();
+  const rest = s.substring(schemeIdx + 3);
+
+  const firstSlash = rest.indexOf('/');
+  let authority = firstSlash === -1 ? rest : rest.substring(0, firstSlash);
+  const rawPath = firstSlash === -1 ? '/' : rest.substring(firstSlash);
+
+  authority = authority.toLowerCase();
+
+  if (scheme === 'https://' && authority.endsWith(':443')) {
+    authority = authority.slice(0, -4);
+  } else if (scheme === 'http://' && authority.endsWith(':80')) {
+    authority = authority.slice(0, -3);
+  }
+
+  const cleanPath = rawPath.replace(/\/+$/, '');
+  let canonicalPath: string;
+  if (!cleanPath || cleanPath === '') {
+    canonicalPath = '/sync.php';
+  } else if (cleanPath.endsWith('/sync.php') || cleanPath === '/sync.php') {
+    canonicalPath = cleanPath;
+  } else {
+    canonicalPath = `${cleanPath}/sync.php`;
+  }
+
+  return `${scheme}${authority}${canonicalPath}`;
+}
+

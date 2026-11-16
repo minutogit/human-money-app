@@ -39,7 +39,7 @@ import { AdvancedDisclosure } from "./ui/AdvancedDisclosure";
 import { TechId } from "./ui/TechId";
 import { formatAmount } from "../utils/format";
 import { readFromClipboard } from "../utils/clipboard";
-import { parseContactCard, parsePaymentRequest } from "../utils/humocoUri";
+import { parseCardUri, parseContactCard, parsePaymentRequest } from "../utils/humocoUri";
 import { 
     Shield, 
     BookOpen,
@@ -493,10 +493,7 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote, in
                 dispatch({ type: 'SET_FEEDBACK', msg: t('transfer.emptyClipboard') });
                 return;
             }
-            const success = applyPaymentRequest(text);
-            if (!success) {
-                dispatch({ type: 'SET_FEEDBACK', msg: t('transfer.invalidPaymentRequest') });
-            }
+            handleApplyRawCode(text);
         } catch (e) {
             logger.error(`Failed to read clipboard for payment request: ${stringifyError(e)}`);
             dispatch({ type: 'SET_FEEDBACK', msg: t('transfer.clipboardReadFailed') });
@@ -515,6 +512,28 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote, in
                 dispatch({ type: 'SET_FEEDBACK', msg: t('transfer.invalidPaymentRequest') });
             }
             return ok;
+        }
+        const parsedCard = parseCardUri(trimmed);
+        if (parsedCard?.envelopeJson) {
+            try {
+                const env = JSON.parse(parsedCard.envelopeJson) as Record<string, unknown>;
+                let cardDid = typeof env.did === 'string' ? env.did : '';
+                if (!cardDid && typeof env.card_wire === 'string') {
+                    const seg = env.card_wire.split('.')[1];
+                    if (seg) {
+                        const b64 = seg.replace(/-/g, '+').replace(/_/g, '/');
+                        const payload = JSON.parse(window.atob(b64)) as { did?: string };
+                        if (typeof payload.did === 'string') cardDid = payload.did;
+                    }
+                }
+                if (cardDid) {
+                    dispatch({ type: 'SET_FEEDBACK', msg: '' });
+                    dispatch({ type: 'SET_RECIPIENT', id: cardDid.replace(/\s+/g, '') });
+                    return true;
+                }
+            } catch {
+                // Fall through to parseContactCard
+            }
         }
         const parsedContact = parseContactCard(trimmed);
         if (parsedContact?.did) {
@@ -647,6 +666,7 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote, in
                 .map(([displayCurrency, stat]) => `${formatAmount(stat.total.toString())} ${displayCurrency}`)
                 .join(', ');
 
+            dispatch({ type: 'TOGGLE_CONFIRM', value: false });
             dispatch({ type: 'SET_FEEDBACK', msg: t('transfer.transferSuccess') });
             navigationTimerRef.current = setTimeout(() => navigate({
                 view: 'transfer_success',

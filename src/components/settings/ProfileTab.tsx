@@ -46,7 +46,9 @@ export const ProfileTab: React.FC<ProfileTabProps> = ({
         try {
             const current = settings || await settingsService.getSettings();
             const updated: AppSettings = { ...current, marketSendCardOnPayment: val };
-            await settingsService.saveSettings(updated);
+            await protectAction(async (pwd) => {
+                await settingsService.saveSettings(updated, pwd || undefined);
+            });
             if (onSettingsUpdated) onSettingsUpdated(updated);
         } catch (err) {
             logger.error(`Failed to save marketSendCardOnPayment: ${stringifyError(err)}`);

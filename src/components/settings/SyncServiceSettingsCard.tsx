@@ -33,6 +33,8 @@ import {
 import { marketService } from '../../services/marketService';
 import { settingsService } from '../../services/settingsService';
 import { useSession } from '../../context/SessionContext';
+import { normalizeSyncUrlInput } from '../../utils/humocoUri';
+export { normalizeSyncUrlInput };
 import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
@@ -93,65 +95,6 @@ const setSessionDraft = (key: string, value: string): void => {
         // ignore
     }
 };
-
-/**
- * Intelligently normalizes a user-entered Sync URL:
- * - Trims whitespace
- * - Prepends 'https://' if scheme is missing
- * - Upgrades 'http://' to 'https://' unless it's a local development loopback (localhost, 127.0.0.1, [::1])
- * - Removes query strings and fragments
- * - Normalizes path so that 'sync.php' is automatically recognized and appended if omitted,
- *   without duplicating it if the user already entered it.
- */
-export function normalizeSyncUrlInput(raw: string): string {
-    const trimmed = raw.trim();
-    if (!trimmed) return '';
-
-    let s = trimmed;
-    if (!s.includes('://')) {
-        s = 'https://' + s;
-    } else if (s.startsWith('http://')) {
-        const after = s.slice(7);
-        const host = after.split(/[/:]/)[0].toLowerCase();
-        if (host !== 'localhost' && host !== '127.0.0.1' && host !== '[::1]') {
-            s = 'https://' + after;
-        }
-    }
-
-    // Strip fragment and query
-    s = s.replace(/[#?].*$/, '');
-
-    const schemeIdx = s.indexOf('://');
-    const scheme = s.substring(0, schemeIdx + 3);
-    const rest = s.substring(schemeIdx + 3);
-
-    const firstSlash = rest.indexOf('/');
-    let authority = firstSlash === -1 ? rest : rest.substring(0, firstSlash);
-    const rawPath = firstSlash === -1 ? '/' : rest.substring(firstSlash);
-
-    // Lowercase host/authority
-    authority = authority.toLowerCase();
-
-    // Strip default port 443 for https, 80 for http
-    if (scheme === 'https://' && authority.endsWith(':443')) {
-        authority = authority.slice(0, -4);
-    } else if (scheme === 'http://' && authority.endsWith(':80')) {
-        authority = authority.slice(0, -3);
-    }
-
-    // Normalize path: trim trailing slashes
-    const cleanPath = rawPath.replace(/\/+$/, '');
-    let canonicalPath: string;
-    if (!cleanPath || cleanPath === '') {
-        canonicalPath = '/sync.php';
-    } else if (cleanPath.endsWith('/sync.php') || cleanPath === '/sync.php') {
-        canonicalPath = cleanPath;
-    } else {
-        canonicalPath = `${cleanPath}/sync.php`;
-    }
-
-    return `${scheme}${authority}${canonicalPath}`;
-}
 
 interface PolicyHelpPopoverProps {
     title: string;
@@ -448,7 +391,9 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                 ...current,
                 [key]: value,
             };
-            await settingsService.saveSettings(updated);
+            await protectAction(async (pwd) => {
+                await settingsService.saveSettings(updated, pwd || undefined);
+            });
             if (onSettingsUpdated) {
                 onSettingsUpdated(updated);
             }
@@ -465,7 +410,9 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                 ...current,
                 [key]: value,
             };
-            await settingsService.saveSettings(updated);
+            await protectAction(async (pwd) => {
+                await settingsService.saveSettings(updated, pwd || undefined);
+            });
             if (onSettingsUpdated) {
                 onSettingsUpdated(updated);
             }

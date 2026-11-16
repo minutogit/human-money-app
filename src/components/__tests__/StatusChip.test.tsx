@@ -36,8 +36,13 @@ vi.mock('react-i18next', () => ({
     useTranslation: () => ({
         t: (key: string, defaultOrOptions?: string | Record<string, unknown>, options?: Record<string, unknown>) => {
             if (typeof defaultOrOptions === 'string') return defaultOrOptions;
-            if (defaultOrOptions && typeof defaultOrOptions === 'object' && 'count' in defaultOrOptions) {
-                return `${key}:${String(defaultOrOptions.count)}`;
+            if (defaultOrOptions && typeof defaultOrOptions === 'object') {
+                if ('count' in defaultOrOptions) {
+                    return `${key}:${String(defaultOrOptions.count)}`;
+                }
+                if ('days' in defaultOrOptions) {
+                    return `${key}:${String(defaultOrOptions.days)}`;
+                }
             }
             if (options && 'count' in options) {
                 return `${key}:${String(options.count)}`;
@@ -269,6 +274,6 @@ describe('StatusChip Component', () => {
 
         fireEvent.click(screen.getByTestId('status-chip-button'));
         expect(screen.getByTestId('status-chip-row-ads')).toBeInTheDocument();
-        expect(screen.getByText('1 Inserat läuft bald ab.')).toBeInTheDocument();
+        expect(screen.getByText('statusChip.oneAdExpiring:7')).toBeInTheDocument();
     });
 });

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use chrono::Utc;
 use ed25519_dalek::SigningKey;
-use human_money_core::crypto::{create_user_id, get_pubkey_from_user_id};
+use human_money_core::crypto::get_pubkey_from_user_id;
 use human_money_core::models::secure_container::{
     ContainerConfig, PayloadType, PrivacyMode, SecureContainer,
 };
@@ -41,14 +41,6 @@ pub(crate) fn are_dids_equal(a: &str, b: &str) -> bool {
     match (get_pubkey_from_user_id(a_trim), get_pubkey_from_user_id(b_trim)) {
         (Ok(pk_a), Ok(pk_b)) => pk_a.as_bytes() == pk_b.as_bytes(),
         _ => false,
-    }
-}
-
-pub(crate) fn canonicalize_did_post(did: &str) -> String {
-    let trimmed = did.trim();
-    match get_pubkey_from_user_id(trimmed) {
-        Ok(pk) => create_user_id(&pk, None).unwrap_or_else(|_| trimmed.to_string()),
-        Err(_) => trimmed.to_string(),
     }
 }
 
@@ -1580,25 +1572,16 @@ pub async fn sync_post_channels_impl(
     // 3. Build authorized_senders and inquiry_only_senders
     let (authorized_senders, inquiry_only_senders) = {
         let mut service = state.service.lock().unwrap();
-        let reg = state.get_or_load_wot_register(&mut service, password.as_deref()).ok();
         let mut auth = Vec::new();
         let mut inquiry = Vec::new();
 
         if settings.post_accept_from_contacts {
             if let Ok(contacts) = state.load_contacts(&mut service, password.as_deref()) {
                 for c in contacts {
-                    let lvl = c.trust_level.unwrap_or_else(|| {
-                        if let Some(ref r) = reg {
-                            let can = canonicalize_did_post(&c.did);
-                            r.own_contacts.get(&can).map(|e| e.level).unwrap_or(0)
-                        } else {
-                            0
-                        }
-                    });
-                    if lvl >= 1 {
-                        if let Ok(vk) = get_pubkey_from_user_id(&c.did) {
-                            auth.push((c.did.clone(), vk));
-                        }
+                    // Allow all explicitly saved AddressBook contacts (including unrated)
+                    // so initial WotHandshakeAssertion packages reach pending_wot_handshakes.
+                    if let Ok(vk) = get_pubkey_from_user_id(&c.did) {
+                        auth.push((c.did.clone(), vk));
                     }
                 }
             }
@@ -1833,13 +1816,27 @@ pub async fn sync_post_channels_impl(
                             let mut service = state.service.lock().unwrap();
                             let conflict_count = result.check_result.verifiable_conflicts.len();
                             let warning_count = result.check_result.unverifiable_warnings.len();
-                            let notes = if conflict_count > 0 || warning_count > 0 {
+                            let conflict_summary = if conflict_count > 0 || warning_count > 0 {
                                 Some(format!(
                                     "Conflicts: {}, Warnings: {}",
                                     conflict_count, warning_count
                                 ))
                             } else {
                                 None
+                            };
+                            let notes = match (
+                                result
+                                    .header
+                                    .notes
+                                    .as_deref()
+                                    .map(str::trim)
+                                    .filter(|s| !s.is_empty()),
+                                conflict_summary,
+                            ) {
+                                (Some(n), Some(cs)) => Some(format!("{} ({})", n, cs)),
+                                (Some(n), None) => Some(n.to_string()),
+                                (None, Some(cs)) => Some(cs),
+                                (None, None) => None,
                             };
                             let record = TransactionRecord {
                                 id: uuid::Uuid::new_v4().to_string(),

@@ -145,7 +145,8 @@ describe('SyncServiceSettingsCard Component', () => {
             expect(settingsService.saveSettings).toHaveBeenCalledWith(
                 expect.objectContaining({
                     postAcceptFromContacts: false,
-                })
+                }),
+                'mock-wallet-pw'
             );
             expect(onUpdated).toHaveBeenCalled();
         });
@@ -392,6 +393,8 @@ describe('SyncServiceSettingsCard Component', () => {
         expect(normalizeSyncUrlInput('http://localhost:8080/sync')).toBe('http://localhost:8080/sync/sync.php');
         expect(normalizeSyncUrlInput('http://127.0.0.1:9000')).toBe('http://127.0.0.1:9000/sync.php');
         expect(normalizeSyncUrlInput('https://example.com:443/sync')).toBe('https://example.com/sync/sync.php');
+        expect(normalizeSyncUrlInput('Hier mein Sync: https://sync.example.org/sync.php!')).toBe('https://sync.example.org/sync.php');
+        expect(normalizeSyncUrlInput('Sync-Link: https://example.org/test?foo=1)')).toBe('https://example.org/test/sync.php');
     });
 
     it('renders discovered drops with non-contradictory titles and status badges', async () => {

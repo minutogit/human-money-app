@@ -1,5 +1,5 @@
 // src/components/AddContactModal.tsx
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { 
     QrCode, 
@@ -7,10 +7,10 @@ import {
     FileText, 
     UserPlus, 
     ArrowLeft, 
-    Camera, 
     RefreshCw 
 } from 'lucide-react';
 import { ModalShell } from './ui/ModalShell';
+import { QrScannerModal } from './ui/QrScannerModal';
 import { Button } from './ui/Button';
 import { Textarea } from './ui/Textarea';
 import { ExpertTabsLayout } from './ui/ExpertTabsLayout';
@@ -36,25 +36,39 @@ export interface AddContactModalProps {
 
 type ModalView = 'tiles' | 'qr_scanner' | 'paste_input';
 
-function isCardEnvelopePayload(trimmed: string): boolean {
-    if (trimmed.startsWith('humoco://card') || trimmed.includes('?env=')) {
-        return true;
+function extractCardPayload(raw: string): string | null {
+    const trimmed = raw.trim();
+    if (!trimmed) return null;
+
+    const cardUriMatch = trimmed.match(/humoco:\/\/card\?[^\s"'<>)]+/i);
+    if (cardUriMatch) {
+        return cardUriMatch[0].replace(/[.,;:!\]]+$/, '');
     }
-    if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+    if (trimmed.includes('?env=')) {
+        return trimmed;
+    }
+    const firstBrace = trimmed.indexOf('{');
+    const lastBrace = trimmed.lastIndexOf('}');
+    if (firstBrace !== -1 && lastBrace > firstBrace) {
+        const candidate = trimmed.slice(firstBrace, lastBrace + 1);
         try {
-            const parsed = JSON.parse(trimmed);
-            if (typeof parsed === 'object' && parsed !== null) {
-                return (
-                    'card_wire' in parsed ||
-                    ('card' in parsed && 'sig' in parsed) ||
-                    'envelope' in parsed
-                );
+            const parsed = JSON.parse(candidate);
+            if (
+                typeof parsed === 'object' &&
+                parsed !== null &&
+                ('card_wire' in parsed || ('card' in parsed && 'sig' in parsed) || 'envelope' in parsed)
+            ) {
+                return candidate;
             }
         } catch {
-            return false;
+            return null;
         }
     }
-    return false;
+    return null;
+}
+
+function isCardEnvelopePayload(trimmed: string): boolean {
+    return extractCardPayload(trimmed) !== null;
 }
 
 export const AddContactModal: React.FC<AddContactModalProps> = ({
@@ -71,73 +85,16 @@ export const AddContactModal: React.FC<AddContactModalProps> = ({
     const [pasteText, setPasteText] = useState('');
     const [smartError, setSmartError] = useState<string | null>(null);
     const [isProcessing, setIsProcessing] = useState(false);
-    const [cameraError, setCameraError] = useState<string | null>(null);
-    const videoRef = useRef<HTMLVideoElement>(null);
-    const streamRef = useRef<MediaStream | null>(null);
-    const scanTimerRef = useRef<number | null>(null);
-
-    const stopCamera = useCallback(() => {
-        if (scanTimerRef.current) {
-            clearTimeout(scanTimerRef.current);
-            scanTimerRef.current = null;
-        }
-        if (streamRef.current) {
-            streamRef.current.getTracks().forEach((track) => track.stop());
-            streamRef.current = null;
-        }
-        if (videoRef.current) {
-            videoRef.current.srcObject = null;
-        }
-    }, []);
-
-    const startCamera = useCallback(async () => {
-        setCameraError(null);
-        if (typeof window !== 'undefined' && !('BarcodeDetector' in window)) {
-            setCameraError(t('common.qrScanUnsupported'));
-            return;
-        }
-        if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
-            setCameraError(t('contacts.cameraNotSupported'));
-            return;
-        }
-
-        try {
-            const stream = await navigator.mediaDevices.getUserMedia({
-                video: { facingMode: 'environment' },
-            });
-            streamRef.current = stream;
-            if (videoRef.current) {
-                videoRef.current.srcObject = stream;
-                videoRef.current.play().catch(() => {});
-            }
-        } catch (err) {
-            logger.info(`Camera access not available or denied: ${stringifyError(err)}`);
-            setCameraError(t('contacts.cameraAccessDenied'));
-        }
-    }, [t]);
 
     // Reset view whenever modal opens or closes
     useEffect(() => {
         if (!isOpen) {
-            stopCamera();
             setView('tiles');
             setPasteText('');
             setSmartError(null);
-            setCameraError(null);
             setIsProcessing(false);
         }
-    }, [isOpen, stopCamera]);
-
-    useEffect(() => {
-        if (view === 'qr_scanner') {
-            startCamera();
-        } else {
-            stopCamera();
-        }
-        return () => {
-            stopCamera();
-        };
-    }, [view, startCamera, stopCamera]);
+    }, [isOpen]);
 
     const handleImportPayload = useCallback(async (rawPayload: string) => {
         setSmartError(null);
@@ -174,7 +131,8 @@ export const AddContactModal: React.FC<AddContactModalProps> = ({
         }
 
         // 2. Verify that payload looks like a signed card envelope before attempting import
-        if (!isCardEnvelopePayload(trimmed)) {
+        const cardPayload = extractCardPayload(trimmed);
+        if (!cardPayload) {
             const msg = t('contacts.invalidContactPayload', 'Ungültiges Kontakt- oder Visitenkarten-Format.');
             setSmartError(msg);
             onError(msg);
@@ -185,7 +143,7 @@ export const AddContactModal: React.FC<AddContactModalProps> = ({
         setIsProcessing(true);
         try {
             const res = await protectAction(async (pwd) => {
-                return await marketService.importContactCard(trimmed, pwd || undefined);
+                return await marketService.importContactCard(cardPayload, pwd || undefined);
             });
 
             if (res && res.status === 'accepted') {
@@ -199,8 +157,16 @@ export const AddContactModal: React.FC<AddContactModalProps> = ({
                         : t('marketplace.importSuccessDesc', 'Visitenkarte erfolgreich importiert.')
                 );
                 onClose();
+            } else if (res && res.status === 'ignored_stale') {
+                const msg = t('marketplace.importIgnoredDesc', 'Diese Visitenkarte ist bereits in gleicher oder neuerer Version gespeichert.');
+                setSmartError(msg);
+                onError(msg);
             } else if (res && res.status === 'rejected_expired') {
                 const msg = t('marketplace.importExpiredDesc', 'Diese Visitenkarte ist abgelaufen.');
+                setSmartError(msg);
+                onError(msg);
+            } else if (res && res.status === 'rejected_hops') {
+                const msg = t('marketplace.importHopsDesc', 'Diese Visitenkarte liegt außerhalb der erlaubten Weiterleitungs-Reichweite.');
                 setSmartError(msg);
                 onError(msg);
             } else if (res && res.status === 'rejected_offender') {
@@ -221,57 +187,6 @@ export const AddContactModal: React.FC<AddContactModalProps> = ({
             setIsProcessing(false);
         }
     }, [onError, t, onClose, onOpenManualAdd, protectAction, onContactAdded, onSuccess]);
-
-    // QR Camera decoding loop
-    useEffect(() => {
-        if (view !== 'qr_scanner') return;
-        if (typeof window === 'undefined' || !('BarcodeDetector' in window)) {
-            return;
-        }
-
-        let isScanning = true;
-        let detector: any = null;
-
-        try {
-            detector = new (window as any).BarcodeDetector({ formats: ['qr_code'] });
-        } catch (err) {
-            logger.info(`BarcodeDetector creation failed: ${stringifyError(err)}`);
-            setCameraError(t('common.qrScanUnsupported'));
-            stopCamera();
-            return;
-        }
-
-        const scanLoop = async () => {
-            if (!isScanning) return;
-            if (detector && videoRef.current && videoRef.current.readyState >= 2) {
-                try {
-                    const barcodes = await detector.detect(videoRef.current);
-                    if (barcodes && barcodes.length > 0 && barcodes[0].rawValue) {
-                        const raw = barcodes[0].rawValue;
-                        isScanning = false;
-                        stopCamera();
-                        handleImportPayload(raw);
-                        return;
-                    }
-                } catch {
-                    // Frame detection error, continue scanning
-                }
-            }
-            if (isScanning && view === 'qr_scanner') {
-                scanTimerRef.current = window.setTimeout(scanLoop, 250);
-            }
-        };
-
-        scanTimerRef.current = window.setTimeout(scanLoop, 400);
-
-        return () => {
-            isScanning = false;
-            if (scanTimerRef.current) {
-                clearTimeout(scanTimerRef.current);
-                scanTimerRef.current = null;
-            }
-        };
-    }, [view, stopCamera, handleImportPayload, t]);
 
     // Tile 2: Clipboard
     const handleTileClipboard = async () => {
@@ -559,67 +474,15 @@ export const AddContactModal: React.FC<AddContactModalProps> = ({
             )}
 
             {/* View 2: QR Scanner */}
-            {view === 'qr_scanner' && (
-                <div className="space-y-4 py-2" data-testid="qr-scanner-view">
-                    <div className="relative w-full aspect-square max-h-[340px] bg-slate-900 rounded-2xl overflow-hidden flex items-center justify-center border border-slate-700">
-                        {cameraError ? (
-                            <div className="p-6 text-center space-y-3 max-w-sm">
-                                <Camera size={36} className="text-slate-400 mx-auto" />
-                                <p className="text-xs text-slate-300 leading-relaxed">
-                                    {cameraError}
-                                </p>
-                                <div className="flex flex-col sm:flex-row gap-2 justify-center pt-2">
-                                    <Button
-                                        type="button"
-                                        size="sm"
-                                        variant="secondary"
-                                        onClick={() => setView('paste_input')}
-                                    >
-                                        {t('contacts.addTileClipboardTitle', 'Link/Code einfügen')}
-                                    </Button>
-                                    <Button
-                                        type="button"
-                                        size="sm"
-                                        variant="secondary"
-                                        onClick={handleTileFile}
-                                    >
-                                        {t('contacts.addTileFileTitle', 'Datei öffnen (.hmcard)')}
-                                    </Button>
-                                </div>
-                            </div>
-                        ) : (
-                            <>
-                                <video
-                                    ref={videoRef}
-                                    className="w-full h-full object-cover"
-                                    playsInline
-                                    muted
-                                />
-                                <div className="absolute inset-0 border-2 border-white/30 rounded-2xl pointer-events-none flex items-center justify-center">
-                                    <div className="w-56 h-56 border-2 border-emerald-400 rounded-2xl shadow-[0_0_0_9999px_rgba(0,0,0,0.4)]" />
-                                </div>
-                            </>
-                        )}
-                    </div>
-
-                    <div className="flex justify-between items-center text-xs text-theme-light">
-                        <button
-                            type="button"
-                            onClick={() => setView('tiles')}
-                            className="font-bold text-theme-secondary hover:text-theme-primary transition-colors"
-                        >
-                            ← {t('common.back', 'Zurück zur Auswahl')}
-                        </button>
-                        <button
-                            type="button"
-                            onClick={() => setView('paste_input')}
-                            className="font-bold text-theme-primary hover:underline"
-                        >
-                            {t('contacts.pasteLinkInstead', 'Lieber als Text einfügen')} →
-                        </button>
-                    </div>
-                </div>
-            )}
+            <QrScannerModal
+                isOpen={isOpen && view === 'qr_scanner'}
+                onClose={() => setView('tiles')}
+                onScan={(raw) => {
+                    setView('tiles');
+                    void handleImportPayload(raw);
+                }}
+                title={t('contacts.addTileQrTitle', 'QR scannen')}
+            />
 
             {/* View 3: Paste Input */}
             {view === 'paste_input' && (

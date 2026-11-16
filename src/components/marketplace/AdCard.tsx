@@ -317,7 +317,7 @@ export const AdCard: React.FC<AdCardProps> = ({
                             {displayName}
                         </span>
                     </div>
-                    {!isOwn && <TrustBadge trust={trustDto} size="sm" />}
+                    {!isOwn && <TrustBadge trust={trustDto} size="sm" binaryTrust />}
                 </button>
 
                 <div className="flex items-center gap-2 shrink-0 ml-auto">

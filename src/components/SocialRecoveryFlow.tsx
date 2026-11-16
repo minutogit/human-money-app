@@ -709,73 +709,84 @@ export const SocialRecoveryFlow: React.FC<SocialRecoveryFlowProps> = ({
                     )}
 
                     {/* Local Collision Choice Card */}
-                    {collisionResult?.localCollision && (
-                        <div
-                            data-testid="social-collision-card"
-                            className="p-5 bg-amber-50 border border-amber-200 rounded-2xl space-y-4"
-                        >
-                            <div className="flex items-start gap-2.5">
-                                <AlertTriangle size={18} className="text-amber-600 shrink-0 mt-0.5" />
-                                <div className="space-y-1">
-                                    <h4 className="text-sm font-black text-amber-900">
-                                        {t('backup.collisionDetectedTitle', {
+                    {collisionResult?.localCollision && (() => {
+                        const hasOnlineBackup =
+                            collisionResult.backupEpoch !== null &&
+                            collisionResult.backupEpoch !== undefined;
+                        return (
+                            <div
+                                data-testid="social-collision-card"
+                                className="p-5 bg-amber-50 border border-amber-200 rounded-2xl space-y-4"
+                            >
+                                <div className="flex items-start gap-2.5">
+                                    <AlertTriangle size={18} className="text-amber-600 shrink-0 mt-0.5" />
+                                    <div className="space-y-1">
+                                        <h4 className="text-sm font-black text-amber-900">
+                                            {t('backup.collisionDetectedTitle', {
+                                                name: collisionResult.localCollision.profileName,
+                                            })}
+                                        </h4>
+                                        <p className="text-xs text-amber-800 leading-relaxed">
+                                            {hasOnlineBackup
+                                                ? t('backup.collisionComparisonDesc', {
+                                                      name: collisionResult.localCollision.profileName,
+                                                      localEpoch:
+                                                          collisionResult.localCollision.localEpoch ?? 0,
+                                                      localNonce:
+                                                          collisionResult.localCollision.localTxNonce ?? 0,
+                                                      backupEpoch: collisionResult.backupEpoch ?? 0,
+                                                      backupNonce: collisionResult.backupTxNonce ?? 0,
+                                                  })
+                                                : t('backup.collisionLocalOnlyDesc', {
+                                                      name: collisionResult.localCollision.profileName,
+                                                  })}
+                                        </p>
+                                    </div>
+                                </div>
+
+                                <div className="flex flex-col sm:flex-row gap-2 justify-end">
+                                    <Button
+                                        type="button"
+                                        variant="primary"
+                                        size="sm"
+                                        data-testid="social-collision-reset-pw-btn"
+                                        disabled={isSubmitting}
+                                        onClick={() =>
+                                            void submitRecoveryCompletion({
+                                                overrideMode: 'reset_local_password',
+                                                overrideTargetFolder:
+                                                    collisionResult.localCollision?.folderName,
+                                            })
+                                        }
+                                    >
+                                        <KeyRound size={14} className="mr-1.5" />
+                                        {t('backup.collisionResetPasswordBtn', {
                                             name: collisionResult.localCollision.profileName,
                                         })}
-                                    </h4>
-                                    <p className="text-xs text-amber-800 leading-relaxed">
-                                        {t('backup.collisionComparisonDesc', {
-                                            name: collisionResult.localCollision.profileName,
-                                            localEpoch:
-                                                collisionResult.localCollision.localEpoch ?? 0,
-                                            localNonce:
-                                                collisionResult.localCollision.localTxNonce ?? 0,
-                                            backupEpoch: collisionResult.backupEpoch ?? 0,
-                                            backupNonce: collisionResult.backupTxNonce ?? 0,
-                                        })}
-                                    </p>
+                                    </Button>
+                                    {hasOnlineBackup && (
+                                        <Button
+                                            type="button"
+                                            variant="secondary"
+                                            size="sm"
+                                            data-testid="social-collision-replace-btn"
+                                            disabled={isSubmitting}
+                                            onClick={() =>
+                                                void submitRecoveryCompletion({
+                                                    replaceFolderName:
+                                                        collisionResult.localCollision?.folderName,
+                                                })
+                                            }
+                                        >
+                                            {t('backup.collisionReplaceProfileBtn', {
+                                                name: collisionResult.localCollision.profileName,
+                                            })}
+                                        </Button>
+                                    )}
                                 </div>
                             </div>
-
-                            <div className="flex flex-col sm:flex-row gap-2 justify-end">
-                                <Button
-                                    type="button"
-                                    variant="primary"
-                                    size="sm"
-                                    data-testid="social-collision-reset-pw-btn"
-                                    disabled={isSubmitting}
-                                    onClick={() =>
-                                        void submitRecoveryCompletion({
-                                            overrideMode: 'reset_local_password',
-                                            overrideTargetFolder:
-                                                collisionResult.localCollision?.folderName,
-                                        })
-                                    }
-                                >
-                                    <KeyRound size={14} className="mr-1.5" />
-                                    {t('backup.collisionResetPasswordBtn', {
-                                        name: collisionResult.localCollision.profileName,
-                                    })}
-                                </Button>
-                                <Button
-                                    type="button"
-                                    variant="secondary"
-                                    size="sm"
-                                    data-testid="social-collision-replace-btn"
-                                    disabled={isSubmitting}
-                                    onClick={() =>
-                                        void submitRecoveryCompletion({
-                                            replaceFolderName:
-                                                collisionResult.localCollision?.folderName,
-                                        })
-                                    }
-                                >
-                                    {t('backup.collisionReplaceProfileBtn', {
-                                        name: collisionResult.localCollision.profileName,
-                                    })}
-                                </Button>
-                            </div>
-                        </div>
-                    )}
+                        );
+                    })()}
 
                     {/* Step 3 Form */}
                     {session.hasEnoughShares && session.questionIds && (

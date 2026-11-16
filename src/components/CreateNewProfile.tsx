@@ -53,7 +53,7 @@ export function CreateNewProfile({
     onSwitchToRestore,
     defaultExpertMode,
 }: CreateNewProfileProps) {
-    const { t } = useTranslation();
+    const { t, i18n } = useTranslation();
     const [isExpertMode, setIsExpertMode] = useState<boolean>(defaultExpertMode ?? false);
     const [retainMnemonic, setRetainMnemonic] = useState<boolean>(true);
     const [profilesCount, setProfilesCount] = useState<number | null>(null);
@@ -62,6 +62,9 @@ export function CreateNewProfile({
     const [wizardStep, setWizardStep] = useState<WizardStep>("display_seed");
     const [generatedSeed, setGeneratedSeed] = useState<string[]>([]);
     const [wordCount, setWordCount] = useState<12 | 24>(12);
+    const passphraseOrdinal = i18n.language?.startsWith('de')
+        ? (wordCount === 12 ? '13.' : '25.')
+        : (wordCount === 12 ? '13th' : '25th');
     const [selectedLanguage, setSelectedLanguage] = useState<MnemonicLanguage>("english");
     const [feedbackMsg, setFeedbackMsg] = useState("");
     const [isLoading, setIsLoading] = useState(false);
@@ -451,7 +454,7 @@ export function CreateNewProfile({
                             >
                                 <span className="flex items-center gap-1.5">
                                     <Lock size={12} className="text-theme-primary" />
-                                    <span>{t('profile.optionalPassphraseAccordion', { ordinal: wordCount === 12 ? '13th' : '25th' })}</span>
+                                    <span>{t('profile.optionalPassphraseAccordion', { ordinal: passphraseOrdinal })}</span>
                                 </span>
                                 <span className="text-[10px] text-theme-light">
                                     {showPassphraseAccordion ? '▲' : '▼'}
@@ -462,7 +465,7 @@ export function CreateNewProfile({
                                     <div className="flex items-center gap-1.5">
                                         <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1">
                                             <Lock size={10}/> 
-                                            <span>{t('profile.optionalPassphrase', { ordinal: wordCount === 12 ? '13th' : '25th' })}</span>
+                                            <span>{t('profile.optionalPassphrase', { ordinal: passphraseOrdinal })}</span>
                                         </label>
                                         <HelpIcon topic="passphrase" size={12} />
                                     </div>

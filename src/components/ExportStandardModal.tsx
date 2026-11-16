@@ -26,7 +26,7 @@ export function ExportStandardModal({
     onSuccess
 }: ExportStandardModalProps) {
     const { t } = useTranslation();
-    const [mode, setMode] = useState<'Cleartext' | 'Password' | 'RawToml'>('Cleartext');
+    const [mode, setMode] = useState<'Cleartext' | 'Password'>('Cleartext');
     const [password, setPassword] = useState('');
     const [confirmPassword, setConfirmPassword] = useState('');
     const [isExporting, setIsExporting] = useState(false);
@@ -57,43 +57,23 @@ export function ExportStandardModal({
 
         setIsExporting(true);
         try {
-            if (mode === 'RawToml') {
-                const containerBytes = await standardsService.exportStandard(standardId, { type: 'Cleartext' });
-                const containerJson = JSON.parse(new TextDecoder().decode(new Uint8Array(containerBytes)));
-                const rawTomlString = window.atob(containerJson.p);
-                const rawTomlBytes = new TextEncoder().encode(rawTomlString);
+            const config: ContainerConfig = mode === 'Password' 
+                ? { type: 'Password', value: password }
+                : { type: 'Cleartext' };
 
-                const defaultFileName = `${standardName.toLowerCase().replace(/\s+/g, '-')}.toml`;
-                const filePath = await save({
-                    defaultPath: defaultFileName,
-                    filters: [{ name: t('standards.tomlFilterName', 'Voucher Standard TOML (*.toml)'), extensions: ['toml'] }]
-                });
+            const containerBytes = await standardsService.exportStandard(standardId, config);
 
-                if (filePath) {
-                    await writeFile(filePath, rawTomlBytes);
-                    logger.info(`Successfully exported raw standard TOML to ${filePath}`);
-                    onSuccess();
-                    onClose();
-                }
-            } else {
-                const config: ContainerConfig = mode === 'Password' 
-                    ? { type: 'Password', value: password }
-                    : { type: 'Cleartext' };
+            const defaultFileName = `${standardName.toLowerCase().replace(/\s+/g, '-')}.standard`;
+            const filePath = await save({
+                defaultPath: defaultFileName,
+                filters: [{ name: t('standards.formatDesc'), extensions: ['standard'] }]
+            });
 
-                const containerBytes = await standardsService.exportStandard(standardId, config);
-
-                const defaultFileName = `${standardName.toLowerCase().replace(/\s+/g, '-')}.standard`;
-                const filePath = await save({
-                    defaultPath: defaultFileName,
-                    filters: [{ name: t('standards.formatDesc'), extensions: ['standard'] }]
-                });
-
-                if (filePath) {
-                    await writeFile(filePath, new Uint8Array(containerBytes));
-                    logger.info(`Successfully exported standard to ${filePath}`);
-                    onSuccess();
-                    onClose();
-                }
+            if (filePath) {
+                await writeFile(filePath, new Uint8Array(containerBytes));
+                logger.info(`Successfully exported standard to ${filePath}`);
+                onSuccess();
+                onClose();
             }
         } catch (e) {
             setError(translateError(e, t));
@@ -124,7 +104,7 @@ export function ExportStandardModal({
                         <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-2">
                             <Shield size={12} /> {t('standards.encryption')}
                         </label>
-                        <div className="grid grid-cols-3 gap-2">
+                        <div className="grid grid-cols-2 gap-2">
                             <button
                                 type="button"
                                 onClick={() => setMode('Cleartext')}
@@ -148,18 +128,6 @@ export function ExportStandardModal({
                             >
                                 <Lock size={18} />
                                 <span>{t('standards.passwordEncrypted')}</span>
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => setMode('RawToml')}
-                                className={`p-2.5 rounded-2xl border-2 text-[11px] font-bold transition-all text-center flex flex-col items-center gap-1 ${
-                                    mode === 'RawToml'
-                                        ? 'border-theme-primary bg-theme-primary/10 text-theme-primary shadow-sm'
-                                        : 'border-theme-subtle bg-white text-theme-light hover:border-theme-primary/30'
-                                }`}
-                            >
-                                <FileCode size={18} />
-                                <span>{t('standards.rawToml', { defaultValue: 'Rohdatei (.toml)' })}</span>
                             </button>
                         </div>
                     </div>

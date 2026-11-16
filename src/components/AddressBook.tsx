@@ -171,7 +171,11 @@ const AddressBook: React.FC<AddressBookProps> = ({
                 setGuardianWardDids(new Set());
             }
             if (postInbox) {
-                setPendingHandshakes(postInbox.pendingWotHandshakes || []);
+                const handshakes = postInbox.pendingWotHandshakes || [];
+                setPendingHandshakes(handshakes);
+                if (handshakes.length > 0) {
+                    setIsHandshakesExpanded(true);
+                }
             }
         } catch (err) {
             logger.error("Failed to load contacts: " + stringifyError(err));
@@ -584,7 +588,9 @@ const AddressBook: React.FC<AddressBookProps> = ({
 
     const handleDismissHandshake = async (msgId: string) => {
         try {
-            await postService.dismissPendingPostItem('wot_handshake', msgId);
+            await protectAction(async (pwd) => {
+                await postService.dismissPendingPostItem('wot_handshake', msgId, pwd || undefined);
+            });
             setPendingHandshakes(prev => prev.filter(h => h.msgId !== msgId));
         } catch (e) {
             setFeedbackMsg({ type: 'error', message: translateError(e, t) });

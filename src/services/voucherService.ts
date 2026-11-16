@@ -67,10 +67,6 @@ export const voucherService = {
         return await invoke<TrustStatus>("check_reputation", { offenderId });
     },
 
-    getSourceSender: async (localId: string) => {
-        return await invoke<string | null>("get_voucher_source_sender", { localId });
-    },
-
     getProofId: async (localId: string) => {
         return await invoke<string | null>("get_proof_id_for_voucher", { localId });
     },

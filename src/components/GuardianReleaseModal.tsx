@@ -52,13 +52,21 @@ export const GuardianReleaseModal: React.FC<GuardianReleaseModalProps> = ({
     const [copied, setCopied] = useState<boolean>(false);
     const [copiedReplyChat, setCopiedReplyChat] = useState<boolean>(false);
 
-    const inspectUri = useCallback(async (uriToInspect: string) => {
+    const inspectUri = useCallback(async (uriToInspect: string, promptIfLocked: boolean = false) => {
         if (!uriToInspect.trim()) return;
         setIsInspecting(true);
         setErrorMsg('');
 
         try {
-            const dto = await recoveryService.inspectGuardianRecoveryRequest(uriToInspect);
+            const dto = promptIfLocked && session?.protectAction
+                ? await session.protectAction(async (pwd) => {
+                      return await recoveryService.inspectGuardianRecoveryRequest(
+                          uriToInspect,
+                          pwd || undefined
+                      );
+                  })
+                : await recoveryService.inspectGuardianRecoveryRequest(uriToInspect);
+            if (!dto) return;
             setInspection(dto);
             const wards = dto.wards || [];
             if (wards.length === 1) {
@@ -83,7 +91,7 @@ export const GuardianReleaseModal: React.FC<GuardianReleaseModalProps> = ({
         } finally {
             setIsInspecting(false);
         }
-    }, [initialOwnerDid, t]);
+    }, [initialOwnerDid, session, t]);
 
     useEffect(() => {
         if (!isOpen) {
@@ -205,6 +213,17 @@ export const GuardianReleaseModal: React.FC<GuardianReleaseModalProps> = ({
                             </div>
                         </div>
 
+                        {approvalResult.sasCode && (
+                            <div className="p-3.5 bg-theme-primary/10 border border-theme-primary/20 rounded-2xl text-center space-y-1">
+                                <span className="text-[11px] font-bold text-theme-light uppercase tracking-wider block">
+                                    {t('backup.releaseSasCodeLabel')}
+                                </span>
+                                <p className="text-2xl font-black tracking-widest text-theme-primary font-mono">
+                                    {approvalResult.sasCode}
+                                </p>
+                            </div>
+                        )}
+
                         {approvalResult.replyQrSvg && (
                             <div className="flex justify-center p-3 bg-white rounded-2xl border border-theme-subtle shadow-sm">
                                 <div
@@ -285,7 +304,7 @@ export const GuardianReleaseModal: React.FC<GuardianReleaseModalProps> = ({
                                         variant="secondary"
                                         data-testid="guardian-inspect-request-btn"
                                         disabled={!requestUri.trim() || isInspecting}
-                                        onClick={() => inspectUri(requestUri)}
+                                        onClick={() => void inspectUri(requestUri, true)}
                                     >
                                         {isInspecting ? t('common.loading') : t('settings.syncProbeNow')}
                                     </Button>

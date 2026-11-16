@@ -780,14 +780,19 @@ describe('AddressBook Component', () => {
     expect(screen.getByText(/Incoming Trust Confirmations|Eingehende Vertrauensbestätigungen|contacts\.incomingHandshakesTitle/i)).toBeInTheDocument();
     expect(screen.getByText(/1 Kontakt möchte dich|1 contact would like to add you/i)).toBeInTheDocument();
 
-    const viewBtn = screen.getByTestId('toggle-handshakes-button');
-    expect(viewBtn).toHaveTextContent(/contacts\.viewHandshakesBtn|View|Ansehen/i);
-    fireEvent.click(viewBtn);
+    const toggleBtn = screen.getByTestId('toggle-handshakes-button');
+    expect(toggleBtn).toHaveTextContent(/contacts\.hideHandshakesBtn|Hide|Ausblenden/i);
 
-    await waitFor(() => {
-      expect(screen.getByText(/Alice Wunder möchte euch gegenseitig als vertraut eintragen|Alice Wunder would like to add each other as trusted contacts/i)).toBeInTheDocument();
-    });
-
+    expect(screen.getByText(/Alice Wunder möchte euch gegenseitig als vertraut eintragen|Alice Wunder would like to add each other as trusted contacts/i)).toBeInTheDocument();
     expect(screen.getByTestId('handshake-item-msg-123')).toBeInTheDocument();
+
+    fireEvent.click(toggleBtn);
+    expect(toggleBtn).toHaveTextContent(/contacts\.viewHandshakesBtn|View|Ansehen/i);
+    expect(screen.queryByTestId('handshake-item-msg-123')).not.toBeInTheDocument();
+
+    fireEvent.click(toggleBtn);
+    await waitFor(() => {
+      expect(screen.getByTestId('handshake-item-msg-123')).toBeInTheDocument();
+    });
   });
 });

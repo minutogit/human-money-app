@@ -190,7 +190,7 @@ export function VoucherDetailsView() {
             });
             if (statusDto) {
                 setL2Status(statusDto);
-                if (statusDto.status === 'spent') {
+                if (statusDto.status === 'spent' || statusDto.status === 'conflict') {
                     await refreshDetails();
                 }
             }
@@ -470,7 +470,14 @@ export function VoucherDetailsView() {
                             </div>
                             <div>
                                 <div className="flex items-baseline gap-2">
-                                    <h1 className="text-5xl font-black text-theme-primary tracking-tighter">{voucher.nominalValue.amount}</h1>
+                                    <h1 className="text-5xl font-black text-theme-primary tracking-tighter">
+                                        {details.currentAmount ?? voucher.nominalValue.amount}
+                                    </h1>
+                                    {details.currentAmount && details.currentAmount !== voucher.nominalValue.amount && (
+                                        <span className="text-sm font-bold text-theme-light">
+                                            / {voucher.nominalValue.amount}
+                                        </span>
+                                    )}
                                     <span className="text-xl font-bold text-theme-light uppercase tracking-widest">{details.displayCurrency}</span>
                                 </div>
                                 <div className="flex flex-wrap items-center gap-2 mt-2">
@@ -482,7 +489,7 @@ export function VoucherDetailsView() {
                                             <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${
                                                 l2Status.status === 'unspent'
                                                     ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
-                                                    : l2Status.status === 'spent'
+                                                    : l2Status.status === 'spent' || l2Status.status === 'conflict'
                                                     ? 'bg-rose-100 text-rose-800 border border-rose-200'
                                                     : l2Status.status === 'offline'
                                                     ? 'bg-amber-100 text-amber-800 border border-amber-200'
@@ -490,6 +497,7 @@ export function VoucherDetailsView() {
                                             }`}>
                                                 {l2Status.status === 'unspent' && t('voucher.l2StatusUnspent')}
                                                 {l2Status.status === 'spent' && t('voucher.l2StatusSpent')}
+                                                {l2Status.status === 'conflict' && t('voucher.statusQuarantined')}
                                                 {l2Status.status === 'offline' && t('voucher.l2StatusOffline')}
                                                 {l2Status.status === 'no_servers' && t('voucher.l2StatusNoServers')}
                                             </span>

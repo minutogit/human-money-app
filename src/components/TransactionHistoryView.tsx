@@ -283,7 +283,7 @@ export function TransactionHistoryView() {
                         date: t('history.date'),
                         type: t('history.txStatus'),
                         counterparty: t('history.counterparty'),
-                        did: 'DID',
+                        did: 'ID',
                         amount: t('history.value'),
                         currency: t('history.currency'),
                         purpose: t('history.notes'),

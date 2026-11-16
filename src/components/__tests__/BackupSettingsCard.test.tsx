@@ -278,7 +278,8 @@ describe('BackupSettingsCard', () => {
 
         await waitFor(() => {
             expect(settingsService.saveSettings).toHaveBeenCalledWith(
-                expect.objectContaining({ backupSyncFolder: null })
+                expect.objectContaining({ backupSyncFolder: null }),
+                'mock-wallet-pw'
             );
             expect(onSettingsUpdated).toHaveBeenCalledWith(
                 expect.objectContaining({ backupSyncFolder: null })

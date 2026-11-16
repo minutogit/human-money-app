@@ -63,6 +63,7 @@ export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
 
     // 4. Expiring ads state
     const [expiringAdsCount, setExpiringAdsCount] = useState<number>(0);
+    const [minExpiringDays, setMinExpiringDays] = useState<number>(0);
 
     // Popover state
     const [isOpen, setIsOpen] = useState(false);
@@ -100,6 +101,23 @@ export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
                             fresh.failingCount !== current.failingCount
                         ) {
                             notifySyncStatusUpdated(fresh);
+                        }
+                        if (!hasTriggeredDailySyncRef.current && fresh.connectedCount > 0 && navigator.onLine) {
+                            const nowSecs = Math.floor(Date.now() / 1000);
+                            const isOutdated = fresh.lastSyncAt == null || (nowSecs - fresh.lastSyncAt >= 86400);
+                            hasTriggeredDailySyncRef.current = true;
+                            if (isOutdated && !rateLimitManager.isCoolingDown()) {
+                                marketService.syncMarketChannels()
+                                    .then((res) => {
+                                        if (res) checkAndTriggerCooldown(res);
+                                    })
+                                    .catch((err) => {
+                                        checkAndTriggerCooldown(err);
+                                    });
+                                postService.syncPostChannels().catch((err) => {
+                                    checkAndTriggerCooldown(err);
+                                });
+                            }
                         }
                     })
                     .catch(() => {});
@@ -157,10 +175,13 @@ export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
         if (!isSessionActive) return;
         try {
             const profile = await marketService.getMyMarketProfile();
-            const count = profile.ads.filter(
+            const expiring = profile.ads.filter(
                 (a) => a.status === "active" && a.daysLeft <= 14
-            ).length;
-            setExpiringAdsCount(count);
+            );
+            setExpiringAdsCount(expiring.length);
+            setMinExpiringDays(
+                expiring.length > 0 ? Math.min(...expiring.map((a) => a.daysLeft)) : 0
+            );
         } catch {
             // Silently retain last known status
         }
@@ -583,8 +604,8 @@ export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
                                         </div>
                                         <p className="text-xs text-theme-light mt-0.5 leading-tight">
                                             {expiringAdsCount === 1
-                                                ? t("statusChip.oneAdExpiring", "1 Inserat läuft bald ab.")
-                                                : t("statusChip.adsExpiring", "{{count}} Inserate laufen bald ab.", { count: expiringAdsCount })}
+                                                ? t("statusChip.oneAdExpiring", { days: minExpiringDays })
+                                                : t("statusChip.adsExpiring", { count: expiringAdsCount, days: minExpiringDays })}
                                         </p>
                                     </div>
                                 </div>

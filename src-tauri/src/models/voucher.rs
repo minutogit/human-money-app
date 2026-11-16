@@ -157,6 +157,7 @@ impl From<human_money_core::wallet::types::VoucherSummary> for FrontendVoucherSu
 pub struct FrontendVoucherDetails {
     pub local_instance_id: String,
     pub status: String,
+    pub current_amount: String,
     pub voucher: FrontendVoucher,
     pub display_currency: String,
     pub display_standard_name: String,
@@ -175,10 +176,12 @@ impl From<human_money_core::wallet::types::VoucherDetails> for FrontendVoucherDe
             VoucherStatus::Endorsed { .. } => "endorsed",
             VoucherStatus::Expired => "expired",
         };
+        let current_amount = d.voucher.nominal_value.amount.clone();
 
         Self {
             local_instance_id: d.local_instance_id,
             status: status_str.to_string(),
+            current_amount,
             voucher: d.voucher.into(),
             display_currency: d.display_currency,
             display_standard_name: d.display_standard_name,

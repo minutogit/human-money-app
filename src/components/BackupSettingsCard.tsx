@@ -131,7 +131,10 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
         setIsSyncingBackup(true);
         setFeedback(null);
         try {
-            const res = await backupService.syncBackup();
+            const res = await protectAction(async (walletPassword) => {
+                return await backupService.syncBackup(walletPassword || undefined);
+            });
+            if (!res) return;
             if (res.uploadedTo > 0) {
                 setFeedback({
                     type: 'success',
@@ -174,7 +177,9 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
                 backupSyncFolder: null,
             };
             try {
-                await settingsService.saveSettings(updated);
+                await protectAction(async (walletPassword) => {
+                    await settingsService.saveSettings(updated, walletPassword || undefined);
+                });
                 if (onSettingsUpdated) onSettingsUpdated(updated);
             } catch (err) {
                 logger.error(`Clear backup folder failed: ${stringifyError(err)}`);
@@ -254,7 +259,9 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
                         backupProtectionMode: protectionMode,
                     };
                     try {
-                        await settingsService.saveSettings(updated);
+                        await protectAction(async (walletPassword) => {
+                            await settingsService.saveSettings(updated, walletPassword || undefined);
+                        });
                         if (onSettingsUpdated) onSettingsUpdated(updated);
                     } catch {
                         // ignore
@@ -334,8 +341,12 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
         }
     };
 
-    const lastBackupDisplay = settings?.lastBackupAt
-        ? new Date(settings.lastBackupAt).toLocaleString()
+    const effectiveBackupAt = [settings?.lastBackupAt, settings?.lastSyncBackupAt]
+        .filter((d): d is string => Boolean(d) && !isNaN(new Date(d as string).getTime()))
+        .sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0] ?? null;
+
+    const lastBackupDisplay = effectiveBackupAt
+        ? new Date(effectiveBackupAt).toLocaleString()
         : t('settings.backupNever');
 
     return (
@@ -359,21 +370,21 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
                 {/* Prominent Status Banner */}
                 <div
                     className={`p-4 rounded-2xl border flex flex-col sm:flex-row sm:items-center justify-between gap-4 ${
-                        settings?.lastBackupAt
+                        effectiveBackupAt
                             ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-950 dark:text-emerald-200'
                             : 'bg-rose-500/10 border-rose-500/20 text-rose-950 dark:text-rose-200'
                     }`}
                 >
                     <div className="flex items-start gap-3">
-                        {settings?.lastBackupAt ? (
+                        {effectiveBackupAt ? (
                             <CheckCircle2 size={22} className="text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
                         ) : (
                             <AlertCircle size={22} className="text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
                         )}
                         <div className="space-y-1">
                             <span className="text-sm font-bold block">
-                                {settings?.lastBackupAt
-                                    ? t('settings.backupBannerProtected', { time: new Date(settings.lastBackupAt).toLocaleString() })
+                                {effectiveBackupAt
+                                    ? t('settings.backupBannerProtected', { time: new Date(effectiveBackupAt).toLocaleString() })
                                     : t('settings.backupBannerUnprotected')}
                             </span>
                             <InfoHint topic="whichBackup" />

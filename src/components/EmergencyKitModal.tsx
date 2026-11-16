@@ -148,12 +148,12 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
 <div class="section">
   <h3>Anleitung für den Ernstfall</h3>
   <ol>
-    <li>${t('backup.emergencyKitInstructions1')}</li>
-    <li>${t('backup.emergencyKitInstructions2')}</li>
-    <li>${t('backup.emergencyKitInstructions3')}</li>
+    <li>${t('backup.emergencyKitInstructions1').replace(/^\d+\.\s*/, '')}</li>
+    <li>${t('backup.emergencyKitInstructions2').replace(/^\d+\.\s*/, '')}</li>
+    <li>${t('backup.emergencyKitInstructions3').replace(/^\d+\.\s*/, '')}</li>
   </ol>
 </div>
-<div class="footer">Erstellt mit HuMoCo Human Money &bull; URI: ${kitData.kitUri}</div>
+<div class="footer">Erstellt mit HuMoCo Human Money &bull; URI: <code>${kitData.kitUri}</code> </div>
 </body>
 </html>`;
 

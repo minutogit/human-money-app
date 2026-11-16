@@ -10,7 +10,7 @@ import { Advanced } from './ui/Advanced';
 import { TechId } from './ui/TechId';
 import { TrustLevelRadioCards } from './TrustLevelRadioCards';
 import { readFromClipboard } from '../utils/clipboard';
-import { parseContactCard } from '../utils/humocoUri';
+import { parseContactCard, normalizeSyncUrlInput } from '../utils/humocoUri';
 import { notifySyncStatusUpdated } from '../utils/syncEvents';
 import { Clipboard, CheckCircle2, AlertCircle, Server, Trash2 } from 'lucide-react';
 
@@ -178,20 +178,23 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
     };
 
     const handleProbeAndAddSync = async () => {
-        const trimmed = syncInputUrl.trim();
-        if (!trimmed) return;
+        const normalized = normalizeSyncUrlInput(syncInputUrl);
+        if (!normalized) return;
+        if (normalized !== syncInputUrl) {
+            setSyncInputUrl(normalized);
+        }
         if (syncs.length >= 2) {
             setSyncError(t('contacts.syncMaxReached'));
             return;
         }
-        if (syncs.some(d => d.writeUrl.toLowerCase() === trimmed.toLowerCase() || d.readUrl.toLowerCase() === trimmed.toLowerCase())) {
+        if (syncs.some(d => d.writeUrl.toLowerCase() === normalized.toLowerCase() || d.readUrl.toLowerCase() === normalized.toLowerCase())) {
             setSyncError(t('contacts.syncAlreadyAdded'));
             return;
         }
         setIsProbingSync(true);
         setSyncError(null);
         try {
-            const info = await marketService.probePublicSync(trimmed);
+            const info = await marketService.probePublicSync(normalized);
             if (!info || !info.dropPub) {
                 setSyncError(t('contacts.syncProbeFailed'));
                 return;
