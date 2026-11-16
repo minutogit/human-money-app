@@ -5,20 +5,20 @@ use human_money_core::crypto::create_user_id;
 use human_money_core::services::mnemonic::MnemonicLanguage;
 use humoco_market::{
     build_emergency_kit_uri, build_recovery_request_uri, code_to_mnemonic_language,
-    combine_shares_32, compute_recovery_sas, compute_share_commitment,
+    combine_shares_32, compute_recovery_sas, compute_rehearsal_verifiers, compute_share_commitment,
     create_social_recovery_vault_bundle, derive_recovery_key, gf256_inv, gf256_mul,
     mnemonic_language_to_code, normalize_recovery_input, open_and_verify_guardian_release_reply,
     parse_emergency_kit_uri, parse_recovery_request_uri, recover_master_payload_from_shares,
     seal_guardian_release_reply, seal_recovery_master_payload, split_secret_32,
     unseal_recovery_master_payload, validate_and_canonicalize_answers, validate_kdf_params,
-    verify_guardian_vault_entry, DropDescriptor, EmergencyKitData, GuardianLocatorUpdate,
-    GuardianReleasePayload, GuardianRevoke, GuardianVaultAck, GuardianVaultEntry,
-    GuardianVaultStore, MarketError, RecoveryKdfParams, RecoveryMasterPayload, ShamirShare,
-    KDF_M_KIB_MAX, KDF_M_KIB_MIN, KDF_M_KIB_PRODUCTION, KDF_P_COST_MAX, KDF_P_COST_MIN,
-    KDF_P_COST_PRODUCTION, KDF_T_COST_MAX, KDF_T_COST_MIN, KDF_T_COST_PRODUCTION,
-    MAX_GUARDIAN_WARDS, PAYLOAD_GUARDIAN_ACK_V1, PAYLOAD_GUARDIAN_ASSIGN_V1,
-    PAYLOAD_GUARDIAN_LOCATOR_V1, PAYLOAD_GUARDIAN_REVOKE_V1, RECOVERY_MIN_ANSWER_LEN,
-    RECOVERY_MIN_TOTAL_LEN, RECOVERY_QUESTION_COUNT,
+    verify_guardian_vault_entry, verify_rehearsal_answers, DropDescriptor, EmergencyKitData,
+    GuardianLocatorUpdate, GuardianReleasePayload, GuardianRevoke, GuardianVaultAck,
+    GuardianVaultEntry, GuardianVaultStore, MarketError, RecoveryKdfParams,
+    RecoveryMasterPayload, ShamirShare, KDF_M_KIB_MAX, KDF_M_KIB_MIN, KDF_M_KIB_PRODUCTION,
+    KDF_P_COST_MAX, KDF_P_COST_MIN, KDF_P_COST_PRODUCTION, KDF_T_COST_MAX, KDF_T_COST_MIN,
+    KDF_T_COST_PRODUCTION, MAX_GUARDIAN_WARDS, PAYLOAD_GUARDIAN_ACK_V1,
+    PAYLOAD_GUARDIAN_ASSIGN_V1, PAYLOAD_GUARDIAN_LOCATOR_V1, PAYLOAD_GUARDIAN_REVOKE_V1,
+    RECOVERY_MIN_ANSWER_LEN, RECOVERY_MIN_TOTAL_LEN, RECOVERY_QUESTION_COUNT,
 };
 use proptest::prelude::*;
 use rand::rngs::OsRng;
@@ -48,7 +48,7 @@ fn test_recovery_wire_constants_and_types() {
     assert_eq!(PAYLOAD_GUARDIAN_LOCATOR_V1, "guardian_locator_v1");
     assert_eq!(PAYLOAD_GUARDIAN_REVOKE_V1, "guardian_revoke_v1");
 
-    assert_eq!(RECOVERY_QUESTION_COUNT, 6);
+    assert_eq!(RECOVERY_QUESTION_COUNT, 12);
     assert_eq!(RECOVERY_MIN_ANSWER_LEN, 2);
     assert_eq!(RECOVERY_MIN_TOTAL_LEN, 12);
     assert_eq!(MAX_GUARDIAN_WARDS, 64);
@@ -248,9 +248,9 @@ fn test_validate_and_canonicalize_answers_rules() {
     assert!(validate_and_canonicalize_answers(&[1, 1, 3], &answers).is_err());
     assert!(validate_and_canonicalize_answers(&[1, 2, 2], &answers).is_err());
 
-    // Question IDs out of 1..=6 range
+    // Question IDs out of 1..=12 range
     assert!(validate_and_canonicalize_answers(&[0, 1, 2], &answers).is_err());
-    assert!(validate_and_canonicalize_answers(&[1, 2, 7], &answers).is_err());
+    assert!(validate_and_canonicalize_answers(&[1, 2, 13], &answers).is_err());
 
     // Individual answer too short (< 2 characters)
     let short_answer = ["a", "Erna", "Schulzentrum"];
@@ -330,6 +330,61 @@ fn test_derive_recovery_key_production_vector() {
         "Production Argon2id (64 MiB, t=12, p=1) completed in {:.2?}",
         elapsed
     );
+}
+
+#[test]
+fn test_extended_12_question_catalog_and_rehearsal_verifiers() {
+    assert_eq!(RECOVERY_QUESTION_COUNT, 12);
+    let q_ids = [7, 10, 12];
+    let answers = ["Sandra", "Nokia 3210", "Blauer Pinguin Fahrrad"];
+    let params = RecoveryKdfParams::new_fast_test();
+    let owner_did = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+
+    let key = derive_recovery_key(&q_ids, &answers, &params)
+        .expect("Question IDs 7..=12 must be accepted");
+    assert_ne!(*key, [0u8; 32]);
+
+    // Question ID 13 must be rejected
+    assert!(derive_recovery_key(&[7, 10, 13], &answers, &params).is_err());
+
+    let verifiers =
+        compute_rehearsal_verifiers(owner_did, 1, &q_ids, &answers, &params).unwrap();
+
+    // Exact & normalized inputs match per-question
+    let normalized_match = verify_rehearsal_answers(
+        owner_did,
+        1,
+        &q_ids,
+        &[" sandra ", "nokia-3210", "BLAUER  pinguin_fahrrad"],
+        &verifiers,
+        &params,
+    )
+    .unwrap();
+    assert_eq!(normalized_match, [true, true, true]);
+
+    // Single wrong answer pinpoints ONLY that question
+    let partial_match = verify_rehearsal_answers(
+        owner_did,
+        1,
+        &q_ids,
+        &["Sandra", "Siemens C35", "Blauer Pinguin Fahrrad"],
+        &verifiers,
+        &params,
+    )
+    .unwrap();
+    assert_eq!(partial_match, [true, false, true]);
+
+    // Different epoch invalidates verifiers
+    let wrong_epoch = verify_rehearsal_answers(
+        owner_did,
+        2,
+        &q_ids,
+        &answers,
+        &verifiers,
+        &params,
+    )
+    .unwrap();
+    assert_eq!(wrong_epoch, [false, false, false]);
 }
 
 // ============================================================================

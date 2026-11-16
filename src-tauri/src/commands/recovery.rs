@@ -34,12 +34,20 @@ use crate::models::{
     ConfirmEmergencySheetResultDto, ExportedMnemonicKitDto, FrontendError,
     GuardianAssignmentRecord, GuardianAssignmentStatus, GuardianRecoveryRequestInspectionDto,
     GuardianStatusDto, GuardianWardDto, InspectedEmergencyKitDto, RecoveryCompletionResultDto,
-    RecoveryOwnerState, RecoveryProtectionStatusDto, RevokeSocialRecoveryResultDto,
-    SetupSocialRecoveryResultDto,
+    RecoveryOwnerState, RecoveryProtectionStatusDto, RehearsalCheckResultDto,
+    RevokeSocialRecoveryResultDto, SetupSocialRecoveryResultDto,
 };
 use crate::state::{
     AppState, PostOutboxEntry, RECOVERY_GUARDIAN_VAULT_KEY, RECOVERY_OWNER_STATE_KEY,
 };
+
+const REHEARSAL_INTERVAL_SECS: [u64; 5] = [
+    86_400,
+    7 * 86_400,
+    30 * 86_400,
+    90 * 86_400,
+    180 * 86_400,
+];
 
 // ============================================================================
 // Storage Helpers
@@ -683,6 +691,15 @@ pub fn get_recovery_protection_status_impl(
         })
         .collect();
 
+    let rehearsal_due = !guardians.is_empty()
+        && owner_state.answer_verifiers.is_some()
+        && owner_state
+            .next_rehearsal_at
+            .is_some_and(|ts| now_secs >= ts);
+    let question_ids = (!guardians.is_empty()).then_some(owner_state.question_ids);
+    let rehearsal_stage = owner_state.rehearsal_stage;
+    let next_rehearsal_at = owner_state.next_rehearsal_at;
+
     Ok(RecoveryProtectionStatusDto {
         has_voucher,
         confirmed_guardians_count,
@@ -695,7 +712,118 @@ pub fn get_recovery_protection_status_impl(
         has_local_backup,
         has_voucher_backup,
         guardian_wards,
+        rehearsal_due,
+        question_ids,
+        rehearsal_stage,
+        next_rehearsal_at,
     })
+}
+
+pub fn verify_recovery_rehearsal_impl(
+    answers: [String; 3],
+    now_secs: u64,
+    state: &AppState,
+) -> Result<RehearsalCheckResultDto, FrontendError> {
+    let mut service = state
+        .service
+        .lock()
+        .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+
+    let mut owner_state = load_recovery_owner_state(&mut service, None)?.ok_or_else(|| {
+        FrontendError::from("Social recovery is not configured for this profile.".to_string())
+    })?;
+    let expected = owner_state.answer_verifiers.ok_or_else(|| {
+        FrontendError::from(
+            "Recovery rehearsal verifiers are not configured. Please update your recovery questions."
+                .to_string(),
+        )
+    })?;
+
+    let signing_key = service
+        .with_wallet_and_identity(|_, id| id.signing_key.clone())
+        .map_err(FrontendError::from)?;
+    let root_did = human_money_core::crypto::create_user_id(&signing_key.verifying_key(), None)
+        .map_err(|e| FrontendError::from(format!("Failed to derive root DID: {}", e)))?;
+
+    let kdf_params = RecoveryKdfParams {
+        m_kib: owner_state.rehearsal_kdf_m_kib,
+        t_cost: owner_state.rehearsal_kdf_t_cost,
+        p_cost: 1,
+        salt: [0u8; 16],
+    };
+    let ans_refs = [answers[0].as_str(), answers[1].as_str(), answers[2].as_str()];
+    let question_matches = humoco_market::verify_rehearsal_answers(
+        &root_did,
+        owner_state.rotation_epoch,
+        &owner_state.question_ids,
+        &ans_refs,
+        &expected,
+        &kdf_params,
+    )?;
+
+    let all_correct = question_matches.iter().all(|&m| m);
+    if all_correct {
+        let next_stage = owner_state
+            .rehearsal_stage
+            .saturating_add(1)
+            .min((REHEARSAL_INTERVAL_SECS.len() - 1) as u8);
+        let interval = REHEARSAL_INTERVAL_SECS[next_stage as usize];
+        let next_at = now_secs.saturating_add(interval);
+        owner_state.rehearsal_stage = next_stage;
+        owner_state.next_rehearsal_at = Some(next_at);
+        save_recovery_owner_state(&mut service, &owner_state, None)?;
+        Ok(RehearsalCheckResultDto {
+            all_correct: true,
+            question_matches,
+            rehearsal_stage: next_stage,
+            next_rehearsal_at: next_at,
+        })
+    } else {
+        Ok(RehearsalCheckResultDto {
+            all_correct: false,
+            question_matches,
+            rehearsal_stage: owner_state.rehearsal_stage,
+            next_rehearsal_at: owner_state.next_rehearsal_at.unwrap_or(now_secs),
+        })
+    }
+}
+
+#[tauri::command]
+pub fn verify_recovery_rehearsal(
+    answers: [String; 3],
+    state: State<'_, AppState>,
+) -> Result<RehearsalCheckResultDto, FrontendError> {
+    let now_secs = Utc::now().timestamp() as u64;
+    verify_recovery_rehearsal_impl(answers, now_secs, &state)
+}
+
+pub fn snooze_recovery_rehearsal_impl(
+    hours: Option<u64>,
+    now_secs: u64,
+    state: &AppState,
+) -> Result<u64, FrontendError> {
+    let mut service = state
+        .service
+        .lock()
+        .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+
+    let mut owner_state = load_recovery_owner_state(&mut service, None)?.ok_or_else(|| {
+        FrontendError::from("Social recovery is not configured for this profile.".to_string())
+    })?;
+    let snooze_secs = hours.unwrap_or(24).clamp(1, 168) * 3600;
+    let next_at = now_secs.saturating_add(snooze_secs);
+    owner_state.next_rehearsal_at = Some(next_at);
+    save_recovery_owner_state(&mut service, &owner_state, None)?;
+    Ok(next_at)
+}
+
+#[tauri::command]
+pub fn snooze_recovery_rehearsal(
+    hours: Option<u64>,
+    state: State<'_, AppState>,
+) -> Result<u64, FrontendError> {
+    let now_secs = Utc::now().timestamp() as u64;
+    snooze_recovery_rehearsal_impl(hours, now_secs, &state)
 }
 
 #[tauri::command]
@@ -992,6 +1120,17 @@ pub async fn setup_social_recovery_guardians_with_params(
 
     save_post_state(state, &post_state, Some(&password))?;
 
+    let answer_verifiers = Some(
+        humoco_market::compute_rehearsal_verifiers(
+            &root_did,
+            new_epoch,
+            &question_ids,
+            &ans_refs,
+            &kdf_params,
+        )
+        .map_err(FrontendError::from)?,
+    );
+
     let new_owner_state = RecoveryOwnerState {
         rotation_epoch: new_epoch,
         threshold_m,
@@ -1000,6 +1139,11 @@ pub async fn setup_social_recovery_guardians_with_params(
         emergency_sheet_confirmed_at: old_owner_state
             .as_ref()
             .and_then(|s| s.emergency_sheet_confirmed_at),
+        answer_verifiers,
+        rehearsal_stage: 0,
+        next_rehearsal_at: Some(now_secs + REHEARSAL_INTERVAL_SECS[0]),
+        rehearsal_kdf_m_kib: kdf_params.m_kib,
+        rehearsal_kdf_t_cost: kdf_params.t_cost,
     };
 
     {
@@ -1058,6 +1202,21 @@ pub async fn revoke_social_recovery_impl(
             .service
             .lock()
             .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+        if let Some(ref pw) = password {
+            let _ = service.export_mnemonic(pw).map_err(FrontendError::from)?;
+        } else {
+            let mode = service.get_access_mode().map_err(FrontendError::from)?;
+            if mode != human_money_core::AccessMode::Full {
+                return Err(FrontendError::from(
+                    human_money_core::app_service::AppFacadeError::App(
+                        human_money_core::error::AppError::InsufficientAccessMode {
+                            required: "full".to_string(),
+                            current: mode.as_str().to_string(),
+                        },
+                    ),
+                ));
+            }
+        }
         let owner = load_recovery_owner_state(&mut service, password.as_deref())?
             .unwrap_or_default();
         let (id, sk) = service
@@ -1125,10 +1284,8 @@ pub async fn revoke_social_recovery_impl(
 
     let updated_owner_state = RecoveryOwnerState {
         rotation_epoch: new_epoch,
-        threshold_m: 0,
-        question_ids: [0, 0, 0],
-        guardians: Vec::new(),
         emergency_sheet_confirmed_at: emergency_confirmed,
+        ..Default::default()
     };
 
     {
@@ -2896,5 +3053,81 @@ mod tests {
         .unwrap();
         let mismatch_err = import_guardian_recovery_reply_impl(bob_eve_rep.reply_uri, &session_file).unwrap_err();
         assert!(mismatch_err.message.contains("anderen Profil"));
+    }
+
+    #[tokio::test]
+    async fn test_12_question_setup_and_spaced_repetition_rehearsal() {
+        let base_dir = temp_test_dir("recovery_rehearsal");
+        let pass = "RehearsalPass!99";
+        let (alice_state, _alice_did) = create_wallet_state(&base_dir, "Alice", ALICE_PHRASE, pass);
+        let (_bob_state, bob_did) = create_wallet_state(&base_dir, "Bob", BOB_PHRASE, pass);
+        let (_carol_state, carol_did) = create_wallet_state(&base_dir, "Carol", CHARLIE_PHRASE, pass);
+        let (_dave_state, dave_did) = create_wallet_state(&base_dir, "Dave", READER1_PHRASE, pass);
+
+        {
+            let mut s = alice_state.service.lock().unwrap();
+            s.unlock_session(pass, 300).unwrap();
+            alice_state.save_contact(&mut s, make_test_contact(&bob_did, "Bob", Some(3)), Some(pass)).unwrap();
+            alice_state.save_contact(&mut s, make_test_contact(&carol_did, "Carol", Some(2)), Some(pass)).unwrap();
+            alice_state.save_contact(&mut s, make_test_contact(&dave_did, "Dave", Some(1)), Some(pass)).unwrap();
+        }
+
+        setup_social_recovery_guardians_with_params(
+            pass.to_string(),
+            vec![bob_did, carol_did, dave_did],
+            2,
+            [7, 10, 12],
+            [
+                "Sandra".to_string(),
+                "Nokia 3210".to_string(),
+                "Blauer Pinguin".to_string(),
+            ],
+            RecoveryKdfParams::new_fast_test(),
+            &alice_state,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let status_now = get_recovery_protection_status_impl(None, &alice_state).unwrap();
+        assert_eq!(status_now.question_ids, Some([7, 10, 12]));
+        assert_eq!(status_now.rehearsal_stage, 0);
+        assert!(!status_now.rehearsal_due);
+        let first_due = status_now.next_rehearsal_at.unwrap();
+
+        // Wrong middle answer pinpoints question index 1
+        let wrong_res = verify_recovery_rehearsal_impl(
+            [
+                "sandra".to_string(),
+                "Siemens C35".to_string(),
+                "blauer pinguin".to_string(),
+            ],
+            first_due + 10,
+            &alice_state,
+        )
+        .unwrap();
+        assert!(!wrong_res.all_correct);
+        assert_eq!(wrong_res.question_matches, [true, false, true]);
+        assert_eq!(wrong_res.rehearsal_stage, 0);
+
+        // Snooze pushes next_rehearsal_at forward by 24h
+        let snoozed_at = snooze_recovery_rehearsal_impl(Some(24), first_due + 10, &alice_state).unwrap();
+        assert_eq!(snoozed_at, first_due + 10 + 24 * 3600);
+
+        // Exact (normalized) match advances stage 0 -> 1 (7 days)
+        let ok_res = verify_recovery_rehearsal_impl(
+            [
+                " sandra ".to_string(),
+                "nokia-3210".to_string(),
+                "BLAUER_pinguin".to_string(),
+            ],
+            snoozed_at + 10,
+            &alice_state,
+        )
+        .unwrap();
+        assert!(ok_res.all_correct);
+        assert_eq!(ok_res.question_matches, [true, true, true]);
+        assert_eq!(ok_res.rehearsal_stage, 1);
+        assert_eq!(ok_res.next_rehearsal_at, snoozed_at + 10 + 7 * 86_400);
     }
 }

@@ -1,4 +1,7 @@
 use crate::models::{ProfileInfo, MnemonicLanguage, FrontendError};
+use crate::pin_keystore::{
+    self, ProfilePinStatusDto, MAX_PIN_ATTEMPTS,
+};
 use crate::settings::{AppSettings, SETTINGS_KEY};
 use crate::AppState;
 use chrono::{DateTime, Utc};
@@ -6,7 +9,7 @@ use log::{error, info};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tauri::Manager;
 
 const PROFILE_METADATA_FILE: &str = "profile_metadata.json";
@@ -320,6 +323,9 @@ pub fn login(
             let user_id = service
                 .with_wallet_and_identity(|_, id| id.user_id.clone())
                 .ok();
+            if let Ok(config_dir) = app.path().app_config_dir() {
+                let _ = pin_keystore::reset_failed_attempts(&config_dir, &folder_name);
+            }
             if let Err(e) = record_profile_metadata(&app, &folder_name, user_id) {
                 error!("Failed to update profile metadata: {}", e);
             }
@@ -364,6 +370,9 @@ pub fn recover_wallet_and_set_new_password(
             let user_id = service
                 .with_wallet_and_identity(|_, id| id.user_id.clone())
                 .ok();
+            if let Ok(config_dir) = app.path().app_config_dir() {
+                let _ = pin_keystore::remove_entry(&config_dir, &folder_name);
+            }
             if let Err(e) = record_profile_metadata(&app, &folder_name, user_id) {
                 error!("Failed to update profile metadata: {}", e);
             }
@@ -404,6 +413,9 @@ pub fn handover_to_this_device(
             let user_id = service
                 .with_wallet_and_identity(|_, id| id.user_id.clone())
                 .ok();
+            if let Ok(config_dir) = app.path().app_config_dir() {
+                let _ = pin_keystore::reset_failed_attempts(&config_dir, &folder_name);
+            }
             if let Err(e) = record_profile_metadata(&app, &folder_name, user_id) {
                 error!("Failed to update profile metadata: {}", e);
             }
@@ -485,11 +497,394 @@ pub fn delete_profile(folder_name: String, password: String, state: tauri::State
     let mut service = state.service.lock().unwrap();
     service.delete_profile(&folder_name, &password).map_err(FrontendError::from)?;
     
-    // 2. Remove metadata entry
+    // 2. Remove metadata entry & device-local PIN keystore entry
     let _ = remove_profile_metadata_entry(&app, &folder_name);
+    if let Ok(config_dir) = app.path().app_config_dir() {
+        let _ = pin_keystore::remove_entry(&config_dir, &folder_name);
+    }
     
     info!("Profile '{}' deleted successfully.", folder_name);
     Ok(())
+}
+
+// ============================================================================
+// Secondary Auth (Device-Bound Quick-PIN / Cashier-PIN) & Session Elevation
+// ============================================================================
+
+fn resolve_pin_keystore_dir_and_device_id(
+    app: &tauri::AppHandle,
+) -> Result<(PathBuf, String), FrontendError> {
+    let keystore_dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|e| FrontendError::from(e.to_string()))?;
+    let device_id = crate::commands::utils::get_local_instance_id(app.clone())
+        .map_err(FrontendError::from)?;
+    Ok((keystore_dir, device_id))
+}
+
+fn resolve_active_profile_folder(
+    service: &human_money_core::app_service::AppService,
+    explicit_folder: Option<&str>,
+    wallet_data_dir: &Path,
+) -> Result<String, FrontendError> {
+    if let Some(f) = explicit_folder {
+        let trimmed = f.trim();
+        if !trimmed.is_empty() {
+            return Ok(trimmed.to_string());
+        }
+    }
+    if let Ok(user_id) = service.with_wallet_and_identity(|_, id| id.user_id.clone()) {
+        let meta = load_profile_metadata_map_from_dir(wallet_data_dir);
+        if let Some((folder, _)) = meta
+            .into_iter()
+            .find(|(_, (_, uid))| uid.as_deref() == Some(user_id.as_str()))
+        {
+            return Ok(folder);
+        }
+    }
+    let profiles = service.list_profiles().map_err(FrontendError::from)?;
+    if profiles.len() == 1 {
+        return Ok(profiles[0].folder_name.clone());
+    }
+    Err(FrontendError::from(
+        "Could not determine active profile folder for PIN management.".to_string(),
+    ))
+}
+
+pub fn get_profile_pin_status_impl(
+    folder_name: &str,
+    keystore_dir: &Path,
+    state: &AppState,
+) -> Result<ProfilePinStatusDto, FrontendError> {
+    let service = state
+        .service
+        .lock()
+        .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+
+    let core_has = service
+        .has_secondary_auth(folder_name)
+        .unwrap_or(false);
+    let entry = pin_keystore::get_entry(keystore_dir, folder_name)
+        .map_err(FrontendError::from)?;
+
+    match (core_has, entry) {
+        (true, Some(e)) => {
+            let remaining = MAX_PIN_ATTEMPTS.saturating_sub(e.failed_attempts);
+            Ok(ProfilePinStatusDto {
+                enabled: true,
+                scope: Some(pin_keystore::scope_to_str(e.scope).to_string()),
+                failed_attempts: e.failed_attempts,
+                max_attempts: MAX_PIN_ATTEMPTS,
+                remaining_attempts: remaining,
+            })
+        }
+        (false, Some(_)) => {
+            // Self-heal stale keystore entry when core slot was wiped (e.g. password reset/restore)
+            let _ = pin_keystore::remove_entry(keystore_dir, folder_name);
+            Ok(ProfilePinStatusDto {
+                enabled: false,
+                scope: None,
+                failed_attempts: 0,
+                max_attempts: MAX_PIN_ATTEMPTS,
+                remaining_attempts: MAX_PIN_ATTEMPTS,
+            })
+        }
+        _ => Ok(ProfilePinStatusDto {
+            enabled: false,
+            scope: None,
+            failed_attempts: 0,
+            max_attempts: MAX_PIN_ATTEMPTS,
+            remaining_attempts: MAX_PIN_ATTEMPTS,
+        }),
+    }
+}
+
+#[tauri::command]
+pub fn get_profile_pin_status(
+    folder_name: String,
+    state: tauri::State<AppState>,
+    app: tauri::AppHandle,
+) -> Result<ProfilePinStatusDto, FrontendError> {
+    let keystore_dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|e| FrontendError::from(e.to_string()))?;
+    get_profile_pin_status_impl(&folder_name, &keystore_dir, &state)
+}
+
+pub fn get_session_access_mode_impl(state: &AppState) -> Result<String, FrontendError> {
+    let service = state
+        .service
+        .lock()
+        .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+    match service.get_access_mode() {
+        Ok(mode) => Ok(mode.as_str().to_string()),
+        Err(human_money_core::Error::WalletLocked) => Ok("locked".to_string()),
+        Err(e) => Err(FrontendError::from(e)),
+    }
+}
+
+#[tauri::command]
+pub fn get_session_access_mode(state: tauri::State<AppState>) -> Result<String, FrontendError> {
+    get_session_access_mode_impl(&state)
+}
+
+pub fn enable_profile_pin_impl(
+    master_password: &str,
+    pin: &str,
+    scope_str: &str,
+    folder_name: &str,
+    keystore_dir: &Path,
+    device_binding_id: &str,
+    state: &AppState,
+) -> Result<ProfilePinStatusDto, FrontendError> {
+    let scope = pin_keystore::parse_scope(scope_str).map_err(FrontendError::from)?;
+    pin_keystore::validate_pin_format(pin).map_err(|msg| FrontendError {
+        code: "error.auth.invalidPinFormat".to_string(),
+        message: msg,
+        details: HashMap::new(),
+    })?;
+
+    // Verify master password cleanly BEFORE mutating the device keystore
+    let mut service = state
+        .service
+        .lock()
+        .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+    let _ = service
+        .export_mnemonic(master_password)
+        .map_err(FrontendError::from)?;
+
+    let secret = pin_keystore::create_and_store_pepper(
+        keystore_dir,
+        device_binding_id,
+        folder_name,
+        pin,
+        scope,
+    )
+    .map_err(FrontendError::from)?;
+
+    if let Err(err) = service.enable_secondary_auth(master_password, &secret, scope) {
+        let _ = pin_keystore::remove_entry(keystore_dir, folder_name);
+        return Err(FrontendError::from(err));
+    }
+
+    Ok(ProfilePinStatusDto {
+        enabled: true,
+        scope: Some(pin_keystore::scope_to_str(scope).to_string()),
+        failed_attempts: 0,
+        max_attempts: MAX_PIN_ATTEMPTS,
+        remaining_attempts: MAX_PIN_ATTEMPTS,
+    })
+}
+
+#[tauri::command]
+pub fn enable_profile_pin(
+    master_password: String,
+    pin: String,
+    scope: String,
+    folder_name: Option<String>,
+    state: tauri::State<AppState>,
+    app: tauri::AppHandle,
+) -> Result<ProfilePinStatusDto, FrontendError> {
+    let (keystore_dir, device_id) = resolve_pin_keystore_dir_and_device_id(&app)?;
+    let wallet_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| FrontendError::from(e.to_string()))?
+        .join("wallet_data");
+    let resolved_folder = {
+        let service = state.service.lock().unwrap();
+        resolve_active_profile_folder(&service, folder_name.as_deref(), &wallet_data_dir)?
+    };
+    enable_profile_pin_impl(
+        &master_password,
+        &pin,
+        &scope,
+        &resolved_folder,
+        &keystore_dir,
+        &device_id,
+        &state,
+    )
+}
+
+pub fn disable_profile_pin_impl(
+    master_password: &str,
+    folder_name: &str,
+    keystore_dir: &Path,
+    state: &AppState,
+) -> Result<(), FrontendError> {
+    let mut service = state
+        .service
+        .lock()
+        .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+    service
+        .disable_secondary_auth(master_password)
+        .map_err(FrontendError::from)?;
+    pin_keystore::remove_entry(keystore_dir, folder_name).map_err(FrontendError::from)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn disable_profile_pin(
+    master_password: String,
+    folder_name: Option<String>,
+    state: tauri::State<AppState>,
+    app: tauri::AppHandle,
+) -> Result<(), FrontendError> {
+    let keystore_dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|e| FrontendError::from(e.to_string()))?;
+    let wallet_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| FrontendError::from(e.to_string()))?
+        .join("wallet_data");
+    let resolved_folder = {
+        let service = state.service.lock().unwrap();
+        resolve_active_profile_folder(&service, folder_name.as_deref(), &wallet_data_dir)?
+    };
+    disable_profile_pin_impl(&master_password, &resolved_folder, &keystore_dir, &state)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn login_with_pin_impl(
+    folder_name: &str,
+    pin: &str,
+    cleanup_on_login: bool,
+    local_instance_id: String,
+    keystore_dir: &Path,
+    device_binding_id: &str,
+    state: &AppState,
+    app: Option<&tauri::AppHandle>,
+) -> Result<String, FrontendError> {
+    let (secret, attempt) =
+        pin_keystore::begin_pin_attempt(keystore_dir, device_binding_id, folder_name, pin)
+            .map_err(|msg| FrontendError {
+                code: "error.auth.invalidPinFormat".to_string(),
+                message: msg,
+                details: HashMap::new(),
+            })?;
+
+    let mut service = state
+        .service
+        .lock()
+        .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+
+    match service.login_with_secondary(folder_name, &secret, cleanup_on_login, local_instance_id) {
+        Ok(mode) => {
+            let _ = pin_keystore::reset_failed_attempts(keystore_dir, folder_name);
+            let user_id = service
+                .with_wallet_and_identity(|_, id| id.user_id.clone())
+                .ok();
+            if let Some(app_handle) = app {
+                if let Err(e) = record_profile_metadata(app_handle, folder_name, user_id) {
+                    error!("Failed to update profile metadata: {}", e);
+                }
+            }
+
+            state
+                .initialize_profile_session_with_secondary(&mut service, &secret)
+                .map_err(FrontendError::from)?;
+
+            if let Some(app_handle) = app {
+                let app_clone = app_handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    use tauri::Manager;
+                    let app_state = app_clone.state::<AppState>();
+                    let _ = crate::commands::settings_cmd::check_anchor_sync(app_state).await;
+                });
+            }
+
+            Ok(mode.as_str().to_string())
+        }
+        Err(err) => {
+            let is_security_lock = matches!(
+                err,
+                human_money_core::Error::WalletLockedDueToFork
+                    | human_money_core::Error::WalletSupersededByHandover { .. }
+                    | human_money_core::Error::WalletConcurrentCloneDetected
+                    | human_money_core::Error::StateRollbackDetected
+                    | human_money_core::Error::App(
+                        human_money_core::error::AppError::DeviceMismatch { .. }
+                    )
+            );
+            if is_security_lock {
+                let _ = pin_keystore::reset_failed_attempts(keystore_dir, folder_name);
+                return Err(FrontendError::from(err));
+            }
+
+            if attempt >= MAX_PIN_ATTEMPTS {
+                let _ = service.wipe_secondary_auth_slot(folder_name);
+                let _ = pin_keystore::remove_entry(keystore_dir, folder_name);
+                return Err(FrontendError {
+                    code: "error.auth.pinWipedMaxAttempts".to_string(),
+                    message: "PIN disabled after 5 failed attempts. Please sign in with your master password.".to_string(),
+                    details: HashMap::new(),
+                });
+            }
+
+            let remaining = MAX_PIN_ATTEMPTS.saturating_sub(attempt);
+            let mut details = HashMap::new();
+            details.insert("remaining".to_string(), remaining.to_string());
+            Err(FrontendError {
+                code: "error.auth.invalidPin".to_string(),
+                message: format!("Invalid PIN ({} attempts remaining).", remaining),
+                details,
+            })
+        }
+    }
+}
+
+#[tauri::command]
+pub fn login_with_pin(
+    folder_name: String,
+    pin: String,
+    cleanup_on_login: bool,
+    local_instance_id: String,
+    state: tauri::State<AppState>,
+    app: tauri::AppHandle,
+) -> Result<String, FrontendError> {
+    info!("Attempting PIN login for folder '{}'...", folder_name);
+    let (keystore_dir, device_id) = resolve_pin_keystore_dir_and_device_id(&app)?;
+    login_with_pin_impl(
+        &folder_name,
+        &pin,
+        cleanup_on_login,
+        local_instance_id,
+        &keystore_dir,
+        &device_id,
+        &state,
+        Some(&app),
+    )
+}
+
+pub fn elevate_session_with_password_impl(
+    master_password: &str,
+    state: &AppState,
+) -> Result<String, FrontendError> {
+    let timeout_seconds = state
+        .get_cached_settings()
+        .map(|s| s.session_timeout_seconds)
+        .unwrap_or(600);
+    let mut service = state
+        .service
+        .lock()
+        .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+    service
+        .elevate_session(master_password, timeout_seconds)
+        .map_err(FrontendError::from)?;
+    let mode = service.get_access_mode().map_err(FrontendError::from)?;
+    Ok(mode.as_str().to_string())
+}
+
+#[tauri::command]
+pub fn elevate_session_with_password(
+    master_password: String,
+    state: tauri::State<AppState>,
+) -> Result<String, FrontendError> {
+    elevate_session_with_password_impl(&master_password, &state)
 }
 
 #[cfg(test)]
@@ -588,5 +983,157 @@ mod tests {
         let current_pid = std::process::id();
         let proc = s.process(Pid::from_u32(current_pid));
         assert!(proc.is_some(), "Current process should be found in refreshed processes! PID: {}", current_pid);
+    }
+
+    #[test]
+    fn test_pin_enable_login_five_strike_wipe_and_elevate() {
+        use human_money_core::app_service::AppService;
+        use human_money_core::services::mnemonic::MnemonicLanguage;
+
+        let dir = crate::commands::sync::tests::temp_test_dir("pin_auth_test");
+        let wallet_dir = dir.join("wallet_data");
+        let keystore_dir = dir.join("keystore");
+        std::fs::create_dir_all(&wallet_dir).unwrap();
+
+        let master_pw = "MasterPass-Strong-2026!";
+        let mut service = AppService::new(&wallet_dir).unwrap();
+        let mnemonic = AppService::generate_mnemonic(12, MnemonicLanguage::English).unwrap();
+        service
+            .create_profile(
+                "Pin Tester",
+                &mnemonic,
+                None,
+                Some("pt"),
+                master_pw,
+                MnemonicLanguage::English,
+                "dev-pin-1".into(),
+                true,
+            )
+            .unwrap();
+        let folder = service.list_profiles().unwrap()[0].folder_name.clone();
+
+        let app_state = AppState {
+            service: Mutex::new(service),
+            history: Mutex::new(None),
+            events: Mutex::new(None),
+            contacts: Mutex::new(None),
+            settings: Mutex::new(None),
+            regional_views: Mutex::new(None),
+            wot: Mutex::new(None),
+            media_negative_cache: Mutex::new(HashMap::new()),
+        };
+
+        // 1. Short / non-digit PIN rejected
+        assert!(enable_profile_pin_impl(
+            master_pw,
+            "1234",
+            "dailyPay",
+            &folder,
+            &keystore_dir,
+            "dev-pin-1",
+            &app_state
+        )
+        .is_err());
+
+        // 2. Enable 6-digit DailyPay PIN
+        let status = enable_profile_pin_impl(
+            master_pw,
+            "246810",
+            "dailyPay",
+            &folder,
+            &keystore_dir,
+            "dev-pin-1",
+            &app_state,
+        )
+        .unwrap();
+        assert!(status.enabled);
+        assert_eq!(status.scope.as_deref(), Some("dailyPay"));
+        assert_eq!(status.remaining_attempts, 5);
+
+        // Logout and login via PIN
+        app_state.service.lock().unwrap().logout();
+        let mode = login_with_pin_impl(
+            &folder,
+            "246810",
+            false,
+            "dev-pin-1".into(),
+            &keystore_dir,
+            "dev-pin-1",
+            &app_state,
+            None,
+        )
+        .unwrap();
+        assert_eq!(mode, "dailyPay");
+        assert_eq!(
+            get_session_access_mode_impl(&app_state).unwrap(),
+            "dailyPay"
+        );
+
+        // Elevate session -> restores Full access
+        assert_eq!(
+            elevate_session_with_password_impl(master_pw, &app_state).unwrap(),
+            "full"
+        );
+        assert_eq!(get_session_access_mode_impl(&app_state).unwrap(), "full");
+
+        // Switch to ReceiveOnly PIN and test 5-strike auto-wipe
+        let r_status = enable_profile_pin_impl(
+            master_pw,
+            "13579024",
+            "receiveOnly",
+            &folder,
+            &keystore_dir,
+            "dev-pin-1",
+            &app_state,
+        )
+        .unwrap();
+        assert_eq!(r_status.scope.as_deref(), Some("receiveOnly"));
+
+        app_state.service.lock().unwrap().logout();
+
+        for expected_rem in [4, 3, 2, 1] {
+            let err = login_with_pin_impl(
+                &folder,
+                "000000",
+                false,
+                "dev-pin-1".into(),
+                &keystore_dir,
+                "dev-pin-1",
+                &app_state,
+                None,
+            )
+            .unwrap_err();
+            assert_eq!(err.code, "error.auth.invalidPin");
+            assert_eq!(
+                err.details.get("remaining").map(String::as_str),
+                Some(expected_rem.to_string().as_str())
+            );
+        }
+
+        // 5th strike triggers wipe!
+        let wipe_err = login_with_pin_impl(
+            &folder,
+            "000000",
+            false,
+            "dev-pin-1".into(),
+            &keystore_dir,
+            "dev-pin-1",
+            &app_state,
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(wipe_err.code, "error.auth.pinWipedMaxAttempts");
+
+        let post_wipe_status =
+            get_profile_pin_status_impl(&folder, &keystore_dir, &app_state).unwrap();
+        assert!(!post_wipe_status.enabled);
+
+        // Master password login still works cleanly after PIN wipe!
+        app_state
+            .service
+            .lock()
+            .unwrap()
+            .login(&folder, master_pw, false, "dev-pin-1".into())
+            .unwrap();
     }
 }

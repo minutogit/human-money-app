@@ -9,9 +9,10 @@ interface AuthModalProps {
     onCancel: () => void;
     title?: string;
     description?: string;
+    errorMsg?: string;
 }
 
-export function AuthModal({ isOpen, onConfirm, onCancel, title, description }: AuthModalProps) {
+export function AuthModal({ isOpen, onConfirm, onCancel, title, description, errorMsg }: AuthModalProps) {
     const { t } = useTranslation();
     const [password, setPassword] = useState('');
 
@@ -31,7 +32,12 @@ export function AuthModal({ isOpen, onConfirm, onCancel, title, description }: A
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
             <div className="w-full max-w-md rounded-lg bg-bg-card border border-theme-subtle p-6 shadow-2xl animate-in fade-in zoom-in-95 duration-200">
                 <h2 className="text-xl font-bold text-theme-primary mb-2">{title || t('auth.authenticationRequired')}</h2>
-                <p className="text-sm text-theme-light mb-6">{description || t('auth.enterPasswordToContinue')}</p>
+                <p className="text-sm text-theme-light mb-4">{description || t('auth.enterPasswordToContinue')}</p>
+                {errorMsg && (
+                    <div className="mb-4 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700">
+                        {errorMsg}
+                    </div>
+                )}
                 
                 <form onSubmit={handleSubmit} className="space-y-4">
                     <Input 

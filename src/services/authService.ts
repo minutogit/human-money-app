@@ -1,9 +1,27 @@
 import { invoke } from "@tauri-apps/api/core";
 import { ProfileInfo } from "../types";
 
+export type SessionAccessMode = 'full' | 'dailyPay' | 'receiveOnly';
+export type PinScope = 'dailyPay' | 'receiveOnly';
+
+export interface ProfilePinStatusDto {
+    enabled: boolean;
+    scope: PinScope | null;
+    failedAttempts: number;
+    maxAttempts: number;
+    remainingAttempts: number;
+}
+
 export interface LoginArgs {
     folderName: string;
     password?: string;
+    cleanupOnLogin?: boolean;
+    localInstanceId?: string;
+}
+
+export interface PinLoginArgs {
+    folderName: string;
+    pin: string;
     cleanupOnLogin?: boolean;
     localInstanceId?: string;
 }
@@ -68,6 +86,50 @@ export const authService = {
 
     lockSession: async () => {
         return await invoke<void>("lock_session");
-    }
+    },
+
+    getProfilePinStatus: async (folderName: string): Promise<ProfilePinStatusDto> => {
+        return await invoke<ProfilePinStatusDto>("get_profile_pin_status", { folderName });
+    },
+
+    getSessionAccessMode: async (): Promise<SessionAccessMode | 'locked'> => {
+        return await invoke<SessionAccessMode | 'locked'>("get_session_access_mode");
+    },
+
+    enableProfilePin: async (
+        masterPassword: string,
+        pin: string,
+        scope: PinScope,
+        folderName?: string
+    ): Promise<ProfilePinStatusDto> => {
+        return await invoke<ProfilePinStatusDto>("enable_profile_pin", {
+            masterPassword,
+            pin,
+            scope,
+            folderName: folderName ?? null,
+        });
+    },
+
+    disableProfilePin: async (masterPassword: string, folderName?: string): Promise<void> => {
+        return await invoke<void>("disable_profile_pin", {
+            masterPassword,
+            folderName: folderName ?? null,
+        });
+    },
+
+    loginWithPin: async (args: PinLoginArgs): Promise<SessionAccessMode> => {
+        return await invoke<SessionAccessMode>("login_with_pin", {
+            folderName: args.folderName,
+            pin: args.pin,
+            cleanupOnLogin: args.cleanupOnLogin ?? true,
+            localInstanceId: args.localInstanceId,
+        });
+    },
+
+    elevateSessionWithPassword: async (masterPassword: string): Promise<SessionAccessMode> => {
+        return await invoke<SessionAccessMode>("elevate_session_with_password", {
+            masterPassword,
+        });
+    },
 };
 

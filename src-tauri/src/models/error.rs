@@ -65,6 +65,13 @@ impl From<human_money_core::app_service::AppFacadeError> for FrontendError {
                 "error.security.supersededByHandover".to_string()
             }
             human_money_core::app_service::AppFacadeError::WalletConcurrentCloneDetected => "error.security.concurrentCloneDetected".to_string(),
+            human_money_core::app_service::AppFacadeError::App(
+                human_money_core::error::AppError::InsufficientAccessMode { required, current },
+            ) => {
+                details.insert("required".to_string(), required.clone());
+                details.insert("current".to_string(), current.clone());
+                "error.auth.insufficientAccessMode".to_string()
+            }
             human_money_core::app_service::AppFacadeError::VoucherNotActive(status) => {
                 if matches!(status, human_money_core::wallet::instance::VoucherStatus::Quarantined { .. }) {
                     "error.conflict.voucherQuarantined".to_string()

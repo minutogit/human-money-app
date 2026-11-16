@@ -24,7 +24,7 @@ use crate::model::DropDescriptor;
 // Constants
 // ============================================================================
 
-pub const RECOVERY_QUESTION_COUNT: u8 = 6;
+pub const RECOVERY_QUESTION_COUNT: u8 = 12;
 pub const RECOVERY_MIN_ANSWER_LEN: usize = 2;
 pub const RECOVERY_MIN_TOTAL_LEN: usize = 12;
 
@@ -216,6 +216,101 @@ pub fn derive_recovery_key(
         .map_err(|e| MarketError::Crypto(format!("Argon2id derivation failed: {}", e)))?;
 
     Ok(Zeroizing::new(key))
+}
+
+fn derive_single_answer_verifier(
+    owner_did: &str,
+    rotation_epoch: u32,
+    question_id: u8,
+    normalized_answer: &str,
+    kdf_params: &RecoveryKdfParams,
+) -> Result<[u8; 32], MarketError> {
+    use sha2::Digest;
+
+    if !(1..=RECOVERY_QUESTION_COUNT).contains(&question_id) {
+        return Err(MarketError::Validation(format!(
+            "Invalid question ID {}: must be between 1 and {}",
+            question_id, RECOVERY_QUESTION_COUNT
+        )));
+    }
+    validate_kdf_params(kdf_params)?;
+    let m_kib = (kdf_params.m_kib / 4).max(KDF_M_KIB_MIN);
+    let t_cost = (kdf_params.t_cost / 4).max(KDF_T_COST_MIN);
+    let p_cost = kdf_params.p_cost;
+
+    let mut salt_hash = Sha256::new();
+    salt_hash.update(b"HUMOCO-REC-REHEARSAL-SALT-V1");
+    salt_hash.update(owner_did.as_bytes());
+    salt_hash.update(rotation_epoch.to_le_bytes());
+    salt_hash.update([question_id]);
+    let digest = salt_hash.finalize();
+    let mut salt = [0u8; 16];
+    salt.copy_from_slice(&digest[..16]);
+
+    let input = Zeroizing::new(format!(
+        "HUMOCO-REC-REHEARSAL-V1|{}|{}|{}:{}",
+        owner_did, rotation_epoch, question_id, normalized_answer
+    ));
+    let argon_params = Params::new(m_kib, t_cost, p_cost, Some(32))
+        .map_err(|e| MarketError::Crypto(format!("Invalid Argon2 parameters: {}", e)))?;
+    let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, argon_params);
+    let mut tag = [0u8; 32];
+    argon2
+        .hash_password_into(input.as_bytes(), &salt, &mut tag)
+        .map_err(|e| MarketError::Crypto(format!("Argon2id derivation failed: {}", e)))?;
+    Ok(tag)
+}
+
+/// Computes memory-hard one-way per-answer rehearsal verifiers (no plaintext persisted on disk).
+pub fn compute_rehearsal_verifiers(
+    owner_did: &str,
+    rotation_epoch: u32,
+    question_ids: &[u8; 3],
+    answers: &[&str; 3],
+    kdf_params: &RecoveryKdfParams,
+) -> Result<[[u8; 32]; 3], MarketError> {
+    let _canonical = validate_and_canonicalize_answers(question_ids, answers)?;
+    let mut out = [[0u8; 32]; 3];
+    for i in 0..3 {
+        let norm = Zeroizing::new(normalize_recovery_input(answers[i]));
+        out[i] = derive_single_answer_verifier(
+            owner_did,
+            rotation_epoch,
+            question_ids[i],
+            &norm,
+            kdf_params,
+        )?;
+    }
+    Ok(out)
+}
+
+/// Verifies rehearsal answers individually against stored memory-hard verifiers, returning per-question match flags.
+pub fn verify_rehearsal_answers(
+    owner_did: &str,
+    rotation_epoch: u32,
+    question_ids: &[u8; 3],
+    answers: &[&str; 3],
+    expected_verifiers: &[[u8; 32]; 3],
+    kdf_params: &RecoveryKdfParams,
+) -> Result<[bool; 3], MarketError> {
+    let mut matches = [false; 3];
+    for i in 0..3 {
+        let norm = Zeroizing::new(normalize_recovery_input(answers[i]));
+        if norm.chars().count() < RECOVERY_MIN_ANSWER_LEN {
+            matches[i] = false;
+            continue;
+        }
+        let actual = derive_single_answer_verifier(
+            owner_did,
+            rotation_epoch,
+            question_ids[i],
+            &norm,
+            kdf_params,
+        )?;
+        let diff = (0..32).fold(0u8, |acc, idx| acc | (actual[idx] ^ expected_verifiers[i][idx]));
+        matches[i] = diff == 0;
+    }
+    Ok(matches)
 }
 
 // ============================================================================
@@ -659,7 +754,7 @@ pub struct GuardianVaultEntry {
 
 /// Verifies all cryptographic and structural invariants of a `GuardianVaultEntry`:
 /// 1. Verifying key extraction & canonical root DID verification.
-/// 2. Threshold bounds (`2 <= threshold_m <= total_n <= 16`), distinct `question_ids` in `1..=6`, `share.index` in `1..=total_n`.
+/// 2. Threshold bounds (`2 <= threshold_m <= total_n <= 16`), distinct `question_ids` in `1..=12`, `share.index` in `1..=total_n`.
 /// 3. `kdf_params` bounds check against DoS/OOM bombs.
 /// 4. Ed25519 `owner_sig` verification.
 /// 5. Share commitment check against `entry.share_commitments[share.index - 1]`.

@@ -20,6 +20,14 @@ pub struct GuardianAssignmentRecord {
     pub sealed_entry: humoco_market::GuardianVaultEntry,
 }
 
+fn default_rehearsal_m_kib() -> u32 {
+    humoco_market::KDF_M_KIB_PRODUCTION
+}
+
+fn default_rehearsal_t_cost() -> u32 {
+    humoco_market::KDF_T_COST_PRODUCTION
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct RecoveryOwnerState {
@@ -29,6 +37,16 @@ pub struct RecoveryOwnerState {
     pub guardians: Vec<GuardianAssignmentRecord>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub emergency_sheet_confirmed_at: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answer_verifiers: Option<[[u8; 32]; 3]>,
+    #[serde(default)]
+    pub rehearsal_stage: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_rehearsal_at: Option<u64>,
+    #[serde(default = "default_rehearsal_m_kib")]
+    pub rehearsal_kdf_m_kib: u32,
+    #[serde(default = "default_rehearsal_t_cost")]
+    pub rehearsal_kdf_t_cost: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -88,6 +106,19 @@ pub struct RecoveryProtectionStatusDto {
     pub has_local_backup: bool,
     pub has_voucher_backup: bool,
     pub guardian_wards: Vec<GuardianWardDto>,
+    pub rehearsal_due: bool,
+    pub question_ids: Option<[u8; 3]>,
+    pub rehearsal_stage: u8,
+    pub next_rehearsal_at: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RehearsalCheckResultDto {
+    pub all_correct: bool,
+    pub question_matches: [bool; 3],
+    pub rehearsal_stage: u8,
+    pub next_rehearsal_at: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

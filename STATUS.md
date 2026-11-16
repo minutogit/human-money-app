@@ -7,6 +7,12 @@ last_updated: "2026-11-16"
 blocks: []
 blocked_by: []
 priority_tasks:
+  - id: "APP-069"
+    title: "Device-Peppered Quick PIN, Cashier Mode (`receiveOnly`), Master-Password Step-Up & 12-Question Spaced-Repetition Recovery Rehearsal"
+    status: "completed"
+    priority: "high"
+    depends_on: ["CORE-017", "APP-066"]
+    description: "Implemented optional 6–8 digit Quick PIN & Cashier Mode (`receiveOnly`) plus hardened Social Recovery UX: 1) Device-bound `pin_keystore.rs` storing AES-GCM encrypted 32-byte `device_pepper` (`app_config_dir/pin_keystore.json`, `0o600` perms), BLAKE3 keyed secret derivation (`MAX_PIN_ATTEMPTS = 5`), automatic slot wipe on 5 failed attempts with master-password fallback, and clean cleanup on profile delete/recovery/password reset; 2) Tauri auth commands (`login_with_pin`, `get_profile_pin_status`, `get_session_access_mode`, `enable_profile_pin`, `disable_profile_pin`, `elevate_session_with_password`) and React UI (`QuickPinCard`, `Login` PIN mode & remaining-attempt counter, `Sidebar` Cashier/Daily badge with 1-click Step-Up, `SessionContext::requireFullAccess` Step-Up modal, `IdentityRecoveryCard`, `Dashboard`, `CreateVoucher`, and `SendView` Cashier guards); 3) Expanded Social Recovery question catalog from 6 to 12 in `humoco-market` and `src/constants/recoveryQuestions.ts` plus zero-plaintext Spaced-Repetition memory rehearsal (`compute_rehearsal_verifiers` / `verify_rehearsal_answers`, `[1d, 7d, 30d, 90d, 180d]` schedule, `RecoveryRehearsalModal`, Dashboard reminder banner & Snooze) across all 5 locales. Verified with 101 humoco-market tests, 117 src-tauri tests, cargo clippy (0 warnings), 591/591 Vitest tests (81 files, including `glossaryLint.test.ts` & `SecurityPinAndRehearsal.test.tsx`), `npm run i18n:check`, and `npm run build`."
   - id: "APP-UX-10"
     title: "Unified Profile Open, Restore & Subaccount UX (`SeedPhraseInput`, 3-Card `RestoreBackupView`, Smart Sync Probe & Local Collision Handling)"
     status: "completed"

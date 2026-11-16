@@ -4,6 +4,7 @@
 
 pub mod commands;
 pub mod models;
+pub mod pin_keystore;
 pub mod settings;
 pub mod sync_client;
 pub mod sync_zip;
@@ -118,7 +119,10 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
-            profile_exists, list_profiles, create_profile, login, recover_wallet_and_set_new_password, logout,
+            profile_exists, list_profiles, create_profile, login, login_with_pin,
+            get_profile_pin_status, get_session_access_mode, enable_profile_pin, disable_profile_pin,
+            elevate_session_with_password,
+            recover_wallet_and_set_new_password, logout,
             delete_profile, verify_profile_password,
             handover_to_this_device,
             unlock_session, lock_session, refresh_session_activity, is_session_active, // <--- NEU
@@ -213,6 +217,8 @@ pub fn run() {
             approve_guardian_recovery_request,
             complete_social_recovery,
             inspect_emergency_kit_uri,
+            verify_recovery_rehearsal,
+            snooze_recovery_rehearsal,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

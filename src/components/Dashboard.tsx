@@ -16,6 +16,7 @@ import { AggregatedBalance, VoucherSummary, WalletEvent, AppSettings, FrontendPe
 import { postService, POST_INBOX_UPDATED_EVENT } from "../services/postService";
 import { useSession } from "../context/SessionContext";
 import { IntegrityReportModal } from "./IntegrityReportModal";
+import { RecoveryRehearsalModal } from "./RecoveryRehearsalModal";
 import { FirstStepsChecklist } from "./FirstStepsChecklist";
 import { InfoHint } from "./ui/InfoHint";
 import { PageLayout } from "./ui/PageLayout";
@@ -38,7 +39,8 @@ import {
     X,
     RefreshCw,
     Layers,
-    MessageSquare
+    MessageSquare,
+    Brain
 } from "lucide-react";
 import { truncateUserId } from "../utils/userIdHelper";
 import { stringifyError, translateError } from "../utils/errorHelper";
@@ -51,7 +53,7 @@ export function Dashboard() {
     const tRef = useRef(t);
     tRef.current = t;
     const { navigate } = useNavigation();
-    const { profileName, integrityReport, protectAction } = useSession();
+    const { profileName, integrityReport, protectAction, accessMode = 'full', requireFullAccess } = useSession();
     const { resolveIdentity } = useContactResolver();
 
     const [userId, setUserId] = useState("");
@@ -73,6 +75,8 @@ export function Dashboard() {
     const [voucherCountsByStandard, setVoucherCountsByStandard] = useState<Record<string, number>>({});
     const [showIntegrityModal, setShowIntegrityModal] = useState(false);
     const [showBackupReminder, setShowBackupReminder] = useState(false);
+    const [showRehearsalModal, setShowRehearsalModal] = useState(false);
+    const [rehearsalSnoozed, setRehearsalSnoozed] = useState(false);
     const [appSettings, setAppSettings] = useState<AppSettings | null>(null);
     const [protectionStatus, setProtectionStatus] = useState<RecoveryProtectionStatusDto | null>(null);
     const [contactsCount, setContactsCount] = useState(0);
@@ -412,6 +416,16 @@ export function Dashboard() {
         return { label: t('dashboard.eventUnknown'), icon: AlertCircle, color: 'text-gray-600', bgColor: 'bg-gray-50' };
     }
 
+    const handleProtectedNavigate = (target: Parameters<typeof navigate>[0]) => {
+        if (accessMode === 'receiveOnly' && requireFullAccess) {
+            void requireFullAccess(async () => {
+                navigate(target);
+            }).catch(() => undefined);
+            return;
+        }
+        navigate(target);
+    };
+
     return (
         <PageLayout 
             customHeader={
@@ -444,7 +458,7 @@ export function Dashboard() {
                     data-testid="dashboard-primary-actions"
                 >
                     <Button 
-                        onClick={() => navigate({ view: 'send_vouchers' })} 
+                        onClick={() => handleProtectedNavigate({ view: 'send_vouchers' })} 
                         className="flex-1 md:flex-initial min-w-[130px] sm:min-w-[150px] gap-2 shadow-sm"
                         size="md"
                         disabled={activeVouchersCount === 0}
@@ -464,7 +478,7 @@ export function Dashboard() {
                         <span>{t('transfer.receive')}</span>
                     </Button>
                     <Button 
-                        onClick={() => navigate({ view: 'create_voucher', previousView: { view: 'logged_in' } })}
+                        onClick={() => handleProtectedNavigate({ view: 'create_voucher', previousView: { view: 'logged_in' } })}
                         className="flex-1 md:flex-initial min-w-[130px] sm:min-w-[150px] gap-2 shadow-sm"
                         variant="secondary"
                         size="md"
@@ -721,6 +735,52 @@ export function Dashboard() {
                             <Button variant="primary" size="xs" className="shadow-none shrink-0">{t('dashboard.backupReminderButton')}</Button>
                         </Card>
                     )}
+
+                    {protectionStatus?.rehearsalDue && protectionStatus?.questionIds && !rehearsalSnoozed && accessMode !== 'receiveOnly' && (
+                        <Card
+                            variant="glass"
+                            className="py-3 px-4 flex flex-wrap gap-3 items-center justify-between border-l-4 border-l-indigo-500 bg-indigo-50/40 dark:bg-indigo-950/20"
+                            data-testid="rehearsal-reminder-banner"
+                        >
+                            <div className="flex items-center gap-4 min-w-0">
+                                <div className="p-2 rounded-xl bg-indigo-600 text-white shrink-0">
+                                    <Brain size={20} />
+                                </div>
+                                <div className="min-w-0">
+                                    <p className="font-bold text-sm text-theme-secondary">
+                                        {t('dashboard.rehearsalReminderTitle')}
+                                    </p>
+                                    <p className="text-xs text-theme-light">
+                                        {t('dashboard.rehearsalReminderDesc')}
+                                    </p>
+                                </div>
+                            </div>
+                            <div className="flex items-center gap-2 shrink-0">
+                                <Button
+                                    type="button"
+                                    variant="secondary"
+                                    size="xs"
+                                    onClick={() => {
+                                        setRehearsalSnoozed(true);
+                                        void recoveryService.snoozeRecoveryRehearsal?.(24).catch(() => undefined);
+                                    }}
+                                    data-testid="rehearsal-snooze-btn"
+                                >
+                                    {t('dashboard.rehearsalSnoozeButton')}
+                                </Button>
+                                <Button
+                                    type="button"
+                                    variant="primary"
+                                    size="xs"
+                                    onClick={() => setShowRehearsalModal(true)}
+                                    data-testid="rehearsal-start-btn"
+                                    className="bg-indigo-600 hover:bg-indigo-700 text-white"
+                                >
+                                    {t('dashboard.rehearsalStartButton')}
+                                </Button>
+                            </div>
+                        </Card>
+                    )}
                 </div>
 
                 {/* Zone 1.5: Getting Started Checklist */}
@@ -788,7 +848,7 @@ export function Dashboard() {
                             </div>
                             <div className="flex flex-wrap justify-center gap-3 pt-2">
                                 <Button 
-                                    onClick={() => navigate({ view: 'create_voucher', previousView: { view: 'logged_in' } })}
+                                    onClick={() => handleProtectedNavigate({ view: 'create_voucher', previousView: { view: 'logged_in' } })}
                                     className="gap-2 shadow-sm"
                                     size="sm"
                                     data-testid="empty-balance-create-btn"
@@ -908,7 +968,7 @@ export function Dashboard() {
                                     variant="none" 
                                     className="border-2 border-dashed border-theme-subtle bg-transparent p-6 h-48 flex flex-col items-center justify-center text-theme-placeholder hover:border-theme-primary hover:text-theme-primary transition-all group cursor-pointer"
                                     hover
-                                    onClick={() => navigate({ view: 'create_voucher', previousView: { view: 'logged_in' } })}
+                                    onClick={() => handleProtectedNavigate({ view: 'create_voucher', previousView: { view: 'logged_in' } })}
                                 >
                                     <Plus size={32} className="mb-2 opacity-50 group-hover:scale-110 transition-transform" />
                                     <span className="text-sm font-bold uppercase tracking-widest">{t('voucher.create')}</span>
@@ -1149,6 +1209,20 @@ export function Dashboard() {
                     document.body
                 );
             })()}
+            {showRehearsalModal && protectionStatus?.questionIds && (
+                <RecoveryRehearsalModal
+                    isOpen={showRehearsalModal}
+                    questionIds={protectionStatus.questionIds}
+                    onClose={() => setShowRehearsalModal(false)}
+                    onVerified={() => {
+                        setProtectionStatus((prev) => (prev ? { ...prev, rehearsalDue: false } : prev));
+                    }}
+                    onResetQuestions={() => {
+                        setShowRehearsalModal(false);
+                        navigate({ view: 'settings', initialSection: 'security' });
+                    }}
+                />
+            )}
         </PageLayout>
     );
 }

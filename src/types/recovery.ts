@@ -66,6 +66,17 @@ export interface RecoveryProtectionStatusDto {
     hasLocalBackup: boolean;
     hasVoucherBackup: boolean;
     guardianWards: GuardianWardDto[];
+    rehearsalDue?: boolean;
+    questionIds?: [number, number, number] | null;
+    rehearsalStage?: number;
+    nextRehearsalAt?: number | null;
+}
+
+export interface RehearsalCheckResultDto {
+    allCorrect: boolean;
+    questionMatches: [boolean, boolean, boolean];
+    rehearsalStage: number;
+    nextRehearsalAt: number;
 }
 
 export interface SetupSocialRecoveryResultDto {

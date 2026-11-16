@@ -9,6 +9,7 @@ import { contactService } from '../services/contactService';
 import { recoveryService } from '../services/recoveryService';
 import { Contact } from '../types';
 import { translateError } from '../utils/errorHelper';
+import { RECOVERY_QUESTION_CATALOG } from '../constants/recoveryQuestions';
 import { ShieldCheck, Users, CheckCircle2, AlertTriangle, KeyRound } from 'lucide-react';
 
 interface GuardianSetupModalProps {
@@ -20,14 +21,7 @@ interface GuardianSetupModalProps {
     initialQuestionIds?: number[];
 }
 
-const QUESTION_CATALOG: Array<{ id: number; key: string }> = [
-    { id: 1, key: 'backup.recoveryQuestion1' },
-    { id: 2, key: 'backup.recoveryQuestion2' },
-    { id: 3, key: 'backup.recoveryQuestion3' },
-    { id: 4, key: 'backup.recoveryQuestion4' },
-    { id: 5, key: 'backup.recoveryQuestion5' },
-    { id: 6, key: 'backup.recoveryQuestion6' },
-];
+const QUESTION_CATALOG = RECOVERY_QUESTION_CATALOG;
 
 export const GuardianSetupModal: React.FC<GuardianSetupModalProps> = ({
     isOpen,

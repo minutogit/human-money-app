@@ -11,6 +11,7 @@ import { profileService } from '../services/profileService';
 import { ActiveRecoverySessionDto, RecoveryCompletionResultDto } from '../types';
 import { copyToClipboard } from '../utils/clipboard';
 import { translateError } from '../utils/errorHelper';
+import { RECOVERY_QUESTION_MAP } from '../constants/recoveryQuestions';
 import {
     Users,
     Copy,
@@ -36,14 +37,7 @@ export interface SocialRecoveryFlowProps {
     onBack?: () => void;
 }
 
-const QUESTION_CATALOG: Record<number, string> = {
-    1: 'backup.recoveryQuestion1',
-    2: 'backup.recoveryQuestion2',
-    3: 'backup.recoveryQuestion3',
-    4: 'backup.recoveryQuestion4',
-    5: 'backup.recoveryQuestion5',
-    6: 'backup.recoveryQuestion6',
-};
+const QUESTION_CATALOG = RECOVERY_QUESTION_MAP;
 
 export const SocialRecoveryFlow: React.FC<SocialRecoveryFlowProps> = ({
     mode,

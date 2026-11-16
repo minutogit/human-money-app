@@ -5,7 +5,7 @@ import { useTranslation } from "react-i18next";
 import logo from "../assets/logo.png";
 
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { authService } from "../services/authService";
+import { authService, ProfilePinStatusDto } from "../services/authService";
 import { recoveryService } from "../services/recoveryService";
 import { AuthLayout } from "./AuthLayout";
 import { profileService } from "../services/profileService";
@@ -36,7 +36,8 @@ import {
     BookOpen,
     Smartphone,
     ChevronDown,
-    ChevronUp
+    ChevronUp,
+    KeyRound
 } from "lucide-react";
 
 interface LoginProps {
@@ -52,6 +53,9 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRestoreBacku
     const [profiles, setProfiles] = useState<ProfileInfo[]>([]);
     const [selectedProfile, setSelectedProfile] = useState<string>("");
     const [password, setPassword] = useState("");
+    const [pinStatus, setPinStatus] = useState<ProfilePinStatusDto | null>(null);
+    const [authMethod, setAuthMethod] = useState<'pin' | 'password'>('password');
+    const [pin, setPin] = useState("");
     const [feedbackMsg, setFeedbackMsg] = useState("");
     const [feedbackType, setFeedbackType] = useState<"error" | "success" | "info" | null>(null);
 
@@ -79,6 +83,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRestoreBacku
         useState<ActiveRecoverySessionDto | null>(null);
     
     const passwordInputRef = useRef<HTMLInputElement>(null);
+    const pinInputRef = useRef<HTMLInputElement>(null);
 
     const refreshProfiles = useCallback(async () => {
         setIsLoading(true);
@@ -133,6 +138,93 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRestoreBacku
             active = false;
         };
     }, []);
+
+    useEffect(() => {
+        if (!selectedProfile) {
+            setPinStatus(null);
+            setAuthMethod('password');
+            setPin('');
+            return;
+        }
+        let active = true;
+        Promise.resolve(authService.getProfilePinStatus?.(selectedProfile))
+            .then((dto) => {
+                if (!active) return;
+                if (dto && dto.enabled) {
+                    setPinStatus(dto);
+                    setAuthMethod('pin');
+                } else {
+                    setPinStatus(dto ?? null);
+                    setAuthMethod('password');
+                }
+                setPin('');
+            })
+            .catch(() => {
+                if (!active) return;
+                setPinStatus(null);
+                setAuthMethod('password');
+            });
+        return () => {
+            active = false;
+        };
+    }, [selectedProfile]);
+
+    async function handlePinLogin() {
+        if (!selectedProfile || pin.length < 6) {
+            setFeedback(t('settings.pinValidationDigits'), "error");
+            return;
+        }
+
+        setIsLoggingIn(true);
+        setFeedback("", null);
+
+        setTimeout(async () => {
+            try {
+                const localInstanceId = await authService.getLocalInstanceId();
+                await authService.loginWithPin({
+                    folderName: selectedProfile,
+                    pin,
+                    cleanupOnLogin: true,
+                    localInstanceId,
+                });
+                const loggedInProfile = profiles.find(p => p.folderName === selectedProfile);
+                if (loggedInProfile) onLoginSuccess(loggedInProfile.profileName, loggedInProfile.folderName);
+            } catch (e) {
+                const msg = stringifyError(e);
+                const code = isBackendError(e) ? e.code : '';
+                if (code === 'error.auth.pinWipedMaxAttempts' || msg.includes('PIN slot wiped') || msg.includes('pinWipedMaxAttempts')) {
+                    setPinStatus((prev) => prev ? { ...prev, enabled: false, remainingAttempts: 0, failedAttempts: prev.maxAttempts } : null);
+                    setAuthMethod('password');
+                    setPin('');
+                    setFeedback(translateError(e, t), "error");
+                    passwordInputRef.current?.focus();
+                } else if (code === 'error.auth.invalidPin' || msg.includes('Invalid PIN') || msg.includes('invalidPin')) {
+                    setPinStatus((prev) => {
+                        if (!prev) return prev;
+                        const nextFailed = prev.failedAttempts + 1;
+                        const nextRemaining = Math.max(0, prev.maxAttempts - nextFailed);
+                        return { ...prev, failedAttempts: nextFailed, remainingAttempts: nextRemaining };
+                    });
+                    setPin('');
+                    setFeedback(translateError(e, t), "error");
+                    pinInputRef.current?.focus();
+                } else if (code === 'error.security.supersededByHandover' || msg.includes("transferred to another device") || msg.includes("SupersededByHandover")) {
+                    const epoch = isBackendError(e) && e.details?.targetEpoch ? parseInt(e.details.targetEpoch, 10) : undefined;
+                    setSupersededTargetEpoch(epoch);
+                    setShowSupersededUI(true);
+                } else if (code === 'error.security.concurrentCloneDetected' || msg.includes("Concurrent clone detected") || msg.includes("WalletConcurrentCloneDetected")) {
+                    setShowCloneUI(true);
+                } else if (code === 'error.auth.deviceMismatch' || msg.includes("Device Mismatch") || msg.includes("different device")) {
+                    setFeedback(translateError(e, t), "error");
+                    setShowHandoverUI(true);
+                } else {
+                    setFeedback(`${t('profile.verificationFailure')}: ${translateError(e, t)}`, "error");
+                }
+            } finally {
+                setIsLoggingIn(false);
+            }
+        }, 150);
+    }
 
     async function handleLogin() {
         if (!selectedProfile || !password) {
@@ -580,7 +672,17 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRestoreBacku
                     )}
 
                     {profiles.length > 0 ? (
-                        <form className="space-y-6" onSubmit={(e) => { e.preventDefault(); handleLogin(); }}>
+                        <form
+                            className="space-y-6"
+                            onSubmit={(e) => {
+                                e.preventDefault();
+                                if (authMethod === 'pin' && pinStatus?.enabled && !showHandoverUI) {
+                                    handlePinLogin();
+                                } else {
+                                    handleLogin();
+                                }
+                            }}
+                        >
                             <div className="space-y-3">
                                 <div className="flex items-center gap-1.5">
                                     <label htmlFor="profile-select" className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1">
@@ -596,6 +698,8 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRestoreBacku
                                             value={selectedProfile}
                                             onChange={(e) => { 
                                                 setSelectedProfile(e.target.value); 
+                                                setPassword("");
+                                                setPin("");
                                                 setShowHandoverUI(false); 
                                                 setShowSupersededUI(false); 
                                                 setShowCloneUI(false); 
@@ -628,18 +732,89 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRestoreBacku
                                 </div>
                             </div>
 
-                            <div className="space-y-3">
-                                <label htmlFor="password-input" className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><Lock size={12}/> {t('auth.password')}</label>
-                                <Input 
-                                    id="password-input"
-                                    type="password" 
-                                    value={password} 
-                                    onChange={(e) => { setPassword(e.target.value); if (feedbackType === 'error') setFeedback("", null); }} 
-                                    placeholder={t('auth.enterAccessPassword')}
-                                    ref={passwordInputRef}
-                                    className="py-5 px-6 text-lg font-bold tracking-widest"
-                                />
-                            </div>
+                            {authMethod === 'pin' && pinStatus?.enabled && !showHandoverUI ? (
+                                <div className="space-y-3">
+                                    <div className="flex items-center justify-between gap-2">
+                                        <label htmlFor="pin-input" className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5">
+                                            <KeyRound size={12} /> {t('auth.quickPinLabel')}
+                                        </label>
+                                        <span
+                                            data-testid="login-pin-scope-badge"
+                                            className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                                pinStatus.scope === 'receiveOnly'
+                                                    ? 'bg-amber-50 text-amber-800 border border-amber-200'
+                                                    : 'bg-sky-50 text-sky-800 border border-sky-200'
+                                            }`}
+                                        >
+                                            {pinStatus.scope === 'receiveOnly'
+                                                ? t('auth.cashierModeBadge')
+                                                : t('auth.quickPinModeBadge')}
+                                        </span>
+                                    </div>
+                                    <Input
+                                        id="pin-input"
+                                        type="password"
+                                        inputMode="numeric"
+                                        autoComplete="off"
+                                        maxLength={8}
+                                        value={pin}
+                                        onChange={(e) => {
+                                            setPin(e.target.value.replace(/\D/g, '').slice(0, 8));
+                                            if (feedbackType === 'error') setFeedback("", null);
+                                        }}
+                                        placeholder={t('settings.pinInputPlaceholder')}
+                                        ref={pinInputRef}
+                                        data-testid="login-pin-input"
+                                        className="py-5 px-6 text-lg font-bold tracking-widest"
+                                    />
+                                    <div className="flex items-center justify-between text-[11px] text-theme-light pt-0.5">
+                                        <span>
+                                            {t('auth.pinAttemptsRemaining', { count: pinStatus.remainingAttempts })}
+                                        </span>
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                setAuthMethod('password');
+                                                setPin('');
+                                                setFeedback("", null);
+                                            }}
+                                            data-testid="switch-to-password-btn"
+                                            className="font-bold text-theme-primary hover:underline cursor-pointer"
+                                        >
+                                            {t('auth.useMasterPasswordInstead')}
+                                        </button>
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="space-y-3">
+                                    <div className="flex items-center justify-between gap-2">
+                                        <label htmlFor="password-input" className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5"><Lock size={12}/> {t('auth.password')}</label>
+                                        {pinStatus?.enabled && !showHandoverUI && (
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    setAuthMethod('pin');
+                                                    setPassword('');
+                                                    setFeedback("", null);
+                                                }}
+                                                data-testid="switch-to-pin-btn"
+                                                className="text-[11px] font-bold text-theme-primary hover:underline cursor-pointer"
+                                            >
+                                                {t('auth.useQuickPinInstead')}
+                                            </button>
+                                        )}
+                                    </div>
+                                    <Input 
+                                        id="password-input"
+                                        type="password" 
+                                        value={password} 
+                                        onChange={(e) => { setPassword(e.target.value); if (feedbackType === 'error') setFeedback("", null); }} 
+                                        placeholder={t('auth.enterAccessPassword')}
+                                        ref={passwordInputRef}
+                                        className="py-5 px-6 text-lg font-bold tracking-widest"
+                                    />
+                                </div>
+                            )}
 
                             <div className="space-y-6 pt-4">
                                 {showHandoverUI ? (
@@ -670,7 +845,7 @@ export function Login({ onLoginSuccess, onSwitchToCreate, onSwitchToRestoreBacku
                                         </button>
                                     </div>
                                 ) : (
-                                    <Button type="submit" disabled={isLoading || isLoggingIn || profiles.length === 0 || !password || !selectedProfile} className="w-full py-5 rounded-3xl shadow-premium-lg text-lg gap-3">
+                                    <Button type="submit" disabled={isLoading || isLoggingIn || profiles.length === 0 || !selectedProfile || (authMethod === 'pin' && pinStatus?.enabled ? pin.length < 6 : !password)} className="w-full py-5 rounded-3xl shadow-premium-lg text-lg gap-3">
                                         {isLoggingIn ? <RefreshCw className="animate-spin" size={24} /> : <LogIn size={24} />}
                                         {isLoggingIn ? t('auth.authorizing') : t('auth.login')}
                                     </Button>

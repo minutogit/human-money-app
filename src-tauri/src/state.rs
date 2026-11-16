@@ -531,26 +531,48 @@ impl AppState {
         service: &mut AppService,
         password: &str,
     ) -> Result<(), AppFacadeError> {
+        self.initialize_profile_session_inner(service, password, false)
+    }
+
+    /// Central session initializer for secondary (PIN / Cashier) logins.
+    pub fn initialize_profile_session_with_secondary(
+        &self,
+        service: &mut AppService,
+        secondary_secret: &str,
+    ) -> Result<(), AppFacadeError> {
+        self.initialize_profile_session_inner(service, secondary_secret, true)
+    }
+
+    fn initialize_profile_session_inner(
+        &self,
+        service: &mut AppService,
+        credential: &str,
+        is_secondary: bool,
+    ) -> Result<(), AppFacadeError> {
         info!("Initializing profile session and member caches...");
 
         // 1. Load or create settings
-        let settings = self.load_settings(service, Some(password))?;
+        let settings = self.load_settings(service, Some(credential))?;
 
         if let Some(policy) = crate::checkout::configured_policy(&settings)
             .map_err(|e| AppFacadeError::Generic(e.message))?
         {
             service
-                .configure_regional_mesh_authority(policy, Some(password))
+                .configure_regional_mesh_authority(policy, Some(credential))
                 .map_err(|e| AppFacadeError::Generic(e.to_string()))?;
         }
 
         // 2. Start session timer if configured
         if settings.session_timeout_seconds > 0 {
-            service.unlock_session(password, settings.session_timeout_seconds)?;
+            if is_secondary {
+                service.unlock_secondary_session(credential, settings.session_timeout_seconds)?;
+            } else {
+                service.unlock_session(credential, settings.session_timeout_seconds)?;
+            }
         }
 
         // 3. Load transaction history and clean up expired bundle data
-        let mut history = self.load_history_from_disk(service, Some(password))?;
+        let mut history = self.load_history_from_disk(service, Some(credential))?;
         let mut changed = false;
         let retention_duration = Duration::days(BUNDLE_RETENTION_DAYS);
 
@@ -569,17 +591,17 @@ impl AppState {
 
         if changed {
             info!("Saving cleaned transaction history back to disk...");
-            self.save_history(service, history, Some(password))?;
+            self.save_history(service, history, Some(credential))?;
         }
 
         // 4. Pre-cache the last 50 wallet events
-        self.refresh_events_cache(service, Some(password))?;
+        self.refresh_events_cache(service, Some(credential))?;
 
         // 5. Load the address book
-        let _ = self.load_contacts(service, Some(password));
+        let _ = self.load_contacts(service, Some(credential));
 
         // 6. Load the Web of Trust register
-        self.load_wot_register(service, Some(password))?;
+        self.load_wot_register(service, Some(credential))?;
 
         Ok(())
     }

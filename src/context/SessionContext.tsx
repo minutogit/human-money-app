@@ -1,9 +1,10 @@
 // src/context/SessionContext.tsx
 import { createContext, useContext, useState, useCallback, ReactNode, useEffect, useRef } from 'react';
-import { authService } from '../services/authService';
+import { authService, SessionAccessMode } from '../services/authService';
 import { settingsService } from '../services/settingsService';
 import { logger } from '../utils/log';
 import { AuthModal } from '../components/ui/AuthModal';
+import { useTranslation } from 'react-i18next';
 // AppSettings import removed as unused
 
 import { startSealSyncLoop, stopSealSyncLoop } from '../utils/sealSync';
@@ -13,7 +14,7 @@ import { startMarketSyncLoop, stopMarketSyncLoop } from '../utils/marketSync';
 import { useWindowTitleSync } from '../hooks/useWindowTitleSync';
 import { useIntegrityCheck } from '../hooks/useIntegrityCheck';
 import { useSessionHeartbeat } from '../hooks/useSessionHeartbeat';
-import { isBackendError, stringifyError } from '../utils/errorHelper';
+import { isBackendError, stringifyError, translateError } from '../utils/errorHelper';
 import { tourBridge } from '../utils/tourBridge';
 
 export type SecurityLockdownKind = 'handover' | 'clone' | 'fork' | null;
@@ -25,6 +26,9 @@ export interface SecurityLockdownDetails {
 
 export interface SessionContextType {
     protectAction: <T>(action: (password: string | null) => Promise<T>) => Promise<T | void>;
+    requireFullAccess: <T>(action: (masterPassword: string) => Promise<T>) => Promise<T | void>;
+    elevateSession: (masterPassword: string) => Promise<void>;
+    accessMode: SessionAccessMode;
     isSessionActive: boolean;
     isAuthenticated?: boolean;
     profileName: string;
@@ -57,7 +61,10 @@ export function useOptionalSession() {
 }
 
 export function SessionProvider({ children }: { children: ReactNode }) {
+    const { t } = useTranslation();
     const [isModalOpen, setIsModalOpen] = useState(false);
+    const [modalErrorMsg, setModalErrorMsg] = useState<string>('');
+    const [accessMode, setAccessMode] = useState<SessionAccessMode>('full');
     const [isSessionActive, setIsSessionActive] = useState(false);
     const [isAuthenticated, setIsAuthenticated] = useState(false);
     const [profileName, setProfileName] = useState<string>("");
@@ -100,6 +107,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     }, [isSessionActive]);
 
     const [pendingAction, setPendingAction] = useState<{
+        mode: 'session' | 'stepUp';
         resolve: (value: unknown) => void;
         reject: (reason: unknown) => void;
         action: (password: string | null) => Promise<unknown>;
@@ -124,6 +132,16 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         startMarketSyncLoop();
         checkIntegrity();
 
+        authService.getSessionAccessMode?.()
+            ?.then((mode) => {
+                if (mode === 'full' || mode === 'dailyPay' || mode === 'receiveOnly') {
+                    setAccessMode(mode);
+                } else {
+                    setAccessMode('full');
+                }
+            })
+            ?.catch(() => setAccessMode('full'));
+
         authService.isSessionActive()
             .then((active) => {
                 if (active) {
@@ -142,6 +160,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     const notifyLogout = useCallback(() => {
         setIsAuthenticated(false);
         setIsSessionActive(false);
+        setAccessMode('full');
         isSessionActiveRef.current = false;
         setProfileName("");
         setFolderName("");
@@ -149,6 +168,25 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         stopAutoBackupLoop();
         stopPostSyncLoop();
         stopMarketSyncLoop();
+    }, []);
+
+    const elevateSession = useCallback(async (masterPassword: string) => {
+        const nextMode = await authService.elevateSessionWithPassword(masterPassword);
+        setAccessMode(nextMode);
+        activateSession();
+    }, [activateSession]);
+
+    const requireFullAccess = useCallback(async <T,>(action: (masterPassword: string) => Promise<T>): Promise<T | void> => {
+        return new Promise<T>((resolve, reject) => {
+            setModalErrorMsg('');
+            setPendingAction({
+                mode: 'stepUp',
+                resolve: resolve as (value: unknown) => void,
+                reject,
+                action: (pwd) => action(pwd || ''),
+            });
+            setIsModalOpen(true);
+        });
     }, []);
 
     const protectAction = useCallback(async <T,>(action: (password: string | null) => Promise<T>): Promise<T | void> => {
@@ -197,7 +235,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
             // MODUS A: Immer Passwort fragen (Timeout = 0)
             if (timeout === 0) {
                 return new Promise<T>((resolve, reject) => {
+                    setModalErrorMsg('');
                     setPendingAction({ 
+                        mode: 'session',
                         resolve: resolve as (value: unknown) => void, 
                         reject, 
                         action: action as (password: string | null) => Promise<unknown> 
@@ -214,7 +254,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
                     if (e instanceof Error && e.message === "SESSION_EXPIRED_RETRY") {
                         // Session war im Backend abgelaufen -> Modal öffnen
                         return new Promise<T>((resolve, reject) => {
+                            setModalErrorMsg('');
                             setPendingAction({ 
+                                mode: 'session',
                                 resolve: resolve as (value: unknown) => void, 
                                 reject, 
                                 action: action as (password: string | null) => Promise<unknown> 
@@ -227,7 +269,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
             } else {
                 // Session noch nicht aktiv -> Modal öffnen
                 return new Promise<T>((resolve, reject) => {
+                    setModalErrorMsg('');
                     setPendingAction({ 
+                        mode: 'session',
                         resolve: resolve as (value: unknown) => void, 
                         reject, 
                         action: action as (password: string | null) => Promise<unknown> 
@@ -243,6 +287,25 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
     const handleModalConfirm = async (password: string) => {
         if (!pendingAction) return;
+
+        if (pendingAction.mode === 'stepUp') {
+            try {
+                await elevateSession(password);
+                setModalErrorMsg('');
+                const currentPending = pendingAction;
+                setIsModalOpen(false);
+                setPendingAction(null);
+                try {
+                    const result = await currentPending.action(password);
+                    currentPending.resolve(result);
+                } catch (actionErr) {
+                    currentPending.reject(actionErr);
+                }
+            } catch (err) {
+                setModalErrorMsg(translateError(err, t));
+            }
+            return;
+        }
 
         try {
             const settings = await settingsService.getSettings();
@@ -276,6 +339,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         if (pendingAction) {
             pendingAction.reject(new Error("User cancelled authentication"));
         }
+        setModalErrorMsg('');
         setIsModalOpen(false);
         setPendingAction(null);
     };
@@ -321,12 +385,15 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     }, []);
 
     return (
-        <SessionContext.Provider value={{ protectAction, isSessionActive, isAuthenticated, profileName, folderName, setProfileName, setFolderName, notifyLogin, notifyLogout, isForkLocked, lockdownKind, lockdownDetails, triggerSecurityLockdown, isRecoveryRequired, integrityReport, checkIntegrity, clearLocks, lockSession }}>
+        <SessionContext.Provider value={{ protectAction, requireFullAccess, elevateSession, accessMode, isSessionActive, isAuthenticated, profileName, folderName, setProfileName, setFolderName, notifyLogin, notifyLogout, isForkLocked, lockdownKind, lockdownDetails, triggerSecurityLockdown, isRecoveryRequired, integrityReport, checkIntegrity, clearLocks, lockSession }}>
             {children}
             <AuthModal
                 isOpen={isModalOpen}
                 onConfirm={handleModalConfirm}
                 onCancel={handleModalCancel}
+                title={pendingAction?.mode === 'stepUp' ? t('auth.stepUpTitle') : undefined}
+                description={pendingAction?.mode === 'stepUp' ? t('auth.stepUpDesc') : undefined}
+                errorMsg={modalErrorMsg || undefined}
             />
         </SessionContext.Provider>
     );

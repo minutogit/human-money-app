@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { AppSettings, PrivacyDefault } from '../../types';
 import { BackupSettingsCard } from '../BackupSettingsCard';
+import { QuickPinCard } from './QuickPinCard';
 import { IdentityRecoveryCard } from './IdentityRecoveryCard';
 import { DangerZoneCard } from './DangerZoneCard';
 import { Card } from '../ui/Card';
@@ -38,6 +39,11 @@ export const SecurityBackupTab: React.FC<SecurityBackupTabProps> = ({
                     settings={settings}
                     onSettingsUpdated={onSettingsSynced}
                 />
+            </div>
+
+            {/* Quick PIN Authentication */}
+            <div id="settings-pin-section">
+                <QuickPinCard />
             </div>
 
             {/* Identity Recovery Section */}

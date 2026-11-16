@@ -68,7 +68,7 @@ interface NavGroup {
 
 export const Sidebar: React.FC<SidebarProps> = ({ openClaimsCount }) => {
   const { t } = useTranslation();
-  const { isSessionActive, isAuthenticated, profileName, notifyLogout, protectAction, lockSession } = useSession();
+  const { isSessionActive, isAuthenticated, profileName, notifyLogout, protectAction, lockSession, accessMode = 'full', requireFullAccess } = useSession();
   const { appState, navigate, appVersion, isSidebarOpen, setSidebarOpen } = useNavigation();
   const { isExpert } = useUiMode();
   const currentView = appState.view;
@@ -199,6 +199,35 @@ export const Sidebar: React.FC<SidebarProps> = ({ openClaimsCount }) => {
                 <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${isSessionActive ? "bg-theme-success animate-pulse" : "bg-theme-warning"}`}></span>
                 {isSessionActive ? t('common.activeWallet') : t('auth.sessionLocked')}
               </span>
+              {isSessionActive && accessMode !== 'full' && (
+                <div className="mt-1 flex items-center gap-1.5 flex-wrap">
+                  <span
+                    data-testid="sidebar-access-mode-badge"
+                    className={`inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-bold tracking-wide border ${
+                      accessMode === 'receiveOnly'
+                        ? 'bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800/50'
+                        : 'bg-sky-50 text-sky-800 border-sky-200 dark:bg-sky-950/40 dark:text-sky-300 dark:border-sky-800/50'
+                    }`}
+                  >
+                    {accessMode === 'receiveOnly'
+                      ? t('auth.cashierModeBadge')
+                      : t('auth.quickPinModeBadge')}
+                  </span>
+                  {requireFullAccess && (
+                    <button
+                      type="button"
+                      data-testid="sidebar-unlock-full-access-btn"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void requireFullAccess(async () => {}).catch(() => undefined);
+                      }}
+                      className="text-[10px] font-bold text-theme-primary hover:underline cursor-pointer"
+                    >
+                      {t('auth.unlockFullAccess')}
+                    </button>
+                  )}
+                </div>
+              )}
               {isExpert && userId && (
                 <div
                   className="mt-1"

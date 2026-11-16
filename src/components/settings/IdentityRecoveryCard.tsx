@@ -15,7 +15,7 @@ import { translateError } from '../../utils/errorHelper';
 
 export const IdentityRecoveryCard: React.FC = () => {
     const { t } = useTranslation();
-    const { protectAction } = useSession();
+    const { protectAction, accessMode = 'full', requireFullAccess } = useSession();
 
     const [protectionStatus, setProtectionStatus] = useState<RecoveryProtectionStatusDto | null>(null);
     const [isGuardianSetupOpen, setIsGuardianSetupOpen] = useState(false);
@@ -38,13 +38,39 @@ export const IdentityRecoveryCard: React.FC = () => {
         loadProtectionStatus();
     }, [loadProtectionStatus]);
 
+    const handleOpenEmergencyKit = () => {
+        if (accessMode !== 'full' && requireFullAccess) {
+            void requireFullAccess(async () => {
+                setIsEmergencyKitOpen(true);
+            }).catch(() => undefined);
+            return;
+        }
+        setIsEmergencyKitOpen(true);
+    };
+
+    const handleOpenGuardianSetup = () => {
+        if (accessMode !== 'full' && requireFullAccess) {
+            void requireFullAccess(async () => {
+                setIsGuardianSetupOpen(true);
+            }).catch(() => undefined);
+            return;
+        }
+        setIsGuardianSetupOpen(true);
+    };
+
     const handleRevokeGuardians = async () => {
         setIsRevokingGuardians(true);
         setRevokeFeedback(null);
         try {
-            await protectAction(async (pwd) => {
-                await recoveryService.revokeSocialRecovery(pwd || '');
-            });
+            if (accessMode !== 'full' && requireFullAccess) {
+                await requireFullAccess(async (masterPwd) => {
+                    await recoveryService.revokeSocialRecovery(masterPwd);
+                });
+            } else {
+                await protectAction(async (pwd) => {
+                    await recoveryService.revokeSocialRecovery(pwd || '');
+                });
+            }
             setRevokeFeedback({ type: 'success', text: t('backup.revokeGuardiansSuccess') });
             await loadProtectionStatus();
         } catch (err) {
@@ -111,7 +137,7 @@ export const IdentityRecoveryCard: React.FC = () => {
                             <Button
                                 type="button"
                                 variant="secondary"
-                                onClick={() => setIsEmergencyKitOpen(true)}
+                                onClick={handleOpenEmergencyKit}
                                 className="w-full text-xs py-2 gap-1.5"
                             >
                                 <FileText size={14} />
@@ -153,7 +179,7 @@ export const IdentityRecoveryCard: React.FC = () => {
                                 <Button
                                     type="button"
                                     variant="secondary"
-                                    onClick={() => setIsGuardianSetupOpen(true)}
+                                    onClick={handleOpenGuardianSetup}
                                     className="flex-1 text-xs py-2 gap-1.5"
                                 >
                                     <Users size={14} />

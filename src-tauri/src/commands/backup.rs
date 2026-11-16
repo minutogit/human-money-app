@@ -1313,6 +1313,11 @@ pub(crate) fn reset_local_password_via_backup_impl(
             service
                 .login(target_folder_name, new_password, false, local_instance_id)
                 .map_err(FrontendError::from)?;
+            if let Some(app) = app_opt {
+                if let Ok(config_dir) = app.path().app_config_dir() {
+                    let _ = crate::pin_keystore::remove_entry(&config_dir, target_folder_name);
+                }
+            }
             let _ = crate::commands::auth::record_profile_metadata_in_dir(
                 wallet_data_dir,
                 target_folder_name,

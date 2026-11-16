@@ -8,6 +8,7 @@ import {
     InspectedEmergencyKitDto,
     RecoveryCompletionResultDto,
     RecoveryProtectionStatusDto,
+    RehearsalCheckResultDto,
     RevokeSocialRecoveryResultDto,
     SetupSocialRecoveryResultDto,
 } from '../types/recovery';
@@ -57,6 +58,16 @@ export const recoveryService = {
 
     getRecoveryProtectionStatus: async (): Promise<RecoveryProtectionStatusDto> => {
         return await invoke<RecoveryProtectionStatusDto>('get_recovery_protection_status');
+    },
+
+    verifyRecoveryRehearsal: async (
+        answers: [string, string, string]
+    ): Promise<RehearsalCheckResultDto> => {
+        return await invoke<RehearsalCheckResultDto>('verify_recovery_rehearsal', { answers });
+    },
+
+    snoozeRecoveryRehearsal: async (hours = 24): Promise<number> => {
+        return await invoke<number>('snooze_recovery_rehearsal', { hours });
     },
 
     setupSocialRecoveryGuardians: async (

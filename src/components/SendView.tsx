@@ -141,7 +141,7 @@ export interface SendViewProps {
 
 export function SendView({ initialRecipientId, initialVoucherId, initialNote, initialPaymentUri }: SendViewProps = {}) {
     const { t } = useTranslation();
-    const { protectAction, profileName } = useSession();
+    const { protectAction, profileName, accessMode = 'full', requireFullAccess } = useSession();
     const { navigate, goBack } = useNavigation();
     const [state, dispatch] = useReducer(reducer, initialState);
     const [paymentRequestSuccessMsg, setPaymentRequestSuccessMsg] = useState<string | null>(null);
@@ -557,6 +557,14 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote, in
 
     const handlePrepareTransfer = (e: FormEvent) => {
         e.preventDefault();
+        if (accessMode === 'receiveOnly') {
+            if (requireFullAccess) {
+                void requireFullAccess(async () => {}).catch(() => undefined);
+            } else {
+                dispatch({ type: 'SET_FEEDBACK', msg: t('auth.cashierModeRestrictedDesc') });
+            }
+            return;
+        }
         if (appSettings?.pendingRestoreL2Reconciliation) {
             dispatch({ type: 'SET_FEEDBACK', msg: t('transfer.pendingL2ReconciliationBlocked', 'Ausgaben sind vorübergehend gesperrt, bis der Online-Sicherheitsabgleich durchgeführt wurde.') });
             return;
@@ -708,6 +716,26 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote, in
                 {paymentRequestSuccessMsg && (
                     <AlertBanner variant="success">
                         {paymentRequestSuccessMsg}
+                    </AlertBanner>
+                )}
+
+                {accessMode === 'receiveOnly' && (
+                    <AlertBanner variant="warning" title={t('auth.cashierModeRestrictedTitle')}>
+                        <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+                            <span>{t('auth.cashierModeRestrictedDesc')}</span>
+                            {requireFullAccess && (
+                                <Button
+                                    type="button"
+                                    variant="primary"
+                                    size="xs"
+                                    onClick={() => {
+                                        void requireFullAccess(async () => {}).catch(() => undefined);
+                                    }}
+                                >
+                                    {t('auth.unlockFullAccess')}
+                                </Button>
+                            )}
+                        </div>
                     </AlertBanner>
                 )}
 

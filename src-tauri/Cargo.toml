@@ -49,6 +49,7 @@ sha2 = "0.10"
 ed25519-dalek = { version = "2.1", features = ["rand_core"] }
 x25519-dalek = { version = "2.0.1", features = ["static_secrets"] }
 url = "2.5"
+zeroize = "1.8"
 
 [dev-dependencies]
 tauri = { version = "~2.11", features = ["test"] }

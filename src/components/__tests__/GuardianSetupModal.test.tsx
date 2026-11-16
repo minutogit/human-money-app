@@ -108,4 +108,49 @@ describe('GuardianSetupModal Component', () => {
             });
         });
     });
+
+    it('renders all 12 recovery questions and allows selecting IDs 7, 10, 12', async () => {
+        vi.mocked(recoveryService.setupSocialRecoveryGuardians).mockResolvedValue({
+            rotationEpoch: 1,
+            thresholdM: 2,
+            guardiansCount: 3,
+            postSyncResult: null,
+            backupSyncResult: null,
+        });
+
+        render(
+            <GuardianSetupModal
+                isOpen={true}
+                onClose={mockOnClose}
+                onSuccess={mockOnSuccess}
+            />
+        );
+
+        await screen.findByText('Alice Smith');
+
+        const selects = screen.getAllByRole('combobox') as HTMLSelectElement[];
+        const questionSelects = selects.filter((s) => s.querySelectorAll('option').length === 12);
+        expect(questionSelects).toHaveLength(3);
+
+        fireEvent.change(questionSelects[0], { target: { value: '7' } });
+        fireEvent.change(questionSelects[1], { target: { value: '10' } });
+        fireEvent.change(questionSelects[2], { target: { value: '12' } });
+
+        fireEvent.change(screen.getByTestId('guardian-answer-0'), { target: { value: 'FirstLoveName' } });
+        fireEvent.change(screen.getByTestId('guardian-answer-1'), { target: { value: 'Nokia3310Phone' } });
+        fireEvent.change(screen.getByTestId('guardian-answer-2'), { target: { value: 'CorrectHorseBattery' } });
+        fireEvent.change(screen.getByTestId('guardian-password-input'), { target: { value: 'CorrectPassword123' } });
+
+        fireEvent.click(screen.getByTestId('guardian-setup-submit-btn'));
+
+        await waitFor(() => {
+            expect(recoveryService.setupSocialRecoveryGuardians).toHaveBeenCalledWith({
+                password: 'CorrectPassword123',
+                guardianDids: ['did:key:z6MkuContact1', 'did:key:z6MkuContact2', 'did:key:z6MkuContact3'],
+                thresholdM: 2,
+                questionIds: [7, 10, 12],
+                answers: ['FirstLoveName', 'Nokia3310Phone', 'CorrectHorseBattery'],
+            });
+        });
+    });
 });
