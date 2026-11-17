@@ -70,18 +70,29 @@ describe('MineTab Component', () => {
   const mockInbox: FrontendPostInboxSummary = {
     pendingSignRequests: [],
     pendingWotHandshakes: [],
-    sellerInquiries: [
+    inquiries: [
       {
         inquiryId: 'inq-1',
+        role: 'seller',
         counterpartyDid: 'did:key:z6MkuSender',
         counterpartyName: 'Interessent Peter',
+        isContact: false,
+        status: 'open',
         target: { kind: 'ad', ad_id: 'ad-1', ad_title: 'IT-Beratung kostenlos' },
-        message: 'Hallo, ich hätte Interesse an einer Beratung.',
         createdAt: nowSecs - 3600,
-        replySyncs: [],
+        updatedAt: nowSecs - 3600,
+        unread: true,
+        replySyncs: [{ writeUrl: 'https://sync.example/w', readUrl: 'https://sync.example/r', dropPub: 'pub', failCount: 0, status: 'active' }],
+        messages: [
+          {
+            msgId: 'msg-1',
+            sender: 'them',
+            text: 'Hallo, ich hätte Interesse an einer Beratung.',
+            createdAt: nowSecs - 3600,
+          },
+        ],
       },
     ],
-    buyerInquiries: [],
     unacknowledgedPayments: [],
   };
 
@@ -197,8 +208,8 @@ describe('MineTab Component', () => {
     expect(onRenewAd).toHaveBeenCalledWith(expect.objectContaining({ id: 'ad-active-1' }));
   });
 
-  it('renders inquiries section with received inquiries and handles reply', () => {
-    const onReplyInquiry = vi.fn();
+  it('renders inquiries section with chat messages and handles reply', () => {
+    const onSendInquiryMessage = vi.fn().mockResolvedValue(undefined);
 
     render(
       <MineTab
@@ -211,34 +222,52 @@ describe('MineTab Component', () => {
         onEditAd={vi.fn()}
         onRenewAd={vi.fn()}
         onDeleteAd={vi.fn()}
-        onReplyInquiry={onReplyInquiry}
+        onSendInquiryMessage={onSendInquiryMessage}
       />
     );
 
     expect(screen.getByText(/Interessent Peter/i)).toBeInTheDocument();
     expect(screen.getByText('Hallo, ich hätte Interesse an einer Beratung.')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Antworten|Reply/i })).toBeInTheDocument();
+    expect(screen.getByTestId('inquiry-confirm-btn-inq-1')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('inquiry-confirm-btn-inq-1'));
+    expect(onSendInquiryMessage).toHaveBeenCalledWith('inq-1', {
+      text: undefined,
+      decision: 'confirm',
+    });
   });
 
-  it('shows pay button on confirmed sent inquiry even without paymentUri and passes counterpartyDid', () => {
+  it('shows pay button on confirmed buyer inquiry even without paymentUri and passes counterpartyDid', () => {
     const onPayInquiry = vi.fn();
     const inboxWithConfirmedSent: FrontendPostInboxSummary = {
       ...mockInbox,
-      buyerInquiries: [
+      inquiries: [
         {
           inquiryId: 'inq-sent-1',
+          role: 'buyer',
           counterpartyDid: 'did:key:z6MkuSeller',
           counterpartyName: 'Bäcker Bernd',
+          isContact: true,
+          status: 'confirmed',
           target: { kind: 'ad', ad_id: 'ad-2', ad_title: 'Sauerteigbrot' },
-          message: 'Noch 2 Brote da?',
           createdAt: nowSecs - 1200,
+          updatedAt: nowSecs - 600,
+          unread: false,
           replySyncs: [],
-          reply: {
-            inquiryId: 'inq-sent-1',
-            decision: 'confirm',
-            note: 'Gerne ab 16 Uhr',
-            repliedAt: nowSecs - 600,
-          },
+          messages: [
+            {
+              msgId: 'm1',
+              sender: 'me',
+              text: 'Noch 2 Brote da?',
+              createdAt: nowSecs - 1200,
+            },
+            {
+              msgId: 'm2',
+              sender: 'them',
+              text: 'Gerne ab 16 Uhr',
+              decision: 'confirm',
+              createdAt: nowSecs - 600,
+            },
+          ],
         },
       ],
     };
@@ -258,7 +287,6 @@ describe('MineTab Component', () => {
       />
     );
 
-    fireEvent.click(screen.getByRole('button', { name: /Gesendet|Sent/i }));
     const payBtn = screen.getByTestId('inquiry-pay-btn-inq-sent-1');
     fireEvent.click(payBtn);
     expect(onPayInquiry).toHaveBeenCalledWith('did:key:z6MkuSeller', undefined);

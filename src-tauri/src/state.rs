@@ -15,6 +15,8 @@ pub const MARKET_SYNC_ADMIN_KEY: &str = "market_sync_admin";
 pub const MARKET_SYNC_KEY: &str = "market_sync_state";
 pub const BACKUP_SYNC_STATE_KEY: &str = "backup_sync_state";
 pub const MARKET_POST_STATE_KEY: &str = "market_post_state";
+pub const APP_NOTICES_KEY: &str = "app_notices";
+pub const MAX_APP_NOTICES: usize = 50;
 pub const RECOVERY_OWNER_STATE_KEY: &str = "recovery_owner_state";
 pub const RECOVERY_GUARDIAN_VAULT_KEY: &str = "recovery_guardian_vault";
 pub const BUNDLE_RETENTION_DAYS: i64 = 90;
@@ -53,9 +55,7 @@ pub struct StoredPostState {
     #[serde(default)]
     pub pending_wot_packages_by_msg_id: std::collections::BTreeMap<String, String>,
     #[serde(default)]
-    pub seller_inquiries: Vec<crate::models::FrontendMarketInquiryItem>,
-    #[serde(default)]
-    pub buyer_inquiries: Vec<crate::models::FrontendMarketInquiryItem>,
+    pub inquiries: Vec<crate::models::FrontendMarketInquiryItem>,
     #[serde(default)]
     pub inquiry_rate_tracker: humoco_market::InquiryRateTracker,
 }
@@ -1143,7 +1143,14 @@ impl AppState {
                         .cloned()
                         .map(Into::into)
                         .collect();
-                    self.update_contact_syncs_from_card(service, &did, &card_syncs, password);
+                    let card_profile = humoco_market::extract_public_profile(&stored.card);
+                    self.update_contact_from_card(
+                        service,
+                        &did,
+                        &card_syncs,
+                        Some(&card_profile),
+                        password,
+                    );
                 }
             }
             Ok(other) => {
@@ -1158,14 +1165,15 @@ impl AppState {
         }
     }
 
-    pub fn update_contact_syncs_from_card(
+    pub fn update_contact_from_card(
         &self,
         service: &mut AppService,
         card_did: &str,
         card_syncs: &[crate::models::FrontendSyncDescriptor],
+        card_profile: Option<&human_money_core::models::profile::PublicProfile>,
         password: Option<&str>,
     ) {
-        if card_syncs.is_empty() {
+        if card_syncs.is_empty() && card_profile.is_none() {
             return;
         }
         let can_card_did = match canonicalize_did(card_did) {
@@ -1184,10 +1192,17 @@ impl AppState {
             let is_match =
                 k == card_did || canonicalize_did(k).ok().as_deref() == Some(&can_card_did);
             if is_match {
-                let merged = merge_contact_syncs(&contact.syncs, card_syncs);
-                if contact.syncs != merged {
-                    contact.syncs = merged;
-                    updated = true;
+                if !card_syncs.is_empty() {
+                    let merged = merge_contact_syncs(&contact.syncs, card_syncs);
+                    if contact.syncs != merged {
+                        contact.syncs = merged;
+                        updated = true;
+                    }
+                }
+                if let Some(prof) = card_profile {
+                    if apply_card_profile_to_contact(contact, prof) {
+                        updated = true;
+                    }
                 }
             }
         }
@@ -1591,6 +1606,116 @@ pub fn sync_endpoint_key(d: &crate::models::FrontendSyncDescriptor) -> String {
         w.to_string()
     } else {
         d.read_url.trim().trim_end_matches('/').to_string()
+    }
+}
+
+/// Applies disclosed business card profile fields to an existing address-book contact.
+/// Always updates `picture_url` when present on the card, and populates missing names
+/// without overwriting custom names already set by the user.
+pub fn apply_card_profile_to_contact(
+    contact: &mut FrontendContact,
+    card_profile: &human_money_core::models::profile::PublicProfile,
+) -> bool {
+    let mut changed = false;
+
+    if let Some(ref pic) = card_profile.picture_url {
+        let trimmed = pic.trim();
+        if !trimmed.is_empty() && contact.profile.picture_url.as_deref() != Some(trimmed) {
+            contact.profile.picture_url = Some(trimmed.to_string());
+            changed = true;
+        }
+    }
+
+    let has_existing_name = contact
+        .profile
+        .first_name
+        .as_deref()
+        .is_some_and(|s| !s.trim().is_empty())
+        || contact
+            .profile
+            .last_name
+            .as_deref()
+            .is_some_and(|s| !s.trim().is_empty())
+        || contact
+            .profile
+            .organization
+            .as_deref()
+            .is_some_and(|s| !s.trim().is_empty());
+
+    if !has_existing_name {
+        if let Some(ref first) = card_profile.first_name {
+            if !first.trim().is_empty() {
+                contact.profile.first_name = Some(first.trim().to_string());
+                changed = true;
+            }
+        }
+        if let Some(ref last) = card_profile.last_name {
+            if !last.trim().is_empty() {
+                contact.profile.last_name = Some(last.trim().to_string());
+                changed = true;
+            }
+        }
+        if let Some(ref org) = card_profile.organization {
+            if !org.trim().is_empty() {
+                contact.profile.organization = Some(org.trim().to_string());
+                changed = true;
+            }
+        }
+    }
+
+    changed
+}
+
+impl AppState {
+    pub fn load_app_notices(
+        &self,
+        service: &mut AppService,
+        password: Option<&str>,
+    ) -> crate::models::StoredAppNotices {
+        service
+            .load_encrypted_data(APP_NOTICES_KEY, password)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save_app_notices(
+        &self,
+        service: &mut AppService,
+        notices: &crate::models::StoredAppNotices,
+        password: Option<&str>,
+    ) -> Result<(), crate::models::FrontendError> {
+        let bytes = serde_json::to_vec(notices).map_err(|e| {
+            crate::models::FrontendError::from(format!("Serialize notices: {}", e))
+        })?;
+        service
+            .save_encrypted_data(APP_NOTICES_KEY, &bytes, password)
+            .map_err(crate::models::FrontendError::from)
+    }
+
+    /// Updates `last_sync_at` and prepends new notices, truncating to `MAX_APP_NOTICES` (50).
+    pub fn append_app_notices(
+        &self,
+        last_sync_at: Option<u64>,
+        mut new_items: Vec<crate::models::FrontendAppNotice>,
+        password: Option<&str>,
+    ) {
+        if last_sync_at.is_none() && new_items.is_empty() {
+            return;
+        }
+        let mut service = self.service.lock().unwrap();
+        let mut store = self.load_app_notices(&mut service, password);
+        if let Some(ts) = last_sync_at {
+            store.last_sync_at = Some(store.last_sync_at.map_or(ts, |prev| prev.max(ts)));
+        }
+        if !new_items.is_empty() {
+            new_items.extend(store.notices);
+            new_items.truncate(MAX_APP_NOTICES);
+            store.notices = new_items;
+        }
+        if let Err(e) = self.save_app_notices(&mut service, &store, password) {
+            log::warn!("Failed to persist app notices: {:?}", e);
+        }
     }
 }
 

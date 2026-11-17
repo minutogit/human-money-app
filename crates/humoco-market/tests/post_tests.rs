@@ -4,10 +4,10 @@ use humoco_market::{
     compute_dummy_tag16, compute_post_tag16, create_dummy_post_box, decode_post_slot,
     derive_dummy_key, derive_post_box_key, derive_post_shared_secret, encode_post_slot,
     is_own_dummy_post_box, merge_post_slot, seal_post_box, try_open_post_box_any_sender,
-    try_open_post_box_from_sender, validate_market_inquiry, validate_market_inquiry_reply,
+    try_open_post_box_from_sender, validate_market_inquiry, validate_market_inquiry_message,
     validate_post_delivery_receipt, validate_wot_handshake_assertion, DropDescriptor,
     InquiryRateTracker, InquiryTarget, MarketError, MarketInquiry, MarketInquiryDecision,
-    MarketInquiryReply, PostDeliveryReceipt, PostEnvelope, WotHandshakeAssertion,
+    MarketInquiryMessage, PostDeliveryReceipt, PostEnvelope, WotHandshakeAssertion,
     DROP_POST_MAX_BYTES, MAX_INQUIRY_CHARS, POST_BOX_TIERS, POST_SLOT_MAGIC,
 };
 use proptest::prelude::*;
@@ -358,21 +358,42 @@ fn test_market_inquiry_models_and_rate_limiting() {
     long_msg.message = "A".repeat(MAX_INQUIRY_CHARS);
     assert!(validate_market_inquiry(&long_msg).is_ok());
 
-    // Reply testing
-    let reply = MarketInquiryReply {
+    // Thread message & decision testing
+    let msg_confirm = MarketInquiryMessage {
         inquiry_id: "inq-123".to_string(),
-        decision: MarketInquiryDecision::Confirm,
-        note: Some("Yes, pickup available!".to_string()),
+        msg_id: "msg-1".to_string(),
+        text: Some("Yes, pickup available!".to_string()),
+        decision: Some(MarketInquiryDecision::Confirm),
         payment_uri: Some("humoco:transfer?amount=5".to_string()),
         amount_hint: Some("5 Minuto".to_string()),
         standard_uuid: None,
-        replied_at: 1700001000,
+        created_at: 1700001000,
     };
-    assert!(validate_market_inquiry_reply(&reply).is_ok());
+    assert!(validate_market_inquiry_message(&msg_confirm).is_ok());
 
-    let mut long_note = reply.clone();
-    long_note.note = Some("B".repeat(MAX_INQUIRY_CHARS + 1));
-    assert!(validate_market_inquiry_reply(&long_note).is_err());
+    let msg_text_only = MarketInquiryMessage {
+        inquiry_id: "inq-123".to_string(),
+        msg_id: "msg-2".to_string(),
+        text: Some("Does 4pm work?".to_string()),
+        decision: None,
+        payment_uri: None,
+        amount_hint: None,
+        standard_uuid: None,
+        created_at: 1700002000,
+    };
+    assert!(validate_market_inquiry_message(&msg_text_only).is_ok());
+
+    let mut empty_both = msg_text_only.clone();
+    empty_both.text = None;
+    assert!(validate_market_inquiry_message(&empty_both).is_err());
+
+    let mut blank_text = msg_text_only.clone();
+    blank_text.text = Some("   ".to_string());
+    assert!(validate_market_inquiry_message(&blank_text).is_err());
+
+    let mut long_note = msg_confirm.clone();
+    long_note.text = Some("B".repeat(MAX_INQUIRY_CHARS + 1));
+    assert!(validate_market_inquiry_message(&long_note).is_err());
 
     // Rate tracker testing (max 3 for testing)
     let mut tracker = InquiryRateTracker::new(3);

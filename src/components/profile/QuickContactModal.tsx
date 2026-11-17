@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { QrCode, Copy, Check, Loader2, AlertCircle, Download, Info, Globe } from 'lucide-react';
-import Avatar from 'boring-avatars';
+import { UserAvatar } from '../ui/UserAvatar';
 import { save } from '@tauri-apps/plugin-dialog';
 import { writeFile } from '@tauri-apps/plugin-fs';
 import { ModalShell } from '../ui/ModalShell';
@@ -203,11 +203,10 @@ export const QuickContactModal: React.FC<QuickContactModalProps> = ({
                     <div className="space-y-4">
                         {/* Person header */}
                         <div className="flex items-center gap-3 p-3 bg-slate-50 border border-theme-subtle/80 rounded-2xl">
-                            <Avatar
+                            <UserAvatar
                                 size={44}
-                                name={quickContact.did}
-                                variant="beam"
-                                colors={['#0f172a', '#2563eb', '#38bdf8', '#f8fafc', '#e2e8f0']}
+                                pictureUrl={marketProfile?.profile?.pictureUrl || session?.userAvatarUrl}
+                                name={quickContact.name || quickContact.did}
                             />
                             <div className="min-w-0 flex-1 space-y-0.5">
                                 <h4 className="text-sm font-extrabold text-theme-secondary truncate">

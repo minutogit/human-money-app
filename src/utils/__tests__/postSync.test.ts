@@ -43,7 +43,7 @@ describe('postSync utils (Point G.1)', () => {
             newSignRequests: 0,
             newWotHandshakes: 0,
             newInquiries: 0,
-            newInquiryReplies: 0,
+            newInquiryMessages: 0,
             prunedBoxes: 0,
             errors: [],
         });

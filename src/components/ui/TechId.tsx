@@ -1,8 +1,8 @@
 // src/components/ui/TechId.tsx
 import React, { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import Avatar from 'boring-avatars';
 import { Check, Copy, Hash } from 'lucide-react';
+import { UserAvatar } from './UserAvatar';
 import { useUiMode } from '../../context/UiModeContext';
 import { copyToClipboard } from '../../utils/clipboard';
 
@@ -16,8 +16,6 @@ export interface TechIdProps {
     compact?: boolean;
     className?: string;
 }
-
-const AVATAR_COLORS = ['#E63946', '#2B1B17', '#E76F51', '#F4A261', '#2A9D8F'];
 
 export function formatShortFingerprint(value: string): string {
     const trimmed = value.trim();
@@ -80,12 +78,7 @@ export const TechId: React.FC<TechIdProps> = ({
         >
             {showAvatar ? (
                 <span className="shrink-0 inline-flex items-center" aria-hidden="true">
-                    <Avatar
-                        size={compact ? 12 : 18}
-                        name={value}
-                        variant="beam"
-                        colors={AVATAR_COLORS}
-                    />
+                    <UserAvatar size={compact ? 14 : 18} />
                 </span>
             ) : (
                 <Hash size={compact ? 10 : 12} className="shrink-0 text-theme-light" aria-hidden="true" />

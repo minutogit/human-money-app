@@ -6771,15 +6771,6 @@
       "it": "manual-verified"
     }
   },
-  "marketplace.buyerInquiriesTitle": {
-    "source_text": "My Sent Inquiries",
-    "status": {
-      "de": "ai-translated",
-      "es": "ai-translated",
-      "fr": "ai-translated",
-      "it": "ai-translated"
-    }
-  },
   "marketplace.cardDeletedSuccess": {
     "source_text": "Contact card deleted.",
     "status": {

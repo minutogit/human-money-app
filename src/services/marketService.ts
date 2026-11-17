@@ -19,7 +19,9 @@ import {
     FrontendTrustChangeImpact,
     FrontendPublicSyncInfo,
     FrontendSyncOverviewStatus,
+    FrontendAppNoticesResponse,
 } from "../types";
+import { notifyAppNoticesUpdated, notifyMyProfileUpdated } from "../utils/syncEvents";
 
 export const marketService = {
     getMyMarketProfile: async (password?: string): Promise<FrontendMyMarketProfile> => {
@@ -30,10 +32,12 @@ export const marketService = {
         request: FrontendSaveMyMarketProfileRequest,
         password?: string
     ): Promise<FrontendMyMarketProfile> => {
-        return await invoke<FrontendMyMarketProfile>("save_my_market_profile", {
+        const res = await invoke<FrontendMyMarketProfile>("save_my_market_profile", {
             request,
             password: password || undefined,
         });
+        notifyMyProfileUpdated(res);
+        return res;
     },
 
     setCardPublished: async (
@@ -41,11 +45,13 @@ export const marketService = {
         deleteRemote: boolean = false,
         password?: string
     ): Promise<FrontendMyMarketProfile> => {
-        return await invoke<FrontendMyMarketProfile>("set_card_published", {
+        const res = await invoke<FrontendMyMarketProfile>("set_card_published", {
             published,
             deleteRemote,
             password: password || undefined,
         });
+        notifyMyProfileUpdated(res);
+        return res;
     },
 
     upsertAd: async (ad: FrontendAdInput, password?: string): Promise<FrontendMyMarketProfile> => {
@@ -245,7 +251,27 @@ export const marketService = {
         if (args?.forceUpload !== undefined) payload.forceUpload = args.forceUpload;
         if (args?.background) payload.respectCooldown = true;
         if (password) payload.password = password;
-        return await invoke<FrontendMarketSyncResult>("sync_market_channels", payload);
+        const res = await invoke<FrontendMarketSyncResult>("sync_market_channels", payload);
+        notifyAppNoticesUpdated();
+        return res;
+    },
+
+    getAppNotices: async (password?: string): Promise<FrontendAppNoticesResponse> => {
+        return await invoke<FrontendAppNoticesResponse>("get_app_notices", password ? { password } : {});
+    },
+
+    markAppNoticesRead: async (
+        noticeId?: string | null,
+        password?: string
+    ): Promise<FrontendAppNoticesResponse> => {
+        return await invoke<FrontendAppNoticesResponse>("mark_app_notices_read", {
+            noticeId: noticeId || undefined,
+            password: password || undefined,
+        });
+    },
+
+    clearAppNotices: async (password?: string): Promise<FrontendAppNoticesResponse> => {
+        return await invoke<FrontendAppNoticesResponse>("clear_app_notices", password ? { password } : {});
     },
 
     deleteOwnSyncSlots: async (password?: string): Promise<number> => {

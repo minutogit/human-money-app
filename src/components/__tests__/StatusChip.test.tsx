@@ -3,22 +3,24 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { StatusChip } from '../StatusChip';
 import { backupService } from '../../services/backupService';
 import { marketService } from '../../services/marketService';
-import { settingsService } from '../../services/settingsService';
+import { integrityService } from '../../services/integrityService';
 
 vi.mock('../../services/backupService');
 vi.mock('../../services/marketService');
+vi.mock('../../services/integrityService');
 vi.mock('../../services/postService', () => ({
     postService: {
         syncPostChannels: vi.fn().mockResolvedValue(undefined),
     },
 }));
-vi.mock('../../services/settingsService');
 
 const mockNavigateToSettingsSection = vi.fn();
+const mockNavigate = vi.fn();
 
 vi.mock('../../context/NavigationContext', () => ({
     useNavigation: () => ({
         navigateToSettingsSection: mockNavigateToSettingsSection,
+        navigate: mockNavigate,
         appState: { view: 'logged_in' },
     }),
 }));
@@ -53,31 +55,24 @@ vi.mock('react-i18next', () => ({
 }));
 
 describe('StatusChip Component', () => {
-    const okLockStatus = {
-        status: 'Ok' as const,
-        unresolvedIntentsCount: 0,
-        pendingRestoreReconciliation: false,
-        templatesCount: 1,
-        hasOwnNominatedServer: false,
-        staleServersCount: 0,
-        maxProbeAgeSecs: 60,
+    const healthyBackup = {
+        status: 'synced' as const,
+        lastBackupAt: new Date().toISOString(),
+        backupDirty: false,
+        syncFolder: '/path/backup',
+        changedBlobs: 0,
+        syncBackupEnabled: true,
+        lastSyncBackupAt: new Date().toISOString(),
+        hasAuthorizedSyncBackupTarget: true,
     };
 
     beforeEach(() => {
         vi.clearAllMocks();
+        vi.mocked(integrityService.getDoubleSpendConflicts).mockResolvedValue([]);
     });
 
-    it('renders "Alles in Ordnung" when backup, sync, and protection are healthy', async () => {
-        vi.mocked(backupService.getBackupStatus).mockResolvedValue({
-            status: 'synced',
-            lastBackupAt: new Date().toISOString(),
-            backupDirty: false,
-            syncFolder: '/path/backup',
-            changedBlobs: 0,
-            syncBackupEnabled: true,
-            lastSyncBackupAt: new Date().toISOString(),
-            hasAuthorizedSyncBackupTarget: true,
-        });
+    it('renders "Alles in Ordnung" when backup, sync, and voucher protection are healthy', async () => {
+        vi.mocked(backupService.getBackupStatus).mockResolvedValue(healthyBackup);
         vi.mocked(marketService.getSyncOverviewStatus).mockResolvedValue({
             connectedCount: 2,
             pendingCount: 0,
@@ -87,7 +82,6 @@ describe('StatusChip Component', () => {
             ownSyncSoftWarning: false,
             lastSyncAt: Math.floor(Date.now() / 1000),
         });
-        vi.mocked(settingsService.checkL2LockStatus).mockResolvedValue(okLockStatus);
 
         render(<StatusChip />);
 
@@ -96,27 +90,39 @@ describe('StatusChip Component', () => {
         });
     });
 
-    it('renders recommendations when sync service is not configured', async () => {
-        vi.mocked(backupService.getBackupStatus).mockResolvedValue({
-            status: 'synced',
-            lastBackupAt: new Date().toISOString(),
-            backupDirty: false,
-            syncFolder: '/path/backup',
-            changedBlobs: 0,
-            syncBackupEnabled: true,
-            lastSyncBackupAt: new Date().toISOString(),
-            hasAuthorizedSyncBackupTarget: true,
-        });
+    it('stays healthy ("Alles in Ordnung") in local mode when sync service is simply optional', async () => {
+        vi.mocked(backupService.getBackupStatus).mockResolvedValue(healthyBackup);
         vi.mocked(marketService.getSyncOverviewStatus).mockResolvedValue({
             connectedCount: 0,
             pendingCount: 0,
+            pendingAuthCount: 0,
+            failingCount: 0,
             friendSyncs: 0,
             publicSyncs: 0,
             hasOwnSync: false,
             ownSyncSoftWarning: false,
             lastSyncAt: null,
         });
-        vi.mocked(settingsService.checkL2LockStatus).mockResolvedValue(okLockStatus);
+
+        render(<StatusChip />);
+
+        await waitFor(() => {
+            expect(screen.getByText('Alles in Ordnung')).toBeInTheDocument();
+        });
+    });
+
+    it('renders "1 Empfehlung" when a configured sync service is failing', async () => {
+        vi.mocked(backupService.getBackupStatus).mockResolvedValue(healthyBackup);
+        vi.mocked(marketService.getSyncOverviewStatus).mockResolvedValue({
+            connectedCount: 1,
+            pendingCount: 0,
+            failingCount: 1,
+            friendSyncs: 1,
+            publicSyncs: 0,
+            hasOwnSync: true,
+            ownSyncSoftWarning: false,
+            lastSyncAt: Math.floor(Date.now() / 1000),
+        });
 
         render(<StatusChip />);
 
@@ -145,7 +151,6 @@ describe('StatusChip Component', () => {
             ownSyncSoftWarning: false,
             lastSyncAt: Math.floor(Date.now() / 1000),
         });
-        vi.mocked(settingsService.checkL2LockStatus).mockResolvedValue(okLockStatus);
 
         render(<StatusChip />);
 
@@ -154,7 +159,7 @@ describe('StatusChip Component', () => {
         });
     });
 
-    it('opens popover on click and deep-links to settings sections', async () => {
+    it('opens popover on click and deep-links to settings and wallet sections', async () => {
         vi.mocked(backupService.getBackupStatus).mockResolvedValue({
             status: 'notConfigured',
             lastBackupAt: null,
@@ -174,7 +179,6 @@ describe('StatusChip Component', () => {
             ownSyncSoftWarning: false,
             lastSyncAt: null,
         });
-        vi.mocked(settingsService.checkL2LockStatus).mockResolvedValue(okLockStatus);
 
         render(<StatusChip />);
 
@@ -188,12 +192,10 @@ describe('StatusChip Component', () => {
             expect(screen.getByTestId('status-chip-popover')).toBeInTheDocument();
         });
 
-        // Check rows
         expect(screen.getByTestId('status-chip-row-backup')).toBeInTheDocument();
         expect(screen.getByTestId('status-chip-row-sync')).toBeInTheDocument();
         expect(screen.getByTestId('status-chip-row-protection')).toBeInTheDocument();
 
-        // Click backup row setup button
         const backupRow = screen.getByTestId('status-chip-row-backup');
         const backupBtn = backupRow.querySelector('button');
         expect(backupBtn).not.toBeNull();
@@ -203,17 +205,8 @@ describe('StatusChip Component', () => {
         }
     });
 
-    it('renders warning recommendation when L2 lock status is Degraded', async () => {
-        vi.mocked(backupService.getBackupStatus).mockResolvedValue({
-            status: 'synced',
-            lastBackupAt: new Date().toISOString(),
-            backupDirty: false,
-            syncFolder: '/path',
-            changedBlobs: 0,
-            syncBackupEnabled: true,
-            lastSyncBackupAt: new Date().toISOString(),
-            hasAuthorizedSyncBackupTarget: true,
-        });
+    it('renders "Handlung nötig" and routes to conflict_list when double-spend conflicts exist', async () => {
+        vi.mocked(backupService.getBackupStatus).mockResolvedValue(healthyBackup);
         vi.mocked(marketService.getSyncOverviewStatus).mockResolvedValue({
             connectedCount: 1,
             pendingCount: 0,
@@ -223,30 +216,28 @@ describe('StatusChip Component', () => {
             ownSyncSoftWarning: false,
             lastSyncAt: Math.floor(Date.now() / 1000),
         });
-        vi.mocked(settingsService.checkL2LockStatus).mockResolvedValue({
-            ...okLockStatus,
-            status: 'Degraded',
-            staleServersCount: 1,
-        });
+        vi.mocked(integrityService.getDoubleSpendConflicts).mockResolvedValue([
+            { proofId: 'proof-1' } as never,
+        ]);
 
         render(<StatusChip />);
 
         await waitFor(() => {
-            expect(screen.getByText('1 Empfehlung')).toBeInTheDocument();
+            expect(screen.getByText('Handlung nötig')).toBeInTheDocument();
         });
+
+        fireEvent.click(screen.getByTestId('status-chip-button'));
+        const protRow = screen.getByTestId('status-chip-row-protection');
+        const protBtn = protRow.querySelector('button');
+        expect(protBtn).not.toBeNull();
+        if (protBtn) {
+            fireEvent.click(protBtn);
+            expect(mockNavigate).toHaveBeenCalledWith({ view: 'conflict_list' });
+        }
     });
 
     it('renders recommendation when active ads are expiring soon', async () => {
-        vi.mocked(backupService.getBackupStatus).mockResolvedValue({
-            status: 'synced',
-            lastBackupAt: new Date().toISOString(),
-            backupDirty: false,
-            syncFolder: '/path',
-            changedBlobs: 0,
-            syncBackupEnabled: true,
-            lastSyncBackupAt: new Date().toISOString(),
-            hasAuthorizedSyncBackupTarget: true,
-        });
+        vi.mocked(backupService.getBackupStatus).mockResolvedValue(healthyBackup);
         vi.mocked(marketService.getSyncOverviewStatus).mockResolvedValue({
             connectedCount: 1,
             pendingCount: 0,
@@ -256,10 +247,9 @@ describe('StatusChip Component', () => {
             ownSyncSoftWarning: false,
             lastSyncAt: Math.floor(Date.now() / 1000),
         });
-        vi.mocked(settingsService.checkL2LockStatus).mockResolvedValue(okLockStatus);
         vi.mocked(marketService.getMyMarketProfile).mockResolvedValue({
             profile: { id: 'did:key:test' },
-            visibility: {} as any,
+            visibility: {} as never,
             skills: [],
             ads: [
                 {

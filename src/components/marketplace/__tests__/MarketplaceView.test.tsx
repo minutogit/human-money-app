@@ -204,8 +204,7 @@ describe('MarketplaceView Component', () => {
   const mockInbox: FrontendPostInboxSummary = {
     pendingSignRequests: [],
     pendingWotHandshakes: [],
-    sellerInquiries: [],
-    buyerInquiries: [],
+    inquiries: [],
     unacknowledgedPayments: [],
   };
 

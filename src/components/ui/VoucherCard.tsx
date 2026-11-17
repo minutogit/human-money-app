@@ -12,7 +12,7 @@ import { Card } from "./Card";
 import { Button } from "./Button";
 import { TrustBadge } from "./TrustBadge";
 import { formatAmount, formatDate } from "../../utils/format";
-import Avatar from "boring-avatars";
+import { UserAvatar } from "./UserAvatar";
 
 interface VoucherCardProps {
     voucher: VoucherSummary;
@@ -160,7 +160,10 @@ export const VoucherCard = React.memo(({
                                     </span>
                                 </div>
                                 <div className="flex items-center gap-2 mt-1">
-                                    <Avatar size={16} name={voucher.creatorId || voucher.localInstanceId} variant="pixel" />
+                                    <UserAvatar
+                                        size={18}
+                                        name={`${voucher.creatorFirstName || ''} ${voucher.creatorLastName || ''}`.trim() || voucher.creatorId || voucher.localInstanceId}
+                                    />
                                     <p className="text-xs font-bold text-theme-secondary flex items-center gap-2">
                                         {t('voucher.issuedBy')}{' '}
                                         <span className="text-theme-primary">{voucher.creatorFirstName} {voucher.creatorLastName}</span>

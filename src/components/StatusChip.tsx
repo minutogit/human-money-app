@@ -13,25 +13,15 @@ import {
 import { backupService } from "../services/backupService";
 import { marketService } from "../services/marketService";
 import { postService } from "../services/postService";
-import { settingsService } from "../services/settingsService";
+import { integrityService } from "../services/integrityService";
 import { useNavigation } from "../context/NavigationContext";
 import { useSession } from "../context/SessionContext";
-import { FrontendAutoBackupStatusDto, FrontendSyncOverviewStatus, L2LockStatusDto } from "../types";
+import { FrontendAutoBackupStatusDto, FrontendSyncOverviewStatus } from "../types";
 import { BACKUP_UPDATED_EVENT } from "../utils/autoBackup";
 import { notifySyncStatusUpdated, SYNC_STATUS_UPDATED_EVENT } from "../utils/syncEvents";
 import { useRateLimitCooldown } from "../hooks/useRateLimitCooldown";
 import { rateLimitManager } from "../utils/rateLimitManager";
 import { Button } from "./ui/Button";
-
-const DEFAULT_L2_LOCK_STATUS: L2LockStatusDto = {
-    status: "NoServers",
-    unresolvedIntentsCount: 0,
-    pendingRestoreReconciliation: false,
-    templatesCount: 0,
-    hasOwnNominatedServer: false,
-    staleServersCount: 0,
-    maxProbeAgeSecs: null,
-};
 
 export interface StatusChipProps {
     className?: string;
@@ -67,8 +57,8 @@ export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
         lastSyncAt: null,
     });
 
-    // 3. Realtime protection state
-    const [protectionStatus, setProtectionStatus] = useState<L2LockStatusDto>(DEFAULT_L2_LOCK_STATUS);
+    // 3. Voucher conflicts state
+    const [conflictsCount, setConflictsCount] = useState<number>(0);
 
     // 4. Expiring ads state
     const [expiringAdsCount, setExpiringAdsCount] = useState<number>(0);
@@ -155,17 +145,17 @@ export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
         }
     }, [isSessionActive, checkAndTriggerCooldown]);
 
-    // Fetch realtime protection status
-    const refreshProtection = useCallback(async () => {
-        if (!isSessionActive) {
-            setProtectionStatus(DEFAULT_L2_LOCK_STATUS);
+    // Fetch voucher conflicts count
+    const refreshConflicts = useCallback(async () => {
+        if (!isSessionActive || typeof integrityService?.getDoubleSpendConflicts !== "function") {
+            setConflictsCount(0);
             return;
         }
         try {
-            const nextStatus = await settingsService.checkL2LockStatus();
-            setProtectionStatus(nextStatus);
+            const conflicts = await integrityService.getDoubleSpendConflicts();
+            setConflictsCount(Array.isArray(conflicts) ? conflicts.length : 0);
         } catch {
-            setProtectionStatus(DEFAULT_L2_LOCK_STATUS);
+            // Retain last known count
         }
     }, [isSessionActive]);
 
@@ -207,19 +197,19 @@ export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
                 ownSyncSoftWarning: false,
                 lastSyncAt: null,
             });
-            setProtectionStatus(DEFAULT_L2_LOCK_STATUS);
+            setConflictsCount(0);
             setExpiringAdsCount(0);
             return;
         }
 
         refreshBackup();
         refreshSync();
-        refreshProtection();
+        refreshConflicts();
         refreshAds();
 
         const backupInterval = window.setInterval(refreshBackup, 30000);
         const syncInterval = window.setInterval(refreshSync, 30000);
-        const protectionInterval = window.setInterval(refreshProtection, 25000);
+        const conflictsInterval = window.setInterval(refreshConflicts, 30000);
         const adsInterval = window.setInterval(refreshAds, 30000);
 
         const onBackupUpdated = (e: Event) => {
@@ -246,12 +236,12 @@ export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
         return () => {
             window.clearInterval(backupInterval);
             window.clearInterval(syncInterval);
-            window.clearInterval(protectionInterval);
+            window.clearInterval(conflictsInterval);
             window.clearInterval(adsInterval);
             window.removeEventListener(BACKUP_UPDATED_EVENT, onBackupUpdated);
             window.removeEventListener(SYNC_STATUS_UPDATED_EVENT, onSyncUpdated);
         };
-    }, [isSessionActive, refreshBackup, refreshSync, refreshProtection, refreshAds]);
+    }, [isSessionActive, refreshBackup, refreshSync, refreshConflicts, refreshAds]);
 
     // Close on outside click or Escape
     useEffect(() => {
@@ -283,7 +273,6 @@ export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
         };
     }, [isOpen]);
 
-    // Determine individual row levels
     // Row 1: Backup
     const hasAnyBackup = !!backupStatus.lastBackupAt || !!backupStatus.lastSyncBackupAt;
 
@@ -322,19 +311,20 @@ export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
         return t("statusChip.backupOk", "Profil ist gesichert.");
     };
 
-    // Row 2: Sync-Dienst
-    const syncIsWarning =
-        syncOverview.connectedCount === 0 ||
+    // Row 2: Sync-Dienst (unconfigured local mode is neutral info, not a warning)
+    const syncHasIssue =
         syncOverview.ownSyncSoftWarning ||
-        (syncOverview.failingCount ?? 0) > 0;
-    const syncLevel: StatusLevel = syncIsWarning ? "warning" : "healthy";
+        (syncOverview.failingCount ?? 0) > 0 ||
+        (syncOverview.connectedCount === 0 && (syncOverview.pendingAuthCount ?? 0) > 0);
+    const syncIsOptional = syncOverview.connectedCount === 0 && !syncHasIssue;
+    const syncLevel: StatusLevel = syncHasIssue ? "warning" : "healthy";
 
     const getSyncSummary = (): string => {
         if (syncOverview.connectedCount === 0) {
             if ((syncOverview.pendingAuthCount ?? 0) > 0) {
                 return t("statusChip.syncPendingAuth", "Sync wartet auf Freigabe.");
             }
-            return t("statusChip.syncNotConfigured", "Kein Sync-Dienst verbunden.");
+            return t("statusChip.syncOptionalHint", "Optional: Sync-Dienst für automatischen Abgleich einrichten.");
         }
         if ((syncOverview.failingCount ?? 0) > 0) {
             return t("statusChip.syncFailing", "Mindestens ein Sync-Dienst ist derzeit nicht erreichbar.");
@@ -347,27 +337,16 @@ export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
         });
     };
 
-    // Row 3: Schutz (L2 Realtime Protection)
-    const protectionIsCritical = false;
-    const protectionIsWarning =
-        protectionStatus.status === "NoServers" ||
-        protectionStatus.status === "Degraded" ||
-        protectionStatus.status === "Syncing";
-
-    const protectionLevel: StatusLevel = protectionIsCritical
-        ? "critical"
-        : protectionIsWarning
-        ? "warning"
-        : "healthy";
+    // Row 3: Voucher protection & conflict check
+    const protectionLevel: StatusLevel = conflictsCount > 0 ? "critical" : "healthy";
 
     const getProtectionSummary = (): string => {
-        if (protectionStatus.status === "NoServers" || protectionStatus.status === "Degraded") {
-            return t("statusChip.protectionOffline", "Echtzeitschutz ist offline.");
+        if (conflictsCount > 0) {
+            return t("statusChip.conflictsFound", "{{count}} Gutschein-Konflikt(e) erkannt – bitte prüfen.", {
+                count: conflictsCount,
+            });
         }
-        if (protectionStatus.status === "Syncing") {
-            return t("statusChip.protectionSyncing", "Echtzeitschutz gleicht ab...");
-        }
-        return t("statusChip.protectionOk", "Echtzeitschutz ist aktiv.");
+        return t("statusChip.voucherProtectionOk", "Gutscheinschutz aktiv – Fälschungsschutz & Konfliktprüfung bereit.");
     };
 
     // Overall count & level
@@ -380,7 +359,6 @@ export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
     const warningCount =
         (backupLevel === "warning" ? 1 : 0) +
         (syncLevel === "warning" ? 1 : 0) +
-        (protectionLevel === "warning" ? 1 : 0) +
         (adsIsWarning ? 1 : 0);
 
     const overallLevel: StatusLevel =
@@ -412,7 +390,8 @@ export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
             ? "bg-amber-500"
             : "bg-emerald-500";
 
-    const getRowDot = (level: StatusLevel) => {
+    const getRowDot = (level: StatusLevel, neutral = false) => {
+        if (neutral) return "bg-slate-400";
         if (level === "critical") return "bg-rose-500";
         if (level === "warning") return "bg-amber-500";
         return "bg-emerald-500";
@@ -511,7 +490,7 @@ export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
                                 </div>
                                 <div className="min-w-0">
                                     <div className="flex items-center gap-1.5">
-                                        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${getRowDot(syncLevel)}`} />
+                                        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${getRowDot(syncLevel, syncIsOptional)}`} />
                                         <p className="text-xs font-bold text-theme-primary">
                                             {t("statusChip.syncTitle", "Sync-Dienst")}
                                         </p>
@@ -523,7 +502,7 @@ export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
                             </div>
                             <Button
                                 size="xs"
-                                variant={syncLevel === "warning" && syncOverview.connectedCount === 0 ? "secondary" : "outline"}
+                                variant="outline"
                                 onClick={() => {
                                     setIsOpen(false);
                                     navigateToSettingsSection("sync");
@@ -536,7 +515,7 @@ export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
                             </Button>
                         </div>
 
-                        {/* Row 3: Schutz */}
+                        {/* Row 3: Voucher Protection & Conflicts */}
                         <div
                             className="p-3 rounded-xl bg-bg-app/40 border border-theme-subtle/30 flex items-start justify-between gap-3"
                             data-testid="status-chip-row-protection"
@@ -553,7 +532,7 @@ export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
                                     <div className="flex items-center gap-1.5">
                                         <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${getRowDot(protectionLevel)}`} />
                                         <p className="text-xs font-bold text-theme-primary">
-                                            {t("statusChip.protectionTitle", "Schutz")}
+                                            {t("statusChip.voucherProtectionTitle", "Gutscheinschutz")}
                                         </p>
                                     </div>
                                     <p className="text-xs text-theme-light mt-0.5 leading-tight">
@@ -566,13 +545,17 @@ export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
                                 variant={protectionLevel === "critical" ? "primary" : "outline"}
                                 onClick={() => {
                                     setIsOpen(false);
-                                    navigateToSettingsSection("network");
+                                    navigate(
+                                        protectionLevel === "critical"
+                                            ? { view: "conflict_list" }
+                                            : { view: "wallet" }
+                                    );
                                 }}
                                 className="shrink-0"
                             >
                                 {protectionLevel === "critical"
-                                    ? t("statusChip.fixNow", "Jetzt beheben")
-                                    : t("statusChip.open", "Öffnen")}
+                                    ? t("statusChip.checkConflictsBtn", "Konflikte prüfen")
+                                    : t("statusChip.myVouchersBtn", "Meine Gutscheine")}
                             </Button>
                         </div>
 

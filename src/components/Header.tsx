@@ -5,6 +5,7 @@ import logo from "../assets/logo.png";
 import { useNavigation } from "../context/NavigationContext";
 import { useSession } from "../context/SessionContext";
 import { StatusChip } from "./StatusChip";
+import { NotificationBell } from "./NotificationBell";
 import { INTERNAL_VIEWS } from "./Sidebar";
 import { UiModeToggle } from "./ui/UiModeToggle";
 
@@ -63,6 +64,7 @@ export const Header: React.FC = () => {
 
             <div className="flex items-center gap-2 sm:gap-3 shrink-0">
                 <UiModeToggle variant="compact" />
+                <NotificationBell />
                 <StatusChip />
             </div>
         </header>

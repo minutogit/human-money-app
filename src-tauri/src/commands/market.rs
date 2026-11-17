@@ -357,11 +357,7 @@ pub fn rebuild_and_sign_own_card_with_drops(
     }
 
     // Picture
-    let picture_url = stored
-        .picture_url
-        .clone()
-        .or_else(|| profile.picture_url.clone());
-    if let Some(ref pic) = picture_url {
+    if let Some(ref pic) = profile.picture_url {
         if !pic.trim().is_empty() {
             if let Some(dist) = audience_dist(stored.visibility.picture) {
                 items.push((
@@ -587,10 +583,7 @@ pub fn get_my_market_profile_impl(
         (None, None, None, false)
     };
 
-    let mut frontend_profile: crate::models::FrontendUserProfile = core_profile.into();
-    if stored.picture_url.is_some() {
-        frontend_profile.picture_url = stored.picture_url.clone();
-    }
+    let frontend_profile: crate::models::FrontendUserProfile = core_profile.into();
 
     Ok(FrontendMyMarketProfile {
         profile: frontend_profile,
@@ -714,7 +707,15 @@ pub fn save_my_market_profile_impl(
     for ad in &mut stored.ads {
         ad.allow_inquiries = request.allow_inquiries;
     }
-    stored.picture_url = request.profile.picture_url;
+
+    if let Some(pub_flag) = request.published {
+        if pub_flag {
+            stored.published = true;
+        } else {
+            stored.published = false;
+            stored.last_card = None;
+        }
+    }
 
     let now = chrono::Utc::now().timestamp().max(0) as u64;
     if stored.published {
@@ -1629,6 +1630,7 @@ pub fn import_contact_card_impl(
                     };
 
                     if exists {
+                        let card_profile = humoco_market::extract_public_profile(&stored.card);
                         if is_own_root {
                             if let Some(existing_contact) = address_book
                                 .contacts
@@ -1639,8 +1641,18 @@ pub fn import_contact_card_impl(
                                     &existing_contact.syncs,
                                     &card_syncs,
                                 );
+                                let mut changed = false;
                                 if existing_contact.syncs != merged {
                                     existing_contact.syncs = merged;
+                                    changed = true;
+                                }
+                                if crate::state::apply_card_profile_to_contact(
+                                    existing_contact,
+                                    &card_profile,
+                                ) {
+                                    changed = true;
+                                }
+                                if changed {
                                     if let Ok(bytes) = serde_json::to_vec(&address_book) {
                                         let _ = service.save_encrypted_data(
                                             CONTACTS_DATA_NAME,
@@ -1652,10 +1664,11 @@ pub fn import_contact_card_impl(
                                 }
                             }
                         } else {
-                            state.update_contact_syncs_from_card(
+                            state.update_contact_from_card(
                                 &mut service,
                                 &did,
                                 &card_syncs,
+                                Some(&card_profile),
                                 password.as_deref(),
                             );
                         }
@@ -1763,6 +1776,54 @@ pub fn delete_foreign_contact_card(
     state: State<'_, AppState>,
 ) -> Result<(), FrontendError> {
     delete_foreign_contact_card_impl(did, password, &state)
+}
+
+#[tauri::command]
+pub fn get_app_notices(
+    password: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<crate::models::StoredAppNotices, FrontendError> {
+    let mut service = state.service.lock().unwrap();
+    Ok(state.load_app_notices(&mut service, password.as_deref()))
+}
+
+#[tauri::command]
+pub fn mark_app_notices_read(
+    notice_id: Option<String>,
+    password: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<crate::models::StoredAppNotices, FrontendError> {
+    let mut service = state.service.lock().unwrap();
+    let mut store = state.load_app_notices(&mut service, password.as_deref());
+    let mut changed = false;
+    for notice in &mut store.notices {
+        let matches = notice_id
+            .as_deref()
+            .map(|id| notice.id == id)
+            .unwrap_or(true);
+        if matches && !notice.read {
+            notice.read = true;
+            changed = true;
+        }
+    }
+    if changed {
+        state.save_app_notices(&mut service, &store, password.as_deref())?;
+    }
+    Ok(store)
+}
+
+#[tauri::command]
+pub fn clear_app_notices(
+    password: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<crate::models::StoredAppNotices, FrontendError> {
+    let mut service = state.service.lock().unwrap();
+    let mut store = state.load_app_notices(&mut service, password.as_deref());
+    if !store.notices.is_empty() {
+        store.notices.clear();
+        state.save_app_notices(&mut service, &store, password.as_deref())?;
+    }
+    Ok(store)
 }
 
 // =========================================================================
@@ -2004,6 +2065,7 @@ mod tests {
             max_hops: 2,
             validity_years: 2,
             allow_inquiries: true,
+            published: None,
         };
 
         save_my_market_profile_impl(save_req, Some(password.to_string()), &alice_state).unwrap();
@@ -2096,6 +2158,7 @@ mod tests {
             max_hops: 2,
             validity_years: 2,
             allow_inquiries: true,
+            published: None,
         };
 
         save_my_market_profile_impl(save_req, Some(password.to_string()), &alice_state).unwrap();
@@ -2154,6 +2217,7 @@ mod tests {
             max_hops: 2,
             validity_years: 2,
             allow_inquiries: true,
+            published: None,
         };
         save_my_market_profile_impl(save_req, Some(password.to_string()), &alice_state).unwrap();
 
@@ -2310,6 +2374,7 @@ mod tests {
             max_hops: 2,
             validity_years: 2,
             allow_inquiries: true,
+            published: None,
         };
         assert!(save_my_market_profile_impl(
             bad_avatar_req,
@@ -2331,6 +2396,7 @@ mod tests {
             max_hops: 2,
             validity_years: 2,
             allow_inquiries: true,
+            published: None,
         };
         let saved_profile =
             save_my_market_profile_impl(good_avatar_req, Some(password.to_string()), &alice_state)
@@ -2351,6 +2417,7 @@ mod tests {
             max_hops: 2,
             validity_years: 2,
             allow_inquiries: true,
+            published: None,
         };
         let saved_jpeg_profile = save_my_market_profile_impl(
             good_jpeg_avatar_req,
@@ -2606,6 +2673,7 @@ mod tests {
             max_hops: 2,
             validity_years: 2,
             allow_inquiries: false,
+            published: None,
         };
 
         let saved = save_my_market_profile_impl(save_req, Some(password.to_string()), &alice_state)
@@ -2642,6 +2710,7 @@ mod tests {
             max_hops: 2,
             validity_years: 2,
             allow_inquiries: true,
+            published: None,
         };
 
         let saved_contacts = save_my_market_profile_impl(

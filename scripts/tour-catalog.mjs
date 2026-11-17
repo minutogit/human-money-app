@@ -1268,8 +1268,7 @@ export function getTauriMockInitScript(initialScenario = 'normal') {
             marketInquiries: 0,
             pendingSignRequests: [],
             pendingWotHandshakes: [],
-            sellerInquiries: [],
-            buyerInquiries: [],
+            inquiries: [],
             unacknowledgedPayments: []
         }),
         "sync_post_channels": () => ({ fetchedItems: 1, processedItems: 1, errors: [] }),
@@ -1277,9 +1276,13 @@ export function getTauriMockInitScript(initialScenario = 'normal') {
         "reply_detached_signature_via_post": () => ({ success: true }),
         "send_wot_handshake_via_post": () => ({ success: true }),
         "accept_wot_handshake": () => ({ success: true }),
-        "send_market_inquiry_via_post": () => ({ inquiryId: "inq_01", status: "sent" }),
-        "reply_market_inquiry_via_post": () => ({ inquiryId: "inq_01", status: "replied" }),
+        "send_market_inquiry_via_post": () => ({ inquiryId: "inq_01", status: "open" }),
+        "send_market_inquiry_message_via_post": () => ({ inquiryId: "inq_01", status: "confirmed" }),
+        "mark_inquiry_read": () => null,
         "dismiss_pending_post_item": () => null,
+        "get_app_notices": () => ({ lastSyncAt: null, notices: [] }),
+        "mark_app_notices_read": () => ({ lastSyncAt: null, notices: [] }),
+        "clear_app_notices": () => ({ lastSyncAt: null, notices: [] }),
 
         // --- Social & Emergency Recovery ---
         "export_profile_mnemonic": () => ({

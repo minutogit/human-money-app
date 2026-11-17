@@ -73,8 +73,6 @@ pub struct StoredOwnMarketProfile {
     pub published: bool,
     #[serde(default)]
     pub last_card: Option<humoco_market::SdCard>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub picture_url: Option<String>,
 }
 
 impl Default for StoredOwnMarketProfile {
@@ -88,7 +86,6 @@ impl Default for StoredOwnMarketProfile {
             allow_inquiries: true,
             published: false,
             last_card: None,
-            picture_url: None,
         }
     }
 }
@@ -230,6 +227,8 @@ pub struct FrontendSaveMyMarketProfileRequest {
     #[serde(default = "default_validity_years")]
     pub validity_years: u8,
     pub allow_inquiries: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub published: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -648,11 +647,43 @@ pub struct FrontendMarketSyncResult {
     pub polled_syncs: usize,
     pub decrypted_slots: usize,
     pub imported_cards: usize,
+    pub new_ads: usize,
     pub imported_wot_lists: usize,
     pub errors: Vec<String>,
     pub retry_after_secs: Option<u64>,
     #[serde(default)]
     pub revoked_own_syncs: Vec<FrontendSyncDescriptor>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FrontendAppNotice {
+    pub id: String,
+    pub kind: String, // "payment" | "inquiry" | "market" | "trust"
+    pub created_at: u64,
+    pub read: bool,
+    pub imported_payments: usize,
+    pub imported_receipts: usize,
+    pub imported_signatures: usize,
+    pub new_sign_requests: usize,
+    pub new_wot_handshakes: usize,
+    pub new_inquiries: usize,
+    pub new_inquiry_messages: usize,
+    pub imported_cards: usize,
+    pub new_ads: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub counterparty_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inquiry_id: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct StoredAppNotices {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_sync_at: Option<u64>,
+    #[serde(default)]
+    pub notices: Vec<FrontendAppNotice>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]

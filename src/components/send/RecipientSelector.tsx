@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { User, UserPlus, Search, X, AlertTriangle, ClipboardPaste, QrCode } from 'lucide-react';
-import Avatar from 'boring-avatars';
+import { UserAvatar } from '../ui/UserAvatar';
 import { Card } from '../ui/Card';
 import { Input } from '../ui/Input';
 import { Button } from '../ui/Button';
@@ -205,7 +205,11 @@ export function RecipientSelector({
                         onClick={() => onSelectContact(contact)}
                         className="flex items-center gap-3 p-2.5 bg-slate-50/70 hover:bg-theme-primary/5 border border-theme-subtle/60 hover:border-theme-primary/40 rounded-2xl text-left transition-all cursor-pointer"
                       >
-                        <Avatar size={30} name={contact.did} variant="beam" />
+                        <UserAvatar
+                        size={30}
+                        pictureUrl={contact.profile.pictureUrl}
+                        name={getContactDisplayName(contact, t('transfer.anonymous'))}
+                      />
                         <div className="min-w-0 flex-1">
                           <p className="text-xs font-bold text-theme-secondary truncate">
                             {getContactDisplayName(contact, t('transfer.anonymous'))}
@@ -245,7 +249,11 @@ export function RecipientSelector({
                           onClick={() => onSelectContact(contact)}
                           className="w-full flex items-center gap-4 p-3.5 hover:bg-theme-primary/5 text-left border-b border-theme-subtle/40 last:border-0 transition-all"
                         >
-                          <Avatar size={30} name={contact.did} variant="beam" />
+                          <UserAvatar
+                        size={30}
+                        pictureUrl={contact.profile.pictureUrl}
+                        name={getContactDisplayName(contact, t('transfer.anonymous'))}
+                      />
                           <div className="min-w-0">
                             <p className="text-sm font-black text-theme-secondary truncate">
                               {getContactDisplayName(contact, t('transfer.anonymous'))}

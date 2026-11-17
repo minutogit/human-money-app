@@ -221,8 +221,8 @@ describe('SettingsView Component', () => {
     expect(screen.getByText('Sync Service')).toBeInTheDocument();
     expect(screen.getByText('Advanced')).toBeInTheDocument();
     
-    // Check that marketplace redirect card is rendered on Profile tab
-    expect(screen.getByRole('button', { name: /Open in Marketplace|Im Marktplatz öffnen/i })).toBeInTheDocument();
+    // Check that unified profile/business card is rendered on Profile tab
+    expect(screen.getByRole('button', { name: /Edit business card|Visitenkarte bearbeiten/i })).toBeInTheDocument();
   });
 
   it('clicking each of the 4 tabs displays its respective components', async () => {
@@ -230,12 +230,12 @@ describe('SettingsView Component', () => {
     render(<SettingsView onBack={mockOnBack} />);
 
     await screen.findByText('Profile');
-    expect(screen.getByRole('button', { name: /Open in Marketplace|Im Marktplatz öffnen/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Edit business card|Visitenkarte bearbeiten/i })).toBeInTheDocument();
 
     // 1. Security & Backup tab
     const securityTab = screen.getByText('Security & Backup');
     await user.click(securityTab);
-    expect(screen.queryByRole('button', { name: /Open in Marketplace|Im Marktplatz öffnen/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Edit business card|Visitenkarte bearbeiten/i })).not.toBeInTheDocument();
     expect(document.getElementById('settings-backup-section')).toBeInTheDocument();
     expect(screen.getByText('Privacy Settings')).toBeInTheDocument();
     expect(screen.getByText('Danger Zone')).toBeInTheDocument();

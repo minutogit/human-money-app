@@ -1,7 +1,6 @@
 // src/components/Sidebar.tsx
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import Avatar from "boring-avatars";
 import { AppState, UiMode } from '../types';
 import { useSession } from '../context/SessionContext';
 import { useNavigation } from '../context/NavigationContext';
@@ -10,8 +9,10 @@ import { profileService } from '../services/profileService';
 import { integrityService } from '../services/integrityService';
 import { error } from "@tauri-apps/plugin-log";
 import { stringifyError } from '../utils/errorHelper';
+import { openOwnProfileEditor } from '../utils/syncEvents';
 import { Disclosure } from './ui/Disclosure';
 import { TechId } from './ui/TechId';
+import { UserAvatar } from './ui/UserAvatar';
 import { 
   LayoutDashboard, 
   Wallet, 
@@ -68,7 +69,7 @@ interface NavGroup {
 
 export const Sidebar: React.FC<SidebarProps> = ({ openClaimsCount }) => {
   const { t } = useTranslation();
-  const { isSessionActive, isAuthenticated, profileName, notifyLogout, protectAction, lockSession, accessMode = 'full', requireFullAccess } = useSession();
+  const { isSessionActive, isAuthenticated, profileName, displayProfileName, userAvatarUrl, notifyLogout, protectAction, lockSession, accessMode = 'full', requireFullAccess } = useSession();
   const { appState, navigate, appVersion, isSidebarOpen, setSidebarOpen } = useNavigation();
   const { isExpert } = useUiMode();
   const currentView = appState.view;
@@ -163,33 +164,61 @@ export const Sidebar: React.FC<SidebarProps> = ({ openClaimsCount }) => {
       >
         {/* Profile Header */}
         <div className="p-3 border-b border-theme-subtle bg-bg-app/30 flex items-center justify-between gap-2 shrink-0">
-          <div 
-            onClick={!isSessionActive ? () => { protectAction(async () => {}).catch(() => {}); } : undefined}
-            onKeyDown={!isSessionActive ? (e) => {
+          <div
+            onClick={() => {
+              if (!isSessionActive) {
+                protectAction(async () => {}).catch(() => {});
+                return;
+              }
+              if (accessMode === 'receiveOnly' && requireFullAccess) {
+                requireFullAccess(async () => {
+                  openOwnProfileEditor();
+                }).catch(() => {});
+                return;
+              }
+              openOwnProfileEditor();
+            }}
+            onKeyDown={(e) => {
               if (e.key === 'Enter' || e.key === ' ') {
                 e.preventDefault();
-                protectAction(async () => {}).catch(() => {});
+                if (!isSessionActive) {
+                  protectAction(async () => {}).catch(() => {});
+                  return;
+                }
+                if (accessMode === 'receiveOnly' && requireFullAccess) {
+                  requireFullAccess(async () => {
+                    openOwnProfileEditor();
+                  }).catch(() => {});
+                  return;
+                }
+                openOwnProfileEditor();
               }
-            } : undefined}
-            role={!isSessionActive ? "button" : undefined}
-            tabIndex={!isSessionActive ? 0 : undefined}
-            title={!isSessionActive ? t('auth.sessionLocked') : undefined}
-            className={`flex items-center gap-3 min-w-0 flex-1 transition-colors ${
-              !isSessionActive ? "cursor-pointer hover:bg-theme-warning/10 rounded-xl p-1 -m-1" : ""
+            }}
+            role="button"
+            tabIndex={0}
+            data-testid="sidebar-profile-button"
+            title={
+              !isSessionActive
+                ? t('auth.sessionLocked')
+                : t('profile.editProfileAndCardTooltip', 'Profil & Visitenkarte bearbeiten')
+            }
+            className={`flex items-center gap-3 min-w-0 flex-1 transition-colors cursor-pointer rounded-xl p-1 -m-1 ${
+              !isSessionActive
+                ? "hover:bg-theme-warning/10"
+                : "hover:bg-theme-primary/5"
             }`}
           >
             <div className="ring-2 ring-theme-primary/20 rounded-full p-0.5 shadow-sm shrink-0">
-              <Avatar
-                size={32}
-                name={profileName || t('common.guest')}
-                variant="beam"
-                colors={["#E63946", "#F4A261", "#E76F51", "#2A9D8F", "#2B1B17"]}
+              <UserAvatar
+                size={34}
+                pictureUrl={userAvatarUrl}
+                name={displayProfileName || profileName || t('common.guest')}
               />
             </div>
             <div className="flex flex-col min-w-0">
               <h2 className="text-sm font-bold text-theme-secondary truncate flex items-center gap-1.5">
-                {profileName || (isSessionActive ? t('auth.loggedIn') : t('auth.sessionLocked'))}
-                {!isSessionActive && profileName && (
+                {(displayProfileName || profileName) || (isSessionActive ? t('auth.loggedIn') : t('auth.sessionLocked'))}
+                {!isSessionActive && (displayProfileName || profileName) && (
                   <svg className="w-3.5 h-3.5 text-theme-warning shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
                   </svg>

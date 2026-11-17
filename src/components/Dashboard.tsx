@@ -222,7 +222,9 @@ export function Dashboard() {
                     setPendingSignRequests(summary.pendingSignRequests || []);
                     setPendingWotHandshakes(summary.pendingWotHandshakes || []);
                     setOpenSellerInquiriesCount(
-                        (summary.sellerInquiries || []).filter((inq) => !inq.reply).length
+                        (summary.inquiries || []).filter(
+                            (inq) => inq.unread || (inq.role === 'seller' && inq.status === 'open')
+                        ).length
                     );
                 })
                 .catch(() => {});

@@ -1088,7 +1088,6 @@
   "marketplace.blockSlotTitle": "Bloquear ranura",
   "marketplace.blockedPubkeysLabel": "Claves públicas stealth bloqueadas (64-Hex)",
   "marketplace.blockedSlotsLabel": "IDs de ranuras bloqueadas",
-  "marketplace.buyerInquiriesTitle": "Mis consultas enviadas",
   "marketplace.cardDeletedSuccess": "Tarjeta de contacto eliminada.",
   "marketplace.cardFileDownloaded": "Archivo descargado.",
   "marketplace.cardFileSaveFailed": "Error al guardar el archivo.",

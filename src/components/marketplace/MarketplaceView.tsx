@@ -13,6 +13,7 @@ import {
     RefreshCw,
 } from 'lucide-react';
 import {
+    Contact,
     FrontendMarketSnapshot,
     FrontendMyMarketProfile,
     FrontendMyAd,
@@ -26,6 +27,8 @@ import { useSession } from '../../context/SessionContext';
 import { marketService } from '../../services/marketService';
 import { postService, POST_INBOX_UPDATED_EVENT } from '../../services/postService';
 import { settingsService } from '../../services/settingsService';
+import { contactService } from '../../services/contactService';
+import ContactDialog from '../ContactDialog';
 import { PageLayout } from '../ui/PageLayout';
 import { Button } from '../ui/Button';
 import { PageLoadingState } from '../ui/PageState';
@@ -41,7 +44,13 @@ import { ShareCardModal } from './ShareCardModal';
 import { ImportCardModal } from './ImportCardModal';
 import { MarketplaceOptionsPanel } from './MarketplaceOptionsPanel';
 import { translateError, stringifyError } from '../../utils/errorHelper';
-import { SYNC_STATUS_UPDATED_EVENT } from '../../utils/syncEvents';
+import {
+    SYNC_STATUS_UPDATED_EVENT,
+    MY_PROFILE_UPDATED_EVENT,
+    APP_NOTICES_UPDATED_EVENT,
+    showTransientSyncToast,
+} from '../../utils/syncEvents';
+import { formatLastSyncLabel } from '../../utils/appNotices';
 import { logger } from '../../utils/log';
 
 export interface MarketplaceViewProps {
@@ -68,6 +77,9 @@ export function MarketplaceView({
     const [snapshot, setSnapshot] = useState<FrontendMarketSnapshot | null>(null);
     const [myProfile, setMyProfile] = useState<FrontendMyMarketProfile | null>(null);
     const [inboxSummary, setInboxSummary] = useState<FrontendPostInboxSummary | null>(null);
+    const [contacts, setContacts] = useState<Contact[]>([]);
+    const [lastSyncAt, setLastSyncAt] = useState<number | null>(null);
+    const [addContactTarget, setAddContactTarget] = useState<{ did: string; suggestedName?: string | null } | null>(null);
     const [isLoading, setIsLoading] = useState<boolean>(true);
     const [isSyncing, setIsSyncing] = useState<boolean>(false);
     const [error, setError] = useState<string | null>(null);
@@ -127,6 +139,12 @@ export function MarketplaceView({
         try {
             const inbox = await postService.getPostInboxSummary();
             setInboxSummary(inbox);
+            if (typeof contactService?.getContacts === 'function') {
+                contactService.getContacts().then((list) => setContacts(list || [])).catch(() => {});
+            }
+            if (typeof marketService?.getAppNotices === 'function') {
+                marketService.getAppNotices().then((res) => setLastSyncAt(res?.lastSyncAt ?? null)).catch(() => {});
+            }
         } catch (err) {
             logger.debug('Failed to load post inbox in marketplace: ' + stringifyError(err));
         }
@@ -165,12 +183,30 @@ export function MarketplaceView({
             refreshData(false);
         };
 
+        const handleProfileUpdate = (e: Event) => {
+            const detail = (e as CustomEvent<FrontendMyMarketProfile | undefined>).detail;
+            if (detail?.profile) {
+                setMyProfile(detail);
+            } else {
+                refreshData(false);
+            }
+        };
+        const handleNoticesUpdate = () => {
+            if (typeof marketService?.getAppNotices === 'function') {
+                marketService.getAppNotices().then((res) => setLastSyncAt(res?.lastSyncAt ?? null)).catch(() => {});
+            }
+        };
+
         window.addEventListener(POST_INBOX_UPDATED_EVENT, handleInboxUpdate);
         window.addEventListener(SYNC_STATUS_UPDATED_EVENT, handleSyncUpdate);
+        window.addEventListener(MY_PROFILE_UPDATED_EVENT, handleProfileUpdate);
+        window.addEventListener(APP_NOTICES_UPDATED_EVENT, handleNoticesUpdate);
 
         return () => {
             window.removeEventListener(POST_INBOX_UPDATED_EVENT, handleInboxUpdate);
             window.removeEventListener(SYNC_STATUS_UPDATED_EVENT, handleSyncUpdate);
+            window.removeEventListener(MY_PROFILE_UPDATED_EVENT, handleProfileUpdate);
+            window.removeEventListener(APP_NOTICES_UPDATED_EVENT, handleNoticesUpdate);
         };
     }, [refreshInbox, refreshSyncStatus, refreshData]);
 
@@ -298,44 +334,57 @@ export function MarketplaceView({
         }
     };
 
-    const handleReplyInquiry = async (
+    const handleSendInquiryMessage = async (
         inquiryId: string,
-        decision: 'confirm' | 'decline',
-        note?: string,
-        paymentUri?: string
+        options: { text?: string; decision?: 'confirm' | 'decline' }
     ) => {
         try {
             await protectAction(async (pwd) => {
-                await postService.replyMarketInquiryViaPost(
+                await postService.sendMarketInquiryMessageViaPost(
                     inquiryId,
-                    decision,
-                    note,
-                    paymentUri,
-                    undefined,
-                    undefined,
+                    {
+                        text: options.text,
+                        decision: options.decision,
+                    },
                     pwd || undefined
                 );
             });
             await refreshInbox();
         } catch (err) {
-            logger.error('Failed to reply to inquiry: ' + stringifyError(err));
+            logger.error('Failed to send inquiry message: ' + stringifyError(err));
             setError(translateError(err, t));
         }
     };
 
-    const handleDismissInquiry = async (
-        itemKind: 'seller_inquiry' | 'buyer_inquiry',
-        inquiryId: string
-    ) => {
+    const handleMarkInquiryRead = async (inquiryId: string) => {
+        try {
+            if (typeof postService?.markInquiryRead === 'function') {
+                await postService.markInquiryRead(inquiryId);
+                await refreshInbox();
+            }
+        } catch (err) {
+            logger.debug('Failed to mark inquiry read: ' + stringifyError(err));
+        }
+    };
+
+    const handleDismissInquiry = async (inquiryId: string) => {
         try {
             await protectAction(async (pwd) => {
-                await postService.dismissPendingPostItem(itemKind, inquiryId, pwd || undefined);
+                await postService.dismissPendingPostItem('inquiry', inquiryId, pwd || undefined);
             });
             await refreshInbox();
         } catch (err) {
             logger.error('Failed to dismiss inquiry: ' + stringifyError(err));
             setError(translateError(err, t));
         }
+    };
+
+    const handleSaveContactFromInquiry = async (contact: Contact) => {
+        await protectAction(async (pwd) => {
+            await contactService.saveContact(contact, pwd || undefined);
+        });
+        setAddContactTarget(null);
+        await refreshInbox();
     };
 
     const handlePayInquiry = (counterpartyDid: string, paymentUri?: string | null) => {
@@ -372,9 +421,26 @@ export function MarketplaceView({
                     }
                 }
             }
+            const mktRes = results[0].status === 'fulfilled' ? results[0].value : null;
+            const postRes = results[1].status === 'fulfilled' ? results[1].value : null;
+            const hasNewItems =
+                (mktRes?.importedCards ?? 0) > 0 ||
+                (mktRes?.newAds ?? 0) > 0 ||
+                (postRes?.importedPayments ?? 0) > 0 ||
+                (postRes?.newInquiries ?? 0) > 0 ||
+                (postRes?.newInquiryMessages ?? 0) > 0 ||
+                (postRes?.newWotHandshakes ?? 0) > 0 ||
+                (postRes?.newSignRequests ?? 0) > 0 ||
+                (postRes?.importedSignatures ?? 0) > 0;
+
             await refreshData(false);
             if (syncErrors.length > 0) {
                 setError(syncErrors.join(' · '));
+            } else if (!hasNewItems) {
+                showTransientSyncToast({
+                    message: t('common.syncUpToDateToast', 'Alles aktuell – keine neuen Einträge.'),
+                    variant: 'info',
+                });
             }
         } catch (err) {
             logger.error('Failed to sync marketplace manually: ' + stringifyError(err));
@@ -429,8 +495,7 @@ export function MarketplaceView({
     const defaultEmptyInbox: FrontendPostInboxSummary = {
         pendingSignRequests: [],
         pendingWotHandshakes: [],
-        sellerInquiries: [],
-        buyerInquiries: [],
+        inquiries: [],
         unacknowledgedPayments: [],
     };
 
@@ -544,9 +609,9 @@ export function MarketplaceView({
                     </div>
                 )}
 
-                {/* Segmented Control Tabs */}
-                <div className="flex items-center justify-center sm:justify-start">
-                    <div className="inline-flex p-1 bg-theme-subtle/40 rounded-2xl border border-theme-subtle/60 shadow-xs">
+                {/* Segmented Control Tabs & Last Updated */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div className="inline-flex p-1 bg-theme-subtle/40 rounded-2xl border border-theme-subtle/60 shadow-xs self-center sm:self-auto">
                         <button
                             type="button"
                             onClick={() => setActiveTab('board')}
@@ -619,6 +684,11 @@ export function MarketplaceView({
                             )}
                         </button>
                     </div>
+                    {lastSyncAt && (
+                        <span className="text-[11px] text-theme-light self-center sm:self-auto" data-testid="marketplace-last-sync">
+                            {t('common.lastUpdatedPrefix', 'Zuletzt aktualisiert:')} {formatLastSyncLabel(lastSyncAt, t)}
+                        </span>
+                    )}
                 </div>
 
                 {/* Tab content */}
@@ -667,6 +737,7 @@ export function MarketplaceView({
                         <MineTab
                             myProfile={currentProfile}
                             inbox={inboxSummary || defaultEmptyInbox}
+                            contacts={contacts}
                             onOpenProfileEditor={() => setIsProfileEditorOpen(true)}
                             onOpenShareCard={() => setIsShareModalOpen(true)}
                             onTogglePublished={handleTogglePublished}
@@ -678,9 +749,16 @@ export function MarketplaceView({
                             onRenewAd={(ad) => setRenewingAd(ad)}
                             onQuickRenewAd={(ad) => handleRenewAd(ad.id, 90)}
                             onDeleteAd={handleDeleteAd}
-                            onReplyInquiry={handleReplyInquiry}
+                            onSendInquiryMessage={handleSendInquiryMessage}
+                            onMarkInquiryRead={handleMarkInquiryRead}
                             onPayInquiry={handlePayInquiry}
                             onDismissInquiry={handleDismissInquiry}
+                            onAddContact={(did, suggestedName) => setAddContactTarget({ did, suggestedName })}
+                            onViewCard={(did) => {
+                                if (snapshot?.people.some((p) => p.did === did)) {
+                                    setSelectedPersonDid(did);
+                                }
+                            }}
                         />
                     )}
                 </div>
@@ -759,6 +837,20 @@ export function MarketplaceView({
                 confirmText={t('marketplace.publishAndCreateAdBtn', 'Veröffentlichen & Inserat aufgeben')}
                 cancelText={t('common.cancel', 'Abbrechen')}
             />
+
+            {addContactTarget && (
+                <ContactDialog
+                    isOpen={!!addContactTarget}
+                    onClose={() => setAddContactTarget(null)}
+                    onSave={handleSaveContactFromInquiry}
+                    initialDid={addContactTarget.did}
+                    initialProfile={
+                        addContactTarget.suggestedName
+                            ? { firstName: addContactTarget.suggestedName }
+                            : undefined
+                    }
+                />
+            )}
         </PageLayout>
     );
 }

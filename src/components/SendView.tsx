@@ -49,7 +49,7 @@ import {
     AlertTriangle,
     RefreshCw
 } from "lucide-react";
-import Avatar from "boring-avatars";
+import { UserAvatar } from "./ui/UserAvatar";
 
 // Modular Components
 import { RecipientSelector } from "./send/RecipientSelector";
@@ -820,7 +820,7 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote, in
                                     <div className="space-y-2">
                                         <div className="flex items-center gap-3">
                                             <div className="shrink-0">
-                                                <Avatar size={32} name={ownUserId || "sender"} variant="beam" />
+                                                <UserAvatar size={32} name={state.customSenderName || ownUserId || "sender"} />
                                             </div>
                                             <div className="flex-1 min-w-0">
                                                 <Input
@@ -1090,7 +1090,7 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote, in
                     return (
                         <div className="space-y-4 pt-2 text-left">
                             <div className="flex items-center gap-3 p-4 bg-theme-primary/5 rounded-2xl border border-theme-primary/10">
-                                <Avatar size={40} name={state.recipientId} variant="beam" />
+                                <UserAvatar size={40} pictureUrl={matched?.profile.pictureUrl} name={matchedName || state.recipientId} />
                                 <div className="min-w-0 flex-1 space-y-1">
                                     <p className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('transfer.confirmRecipient')}</p>
                                     {matchedName ? (
@@ -1183,7 +1183,7 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote, in
                                     }}
                                     className="w-full flex items-center gap-3.5 p-3 hover:bg-theme-primary/5 rounded-2xl text-left border border-transparent hover:border-theme-primary/20 transition-all cursor-pointer"
                                 >
-                                    <Avatar size={36} name={c.did} variant="beam" />
+                                    <UserAvatar size={36} pictureUrl={c.profile.pictureUrl} name={name} />
                                     <div className="min-w-0 flex-1">
                                         <p className="text-sm font-bold text-theme-secondary truncate">{name}</p>
                                         <Advanced>

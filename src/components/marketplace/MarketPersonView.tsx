@@ -1,7 +1,7 @@
 // src/components/marketplace/MarketPersonView.tsx
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import Avatar from 'boring-avatars';
+import { UserAvatar } from '../ui/UserAvatar';
 import {
     Send,
     UserPlus,
@@ -79,11 +79,6 @@ export const MarketPersonView: React.FC<MarketPersonViewProps> = ({
     const [contacts, setContacts] = useState<Contact[]>([]);
     const [isContactDialogOpen, setIsContactDialogOpen] = useState(false);
     const [copiedDid, setCopiedDid] = useState(false);
-    const [avatarError, setAvatarError] = useState(false);
-
-    useEffect(() => {
-        setAvatarError(false);
-    }, [currentPerson.profile.pictureUrl]);
 
     // Forwarding
     const [isForwarding, setIsForwarding] = useState(false);
@@ -350,22 +345,12 @@ export const MarketPersonView: React.FC<MarketPersonViewProps> = ({
             {/* Profile Overview Card */}
             <Card className="p-6 sm:p-8 bg-white border border-theme-subtle rounded-3xl shadow-soft space-y-6">
                 <div className="flex flex-col sm:flex-row items-start sm:items-center gap-6">
-                    <div className="ring-4 ring-theme-primary/10 rounded-full p-1 shrink-0 bg-white shadow-sm overflow-hidden w-20 h-20 flex items-center justify-center">
-                        {currentPerson.profile.pictureUrl && !avatarError ? (
-                            <img
-                                src={currentPerson.profile.pictureUrl}
-                                alt=""
-                                className="w-full h-full object-cover rounded-full"
-                                onError={() => setAvatarError(true)}
-                            />
-                        ) : (
-                            <Avatar
-                                size={72}
-                                name={displayName}
-                                variant="beam"
-                                colors={['#E63946', '#F4A261', '#E76F51', '#2A9D8F', '#2B1B17']}
-                            />
-                        )}
+                    <div className="ring-4 ring-theme-primary/10 rounded-full p-1 shrink-0 bg-white shadow-sm overflow-hidden flex items-center justify-center">
+                        <UserAvatar
+                            size={72}
+                            pictureUrl={currentPerson.profile.pictureUrl}
+                            name={displayName}
+                        />
                     </div>
 
                     <div className="space-y-2 flex-1 min-w-0">

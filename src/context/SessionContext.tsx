@@ -2,7 +2,10 @@
 import { createContext, useContext, useState, useCallback, ReactNode, useEffect, useRef } from 'react';
 import { authService, SessionAccessMode } from '../services/authService';
 import { settingsService } from '../services/settingsService';
+import { marketService } from '../services/marketService';
 import { logger } from '../utils/log';
+import { MY_PROFILE_UPDATED_EVENT } from '../utils/syncEvents';
+import { FrontendMyMarketProfile } from '../types';
 import { AuthModal } from '../components/ui/AuthModal';
 import { useTranslation } from 'react-i18next';
 // AppSettings import removed as unused
@@ -32,6 +35,8 @@ export interface SessionContextType {
     isSessionActive: boolean;
     isAuthenticated?: boolean;
     profileName: string;
+    displayProfileName?: string;
+    userAvatarUrl?: string | null;
     folderName?: string;
     setProfileName: (name: string) => void;
     setFolderName?: (folder: string) => void;
@@ -68,6 +73,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     const [isSessionActive, setIsSessionActive] = useState(false);
     const [isAuthenticated, setIsAuthenticated] = useState(false);
     const [profileName, setProfileName] = useState<string>("");
+    const [displayProfileName, setDisplayProfileName] = useState<string>("");
+    const [userAvatarUrl, setUserAvatarUrl] = useState<string | null>(null);
     const [folderName, setFolderName] = useState<string>("");
     const [isForkLocked, setIsForkLocked] = useState(false);
     const [lockdownKind, setLockdownKind] = useState<SecurityLockdownKind>(null);
@@ -163,6 +170,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         setAccessMode('full');
         isSessionActiveRef.current = false;
         setProfileName("");
+        setDisplayProfileName("");
+        setUserAvatarUrl(null);
         setFolderName("");
         stopSealSyncLoop();
         stopAutoBackupLoop();
@@ -363,6 +372,42 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     }, []);
 
     useEffect(() => {
+        const applySummary = (mp: FrontendMyMarketProfile | undefined | null) => {
+            if (!mp?.profile) return;
+            const fullName = [mp.profile.firstName, mp.profile.lastName]
+                .map((s) => s?.trim())
+                .filter(Boolean)
+                .join(' ');
+            setDisplayProfileName(fullName || mp.profile.organization?.trim() || '');
+            setUserAvatarUrl(mp.profile.pictureUrl?.trim() || null);
+        };
+
+        const loadSummary = () => {
+            if (!isSessionActive || accessMode === 'receiveOnly') return;
+            if (typeof marketService?.getMyMarketProfile !== 'function') return;
+            Promise.resolve(marketService.getMyMarketProfile())
+                .then((mp) => applySummary(mp))
+                .catch(() => {});
+        };
+
+        loadSummary();
+
+        const onProfileUpdated = (e: Event) => {
+            const custom = e as CustomEvent<FrontendMyMarketProfile | undefined>;
+            if (custom.detail?.profile) {
+                applySummary(custom.detail);
+            } else {
+                loadSummary();
+            }
+        };
+
+        window.addEventListener(MY_PROFILE_UPDATED_EVENT, onProfileUpdated);
+        return () => {
+            window.removeEventListener(MY_PROFILE_UPDATED_EVENT, onProfileUpdated);
+        };
+    }, [isSessionActive, accessMode]);
+
+    useEffect(() => {
         return tourBridge.subscribe((partial) => {
             if (partial.isAuthenticated !== undefined) {
                 setIsAuthenticated(partial.isAuthenticated);
@@ -385,7 +430,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     }, []);
 
     return (
-        <SessionContext.Provider value={{ protectAction, requireFullAccess, elevateSession, accessMode, isSessionActive, isAuthenticated, profileName, folderName, setProfileName, setFolderName, notifyLogin, notifyLogout, isForkLocked, lockdownKind, lockdownDetails, triggerSecurityLockdown, isRecoveryRequired, integrityReport, checkIntegrity, clearLocks, lockSession }}>
+        <SessionContext.Provider value={{ protectAction, requireFullAccess, elevateSession, accessMode, isSessionActive, isAuthenticated, profileName, displayProfileName, userAvatarUrl, folderName, setProfileName, setFolderName, notifyLogin, notifyLogout, isForkLocked, lockdownKind, lockdownDetails, triggerSecurityLockdown, isRecoveryRequired, integrityReport, checkIntegrity, clearLocks, lockSession }}>
             {children}
             <AuthModal
                 isOpen={isModalOpen}

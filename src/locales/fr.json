@@ -1088,7 +1088,6 @@
   "marketplace.blockSlotTitle": "Bloquer l'emplacement",
   "marketplace.blockedPubkeysLabel": "Clés publiques furtives bloquées (64-Hex)",
   "marketplace.blockedSlotsLabel": "IDs d'emplacements bloqués",
-  "marketplace.buyerInquiriesTitle": "Mes demandes envoyées",
   "marketplace.cardDeletedSuccess": "Carte de contact supprimée.",
   "marketplace.cardFileDownloaded": "Fichier téléchargé.",
   "marketplace.cardFileSaveFailed": "Échec de l'enregistrement du fichier.",

@@ -1988,8 +1988,20 @@ fn import_decrypted_card_bundle(
     store: &mut humoco_market::CardStore,
     sync_state: &mut StoredSyncState,
     password: Option<&str>,
-) -> usize {
+) -> (usize, usize) {
     let mut count = 0;
+    let mut new_ads = 0;
+    let mut before_ads_by_did: std::collections::HashMap<String, std::collections::HashSet<String>> =
+        std::collections::HashMap::new();
+    for sc in store.cards.values() {
+        let ids: std::collections::HashSet<String> =
+            humoco_market::sd_card::active_ads(&sc.card, now_secs)
+                .into_iter()
+                .map(|a| a.id)
+                .collect();
+        before_ads_by_did.insert(sc.card.payload.did.clone(), ids);
+    }
+
     for env in bundle.envelopes {
         let mut service = state.service.lock().unwrap();
         let outcome = service.with_wallet(|wallet| {
@@ -2020,6 +2032,12 @@ fn import_decrypted_card_bundle(
                 .insert(can_did, read_url.to_string());
 
             if let Some(stored) = store.cards.values().find(|sc| sc.card.payload.did == did) {
+                let prev_ids = before_ads_by_did.entry(did.clone()).or_default();
+                for ad in humoco_market::sd_card::active_ads(&stored.card, now_secs) {
+                    if prev_ids.insert(ad.id) {
+                        new_ads += 1;
+                    }
+                }
                 let card_syncs: Vec<FrontendSyncDescriptor> = stored
                     .card
                     .payload
@@ -2028,11 +2046,18 @@ fn import_decrypted_card_bundle(
                     .cloned()
                     .map(Into::into)
                     .collect();
-                state.update_contact_syncs_from_card(&mut service, &did, &card_syncs, password);
+                let card_profile = humoco_market::extract_public_profile(&stored.card);
+                state.update_contact_from_card(
+                    &mut service,
+                    &did,
+                    &card_syncs,
+                    Some(&card_profile),
+                    password,
+                );
             }
         }
     }
-    count
+    (count, new_ads)
 }
 
 fn import_decrypted_wot_package(
@@ -2098,6 +2123,7 @@ pub async fn sync_market_channels_with_options(
             polled_syncs: 0,
             decrypted_slots: 0,
             imported_cards: 0,
+            new_ads: 0,
             imported_wot_lists: 0,
             errors: Vec::new(),
             retry_after_secs: None,
@@ -2111,6 +2137,7 @@ pub async fn sync_market_channels_with_options(
     let mut polled_syncs = 0;
     let mut decrypted_slots = 0;
     let mut imported_cards = 0;
+    let mut new_ads = 0;
     let mut imported_wot_lists = 0;
 
     let now_secs = sync_client::current_unix_timestamp();
@@ -3350,7 +3377,7 @@ pub async fn sync_market_channels_with_options(
                         match humoco_market::open_slot_blob(&blob, &my_x25519_sk) {
                             Ok(Some(bundle)) => {
                                 decrypted_slots += 1;
-                                imported_cards += import_decrypted_card_bundle(
+                                let (cards_count, ads_count) = import_decrypted_card_bundle(
                                     bundle,
                                     &read_url,
                                     now_secs,
@@ -3360,6 +3387,8 @@ pub async fn sync_market_channels_with_options(
                                     &mut sync_state,
                                     password.as_deref(),
                                 );
+                                imported_cards += cards_count;
+                                new_ads += ads_count;
                             }
                             Ok(None) => {}
                             Err(e) => {
@@ -3406,7 +3435,7 @@ pub async fn sync_market_channels_with_options(
                         match humoco_market::open_slot_blob(&blob, &my_x25519_sk) {
                             Ok(Some(bundle)) => {
                                 decrypted_slots += 1;
-                                imported_cards += import_decrypted_card_bundle(
+                                let (cards_count, ads_count) = import_decrypted_card_bundle(
                                     bundle,
                                     &read_url,
                                     now_secs,
@@ -3416,6 +3445,8 @@ pub async fn sync_market_channels_with_options(
                                     &mut sync_state,
                                     password.as_deref(),
                                 );
+                                imported_cards += cards_count;
+                                new_ads += ads_count;
                             }
                             Ok(None) => {}
                             Err(e) => {
@@ -3623,16 +3654,19 @@ pub async fn sync_market_channels_with_options(
                                     match humoco_market::open_slot_blob(&blob, &my_x25519_sk) {
                                         Ok(Some(bundle)) => {
                                             decrypted_slots += 1;
-                                            imported_cards += import_decrypted_card_bundle(
-                                                bundle,
-                                                &read_url,
-                                                now_secs,
-                                                max_stored_cards,
-                                                state,
-                                                &mut store,
-                                                &mut sync_state,
-                                                password.as_deref(),
-                                            );
+                                            let (cards_count, ads_count) =
+                                                import_decrypted_card_bundle(
+                                                    bundle,
+                                                    &read_url,
+                                                    now_secs,
+                                                    max_stored_cards,
+                                                    state,
+                                                    &mut store,
+                                                    &mut sync_state,
+                                                    password.as_deref(),
+                                                );
+                                            imported_cards += cards_count;
+                                            new_ads += ads_count;
                                         }
                                         Ok(None) => {}
                                         Err(e) => {
@@ -3732,6 +3766,30 @@ pub async fn sync_market_channels_with_options(
         }
     }
 
+    if polled_syncs > 0 || uploaded_to > 0 {
+        let mut market_notices = Vec::new();
+        if imported_cards > 0 || new_ads > 0 {
+            market_notices.push(crate::models::FrontendAppNotice {
+                id: uuid::Uuid::new_v4().to_string(),
+                kind: "market".to_string(),
+                created_at: now_secs,
+                read: false,
+                imported_payments: 0,
+                imported_receipts: 0,
+                imported_signatures: 0,
+                new_sign_requests: 0,
+                new_wot_handshakes: 0,
+                new_inquiries: 0,
+                new_inquiry_messages: 0,
+                imported_cards,
+                new_ads,
+                counterparty_name: None,
+                inquiry_id: None,
+            });
+        }
+        state.append_app_notices(Some(now_secs), market_notices, password.as_deref());
+    }
+
     let mut retry_after_secs: Option<u64> = None;
     for e in &errors {
         if let Some(secs) = sync_client::extract_retry_after_from_error_str(e) {
@@ -3745,6 +3803,7 @@ pub async fn sync_market_channels_with_options(
         polled_syncs,
         decrypted_slots,
         imported_cards,
+        new_ads,
         imported_wot_lists,
         errors,
         retry_after_secs,
@@ -5244,6 +5303,7 @@ pub(crate) mod tests {
             max_hops: 2,
             validity_years: 2,
             allow_inquiries: true,
+            published: None,
         };
         save_my_market_profile_impl(save_req, Some(password.to_string()), &bob_state).unwrap();
         set_card_published_impl(true, false, Some(password.to_string()), &bob_state)

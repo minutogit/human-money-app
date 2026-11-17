@@ -11,6 +11,7 @@ import {
 } from "../types";
 import { triggerAutoBackup } from "../utils/autoBackup";
 import { scheduleContactOnboardingMarketSync } from "../utils/marketSync";
+import { notifyAppNoticesUpdated } from "../utils/syncEvents";
 import { channelMembersSyncManager } from "./channelMembersSyncManager";
 
 export const POST_INBOX_UPDATED_EVENT = 'humoco:post-inbox-updated';
@@ -121,30 +122,43 @@ export const postService = {
         return res;
     },
 
-    replyMarketInquiryViaPost: async (
+    sendMarketInquiryMessageViaPost: async (
         inquiryId: string,
-        decision: string,
-        note?: string | null,
-        paymentUri?: string | null,
-        amountHint?: string | null,
-        standardUuid?: string | null,
+        options: {
+            text?: string | null;
+            decision?: 'confirm' | 'decline' | null;
+            paymentUri?: string | null;
+            amountHint?: string | null;
+            standardUuid?: string | null;
+        },
         password?: string
     ): Promise<FrontendMarketInquiryItem> => {
-        const res = await invoke<FrontendMarketInquiryItem>("reply_market_inquiry_via_post", {
+        const res = await invoke<FrontendMarketInquiryItem>("send_market_inquiry_message_via_post", {
             inquiryId,
-            decision,
-            note: note || undefined,
-            paymentUri: paymentUri || undefined,
-            amountHint: amountHint || undefined,
-            standardUuid: standardUuid || undefined,
+            text: options.text || undefined,
+            decision: options.decision || undefined,
+            paymentUri: options.paymentUri || undefined,
+            amountHint: options.amountHint || undefined,
+            standardUuid: options.standardUuid || undefined,
             password: password || undefined,
         });
         notifyPostInboxUpdated();
         return res;
     },
 
+    markInquiryRead: async (
+        inquiryId: string,
+        password?: string
+    ): Promise<void> => {
+        await invoke<void>("mark_inquiry_read", {
+            inquiryId,
+            password: password || undefined,
+        });
+        notifyPostInboxUpdated();
+    },
+
     dismissPendingPostItem: async (
-        itemKind: 'sign_request' | 'wot_handshake' | 'seller_inquiry' | 'buyer_inquiry',
+        itemKind: 'sign_request' | 'wot_handshake' | 'inquiry',
         id: string,
         password?: string
     ): Promise<void> => {
@@ -174,6 +188,7 @@ export const postService = {
             triggerAutoBackup();
         }
         notifyPostInboxUpdated();
+        notifyAppNoticesUpdated();
         return res;
     },
 };

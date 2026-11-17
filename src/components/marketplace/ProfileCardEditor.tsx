@@ -131,6 +131,7 @@ export const ProfileCardEditor: React.FC<ProfileCardEditorProps> = ({
     }));
     const [skills, setSkills] = useState<Skill[]>(myProfile.skills || []);
     const [allowInquiries, setAllowInquiries] = useState<boolean>(myProfile.allowInquiries);
+    const [published, setPublished] = useState<boolean>(myProfile.published);
 
     const [previewPerspective, setPreviewPerspective] = useState<'contact' | 'forwarded'>('contact');
     const [isSaving, setIsSaving] = useState(false);
@@ -169,6 +170,7 @@ export const ProfileCardEditor: React.FC<ProfileCardEditorProps> = ({
             setVisibility(clampedVis);
             setSkills(myProfile.skills || []);
             setAllowInquiries(myProfile.allowInquiries);
+            setPublished(myProfile.published);
             setPreviewPerspective('contact');
             if (clampedVis.coordinates !== 'contacts') {
                 setCoordPrecision(2);
@@ -395,6 +397,7 @@ export const ProfileCardEditor: React.FC<ProfileCardEditorProps> = ({
                 maxHops: myProfile.maxHops,
                 validityYears: myProfile.validityYears ?? 2,
                 allowInquiries,
+                published,
             });
             onClose();
         } catch (err) {
@@ -447,6 +450,28 @@ export const ProfileCardEditor: React.FC<ProfileCardEditorProps> = ({
                         {error}
                     </div>
                 )}
+
+                {/* Publish Toggle Banner */}
+                <label className="flex items-start gap-3 p-4 rounded-2xl border border-theme-primary/25 bg-theme-primary/5 cursor-pointer hover:bg-theme-primary/10 transition-colors">
+                    <input
+                        type="checkbox"
+                        checked={published}
+                        onChange={(e) => setPublished(e.target.checked)}
+                        data-testid="editor-publish-checkbox"
+                        className="mt-0.5 w-4 h-4 rounded accent-theme-primary cursor-pointer shrink-0"
+                    />
+                    <div className="min-w-0 space-y-0.5">
+                        <span className="block text-xs font-bold text-theme-secondary">
+                            {t('marketplace.publishCardSwitchLabel', 'Visitenkarte veröffentlichen & weiterreichen')}
+                        </span>
+                        <span className="block text-[11px] text-theme-light leading-relaxed">
+                            {t(
+                                'marketplace.publishCardSwitchHint',
+                                'Aus: Nur lokal auf diesem Gerät gespeichert. · An: Signiert, teilbar und gemäß Sichtbarkeit im Netzwerk auffindbar.'
+                            )}
+                        </span>
+                    </div>
+                </label>
 
                 {/* Top audience preset cards & visibility explanation hint */}
                 <div className="p-4 rounded-2xl bg-bg-app border border-theme-subtle space-y-3">

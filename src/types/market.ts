@@ -82,6 +82,7 @@ export interface FrontendSaveMyMarketProfileRequest {
     maxHops: number;
     validityYears?: number;
     allowInquiries: boolean;
+    published?: boolean;
 }
 
 export interface FrontendAdInput {
@@ -302,10 +303,34 @@ export interface FrontendMarketSyncResult {
     polledSyncs: number;
     decryptedSlots: number;
     importedCards: number;
+    newAds?: number;
     importedWotLists: number;
     errors: string[];
     retryAfterSecs?: number | null;
     revokedOwnSyncs?: FrontendSyncDescriptor[];
+}
+
+export interface FrontendAppNotice {
+    id: string;
+    kind: 'payment' | 'inquiry' | 'market' | 'trust' | string;
+    createdAt: number;
+    read: boolean;
+    importedPayments: number;
+    importedReceipts: number;
+    importedSignatures: number;
+    newSignRequests: number;
+    newWotHandshakes: number;
+    newInquiries: number;
+    newInquiryMessages: number;
+    importedCards: number;
+    newAds: number;
+    counterpartyName?: string | null;
+    inquiryId?: string | null;
+}
+
+export interface FrontendAppNoticesResponse {
+    lastSyncAt?: number | null;
+    notices: FrontendAppNotice[];
 }
 
 export interface FrontendTrustChangeImpact {
@@ -347,32 +372,37 @@ export type InquiryTarget =
     | { kind: 'ad'; ad_id: string; ad_title: string }
     | { kind: 'person'; skill_title?: string };
 
-export interface FrontendMarketInquiryReplyDto {
-    inquiryId: string;
-    decision: 'confirm' | 'decline' | string;
-    note?: string | null;
-    paymentUri?: string | null;
-    amountHint?: string | null;
-    standardUuid?: string | null;
-    repliedAt: number;
+export interface FrontendInquiryChatMessage {
+    msgId: string;
+    sender: 'me' | 'them' | string;
+    text?: string | null;
+    decision?: 'confirm' | 'decline' | string | null;
+    createdAt: number;
 }
 
 export interface FrontendMarketInquiryItem {
     inquiryId: string;
+    role: 'seller' | 'buyer' | string;
     target: InquiryTarget;
     counterpartyDid: string;
     counterpartyName?: string | null;
-    message: string;
+    counterpartyPictureUrl?: string | null;
+    isContact: boolean;
+    status: 'open' | 'confirmed' | 'declined' | string;
+    paymentUri?: string | null;
+    amountHint?: string | null;
+    standardUuid?: string | null;
     createdAt: number;
+    updatedAt: number;
+    unread: boolean;
     replySyncs: FrontendSyncDescriptor[];
-    reply?: FrontendMarketInquiryReplyDto | null;
+    messages: FrontendInquiryChatMessage[];
 }
 
 export interface FrontendPostInboxSummary {
     pendingSignRequests: FrontendPendingSignRequest[];
     pendingWotHandshakes: FrontendPendingWotHandshake[];
-    sellerInquiries: FrontendMarketInquiryItem[];
-    buyerInquiries: FrontendMarketInquiryItem[];
+    inquiries: FrontendMarketInquiryItem[];
     unacknowledgedPayments: string[];
 }
 
@@ -385,7 +415,7 @@ export interface FrontendPostSyncResult {
     newSignRequests: number;
     newWotHandshakes: number;
     newInquiries: number;
-    newInquiryReplies: number;
+    newInquiryMessages: number;
     prunedBoxes: number;
     errors: string[];
     retryAfterSecs?: number | null;

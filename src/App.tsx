@@ -17,6 +17,8 @@ import { Header } from './components/Header';
 import { AppRouter } from "./components/AppRouter";
 import { GlobalFileDropZone } from "./components/GlobalFileDropZone";
 import { GuardianReleaseModal } from "./components/GuardianReleaseModal";
+import { GlobalProfileEditorModal } from "./components/profile/GlobalProfileEditorModal";
+import { EventToastStack } from "./components/EventToastStack";
 import { parseCardUri } from "./utils/humocoUri";
 import { marketService } from "./services/marketService";
 import { recoveryService } from "./services/recoveryService";
@@ -241,6 +243,8 @@ function AppContent() {
                     initialRequestUri={releaseRequestUri}
                     initialOwnerDid={releaseInitialOwnerDid}
                 />
+                <GlobalProfileEditorModal />
+                <EventToastStack />
             </div>
     );
 }

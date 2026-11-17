@@ -9,20 +9,20 @@ use human_money_core::models::secure_container::{
 };
 use humoco_market::{
     is_own_dummy_post_box, merge_post_slot, seal_post_box, try_open_post_box_any_sender,
-    validate_market_inquiry, validate_market_inquiry_reply, validate_post_delivery_receipt,
+    validate_market_inquiry, validate_market_inquiry_message, validate_post_delivery_receipt,
     validate_wot_handshake_assertion, InquiryTarget, MarketInquiry, MarketInquiryDecision,
-    MarketInquiryReply, PostDeliveryReceipt, PostEnvelope, WotHandshakeAssertion,
-    DROP_POST_MAX_BYTES, PAYLOAD_MARKET_INQUIRY_REPLY_V1, PAYLOAD_MARKET_INQUIRY_V1,
-    PAYLOAD_POST_RECEIPT_V1, POST_SLOT_MAGIC, POST_TTL_SECS,
+    MarketInquiryMessage, PostDeliveryReceipt, PostEnvelope, WotHandshakeAssertion,
+    DROP_POST_MAX_BYTES, MAX_INQUIRY_MESSAGES_PER_THREAD, PAYLOAD_MARKET_INQUIRY_MESSAGE_V1,
+    PAYLOAD_MARKET_INQUIRY_V1, PAYLOAD_POST_RECEIPT_V1, POST_SLOT_MAGIC, POST_TTL_SECS,
 };
 use log::warn;
 use tauri::State;
 
 use crate::models::{
-    FrontendContact, FrontendError, FrontendMarketInquiryItem, FrontendMarketInquiryReplyDto,
-    FrontendPendingSignRequest, FrontendPendingWotHandshake, FrontendPostDepositResult,
-    FrontendPostInboxSummary, FrontendPostSyncResult, FrontendSyncDescriptor, FrontendUserProfile,
-    TransactionRecord,
+    FrontendAppNotice, FrontendContact, FrontendError, FrontendInquiryChatMessage,
+    FrontendMarketInquiryItem, FrontendPendingSignRequest, FrontendPendingWotHandshake,
+    FrontendPostDepositResult, FrontendPostInboxSummary, FrontendPostSyncResult,
+    FrontendSyncDescriptor, FrontendUserProfile, TransactionRecord,
 };
 use crate::settings::AppSettings;
 use crate::state::{AppState, PostOutboxEntry, StoredPostState, MARKET_POST_STATE_KEY};
@@ -192,36 +192,131 @@ pub(crate) fn open_wallet_archive(
     ))
 }
 
-pub(crate) fn get_contact_name(
+fn format_name_parts(
+    first_name: Option<&str>,
+    last_name: Option<&str>,
+    organization: Option<&str>,
+) -> Option<String> {
+    let first = first_name.unwrap_or("").trim();
+    let last = last_name.unwrap_or("").trim();
+    let full = format!("{} {}", first, last).trim().to_string();
+    if !full.is_empty() {
+        return Some(full);
+    }
+    let org = organization.unwrap_or("").trim();
+    if !org.is_empty() {
+        return Some(org.to_string());
+    }
+    None
+}
+
+/// Resolves `(display_name, picture_url, is_contact)` for a DID across the
+/// address book and the local marketplace business-card store.
+pub(crate) fn resolve_counterparty_info(
     state: &AppState,
     did: &str,
     password: Option<&str>,
-) -> Option<String> {
+) -> (Option<String>, Option<String>, bool) {
+    let mut name: Option<String> = None;
+    let mut picture_url: Option<String> = None;
+    let mut is_contact = false;
+    let trimmed = did.trim();
+
     let mut service = state.service.lock().unwrap();
     if let Ok(contacts) = state.load_contacts(&mut service, password) {
-        let trimmed = did.trim();
-        let format_name = |c: &crate::models::FrontendContact| -> Option<String> {
-            let first = c.profile.first_name.as_deref().unwrap_or("").trim();
-            let last = c.profile.last_name.as_deref().unwrap_or("").trim();
-            let full = format!("{} {}", first, last).trim().to_string();
-            if !full.is_empty() {
-                Some(full)
-            } else {
-                None
-            }
-        };
-        if let Some(exact) = contacts.iter().find(|c| c.did.trim() == trimmed) {
-            if let Some(name) = format_name(exact) {
-                return Some(name);
-            }
+        if let Some(c) = contacts
+            .iter()
+            .find(|c| c.did.trim() == trimmed)
+            .or_else(|| contacts.iter().find(|c| are_dids_equal(&c.did, did)))
+        {
+            is_contact = true;
+            name = format_name_parts(
+                c.profile.first_name.as_deref(),
+                c.profile.last_name.as_deref(),
+                c.profile.organization.as_deref(),
+            );
+            picture_url = c
+                .profile
+                .picture_url
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string);
         }
-        if let Some(c) = contacts.iter().find(|c| are_dids_equal(&c.did, did)) {
-            if let Some(name) = format_name(c) {
-                return Some(name);
+    }
+
+    if !is_contact || name.is_none() || picture_url.is_none() {
+        if let Ok(bytes) =
+            service.load_encrypted_data(crate::state::MARKET_CARD_STORE_KEY, password)
+        {
+            if let Ok(card_store) = serde_json::from_slice::<humoco_market::CardStore>(&bytes) {
+                let stored_opt = get_pubkey_from_user_id(trimmed)
+                    .ok()
+                    .and_then(|pk| card_store.cards.get(&pk.to_bytes()))
+                    .or_else(|| {
+                        card_store
+                            .cards
+                            .values()
+                            .find(|sc| are_dids_equal(&sc.card.payload.did, did))
+                    });
+                if let Some(stored) = stored_opt {
+                    let card_prof = humoco_market::extract_public_profile(&stored.card);
+                    if name.is_none() {
+                        name = format_name_parts(
+                            card_prof.first_name.as_deref(),
+                            card_prof.last_name.as_deref(),
+                            card_prof.organization.as_deref(),
+                        );
+                    }
+                    if picture_url.is_none() {
+                        picture_url = card_prof
+                            .picture_url
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .map(str::to_string);
+                    }
+                }
             }
         }
     }
-    None
+
+    (name, picture_url, is_contact)
+}
+
+pub(crate) fn lookup_counterparty_syncs(
+    state: &AppState,
+    did: &str,
+    password: Option<&str>,
+) -> Vec<FrontendSyncDescriptor> {
+    let mut result = Vec::new();
+    let mut service = state.service.lock().unwrap();
+    if let Ok(contacts) = state.load_contacts(&mut service, password) {
+        if let Some(c) = contacts.iter().find(|c| are_dids_equal(&c.did, did)) {
+            result.extend(c.syncs.iter().cloned());
+        }
+    }
+    if result.is_empty() {
+        if let Ok(bytes) =
+            service.load_encrypted_data(crate::state::MARKET_CARD_STORE_KEY, password)
+        {
+            if let Ok(card_store) = serde_json::from_slice::<humoco_market::CardStore>(&bytes) {
+                if let Some(stored) = get_pubkey_from_user_id(did.trim())
+                    .ok()
+                    .and_then(|pk| card_store.cards.get(&pk.to_bytes()))
+                    .or_else(|| {
+                        card_store
+                            .cards
+                            .values()
+                            .find(|sc| are_dids_equal(&sc.card.payload.did, did))
+                    })
+                {
+                    result.extend(stored.card.payload.drops.iter().cloned().map(Into::into));
+                }
+            }
+        }
+    }
+    result
 }
 
 pub(crate) fn check_inquiry_target(
@@ -353,17 +448,17 @@ pub(crate) async fn flush_post_slots_impl(
             .unwrap_or_default();
         let mut targets = collect_post_upload_targets(&settings, &master_seed);
 
-        // Include recipient Sync-Ablagen from address book
-        if let Ok(contacts) = state.load_contacts(&mut service, password) {
-            let recipient_dids: std::collections::HashSet<String> = post_state
-                .outbox_entries
-                .iter()
-                .map(|e| {
-                    crate::state::canonicalize_did(&e.recipient_did)
-                        .unwrap_or_else(|_| e.recipient_did.clone())
-                })
-                .collect();
+        // Include recipient Sync-Ablagen from address book and active inquiry threads
+        let recipient_dids: std::collections::HashSet<String> = post_state
+            .outbox_entries
+            .iter()
+            .map(|e| {
+                crate::state::canonicalize_did(&e.recipient_did)
+                    .unwrap_or_else(|_| e.recipient_did.clone())
+            })
+            .collect();
 
+        if let Ok(contacts) = state.load_contacts(&mut service, password) {
             for c in contacts {
                 let can_c_did =
                     crate::state::canonicalize_did(&c.did).unwrap_or_else(|_| c.did.clone());
@@ -372,6 +467,18 @@ pub(crate) async fn flush_post_slots_impl(
                         if !d.write_url.is_empty() {
                             targets.push(d.into());
                         }
+                    }
+                }
+            }
+        }
+
+        for inq in &post_state.inquiries {
+            let can_inq_did = crate::state::canonicalize_did(&inq.counterparty_did)
+                .unwrap_or_else(|_| inq.counterparty_did.clone());
+            if recipient_dids.contains(&can_inq_did) {
+                for d in &inq.reply_syncs {
+                    if !d.write_url.is_empty() {
+                        targets.push(d.clone().into());
                     }
                 }
             }
@@ -889,10 +996,11 @@ pub async fn reply_detached_signature_via_post_impl(
                 let req = post_state.pending_sign_requests.remove(idx);
                 if !req.reply_syncs.is_empty() {
                     let mut service = state.service.lock().unwrap();
-                    state.update_contact_syncs_from_card(
+                    state.update_contact_from_card(
                         &mut service,
                         &recipient_did,
                         &req.reply_syncs,
+                        None,
                         password.as_deref(),
                     );
                 }
@@ -1207,10 +1315,11 @@ pub async fn send_market_inquiry_via_post_impl(
 
     if !recipient_syncs.is_empty() {
         let mut service = state.service.lock().unwrap();
-        state.update_contact_syncs_from_card(
+        state.update_contact_from_card(
             &mut service,
             &recipient_did,
             &recipient_syncs,
+            None,
             password.as_deref(),
         );
     }
@@ -1279,17 +1388,34 @@ pub async fn send_market_inquiry_via_post_impl(
         )));
     }
 
+    let (counterparty_name, counterparty_picture_url, is_contact) =
+        resolve_counterparty_info(state, &recipient_did, password.as_deref());
+
     let item = FrontendMarketInquiryItem {
         inquiry_id,
+        role: "buyer".to_string(),
         target,
         counterparty_did: recipient_did,
-        counterparty_name: None,
-        message,
+        counterparty_name,
+        counterparty_picture_url,
+        is_contact,
+        status: "open".to_string(),
+        payment_uri: None,
+        amount_hint: None,
+        standard_uuid: None,
         created_at: now_secs,
+        updated_at: now_secs,
+        unread: false,
         reply_syncs: recipient_syncs,
-        reply: None,
+        messages: vec![FrontendInquiryChatMessage {
+            msg_id: msg_id.clone(),
+            sender: "me".to_string(),
+            text: Some(message),
+            decision: None,
+            created_at: now_secs,
+        }],
     };
-    post_state.buyer_inquiries.push(item.clone());
+    post_state.inquiries.push(item.clone());
     save_post_state(state, &post_state, password.as_deref())?;
 
     Ok(item)
@@ -1316,58 +1442,105 @@ pub async fn send_market_inquiry_via_post(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub async fn reply_market_inquiry_via_post_impl(
+pub async fn send_market_inquiry_message_via_post_impl(
     inquiry_id: String,
-    decision: String,
-    note: Option<String>,
+    text: Option<String>,
+    decision: Option<String>,
     payment_uri: Option<String>,
     amount_hint: Option<String>,
     standard_uuid: Option<String>,
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendMarketInquiryItem, FrontendError> {
-    let dec = match decision.trim().to_ascii_lowercase().as_str() {
-        "confirm" => MarketInquiryDecision::Confirm,
-        "decline" => MarketInquiryDecision::Decline,
-        other => return Err(FrontendError::from(format!("Invalid decision: {}", other))),
+    let dec = match decision
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("confirm") => Some(MarketInquiryDecision::Confirm),
+        Some("decline") => Some(MarketInquiryDecision::Decline),
+        Some(other) => return Err(FrontendError::from(format!("Invalid decision: {}", other))),
+        None => None,
     };
+
+    let clean_text = text.and_then(|s| {
+        let trimmed = s.trim().to_string();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
+    });
 
     let now_secs = sync_client::current_unix_timestamp();
     let mut post_state = load_post_state(state, password.as_deref())?;
 
-    let (item_idx, counterparty_did, target) = {
+    let (item_idx, counterparty_did, target, has_reply_syncs) = {
         let (idx, item) = post_state
-            .seller_inquiries
+            .inquiries
             .iter()
             .enumerate()
             .find(|(_, i)| i.inquiry_id == inquiry_id)
-            .ok_or_else(|| {
-                FrontendError::from(format!("Seller inquiry {} not found", inquiry_id))
-            })?;
+            .ok_or_else(|| FrontendError::from(format!("Inquiry {} not found", inquiry_id)))?;
 
-        if item.reply.is_some() {
-            return Err(FrontendError::from(
-                "Inquiry has already been replied to (one-step cycle only)".to_string(),
-            ));
+        if item.messages.len() >= MAX_INQUIRY_MESSAGES_PER_THREAD {
+            return Err(FrontendError::from(format!(
+                "Inquiry thread reached maximum message limit ({})",
+                MAX_INQUIRY_MESSAGES_PER_THREAD
+            )));
         }
-        (idx, item.counterparty_did.clone(), item.target.clone())
+        if dec.is_some() {
+            if item.role != "seller" {
+                return Err(FrontendError::from(
+                    "Only the seller can confirm or decline an inquiry".to_string(),
+                ));
+            }
+            if item.status != "open" {
+                return Err(FrontendError::from(
+                    "Inquiry status has already been decided".to_string(),
+                ));
+            }
+        }
+        (
+            idx,
+            item.counterparty_did.clone(),
+            item.target.clone(),
+            !item.reply_syncs.is_empty(),
+        )
     };
 
-    let reply_payload = MarketInquiryReply {
+    if !has_reply_syncs {
+        let discovered_syncs =
+            lookup_counterparty_syncs(state, &counterparty_did, password.as_deref());
+        if discovered_syncs.is_empty() {
+            return Err(FrontendError::from(
+                "Counterparty has no sync service configured for replies".to_string(),
+            ));
+        }
+        post_state.inquiries[item_idx].reply_syncs = discovered_syncs;
+    }
+
+    let msg_id = uuid::Uuid::new_v4().to_string();
+    let msg_payload = MarketInquiryMessage {
         inquiry_id: inquiry_id.clone(),
+        msg_id: msg_id.clone(),
+        text: clean_text.clone(),
         decision: dec,
-        note: note.clone(),
         payment_uri: payment_uri.clone(),
         amount_hint: amount_hint.clone(),
         standard_uuid: standard_uuid.clone(),
-        replied_at: now_secs,
+        created_at: now_secs,
     };
-    validate_market_inquiry_reply(&reply_payload).map_err(FrontendError::from)?;
+    validate_market_inquiry_message(&msg_payload).map_err(FrontendError::from)?;
 
-    if let Ok(sender_vk) = get_pubkey_from_user_id(&counterparty_did) {
-        post_state
-            .inquiry_rate_tracker
-            .resolve_inquiry(&hex::encode(sender_vk.as_bytes()), &target.target_key());
+    if dec.is_some() {
+        if let Ok(sender_vk) = get_pubkey_from_user_id(&counterparty_did) {
+            post_state
+                .inquiry_rate_tracker
+                .resolve_inquiry(&hex::encode(sender_vk.as_bytes()), &target.target_key());
+        }
     }
 
     let recipient_ed_pk =
@@ -1390,21 +1563,20 @@ pub async fn reply_market_inquiry_via_post_impl(
         (my_identity, my_ed_sk, reply_syncs)
     };
 
-    let reply_bytes = serde_json::to_vec(&reply_payload)
-        .map_err(|e| FrontendError::from(format!("Failed to serialize reply: {}", e)))?;
+    let msg_bytes = serde_json::to_vec(&msg_payload)
+        .map_err(|e| FrontendError::from(format!("Failed to serialize inquiry message: {}", e)))?;
 
     let container = SecureContainer::seal(
         &my_identity,
         &ContainerConfig::TargetDid(counterparty_did.clone(), PrivacyMode::HashedRouting),
-        &reply_bytes,
-        PayloadType::Generic(PAYLOAD_MARKET_INQUIRY_REPLY_V1.to_string()),
+        &msg_bytes,
+        PayloadType::Generic(PAYLOAD_MARKET_INQUIRY_MESSAGE_V1.to_string()),
     )
     .map_err(FrontendError::from)?;
 
     let container_bytes = serde_json::to_vec(&container)
         .map_err(|e| FrontendError::from(format!("Failed to serialize container: {}", e)))?;
 
-    let msg_id = uuid::Uuid::new_v4().to_string();
     let envelope = PostEnvelope::new(
         msg_id.clone(),
         now_secs,
@@ -1418,7 +1590,7 @@ pub async fn reply_market_inquiry_via_post_impl(
     post_state.processed_msg_ids.insert(msg_id.clone());
     post_state.outbox_entries.push(PostOutboxEntry {
         msg_id: msg_id.clone(),
-        recipient_did: counterparty_did,
+        recipient_did: counterparty_did.clone(),
         tag16_hex: hex::encode(box_entry.tag16),
         bundle_id: None,
         entry: box_entry,
@@ -1427,39 +1599,66 @@ pub async fn reply_market_inquiry_via_post_impl(
 
     let _ = flush_post_slots_impl(state, &mut post_state, password.as_deref()).await;
 
-    let reply_dto = FrontendMarketInquiryReplyDto {
-        inquiry_id,
-        decision,
-        note,
-        payment_uri,
-        amount_hint,
-        standard_uuid,
-        replied_at: now_secs,
-    };
-    post_state.seller_inquiries[item_idx].reply = Some(reply_dto);
-    let updated_item = post_state.seller_inquiries[item_idx].clone();
+    let dec_str = dec.map(|d| match d {
+        MarketInquiryDecision::Confirm => "confirm".to_string(),
+        MarketInquiryDecision::Decline => "decline".to_string(),
+    });
 
+    let item = &mut post_state.inquiries[item_idx];
+    item.messages.push(FrontendInquiryChatMessage {
+        msg_id,
+        sender: "me".to_string(),
+        text: clean_text,
+        decision: dec_str.clone(),
+        created_at: now_secs,
+    });
+    if let Some(ref d) = dec_str {
+        item.status = if d == "confirm" {
+            "confirmed".to_string()
+        } else {
+            "declined".to_string()
+        };
+    }
+    if payment_uri.is_some() {
+        item.payment_uri = payment_uri;
+    }
+    if amount_hint.is_some() {
+        item.amount_hint = amount_hint;
+    }
+    if standard_uuid.is_some() {
+        item.standard_uuid = standard_uuid;
+    }
+    item.updated_at = now_secs;
+    item.unread = false;
+
+    let mut updated_item = item.clone();
     save_post_state(state, &post_state, password.as_deref())?;
+
+    let (name, pic, is_contact) =
+        resolve_counterparty_info(state, &updated_item.counterparty_did, password.as_deref());
+    updated_item.counterparty_name = name;
+    updated_item.counterparty_picture_url = pic;
+    updated_item.is_contact = is_contact;
 
     Ok(updated_item)
 }
 
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
-pub async fn reply_market_inquiry_via_post(
+pub async fn send_market_inquiry_message_via_post(
     inquiry_id: String,
-    decision: String,
-    note: Option<String>,
+    text: Option<String>,
+    decision: Option<String>,
     payment_uri: Option<String>,
     amount_hint: Option<String>,
     standard_uuid: Option<String>,
     password: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<FrontendMarketInquiryItem, FrontendError> {
-    reply_market_inquiry_via_post_impl(
+    send_market_inquiry_message_via_post_impl(
         inquiry_id,
+        text,
         decision,
-        note,
         payment_uri,
         amount_hint,
         standard_uuid,
@@ -1467,6 +1666,34 @@ pub async fn reply_market_inquiry_via_post(
         &state,
     )
     .await
+}
+
+pub fn mark_inquiry_read_impl(
+    inquiry_id: String,
+    password: Option<String>,
+    state: &AppState,
+) -> Result<(), FrontendError> {
+    let mut post_state = load_post_state(state, password.as_deref())?;
+    let mut changed = false;
+    for inq in &mut post_state.inquiries {
+        if inq.inquiry_id == inquiry_id && inq.unread {
+            inq.unread = false;
+            changed = true;
+        }
+    }
+    if changed {
+        save_post_state(state, &post_state, password.as_deref())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn mark_inquiry_read(
+    inquiry_id: String,
+    password: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<(), FrontendError> {
+    mark_inquiry_read_impl(inquiry_id, password, &state)
 }
 
 pub fn dismiss_pending_post_item_impl(
@@ -1484,11 +1711,8 @@ pub fn dismiss_pending_post_item_impl(
             post_state.pending_wot_handshakes.retain(|h| h.msg_id != id);
             post_state.pending_wot_packages_by_msg_id.remove(&id);
         }
-        "seller_inquiry" => {
-            post_state.seller_inquiries.retain(|i| i.inquiry_id != id);
-        }
-        "buyer_inquiry" => {
-            post_state.buyer_inquiries.retain(|i| i.inquiry_id != id);
+        "inquiry" => {
+            post_state.inquiries.retain(|i| i.inquiry_id != id);
         }
         other => {
             return Err(FrontendError::from(format!(
@@ -1514,18 +1738,28 @@ pub fn get_post_inbox_summary_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendPostInboxSummary, FrontendError> {
-    let post_state = load_post_state(state, password.as_deref())?;
+    let mut post_state = load_post_state(state, password.as_deref())?;
     let unacknowledged_payments = post_state
         .outbox_entries
         .iter()
         .filter_map(|e| e.bundle_id.clone())
         .collect();
 
+    for inq in &mut post_state.inquiries {
+        let (name, pic, is_contact) =
+            resolve_counterparty_info(state, &inq.counterparty_did, password.as_deref());
+        inq.counterparty_name = name;
+        inq.counterparty_picture_url = pic;
+        inq.is_contact = is_contact;
+    }
+    post_state
+        .inquiries
+        .sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+
     Ok(FrontendPostInboxSummary {
         pending_sign_requests: post_state.pending_sign_requests,
         pending_wot_handshakes: post_state.pending_wot_handshakes,
-        seller_inquiries: post_state.seller_inquiries,
-        buyer_inquiries: post_state.buyer_inquiries,
+        inquiries: post_state.inquiries,
         unacknowledged_payments,
     })
 }
@@ -1563,7 +1797,7 @@ pub async fn sync_post_channels_impl(
             new_sign_requests: 0,
             new_wot_handshakes: 0,
             new_inquiries: 0,
-            new_inquiry_replies: 0,
+            new_inquiry_messages: 0,
             pruned_boxes: 0,
             errors: Vec::new(),
             retry_after_secs: None,
@@ -1582,8 +1816,9 @@ pub async fn sync_post_channels_impl(
     let mut new_sign_requests = 0;
     let mut new_wot_handshakes = 0;
     let mut new_inquiries = 0;
-    let mut new_inquiry_replies = 0;
+    let mut new_inquiry_messages = 0;
     let mut pruned_boxes = 0;
+    let mut last_inquiry_notice_target: Option<(String, Option<String>)> = None;
 
     let (my_identity, my_ed_sk, master_seed, my_prefix, own_reply_syncs) = {
         let service = state.service.lock().unwrap();
@@ -1702,19 +1937,7 @@ pub async fn sync_post_channels_impl(
             }
         }
 
-        for inq in &post_state.seller_inquiries {
-            for d in &inq.reply_syncs {
-                if !d.read_url.is_empty() {
-                    if let Some(ref sid) = d.slot_id {
-                        direct.push((d.read_url.clone(), sid.clone(), None));
-                    } else {
-                        index_urls.push(d.read_url.clone());
-                    }
-                }
-            }
-        }
-
-        for inq in &post_state.buyer_inquiries {
+        for inq in &post_state.inquiries {
             for d in &inq.reply_syncs {
                 if !d.read_url.is_empty() {
                     if let Some(ref sid) = d.slot_id {
@@ -1758,11 +1981,9 @@ pub async fn sync_post_channels_impl(
             }
         }
 
-        for item in &post_state.buyer_inquiries {
-            if item.reply.is_none() {
-                if let Ok(vk) = get_pubkey_from_user_id(&item.counterparty_did) {
-                    auth.push((item.counterparty_did.clone(), vk));
-                }
+        for item in &post_state.inquiries {
+            if let Ok(vk) = get_pubkey_from_user_id(&item.counterparty_did) {
+                auth.push((item.counterparty_did.clone(), vk));
             }
         }
 
@@ -2006,6 +2227,7 @@ pub async fn sync_post_channels_impl(
 
             if is_inquiry_only
                 && container.c != PayloadType::Generic(PAYLOAD_MARKET_INQUIRY_V1.to_string())
+                && container.c != PayloadType::Generic(PAYLOAD_MARKET_INQUIRY_MESSAGE_V1.to_string())
             {
                 continue;
             }
@@ -2018,10 +2240,11 @@ pub async fn sync_post_channels_impl(
                     .map(Into::into)
                     .collect();
                 let mut service = state.service.lock().unwrap();
-                state.update_contact_syncs_from_card(
+                state.update_contact_from_card(
                     &mut service,
                     &sender_did,
                     &reply_dtos,
+                    None,
                     password.as_deref(),
                 );
             }
@@ -2146,7 +2369,8 @@ pub async fn sync_post_channels_impl(
                     }
                 }
                 PayloadType::VoucherForSigning => {
-                    let sender_name = get_contact_name(state, &sender_did, password.as_deref());
+                    let (sender_name, _, _) =
+                        resolve_counterparty_info(state, &sender_did, password.as_deref());
                     post_state
                         .pending_sign_requests
                         .push(FrontendPendingSignRequest {
@@ -2462,19 +2686,22 @@ pub async fn sync_post_channels_impl(
                                             if let Ok(sender_ed_pk) =
                                                 get_pubkey_from_user_id(&sender_did)
                                             {
-                                                let decline_reply = MarketInquiryReply {
+                                                let auto_msg_id =
+                                                    uuid::Uuid::new_v4().to_string();
+                                                let decline_msg = MarketInquiryMessage {
                                                     inquiry_id: inquiry.inquiry_id.clone(),
-                                                    decision: MarketInquiryDecision::Decline,
-                                                    note: Some(
+                                                    msg_id: auto_msg_id.clone(),
+                                                    text: Some(
                                                         "Inserat nicht mehr verfügbar".to_string(),
                                                     ),
+                                                    decision: Some(MarketInquiryDecision::Decline),
                                                     payment_uri: None,
                                                     amount_hint: None,
                                                     standard_uuid: None,
-                                                    replied_at: now_secs,
+                                                    created_at: now_secs,
                                                 };
                                                 if let Ok(reply_bytes) =
-                                                    serde_json::to_vec(&decline_reply)
+                                                    serde_json::to_vec(&decline_msg)
                                                 {
                                                     if let Ok(container) = SecureContainer::seal(
                                                         &my_identity,
@@ -2484,15 +2711,13 @@ pub async fn sync_post_channels_impl(
                                                         ),
                                                         &reply_bytes,
                                                         PayloadType::Generic(
-                                                            PAYLOAD_MARKET_INQUIRY_REPLY_V1
+                                                            PAYLOAD_MARKET_INQUIRY_MESSAGE_V1
                                                                 .to_string(),
                                                         ),
                                                     ) {
                                                         if let Ok(container_bytes) =
                                                             serde_json::to_vec(&container)
                                                         {
-                                                            let auto_msg_id =
-                                                                uuid::Uuid::new_v4().to_string();
                                                             let env = PostEnvelope::new(
                                                                 auto_msg_id.clone(),
                                                                 now_secs,
@@ -2559,29 +2784,54 @@ pub async fn sync_post_channels_impl(
                                         .record_inquiry(&sender_pk_hex, &target_key)
                                     {
                                         Ok(()) => {
-                                            let sender_name = get_contact_name(
-                                                state,
-                                                &sender_did,
-                                                password.as_deref(),
-                                            );
-                                            post_state.seller_inquiries.push(
-                                                FrontendMarketInquiryItem {
-                                                    inquiry_id: inquiry.inquiry_id.clone(),
-                                                    target: inquiry.target.clone(),
-                                                    counterparty_did: sender_did.clone(),
-                                                    counterparty_name: sender_name,
-                                                    message: inquiry.message.clone(),
-                                                    created_at: inquiry.created_at,
-                                                    reply_syncs: envelope
-                                                        .reply_drops
-                                                        .iter()
-                                                        .cloned()
-                                                        .map(Into::into)
-                                                        .collect(),
-                                                    reply: None,
-                                                },
-                                            );
-                                            new_inquiries += 1;
+                                            let (sender_name, sender_pic, is_contact) =
+                                                resolve_counterparty_info(
+                                                    state,
+                                                    &sender_did,
+                                                    password.as_deref(),
+                                                );
+                                            if !post_state
+                                                .inquiries
+                                                .iter()
+                                                .any(|i| i.inquiry_id == inquiry.inquiry_id)
+                                            {
+                                                last_inquiry_notice_target = Some((
+                                                    inquiry.inquiry_id.clone(),
+                                                    sender_name.clone(),
+                                                ));
+                                                post_state.inquiries.push(
+                                                    FrontendMarketInquiryItem {
+                                                        inquiry_id: inquiry.inquiry_id.clone(),
+                                                        role: "seller".to_string(),
+                                                        target: inquiry.target.clone(),
+                                                        counterparty_did: sender_did.clone(),
+                                                        counterparty_name: sender_name,
+                                                        counterparty_picture_url: sender_pic,
+                                                        is_contact,
+                                                        status: "open".to_string(),
+                                                        payment_uri: None,
+                                                        amount_hint: None,
+                                                        standard_uuid: None,
+                                                        created_at: inquiry.created_at,
+                                                        updated_at: inquiry.created_at,
+                                                        unread: true,
+                                                        reply_syncs: envelope
+                                                            .reply_drops
+                                                            .iter()
+                                                            .cloned()
+                                                            .map(Into::into)
+                                                            .collect(),
+                                                        messages: vec![FrontendInquiryChatMessage {
+                                                            msg_id: envelope.msg_id.clone(),
+                                                            sender: "them".to_string(),
+                                                            text: Some(inquiry.message.clone()),
+                                                            decision: None,
+                                                            created_at: inquiry.created_at,
+                                                        }],
+                                                    },
+                                                );
+                                                new_inquiries += 1;
+                                            }
                                             queue_receipt(
                                                 &mut post_state,
                                                 &my_identity,
@@ -2609,32 +2859,86 @@ pub async fn sync_post_channels_impl(
                         }
                     }
                 }
-                PayloadType::Generic(ref s) if s == PAYLOAD_MARKET_INQUIRY_REPLY_V1 => {
-                    match serde_json::from_slice::<MarketInquiryReply>(&decrypted_bytes) {
-                        Ok(reply) => {
-                            if let Err(e) = validate_market_inquiry_reply(&reply) {
-                                errors.push(format!("Invalid market inquiry reply: {}", e));
-                            } else if let Some(item) =
-                                post_state.buyer_inquiries.iter_mut().find(|i| {
-                                    i.inquiry_id == reply.inquiry_id
-                                        && are_dids_equal(&i.counterparty_did, &sender_did)
-                                        && i.reply.is_none()
-                                })
-                            {
-                                let decision_str = match reply.decision {
-                                    MarketInquiryDecision::Confirm => "confirm".to_string(),
-                                    MarketInquiryDecision::Decline => "decline".to_string(),
-                                };
-                                item.reply = Some(FrontendMarketInquiryReplyDto {
-                                    inquiry_id: reply.inquiry_id.clone(),
-                                    decision: decision_str,
-                                    note: reply.note.clone(),
-                                    payment_uri: reply.payment_uri.clone(),
-                                    amount_hint: reply.amount_hint.clone(),
-                                    standard_uuid: reply.standard_uuid.clone(),
-                                    replied_at: reply.replied_at,
-                                });
-                                new_inquiry_replies += 1;
+                PayloadType::Generic(ref s) if s == PAYLOAD_MARKET_INQUIRY_MESSAGE_V1 => {
+                    match serde_json::from_slice::<MarketInquiryMessage>(&decrypted_bytes) {
+                        Ok(msg) => {
+                            if let Err(e) = validate_market_inquiry_message(&msg) {
+                                errors.push(format!("Invalid market inquiry message: {}", e));
+                            } else if let Some(item) = post_state.inquiries.iter_mut().find(|i| {
+                                i.inquiry_id == msg.inquiry_id
+                                    && are_dids_equal(&i.counterparty_did, &sender_did)
+                            }) {
+                                if !item.messages.iter().any(|m| m.msg_id == msg.msg_id)
+                                    && item.messages.len() < MAX_INQUIRY_MESSAGES_PER_THREAD
+                                {
+                                    let valid_decision = match msg.decision {
+                                        Some(d) => {
+                                            if item.role == "buyer" && item.status == "open" {
+                                                Some(match d {
+                                                    MarketInquiryDecision::Confirm => {
+                                                        "confirm".to_string()
+                                                    }
+                                                    MarketInquiryDecision::Decline => {
+                                                        "decline".to_string()
+                                                    }
+                                                })
+                                            } else {
+                                                errors.push(format!(
+                                                    "Ignored invalid inquiry decision on thread {}",
+                                                    msg.inquiry_id
+                                                ));
+                                                None
+                                            }
+                                        }
+                                        None => None,
+                                    };
+
+                                    if let Some(ref dec_str) = valid_decision {
+                                        item.status = if dec_str == "confirm" {
+                                            "confirmed".to_string()
+                                        } else {
+                                            "declined".to_string()
+                                        };
+                                        if msg.payment_uri.is_some() {
+                                            item.payment_uri = msg.payment_uri.clone();
+                                        }
+                                        if msg.amount_hint.is_some() {
+                                            item.amount_hint = msg.amount_hint.clone();
+                                        }
+                                        if msg.standard_uuid.is_some() {
+                                            item.standard_uuid = msg.standard_uuid.clone();
+                                        }
+                                    }
+
+                                    if !envelope.reply_drops.is_empty() {
+                                        item.reply_syncs = envelope
+                                            .reply_drops
+                                            .iter()
+                                            .cloned()
+                                            .map(Into::into)
+                                            .collect();
+                                    }
+
+                                    item.messages.push(FrontendInquiryChatMessage {
+                                        msg_id: msg.msg_id.clone(),
+                                        sender: "them".to_string(),
+                                        text: msg.text.clone(),
+                                        decision: valid_decision,
+                                        created_at: msg.created_at,
+                                    });
+                                    item.messages.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+                                    item.updated_at = item.updated_at.max(msg.created_at);
+                                    item.unread = true;
+                                    new_inquiry_messages += 1;
+                                    let inq_id = item.inquiry_id.clone();
+                                    let cp_name = resolve_counterparty_info(
+                                        state,
+                                        &sender_did,
+                                        password.as_deref(),
+                                    )
+                                    .0;
+                                    last_inquiry_notice_target = Some((inq_id, cp_name));
+                                }
                                 queue_receipt(
                                     &mut post_state,
                                     &my_identity,
@@ -2649,7 +2953,7 @@ pub async fn sync_post_channels_impl(
                             }
                         }
                         Err(e) => {
-                            errors.push(format!("Failed to parse MarketInquiryReply: {}", e));
+                            errors.push(format!("Failed to parse MarketInquiryMessage: {}", e));
                         }
                     }
                 }
@@ -2963,6 +3267,77 @@ pub async fn sync_post_channels_impl(
 
     save_post_state(state, &post_state, password.as_deref())?;
 
+    if polled_syncs > 0 || uploaded_to > 0 {
+        let mut post_notices = Vec::new();
+        if imported_payments > 0 {
+            post_notices.push(FrontendAppNotice {
+                id: uuid::Uuid::new_v4().to_string(),
+                kind: "payment".to_string(),
+                created_at: now_secs,
+                read: false,
+                imported_payments,
+                imported_receipts: 0,
+                imported_signatures: 0,
+                new_sign_requests: 0,
+                new_wot_handshakes: 0,
+                new_inquiries: 0,
+                new_inquiry_messages: 0,
+                imported_cards: 0,
+                new_ads: 0,
+                counterparty_name: None,
+                inquiry_id: None,
+            });
+        }
+        if new_inquiries > 0 || new_inquiry_messages > 0 {
+            let (inq_id, cp_name) = if new_inquiries + new_inquiry_messages == 1 {
+                if let Some((id, name)) = last_inquiry_notice_target {
+                    (Some(id), name)
+                } else {
+                    (None, None)
+                }
+            } else {
+                (None, None)
+            };
+            post_notices.push(FrontendAppNotice {
+                id: uuid::Uuid::new_v4().to_string(),
+                kind: "inquiry".to_string(),
+                created_at: now_secs,
+                read: false,
+                imported_payments: 0,
+                imported_receipts: 0,
+                imported_signatures: 0,
+                new_sign_requests: 0,
+                new_wot_handshakes: 0,
+                new_inquiries,
+                new_inquiry_messages,
+                imported_cards: 0,
+                new_ads: 0,
+                counterparty_name: cp_name,
+                inquiry_id: inq_id,
+            });
+        }
+        if new_wot_handshakes > 0 || new_sign_requests > 0 || imported_signatures > 0 {
+            post_notices.push(FrontendAppNotice {
+                id: uuid::Uuid::new_v4().to_string(),
+                kind: "trust".to_string(),
+                created_at: now_secs,
+                read: false,
+                imported_payments: 0,
+                imported_receipts: 0,
+                imported_signatures,
+                new_sign_requests,
+                new_wot_handshakes,
+                new_inquiries: 0,
+                new_inquiry_messages: 0,
+                imported_cards: 0,
+                new_ads: 0,
+                counterparty_name: None,
+                inquiry_id: None,
+            });
+        }
+        state.append_app_notices(Some(now_secs), post_notices, password.as_deref());
+    }
+
     let mut retry_after_secs: Option<u64> = None;
     for e in &errors {
         if let Some(secs) = sync_client::extract_retry_after_from_error_str(e) {
@@ -2987,7 +3362,7 @@ pub async fn sync_post_channels_impl(
         new_sign_requests,
         new_wot_handshakes,
         new_inquiries,
-        new_inquiry_replies,
+        new_inquiry_messages,
         pruned_boxes,
         errors,
         retry_after_secs,
@@ -4188,6 +4563,7 @@ mod tests {
             max_hops: 2,
             validity_years: 2,
             allow_inquiries: true,
+            published: None,
         };
         save_my_market_profile_impl(save_req, Some(password.to_string()), &bob_state).unwrap();
         set_card_published_impl(true, false, Some(password.to_string()), &bob_state)
@@ -4232,13 +4608,15 @@ mod tests {
         assert_eq!(bob_sync_2.new_inquiries, 1);
 
         let bob_post_2 = load_post_state(&bob_state, Some(password)).unwrap();
-        let seller_inq = &bob_post_2.seller_inquiries[0];
+        let seller_inq = &bob_post_2.inquiries[0];
+        assert_eq!(seller_inq.role, "seller");
+        assert!(seller_inq.unread);
 
         // Bob replies: confirm + payment link
-        let rep_res = reply_market_inquiry_via_post_impl(
+        let rep_res = send_market_inquiry_message_via_post_impl(
             seller_inq.inquiry_id.clone(),
-            "confirm".to_string(),
             Some("Yes, 2 jars reserved!".to_string()),
+            Some("confirm".to_string()),
             Some("humoco://pay/123".to_string()),
             Some("20 Minuto".to_string()),
             None,
@@ -4247,13 +4625,14 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(rep_res.reply.is_some());
+        assert_eq!(rep_res.status, "confirmed");
+        assert_eq!(rep_res.messages.len(), 2);
 
-        // Second reply is strictly forbidden (1-step only, NO chat!)
-        let second_reply = reply_market_inquiry_via_post_impl(
+        // Second decision change after already decided is rejected, but follow-up text chat works
+        let second_decision = send_market_inquiry_message_via_post_impl(
             seller_inq.inquiry_id.clone(),
-            "decline".to_string(),
             None,
+            Some("decline".to_string()),
             None,
             None,
             None,
@@ -4261,36 +4640,64 @@ mod tests {
             &bob_state,
         )
         .await;
-        assert!(second_reply.is_err(), "Second reply must be rejected");
+        assert!(second_decision.is_err(), "Second decision change must be rejected");
 
         // Alice syncs: receives reply
         let alice_sync_2 =
             sync_post_channels_impl(None, None, None, Some(password.to_string()), &alice_state)
                 .await
                 .unwrap();
-        assert_eq!(alice_sync_2.new_inquiry_replies, 1);
+        assert_eq!(alice_sync_2.new_inquiry_messages, 1);
 
         let alice_post_2 = load_post_state(&alice_state, Some(password)).unwrap();
-        assert!(alice_post_2.buyer_inquiries[0].reply.is_some());
-        assert_eq!(
-            alice_post_2.buyer_inquiries[0]
-                .reply
-                .as_ref()
-                .unwrap()
-                .decision,
-            "confirm"
-        );
+        assert_eq!(alice_post_2.inquiries[0].status, "confirmed");
+        assert_eq!(alice_post_2.inquiries[0].messages.len(), 2);
+        assert!(alice_post_2.inquiries[0].unread);
+
+        // Mark inquiry read works
+        mark_inquiry_read_impl(
+            inq_item.inquiry_id.clone(),
+            Some(password.to_string()),
+            &alice_state,
+        )
+        .unwrap();
+        let alice_post_read = load_post_state(&alice_state, Some(password)).unwrap();
+        assert!(!alice_post_read.inquiries[0].unread);
+
+        // Alice sends a follow-up chat question to Bob
+        let follow_up = send_market_inquiry_message_via_post_impl(
+            inq_item.inquiry_id.clone(),
+            Some("Can I pick them up at 5pm?".to_string()),
+            None,
+            None,
+            None,
+            None,
+            Some(password.to_string()),
+            &alice_state,
+        )
+        .await
+        .unwrap();
+        assert_eq!(follow_up.messages.len(), 3);
+
+        // Bob syncs and receives Alice's follow-up message
+        let bob_sync_3 =
+            sync_post_channels_impl(None, None, None, Some(password.to_string()), &bob_state)
+                .await
+                .unwrap();
+        assert_eq!(bob_sync_3.new_inquiry_messages, 1);
+        let bob_post_3 = load_post_state(&bob_state, Some(password)).unwrap();
+        assert_eq!(bob_post_3.inquiries[0].messages.len(), 3);
 
         // Dismiss pending post item works
         dismiss_pending_post_item_impl(
-            "buyer_inquiry".to_string(),
+            "inquiry".to_string(),
             inq_item.inquiry_id.clone(),
             Some(password.to_string()),
             &alice_state,
         )
         .unwrap();
         let alice_post_3 = load_post_state(&alice_state, Some(password)).unwrap();
-        assert!(alice_post_3.buyer_inquiries.is_empty());
+        assert!(alice_post_3.inquiries.is_empty());
     }
 
     #[tokio::test]

@@ -3,13 +3,12 @@ import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Fingerprint, Globe, User, SlidersHorizontal, Radio } from 'lucide-react';
 import { Card } from '../ui/Card';
-import { Button } from '../ui/Button';
 import { LanguageSelector } from '../ui/LanguageSelector';
 import { UiModeToggle } from '../ui/UiModeToggle';
 import { InfoHint } from '../ui/InfoHint';
 import { TechId } from '../ui/TechId';
 import { ReachPresetSelector } from '../ReachPresetSelector';
-import { useOptionalNavigation } from '../../context/NavigationContext';
+import { MyProfileCard } from '../profile/MyProfileCard';
 import { useSession } from '../../context/SessionContext';
 import { AppSettings } from '../../types';
 import { settingsService } from '../../services/settingsService';
@@ -28,7 +27,6 @@ export const ProfileTab: React.FC<ProfileTabProps> = ({
     onSettingsUpdated,
 }) => {
     const { t } = useTranslation();
-    const nav = useOptionalNavigation();
     const { protectAction } = useSession();
     const [marketSendCardOnPayment, setMarketSendCardOnPayment] = useState<boolean>(settings?.marketSendCardOnPayment ?? false);
     const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -99,26 +97,15 @@ export const ProfileTab: React.FC<ProfileTabProps> = ({
                 </div>
             </Card>
 
-            {/* Verweis auf Marktplatz */}
+            {/* Profil & Visitenkarte */}
             <Card header={
                 <div className="flex items-center gap-2">
                     <User size={18} className="text-theme-primary" />
-                    <span className="font-black text-xs uppercase tracking-widest">{t('profile.businessCardSectionTitle')}</span>
+                    <span className="font-black text-xs uppercase tracking-widest">{t('settings.profileAndCardTitle')}</span>
                 </div>
             }>
                 <div className="space-y-4">
-                    <p className="text-xs text-theme-light leading-relaxed">
-                        {t('profile.marketplaceRedirectDesc')}
-                    </p>
-                    <Button
-                        type="button"
-                        variant="primary"
-                        size="sm"
-                        onClick={() => nav?.navigate({ view: 'marketplace', initialTab: 'mine', initialOpenEditor: true })}
-                        className="flex items-center gap-2"
-                    >
-                        <span>{t('profile.openInMarketplaceBtn')}</span>
-                    </Button>
+                    <MyProfileCard compact showSkills={false} />
 
                     {/* Marketplace Send Card On Payment Toggle */}
                     {errorMsg && (

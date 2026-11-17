@@ -4,7 +4,7 @@ import { Contact, PublicProfile, FrontendTrustChangeImpact } from '../types';
 import { FrontendSyncDescriptor } from '../types/market';
 import { marketService } from '../services/marketService';
 import { profileService } from '../services/profileService';
-import Avatar from 'boring-avatars';
+import { UserAvatar } from './ui/UserAvatar';
 import { translateError } from '../utils/errorHelper';
 import { HelpIcon } from './ui/HelpIcon';
 import { Advanced } from './ui/Advanced';
@@ -317,14 +317,11 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
         <div className="fixed inset-0 bg-black/40 backdrop-blur-[2px] z-50 flex items-center justify-center p-4">
             <div className="bg-bg-app border border-theme-subtle rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
                 <div className="p-6 border-b border-theme-subtle flex items-center gap-4 bg-white">
-                    <div className="w-16 h-16 rounded-full overflow-hidden border-2 border-theme-subtle bg-bg-app shrink-0">
-                        <Avatar
-                            size={64}
-                            name={did || "default"}
-                            variant="beam"
-                            colors={["#E63946", "#2B1B17", "#E76F51", "#F4A261", "#2A9D8F"]}
-                        />
-                    </div>
+                    <UserAvatar
+                        size={64}
+                        pictureUrl={existingContact?.profile.pictureUrl || initialProfile?.pictureUrl}
+                        name={`${firstName} ${lastName}`.trim() || organization || did}
+                    />
                     <div className="min-w-0 flex-1">
                         <h2 className="text-xl font-extrabold text-theme-secondary">
                             {existingContact ? t('contacts.editContact') : t('contacts.addNewContact')}

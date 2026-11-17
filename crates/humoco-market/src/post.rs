@@ -24,9 +24,10 @@ pub const POST_BOX_TIERS: [usize; 4] = [4_096, 16_384, 65_536, 262_144]; // 4 KB
 
 pub const PAYLOAD_POST_RECEIPT_V1: &str = "post_delivery_receipt_v1";
 pub const PAYLOAD_MARKET_INQUIRY_V1: &str = "market_inquiry_v1";
-pub const PAYLOAD_MARKET_INQUIRY_REPLY_V1: &str = "market_inquiry_reply_v1";
+pub const PAYLOAD_MARKET_INQUIRY_MESSAGE_V1: &str = "market_inquiry_message_v1";
 
 pub const MAX_INQUIRY_CHARS: usize = 280;
+pub const MAX_INQUIRY_MESSAGES_PER_THREAD: usize = 20;
 pub const DEFAULT_MAX_OPEN_INQUIRIES_PER_LISTING: usize = 20;
 
 /// Derives a contributory X25519 shared secret between an Ed25519 signing key and a peer Ed25519 verifying key.
@@ -626,7 +627,7 @@ pub fn validate_market_inquiry(inquiry: &MarketInquiry) -> Result<(), MarketErro
     Ok(())
 }
 
-/// Seller decision on a 1-step marketplace inquiry (§6.4).
+/// Seller decision on a marketplace inquiry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MarketInquiryDecision {
@@ -634,34 +635,51 @@ pub enum MarketInquiryDecision {
     Decline,
 }
 
-/// 1-Step Marketplace Inquiry Reply payload (§6.4).
+/// Follow-up chat message or seller decision within an existing marketplace inquiry thread.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct MarketInquiryReply {
+pub struct MarketInquiryMessage {
     pub inquiry_id: String,
-    pub decision: MarketInquiryDecision,
+    pub msg_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub note: Option<String>, // optional <= 280 chars
+    pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision: Option<MarketInquiryDecision>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub payment_uri: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub amount_hint: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub standard_uuid: Option<String>,
-    pub replied_at: u64,
+    pub created_at: u64,
 }
 
-pub fn validate_market_inquiry_reply(reply: &MarketInquiryReply) -> Result<(), MarketError> {
-    if reply.inquiry_id.trim().is_empty() {
+pub fn validate_market_inquiry_message(msg: &MarketInquiryMessage) -> Result<(), MarketError> {
+    if msg.inquiry_id.trim().is_empty() {
         return Err(MarketError::Validation(
             "inquiry_id cannot be empty".to_string(),
         ));
     }
-    if let Some(ref note) = reply.note {
-        let note_chars = note.trim().chars().count();
-        if note_chars > MAX_INQUIRY_CHARS {
+    if msg.msg_id.trim().is_empty() {
+        return Err(MarketError::Validation(
+            "msg_id cannot be empty".to_string(),
+        ));
+    }
+    if msg.decision.is_none() && msg.text.is_none() {
+        return Err(MarketError::Validation(
+            "message must include either text or a decision".to_string(),
+        ));
+    }
+    if let Some(ref txt) = msg.text {
+        let trimmed_chars = txt.trim().chars().count();
+        if trimmed_chars == 0 {
+            return Err(MarketError::Validation(
+                "message text cannot be blank".to_string(),
+            ));
+        }
+        if trimmed_chars > MAX_INQUIRY_CHARS {
             return Err(MarketError::Validation(format!(
-                "reply note length {} exceeds MAX_INQUIRY_CHARS ({})",
-                note_chars, MAX_INQUIRY_CHARS
+                "message text length {} exceeds MAX_INQUIRY_CHARS ({})",
+                trimmed_chars, MAX_INQUIRY_CHARS
             )));
         }
     }

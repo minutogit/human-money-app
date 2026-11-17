@@ -34,33 +34,40 @@ pub struct FrontendPendingWotHandshake {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct FrontendMarketInquiryReplyDto {
-    pub inquiry_id: String,
-    pub decision: String, // "confirm" | "decline"
+pub struct FrontendInquiryChatMessage {
+    pub msg_id: String,
+    pub sender: String, // "me" | "them"
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub note: Option<String>,
+    pub text: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub payment_uri: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub amount_hint: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub standard_uuid: Option<String>,
-    pub replied_at: u64,
+    pub decision: Option<String>, // "confirm" | "decline"
+    pub created_at: u64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct FrontendMarketInquiryItem {
     pub inquiry_id: String,
+    pub role: String, // "seller" | "buyer"
     pub target: humoco_market::InquiryTarget,
     pub counterparty_did: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub counterparty_name: Option<String>,
-    pub message: String,
-    pub created_at: u64,
-    pub reply_syncs: Vec<FrontendSyncDescriptor>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reply: Option<FrontendMarketInquiryReplyDto>,
+    pub counterparty_picture_url: Option<String>,
+    pub is_contact: bool,
+    pub status: String, // "open" | "confirmed" | "declined"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payment_uri: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub amount_hint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub standard_uuid: Option<String>,
+    pub created_at: u64,
+    pub updated_at: u64,
+    pub unread: bool,
+    pub reply_syncs: Vec<FrontendSyncDescriptor>,
+    pub messages: Vec<FrontendInquiryChatMessage>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -68,8 +75,7 @@ pub struct FrontendMarketInquiryItem {
 pub struct FrontendPostInboxSummary {
     pub pending_sign_requests: Vec<FrontendPendingSignRequest>,
     pub pending_wot_handshakes: Vec<FrontendPendingWotHandshake>,
-    pub seller_inquiries: Vec<FrontendMarketInquiryItem>,
-    pub buyer_inquiries: Vec<FrontendMarketInquiryItem>,
+    pub inquiries: Vec<FrontendMarketInquiryItem>,
     pub unacknowledged_payments: Vec<String>,
 }
 
@@ -84,7 +90,7 @@ pub struct FrontendPostSyncResult {
     pub new_sign_requests: usize,
     pub new_wot_handshakes: usize,
     pub new_inquiries: usize,
-    pub new_inquiry_replies: usize,
+    pub new_inquiry_messages: usize,
     pub pruned_boxes: usize,
     pub errors: Vec<String>,
     pub retry_after_secs: Option<u64>,

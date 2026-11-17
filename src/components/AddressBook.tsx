@@ -12,7 +12,7 @@ import { postService, POST_INBOX_UPDATED_EVENT } from '../services/postService';
 import { settingsService } from '../services/settingsService';
 import { marketService, triggerDebouncedChannelMembersSync } from '../services/marketService';
 import { useRateLimitCooldown } from '../hooks/useRateLimitCooldown';
-import { notifySyncStatusUpdated, SYNC_STATUS_UPDATED_EVENT } from '../utils/syncEvents';
+import { notifySyncStatusUpdated, SYNC_STATUS_UPDATED_EVENT, showTransientSyncToast } from '../utils/syncEvents';
 import { save, open } from '@tauri-apps/plugin-dialog';
 import { writeFile, readFile } from '@tauri-apps/plugin-fs';
 import { InfoHint } from './ui/InfoHint';
@@ -25,7 +25,7 @@ import {
     PublicProfile 
 } from '../types';
 import { updateLastUsedDirectory } from '../utils/settingsUtils';
-import Avatar from 'boring-avatars';
+import { UserAvatar } from './ui/UserAvatar';
 import ContactDialog from './ContactDialog';
 import { AddContactModal } from './AddContactModal';
 import { TrustLevelRadioCards } from './TrustLevelRadioCards';
@@ -554,6 +554,17 @@ const AddressBook: React.FC<AddressBookProps> = ({
                         cards: res?.importedCards ?? 0,
                     });
                     setFeedbackMsg({ type: 'success', message: msg });
+                    const hasAnyNew =
+                        (res?.importedWotLists ?? 0) > 0 ||
+                        (res?.importedCards ?? 0) > 0 ||
+                        (postRes?.importedPayments ?? 0) > 0 ||
+                        (postRes?.newWotHandshakes ?? 0) > 0;
+                    if (!hasAnyNew) {
+                        showTransientSyncToast({
+                            message: t('common.syncUpToDateToast', 'Alles aktuell – keine neuen Einträge.'),
+                            variant: 'info',
+                        });
+                    }
                 }
             }
         } catch (err) {
@@ -1096,15 +1107,13 @@ const AddressBook: React.FC<AddressBookProps> = ({
                                         <div className="h-full bg-white border border-theme-subtle rounded-[32px] p-6 flex flex-col group-hover:border-theme-primary/30 group-hover:shadow-premium transition-all">
                                             <div className="flex items-start justify-between mb-4">
                                                 <div className="relative">
-                                                    <div className="w-16 h-16 rounded-[24px] overflow-hidden border-2 border-theme-subtle group-hover:border-theme-primary/30 transition-all p-1 bg-white shadow-inner">
-                                                        <div className="w-full h-full rounded-[18px] overflow-hidden">
-                                                            <Avatar
-                                                                size={64}
-                                                                name={contact.did}
-                                                                variant="beam"
-                                                                colors={["#E63946", "#2B1B17", "#E76F51", "#F4A261", "#2A9D8F"]}
-                                                            />
-                                                        </div>
+                                                    <div className="w-16 h-16 rounded-[24px] overflow-hidden border-2 border-theme-subtle group-hover:border-theme-primary/30 transition-all p-1 bg-white shadow-inner flex items-center justify-center">
+                                                        <UserAvatar
+                                                            size={56}
+                                                            rounded="2xl"
+                                                            pictureUrl={contact.profile.pictureUrl}
+                                                            name={[contact.profile.firstName, contact.profile.lastName].filter(Boolean).join(' ') || contact.profile.organization || contact.did}
+                                                        />
                                                     </div>
                                                     <div className="absolute -bottom-1 -right-1 bg-white p-1 rounded-full shadow-sm border border-theme-subtle">
                                                         <div className="bg-emerald-500 w-3 h-3 rounded-full border-2 border-white"></div>

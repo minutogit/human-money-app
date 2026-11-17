@@ -14,8 +14,8 @@ import { ExpertTabsLayout } from './ui/ExpertTabsLayout';
 import { SegmentedTabs } from './ui/SegmentedTabs';
 import { AlertBanner } from './ui/AlertBanner';
 import { Card } from './ui/Card';
-import { Button } from './ui/Button';
 import { LanguageSelector } from './ui/LanguageSelector';
+import { MyProfileCard } from './profile/MyProfileCard';
 import { InfoHint } from './ui/InfoHint';
 import { BackupSettingsCard } from './BackupSettingsCard';
 import { ReachPresetSelector } from './ReachPresetSelector';
@@ -229,24 +229,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                     }
                 >
                     <div className="space-y-4">
-                        <p className="text-xs text-theme-light leading-relaxed">
-                            {t('profile.marketplaceRedirectDesc')}
-                        </p>
-                        <Button
-                            type="button"
-                            variant="primary"
-                            size="sm"
-                            onClick={() =>
-                                nav?.navigate({
-                                    view: 'marketplace',
-                                    initialTab: 'mine',
-                                    initialOpenEditor: true,
-                                })
-                            }
-                            className="flex items-center gap-2"
-                        >
-                            <span>{t('profile.openInMarketplaceBtn')}</span>
-                        </Button>
+                        <MyProfileCard compact showSkills={false} />
                         <div className="pt-2 border-t border-theme-subtle/50">
                             <h5 className="text-xs font-bold text-theme-secondary mb-2.5">
                                 {t('settings.languageTitle')}
