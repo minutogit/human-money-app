@@ -1,20 +1,36 @@
 import { invoke } from "@tauri-apps/api/core";
-import { AppSettings, AnchorSyncStatus, ReachPresetDto, ReachPresetId, RollbackReport, VoucherL2StatusDto } from "../types";
+import {
+    AnchorServerInputDto,
+    AppSettings,
+    L2LockStatusDto,
+    LockServerProbeResult,
+    NominatedLockServerMeta,
+    ReachPresetDto,
+    ReachPresetId,
+    RollbackReport,
+    StoredAnchorTemplateMeta,
+    VoucherL2StatusDto,
+} from "../types";
 
-export type { AnchorSyncStatus, RollbackReport, VoucherL2StatusDto };
+export type { RollbackReport, VoucherL2StatusDto, L2LockStatusDto };
 
 export interface SealForUpload {
     sealHash: string;
     sealBytes: number[];
 }
 
+export interface AssembleAnchorTemplateArgs {
+    label: string;
+    retainUntilQuarterStr: string;
+    servers: AnchorServerInputDto[];
+    guarantorMigPubsHex?: string[];
+    threshold?: number | null;
+    password?: string | null;
+}
+
 export const settingsService = {
     getSettings: async () => {
         return await invoke<AppSettings>("get_app_settings");
-    },
-
-    refreshGatewayCache: async (password?: string) => {
-        return await invoke<string[]>("refresh_l2_gateway_cache", { password });
     },
 
     saveSettings: async (settings: AppSettings, password?: string) => {
@@ -41,24 +57,43 @@ export const settingsService = {
         return await invoke<void>("acknowledge_seal_sync", { uploadedSealHash, password });
     },
 
-    checkAnchorSync: async () => {
-        return await invoke<AnchorSyncStatus>("check_anchor_sync");
-    },
-
     reconcileRollback: async (password?: string) => {
         return await invoke<RollbackReport>("reconcile_rollback", { password });
     },
 
-    flushPendingAnchorSync: async (password?: string | null) => {
-        return await invoke<boolean>("flush_pending_anchor_sync", { password: password ?? null });
+    probeLockServer: async (writeUrl: string, expectedAdminPub?: string | null, password?: string | null) => {
+        return await invoke<LockServerProbeResult>("probe_lock_server_cmd", {
+            writeUrl,
+            expectedAdminPub: expectedAdminPub ?? null,
+            password: password ?? null,
+        });
     },
 
-    benchmarkL2Servers: async (urls?: string[]) => {
-        return await invoke<Array<{ url: string; latencyMs?: number; reachable: boolean }>>("benchmark_l2_servers", { urls });
+    setOwnNominatedLockServer: async (writeUrl: string | null, asn?: string | null, password?: string | null) => {
+        return await invoke<NominatedLockServerMeta | null>("set_own_nominated_lock_server", {
+            writeUrl,
+            asn: asn ?? null,
+            password: password ?? null,
+        });
     },
 
-    refreshRegionalMeshViews: async () => {
-        return await invoke<boolean>("refresh_regional_mesh_views");
+    assembleAnchorTemplate: async (args: AssembleAnchorTemplateArgs) => {
+        return await invoke<StoredAnchorTemplateMeta>("assemble_anchor_template", {
+            label: args.label,
+            retainUntilQuarterStr: args.retainUntilQuarterStr,
+            servers: args.servers,
+            guarantorMigPubsHex: args.guarantorMigPubsHex ?? [],
+            threshold: args.threshold ?? null,
+            password: args.password ?? null,
+        });
+    },
+
+    prewarmL2Checkout: async () => {
+        return await invoke<void>("prewarm_l2_checkout");
+    },
+
+    checkL2LockStatus: async () => {
+        return await invoke<L2LockStatusDto>("check_l2_lock_status");
     },
 
     checkVoucherL2Status: async (localInstanceId: string, password?: string | null) => {
@@ -66,5 +101,5 @@ export const settingsService = {
             localInstanceId,
             password: password ?? null,
         });
-    }
+    },
 };

@@ -1,10 +1,10 @@
 // src-tauri/src/state.rs
-use std::sync::{Mutex, MutexGuard};
-use log::{info, error};
-use chrono::{Duration, Utc};
-use human_money_core::app_service::{AppService, AppFacadeError};
-use crate::models::{TransactionRecord, FrontendAddressBook, FrontendContact};
+use crate::models::{FrontendAddressBook, FrontendContact, TransactionRecord};
 use crate::settings::{AppSettings, SETTINGS_KEY};
+use chrono::{Duration, Utc};
+use human_money_core::app_service::{AppFacadeError, AppService};
+use log::{error, info};
+use std::sync::{Mutex, MutexGuard};
 
 pub const TRANSACTION_HISTORY_KEY: &str = "transaction_history";
 pub const CONTACTS_DATA_NAME: &str = "address_book";
@@ -144,7 +144,6 @@ pub struct AppState {
     pub events: Mutex<Option<Vec<human_money_core::models::wallet_event::WalletEvent>>>,
     pub contacts: Mutex<Option<crate::models::FrontendAddressBook>>,
     pub settings: Mutex<Option<AppSettings>>,
-    pub(crate) regional_views: Mutex<Option<crate::checkout::RegionalViewCache>>,
     pub wot: Mutex<Option<humoco_wot::TrustRegister>>,
     pub media_negative_cache: Mutex<std::collections::HashMap<String, u64>>,
 }
@@ -157,7 +156,6 @@ impl AppState {
             events: Mutex::new(None),
             contacts: Mutex::new(None),
             settings: Mutex::new(None),
-            regional_views: Mutex::new(None),
             wot: Mutex::new(None),
             media_negative_cache: Mutex::new(std::collections::HashMap::new()),
         }
@@ -177,7 +175,11 @@ impl AppState {
             .ok_or_else(|| AppFacadeError::Generic("Settings not loaded".to_string()))
     }
 
-    pub fn load_settings(&self, service: &mut AppService, password: Option<&str>) -> Result<AppSettings, AppFacadeError> {
+    pub fn load_settings(
+        &self,
+        service: &mut AppService,
+        password: Option<&str>,
+    ) -> Result<AppSettings, AppFacadeError> {
         let settings: AppSettings = match service.load_encrypted_data(SETTINGS_KEY, password) {
             Ok(data) => serde_json::from_slice(&data).unwrap_or_default(),
             Err(_) => {
@@ -186,7 +188,9 @@ impl AppState {
                 let bytes = serde_json::to_vec(&default_settings).unwrap();
                 service
                     .save_encrypted_data(SETTINGS_KEY, &bytes, password)
-                    .map_err(|e| AppFacadeError::Generic(format!("Failed to save default settings: {}", e)))?;
+                    .map_err(|e| {
+                        AppFacadeError::Generic(format!("Failed to save default settings: {}", e))
+                    })?;
                 default_settings
             }
         };
@@ -195,8 +199,14 @@ impl AppState {
         Ok(settings)
     }
 
-    pub fn save_settings(&self, service: &mut AppService, settings: AppSettings, password: Option<&str>) -> Result<(), AppFacadeError> {
-        let bytes = serde_json::to_vec(&settings).map_err(|e| AppFacadeError::Json(e.to_string()))?;
+    pub fn save_settings(
+        &self,
+        service: &mut AppService,
+        settings: AppSettings,
+        password: Option<&str>,
+    ) -> Result<(), AppFacadeError> {
+        let bytes =
+            serde_json::to_vec(&settings).map_err(|e| AppFacadeError::Json(e.to_string()))?;
         service.save_encrypted_data(SETTINGS_KEY, &bytes, password)?;
         *self.settings.lock().unwrap() = Some(settings);
         Ok(())
@@ -218,16 +228,22 @@ impl AppState {
             });
             Ok(contacts)
         } else {
-            Err(AppFacadeError::Generic("Contacts cache not initialized".to_string()))
+            Err(AppFacadeError::Generic(
+                "Contacts cache not initialized".to_string(),
+            ))
         }
     }
 
-    pub fn load_contacts(&self, service: &mut AppService, password: Option<&str>) -> Result<Vec<FrontendContact>, AppFacadeError> {
+    pub fn load_contacts(
+        &self,
+        service: &mut AppService,
+        password: Option<&str>,
+    ) -> Result<Vec<FrontendContact>, AppFacadeError> {
         info!("Fetching all contacts from address book from disk...");
         match service.load_encrypted_data(CONTACTS_DATA_NAME, password) {
             Ok(data) => {
-                let address_book: FrontendAddressBook = serde_json::from_slice(&data)
-                    .map_err(|e| {
+                let address_book: FrontendAddressBook =
+                    serde_json::from_slice(&data).map_err(|e| {
                         error!("Failed to parse address book: {}", e);
                         AppFacadeError::Json(format!("Failed to parse address book: {}", e))
                     })?;
@@ -235,7 +251,8 @@ impl AppState {
                 *self.contacts.lock().unwrap() = Some(address_book.clone());
 
                 let wot_guard = self.wot.lock().unwrap();
-                let mut contacts: Vec<FrontendContact> = address_book.contacts.into_values().collect();
+                let mut contacts: Vec<FrontendContact> =
+                    address_book.contacts.into_values().collect();
                 for c in contacts.iter_mut() {
                     enrich_contact_with_wot(c, wot_guard.as_ref());
                     c.syncs.truncate(2);
@@ -248,12 +265,20 @@ impl AppState {
                 Ok(contacts)
             }
             Err(e) => {
-                if matches!(&e, AppFacadeError::Storage(human_money_core::StorageError::NotFound)) {
+                if matches!(
+                    &e,
+                    AppFacadeError::Storage(human_money_core::StorageError::NotFound)
+                ) {
                     info!("No address book found, returning empty list.");
                     let default_book = FrontendAddressBook::default();
                     *self.contacts.lock().unwrap() = Some(default_book);
                     Ok(vec![])
-                } else if matches!(&e, AppFacadeError::WalletLocked | AppFacadeError::SessionExpired(_) | AppFacadeError::SessionNotActive(_)) {
+                } else if matches!(
+                    &e,
+                    AppFacadeError::WalletLocked
+                        | AppFacadeError::SessionExpired(_)
+                        | AppFacadeError::SessionNotActive(_)
+                ) {
                     error!("Error loading address book (locked/session issue): {:?}", e);
                     Err(e)
                 } else {
@@ -264,12 +289,22 @@ impl AppState {
         }
     }
 
-    pub fn save_contact(&self, service: &mut AppService, mut contact: FrontendContact, password: Option<&str>) -> Result<(), AppFacadeError> {
+    pub fn save_contact(
+        &self,
+        service: &mut AppService,
+        mut contact: FrontendContact,
+        password: Option<&str>,
+    ) -> Result<(), AppFacadeError> {
         contact.did = contact.did.trim().to_string();
         let mut address_book = match service.load_encrypted_data(CONTACTS_DATA_NAME, password) {
             Ok(data) => serde_json::from_slice::<FrontendAddressBook>(&data).unwrap_or_default(),
             Err(e) => {
-                if matches!(&e, AppFacadeError::WalletLocked | AppFacadeError::SessionExpired(_) | AppFacadeError::SessionNotActive(_)) {
+                if matches!(
+                    &e,
+                    AppFacadeError::WalletLocked
+                        | AppFacadeError::SessionExpired(_)
+                        | AppFacadeError::SessionNotActive(_)
+                ) {
                     return Err(e);
                 }
                 FrontendAddressBook::default()
@@ -287,7 +322,10 @@ impl AppState {
             })
             .ok();
 
-        if own_ids.as_ref().is_some_and(|(own_uid, _)| contact.did == *own_uid) {
+        if own_ids
+            .as_ref()
+            .is_some_and(|(own_uid, _)| contact.did == *own_uid)
+        {
             return Err(AppFacadeError::Generic(
                 "Cannot add your own active profile as a contact".to_string(),
             ));
@@ -299,13 +337,16 @@ impl AppState {
 
         if is_own_root && contact.trust_level.is_some() {
             return Err(AppFacadeError::Generic(
-                "Self trust forbidden: cannot assign a trust level to your own subaccount".to_string(),
+                "Self trust forbidden: cannot assign a trust level to your own subaccount"
+                    .to_string(),
             ));
         }
 
         // Deduplicate address_book.contacts: for own subaccounts keep distinct prefixes separate;
         // for external contacts deduplicate by canonical DID.
-        let keys_to_remove: Vec<String> = address_book.contacts.keys()
+        let keys_to_remove: Vec<String> = address_book
+            .contacts
+            .keys()
             .filter(|k| {
                 if *k == &contact.did {
                     false
@@ -320,7 +361,8 @@ impl AppState {
             .cloned()
             .collect();
 
-        let is_existing = address_book.contacts.contains_key(&contact.did) || !keys_to_remove.is_empty();
+        let is_existing =
+            address_book.contacts.contains_key(&contact.did) || !keys_to_remove.is_empty();
 
         let mut old_contact_syncs: Vec<crate::models::FrontendSyncDescriptor> = address_book
             .contacts
@@ -358,9 +400,21 @@ impl AppState {
                 .ok()
                 .and_then(|bytes| serde_json::from_slice::<humoco_market::CardStore>(&bytes).ok())
                 .and_then(|store| {
-                    store.cards.values()
-                        .find(|sc| canonicalize_did(&sc.card.payload.did).ok().as_deref() == Some(&can_did))
-                        .map(|sc| sc.card.payload.drops.iter().cloned().map(Into::into).collect())
+                    store
+                        .cards
+                        .values()
+                        .find(|sc| {
+                            canonicalize_did(&sc.card.payload.did).ok().as_deref() == Some(&can_did)
+                        })
+                        .map(|sc| {
+                            sc.card
+                                .payload
+                                .drops
+                                .iter()
+                                .cloned()
+                                .map(Into::into)
+                                .collect()
+                        })
                 })
                 .unwrap_or_default();
 
@@ -381,9 +435,16 @@ impl AppState {
 
             if let Some(level) = contact.trust_level {
                 if level > 3 {
-                    return Err(AppFacadeError::Generic(format!("Invalid trust level: {}", level)));
+                    return Err(AppFacadeError::Generic(format!(
+                        "Invalid trust level: {}",
+                        level
+                    )));
                 }
-                let hops = if level == 0 { 0 } else { reg.policy.own_list_max_hops };
+                let hops = if level == 0 {
+                    0
+                } else {
+                    reg.policy.own_list_max_hops
+                };
                 reg.set_contact_trust(&can_did, level, hops, now_secs)
                     .map_err(|e| AppFacadeError::Generic(e.to_string()))?;
                 reg.prune_unreachable_lists();
@@ -392,7 +453,8 @@ impl AppState {
                 contact.trust_level = Some(level);
                 contact.desired_hops = Some(hops);
             } else {
-                let removed = reg.remove_contact_trust(&can_did)
+                let removed = reg
+                    .remove_contact_trust(&can_did)
                     .map_err(|e| AppFacadeError::Generic(e.to_string()))?;
                 if removed {
                     reg.prune_unreachable_lists();
@@ -420,23 +482,40 @@ impl AppState {
 
         address_book.contacts.insert(contact.did.clone(), contact);
 
-        let data = serde_json::to_vec(&address_book)
-            .map_err(|e| AppFacadeError::Json(format!("Failed to serialize address book: {}", e)))?;
+        let data = serde_json::to_vec(&address_book).map_err(|e| {
+            AppFacadeError::Json(format!("Failed to serialize address book: {}", e))
+        })?;
 
-        service.save_encrypted_data(CONTACTS_DATA_NAME, &data, password)
+        service
+            .save_encrypted_data(CONTACTS_DATA_NAME, &data, password)
             .map_err(|e| AppFacadeError::Generic(format!("Failed to save address book: {}", e)))?;
 
         *self.contacts.lock().unwrap() = Some(address_book.clone());
-        self.prune_orphaned_market_selected_syncs(service, &address_book, &removed_endpoints, password);
+        self.prune_orphaned_market_selected_syncs(
+            service,
+            &address_book,
+            &removed_endpoints,
+            password,
+        );
         Ok(())
     }
 
-    pub fn delete_contact(&self, service: &mut AppService, did: &str, password: Option<&str>) -> Result<(), AppFacadeError> {
+    pub fn delete_contact(
+        &self,
+        service: &mut AppService,
+        did: &str,
+        password: Option<&str>,
+    ) -> Result<(), AppFacadeError> {
         let did = did.trim();
         let mut address_book = match service.load_encrypted_data(CONTACTS_DATA_NAME, password) {
             Ok(data) => serde_json::from_slice::<FrontendAddressBook>(&data).unwrap_or_default(),
             Err(e) => {
-                if matches!(&e, AppFacadeError::WalletLocked | AppFacadeError::SessionExpired(_) | AppFacadeError::SessionNotActive(_)) {
+                if matches!(
+                    &e,
+                    AppFacadeError::WalletLocked
+                        | AppFacadeError::SessionExpired(_)
+                        | AppFacadeError::SessionNotActive(_)
+                ) {
                     return Err(e);
                 }
                 return Ok(());
@@ -450,7 +529,9 @@ impl AppState {
             .flatten();
         let is_own_root = can_target.is_some() && own_can_did == can_target;
 
-        let keys_to_remove: Vec<String> = address_book.contacts.keys()
+        let keys_to_remove: Vec<String> = address_book
+            .contacts
+            .keys()
             .filter(|k| {
                 if is_own_root {
                     k.trim() == did
@@ -471,14 +552,23 @@ impl AppState {
         }
 
         if changed {
-            let data = serde_json::to_vec(&address_book)
-                .map_err(|e| AppFacadeError::Json(format!("Failed to serialize address book: {}", e)))?;
+            let data = serde_json::to_vec(&address_book).map_err(|e| {
+                AppFacadeError::Json(format!("Failed to serialize address book: {}", e))
+            })?;
 
-            service.save_encrypted_data(CONTACTS_DATA_NAME, &data, password)
-                .map_err(|e| AppFacadeError::Generic(format!("Failed to save address book: {}", e)))?;
+            service
+                .save_encrypted_data(CONTACTS_DATA_NAME, &data, password)
+                .map_err(|e| {
+                    AppFacadeError::Generic(format!("Failed to save address book: {}", e))
+                })?;
 
             *self.contacts.lock().unwrap() = Some(address_book.clone());
-            self.prune_orphaned_market_selected_syncs(service, &address_book, &removed_endpoints, password);
+            self.prune_orphaned_market_selected_syncs(
+                service,
+                &address_book,
+                &removed_endpoints,
+                password,
+            );
         }
 
         if !is_own_root && service.with_wallet(|_| ()).is_ok() {
@@ -508,7 +598,11 @@ impl AppState {
             .ok_or_else(|| AppFacadeError::Generic("History cache not initialized".to_string()))
     }
 
-    pub fn load_history_from_disk(&self, service: &mut AppService, password: Option<&str>) -> Result<Vec<TransactionRecord>, AppFacadeError> {
+    pub fn load_history_from_disk(
+        &self,
+        service: &mut AppService,
+        password: Option<&str>,
+    ) -> Result<Vec<TransactionRecord>, AppFacadeError> {
         match service.load_encrypted_data(TRANSACTION_HISTORY_KEY, password) {
             Ok(data) => {
                 let records: Result<Vec<TransactionRecord>, _> = serde_json::from_slice(&data);
@@ -525,7 +619,12 @@ impl AppState {
                 }
             }
             Err(e) => {
-                if matches!(&e, AppFacadeError::WalletLocked | AppFacadeError::SessionExpired(_) | AppFacadeError::SessionNotActive(_)) {
+                if matches!(
+                    &e,
+                    AppFacadeError::WalletLocked
+                        | AppFacadeError::SessionExpired(_)
+                        | AppFacadeError::SessionNotActive(_)
+                ) {
                     return Err(e);
                 }
                 info!("Keine Transaktionshistorie auf Festplatte gefunden. Erstelle neue.");
@@ -536,21 +635,36 @@ impl AppState {
         }
     }
 
-    pub fn save_history(&self, service: &mut AppService, history: Vec<TransactionRecord>, password: Option<&str>) -> Result<(), AppFacadeError> {
-        let history_bytes = serde_json::to_vec(&history).map_err(|e| AppFacadeError::Json(e.to_string()))?;
+    pub fn save_history(
+        &self,
+        service: &mut AppService,
+        history: Vec<TransactionRecord>,
+        password: Option<&str>,
+    ) -> Result<(), AppFacadeError> {
+        let history_bytes =
+            serde_json::to_vec(&history).map_err(|e| AppFacadeError::Json(e.to_string()))?;
         service.save_encrypted_data(TRANSACTION_HISTORY_KEY, &history_bytes, password)?;
         *self.history.lock().unwrap() = Some(history);
         Ok(())
     }
 
-    pub fn append_to_history(&self, service: &mut AppService, record: TransactionRecord, password: Option<&str>) -> Result<(), AppFacadeError> {
+    pub fn append_to_history(
+        &self,
+        service: &mut AppService,
+        record: TransactionRecord,
+        password: Option<&str>,
+    ) -> Result<(), AppFacadeError> {
         let mut history = self.load_history_from_disk(service, password)?;
         history.push(record);
         self.save_history(service, history, password)
     }
 
     // 5. Events Helpers
-    pub fn refresh_events_cache(&self, service: &mut AppService, password: Option<&str>) -> Result<(), AppFacadeError> {
+    pub fn refresh_events_cache(
+        &self,
+        service: &mut AppService,
+        password: Option<&str>,
+    ) -> Result<(), AppFacadeError> {
         info!("Refreshing events cache...");
         let events = service.get_event_history(0, 50, password)?;
         *self.events.lock().unwrap() = Some(events);
@@ -560,7 +674,6 @@ impl AppState {
     // 6. Logout Helpers
     pub fn clear_all_caches(&self) {
         info!("Clearing all caches on logout...");
-        *self.regional_views.lock().unwrap() = None;
         *self.history.lock().unwrap() = None;
         *self.events.lock().unwrap() = None;
         *self.contacts.lock().unwrap() = None;
@@ -597,14 +710,6 @@ impl AppState {
 
         // 1. Load or create settings
         let settings = self.load_settings(service, Some(credential))?;
-
-        if let Some(policy) = crate::checkout::configured_policy(&settings)
-            .map_err(|e| AppFacadeError::Generic(e.message))?
-        {
-            service
-                .configure_regional_mesh_authority(policy, Some(credential))
-                .map_err(|e| AppFacadeError::Generic(e.to_string()))?;
-        }
 
         // 2. Start session timer if configured
         if settings.session_timeout_seconds > 0 {
@@ -659,8 +764,9 @@ impl AppState {
         let now_secs = Utc::now().timestamp() as u64;
         service.with_wallet_and_identity(|_wallet, identity| {
             let signer = CoreIdentitySigner::new(identity);
-            reg.ensure_own_list_signed(&signer, now_secs)
-                .map_err(|e| AppFacadeError::Generic(format!("Failed to sign WoT trust list: {}", e)))
+            reg.ensure_own_list_signed(&signer, now_secs).map_err(|e| {
+                AppFacadeError::Generic(format!("Failed to sign WoT trust list: {}", e))
+            })
         })?
     }
 
@@ -675,20 +781,39 @@ impl AppState {
             .map_err(|e| AppFacadeError::Generic(format!("Invalid own wallet DID: {}", e)))?;
         let mut reg = match service.load_encrypted_data(WOT_DATA_NAME, password) {
             Ok(data) => {
-                serde_json::from_slice::<humoco_wot::TrustRegister>(&data)
-                    .map_err(|e| AppFacadeError::Json(format!("Failed to deserialize TrustRegister: {}", e)))?
+                serde_json::from_slice::<humoco_wot::TrustRegister>(&data).map_err(|e| {
+                    AppFacadeError::Json(format!("Failed to deserialize TrustRegister: {}", e))
+                })?
             }
             Err(e) => {
-                if matches!(&e, AppFacadeError::Storage(human_money_core::StorageError::NotFound)) {
+                if matches!(
+                    &e,
+                    AppFacadeError::Storage(human_money_core::StorageError::NotFound)
+                ) {
                     info!("No WoT register found, creating new one");
                     humoco_wot::TrustRegister::new(&own_can_did, humoco_wot::WotPolicy::default())
-                        .map_err(|e| AppFacadeError::Generic(format!("Failed to initialize TrustRegister: {}", e)))?
-                } else if matches!(&e, AppFacadeError::WalletLocked | AppFacadeError::SessionExpired(_) | AppFacadeError::SessionNotActive(_)) {
+                        .map_err(|e| {
+                        AppFacadeError::Generic(format!(
+                            "Failed to initialize TrustRegister: {}",
+                            e
+                        ))
+                    })?
+                } else if matches!(
+                    &e,
+                    AppFacadeError::WalletLocked
+                        | AppFacadeError::SessionExpired(_)
+                        | AppFacadeError::SessionNotActive(_)
+                ) {
                     return Err(e);
                 } else {
                     info!("Error loading WoT register ({:?}), creating fallback.", e);
                     humoco_wot::TrustRegister::new(&own_can_did, humoco_wot::WotPolicy::default())
-                        .map_err(|e| AppFacadeError::Generic(format!("Failed to initialize TrustRegister: {}", e)))?
+                        .map_err(|e| {
+                        AppFacadeError::Generic(format!(
+                            "Failed to initialize TrustRegister: {}",
+                            e
+                        ))
+                    })?
                 }
             }
         };
@@ -724,9 +849,11 @@ impl AppState {
         reg: &humoco_wot::TrustRegister,
         password: Option<&str>,
     ) -> Result<(), AppFacadeError> {
-        let bytes = serde_json::to_vec(reg)
-            .map_err(|e| AppFacadeError::Json(format!("Failed to serialize TrustRegister: {}", e)))?;
-        service.save_encrypted_data(WOT_DATA_NAME, &bytes, password)
+        let bytes = serde_json::to_vec(reg).map_err(|e| {
+            AppFacadeError::Json(format!("Failed to serialize TrustRegister: {}", e))
+        })?;
+        service
+            .save_encrypted_data(WOT_DATA_NAME, &bytes, password)
             .map_err(|e| AppFacadeError::Generic(format!("Failed to save TrustRegister: {}", e)))?;
         *self.wot.lock().unwrap() = Some(reg.clone());
         Ok(())
@@ -738,8 +865,8 @@ impl AppState {
         creator_id: &str,
         guarantor_ids: &[&str],
     ) -> crate::models::FrontendVoucherTrustDto {
-        use human_money_core::models::conflict::TrustStatus;
         use crate::models::FrontendVoucherTrustDto;
+        use human_money_core::models::conflict::TrustStatus;
 
         let own_did_can = canonicalize_did(wallet.get_user_id()).ok();
         let creator_can = canonicalize_did(creator_id).ok();
@@ -756,7 +883,10 @@ impl AppState {
             }
         }
 
-        let is_offender = matches!(wallet.check_reputation(creator_id), TrustStatus::KnownOffender(_));
+        let is_offender = matches!(
+            wallet.check_reputation(creator_id),
+            TrustStatus::KnownOffender(_)
+        );
         if is_offender {
             return FrontendVoucherTrustDto {
                 score: 0.0,
@@ -767,11 +897,14 @@ impl AppState {
             };
         }
 
-        let valid_guarantors: Vec<&str> = guarantor_ids.iter().copied()
+        let valid_guarantors: Vec<&str> = guarantor_ids
+            .iter()
+            .copied()
             .filter(|gid| !matches!(wallet.check_reputation(gid), TrustStatus::KnownOffender(_)))
             .collect();
 
-        let guarantor_canonical_set: std::collections::HashSet<String> = valid_guarantors.iter()
+        let guarantor_canonical_set: std::collections::HashSet<String> = valid_guarantors
+            .iter()
             .filter_map(|gid| canonicalize_did(gid).ok())
             .collect();
 
@@ -782,13 +915,22 @@ impl AppState {
         };
 
         let creator_canonical = creator_can.as_deref().unwrap_or(creator_id);
-        let valid_guarantor_canonicals: Vec<String> = valid_guarantors.iter()
+        let valid_guarantor_canonicals: Vec<String> = valid_guarantors
+            .iter()
             .map(|gid| canonicalize_did(gid).unwrap_or_else(|_| gid.to_string()))
             .collect();
-        let valid_guarantor_refs: Vec<&str> = valid_guarantor_canonicals.iter().map(|s| s.as_str()).collect();
+        let valid_guarantor_refs: Vec<&str> = valid_guarantor_canonicals
+            .iter()
+            .map(|s| s.as_str())
+            .collect();
 
         let now_secs = Utc::now().timestamp() as u64;
-        let eval = match reg.evaluate_voucher(creator_canonical, &valid_guarantor_refs, false, Some(now_secs)) {
+        let eval = match reg.evaluate_voucher(
+            creator_canonical,
+            &valid_guarantor_refs,
+            false,
+            Some(now_secs),
+        ) {
             Ok(e) => e,
             Err(_) => return FrontendVoucherTrustDto::default(),
         };
@@ -860,7 +1002,8 @@ impl AppState {
         creator_id: &str,
         signatures: &[human_money_core::models::voucher::VoucherSignature],
     ) -> crate::models::FrontendVoucherTrustDto {
-        let guarantor_ids: Vec<&str> = signatures.iter()
+        let guarantor_ids: Vec<&str> = signatures
+            .iter()
             .filter(|s| s.role.eq_ignore_ascii_case("guarantor"))
             .map(|s| s.signer_id.as_str())
             .collect();
@@ -916,7 +1059,10 @@ impl AppState {
         }
 
         if let Err(e) = self.save_wot_register(service, &reg, password) {
-            log::warn!("Failed to save WoT register after piggybacked import: {}", e);
+            log::warn!(
+                "Failed to save WoT register after piggybacked import: {}",
+                e
+            );
         }
 
         Some(stats.imported + stats.updated + stats.merged)
@@ -949,7 +1095,9 @@ impl AppState {
         let now = Utc::now().timestamp().max(0) as u64;
 
         let mut store = match service.load_encrypted_data(MARKET_CARD_STORE_KEY, password) {
-            Ok(data) => serde_json::from_slice::<humoco_market::CardStore>(&data).unwrap_or_default(),
+            Ok(data) => {
+                serde_json::from_slice::<humoco_market::CardStore>(&data).unwrap_or_default()
+            }
             Err(_) => humoco_market::CardStore::default(),
         };
 
@@ -977,13 +1125,24 @@ impl AppState {
             Ok(humoco_market::AcceptOutcome::Accepted { did, replaced }) => {
                 log::info!("Accepted piggybacked contact card (replaced={})", replaced);
                 if let Ok(bytes) = serde_json::to_vec(&store) {
-                    if let Err(e) = service.save_encrypted_data(MARKET_CARD_STORE_KEY, &bytes, password) {
-                        log::warn!("Failed to save CardStore after accepting piggybacked card: {}", e);
+                    if let Err(e) =
+                        service.save_encrypted_data(MARKET_CARD_STORE_KEY, &bytes, password)
+                    {
+                        log::warn!(
+                            "Failed to save CardStore after accepting piggybacked card: {}",
+                            e
+                        );
                     }
                 }
                 if let Some(stored) = store.cards.values().find(|sc| sc.card.payload.did == did) {
-                    let card_syncs: Vec<crate::models::FrontendSyncDescriptor> =
-                        stored.card.payload.drops.iter().cloned().map(Into::into).collect();
+                    let card_syncs: Vec<crate::models::FrontendSyncDescriptor> = stored
+                        .card
+                        .payload
+                        .drops
+                        .iter()
+                        .cloned()
+                        .map(Into::into)
+                        .collect();
                     self.update_contact_syncs_from_card(service, &did, &card_syncs, password);
                 }
             }
@@ -991,7 +1150,10 @@ impl AppState {
                 log::debug!("Piggybacked contact card outcome: {:?}", other);
             }
             Err(e) => {
-                log::warn!("Error verifying reputation for piggybacked contact card: {}", e);
+                log::warn!(
+                    "Error verifying reputation for piggybacked contact card: {}",
+                    e
+                );
             }
         }
     }
@@ -1012,13 +1174,15 @@ impl AppState {
         };
 
         let mut address_book = match service.load_encrypted_data(CONTACTS_DATA_NAME, password) {
-            Ok(data) => serde_json::from_slice::<crate::models::FrontendAddressBook>(&data).unwrap_or_default(),
+            Ok(data) => serde_json::from_slice::<crate::models::FrontendAddressBook>(&data)
+                .unwrap_or_default(),
             Err(_) => return,
         };
 
         let mut updated = false;
         for (k, contact) in address_book.contacts.iter_mut() {
-            let is_match = k == card_did || canonicalize_did(k).ok().as_deref() == Some(&can_card_did);
+            let is_match =
+                k == card_did || canonicalize_did(k).ok().as_deref() == Some(&can_card_did);
             if is_match {
                 let merged = merge_contact_syncs(&contact.syncs, card_syncs);
                 if contact.syncs != merged {
@@ -1048,7 +1212,8 @@ impl AppState {
         }
 
         let mut address_book = match service.load_encrypted_data(CONTACTS_DATA_NAME, password) {
-            Ok(data) => serde_json::from_slice::<crate::models::FrontendAddressBook>(&data).unwrap_or_default(),
+            Ok(data) => serde_json::from_slice::<crate::models::FrontendAddressBook>(&data)
+                .unwrap_or_default(),
             Err(_) => return false,
         };
 
@@ -1064,12 +1229,19 @@ impl AppState {
             for contact in address_book.contacts.values_mut() {
                 for sync_ep in &mut contact.syncs {
                     let norm_read = sync_ep.read_url.trim().trim_end_matches('/').to_lowercase();
-                    let norm_write = sync_ep.write_url.trim().trim_end_matches('/').to_lowercase();
+                    let norm_write = sync_ep
+                        .write_url
+                        .trim()
+                        .trim_end_matches('/')
+                        .to_lowercase();
                     if norm_read == norm_target || norm_write == norm_target {
-                        if sync_ep.status == "deprecating" && sync_ep.sunset_at.is_some_and(|eff| now_secs >= eff) {
+                        if sync_ep.status == "deprecating"
+                            && sync_ep.sunset_at.is_some_and(|eff| now_secs >= eff)
+                        {
                             sync_ep.status = "revoked".to_string();
                         }
-                        let is_revocation_state = sync_ep.status == "deprecating" || sync_ep.status == "revoked";
+                        let is_revocation_state =
+                            sync_ep.status == "deprecating" || sync_ep.status == "revoked";
                         if *success {
                             sync_ep.last_seen_at = Some(now_secs);
                             sync_ep.fail_count = 0;
@@ -1077,14 +1249,27 @@ impl AppState {
                                 if sync_ep.status == "active" {
                                     // remains active
                                 } else if sync_ep.status == "unreachable" {
-                                    let is_selected = settings_opt.as_ref().map(|s| {
-                                        s.market_selected_syncs.iter().any(|sel| {
-                                            let sr = sel.read_url.trim().trim_end_matches('/').to_lowercase();
-                                            let sw = sel.write_url.trim().trim_end_matches('/').to_lowercase();
-                                            (!sr.is_empty() && (sr == norm_read || sr == norm_write))
-                                                || (!sw.is_empty() && (sw == norm_read || sw == norm_write))
+                                    let is_selected = settings_opt
+                                        .as_ref()
+                                        .map(|s| {
+                                            s.market_selected_syncs.iter().any(|sel| {
+                                                let sr = sel
+                                                    .read_url
+                                                    .trim()
+                                                    .trim_end_matches('/')
+                                                    .to_lowercase();
+                                                let sw = sel
+                                                    .write_url
+                                                    .trim()
+                                                    .trim_end_matches('/')
+                                                    .to_lowercase();
+                                                (!sr.is_empty()
+                                                    && (sr == norm_read || sr == norm_write))
+                                                    || (!sw.is_empty()
+                                                        && (sw == norm_read || sw == norm_write))
+                                            })
                                         })
-                                    }).unwrap_or(false);
+                                        .unwrap_or(false);
                                     if is_selected {
                                         sync_ep.status = "active".to_string();
                                     } else {
@@ -1128,10 +1313,13 @@ impl AppState {
                     let norm_read = sel.read_url.trim().trim_end_matches('/').to_lowercase();
                     let norm_write = sel.write_url.trim().trim_end_matches('/').to_lowercase();
                     if norm_read == norm_target || norm_write == norm_target {
-                        if sel.status == "deprecating" && sel.sunset_at.is_some_and(|eff| now_secs >= eff) {
+                        if sel.status == "deprecating"
+                            && sel.sunset_at.is_some_and(|eff| now_secs >= eff)
+                        {
                             sel.status = "revoked".to_string();
                         }
-                        let is_revocation_state = sel.status == "deprecating" || sel.status == "revoked";
+                        let is_revocation_state =
+                            sel.status == "deprecating" || sel.status == "revoked";
                         if *success {
                             sel.last_seen_at = Some(now_secs);
                             sel.fail_count = 0;
@@ -1192,7 +1380,8 @@ impl AppState {
             let was_removed = removed_endpoints.iter().any(|rem| {
                 let rr = rem.read_url.trim().trim_end_matches('/').to_lowercase();
                 let rw = rem.write_url.trim().trim_end_matches('/').to_lowercase();
-                (!rr.is_empty() && (rr == sr || rr == sw)) || (!rw.is_empty() && (rw == sr || rw == sw))
+                (!rr.is_empty() && (rr == sr || rr == sw))
+                    || (!rw.is_empty() && (rw == sr || rw == sw))
             });
 
             if !was_removed {
@@ -1200,11 +1389,25 @@ impl AppState {
             }
 
             // 1. Matches StoredSyncAdmin?
-            let matches_admin = admin_opt.as_ref().map(|a| {
-                let ar = a.descriptor.read_url.trim().trim_end_matches('/').to_lowercase();
-                let aw = a.descriptor.write_url.trim().trim_end_matches('/').to_lowercase();
-                (!ar.is_empty() && (ar == sr || ar == sw)) || (!aw.is_empty() && (aw == sr || aw == sw))
-            }).unwrap_or(false);
+            let matches_admin = admin_opt
+                .as_ref()
+                .map(|a| {
+                    let ar = a
+                        .descriptor
+                        .read_url
+                        .trim()
+                        .trim_end_matches('/')
+                        .to_lowercase();
+                    let aw = a
+                        .descriptor
+                        .write_url
+                        .trim()
+                        .trim_end_matches('/')
+                        .to_lowercase();
+                    (!ar.is_empty() && (ar == sr || ar == sw))
+                        || (!aw.is_empty() && (aw == sr || aw == sw))
+                })
+                .unwrap_or(false);
 
             if matches_admin {
                 return true;
@@ -1215,7 +1418,8 @@ impl AppState {
                 c.syncs.iter().any(|ep| {
                     let er = ep.read_url.trim().trim_end_matches('/').to_lowercase();
                     let ew = ep.write_url.trim().trim_end_matches('/').to_lowercase();
-                    (!er.is_empty() && (er == sr || er == sw)) || (!ew.is_empty() && (ew == sr || ew == sw))
+                    (!er.is_empty() && (er == sr || er == sw))
+                        || (!ew.is_empty() && (ew == sr || ew == sw))
                 })
             });
 
@@ -1227,7 +1431,8 @@ impl AppState {
             let matches_public = settings.public_syncs.iter().any(|ps| {
                 let pr = ps.read_url.trim().trim_end_matches('/').to_lowercase();
                 let pw = ps.write_url.trim().trim_end_matches('/').to_lowercase();
-                (!pr.is_empty() && (pr == sr || pr == sw)) || (!pw.is_empty() && (pw == sr || pw == sw))
+                (!pr.is_empty() && (pr == sr || pr == sw))
+                    || (!pw.is_empty() && (pw == sr || pw == sw))
             });
 
             matches_public
@@ -1236,7 +1441,11 @@ impl AppState {
         if settings.market_selected_syncs.len() != initial_count {
             let updated_syncs = settings.market_selected_syncs.clone();
             let _ = self.save_settings(service, settings, password);
-            crate::commands::market::sync_own_card_drops_on_settings_change(service, &updated_syncs, password);
+            crate::commands::market::sync_own_card_drops_on_settings_change(
+                service,
+                &updated_syncs,
+                password,
+            );
         }
     }
 
@@ -1248,7 +1457,12 @@ impl AppState {
         now_secs: u64,
         password: Option<&str>,
     ) -> bool {
-        self.record_contact_sync_health_batch(service, &[(endpoint_url.to_string(), success)], now_secs, password)
+        self.record_contact_sync_health_batch(
+            service,
+            &[(endpoint_url.to_string(), success)],
+            now_secs,
+            password,
+        )
     }
 }
 
@@ -1289,11 +1503,15 @@ impl<'a> humoco_wot::WotSigner for CoreIdentitySigner<'a> {
     }
 
     fn sign(&self, message: &[u8]) -> [u8; 64] {
-        human_money_core::services::crypto::sign_ed25519(&self.identity.signing_key, message).to_bytes()
+        human_money_core::services::crypto::sign_ed25519(&self.identity.signing_key, message)
+            .to_bytes()
     }
 }
 
-fn enrich_contact_with_wot(contact: &mut FrontendContact, wot_opt: Option<&humoco_wot::TrustRegister>) {
+fn enrich_contact_with_wot(
+    contact: &mut FrontendContact,
+    wot_opt: Option<&humoco_wot::TrustRegister>,
+) {
     if let Some(reg) = wot_opt {
         if let Ok(can_did) = canonicalize_did(&contact.did) {
             if reg.self_did == can_did {
@@ -1318,15 +1536,32 @@ fn format_contact_display_name(c: &FrontendContact) -> Option<String> {
         (false, false) => format!("{} {}", first, last),
         (false, true) => first.to_string(),
         (true, false) => last.to_string(),
-        (true, true) => c.profile.organization.as_deref().unwrap_or("").trim().to_string(),
+        (true, true) => c
+            .profile
+            .organization
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .to_string(),
     };
-    if name.is_empty() { None } else { Some(name) }
+    if name.is_empty() {
+        None
+    } else {
+        Some(name)
+    }
 }
 
-fn lookup_contact_name(contacts_map: Option<&FrontendAddressBook>, target_did: &str) -> Option<String> {
+fn lookup_contact_name(
+    contacts_map: Option<&FrontendAddressBook>,
+    target_did: &str,
+) -> Option<String> {
     let book = contacts_map?;
     let trimmed_target = target_did.trim();
-    if let Some((_, exact_contact)) = book.contacts.iter().find(|(k, _)| k.trim() == trimmed_target) {
+    if let Some((_, exact_contact)) = book
+        .contacts
+        .iter()
+        .find(|(k, _)| k.trim() == trimmed_target)
+    {
         if let Some(name) = format_contact_display_name(exact_contact) {
             return Some(name);
         }
@@ -1365,7 +1600,8 @@ pub fn merge_contact_syncs(
 ) -> Vec<crate::models::FrontendSyncDescriptor> {
     let mut result: Vec<crate::models::FrontendSyncDescriptor> = Vec::with_capacity(2);
 
-    let merge_entry = |res: &mut Vec<crate::models::FrontendSyncDescriptor>, d: &crate::models::FrontendSyncDescriptor| {
+    let merge_entry = |res: &mut Vec<crate::models::FrontendSyncDescriptor>,
+                       d: &crate::models::FrontendSyncDescriptor| {
         let w = d.write_url.trim().trim_end_matches('/');
         let r = d.read_url.trim().trim_end_matches('/');
         if w.is_empty() && r.is_empty() {
@@ -1580,12 +1816,13 @@ pub fn apply_revocation_notice_to_address_book(
 
 #[cfg(test)]
 mod tests {
+    use crate::models::{FrontendContact, FrontendSyncDescriptor, FrontendUserProfile};
     use chrono::Utc;
-    use crate::models::{FrontendContact, FrontendUserProfile, FrontendSyncDescriptor};
 
     #[test]
     fn test_save_contact_authoritative_syncs_deletion() {
-        let temp_dir = std::env::temp_dir().join(format!("humoco_state_test_{}", uuid::Uuid::new_v4()));
+        let temp_dir =
+            std::env::temp_dir().join(format!("humoco_state_test_{}", uuid::Uuid::new_v4()));
         let password = "test-password-123";
         let alice_service = crate::commands::sync::tests::setup_test_app(
             &temp_dir.join("alice"),
@@ -1599,7 +1836,9 @@ mod tests {
             crate::commands::sync::tests::BOB_PHRASE,
             password,
         );
-        let bob_did = bob_service.with_wallet(|w| w.get_user_id().to_string()).unwrap();
+        let bob_did = bob_service
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
 
         let state = crate::commands::sync::tests::create_test_state(alice_service);
         let mut service = state.service.lock().unwrap();
@@ -1647,7 +1886,9 @@ mod tests {
             syncs: vec![sync1.clone(), sync2.clone()],
         };
 
-        state.save_contact(&mut service, initial_contact, Some(password)).unwrap();
+        state
+            .save_contact(&mut service, initial_contact, Some(password))
+            .unwrap();
 
         let loaded = state.load_contacts(&mut service, Some(password)).unwrap();
         let bob = loaded.iter().find(|c| c.did == bob_did).unwrap();
@@ -1671,7 +1912,9 @@ mod tests {
             syncs: vec![sync1.clone()], // sync2 removed!
         };
 
-        state.save_contact(&mut service, updated_one_sync, Some(password)).unwrap();
+        state
+            .save_contact(&mut service, updated_one_sync, Some(password))
+            .unwrap();
 
         // 3. Verify sync2 is deleted and NOT resurrected from old syncs
         let loaded2 = state.load_contacts(&mut service, Some(password)).unwrap();
@@ -1697,17 +1940,24 @@ mod tests {
             syncs: vec![], // All removed!
         };
 
-        state.save_contact(&mut service, updated_zero_syncs, Some(password)).unwrap();
+        state
+            .save_contact(&mut service, updated_zero_syncs, Some(password))
+            .unwrap();
 
         // 5. Verify all syncs deleted
         let loaded3 = state.load_contacts(&mut service, Some(password)).unwrap();
         let bob3 = loaded3.iter().find(|c| c.did == bob_did).unwrap();
-        assert_eq!(bob3.syncs.len(), 0, "All syncs must be removed authoritatively");
+        assert_eq!(
+            bob3.syncs.len(),
+            0,
+            "All syncs must be removed authoritatively"
+        );
     }
 
     #[test]
     fn test_record_contact_sync_health_batch() {
-        let temp_dir = std::env::temp_dir().join(format!("humoco_health_test_{}", uuid::Uuid::new_v4()));
+        let temp_dir =
+            std::env::temp_dir().join(format!("humoco_health_test_{}", uuid::Uuid::new_v4()));
         let password = "test-password-123";
         let alice_service = crate::commands::sync::tests::setup_test_app(
             &temp_dir.join("alice"),
@@ -1721,7 +1971,9 @@ mod tests {
             crate::commands::sync::tests::BOB_PHRASE,
             password,
         );
-        let bob_did = bob_service.with_wallet(|w| w.get_user_id().to_string()).unwrap();
+        let bob_did = bob_service
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
 
         let state = crate::commands::sync::tests::create_test_state(alice_service);
         let mut service = state.service.lock().unwrap();
@@ -1755,29 +2007,57 @@ mod tests {
             peer_list_updated_at: None,
             syncs: vec![sync_desc],
         };
-        state.save_contact(&mut service, contact, Some(password)).unwrap();
+        state
+            .save_contact(&mut service, contact, Some(password))
+            .unwrap();
 
         // 1. Success update preserves "unverified" (does NOT overwrite with "active")
-        let updated = state.update_contact_sync_health(&mut service, "https://sync-endpoint.org/sync.php", true, 1000, Some(password));
+        let updated = state.update_contact_sync_health(
+            &mut service,
+            "https://sync-endpoint.org/sync.php",
+            true,
+            1000,
+            Some(password),
+        );
         assert!(updated);
         let contacts = state.load_contacts(&mut service, Some(password)).unwrap();
         let bob = contacts.iter().find(|c| c.did == bob_did).unwrap();
         assert_eq!(bob.syncs[0].last_seen_at, Some(1000));
         assert_eq!(bob.syncs[0].fail_count, 0);
-        assert_eq!(bob.syncs[0].status, "unverified", "unverified status must not be overwritten with active on static read success");
+        assert_eq!(
+            bob.syncs[0].status, "unverified",
+            "unverified status must not be overwritten with active on static read success"
+        );
 
         // 1b. Test that "pending_auth" is also preserved on read success
         let mut bob_pending = bob.clone();
         bob_pending.syncs[0].status = "pending_auth".to_string();
-        state.save_contact(&mut service, bob_pending, Some(password)).unwrap();
-        let updated_pending = state.update_contact_sync_health(&mut service, "https://sync-endpoint.org/sync.php", true, 1050, Some(password));
+        state
+            .save_contact(&mut service, bob_pending, Some(password))
+            .unwrap();
+        let updated_pending = state.update_contact_sync_health(
+            &mut service,
+            "https://sync-endpoint.org/sync.php",
+            true,
+            1050,
+            Some(password),
+        );
         assert!(updated_pending);
         let contacts = state.load_contacts(&mut service, Some(password)).unwrap();
         let bob = contacts.iter().find(|c| c.did == bob_did).unwrap();
-        assert_eq!(bob.syncs[0].status, "pending_auth", "pending_auth status must not be overwritten with active on static read success");
+        assert_eq!(
+            bob.syncs[0].status, "pending_auth",
+            "pending_auth status must not be overwritten with active on static read success"
+        );
 
         // 2. Transient failure on pending_auth increments fail_count without immediately flipping to unreachable
-        let updated2 = state.update_contact_sync_health(&mut service, "https://sync-endpoint.org/sync.php", false, 1100, Some(password));
+        let updated2 = state.update_contact_sync_health(
+            &mut service,
+            "https://sync-endpoint.org/sync.php",
+            false,
+            1100,
+            Some(password),
+        );
         assert!(updated2);
         let contacts = state.load_contacts(&mut service, Some(password)).unwrap();
         let bob = contacts.iter().find(|c| c.did == bob_did).unwrap();
@@ -1786,7 +2066,13 @@ mod tests {
         assert_eq!(bob.syncs[0].status, "pending_auth");
 
         // 3. Second failure still keeps pending_auth; third consecutive failure transitions to unreachable
-        let updated3 = state.update_contact_sync_health(&mut service, "https://sync-endpoint.org/sync.php", false, 1200, Some(password));
+        let updated3 = state.update_contact_sync_health(
+            &mut service,
+            "https://sync-endpoint.org/sync.php",
+            false,
+            1200,
+            Some(password),
+        );
         assert!(updated3);
         let contacts = state.load_contacts(&mut service, Some(password)).unwrap();
         let bob = contacts.iter().find(|c| c.did == bob_did).unwrap();
@@ -1794,7 +2080,13 @@ mod tests {
         assert_eq!(bob.syncs[0].fail_count, 2);
         assert_eq!(bob.syncs[0].status, "pending_auth");
 
-        let updated3b = state.update_contact_sync_health(&mut service, "https://sync-endpoint.org/sync.php", false, 1250, Some(password));
+        let updated3b = state.update_contact_sync_health(
+            &mut service,
+            "https://sync-endpoint.org/sync.php",
+            false,
+            1250,
+            Some(password),
+        );
         assert!(updated3b);
         let contacts = state.load_contacts(&mut service, Some(password)).unwrap();
         let bob = contacts.iter().find(|c| c.did == bob_did).unwrap();
@@ -1803,13 +2095,22 @@ mod tests {
         assert_eq!(bob.syncs[0].status, "unreachable");
 
         // 4. Recovery success resets fail_count; since not in market_selected_syncs, transitions to "unverified"
-        let updated4 = state.update_contact_sync_health(&mut service, "https://sync-endpoint.org/sync.php", true, 1300, Some(password));
+        let updated4 = state.update_contact_sync_health(
+            &mut service,
+            "https://sync-endpoint.org/sync.php",
+            true,
+            1300,
+            Some(password),
+        );
         assert!(updated4);
         let contacts = state.load_contacts(&mut service, Some(password)).unwrap();
         let bob = contacts.iter().find(|c| c.did == bob_did).unwrap();
         assert_eq!(bob.syncs[0].last_seen_at, Some(1300));
         assert_eq!(bob.syncs[0].fail_count, 0);
-        assert_eq!(bob.syncs[0].status, "unverified", "unreachable contact sync transitions to unverified on read success when not in market_selected_syncs");
+        assert_eq!(
+            bob.syncs[0].status, "unverified",
+            "unreachable contact sync transitions to unverified on read success when not in market_selected_syncs"
+        );
 
         // 5. If sync is in market_selected_syncs, unreachable transitions to "active" on recovery
         let mut settings = state.load_settings(&mut service, Some(password)).unwrap();
@@ -1825,22 +2126,43 @@ mod tests {
             last_probed_at: None,
             ..Default::default()
         }];
-        state.save_settings(&mut service, settings, Some(password)).unwrap();
+        state
+            .save_settings(&mut service, settings, Some(password))
+            .unwrap();
 
         // Mark contact as unreachable again
-        let _ = state.update_contact_sync_health(&mut service, "https://sync-endpoint.org/sync.php", false, 1400, Some(password));
+        let _ = state.update_contact_sync_health(
+            &mut service,
+            "https://sync-endpoint.org/sync.php",
+            false,
+            1400,
+            Some(password),
+        );
         let contacts = state.load_contacts(&mut service, Some(password)).unwrap();
-        assert_eq!(contacts.iter().find(|c| c.did == bob_did).unwrap().syncs[0].status, "unreachable");
+        assert_eq!(
+            contacts.iter().find(|c| c.did == bob_did).unwrap().syncs[0].status,
+            "unreachable"
+        );
 
         // Now recover: should transition to "active" because it's in market_selected_syncs
-        let _ = state.update_contact_sync_health(&mut service, "https://sync-endpoint.org/sync.php", true, 1500, Some(password));
+        let _ = state.update_contact_sync_health(
+            &mut service,
+            "https://sync-endpoint.org/sync.php",
+            true,
+            1500,
+            Some(password),
+        );
         let contacts = state.load_contacts(&mut service, Some(password)).unwrap();
-        assert_eq!(contacts.iter().find(|c| c.did == bob_did).unwrap().syncs[0].status, "active");
+        assert_eq!(
+            contacts.iter().find(|c| c.did == bob_did).unwrap().syncs[0].status,
+            "active"
+        );
     }
 
     #[test]
     fn test_prune_orphaned_market_selected_syncs() {
-        let temp_dir = std::env::temp_dir().join(format!("humoco_prune_test_{}", uuid::Uuid::new_v4()));
+        let temp_dir =
+            std::env::temp_dir().join(format!("humoco_prune_test_{}", uuid::Uuid::new_v4()));
         let password = "test-password-123";
         let alice_service = crate::commands::sync::tests::setup_test_app(
             &temp_dir.join("alice"),
@@ -1854,7 +2176,9 @@ mod tests {
             crate::commands::sync::tests::BOB_PHRASE,
             password,
         );
-        let bob_did = bob_service.with_wallet(|w| w.get_user_id().to_string()).unwrap();
+        let bob_did = bob_service
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
 
         let state = crate::commands::sync::tests::create_test_state(alice_service);
         let mut service = state.service.lock().unwrap();
@@ -1888,23 +2212,35 @@ mod tests {
             peer_list_updated_at: None,
             syncs: vec![bob_sync.clone()],
         };
-        state.save_contact(&mut service, contact.clone(), Some(password)).unwrap();
+        state
+            .save_contact(&mut service, contact.clone(), Some(password))
+            .unwrap();
 
         // Put Bob's sync into settings.market_selected_syncs
         let mut settings = state.load_settings(&mut service, Some(password)).unwrap();
         settings.market_selected_syncs = vec![bob_sync];
-        state.save_settings(&mut service, settings, Some(password)).unwrap();
+        state
+            .save_settings(&mut service, settings, Some(password))
+            .unwrap();
 
         // 1. Updating contact to remove sync should prune it from settings.market_selected_syncs
         let mut updated_contact = contact.clone();
         updated_contact.syncs = vec![];
-        state.save_contact(&mut service, updated_contact, Some(password)).unwrap();
+        state
+            .save_contact(&mut service, updated_contact, Some(password))
+            .unwrap();
 
         let s_after = state.load_settings(&mut service, Some(password)).unwrap();
-        assert_eq!(s_after.market_selected_syncs.len(), 0, "Orphaned contact sync must be pruned from market_selected_syncs on save_contact");
+        assert_eq!(
+            s_after.market_selected_syncs.len(),
+            0,
+            "Orphaned contact sync must be pruned from market_selected_syncs on save_contact"
+        );
 
         // 2. Add contact back with sync, add to market_selected_syncs, then delete_contact
-        state.save_contact(&mut service, contact, Some(password)).unwrap();
+        state
+            .save_contact(&mut service, contact, Some(password))
+            .unwrap();
         let mut settings2 = state.load_settings(&mut service, Some(password)).unwrap();
         settings2.market_selected_syncs = vec![FrontendSyncDescriptor {
             read_url: "https://bob-sync.org/sync.php".to_string(),
@@ -1918,11 +2254,19 @@ mod tests {
             last_probed_at: None,
             ..Default::default()
         }];
-        state.save_settings(&mut service, settings2, Some(password)).unwrap();
+        state
+            .save_settings(&mut service, settings2, Some(password))
+            .unwrap();
 
-        state.delete_contact(&mut service, &bob_did, Some(password)).unwrap();
+        state
+            .delete_contact(&mut service, &bob_did, Some(password))
+            .unwrap();
         let s_after_del = state.load_settings(&mut service, Some(password)).unwrap();
-        assert_eq!(s_after_del.market_selected_syncs.len(), 0, "Orphaned contact sync must be pruned from market_selected_syncs on delete_contact");
+        assert_eq!(
+            s_after_del.market_selected_syncs.len(),
+            0,
+            "Orphaned contact sync must be pruned from market_selected_syncs on delete_contact"
+        );
     }
 
     #[test]
@@ -1953,7 +2297,8 @@ mod tests {
         };
 
         // Merge two unprobed syncs with distinct write URLs: neither should be dropped
-        let merged = super::merge_contact_syncs(std::slice::from_ref(&ep1), std::slice::from_ref(&ep2));
+        let merged =
+            super::merge_contact_syncs(std::slice::from_ref(&ep1), std::slice::from_ref(&ep2));
         assert_eq!(merged.len(), 2, "Both distinct unprobed syncs must be kept");
         assert_eq!(merged[0].write_url, "https://sync-b.example.com/sync.php");
         assert_eq!(merged[1].write_url, "https://sync-a.example.com/sync.php");
@@ -1972,7 +2317,11 @@ mod tests {
             ..Default::default()
         };
         let merged2 = super::merge_contact_syncs(&[ep1], &[populated_card]);
-        assert_eq!(merged2.len(), 1, "Matching write_url should be merged into single entry");
+        assert_eq!(
+            merged2.len(),
+            1,
+            "Matching write_url should be merged into single entry"
+        );
         assert_eq!(merged2[0].read_url, "https://sync-a.example.com/read");
         assert_eq!(merged2[0].drop_pub, "pubkey_a");
         assert_eq!(merged2[0].slot_id, Some("slot123".to_string()));
@@ -2097,12 +2446,16 @@ mod tests {
         assert_eq!(bob_after.syncs.len(), 2);
         assert_eq!(bob_after.syncs[0].read_url, "https://new.example.org/d-new");
         assert_eq!(bob_after.syncs[0].slot_id, None);
-        assert_eq!(bob_after.syncs[1].read_url, "https://keep.example.org/d-keep");
+        assert_eq!(
+            bob_after.syncs[1].read_url,
+            "https://keep.example.org/d-keep"
+        );
     }
 
     #[test]
     fn test_record_contact_sync_health_preserves_deprecating_and_revoked() {
-        let temp_dir = std::env::temp_dir().join(format!("humoco_health_rev_{}", uuid::Uuid::new_v4()));
+        let temp_dir =
+            std::env::temp_dir().join(format!("humoco_health_rev_{}", uuid::Uuid::new_v4()));
         let password = "test-password-123";
         let alice_service = crate::commands::sync::tests::setup_test_app(
             &temp_dir.join("alice"),
@@ -2116,7 +2469,9 @@ mod tests {
             crate::commands::sync::tests::BOB_PHRASE,
             password,
         );
-        let bob_did = bob_service.with_wallet(|w| w.get_user_id().to_string()).unwrap();
+        let bob_did = bob_service
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
 
         let state = crate::commands::sync::tests::create_test_state(alice_service);
         let mut service = state.service.lock().unwrap();
@@ -2155,11 +2510,17 @@ mod tests {
             peer_list_updated_at: None,
             syncs: vec![dep_ep.clone(), rev_ep.clone()],
         };
-        state.save_contact(&mut service, contact, Some(password)).unwrap();
+        state
+            .save_contact(&mut service, contact, Some(password))
+            .unwrap();
 
-        let mut settings = state.load_settings(&mut service, Some(password)).unwrap_or_default();
+        let mut settings = state
+            .load_settings(&mut service, Some(password))
+            .unwrap_or_default();
         settings.market_selected_syncs = vec![dep_ep.clone(), rev_ep.clone()];
-        state.save_settings(&mut service, settings, Some(password)).unwrap();
+        state
+            .save_settings(&mut service, settings, Some(password))
+            .unwrap();
 
         // 1. Before sunset (now = 1800 < 2000): success=true keeps deprecating, failure=false keeps revoked
         state.record_contact_sync_health_batch(
@@ -2214,7 +2575,10 @@ mod tests {
 
     #[test]
     fn test_save_and_delete_own_subaccounts_and_reject_self_profile_and_self_trust() {
-        let temp_dir = std::env::temp_dir().join(format!("humoco_subaccount_contact_test_{}", uuid::Uuid::new_v4()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "humoco_subaccount_contact_test_{}",
+            uuid::Uuid::new_v4()
+        ));
         let password = "test-password-123";
         let alice_service = crate::commands::sync::tests::setup_test_app(
             &temp_dir.join("alice"),
@@ -2223,7 +2587,9 @@ mod tests {
             password,
         );
         let (own_uid, own_vk) = alice_service
-            .with_wallet_and_identity(|w, id| (w.get_user_id().to_string(), id.signing_key.verifying_key()))
+            .with_wallet_and_identity(|w, id| {
+                (w.get_user_id().to_string(), id.signing_key.verifying_key())
+            })
             .unwrap();
         let laden_uid = human_money_core::crypto::create_user_id(&own_vk, Some("laden")).unwrap();
         let privat_uid = human_money_core::crypto::create_user_id(&own_vk, Some("privat")).unwrap();
@@ -2248,7 +2614,9 @@ mod tests {
             peer_list_updated_at: None,
             syncs: vec![],
         };
-        let self_err = state.save_contact(&mut service, self_contact, Some(password)).unwrap_err();
+        let self_err = state
+            .save_contact(&mut service, self_contact, Some(password))
+            .unwrap_err();
         assert!(self_err.to_string().contains("active profile"));
 
         // 2. Own subaccount with trust_level must be rejected (Self trust forbidden)
@@ -2268,7 +2636,9 @@ mod tests {
             peer_list_updated_at: None,
             syncs: vec![],
         };
-        let trust_err = state.save_contact(&mut service, rated_sub, Some(password)).unwrap_err();
+        let trust_err = state
+            .save_contact(&mut service, rated_sub, Some(password))
+            .unwrap_err();
         assert!(trust_err.to_string().contains("Self trust forbidden"));
 
         // 3. Two distinct own subaccounts (trust_level: None) co-exist without overwriting each other
@@ -2304,21 +2674,41 @@ mod tests {
             peer_list_updated_at: None,
             syncs: vec![],
         };
-        state.save_contact(&mut service, laden_contact, Some(password)).unwrap();
-        state.save_contact(&mut service, privat_contact, Some(password)).unwrap();
+        state
+            .save_contact(&mut service, laden_contact, Some(password))
+            .unwrap();
+        state
+            .save_contact(&mut service, privat_contact, Some(password))
+            .unwrap();
 
         let contacts = state.load_contacts(&mut service, Some(password)).unwrap();
-        assert_eq!(contacts.len(), 2, "Both own subaccounts must stay in address book");
-        assert!(contacts.iter().any(|c| c.did == laden_uid && c.trust_level.is_none()));
-        assert!(contacts.iter().any(|c| c.did == privat_uid && c.trust_level.is_none()));
+        assert_eq!(
+            contacts.len(),
+            2,
+            "Both own subaccounts must stay in address book"
+        );
+        assert!(contacts
+            .iter()
+            .any(|c| c.did == laden_uid && c.trust_level.is_none()));
+        assert!(contacts
+            .iter()
+            .any(|c| c.did == privat_uid && c.trust_level.is_none()));
 
         // 4. lookup_contact_name resolves exact subaccount name rather than sibling
         let book = state.contacts.lock().unwrap().clone();
-        assert_eq!(super::lookup_contact_name(book.as_ref(), &laden_uid).as_deref(), Some("Mein Laden"));
-        assert_eq!(super::lookup_contact_name(book.as_ref(), &privat_uid).as_deref(), Some("Mein Privat"));
+        assert_eq!(
+            super::lookup_contact_name(book.as_ref(), &laden_uid).as_deref(),
+            Some("Mein Laden")
+        );
+        assert_eq!(
+            super::lookup_contact_name(book.as_ref(), &privat_uid).as_deref(),
+            Some("Mein Privat")
+        );
 
         // 5. Deleting one subaccount must leave sibling intact
-        state.delete_contact(&mut service, &privat_uid, Some(password)).unwrap();
+        state
+            .delete_contact(&mut service, &privat_uid, Some(password))
+            .unwrap();
         let remaining = state.load_contacts(&mut service, Some(password)).unwrap();
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].did, laden_uid);

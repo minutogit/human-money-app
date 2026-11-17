@@ -128,7 +128,6 @@ export interface ProofOfDoubleSpendSummary {
     forkPointPrevHash: string;
     reportTimestamp: string;
     isResolved: boolean;
-    hasL2Verdict: boolean;
     localOverride: boolean;
     conflictRole: ConflictRole;
     affectedVoucherName?: string;
@@ -149,7 +148,6 @@ export interface ProofOfDoubleSpend {
     reportTimestamp: string;
     reporterSignature: string;
     resolutions?: ResolutionEndorsement[];
-    layer2Verdict?: unknown;
     affectedVoucherName?: string;
     displayAffectedVoucherName?: string;
     voucherStandardUuid?: string;

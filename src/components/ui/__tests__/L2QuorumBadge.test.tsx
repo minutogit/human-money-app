@@ -69,20 +69,29 @@ describe('L2QuorumBadge', () => {
     expect(screen.getByTestId('l2-status-pill')).toHaveTextContent('provisional');
     expect(screen.getByTestId('l2-status-pill')).toHaveTextContent('●○');
     expect(screen.getByTestId('l2-quorum-badge').className).toContain('emerald');
-    expect(screen.getByText(/Ein kleineres Server-Netzwerk hat die Zahlung geprüft/)).toBeInTheDocument();
+    expect(screen.getByText(/Lock-Server haben den Transfer vorläufig abgesichert/)).toBeInTheDocument();
   });
 
   it('displays Level 2 green final state when verified', () => {
-    render(<L2QuorumBadge status="final" isVerifiedCheckout={true} showDetails signerCount={14} activeNodesCount={20} shardId={4} />);
-    expect(screen.getByText('Maximale Sicherheit')).toBeInTheDocument();
+    render(<L2QuorumBadge status="final" isVerifiedCheckout={true} showDetails signerCount={3} activeNodesCount={4} />);
+    expect(screen.getByText('Quorum bestätigt')).toBeInTheDocument();
     expect(screen.getByTestId('l2-status-pill')).toHaveTextContent('final');
     expect(screen.getByTestId('l2-status-pill')).toHaveTextContent('●●');
     expect(screen.getByTestId('l2-quorum-badge').className).toContain('emerald');
-    expect(screen.getByText(/Ein großes, weltweites Server-Netzwerk/)).toBeInTheDocument();
-    expect(screen.getByTestId('l2-quorum-count')).toHaveTextContent(/14\/20 (Nodes|Knoten)/);
+    expect(screen.getByText(/Vertraute Lock-Server haben den Transfer nach der Grün-Regel abgesichert/)).toBeInTheDocument();
+    expect(screen.getByTestId('l2-quorum-count')).toHaveTextContent(/3\/4 Server/);
 
-    expect(screen.queryByText('Shard #4')).not.toBeInTheDocument();
     fireEvent.click(screen.getByTestId('l2-toggle-tech-diagnostics'));
-    expect(screen.getByText('Shard #4')).toBeInTheDocument();
+    expect(screen.getByText('Sync-Lock Quorum')).toBeInTheDocument();
+  });
+
+  it('displays offline_only (N=0) and yellow warning badges cleanly', () => {
+    const { rerender } = render(<L2QuorumBadge status="offline_only" showDetails />);
+    expect(screen.getByText('Nur Offline (N = 0)')).toBeInTheDocument();
+    expect(screen.getByTestId('l2-quorum-badge').className).toContain('slate');
+
+    rerender(<L2QuorumBadge status="yellow" showDetails />);
+    expect(screen.getByText('Eingeschränkt (Gelb)')).toBeInTheDocument();
+    expect(screen.getByTestId('l2-quorum-badge').className).toContain('amber');
   });
 });

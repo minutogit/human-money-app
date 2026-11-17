@@ -1,18 +1,26 @@
-use crate::AppState;
 use crate::models::FrontendError;
+use crate::AppState;
 
 #[tauri::command]
-pub fn get_active_asset_classes(state: tauri::State<AppState>) -> Result<Vec<crate::models::FrontendAssetClassSummary>, FrontendError> {
+pub fn get_active_asset_classes(
+    state: tauri::State<AppState>,
+) -> Result<Vec<crate::models::FrontendAssetClassSummary>, FrontendError> {
     let service = state.service.lock().unwrap();
-    let asset_classes = service.with_wallet(|w| w.get_active_asset_classes()).map_err(FrontendError::from)?;
+    let asset_classes = service
+        .with_wallet(|w| w.get_active_asset_classes())
+        .map_err(FrontendError::from)?;
     Ok(asset_classes.into_iter().map(|s| s.into()).collect())
 }
 
 #[tauri::command]
-pub fn get_user_profile(state: tauri::State<AppState>) -> Result<crate::models::FrontendUserProfile, FrontendError> {
+pub fn get_user_profile(
+    state: tauri::State<AppState>,
+) -> Result<crate::models::FrontendUserProfile, FrontendError> {
     let service = state.service.lock().unwrap();
-    let profile = service.with_wallet(|w| w.profile.to_public_profile()).map_err(FrontendError::from)?;
-    
+    let profile = service
+        .with_wallet(|w| w.profile.to_public_profile())
+        .map_err(FrontendError::from)?;
+
     Ok(crate::models::FrontendUserProfile {
         protocol_version: profile.protocol_version,
         id: profile.id,
@@ -42,7 +50,9 @@ pub fn get_user_profile(state: tauri::State<AppState>) -> Result<crate::models::
 #[tauri::command]
 pub fn get_user_id(state: tauri::State<AppState>) -> Result<String, FrontendError> {
     let service = state.service.lock().unwrap();
-    service.with_wallet(|w| w.get_user_id().to_string()).map_err(FrontendError::from)
+    service
+        .with_wallet(|w| w.get_user_id().to_string())
+        .map_err(FrontendError::from)
 }
 
 pub const FIXED_SCALE: i128 = 100_000_000;
@@ -133,19 +143,28 @@ pub fn calculate_aggregated_balances(
     // 1. Sum up active vouchers using list_vouchers
     let summaries = w.list_vouchers(Some(id), None, None, None);
     for s in summaries {
-        if !matches!(s.status, human_money_core::wallet::instance::VoucherStatus::Active) {
+        if !matches!(
+            s.status,
+            human_money_core::wallet::instance::VoucherStatus::Active
+        ) {
             continue;
         }
 
-        let key = (s.voucher_standard_uuid.clone(), s.unit.clone(), s.is_test_voucher);
-        meta_map.entry(key.clone()).or_insert_with(|| AssetClassMeta {
-            standard_name: s.raw_standard_name.clone(),
-            standard_uuid: s.voucher_standard_uuid.clone(),
-            unit: s.unit.clone(),
-            is_test_voucher: s.is_test_voucher,
-            display_currency: s.display_currency.clone(),
-            display_standard_name: s.display_standard_name.clone(),
-        });
+        let key = (
+            s.voucher_standard_uuid.clone(),
+            s.unit.clone(),
+            s.is_test_voucher,
+        );
+        meta_map
+            .entry(key.clone())
+            .or_insert_with(|| AssetClassMeta {
+                standard_name: s.raw_standard_name.clone(),
+                standard_uuid: s.voucher_standard_uuid.clone(),
+                unit: s.unit.clone(),
+                is_test_voucher: s.is_test_voucher,
+                display_currency: s.display_currency.clone(),
+                display_standard_name: s.display_standard_name.clone(),
+            });
 
         let amount = parse_fixed_point(&s.current_amount).unwrap_or(0);
         let entry = amounts_map.entry(key).or_default();
@@ -157,16 +176,21 @@ pub fn calculate_aggregated_balances(
     }
 
     // 2. Calculate own circulating amounts across all root vouchers created by this user
-    let mut root_nominal_by_asset: HashMap<(String, String, bool), HashMap<String, i128>> = HashMap::new();
+    let mut root_nominal_by_asset: HashMap<(String, String, bool), HashMap<String, i128>> =
+        HashMap::new();
     let mut redeemed_by_asset: HashMap<(String, String, bool), i128> = HashMap::new();
-    let mut seen_redeemed_tx: HashMap<(String, String, bool), HashSet<(String, String)>> = HashMap::new();
+    let mut seen_redeemed_tx: HashMap<(String, String, bool), HashSet<(String, String)>> =
+        HashMap::new();
 
     for instance in w.voucher_store.vouchers.values() {
         let is_own = instance.voucher.creator_profile.id.as_deref() == Some(&id.user_id);
         if !is_own {
             continue;
         }
-        if matches!(instance.status, human_money_core::wallet::instance::VoucherStatus::Incomplete { .. }) {
+        if matches!(
+            instance.status,
+            human_money_core::wallet::instance::VoucherStatus::Incomplete { .. }
+        ) {
             continue;
         }
         let not_expired = chrono::DateTime::parse_from_rfc3339(&instance.voucher.valid_until)
@@ -183,7 +207,11 @@ pub fn calculate_aggregated_balances(
             .clone()
             .unwrap_or_else(|| instance.voucher.nominal_value.unit.clone());
         let is_test = instance.voucher.non_redeemable_test_voucher;
-        let key = (instance.voucher.voucher_standard.uuid.clone(), unit.clone(), is_test);
+        let key = (
+            instance.voucher.voucher_standard.uuid.clone(),
+            unit.clone(),
+            is_test,
+        );
 
         meta_map.entry(key.clone()).or_insert_with(|| {
             let std_name = instance.voucher.voucher_standard.name.clone();
@@ -219,8 +247,13 @@ pub fn calculate_aggregated_balances(
         for tx in &instance.voucher.transactions {
             if tx.t_type == "redeem" {
                 let tx_key = (instance.voucher.voucher_id.clone(), tx.t_id.clone());
-                if seen_redeemed_tx.entry(key.clone()).or_default().insert(tx_key) {
-                    *redeemed_by_asset.entry(key.clone()).or_default() += parse_fixed_point(&tx.amount).unwrap_or(0);
+                if seen_redeemed_tx
+                    .entry(key.clone())
+                    .or_default()
+                    .insert(tx_key)
+                {
+                    *redeemed_by_asset.entry(key.clone()).or_default() +=
+                        parse_fixed_point(&tx.amount).unwrap_or(0);
                 }
             }
         }
@@ -239,7 +272,8 @@ pub fn calculate_aggregated_balances(
             .unwrap_or(0);
         let redeemed_amount = redeemed_by_asset.get(&key).copied().unwrap_or(0);
 
-        let own_circulating_amount = (nominal_total - redeemed_amount - own_available_amount).max(0);
+        let own_circulating_amount =
+            (nominal_total - redeemed_amount - own_available_amount).max(0);
         let total_amount = received_amount + own_available_amount;
         let net_balance = received_amount - own_circulating_amount;
 
@@ -265,77 +299,110 @@ pub fn calculate_aggregated_balances(
 }
 
 #[tauri::command]
-pub fn get_total_balance_by_currency(state: tauri::State<AppState>) -> Result<Vec<crate::models::FrontendAggregatedBalance>, FrontendError> {
+pub fn get_total_balance_by_currency(
+    state: tauri::State<AppState>,
+) -> Result<Vec<crate::models::FrontendAggregatedBalance>, FrontendError> {
     let service = state.service.lock().unwrap();
-    let balances = service.with_wallet_and_identity(|w, id| {
-        calculate_aggregated_balances(w, id)
-    }).map_err(FrontendError::from)?;
+    let balances = service
+        .with_wallet_and_identity(calculate_aggregated_balances)
+        .map_err(FrontendError::from)?;
     Ok(balances)
 }
 
 #[tauri::command]
-pub fn get_voucher_summaries(test_filter: Option<bool>, state: tauri::State<AppState>) -> Result<Vec<crate::models::FrontendVoucherSummary>, FrontendError> {
+pub fn get_voucher_summaries(
+    test_filter: Option<bool>,
+    state: tauri::State<AppState>,
+) -> Result<Vec<crate::models::FrontendVoucherSummary>, FrontendError> {
     let service = state.service.lock().unwrap();
-    let summaries = service.with_wallet_and_identity(|w, id| {
-        let raw_summaries = w.list_vouchers(Some(id), None, None, test_filter);
-        let mut enriched = Vec::with_capacity(raw_summaries.len());
-        for s in raw_summaries {
-            let mut summary: crate::models::FrontendVoucherSummary = s.into();
-            if let Some(instance) = w.voucher_store.vouchers.get(&summary.local_instance_id) {
-                summary.description = instance
-                    .voucher
-                    .nominal_value
-                    .description
-                    .clone()
-                    .or_else(|| instance.voucher.creator_profile.service_offer.clone())
-                    .unwrap_or_default();
-                summary.trust = state.evaluate_voucher_trust(w, &summary.creator_id, &instance.voucher.signatures);
+    let summaries = service
+        .with_wallet_and_identity(|w, id| {
+            let raw_summaries = w.list_vouchers(Some(id), None, None, test_filter);
+            let mut enriched = Vec::with_capacity(raw_summaries.len());
+            for s in raw_summaries {
+                let mut summary: crate::models::FrontendVoucherSummary = s.into();
+                if let Some(instance) = w.voucher_store.vouchers.get(&summary.local_instance_id) {
+                    summary.description = instance
+                        .voucher
+                        .nominal_value
+                        .description
+                        .clone()
+                        .or_else(|| instance.voucher.creator_profile.service_offer.clone())
+                        .unwrap_or_default();
+                    summary.trust = state.evaluate_voucher_trust(
+                        w,
+                        &summary.creator_id,
+                        &instance.voucher.signatures,
+                    );
+                }
+                enriched.push(summary);
             }
-            enriched.push(summary);
-        }
-        enriched
-    }).map_err(FrontendError::from)?;
+            enriched
+        })
+        .map_err(FrontendError::from)?;
     Ok(summaries)
 }
 
 #[tauri::command]
-pub fn get_voucher_details(local_id: String, state: tauri::State<AppState>) -> Result<crate::models::FrontendVoucherDetails, FrontendError> {
+pub fn get_voucher_details(
+    local_id: String,
+    state: tauri::State<AppState>,
+) -> Result<crate::models::FrontendVoucherDetails, FrontendError> {
     let service = state.service.lock().unwrap();
-    let details = service.with_wallet_and_identity(|w, id| -> Result<crate::models::FrontendVoucherDetails, human_money_core::Error> {
-        let raw_details = w.get_voucher_details(&local_id)?;
-        let mut frontend_details: crate::models::FrontendVoucherDetails = raw_details.clone().into();
-        if let Some(summary) = w
-            .list_vouchers(Some(id), None, None, None)
-            .into_iter()
-            .find(|s| s.local_instance_id == local_id)
-        {
-            frontend_details.current_amount = summary.current_amount;
-        }
-        let creator_id = raw_details.voucher.creator_profile.id.as_deref().unwrap_or("");
-        frontend_details.trust = state.evaluate_voucher_trust(w, creator_id, &raw_details.voucher.signatures);
-        Ok(frontend_details)
-    }).map_err(FrontendError::from)?
-    .map_err(FrontendError::from)?;
+    let details = service
+        .with_wallet_and_identity(
+            |w, id| -> Result<crate::models::FrontendVoucherDetails, human_money_core::Error> {
+                let raw_details = w.get_voucher_details(&local_id)?;
+                let mut frontend_details: crate::models::FrontendVoucherDetails =
+                    raw_details.clone().into();
+                if let Some(summary) = w
+                    .list_vouchers(Some(id), None, None, None)
+                    .into_iter()
+                    .find(|s| s.local_instance_id == local_id)
+                {
+                    frontend_details.current_amount = summary.current_amount;
+                }
+                let creator_id = raw_details
+                    .voucher
+                    .creator_profile
+                    .id
+                    .as_deref()
+                    .unwrap_or("");
+                frontend_details.trust =
+                    state.evaluate_voucher_trust(w, creator_id, &raw_details.voucher.signatures);
+                Ok(frontend_details)
+            },
+        )
+        .map_err(FrontendError::from)?
+        .map_err(FrontendError::from)?;
     Ok(details)
 }
 
 #[tauri::command]
-pub fn get_voucher_source_sender(local_id: String, state: tauri::State<AppState>) -> Result<Option<String>, FrontendError> {
+pub fn get_voucher_source_sender(
+    local_id: String,
+    state: tauri::State<AppState>,
+) -> Result<Option<String>, FrontendError> {
     let service = state.service.lock().unwrap();
-    let sender = service.with_wallet_and_identity(|w, id| w.get_voucher_source_sender(&local_id, id))
+    let sender = service
+        .with_wallet_and_identity(|w, id| w.get_voucher_source_sender(&local_id, id))
         .map_err(FrontendError::from)?
         .map_err(FrontendError::from)?;
     Ok(sender)
 }
 
 #[tauri::command]
-pub fn get_double_spend_conflicts(state: tauri::State<AppState>) -> Result<Vec<crate::models::FrontendProofOfDoubleSpendSummary>, FrontendError> {
+pub fn get_double_spend_conflicts(
+    state: tauri::State<AppState>,
+) -> Result<Vec<crate::models::FrontendProofOfDoubleSpendSummary>, FrontendError> {
     let service = state.service.lock().unwrap();
     let conflicts = service.list_conflicts().map_err(FrontendError::from)?;
     Ok(conflicts.into_iter().map(|s| s.into()).collect())
 }
 
-pub(crate) fn conflict_role_str(role: human_money_core::models::conflict::ConflictRole) -> &'static str {
+pub(crate) fn conflict_role_str(
+    role: human_money_core::models::conflict::ConflictRole,
+) -> &'static str {
     match role {
         human_money_core::models::conflict::ConflictRole::Victim => "victim",
         human_money_core::models::conflict::ConflictRole::Witness => "witness",
@@ -343,14 +410,21 @@ pub(crate) fn conflict_role_str(role: human_money_core::models::conflict::Confli
 }
 
 #[tauri::command]
-pub fn get_proof_of_double_spend(proof_id: String, state: tauri::State<AppState>) -> Result<crate::models::FullProofDetails, FrontendError> {
+pub fn get_proof_of_double_spend(
+    proof_id: String,
+    state: tauri::State<AppState>,
+) -> Result<crate::models::FullProofDetails, FrontendError> {
     let service = state.service.lock().unwrap();
     let summaries = service.list_conflicts().map_err(FrontendError::from)?;
-    let summary = summaries.into_iter().find(|s| s.proof_id == proof_id)
+    let summary = summaries
+        .into_iter()
+        .find(|s| s.proof_id == proof_id)
         .ok_or_else(|| FrontendError::from(format!("Conflict proof {} not found", proof_id)))?;
-    
-    let proof = service.get_proof_of_double_spend(&proof_id).map_err(FrontendError::from)?;
-    
+
+    let proof = service
+        .get_proof_of_double_spend(&proof_id)
+        .map_err(FrontendError::from)?;
+
     let conflict_role = conflict_role_str(summary.conflict_role);
     let mut frontend_proof: crate::models::FrontendProofOfDoubleSpend = proof.into();
     frontend_proof.affected_voucher_name = summary
@@ -369,9 +443,14 @@ pub fn get_proof_of_double_spend(proof_id: String, state: tauri::State<AppState>
 }
 
 #[tauri::command]
-pub fn get_proof_id_for_voucher(local_id: String, state: tauri::State<AppState>) -> Result<Option<String>, FrontendError> {
+pub fn get_proof_id_for_voucher(
+    local_id: String,
+    state: tauri::State<AppState>,
+) -> Result<Option<String>, FrontendError> {
     let service = state.service.lock().unwrap();
-    service.get_proof_id_for_voucher(&local_id).map_err(FrontendError::from)
+    service
+        .get_proof_id_for_voucher(&local_id)
+        .map_err(FrontendError::from)
 }
 
 #[tauri::command]
@@ -381,7 +460,9 @@ pub fn check_reputation(
 ) -> Result<crate::models::FrontendTrustStatus, FrontendError> {
     let offender_id = offender_id.trim().to_string();
     let service = state.service.lock().unwrap();
-    let status = service.with_wallet(|w| w.check_reputation(&offender_id)).map_err(FrontendError::from)?;
+    let status = service
+        .with_wallet(|w| w.check_reputation(&offender_id))
+        .map_err(FrontendError::from)?;
     Ok(status.into())
 }
 #[tauri::command]
@@ -394,19 +475,24 @@ pub fn get_event_history(
     if let Some(events) = events_cache.as_ref() {
         let start = offset.min(events.len());
         let end = (offset + limit).min(events.len());
-        Ok(events[start..end].iter().map(|e| e.clone().into()).collect())
+        Ok(events[start..end]
+            .iter()
+            .map(|e| e.clone().into())
+            .collect())
     } else {
-        Err(FrontendError::from("Events cache not initialized".to_string()))
+        Err(FrontendError::from(
+            "Events cache not initialized".to_string(),
+        ))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
+    use chrono::Utc;
     use human_money_core::app_service::AppService;
     use human_money_core::models::wallet_event::{WalletEvent, WalletEventType};
-    use chrono::Utc;
+    use std::sync::Mutex;
 
     #[test]
     fn test_get_event_history_uses_cache() {
@@ -416,23 +502,20 @@ mod tests {
         let state_raw = AppState {
             service: Mutex::new(service),
             history: Mutex::new(None),
-            events: Mutex::new(Some(vec![
-                WalletEvent {
-                    event_id: "test_event_1".to_string(),
-                    event_type: WalletEventType::VoucherActivated,
-                    timestamp: Utc::now(),
-                    local_instance_id: "voucher_1".to_string(),
-                    voucher_id: "vid_1".to_string(),
-                    bff_data: Default::default(),
-                }
-            ])),
+            events: Mutex::new(Some(vec![WalletEvent {
+                event_id: "test_event_1".to_string(),
+                event_type: WalletEventType::VoucherActivated,
+                timestamp: Utc::now(),
+                local_instance_id: "voucher_1".to_string(),
+                voucher_id: "vid_1".to_string(),
+                bff_data: Default::default(),
+            }])),
             contacts: Mutex::new(None),
             settings: Mutex::new(None),
-            regional_views: Mutex::new(None),
             wot: Mutex::new(None),
             media_negative_cache: Mutex::new(std::collections::HashMap::new()),
         };
-        
+
         let events = state_raw.events.lock().unwrap();
         assert!(events.is_some());
         assert_eq!(events.as_ref().unwrap().len(), 1);

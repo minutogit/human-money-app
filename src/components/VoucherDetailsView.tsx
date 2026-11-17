@@ -499,6 +499,7 @@ export function VoucherDetailsView() {
                                                 {l2Status.status === 'spent' && t('voucher.l2StatusSpent')}
                                                 {l2Status.status === 'conflict' && t('voucher.statusQuarantined')}
                                                 {l2Status.status === 'offline' && t('voucher.l2StatusOffline')}
+                                                {l2Status.status === 'offline_only' && t('voucher.l2StatusOfflineOnly', 'Offline-only (N=0)')}
                                                 {l2Status.status === 'no_servers' && t('voucher.l2StatusNoServers')}
                                             </span>
                                         </Advanced>

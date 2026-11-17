@@ -153,4 +153,42 @@ describe('ReceiveSuccessView payment evidence', () => {
     expect(screen.queryByTestId('l2-quorum-count')).not.toBeInTheDocument();
     expect(screen.getByTestId('merchant-approve-btn')).toBeInTheDocument();
   });
+
+  it('renders OfflineOnly (N=0) and Yellow checkout verdicts requiring merchant trust approval', () => {
+    const { rerender } = render(
+      <ReceiveSuccessView
+        payload={{
+          ...payload,
+          checkoutVerdict: {
+            outcome: 'OfflineOnly',
+            canReleaseGoodsAutomatically: false,
+            requiresMerchantApproval: true,
+            isGoodsReleaseAuthorized: false,
+            merchantWarning: 'Voucher configured with N=0.',
+          },
+        }}
+        onDone={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId('l2-status-pill')).toHaveTextContent(/Offline \(N=0\)|offline_only|Offline-Only/i);
+    expect(screen.getByTestId('merchant-approve-btn')).toBeInTheDocument();
+
+    rerender(
+      <ReceiveSuccessView
+        payload={{
+          ...payload,
+          checkoutVerdict: {
+            outcome: 'Yellow:Insufficient trusted receipts',
+            canReleaseGoodsAutomatically: false,
+            requiresMerchantApproval: true,
+            isGoodsReleaseAuthorized: false,
+            merchantWarning: 'Insufficient trusted server receipts.',
+          },
+        }}
+        onDone={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId('l2-status-pill')).toHaveTextContent(/Eingeschränkt|Restricted|yellow/i);
+    expect(screen.getByTestId('merchant-approve-btn')).toBeInTheDocument();
+  });
 });

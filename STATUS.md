@@ -3,10 +3,16 @@ project: human-money-app
 version: "0.5.7"
 phase: "beta"
 health: "green"
-last_updated: "2026-11-16"
+last_updated: "2026-11-17"
 blocks: []
 blocked_by: []
 priority_tasks:
+  - id: "APP-070"
+    title: "Sync-Locks Migration (`LockCommittee`), External Probe UI, Anchor Templates & Guarantor Check"
+    status: "completed"
+    priority: "high"
+    depends_on: ["CORE-020", "SYNC-006b"]
+    description: "Replaced legacy human-money-node `/v1/*` and regional-mesh client/UI flows cleanly per Zero-Compat with Sync-Lock Committees: 1) Tauri backend (`settings_cmd.rs`, `sync_client.rs`, `checkout.rs`, `gateway_resolver.rs`, `intent_reconciliation.rs`, `vouchers.rs`, `state.rs`) added SSRF-hardened `probe_lock_server_cmd` (`?info` delegation, WAF `POST ?lock`, `?lock_selftest`, key-leak check), `set_own_nominated_lock_server`, `assemble_anchor_template` (Sybil-folding & PoW/signed genesis tickets), upfront `retention_covers(init.deletable_at)` validation, `evaluate_guarantor_anchor_check` (guarantor standards only), `resolve_trusted_lock_keys` (`LÜCKE-03` isolation), Green-Rule `checkout_bundle` (`OfflineOnly`/`Confirmed`/`Yellow`/`Quarantined`), slot-filtered Leap-Lock receipt recording, and static `.lock` reconciliation; 2) React UI (`NetworkProtectionCard.tsx`, `StatusChip.tsx`, `VoucherBasicsForm.tsx`, `CreateVoucher.tsx`, `SignRequestView.tsx`, `L2QuorumBadge.tsx`, `ReceiveView.tsx`, `ReceiveSuccessView.tsx`, `SendView.tsx`, `VoucherDetailsView.tsx`, `retentionQuarter.ts`, all 5 locales) added external probe & committee template builder, explicit `N=0` offline-only mode, guarantor blocking check, PoS traffic light, and Sync-Lock help copy. Verified with `rustfmt --check`, `cargo clippy --all-targets --offline -- -D warnings` (0 warnings), `118/118` `src-tauri` tests, `101/101` `humoco-market` tests, `npm run i18n:check`, `npm run lint` (0 errors), `tsc --noEmit`, `600/600` Vitest tests (81 files), and `npm run build`."
   - id: "APP-069"
     title: "Device-Peppered Quick PIN, Cashier Mode (`receiveOnly`), Master-Password Step-Up & 12-Question Spaced-Repetition Recovery Rehearsal"
     status: "completed"

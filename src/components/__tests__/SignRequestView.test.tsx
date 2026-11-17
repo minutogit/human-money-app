@@ -309,4 +309,30 @@ uuid = "minuto-uuid-123"`,
       expect(screen.getByText('/tmp/signature-fallback.sig')).toBeInTheDocument();
     });
   });
+
+  it('blocks guarantor signing when evaluate_guarantor_anchor_check fails', async () => {
+    const baseImpl = (invoke as Mock).getMockImplementation();
+    (invoke as Mock).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === 'evaluate_guarantor_anchor_check') {
+        return Promise.resolve({
+          required: true,
+          passed: false,
+          hasLayer2Anchor: true,
+          retentionOk: false,
+          ownServerPresent: false,
+          sybilIndependentCount: 1,
+          threshold: 2,
+          serverCount: 3,
+          issues: ['own_nominated_server_missing', 'sybil_independent_servers_below_threshold'],
+        });
+      }
+      return baseImpl ? baseImpl(cmd, args) : Promise.resolve(undefined);
+    });
+
+    render(<SignRequestView voucherData={mockVoucherDetails} onBack={mockOnBack} />);
+
+    const anchorCard = await screen.findByTestId('guarantor-anchor-check');
+    expect(anchorCard).toHaveTextContent(/Sybil: 1\/2/);
+    expect(screen.getByRole('button', { name: /Sign Now/i })).toBeDisabled();
+  });
 });

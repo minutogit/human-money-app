@@ -1,6 +1,6 @@
-use serde::{Deserialize, Serialize};
 use super::profile::FrontendAddressData;
 use human_money_core::wallet::instance::VoucherStatus;
+use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -66,6 +66,7 @@ pub struct FrontendNewVoucherData {
     pub validity_duration: Option<String>,
     pub non_redeemable_test_voucher: bool,
     pub collateral: FrontendCollateralData,
+    pub layer2_anchor: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -203,6 +204,7 @@ pub struct FrontendVoucher {
     pub nominal_value: FrontendValueDefinition,
     pub collateral: Option<FrontendCollateral>,
     pub creator: FrontendCreatorData,
+    pub layer2_anchor: Option<String>,
     pub transactions: Vec<FrontendTransaction>,
     pub signatures: Vec<FrontendVoucherSignature>,
 }
@@ -219,6 +221,7 @@ impl From<human_money_core::models::voucher::Voucher> for FrontendVoucher {
             nominal_value: v.nominal_value.into(),
             collateral: v.collateral.map(|c| c.into()),
             creator: v.creator_profile.into(),
+            layer2_anchor: v.layer2_anchor.map(hex::encode),
             transactions: v.transactions.into_iter().map(|t| t.into()).collect(),
             signatures: v.signatures.into_iter().map(|s| s.into()).collect(),
         }
@@ -384,7 +387,9 @@ pub struct FrontendSignatureImpact {
     pub gentle_hints: Vec<String>,
 }
 
-impl From<human_money_core::services::voucher_validation::SignatureImpact> for FrontendSignatureImpact {
+impl From<human_money_core::services::voucher_validation::SignatureImpact>
+    for FrontendSignatureImpact
+{
     fn from(i: human_money_core::services::voucher_validation::SignatureImpact) -> Self {
         Self {
             is_allowed_role: i.is_allowed_role,
@@ -522,6 +527,9 @@ impl From<FrontendVoucher> for human_money_core::models::voucher::Voucher {
             creator_profile: v.creator.into(),
             transactions: v.transactions.into_iter().map(|t| t.into()).collect(),
             signatures: v.signatures.into_iter().map(|s| s.into()).collect(),
+            layer2_anchor: v.layer2_anchor.as_deref().and_then(|h| {
+                human_money_core::humoco_proto::decode_hex_fixed::<32>(h.trim()).ok()
+            }),
         }
     }
 }

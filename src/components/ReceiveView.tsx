@@ -34,7 +34,8 @@ import {
     VoucherSummary,
     Contact,
     WotImportResultDto,
-    PublicProfile
+    PublicProfile,
+    CheckoutReleaseVerdict
 } from '../types';
 import { PageLayout } from './ui/PageLayout';
 import { AlertBanner } from './ui/AlertBanner';
@@ -121,9 +122,15 @@ export function ReceiveView({ onBack, onReceiveSuccess, droppedFile }: ReceiveVi
     const [pendingPosFallback, setPendingPosFallback] = useState<{
         fileData: number[];
         standardDefinitionsToml: Record<string, string>;
-        errorCode: string;
+        outcomeKind: 'offlineOnly' | 'yellow';
+        merchantWarning?: string;
+        verdict: CheckoutReleaseVerdict;
         purchaseId: string;
     } | null>(null);
+
+    useEffect(() => {
+        void settingsService.prewarmL2Checkout?.().catch(() => undefined);
+    }, []);
 
     useEffect(() => {
         let active = true;
@@ -385,44 +392,49 @@ export function ReceiveView({ onBack, onReceiveSuccess, droppedFile }: ReceiveVi
                     if (!purchaseId.trim()) {
                         setPurchaseId(activePurchaseId);
                     }
-                    try {
-                        const completion = await protectAction(async (walletPassword) => {
-                            return await transferService.checkoutReceivedBundle({
-                                purchaseId: activePurchaseId,
-                                bundleData: fileData,
-                                standardDefinitionsToml,
-                                password: password || walletPassword || undefined,
-                            });
+                    const completion = await protectAction(async (walletPassword) => {
+                        return await transferService.checkoutReceivedBundle({
+                            purchaseId: activePurchaseId,
+                            bundleData: fileData,
+                            standardDefinitionsToml,
+                            password: password || walletPassword || undefined,
                         });
+                    });
 
-                        if (completion) {
-                            const basePayload: ReceiveSuccessPayload = completion.receivePayload ?? {
-                                senderId: "pos-terminal",
-                                transferSummary: { summableAmounts: {}, countableItems: {} },
-                                involvedVouchers: [],
-                            };
-                            const payload: ReceiveSuccessPayload = {
-                                ...basePayload,
-                                purchaseId: completion.purchaseId,
-                                newlyCommitted: completion.newlyCommitted,
-                                isReplay: !completion.newlyCommitted,
-                                checkoutVerdict: completion.verdict,
-                            };
-                            onReceiveSuccess(payload);
-                            return;
-                        }
-                    } catch (posErr) {
-                        if (isBackendError(posErr) && (posErr.code === 'pos.noServersConfigured' || posErr.code === 'pos.quorumUnavailable')) {
+                    if (completion) {
+                        if (
+                            !completion.newlyCommitted &&
+                            (completion.verdict.outcome === 'OfflineOnly' ||
+                                completion.verdict.outcome.startsWith('Yellow'))
+                        ) {
                             setPendingPosFallback({
                                 fileData,
                                 standardDefinitionsToml,
-                                errorCode: posErr.code,
-                                purchaseId: activePurchaseId,
+                                outcomeKind:
+                                    completion.verdict.outcome === 'OfflineOnly'
+                                        ? 'offlineOnly'
+                                        : 'yellow',
+                                merchantWarning: completion.verdict.merchantWarning,
+                                verdict: completion.verdict,
+                                purchaseId: completion.purchaseId,
                             });
                             setIsProcessing(false);
                             return;
                         }
-                        throw posErr;
+                        const basePayload: ReceiveSuccessPayload = completion.receivePayload ?? {
+                            senderId: "pos-terminal",
+                            transferSummary: { summableAmounts: {}, countableItems: {} },
+                            involvedVouchers: [],
+                        };
+                        const payload: ReceiveSuccessPayload = {
+                            ...basePayload,
+                            purchaseId: completion.purchaseId,
+                            newlyCommitted: completion.newlyCommitted,
+                            isReplay: !completion.newlyCommitted,
+                            checkoutVerdict: completion.verdict,
+                        };
+                        onReceiveSuccess(payload);
+                        return;
                     }
                 }
 
@@ -737,15 +749,7 @@ export function ReceiveView({ onBack, onReceiveSuccess, droppedFile }: ReceiveVi
                     purchaseId: pendingPosFallback.purchaseId,
                     newlyCommitted: true,
                     isReplay: false,
-                    checkoutVerdict: {
-                        outcome: pendingPosFallback.errorCode === 'pos.noServersConfigured' ? 'UnverifiedOffline' : 'QuorumUnavailable',
-                        canReleaseGoodsAutomatically: false,
-                        requiresMerchantApproval: true,
-                        isGoodsReleaseAuthorized: false,
-                        merchantWarning: pendingPosFallback.errorCode === 'pos.noServersConfigured'
-                            ? t('transfer.checkout.fallbackNoServersDesc', 'No L2 servers are configured to lock vouchers against double-spends in real time. You can still accept this transfer on a trust basis using pure Layer-1 math (SST V4).')
-                            : t('transfer.checkout.fallbackQuorumDesc', 'Could not reach an L2 quorum to verify lock status. You can either retry or accept on a trust basis (L1 verified).'),
-                    },
+                    checkoutVerdict: pendingPosFallback.verdict,
                 };
                 onReceiveSuccess(enrichedPayload);
             }
@@ -1078,9 +1082,10 @@ export function ReceiveView({ onBack, onReceiveSuccess, droppedFile }: ReceiveVi
                                     {t('transfer.checkout.fallbackCardTitle', 'L2 PoS Protection Unavailable')}
                                 </h4>
                                 <p className="text-xs text-amber-800 leading-relaxed">
-                                    {pendingPosFallback.errorCode === 'pos.noServersConfigured'
-                                        ? t('transfer.checkout.fallbackNoServersDesc', 'No L2 servers are configured to lock vouchers against double-spends in real time. You can still accept this transfer on a trust basis using pure Layer-1 math (SST V4).')
-                                        : t('transfer.checkout.fallbackQuorumDesc', 'Could not reach an L2 quorum to verify lock status. You can either retry or accept on a trust basis (L1 verified).')}
+                                    {pendingPosFallback.merchantWarning ||
+                                        (pendingPosFallback.outcomeKind === 'offlineOnly'
+                                            ? t('transfer.checkout.fallbackNoServersDesc', 'No lock servers are configured (N = 0). You can still accept this transfer on a trust basis using pure Layer-1 math (SST V4).')
+                                            : t('transfer.checkout.fallbackQuorumDesc', 'Could not reach enough trusted lock servers for green release. You can reject or accept on a trust basis (L1 verified).'))}
                                 </p>
                                 <p className="text-[11px] text-amber-700/80 font-medium">
                                     {t('transfer.checkout.fallbackNotice', 'Offline transfers are cryptographically protected by SST V4 self-exposure if a double-spend is attempted.')}

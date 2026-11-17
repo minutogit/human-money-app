@@ -3,10 +3,10 @@ use std::collections::HashMap;
 use chrono::Utc;
 use ed25519_dalek::SigningKey;
 use human_money_core::crypto::get_pubkey_from_user_id;
+use human_money_core::models::profile::UserIdentity;
 use human_money_core::models::secure_container::{
     ContainerConfig, PayloadType, PrivacyMode, SecureContainer,
 };
-use human_money_core::models::profile::UserIdentity;
 use humoco_market::{
     is_own_dummy_post_box, merge_post_slot, seal_post_box, try_open_post_box_any_sender,
     validate_market_inquiry, validate_market_inquiry_reply, validate_post_delivery_receipt,
@@ -18,15 +18,15 @@ use humoco_market::{
 use log::warn;
 use tauri::State;
 
-use crate::sync_client::{self as sync_client, PutSlotOutcome};
 use crate::models::{
-    FrontendContact, FrontendSyncDescriptor, FrontendError, FrontendMarketInquiryItem,
-    FrontendMarketInquiryReplyDto, FrontendPendingSignRequest, FrontendPendingWotHandshake,
-    FrontendPostDepositResult, FrontendPostInboxSummary, FrontendPostSyncResult,
-    FrontendUserProfile, TransactionRecord,
+    FrontendContact, FrontendError, FrontendMarketInquiryItem, FrontendMarketInquiryReplyDto,
+    FrontendPendingSignRequest, FrontendPendingWotHandshake, FrontendPostDepositResult,
+    FrontendPostInboxSummary, FrontendPostSyncResult, FrontendSyncDescriptor, FrontendUserProfile,
+    TransactionRecord,
 };
 use crate::settings::AppSettings;
 use crate::state::{AppState, PostOutboxEntry, StoredPostState, MARKET_POST_STATE_KEY};
+use crate::sync_client::{self as sync_client, PutSlotOutcome};
 
 // =========================================================================
 //  HELPERS & UTILITIES
@@ -38,7 +38,10 @@ pub(crate) fn are_dids_equal(a: &str, b: &str) -> bool {
     if a_trim == b_trim {
         return true;
     }
-    match (get_pubkey_from_user_id(a_trim), get_pubkey_from_user_id(b_trim)) {
+    match (
+        get_pubkey_from_user_id(a_trim),
+        get_pubkey_from_user_id(b_trim),
+    ) {
         (Ok(pk_a), Ok(pk_b)) => pk_a.as_bytes() == pk_b.as_bytes(),
         _ => false,
     }
@@ -132,12 +135,22 @@ pub(crate) fn load_all_standard_tomls(
     extra: Option<&HashMap<String, String>>,
 ) -> HashMap<String, String> {
     let mut map = HashMap::new();
-    let minuto_toml = include_str!("../../../voucher_standards/minuto_v1/standard.toml").to_string();
-    if let Ok((std, _)) = human_money_core::models::voucher_standard_definition::VoucherStandardDefinition::from_toml(&minuto_toml) {
+    let minuto_toml =
+        include_str!("../../../voucher_standards/minuto_v1/standard.toml").to_string();
+    if let Ok((std, _)) =
+        human_money_core::models::voucher_standard_definition::VoucherStandardDefinition::from_toml(
+            &minuto_toml,
+        )
+    {
         map.insert(std.immutable.identity.uuid, minuto_toml);
     }
-    let freetaler_toml = include_str!("../../../voucher_standards/freetaler_v1/standard.toml").to_string();
-    if let Ok((std, _)) = human_money_core::models::voucher_standard_definition::VoucherStandardDefinition::from_toml(&freetaler_toml) {
+    let freetaler_toml =
+        include_str!("../../../voucher_standards/freetaler_v1/standard.toml").to_string();
+    if let Ok((std, _)) =
+        human_money_core::models::voucher_standard_definition::VoucherStandardDefinition::from_toml(
+            &freetaler_toml,
+        )
+    {
         map.insert(std.immutable.identity.uuid, freetaler_toml);
     }
     if let Some(extra_map) = extra {
@@ -163,7 +176,8 @@ pub(crate) fn open_wallet_archive(
     let (user_id, key) = service
         .with_wallet_and_identity(|w, id| {
             let uid = w.get_user_id().to_string();
-            let derived = blake3::derive_key("HUMOCO_APP_ARCHIVE_KEY_V1", &id.signing_key.to_bytes());
+            let derived =
+                blake3::derive_key("HUMOCO_APP_ARCHIVE_KEY_V1", &id.signing_key.to_bytes());
             (uid, derived)
         })
         .ok()?;
@@ -172,10 +186,17 @@ pub(crate) fn open_wallet_archive(
     }
     let folder_hash = &blake3::hash(user_id.as_bytes()).to_hex()[..32];
     let archive_dir = app_data_dir.join("voucher_archives").join(folder_hash);
-    Some(human_money_core::FileVoucherArchive::with_key(archive_dir, key))
+    Some(human_money_core::FileVoucherArchive::with_key(
+        archive_dir,
+        key,
+    ))
 }
 
-pub(crate) fn get_contact_name(state: &AppState, did: &str, password: Option<&str>) -> Option<String> {
+pub(crate) fn get_contact_name(
+    state: &AppState,
+    did: &str,
+    password: Option<&str>,
+) -> Option<String> {
     let mut service = state.service.lock().unwrap();
     if let Ok(contacts) = state.load_contacts(&mut service, password) {
         let trimmed = did.trim();
@@ -211,10 +232,15 @@ pub(crate) fn check_inquiry_target(
 ) -> bool {
     let mut service = state.service.lock().unwrap();
     if let Ok(bytes) = service.load_encrypted_data(crate::state::MARKET_OWN_PROFILE_KEY, password) {
-        if let Ok(stored) = serde_json::from_slice::<crate::models::market::StoredOwnMarketProfile>(&bytes) {
+        if let Ok(stored) =
+            serde_json::from_slice::<crate::models::market::StoredOwnMarketProfile>(&bytes)
+        {
             match target {
                 humoco_market::InquiryTarget::Ad { ad_id, .. } => {
-                    return stored.ads.iter().any(|a| &a.id == ad_id && a.expires_at > now_secs && a.allow_inquiries);
+                    return stored
+                        .ads
+                        .iter()
+                        .any(|a| &a.id == ad_id && a.expires_at > now_secs && a.allow_inquiries);
                 }
                 humoco_market::InquiryTarget::Person { .. } => {
                     return stored.published && stored.allow_inquiries;
@@ -313,7 +339,12 @@ pub(crate) async fn flush_post_slots_impl(
             (id.signing_key.clone(), pfx)
         }) {
             Ok(k) => k,
-            Err(e) => return (0, vec![format!("Failed to access wallet signing key: {}", e)]),
+            Err(e) => {
+                return (
+                    0,
+                    vec![format!("Failed to access wallet signing key: {}", e)],
+                );
+            }
         };
         let master_seed = my_ed_sk.to_bytes();
         let settings = state
@@ -327,11 +358,15 @@ pub(crate) async fn flush_post_slots_impl(
             let recipient_dids: std::collections::HashSet<String> = post_state
                 .outbox_entries
                 .iter()
-                .map(|e| crate::state::canonicalize_did(&e.recipient_did).unwrap_or_else(|_| e.recipient_did.clone()))
+                .map(|e| {
+                    crate::state::canonicalize_did(&e.recipient_did)
+                        .unwrap_or_else(|_| e.recipient_did.clone())
+                })
                 .collect();
 
             for c in contacts {
-                let can_c_did = crate::state::canonicalize_did(&c.did).unwrap_or_else(|_| c.did.clone());
+                let can_c_did =
+                    crate::state::canonicalize_did(&c.did).unwrap_or_else(|_| c.did.clone());
                 if recipient_dids.contains(&can_c_did) {
                     for d in c.syncs {
                         if !d.write_url.is_empty() {
@@ -354,7 +389,14 @@ pub(crate) async fn flush_post_slots_impl(
 
         let client = sync_client::create_sync_http_client();
         let now_secs = sync_client::current_unix_timestamp();
-        (my_ed_sk, master_seed, my_prefix, deduped_targets, client, now_secs)
+        (
+            my_ed_sk,
+            master_seed,
+            my_prefix,
+            deduped_targets,
+            client,
+            now_secs,
+        )
     };
 
     if upload_targets.is_empty() {
@@ -367,14 +409,11 @@ pub(crate) async fn flush_post_slots_impl(
         .map(|e| e.entry.clone())
         .collect();
 
-    let initial_blob = match humoco_market::encode_post_slot(
-        &master_seed,
-        &local_entries,
-        DROP_POST_MAX_BYTES,
-    ) {
-        Ok(b) => b,
-        Err(e) => return (0, vec![format!("Failed to encode post slot: {}", e)]),
-    };
+    let initial_blob =
+        match humoco_market::encode_post_slot(&master_seed, &local_entries, DROP_POST_MAX_BYTES) {
+            Ok(b) => b,
+            Err(e) => return (0, vec![format!("Failed to encode post slot: {}", e)]),
+        };
 
     let mut deposited_to = 0;
     let mut errors = Vec::new();
@@ -396,7 +435,10 @@ pub(crate) async fn flush_post_slots_impl(
                     );
                     (hex::encode(r_vk.as_bytes()), Ok(signed))
                 }
-                Err(e) => (String::new(), Err(format!("Public sync key derivation error: {}", e))),
+                Err(e) => (
+                    String::new(),
+                    Err(format!("Public sync key derivation error: {}", e)),
+                ),
             }
         } else {
             match humoco_market::derive_member_stealth_pubkey(&my_ed_sk, &sync_desc.drop_pub) {
@@ -412,9 +454,15 @@ pub(crate) async fn flush_post_slots_impl(
                         &nonce,
                         &initial_blob,
                     );
-                    (p_hex, signed.map_err(|e| format!("Stealth signing error: {}", e)))
+                    (
+                        p_hex,
+                        signed.map_err(|e| format!("Stealth signing error: {}", e)),
+                    )
                 }
-                Err(e) => (String::new(), Err(format!("Stealth derivation error: {}", e))),
+                Err(e) => (
+                    String::new(),
+                    Err(format!("Stealth derivation error: {}", e)),
+                ),
             }
         };
 
@@ -453,9 +501,21 @@ pub(crate) async fn flush_post_slots_impl(
             }
             Ok(PutSlotOutcome::PreconditionFailed { current_etag }) => {
                 // Multi-device conflict! Fetch current remote slot, merge local additions, and retry.
-                let remote_bytes = match sync_client::get_slot(&client, &sync_desc.read_url, &id, my_prefix.as_deref(), "post", None).await {
+                let remote_bytes = match sync_client::get_slot(
+                    &client,
+                    &sync_desc.read_url,
+                    &id,
+                    my_prefix.as_deref(),
+                    "post",
+                    None,
+                )
+                .await
+                {
                     Ok(sync_client::SlotFetchResult::Modified { bytes, .. }) => Some(bytes),
-                    Ok(sync_client::SlotFetchResult::NotFound | sync_client::SlotFetchResult::NotModified) => None,
+                    Ok(
+                        sync_client::SlotFetchResult::NotFound
+                        | sync_client::SlotFetchResult::NotModified,
+                    ) => None,
                     Err(e) => {
                         health_updates.push((sync_desc.write_url.clone(), false));
                         errors.push(format!(
@@ -482,7 +542,10 @@ pub(crate) async fn flush_post_slots_impl(
                 };
 
                 let retry_signed_res = if sync_desc.slot_id.is_some() {
-                    match humoco_market::derive_public_drop_keypair(&master_seed, &sync_desc.write_url) {
+                    match humoco_market::derive_public_drop_keypair(
+                        &master_seed,
+                        &sync_desc.write_url,
+                    ) {
                         Ok((r_sk, _, _)) => {
                             let nonce = sync_client::generate_sync_nonce();
                             Ok(humoco_market::sign_member_request_direct(
@@ -603,11 +666,10 @@ pub async fn deposit_transfer_to_post_impl(
 
     let mut post_state = load_post_state(state, password.as_deref())?;
 
-    let msg_id = if let Some(existing) = post_state
-        .outbox_entries
-        .iter()
-        .find(|e| e.bundle_id.as_deref() == Some(&bundle_id) || e.bundle_id.as_deref() == Some(&record.bundle_id))
-    {
+    let msg_id = if let Some(existing) = post_state.outbox_entries.iter().find(|e| {
+        e.bundle_id.as_deref() == Some(&bundle_id)
+            || e.bundle_id.as_deref() == Some(&record.bundle_id)
+    }) {
         existing.msg_id.clone()
     } else {
         let (my_ed_sk, recipient_ed_pk, own_reply_syncs, now_secs) = {
@@ -619,8 +681,8 @@ pub async fn deposit_transfer_to_post_impl(
                     (id.signing_key.clone(), pfx)
                 })
                 .map_err(FrontendError::from)?;
-            let recipient_ed_pk = get_pubkey_from_user_id(&record.recipient_id)
-                .map_err(FrontendError::from)?;
+            let recipient_ed_pk =
+                get_pubkey_from_user_id(&record.recipient_id).map_err(FrontendError::from)?;
             let settings = state
                 .get_cached_settings()
                 .or_else(|_| state.load_settings(&mut service, password.as_deref()))
@@ -638,8 +700,8 @@ pub async fn deposit_transfer_to_post_impl(
             record.bundle_data.clone(), // EXACT bytes! Never call create_transfer_bundle!
         );
 
-        let box_entry = seal_post_box(&my_ed_sk, &recipient_ed_pk, &envelope)
-            .map_err(FrontendError::from)?;
+        let box_entry =
+            seal_post_box(&my_ed_sk, &recipient_ed_pk, &envelope).map_err(FrontendError::from)?;
 
         let outbox_entry = PostOutboxEntry {
             msg_id: fresh_msg_id.clone(),
@@ -658,9 +720,14 @@ pub async fn deposit_transfer_to_post_impl(
     // sync servers never lose an outgoing transfer box if the app closes.
     save_post_state(state, &post_state, password.as_deref())?;
 
-    let (deposited_to, errors) = flush_post_slots_impl(state, &mut post_state, password.as_deref()).await;
+    let (deposited_to, errors) =
+        flush_post_slots_impl(state, &mut post_state, password.as_deref()).await;
     if !errors.is_empty() {
-        warn!("Post deposit degraded: deposited={}, failed={}", deposited_to, errors.len());
+        warn!(
+            "Post deposit degraded: deposited={}, failed={}",
+            deposited_to,
+            errors.len()
+        );
     }
     save_post_state(state, &post_state, password.as_deref())?;
 
@@ -714,8 +781,8 @@ pub async fn send_signing_request_via_post_impl(
         container_bytes,
     );
 
-    let box_entry = seal_post_box(&my_ed_sk, &recipient_ed_pk, &envelope)
-        .map_err(FrontendError::from)?;
+    let box_entry =
+        seal_post_box(&my_ed_sk, &recipient_ed_pk, &envelope).map_err(FrontendError::from)?;
 
     let mut post_state = load_post_state(state, password.as_deref())?;
     post_state.processed_msg_ids.insert(msg_id.clone());
@@ -732,9 +799,14 @@ pub async fn send_signing_request_via_post_impl(
     // sync servers never lose an outgoing transfer box if the app closes.
     save_post_state(state, &post_state, password.as_deref())?;
 
-    let (deposited_to, errors) = flush_post_slots_impl(state, &mut post_state, password.as_deref()).await;
+    let (deposited_to, errors) =
+        flush_post_slots_impl(state, &mut post_state, password.as_deref()).await;
     if !errors.is_empty() {
-        warn!("Post deposit degraded: deposited={}, failed={}", deposited_to, errors.len());
+        warn!(
+            "Post deposit degraded: deposited={}, failed={}",
+            deposited_to,
+            errors.len()
+        );
     }
     save_post_state(state, &post_state, password.as_deref())?;
 
@@ -790,8 +862,8 @@ pub async fn reply_detached_signature_via_post_impl(
         container_bytes,
     );
 
-    let box_entry = seal_post_box(&my_ed_sk, &recipient_ed_pk, &envelope)
-        .map_err(FrontendError::from)?;
+    let box_entry =
+        seal_post_box(&my_ed_sk, &recipient_ed_pk, &envelope).map_err(FrontendError::from)?;
 
     let mut post_state = load_post_state(state, password.as_deref())?;
     post_state.processed_msg_ids.insert(msg_id.clone());
@@ -804,7 +876,8 @@ pub async fn reply_detached_signature_via_post_impl(
         created_at: now_secs,
     });
 
-    let (deposited_to, errors) = flush_post_slots_impl(state, &mut post_state, password.as_deref()).await;
+    let (deposited_to, errors) =
+        flush_post_slots_impl(state, &mut post_state, password.as_deref()).await;
 
     if deposited_to > 0 {
         if let Some(ref req_id) = request_msg_id {
@@ -844,7 +917,14 @@ pub async fn reply_detached_signature_via_post(
     password: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<FrontendPostDepositResult, FrontendError> {
-    reply_detached_signature_via_post_impl(request_msg_id, recipient_did, container_bytes, password, &state).await
+    reply_detached_signature_via_post_impl(
+        request_msg_id,
+        recipient_did,
+        container_bytes,
+        password,
+        &state,
+    )
+    .await
 }
 
 pub async fn send_wot_handshake_via_post_impl(
@@ -888,7 +968,8 @@ pub async fn send_wot_handshake_via_post_impl(
                 .map_err(FrontendError::from)?;
         }
 
-        let can_recipient = crate::state::canonicalize_did(&recipient_did).unwrap_or_else(|_| recipient_did.clone());
+        let can_recipient = crate::state::canonicalize_did(&recipient_did)
+            .unwrap_or_else(|_| recipient_did.clone());
 
         let (pkg, _receipt) = reg
             .prepare_sync_package(Some(&can_recipient), None, true)
@@ -941,8 +1022,8 @@ pub async fn send_wot_handshake_via_post_impl(
         container_bytes,
     );
 
-    let box_entry = seal_post_box(&my_ed_sk, &recipient_ed_pk, &envelope)
-        .map_err(FrontendError::from)?;
+    let box_entry =
+        seal_post_box(&my_ed_sk, &recipient_ed_pk, &envelope).map_err(FrontendError::from)?;
 
     let mut post_state = load_post_state(state, password.as_deref())?;
     post_state.processed_msg_ids.insert(msg_id.clone());
@@ -959,9 +1040,14 @@ pub async fn send_wot_handshake_via_post_impl(
     // sync servers never lose an outgoing transfer box if the app closes.
     save_post_state(state, &post_state, password.as_deref())?;
 
-    let (deposited_to, errors) = flush_post_slots_impl(state, &mut post_state, password.as_deref()).await;
+    let (deposited_to, errors) =
+        flush_post_slots_impl(state, &mut post_state, password.as_deref()).await;
     if !errors.is_empty() {
-        warn!("Post deposit degraded: deposited={}, failed={}", deposited_to, errors.len());
+        warn!(
+            "Post deposit degraded: deposited={}, failed={}",
+            deposited_to,
+            errors.len()
+        );
     }
     save_post_state(state, &post_state, password.as_deref())?;
 
@@ -980,7 +1066,14 @@ pub async fn send_wot_handshake_via_post(
     password: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<FrontendPostDepositResult, FrontendError> {
-    send_wot_handshake_via_post_impl(recipient_did, proposed_level, reply_requested, password, &state).await
+    send_wot_handshake_via_post_impl(
+        recipient_did,
+        proposed_level,
+        reply_requested,
+        password,
+        &state,
+    )
+    .await
 }
 
 pub async fn accept_wot_handshake_impl(
@@ -1059,7 +1152,8 @@ pub async fn accept_wot_handshake_impl(
         if let Ok(pkg) = serde_json::from_str::<humoco_wot::WotSyncPackage>(&json_str) {
             let mut service = state.service.lock().unwrap();
             if let Ok(mut reg) = state.get_or_load_wot_register(&mut service, password.as_deref()) {
-                let can_sender_did = crate::state::canonicalize_did(&sender_did).unwrap_or_else(|_| sender_did.clone());
+                let can_sender_did = crate::state::canonicalize_did(&sender_did)
+                    .unwrap_or_else(|_| sender_did.clone());
                 let _ = reg.import_sync_package(&pkg, Some(&can_sender_did), now_secs);
                 let _ = state.ensure_wot_list_signed(&mut service, &mut reg);
                 let _ = state.save_wot_register(&mut service, &reg, password.as_deref());
@@ -1070,14 +1164,8 @@ pub async fn accept_wot_handshake_impl(
     save_post_state(state, &post_state, password.as_deref())?;
 
     if send_return_handshake {
-        send_wot_handshake_via_post_impl(
-            sender_did,
-            trust_level.min(1),
-            false,
-            password,
-            state,
-        )
-        .await
+        send_wot_handshake_via_post_impl(sender_did, trust_level.min(1), false, password, state)
+            .await
     } else {
         Ok(FrontendPostDepositResult {
             deposited_to: 0,
@@ -1168,8 +1256,8 @@ pub async fn send_market_inquiry_via_post_impl(
         container_bytes,
     );
 
-    let box_entry = seal_post_box(&my_ed_sk, &recipient_ed_pk, &envelope)
-        .map_err(FrontendError::from)?;
+    let box_entry =
+        seal_post_box(&my_ed_sk, &recipient_ed_pk, &envelope).map_err(FrontendError::from)?;
 
     let mut post_state = load_post_state(state, password.as_deref())?;
     post_state.processed_msg_ids.insert(msg_id.clone());
@@ -1182,7 +1270,8 @@ pub async fn send_market_inquiry_via_post_impl(
         created_at: now_secs,
     });
 
-    let (deposited_to, errors) = flush_post_slots_impl(state, &mut post_state, password.as_deref()).await;
+    let (deposited_to, errors) =
+        flush_post_slots_impl(state, &mut post_state, password.as_deref()).await;
     if deposited_to == 0 {
         return Err(FrontendError::from(format!(
             "An active connected sync service is required to deposit marketplace inquiries. Errors: {:?}",
@@ -1215,7 +1304,15 @@ pub async fn send_market_inquiry_via_post(
     password: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<FrontendMarketInquiryItem, FrontendError> {
-    send_market_inquiry_via_post_impl(recipient_did, target, message, recipient_syncs, password, &state).await
+    send_market_inquiry_via_post_impl(
+        recipient_did,
+        target,
+        message,
+        recipient_syncs,
+        password,
+        &state,
+    )
+    .await
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1273,7 +1370,8 @@ pub async fn reply_market_inquiry_via_post_impl(
             .resolve_inquiry(&hex::encode(sender_vk.as_bytes()), &target.target_key());
     }
 
-    let recipient_ed_pk = get_pubkey_from_user_id(&counterparty_did).map_err(FrontendError::from)?;
+    let recipient_ed_pk =
+        get_pubkey_from_user_id(&counterparty_did).map_err(FrontendError::from)?;
 
     let (my_identity, my_ed_sk, own_reply_syncs) = {
         let mut service = state.service.lock().unwrap();
@@ -1314,8 +1412,8 @@ pub async fn reply_market_inquiry_via_post_impl(
         container_bytes,
     );
 
-    let box_entry = seal_post_box(&my_ed_sk, &recipient_ed_pk, &envelope)
-        .map_err(FrontendError::from)?;
+    let box_entry =
+        seal_post_box(&my_ed_sk, &recipient_ed_pk, &envelope).map_err(FrontendError::from)?;
 
     post_state.processed_msg_ids.insert(msg_id.clone());
     post_state.outbox_entries.push(PostOutboxEntry {
@@ -1358,7 +1456,17 @@ pub async fn reply_market_inquiry_via_post(
     password: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<FrontendMarketInquiryItem, FrontendError> {
-    reply_market_inquiry_via_post_impl(inquiry_id, decision, note, payment_uri, amount_hint, standard_uuid, password, &state).await
+    reply_market_inquiry_via_post_impl(
+        inquiry_id,
+        decision,
+        note,
+        payment_uri,
+        amount_hint,
+        standard_uuid,
+        password,
+        &state,
+    )
+    .await
 }
 
 pub fn dismiss_pending_post_item_impl(
@@ -1522,7 +1630,11 @@ pub async fn sync_post_channels_impl(
         // Public drops
         for pd in &settings.public_syncs {
             if pd.enabled && !pd.read_url.is_empty() {
-                direct.push((pd.read_url.clone(), pd.access_pubkey.clone(), my_prefix.clone()));
+                direct.push((
+                    pd.read_url.clone(),
+                    pd.access_pubkey.clone(),
+                    my_prefix.clone(),
+                ));
             }
         }
 
@@ -1538,7 +1650,11 @@ pub async fn sync_post_channels_impl(
                     // Also poll sibling own-subaccount compartments on configured O(1) public syncs
                     for pd in &settings.public_syncs {
                         if pd.enabled && !pd.read_url.is_empty() {
-                            direct.push((pd.read_url.clone(), pd.access_pubkey.clone(), c_prefix.clone()));
+                            direct.push((
+                                pd.read_url.clone(),
+                                pd.access_pubkey.clone(),
+                                c_prefix.clone(),
+                            ));
                         }
                     }
                 }
@@ -1555,7 +1671,9 @@ pub async fn sync_post_channels_impl(
         }
 
         // CardStore drops
-        if let Ok(bytes) = service.load_encrypted_data(crate::state::MARKET_CARD_STORE_KEY, password.as_deref()) {
+        if let Ok(bytes) =
+            service.load_encrypted_data(crate::state::MARKET_CARD_STORE_KEY, password.as_deref())
+        {
             if let Ok(store) = serde_json::from_slice::<humoco_market::CardStore>(&bytes) {
                 for sc in store.cards.values() {
                     for d in &sc.card.payload.drops {
@@ -1651,12 +1769,23 @@ pub async fn sync_post_channels_impl(
         let has_inquiry_listing = service
             .load_encrypted_data(crate::state::MARKET_OWN_PROFILE_KEY, password.as_deref())
             .ok()
-            .and_then(|bytes| serde_json::from_slice::<crate::models::market::StoredOwnMarketProfile>(&bytes).ok())
-            .map(|stored| stored.published && (stored.allow_inquiries || stored.ads.iter().any(|a| a.expires_at > now_secs && a.allow_inquiries)))
+            .and_then(|bytes| {
+                serde_json::from_slice::<crate::models::market::StoredOwnMarketProfile>(&bytes).ok()
+            })
+            .map(|stored| {
+                stored.published
+                    && (stored.allow_inquiries
+                        || stored
+                            .ads
+                            .iter()
+                            .any(|a| a.expires_at > now_secs && a.allow_inquiries))
+            })
             .unwrap_or(false);
 
         if has_inquiry_listing {
-            if let Ok(bytes) = service.load_encrypted_data(crate::state::MARKET_CARD_STORE_KEY, password.as_deref()) {
+            if let Ok(bytes) = service
+                .load_encrypted_data(crate::state::MARKET_CARD_STORE_KEY, password.as_deref())
+            {
                 if let Ok(cs) = serde_json::from_slice::<humoco_market::CardStore>(&bytes) {
                     for sc in cs.cards.values() {
                         if let Ok(vk) = get_pubkey_from_user_id(&sc.card.payload.did) {
@@ -1685,17 +1814,24 @@ pub async fn sync_post_channels_impl(
         let (base_slot_pk, slot_prefix) =
             humoco_market::parse_slot_id(&slot_id).unwrap_or_else(|_| (slot_id.clone(), None));
         let post_prefix = slot_prefix.as_deref().or(prefix_opt.as_deref());
-        match sync_client::get_slot(&client, &read_url, &base_slot_pk, post_prefix, "post", None).await {
+        match sync_client::get_slot(&client, &read_url, &base_slot_pk, post_prefix, "post", None)
+            .await
+        {
             Ok(sync_client::SlotFetchResult::Modified { bytes, .. }) => {
                 post_sync_health_updates.push((read_url.clone(), true));
                 fetched_slots.push(bytes);
             }
-            Ok(sync_client::SlotFetchResult::NotFound | sync_client::SlotFetchResult::NotModified) => {
+            Ok(
+                sync_client::SlotFetchResult::NotFound | sync_client::SlotFetchResult::NotModified,
+            ) => {
                 post_sync_health_updates.push((read_url.clone(), true));
             }
             Err(e) => {
                 post_sync_health_updates.push((read_url.clone(), false));
-                errors.push(format!("Failed to fetch direct post slot from {}: {}", read_url, e));
+                errors.push(format!(
+                    "Failed to fetch direct post slot from {}: {}",
+                    read_url, e
+                ));
             }
         }
     }
@@ -1710,10 +1846,27 @@ pub async fn sync_post_channels_impl(
                     if entry.channel != "post" {
                         continue;
                     }
-                    match sync_client::get_slot(&client, &read_url, &entry.id, entry.prefix.as_deref(), "post", None).await {
-                        Ok(sync_client::SlotFetchResult::Modified { bytes, .. }) => fetched_slots.push(bytes),
-                        Ok(sync_client::SlotFetchResult::NotFound | sync_client::SlotFetchResult::NotModified) => {}
-                        Err(e) => errors.push(format!("Failed to fetch post slot {} from {}: {}", entry.id, read_url, e)),
+                    match sync_client::get_slot(
+                        &client,
+                        &read_url,
+                        &entry.id,
+                        entry.prefix.as_deref(),
+                        "post",
+                        None,
+                    )
+                    .await
+                    {
+                        Ok(sync_client::SlotFetchResult::Modified { bytes, .. }) => {
+                            fetched_slots.push(bytes)
+                        }
+                        Ok(
+                            sync_client::SlotFetchResult::NotFound
+                            | sync_client::SlotFetchResult::NotModified,
+                        ) => {}
+                        Err(e) => errors.push(format!(
+                            "Failed to fetch post slot {} from {}: {}",
+                            entry.id, read_url, e
+                        )),
                     }
                 }
             }
@@ -1722,14 +1875,22 @@ pub async fn sync_post_channels_impl(
             }
             Err(e) => {
                 post_sync_health_updates.push((read_url.clone(), false));
-                errors.push(format!("Failed to fetch post slot index from {}: {}", read_url, e));
+                errors.push(format!(
+                    "Failed to fetch post slot index from {}: {}",
+                    read_url, e
+                ));
             }
         }
     }
 
     if !post_sync_health_updates.is_empty() {
         let mut service = state.service.lock().unwrap();
-        state.record_contact_sync_health_batch(&mut service, &post_sync_health_updates, now_secs, password.as_deref());
+        state.record_contact_sync_health_batch(
+            &mut service,
+            &post_sync_health_updates,
+            now_secs,
+            password.as_deref(),
+        );
     }
 
     // 5. Decrypt and process entries
@@ -1751,16 +1912,25 @@ pub async fn sync_post_channels_impl(
                 continue;
             }
             let tag16_hex = hex::encode(box_entry.tag16);
-            if post_state.outbox_entries.iter().any(|e| e.tag16_hex == tag16_hex) {
+            if post_state
+                .outbox_entries
+                .iter()
+                .any(|e| e.tag16_hex == tag16_hex)
+            {
                 continue;
             }
 
-            let open_attempt = try_open_post_box_any_sender(&my_ed_sk, &authorized_senders, &box_entry);
+            let open_attempt =
+                try_open_post_box_any_sender(&my_ed_sk, &authorized_senders, &box_entry);
             let (sender_did, envelope, is_inquiry_only) = match open_attempt {
                 Ok(Some((did, env))) => (did, env, false),
                 Ok(None) => {
                     if !inquiry_only_senders.is_empty() {
-                        match try_open_post_box_any_sender(&my_ed_sk, &inquiry_only_senders, &box_entry) {
+                        match try_open_post_box_any_sender(
+                            &my_ed_sk,
+                            &inquiry_only_senders,
+                            &box_entry,
+                        ) {
                             Ok(Some((did, env))) => (did, env, true),
                             _ => continue,
                         }
@@ -1778,7 +1948,8 @@ pub async fn sync_post_channels_impl(
                 continue;
             }
 
-            let container: SecureContainer = match serde_json::from_slice(&envelope.container_bytes) {
+            let container: SecureContainer = match serde_json::from_slice(&envelope.container_bytes)
+            {
                 Ok(c) => c,
                 Err(e) => {
                     errors.push(format!("Failed to parse SecureContainer: {}", e));
@@ -1818,7 +1989,10 @@ pub async fn sync_post_channels_impl(
                     match alt_attempt {
                         Some(b) => b,
                         None => {
-                            if matches!(e, human_money_core::VoucherCoreError::NotAnIntendedRecipient) {
+                            if matches!(
+                                e,
+                                human_money_core::VoucherCoreError::NotAnIntendedRecipient
+                            ) {
                                 // Outer PostBox shared our X25519 key (sibling subaccount/root profile),
                                 // but inner SecureContainer is addressed to a different user_id/prefix.
                                 continue;
@@ -1830,13 +2004,19 @@ pub async fn sync_post_channels_impl(
                 }
             };
 
-            if is_inquiry_only && container.c != PayloadType::Generic(PAYLOAD_MARKET_INQUIRY_V1.to_string()) {
+            if is_inquiry_only
+                && container.c != PayloadType::Generic(PAYLOAD_MARKET_INQUIRY_V1.to_string())
+            {
                 continue;
             }
 
             if !envelope.reply_drops.is_empty() {
-                let reply_dtos: Vec<FrontendSyncDescriptor> =
-                    envelope.reply_drops.iter().cloned().map(Into::into).collect();
+                let reply_dtos: Vec<FrontendSyncDescriptor> = envelope
+                    .reply_drops
+                    .iter()
+                    .cloned()
+                    .map(Into::into)
+                    .collect();
                 let mut service = state.service.lock().unwrap();
                 state.update_contact_syncs_from_card(
                     &mut service,
@@ -1902,13 +2082,16 @@ pub async fn sync_post_channels_impl(
                                 summable_amounts: result.transfer_summary.summable_amounts.clone(),
                                 countable_items: result.transfer_summary.countable_items.clone(),
                                 involved_vouchers: result.involved_vouchers.clone(),
-                                involved_sources_details: Some(result.involved_vouchers_details.clone()),
+                                involved_sources_details: Some(
+                                    result.involved_vouchers_details.clone(),
+                                ),
                                 bundle_data: Vec::new(),
                                 bundle_id: result.header.bundle_id.clone(),
                                 notes,
                                 sender_profile_name: result.header.sender_profile_name.clone(),
                             };
-                            let _ = state.append_to_history(&mut service, record, password.as_deref());
+                            let _ =
+                                state.append_to_history(&mut service, record, password.as_deref());
                             let _ = state.refresh_events_cache(&mut service, password.as_deref());
 
                             if let Some(ref wot_json) = result.wot_sync_json {
@@ -1937,7 +2120,9 @@ pub async fn sync_post_channels_impl(
                                         .is_some_and(|ce| crate::state::canonicalize_did(found).ok().as_ref() == Some(&ce))
                             );
                             let err_str = e.to_string();
-                            if is_sibling_subaccount || err_str.to_ascii_lowercase().contains("already processed") {
+                            if is_sibling_subaccount
+                                || err_str.to_ascii_lowercase().contains("already processed")
+                            {
                                 None
                             } else {
                                 errors.push(format!("Receive payment bundle failed: {}", e));
@@ -1962,14 +2147,21 @@ pub async fn sync_post_channels_impl(
                 }
                 PayloadType::VoucherForSigning => {
                     let sender_name = get_contact_name(state, &sender_did, password.as_deref());
-                    post_state.pending_sign_requests.push(FrontendPendingSignRequest {
-                        msg_id: envelope.msg_id.clone(),
-                        sender_did: sender_did.clone(),
-                        sender_name,
-                        created_at: envelope.created_at,
-                        reply_syncs: envelope.reply_drops.iter().cloned().map(Into::into).collect(),
-                        container_bytes: envelope.container_bytes.clone(),
-                    });
+                    post_state
+                        .pending_sign_requests
+                        .push(FrontendPendingSignRequest {
+                            msg_id: envelope.msg_id.clone(),
+                            sender_did: sender_did.clone(),
+                            sender_name,
+                            created_at: envelope.created_at,
+                            reply_syncs: envelope
+                                .reply_drops
+                                .iter()
+                                .cloned()
+                                .map(Into::into)
+                                .collect(),
+                            container_bytes: envelope.container_bytes.clone(),
+                        });
                     new_sign_requests += 1;
                     queue_receipt(
                         &mut post_state,
@@ -2041,14 +2233,32 @@ pub async fn sync_post_channels_impl(
 
                                 if is_known_trusted_contact {
                                     // Silent auto-accept for established contacts (KISS / Zero-Click)
-                                    if let Ok(pkg) = serde_json::from_str::<humoco_wot::WotSyncPackage>(&assertion.wot_sync_json) {
+                                    if let Ok(pkg) =
+                                        serde_json::from_str::<humoco_wot::WotSyncPackage>(
+                                            &assertion.wot_sync_json,
+                                        )
+                                    {
                                         let mut service = state.service.lock().unwrap();
-                                        if let Ok(mut reg) = state.get_or_load_wot_register(&mut service, password.as_deref()) {
-                                            let can_sender_did = crate::state::canonicalize_did(&assertion.sender_did)
-                                                .unwrap_or_else(|_| assertion.sender_did.clone());
-                                            let _ = reg.import_sync_package(&pkg, Some(&can_sender_did), now_secs);
-                                            let _ = state.ensure_wot_list_signed(&mut service, &mut reg);
-                                            let _ = state.save_wot_register(&mut service, &reg, password.as_deref());
+                                        if let Ok(mut reg) = state.get_or_load_wot_register(
+                                            &mut service,
+                                            password.as_deref(),
+                                        ) {
+                                            let can_sender_did = crate::state::canonicalize_did(
+                                                &assertion.sender_did,
+                                            )
+                                            .unwrap_or_else(|_| assertion.sender_did.clone());
+                                            let _ = reg.import_sync_package(
+                                                &pkg,
+                                                Some(&can_sender_did),
+                                                now_secs,
+                                            );
+                                            let _ = state
+                                                .ensure_wot_list_signed(&mut service, &mut reg);
+                                            let _ = state.save_wot_register(
+                                                &mut service,
+                                                &reg,
+                                                password.as_deref(),
+                                            );
                                         }
                                     }
 
@@ -2066,50 +2276,103 @@ pub async fn sync_post_channels_impl(
 
                                     // If counterparty requested mutual sync package, automatically queue return package
                                     if assertion.reply_requested {
-                                        let can_recipient = crate::state::canonicalize_did(&sender_did)
-                                            .unwrap_or_else(|_| sender_did.clone());
+                                        let can_recipient =
+                                            crate::state::canonicalize_did(&sender_did)
+                                                .unwrap_or_else(|_| sender_did.clone());
                                         let mut service = state.service.lock().unwrap();
-                                        if let Ok(reg) = state.get_or_load_wot_register(&mut service, password.as_deref()) {
-                                            if let Ok((pkg, _)) = reg.prepare_sync_package(Some(&can_recipient), None, true) {
-                                                if let Ok(wot_sync_json) = serde_json::to_string(&pkg) {
+                                        if let Ok(reg) = state.get_or_load_wot_register(
+                                            &mut service,
+                                            password.as_deref(),
+                                        ) {
+                                            if let Ok((pkg, _)) = reg.prepare_sync_package(
+                                                Some(&can_recipient),
+                                                None,
+                                                true,
+                                            ) {
+                                                if let Ok(wot_sync_json) =
+                                                    serde_json::to_string(&pkg)
+                                                {
                                                     let my_name = service
-                                                        .with_wallet(|w| w.profile.first_name.clone())
+                                                        .with_wallet(|w| {
+                                                            w.profile.first_name.clone()
+                                                        })
                                                         .ok()
                                                         .flatten();
-                                                    let auto_reply_assertion = WotHandshakeAssertion {
-                                                        sender_did: my_identity.user_id.clone(),
-                                                        sender_name: my_name,
-                                                        proposed_level: 1,
-                                                        wot_sync_json,
-                                                        reply_requested: false,
-                                                        created_at: now_secs,
-                                                    };
-                                                    if let Ok(assertion_bytes) = serde_json::to_vec(&auto_reply_assertion) {
+                                                    let auto_reply_assertion =
+                                                        WotHandshakeAssertion {
+                                                            sender_did: my_identity.user_id.clone(),
+                                                            sender_name: my_name,
+                                                            proposed_level: 1,
+                                                            wot_sync_json,
+                                                            reply_requested: false,
+                                                            created_at: now_secs,
+                                                        };
+                                                    if let Ok(assertion_bytes) =
+                                                        serde_json::to_vec(&auto_reply_assertion)
+                                                    {
                                                         if let Ok(container) = SecureContainer::seal(
                                                             &my_identity,
-                                                            &ContainerConfig::TargetDid(sender_did.clone(), PrivacyMode::HashedRouting),
+                                                            &ContainerConfig::TargetDid(
+                                                                sender_did.clone(),
+                                                                PrivacyMode::HashedRouting,
+                                                            ),
                                                             &assertion_bytes,
                                                             PayloadType::TrustAssertion,
                                                         ) {
-                                                            if let Ok(container_bytes) = serde_json::to_vec(&container) {
-                                                                if let Ok(sender_ed_pk) = get_pubkey_from_user_id(&sender_did) {
-                                                                    let return_msg_id = uuid::Uuid::new_v4().to_string();
+                                                            if let Ok(container_bytes) =
+                                                                serde_json::to_vec(&container)
+                                                            {
+                                                                if let Ok(sender_ed_pk) =
+                                                                    get_pubkey_from_user_id(
+                                                                        &sender_did,
+                                                                    )
+                                                                {
+                                                                    let return_msg_id =
+                                                                        uuid::Uuid::new_v4()
+                                                                            .to_string();
                                                                     let env = PostEnvelope::new(
                                                                         return_msg_id.clone(),
                                                                         now_secs,
-                                                                        own_reply_syncs.iter().cloned().map(Into::into).collect(),
+                                                                        own_reply_syncs
+                                                                            .iter()
+                                                                            .cloned()
+                                                                            .map(Into::into)
+                                                                            .collect(),
                                                                         container_bytes,
                                                                     );
-                                                                    if let Ok(return_box) = seal_post_box(&my_ed_sk, &sender_ed_pk, &env) {
-                                                                        post_state.processed_msg_ids.insert(return_msg_id.clone());
-                                                                        post_state.outbox_entries.push(PostOutboxEntry {
-                                                                            msg_id: return_msg_id,
-                                                                            recipient_did: sender_did.clone(),
-                                                                            tag16_hex: hex::encode(return_box.tag16),
-                                                                            bundle_id: None,
-                                                                            entry: return_box,
-                                                                            created_at: now_secs,
-                                                                        });
+                                                                    if let Ok(return_box) =
+                                                                        seal_post_box(
+                                                                            &my_ed_sk,
+                                                                            &sender_ed_pk,
+                                                                            &env,
+                                                                        )
+                                                                    {
+                                                                        post_state
+                                                                            .processed_msg_ids
+                                                                            .insert(
+                                                                                return_msg_id
+                                                                                    .clone(),
+                                                                            );
+                                                                        post_state
+                                                                            .outbox_entries
+                                                                            .push(
+                                                                            PostOutboxEntry {
+                                                                                msg_id:
+                                                                                    return_msg_id,
+                                                                                recipient_did:
+                                                                                    sender_did
+                                                                                        .clone(),
+                                                                                tag16_hex:
+                                                                                    hex::encode(
+                                                                                        return_box
+                                                                                            .tag16,
+                                                                                    ),
+                                                                                bundle_id: None,
+                                                                                entry: return_box,
+                                                                                created_at:
+                                                                                    now_secs,
+                                                                            },
+                                                                        );
                                                                     }
                                                                 }
                                                             }
@@ -2125,14 +2388,16 @@ pub async fn sync_post_channels_impl(
                                         envelope.msg_id.clone(),
                                         assertion.wot_sync_json.clone(),
                                     );
-                                    post_state.pending_wot_handshakes.push(FrontendPendingWotHandshake {
-                                        msg_id: envelope.msg_id.clone(),
-                                        sender_did: assertion.sender_did.clone(),
-                                        sender_name: assertion.sender_name.clone(),
-                                        proposed_level: assertion.proposed_level,
-                                        reply_requested: assertion.reply_requested,
-                                        created_at: assertion.created_at,
-                                    });
+                                    post_state.pending_wot_handshakes.push(
+                                        FrontendPendingWotHandshake {
+                                            msg_id: envelope.msg_id.clone(),
+                                            sender_did: assertion.sender_did.clone(),
+                                            sender_name: assertion.sender_name.clone(),
+                                            proposed_level: assertion.proposed_level,
+                                            reply_requested: assertion.reply_requested,
+                                            created_at: assertion.created_at,
+                                        },
+                                    );
                                     new_wot_handshakes += 1;
                                     queue_receipt(
                                         &mut post_state,
@@ -2161,7 +2426,8 @@ pub async fn sync_post_channels_impl(
                             } else {
                                 let before_len = post_state.outbox_entries.len();
                                 post_state.outbox_entries.retain(|e| {
-                                    let matches_sender = are_dids_equal(&e.recipient_did, &sender_did);
+                                    let matches_sender =
+                                        are_dids_equal(&e.recipient_did, &sender_did);
                                     let matches_msg = e.msg_id == receipt.acknowledged_msg_id
                                         || e.tag16_hex == receipt.acknowledged_tag16_hex;
                                     !(matches_sender && matches_msg)
@@ -2193,41 +2459,71 @@ pub async fn sync_post_channels_impl(
                                 if !is_target_valid {
                                     match &inquiry.target {
                                         InquiryTarget::Ad { ad_id, .. } => {
-                                            if let Ok(sender_ed_pk) = get_pubkey_from_user_id(&sender_did) {
+                                            if let Ok(sender_ed_pk) =
+                                                get_pubkey_from_user_id(&sender_did)
+                                            {
                                                 let decline_reply = MarketInquiryReply {
                                                     inquiry_id: inquiry.inquiry_id.clone(),
                                                     decision: MarketInquiryDecision::Decline,
-                                                    note: Some("Inserat nicht mehr verfügbar".to_string()),
+                                                    note: Some(
+                                                        "Inserat nicht mehr verfügbar".to_string(),
+                                                    ),
                                                     payment_uri: None,
                                                     amount_hint: None,
                                                     standard_uuid: None,
                                                     replied_at: now_secs,
                                                 };
-                                                if let Ok(reply_bytes) = serde_json::to_vec(&decline_reply) {
+                                                if let Ok(reply_bytes) =
+                                                    serde_json::to_vec(&decline_reply)
+                                                {
                                                     if let Ok(container) = SecureContainer::seal(
                                                         &my_identity,
-                                                        &ContainerConfig::TargetDid(sender_did.clone(), PrivacyMode::HashedRouting),
+                                                        &ContainerConfig::TargetDid(
+                                                            sender_did.clone(),
+                                                            PrivacyMode::HashedRouting,
+                                                        ),
                                                         &reply_bytes,
-                                                        PayloadType::Generic(PAYLOAD_MARKET_INQUIRY_REPLY_V1.to_string()),
+                                                        PayloadType::Generic(
+                                                            PAYLOAD_MARKET_INQUIRY_REPLY_V1
+                                                                .to_string(),
+                                                        ),
                                                     ) {
-                                                        if let Ok(container_bytes) = serde_json::to_vec(&container) {
-                                                            let auto_msg_id = uuid::Uuid::new_v4().to_string();
+                                                        if let Ok(container_bytes) =
+                                                            serde_json::to_vec(&container)
+                                                        {
+                                                            let auto_msg_id =
+                                                                uuid::Uuid::new_v4().to_string();
                                                             let env = PostEnvelope::new(
                                                                 auto_msg_id.clone(),
                                                                 now_secs,
-                                                                own_reply_syncs.iter().cloned().map(Into::into).collect(),
+                                                                own_reply_syncs
+                                                                    .iter()
+                                                                    .cloned()
+                                                                    .map(Into::into)
+                                                                    .collect(),
                                                                 container_bytes,
                                                             );
-                                                            if let Ok(auto_box) = seal_post_box(&my_ed_sk, &sender_ed_pk, &env) {
-                                                                post_state.processed_msg_ids.insert(auto_msg_id.clone());
-                                                                post_state.outbox_entries.push(PostOutboxEntry {
-                                                                    msg_id: auto_msg_id,
-                                                                    recipient_did: sender_did.clone(),
-                                                                    tag16_hex: hex::encode(auto_box.tag16),
-                                                                    bundle_id: None,
-                                                                    entry: auto_box,
-                                                                    created_at: now_secs,
-                                                                });
+                                                            if let Ok(auto_box) = seal_post_box(
+                                                                &my_ed_sk,
+                                                                &sender_ed_pk,
+                                                                &env,
+                                                            ) {
+                                                                post_state
+                                                                    .processed_msg_ids
+                                                                    .insert(auto_msg_id.clone());
+                                                                post_state.outbox_entries.push(
+                                                                    PostOutboxEntry {
+                                                                        msg_id: auto_msg_id,
+                                                                        recipient_did: sender_did
+                                                                            .clone(),
+                                                                        tag16_hex: hex::encode(
+                                                                            auto_box.tag16,
+                                                                        ),
+                                                                        bundle_id: None,
+                                                                        entry: auto_box,
+                                                                        created_at: now_secs,
+                                                                    },
+                                                                );
                                                             }
                                                         }
                                                     }
@@ -2263,23 +2559,28 @@ pub async fn sync_post_channels_impl(
                                         .record_inquiry(&sender_pk_hex, &target_key)
                                     {
                                         Ok(()) => {
-                                            let sender_name =
-                                                get_contact_name(state, &sender_did, password.as_deref());
-                                            post_state.seller_inquiries.push(FrontendMarketInquiryItem {
-                                                inquiry_id: inquiry.inquiry_id.clone(),
-                                                target: inquiry.target.clone(),
-                                                counterparty_did: sender_did.clone(),
-                                                counterparty_name: sender_name,
-                                                message: inquiry.message.clone(),
-                                                created_at: inquiry.created_at,
-                                                reply_syncs: envelope
-                                                    .reply_drops
-                                                    .iter()
-                                                    .cloned()
-                                                    .map(Into::into)
-                                                    .collect(),
-                                                reply: None,
-                                            });
+                                            let sender_name = get_contact_name(
+                                                state,
+                                                &sender_did,
+                                                password.as_deref(),
+                                            );
+                                            post_state.seller_inquiries.push(
+                                                FrontendMarketInquiryItem {
+                                                    inquiry_id: inquiry.inquiry_id.clone(),
+                                                    target: inquiry.target.clone(),
+                                                    counterparty_did: sender_did.clone(),
+                                                    counterparty_name: sender_name,
+                                                    message: inquiry.message.clone(),
+                                                    created_at: inquiry.created_at,
+                                                    reply_syncs: envelope
+                                                        .reply_drops
+                                                        .iter()
+                                                        .cloned()
+                                                        .map(Into::into)
+                                                        .collect(),
+                                                    reply: None,
+                                                },
+                                            );
                                             new_inquiries += 1;
                                             queue_receipt(
                                                 &mut post_state,
@@ -2313,11 +2614,13 @@ pub async fn sync_post_channels_impl(
                         Ok(reply) => {
                             if let Err(e) = validate_market_inquiry_reply(&reply) {
                                 errors.push(format!("Invalid market inquiry reply: {}", e));
-                            } else if let Some(item) = post_state.buyer_inquiries.iter_mut().find(|i| {
-                                i.inquiry_id == reply.inquiry_id
-                                    && are_dids_equal(&i.counterparty_did, &sender_did)
-                                    && i.reply.is_none()
-                            }) {
+                            } else if let Some(item) =
+                                post_state.buyer_inquiries.iter_mut().find(|i| {
+                                    i.inquiry_id == reply.inquiry_id
+                                        && are_dids_equal(&i.counterparty_did, &sender_did)
+                                        && i.reply.is_none()
+                                })
+                            {
                                 let decision_str = match reply.decision {
                                     MarketInquiryDecision::Confirm => "confirm".to_string(),
                                     MarketInquiryDecision::Decline => "decline".to_string(),
@@ -2351,7 +2654,9 @@ pub async fn sync_post_channels_impl(
                     }
                 }
                 PayloadType::Generic(ref s) if s == humoco_market::PAYLOAD_GUARDIAN_ASSIGN_V1 => {
-                    match serde_json::from_slice::<humoco_market::GuardianVaultEntry>(&decrypted_bytes) {
+                    match serde_json::from_slice::<humoco_market::GuardianVaultEntry>(
+                        &decrypted_bytes,
+                    ) {
                         Ok(entry) => {
                             if !are_dids_equal(&sender_did, &entry.owner_did) {
                                 errors.push(format!(
@@ -2393,11 +2698,14 @@ pub async fn sync_post_channels_impl(
                                     match humoco_market::verify_guardian_vault_entry(&entry) {
                                         Ok(()) => {
                                             let mut service = state.service.lock().unwrap();
-                                            let mut vault = crate::commands::recovery::load_guardian_vault(
-                                                &mut service,
-                                                password.as_deref(),
-                                            )
-                                            .unwrap_or_else(|_| humoco_market::GuardianVaultStore::new());
+                                            let mut vault =
+                                                crate::commands::recovery::load_guardian_vault(
+                                                    &mut service,
+                                                    password.as_deref(),
+                                                )
+                                                .unwrap_or_else(|_| {
+                                                    humoco_market::GuardianVaultStore::new()
+                                                });
 
                                             match vault.upsert_ward(entry.clone()) {
                                                 Ok(()) => {
@@ -2463,12 +2771,18 @@ pub async fn sync_post_channels_impl(
                                                     }
                                                 }
                                                 Err(e) => {
-                                                    errors.push(format!("Failed to upsert guardian ward: {}", e));
+                                                    errors.push(format!(
+                                                        "Failed to upsert guardian ward: {}",
+                                                        e
+                                                    ));
                                                 }
                                             }
                                         }
                                         Err(e) => {
-                                            errors.push(format!("Invalid guardian vault entry: {}", e));
+                                            errors.push(format!(
+                                                "Invalid guardian vault entry: {}",
+                                                e
+                                            ));
                                         }
                                     }
                                 }
@@ -2480,13 +2794,17 @@ pub async fn sync_post_channels_impl(
                     }
                 }
                 PayloadType::Generic(ref s) if s == humoco_market::PAYLOAD_GUARDIAN_ACK_V1 => {
-                    match serde_json::from_slice::<humoco_market::GuardianVaultAck>(&decrypted_bytes) {
+                    match serde_json::from_slice::<humoco_market::GuardianVaultAck>(
+                        &decrypted_bytes,
+                    ) {
                         Ok(ack) => {
                             let mut service = state.service.lock().unwrap();
-                            if let Ok(Some(mut owner_state)) = crate::commands::recovery::load_recovery_owner_state(
-                                &mut service,
-                                password.as_deref(),
-                            ) {
+                            if let Ok(Some(mut owner_state)) =
+                                crate::commands::recovery::load_recovery_owner_state(
+                                    &mut service,
+                                    password.as_deref(),
+                                )
+                            {
                                 if ack.rotation_epoch == owner_state.rotation_epoch
                                     && are_dids_equal(&ack.owner_did, &my_identity.user_id)
                                 {
@@ -2500,11 +2818,12 @@ pub async fn sync_post_channels_impl(
                                         }
                                     }
                                     if modified {
-                                        let _ = crate::commands::recovery::save_recovery_owner_state(
-                                            &mut service,
-                                            &owner_state,
-                                            password.as_deref(),
-                                        );
+                                        let _ =
+                                            crate::commands::recovery::save_recovery_owner_state(
+                                                &mut service,
+                                                &owner_state,
+                                                password.as_deref(),
+                                            );
                                     }
                                 }
                             }
@@ -2526,7 +2845,9 @@ pub async fn sync_post_channels_impl(
                     }
                 }
                 PayloadType::Generic(ref s) if s == humoco_market::PAYLOAD_GUARDIAN_LOCATOR_V1 => {
-                    match serde_json::from_slice::<humoco_market::GuardianLocatorUpdate>(&decrypted_bytes) {
+                    match serde_json::from_slice::<humoco_market::GuardianLocatorUpdate>(
+                        &decrypted_bytes,
+                    ) {
                         Ok(update) => {
                             if !are_dids_equal(&sender_did, &update.owner_did) {
                                 errors.push(format!(
@@ -2562,7 +2883,10 @@ pub async fn sync_post_channels_impl(
                                         );
                                     }
                                     Err(e) => {
-                                        errors.push(format!("Failed to update guardian locator: {}", e));
+                                        errors.push(format!(
+                                            "Failed to update guardian locator: {}",
+                                            e
+                                        ));
                                     }
                                 }
                             }
@@ -2573,7 +2897,8 @@ pub async fn sync_post_channels_impl(
                     }
                 }
                 PayloadType::Generic(ref s) if s == humoco_market::PAYLOAD_GUARDIAN_REVOKE_V1 => {
-                    match serde_json::from_slice::<humoco_market::GuardianRevoke>(&decrypted_bytes) {
+                    match serde_json::from_slice::<humoco_market::GuardianRevoke>(&decrypted_bytes)
+                    {
                         Ok(revoke) => {
                             if !are_dids_equal(&sender_did, &revoke.owner_did) {
                                 errors.push(format!(
@@ -2609,7 +2934,10 @@ pub async fn sync_post_channels_impl(
                                         );
                                     }
                                     Err(e) => {
-                                        errors.push(format!("Failed to revoke ward from guardian vault: {}", e));
+                                        errors.push(format!(
+                                            "Failed to revoke ward from guardian vault: {}",
+                                            e
+                                        ));
                                     }
                                 }
                             }
@@ -2629,7 +2957,8 @@ pub async fn sync_post_channels_impl(
     }
 
     // 6. Flush pass
-    let (uploaded_to, flush_errors) = flush_post_slots_impl(state, &mut post_state, password.as_deref()).await;
+    let (uploaded_to, flush_errors) =
+        flush_post_slots_impl(state, &mut post_state, password.as_deref()).await;
     errors.extend(flush_errors);
 
     save_post_state(state, &post_state, password.as_deref())?;
@@ -2682,18 +3011,17 @@ pub async fn sync_post_channels(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use human_money_core::test_utils;
+    use crate::commands::market::{
+        save_my_market_profile_impl, set_card_published_impl, upsert_ad_impl,
+    };
     use crate::commands::sync::tests::{
         create_test_state, setup_test_app, temp_test_dir, MockSyncServer, ALICE_PHRASE, BOB_PHRASE,
     };
     use crate::commands::sync::{probe_public_sync_impl, save_public_sync_impl};
-    use crate::commands::market::{
-        save_my_market_profile_impl, set_card_published_impl, upsert_ad_impl,
-    };
     use crate::models::{
-        FrontendAdInput, FrontendContact, FrontendSaveMyMarketProfileRequest,
-        FrontendUserProfile,
+        FrontendAdInput, FrontendContact, FrontendSaveMyMarketProfileRequest, FrontendUserProfile,
     };
+    use human_money_core::test_utils;
 
     const DROP_PUB_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const DROP_PUB_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -2708,8 +3036,14 @@ mod tests {
     ) -> (String, crate::models::FrontendPublicSyncInfo) {
         let write_url = format!("{}/sync.php", server.base_url);
         let read_url = format!("{}/{}", server.base_url, server.data_dir);
-        let info = probe_public_sync_impl(write_url.clone(), Some(password.to_string()), state).await.unwrap();
-        server.members.lock().unwrap().push(info.access_pubkey.clone());
+        let info = probe_public_sync_impl(write_url.clone(), Some(password.to_string()), state)
+            .await
+            .unwrap();
+        server
+            .members
+            .lock()
+            .unwrap()
+            .push(info.access_pubkey.clone());
         let saved = save_public_sync_impl(
             write_url.clone(),
             read_url,
@@ -2718,7 +3052,9 @@ mod tests {
             true,
             Some(password.to_string()),
             state,
-        ).await.unwrap();
+        )
+        .await
+        .unwrap();
         (write_url, saved)
     }
 
@@ -2727,7 +3063,8 @@ mod tests {
         let base_dir = temp_test_dir("dual_delivery_test");
         let password = "TestPassword123!";
 
-        let alice_service = setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
+        let alice_service =
+            setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
         let bob_service = setup_test_app(&base_dir.join("bob"), "Bob", BOB_PHRASE, password);
 
         let alice_state = create_test_state(alice_service);
@@ -2746,8 +3083,10 @@ mod tests {
         let server_a = MockSyncServer::start("d-alice".to_string(), ADMIN_A.to_string()).await;
         let server_b = MockSyncServer::start("d-bob".to_string(), ADMIN_B.to_string()).await;
 
-        let (server_a_url, alice_drop) = setup_test_sync(&server_a, DROP_PUB_A, password, &alice_state).await;
-        let (server_b_url, bob_drop) = setup_test_sync(&server_b, DROP_PUB_B, password, &bob_state).await;
+        let (server_a_url, alice_drop) =
+            setup_test_sync(&server_a, DROP_PUB_A, password, &alice_state).await;
+        let (server_b_url, bob_drop) =
+            setup_test_sync(&server_b, DROP_PUB_B, password, &bob_state).await;
 
         // Alice and Bob add each other to address book with Level 2 and their respective drop
         {
@@ -2768,7 +3107,9 @@ mod tests {
                 syncs: vec![FrontendSyncDescriptor {
                     write_url: server_b_url.clone(),
                     read_url: format!("{}/{}", server_b.base_url, server_b.data_dir),
-                    slot_id: Some(humoco_market::format_slot_id(&bob_drop.access_pubkey, Some("pc")).unwrap()),
+                    slot_id: Some(
+                        humoco_market::format_slot_id(&bob_drop.access_pubkey, Some("pc")).unwrap(),
+                    ),
                     drop_pub: DROP_PUB_B.to_string(),
                     last_seen_at: None,
                     last_error_at: None,
@@ -2778,7 +3119,9 @@ mod tests {
                     ..Default::default()
                 }],
             };
-            alice_state.save_contact(&mut s_alice, contact_bob, Some(password)).unwrap();
+            alice_state
+                .save_contact(&mut s_alice, contact_bob, Some(password))
+                .unwrap();
         }
 
         {
@@ -2799,7 +3142,10 @@ mod tests {
                 syncs: vec![FrontendSyncDescriptor {
                     write_url: server_a_url.clone(),
                     read_url: format!("{}/{}", server_a.base_url, server_a.data_dir),
-                    slot_id: Some(humoco_market::format_slot_id(&alice_drop.access_pubkey, Some("pc")).unwrap()),
+                    slot_id: Some(
+                        humoco_market::format_slot_id(&alice_drop.access_pubkey, Some("pc"))
+                            .unwrap(),
+                    ),
                     drop_pub: DROP_PUB_A.to_string(),
                     last_seen_at: None,
                     last_error_at: None,
@@ -2809,42 +3155,53 @@ mod tests {
                     ..Default::default()
                 }],
             };
-            bob_state.save_contact(&mut s_bob, contact_alice, Some(password)).unwrap();
+            bob_state
+                .save_contact(&mut s_bob, contact_alice, Some(password))
+                .unwrap();
         }
 
         // 1. Alice creates standard and voucher
-        let standard_toml = test_utils::generate_signed_standard_toml("voucher_standards/freetaler_v1/standard.toml");
+        let standard_toml = test_utils::generate_signed_standard_toml(
+            "voucher_standards/freetaler_v1/standard.toml",
+        );
         let mut std_map = HashMap::new();
-        std_map.insert("a1b2c3d4-e5f6-4789-8012-3456789abcde".to_string(), standard_toml.clone());
+        std_map.insert(
+            "a1b2c3d4-e5f6-4789-8012-3456789abcde".to_string(),
+            standard_toml.clone(),
+        );
 
         {
             let mut s_alice = alice_state.service.lock().unwrap();
-            s_alice.create_new_voucher(
-                &standard_toml,
-                human_money_core::NewVoucherData {
-                    creator_profile: human_money_core::models::profile::PublicProfile {
-                        id: Some(alice_did.clone()),
-                        first_name: Some("Alice".to_string()),
-                        ..Default::default()
+            s_alice
+                .create_new_voucher(
+                    &standard_toml,
+                    human_money_core::NewVoucherData {
+                        creator_profile: human_money_core::models::profile::PublicProfile {
+                            id: Some(alice_did.clone()),
+                            first_name: Some("Alice".to_string()),
+                            ..Default::default()
+                        },
+                        nominal_value: human_money_core::models::voucher::ValueDefinition {
+                            amount: "100".to_string(),
+                            unit: "Taler".to_string(),
+                            ..Default::default()
+                        },
+                        validity_duration: Some("P1Y".to_string()),
+                        non_redeemable_test_voucher: false,
+                        collateral: None,
+                        layer2_anchor: None,
                     },
-                    nominal_value: human_money_core::models::voucher::ValueDefinition {
-                        amount: "100".to_string(),
-                        unit: "Taler".to_string(),
-                        ..Default::default()
-                    },
-                    validity_duration: Some("P1Y".to_string()),
-                    non_redeemable_test_voucher: false,
-                    collateral: None,
-                },
-                Some(password),
-            ).unwrap();
+                    Some(password),
+                )
+                .unwrap();
         }
 
         let local_id = {
             let s = alice_state.service.lock().unwrap();
-            s.with_wallet_and_identity(|w, id| {
-                w.list_vouchers(Some(id), None, None, None)
-            }).unwrap()[0].local_instance_id.clone()
+            s.with_wallet_and_identity(|w, id| w.list_vouchers(Some(id), None, None, None))
+                .unwrap()[0]
+                .local_instance_id
+                .clone()
         };
 
         // 2. Alice transfers to Bob
@@ -2863,7 +3220,8 @@ mod tests {
 
         let bundle_res = {
             let mut s = alice_state.service.lock().unwrap();
-            s.create_transfer_bundle_with_l2_intents(transfer_req, &std_map, None, Some(password), 0).unwrap()
+            s.create_transfer_bundle(transfer_req, &std_map, None, Some(password))
+                .unwrap()
         };
         let bundle_bytes = bundle_res.bundle_bytes;
         let bundle_id = bundle_res.bundle_id;
@@ -2886,21 +3244,46 @@ mod tests {
         };
         {
             let mut s = alice_state.service.lock().unwrap();
-            alice_state.append_to_history(&mut s, record, Some(password)).unwrap();
+            alice_state
+                .append_to_history(&mut s, record, Some(password))
+                .unwrap();
         }
 
         // 3. Alice deposits to post twice: must be identical bytes, NEVER calling create_transfer_bundle again!
-        let dep1 = deposit_transfer_to_post_impl(bundle_id.clone(), Some(password.to_string()), &alice_state).await.unwrap();
+        let dep1 = deposit_transfer_to_post_impl(
+            bundle_id.clone(),
+            Some(password.to_string()),
+            &alice_state,
+        )
+        .await
+        .unwrap();
         assert_eq!(dep1.deposited_to, 1);
-        let dep2 = deposit_transfer_to_post_impl(bundle_id.clone(), Some(password.to_string()), &alice_state).await.unwrap();
+        let dep2 = deposit_transfer_to_post_impl(
+            bundle_id.clone(),
+            Some(password.to_string()),
+            &alice_state,
+        )
+        .await
+        .unwrap();
         assert_eq!(dep1.msg_id, dep2.msg_id);
 
         let post_state_alice = load_post_state(&alice_state, Some(password)).unwrap();
         assert_eq!(post_state_alice.outbox_entries.len(), 1);
-        assert_eq!(post_state_alice.outbox_entries[0].bundle_id.as_deref(), Some(bundle_id.as_str()));
+        assert_eq!(
+            post_state_alice.outbox_entries[0].bundle_id.as_deref(),
+            Some(bundle_id.as_str())
+        );
 
         // 4. Bob syncs post drops: receives payment & queues receipt
-        let bob_sync = sync_post_channels_impl(None, None, Some(&std_map), Some(password.to_string()), &bob_state).await.unwrap();
+        let bob_sync = sync_post_channels_impl(
+            None,
+            None,
+            Some(&std_map),
+            Some(password.to_string()),
+            &bob_state,
+        )
+        .await
+        .unwrap();
         assert_eq!(bob_sync.imported_payments, 1);
 
         // 5. Bob tries to import the same bundle offline/manually: strictly idempotent!
@@ -2908,15 +3291,24 @@ mod tests {
             let mut s = bob_state.service.lock().unwrap();
             s.receive_bundle(&bundle_bytes, &std_map, None, Some(password), false)
         };
-        assert!(offline_import_attempt.is_err(), "Duplicate import must return BundleAlreadyProcessed");
+        assert!(
+            offline_import_attempt.is_err(),
+            "Duplicate import must return BundleAlreadyProcessed"
+        );
 
         // 6. Alice syncs post drops: downloads receipt from Bob, prunes acknowledged outbox entry!
-        let alice_sync = sync_post_channels_impl(None, None, None, Some(password.to_string()), &alice_state).await.unwrap();
+        let alice_sync =
+            sync_post_channels_impl(None, None, None, Some(password.to_string()), &alice_state)
+                .await
+                .unwrap();
         assert_eq!(alice_sync.imported_receipts, 1);
         assert_eq!(alice_sync.pruned_boxes, 1);
 
         let post_state_alice_final = load_post_state(&alice_state, Some(password)).unwrap();
-        assert!(post_state_alice_final.outbox_entries.is_empty(), "Outbox entry must be acknowledged and pruned");
+        assert!(
+            post_state_alice_final.outbox_entries.is_empty(),
+            "Outbox entry must be acknowledged and pruned"
+        );
     }
 
     #[tokio::test]
@@ -2924,7 +3316,8 @@ mod tests {
         let base_dir = temp_test_dir("asymmetry_test");
         let password = "TestPassword123!";
 
-        let alice_service = setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
+        let alice_service =
+            setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
         let bob_service = setup_test_app(&base_dir.join("bob"), "Bob", BOB_PHRASE, password);
 
         let alice_state = create_test_state(alice_service);
@@ -2941,7 +3334,8 @@ mod tests {
 
         // Server for Alice only; Bob has NO drop server
         let server_a = MockSyncServer::start("d-alice".to_string(), ADMIN_A.to_string()).await;
-        let (server_a_url, alice_drop) = setup_test_sync(&server_a, DROP_PUB_A, password, &alice_state).await;
+        let (server_a_url, alice_drop) =
+            setup_test_sync(&server_a, DROP_PUB_A, password, &alice_state).await;
 
         // Bob has Alice in his address book with Alice's drop
         {
@@ -2962,7 +3356,10 @@ mod tests {
                 syncs: vec![FrontendSyncDescriptor {
                     write_url: server_a_url.clone(),
                     read_url: format!("{}/{}", server_a.base_url, server_a.data_dir),
-                    slot_id: Some(humoco_market::format_slot_id(&alice_drop.access_pubkey, Some("pc")).unwrap()),
+                    slot_id: Some(
+                        humoco_market::format_slot_id(&alice_drop.access_pubkey, Some("pc"))
+                            .unwrap(),
+                    ),
                     drop_pub: DROP_PUB_A.to_string(),
                     last_seen_at: None,
                     last_error_at: None,
@@ -2972,13 +3369,20 @@ mod tests {
                     ..Default::default()
                 }],
             };
-            bob_state.save_contact(&mut s_bob, contact_alice, Some(password)).unwrap();
+            bob_state
+                .save_contact(&mut s_bob, contact_alice, Some(password))
+                .unwrap();
         }
 
         // Alice creates and deposits payment
-        let standard_toml = test_utils::generate_signed_standard_toml("voucher_standards/freetaler_v1/standard.toml");
+        let standard_toml = test_utils::generate_signed_standard_toml(
+            "voucher_standards/freetaler_v1/standard.toml",
+        );
         let mut std_map = HashMap::new();
-        std_map.insert("a1b2c3d4-e5f6-4789-8012-3456789abcde".to_string(), standard_toml.clone());
+        std_map.insert(
+            "a1b2c3d4-e5f6-4789-8012-3456789abcde".to_string(),
+            standard_toml.clone(),
+        );
 
         {
             let mut s = alice_state.service.lock().unwrap();
@@ -2997,16 +3401,19 @@ mod tests {
                     validity_duration: Some("P1Y".to_string()),
                     non_redeemable_test_voucher: false,
                     collateral: None,
+                    layer2_anchor: None,
                 },
                 Some(password),
-            ).unwrap();
+            )
+            .unwrap();
         }
 
         let local_id = {
             let s = alice_state.service.lock().unwrap();
-            s.with_wallet_and_identity(|w, id| {
-                w.list_vouchers(Some(id), None, None, None)
-            }).unwrap()[0].local_instance_id.clone()
+            s.with_wallet_and_identity(|w, id| w.list_vouchers(Some(id), None, None, None))
+                .unwrap()[0]
+                .local_instance_id
+                .clone()
         };
 
         let transfer_req = human_money_core::wallet::types::MultiTransferRequest {
@@ -3024,7 +3431,8 @@ mod tests {
 
         let bundle_res = {
             let mut s = alice_state.service.lock().unwrap();
-            s.create_transfer_bundle_with_l2_intents(transfer_req, &std_map, None, Some(password), 0).unwrap()
+            s.create_transfer_bundle(transfer_req, &std_map, None, Some(password))
+                .unwrap()
         };
 
         let record = TransactionRecord {
@@ -3044,13 +3452,29 @@ mod tests {
         };
         {
             let mut s = alice_state.service.lock().unwrap();
-            alice_state.append_to_history(&mut s, record, Some(password)).unwrap();
+            alice_state
+                .append_to_history(&mut s, record, Some(password))
+                .unwrap();
         }
 
-        deposit_transfer_to_post_impl(bundle_res.bundle_id, Some(password.to_string()), &alice_state).await.unwrap();
+        deposit_transfer_to_post_impl(
+            bundle_res.bundle_id,
+            Some(password.to_string()),
+            &alice_state,
+        )
+        .await
+        .unwrap();
 
         // Bob syncs: Bob has 0 write drops, but can read Alice statically and import payment!
-        let bob_sync = sync_post_channels_impl(None, None, Some(&std_map), Some(password.to_string()), &bob_state).await.unwrap();
+        let bob_sync = sync_post_channels_impl(
+            None,
+            None,
+            Some(&std_map),
+            Some(password.to_string()),
+            &bob_state,
+        )
+        .await
+        .unwrap();
         assert_eq!(bob_sync.imported_payments, 1);
         assert_eq!(bob_sync.uploaded_to, 0, "Bob has no write drops, 0 uploads");
     }
@@ -3060,7 +3484,8 @@ mod tests {
         let base_dir = temp_test_dir("asymmetry_bob_has_drop");
         let password = "TestPassword123!";
 
-        let alice_service = setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
+        let alice_service =
+            setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
         let bob_service = setup_test_app(&base_dir.join("bob"), "Bob", BOB_PHRASE, password);
 
         let alice_state = create_test_state(alice_service);
@@ -3077,11 +3502,22 @@ mod tests {
 
         // Server for Bob only; Alice has NO drop server configured in settings
         let server_b = MockSyncServer::start("d-bob".to_string(), ADMIN_B.to_string()).await;
-        let (server_b_url, bob_drop) = setup_test_sync(&server_b, DROP_PUB_B, password, &bob_state).await;
+        let (server_b_url, bob_drop) =
+            setup_test_sync(&server_b, DROP_PUB_B, password, &bob_state).await;
 
         // Alice registers as a member on the drop server, but does NOT save it to her settings
-        let alice_drop_probe = probe_public_sync_impl(server_b_url.clone(), Some(password.to_string()), &alice_state).await.unwrap();
-        server_b.members.lock().unwrap().push(alice_drop_probe.access_pubkey.clone());
+        let alice_drop_probe = probe_public_sync_impl(
+            server_b_url.clone(),
+            Some(password.to_string()),
+            &alice_state,
+        )
+        .await
+        .unwrap();
+        server_b
+            .members
+            .lock()
+            .unwrap()
+            .push(alice_drop_probe.access_pubkey.clone());
 
         // Verify Alice has 0 drops in settings
         {
@@ -3110,7 +3546,9 @@ mod tests {
                 syncs: vec![FrontendSyncDescriptor {
                     write_url: server_b_url.clone(),
                     read_url: format!("{}/{}", server_b.base_url, server_b.data_dir),
-                    slot_id: Some(humoco_market::format_slot_id(&bob_drop.access_pubkey, Some("pc")).unwrap()),
+                    slot_id: Some(
+                        humoco_market::format_slot_id(&bob_drop.access_pubkey, Some("pc")).unwrap(),
+                    ),
                     drop_pub: DROP_PUB_B.to_string(),
                     last_seen_at: None,
                     last_error_at: None,
@@ -3120,7 +3558,9 @@ mod tests {
                     ..Default::default()
                 }],
             };
-            alice_state.save_contact(&mut s_alice, contact_bob, Some(password)).unwrap();
+            alice_state
+                .save_contact(&mut s_alice, contact_bob, Some(password))
+                .unwrap();
         }
 
         // Bob has Alice in his address book with level 2
@@ -3142,7 +3582,10 @@ mod tests {
                 syncs: vec![FrontendSyncDescriptor {
                     write_url: server_b_url.clone(),
                     read_url: format!("{}/{}", server_b.base_url, server_b.data_dir),
-                    slot_id: Some(humoco_market::format_slot_id(&alice_drop_probe.access_pubkey, Some("pc")).unwrap()),
+                    slot_id: Some(
+                        humoco_market::format_slot_id(&alice_drop_probe.access_pubkey, Some("pc"))
+                            .unwrap(),
+                    ),
                     drop_pub: DROP_PUB_B.to_string(),
                     last_seen_at: None,
                     last_error_at: None,
@@ -3152,13 +3595,20 @@ mod tests {
                     ..Default::default()
                 }],
             };
-            bob_state.save_contact(&mut s_bob, contact_alice, Some(password)).unwrap();
+            bob_state
+                .save_contact(&mut s_bob, contact_alice, Some(password))
+                .unwrap();
         }
 
         // Alice creates standard and voucher
-        let standard_toml = test_utils::generate_signed_standard_toml("voucher_standards/freetaler_v1/standard.toml");
+        let standard_toml = test_utils::generate_signed_standard_toml(
+            "voucher_standards/freetaler_v1/standard.toml",
+        );
         let mut std_map = HashMap::new();
-        std_map.insert("a1b2c3d4-e5f6-4789-8012-3456789abcde".to_string(), standard_toml.clone());
+        std_map.insert(
+            "a1b2c3d4-e5f6-4789-8012-3456789abcde".to_string(),
+            standard_toml.clone(),
+        );
 
         {
             let mut s = alice_state.service.lock().unwrap();
@@ -3177,16 +3627,19 @@ mod tests {
                     validity_duration: Some("P1Y".to_string()),
                     non_redeemable_test_voucher: false,
                     collateral: None,
+                    layer2_anchor: None,
                 },
                 Some(password),
-            ).unwrap();
+            )
+            .unwrap();
         }
 
         let local_id = {
             let s = alice_state.service.lock().unwrap();
-            s.with_wallet_and_identity(|w, id| {
-                w.list_vouchers(Some(id), None, None, None)
-            }).unwrap()[0].local_instance_id.clone()
+            s.with_wallet_and_identity(|w, id| w.list_vouchers(Some(id), None, None, None))
+                .unwrap()[0]
+                .local_instance_id
+                .clone()
         };
 
         let transfer_req = human_money_core::wallet::types::MultiTransferRequest {
@@ -3204,7 +3657,8 @@ mod tests {
 
         let bundle_res = {
             let mut s = alice_state.service.lock().unwrap();
-            s.create_transfer_bundle_with_l2_intents(transfer_req, &std_map, None, Some(password), 0).unwrap()
+            s.create_transfer_bundle(transfer_req, &std_map, None, Some(password))
+                .unwrap()
         };
 
         let record = TransactionRecord {
@@ -3224,15 +3678,34 @@ mod tests {
         };
         {
             let mut s = alice_state.service.lock().unwrap();
-            alice_state.append_to_history(&mut s, record, Some(password)).unwrap();
+            alice_state
+                .append_to_history(&mut s, record, Some(password))
+                .unwrap();
         }
 
         // Alice has no drops in settings, but deposit_transfer_to_post_impl successfully uploads to Bob's drop!
-        let deposit_res = deposit_transfer_to_post_impl(bundle_res.bundle_id, Some(password.to_string()), &alice_state).await.unwrap();
-        assert_eq!(deposit_res.deposited_to, 1, "Must upload to recipient's drop even when sender has no drops");
+        let deposit_res = deposit_transfer_to_post_impl(
+            bundle_res.bundle_id,
+            Some(password.to_string()),
+            &alice_state,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            deposit_res.deposited_to, 1,
+            "Must upload to recipient's drop even when sender has no drops"
+        );
 
         // Bob syncs from his own drop and imports payment!
-        let bob_sync = sync_post_channels_impl(None, None, Some(&std_map), Some(password.to_string()), &bob_state).await.unwrap();
+        let bob_sync = sync_post_channels_impl(
+            None,
+            None,
+            Some(&std_map),
+            Some(password.to_string()),
+            &bob_state,
+        )
+        .await
+        .unwrap();
         assert_eq!(bob_sync.imported_payments, 1);
     }
 
@@ -3241,7 +3714,8 @@ mod tests {
         let base_dir = temp_test_dir("multi_device_merge");
         let password = "TestPassword123!";
 
-        let alice_service = setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
+        let alice_service =
+            setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
         let alice_state = create_test_state(alice_service);
 
         let _alice_did = {
@@ -3250,28 +3724,47 @@ mod tests {
         };
 
         let server_a = MockSyncServer::start("d-alice".to_string(), ADMIN_A.to_string()).await;
-        let (server_a_url, alice_drop) = setup_test_sync(&server_a, DROP_PUB_A, password, &alice_state).await;
+        let (server_a_url, alice_drop) =
+            setup_test_sync(&server_a, DROP_PUB_A, password, &alice_state).await;
 
         // Pre-populate server with a slot containing dummy/remote entries and a higher ETag
         let (_my_ed_sk, master_seed) = {
             let s = alice_state.service.lock().unwrap();
-            let sk = s.with_wallet_and_identity(|_w, id| id.signing_key.clone()).unwrap();
+            let sk = s
+                .with_wallet_and_identity(|_w, id| id.signing_key.clone())
+                .unwrap();
             let seed = sk.to_bytes();
             (sk, seed)
         };
-        let dummy_slot = humoco_market::encode_post_slot(&master_seed, &[], DROP_POST_MAX_BYTES).unwrap();
+        let dummy_slot =
+            humoco_market::encode_post_slot(&master_seed, &[], DROP_POST_MAX_BYTES).unwrap();
         let slot_key = format!("{}_pc.post", alice_drop.access_pubkey);
-        server_a.slots.lock().unwrap().insert(slot_key.clone(), dummy_slot);
-        server_a.etags.lock().unwrap().insert(slot_key, "\"etag_device_2\"".to_string());
+        server_a
+            .slots
+            .lock()
+            .unwrap()
+            .insert(slot_key.clone(), dummy_slot);
+        server_a
+            .etags
+            .lock()
+            .unwrap()
+            .insert(slot_key, "\"etag_device_2\"".to_string());
 
         // Alice local state has an out-of-date or empty ETag
         let mut post_state = load_post_state(&alice_state, Some(password)).unwrap();
-        post_state.slot_etags_by_write_url.insert(server_a_url.clone(), "\"etag_stale\"".to_string());
+        post_state
+            .slot_etags_by_write_url
+            .insert(server_a_url.clone(), "\"etag_stale\"".to_string());
         save_post_state(&alice_state, &post_state, Some(password)).unwrap();
 
         // Flush post slots: PUT with stale ETag -> 412 Precondition Failed -> fetch remote -> merge -> retry with "etag_device_2" -> saved!
-        let (uploaded, errors) = flush_post_slots_impl(&alice_state, &mut post_state, Some(password)).await;
-        assert_eq!(uploaded, 1, "Must successfully merge and upload on 412: {:?}", errors);
+        let (uploaded, errors) =
+            flush_post_slots_impl(&alice_state, &mut post_state, Some(password)).await;
+        assert_eq!(
+            uploaded, 1,
+            "Must successfully merge and upload on 412: {:?}",
+            errors
+        );
         assert!(errors.is_empty());
     }
 
@@ -3280,7 +3773,8 @@ mod tests {
         let base_dir = temp_test_dir("co_signing_test");
         let password = "TestPassword123!";
 
-        let alice_service = setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
+        let alice_service =
+            setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
         let bob_service = setup_test_app(&base_dir.join("bob"), "Bob", BOB_PHRASE, password);
 
         let alice_state = create_test_state(alice_service);
@@ -3298,8 +3792,10 @@ mod tests {
         let server_a = MockSyncServer::start("d-alice".to_string(), ADMIN_A.to_string()).await;
         let server_b = MockSyncServer::start("d-bob".to_string(), ADMIN_B.to_string()).await;
 
-        let (server_a_url, alice_drop) = setup_test_sync(&server_a, DROP_PUB_A, password, &alice_state).await;
-        let (server_b_url, bob_drop) = setup_test_sync(&server_b, DROP_PUB_B, password, &bob_state).await;
+        let (server_a_url, alice_drop) =
+            setup_test_sync(&server_a, DROP_PUB_A, password, &alice_state).await;
+        let (server_b_url, bob_drop) =
+            setup_test_sync(&server_b, DROP_PUB_B, password, &bob_state).await;
 
         {
             let mut s_alice = alice_state.service.lock().unwrap();
@@ -3319,7 +3815,9 @@ mod tests {
                 syncs: vec![FrontendSyncDescriptor {
                     write_url: server_b_url.clone(),
                     read_url: format!("{}/{}", server_b.base_url, server_b.data_dir),
-                    slot_id: Some(humoco_market::format_slot_id(&bob_drop.access_pubkey, Some("pc")).unwrap()),
+                    slot_id: Some(
+                        humoco_market::format_slot_id(&bob_drop.access_pubkey, Some("pc")).unwrap(),
+                    ),
                     drop_pub: DROP_PUB_B.to_string(),
                     last_seen_at: None,
                     last_error_at: None,
@@ -3329,7 +3827,9 @@ mod tests {
                     ..Default::default()
                 }],
             };
-            alice_state.save_contact(&mut s_alice, contact_bob, Some(password)).unwrap();
+            alice_state
+                .save_contact(&mut s_alice, contact_bob, Some(password))
+                .unwrap();
         }
 
         {
@@ -3350,7 +3850,10 @@ mod tests {
                 syncs: vec![FrontendSyncDescriptor {
                     write_url: server_a_url.clone(),
                     read_url: format!("{}/{}", server_a.base_url, server_a.data_dir),
-                    slot_id: Some(humoco_market::format_slot_id(&alice_drop.access_pubkey, Some("pc")).unwrap()),
+                    slot_id: Some(
+                        humoco_market::format_slot_id(&alice_drop.access_pubkey, Some("pc"))
+                            .unwrap(),
+                    ),
                     drop_pub: DROP_PUB_A.to_string(),
                     last_seen_at: None,
                     last_error_at: None,
@@ -3360,41 +3863,52 @@ mod tests {
                     ..Default::default()
                 }],
             };
-            bob_state.save_contact(&mut s_bob, contact_alice, Some(password)).unwrap();
+            bob_state
+                .save_contact(&mut s_bob, contact_alice, Some(password))
+                .unwrap();
         }
 
         // Alice creates voucher
-        let standard_toml = test_utils::generate_signed_standard_toml("voucher_standards/freetaler_v1/standard.toml");
+        let standard_toml = test_utils::generate_signed_standard_toml(
+            "voucher_standards/freetaler_v1/standard.toml",
+        );
         let mut std_map = HashMap::new();
-        std_map.insert("a1b2c3d4-e5f6-4789-8012-3456789abcde".to_string(), standard_toml.clone());
+        std_map.insert(
+            "a1b2c3d4-e5f6-4789-8012-3456789abcde".to_string(),
+            standard_toml.clone(),
+        );
         {
             let mut s_alice = alice_state.service.lock().unwrap();
-            s_alice.create_new_voucher(
-                &standard_toml,
-                human_money_core::NewVoucherData {
-                    creator_profile: human_money_core::models::profile::PublicProfile {
-                        id: Some(alice_did.clone()),
-                        first_name: Some("Alice".to_string()),
-                        ..Default::default()
+            s_alice
+                .create_new_voucher(
+                    &standard_toml,
+                    human_money_core::NewVoucherData {
+                        creator_profile: human_money_core::models::profile::PublicProfile {
+                            id: Some(alice_did.clone()),
+                            first_name: Some("Alice".to_string()),
+                            ..Default::default()
+                        },
+                        nominal_value: human_money_core::models::voucher::ValueDefinition {
+                            amount: "100".to_string(),
+                            unit: "Taler".to_string(),
+                            ..Default::default()
+                        },
+                        validity_duration: Some("P1Y".to_string()),
+                        non_redeemable_test_voucher: false,
+                        collateral: None,
+                        layer2_anchor: None,
                     },
-                    nominal_value: human_money_core::models::voucher::ValueDefinition {
-                        amount: "100".to_string(),
-                        unit: "Taler".to_string(),
-                        ..Default::default()
-                    },
-                    validity_duration: Some("P1Y".to_string()),
-                    non_redeemable_test_voucher: false,
-                    collateral: None,
-                },
-                Some(password),
-            ).unwrap();
+                    Some(password),
+                )
+                .unwrap();
         }
 
         let local_id = {
             let s = alice_state.service.lock().unwrap();
-            s.with_wallet_and_identity(|w, id| {
-                w.list_vouchers(Some(id), None, None, None)
-            }).unwrap()[0].local_instance_id.clone()
+            s.with_wallet_and_identity(|w, id| w.list_vouchers(Some(id), None, None, None))
+                .unwrap()[0]
+                .local_instance_id
+                .clone()
         };
 
         let signing_req_bytes = {
@@ -3404,10 +3918,20 @@ mod tests {
         };
 
         // Alice sends signing request via post
-        send_signing_request_via_post_impl(bob_did.clone(), signing_req_bytes, Some(password.to_string()), &alice_state).await.unwrap();
+        send_signing_request_via_post_impl(
+            bob_did.clone(),
+            signing_req_bytes,
+            Some(password.to_string()),
+            &alice_state,
+        )
+        .await
+        .unwrap();
 
         // Bob syncs post drops: receives sign request
-        let bob_sync = sync_post_channels_impl(None, None, None, Some(password.to_string()), &bob_state).await.unwrap();
+        let bob_sync =
+            sync_post_channels_impl(None, None, None, Some(password.to_string()), &bob_state)
+                .await
+                .unwrap();
         assert_eq!(bob_sync.new_sign_requests, 1);
 
         let bob_post = load_post_state(&bob_state, Some(password)).unwrap();
@@ -3416,15 +3940,19 @@ mod tests {
         // Bob signs and creates detached signature response
         let sig_response_bytes = {
             let mut bob_s = bob_state.service.lock().unwrap();
-            let voucher = bob_s.open_voucher_signing_request(&sign_req.container_bytes, None).unwrap();
+            let voucher = bob_s
+                .open_voucher_signing_request(&sign_req.container_bytes, None)
+                .unwrap();
             let config = ContainerConfig::TargetDid(alice_did.clone(), PrivacyMode::HashedRouting);
-            bob_s.create_detached_signature_response_bundle(
-                &voucher,
-                "guarantor",
-                false,
-                config,
-                Some(password),
-            ).unwrap()
+            bob_s
+                .create_detached_signature_response_bundle(
+                    &voucher,
+                    "guarantor",
+                    false,
+                    config,
+                    Some(password),
+                )
+                .unwrap()
         };
 
         // Bob replies with detached signature via post
@@ -3439,16 +3967,27 @@ mod tests {
         .unwrap();
 
         // Alice syncs post drops: detached signature is automatically attached!
-        let alice_sync = sync_post_channels_impl(None, None, Some(&std_map), Some(password.to_string()), &alice_state).await.unwrap();
+        let alice_sync = sync_post_channels_impl(
+            None,
+            None,
+            Some(&std_map),
+            Some(password.to_string()),
+            &alice_state,
+        )
+        .await
+        .unwrap();
         assert_eq!(alice_sync.imported_signatures, 1);
 
         let updated_voucher = {
             let s = alice_state.service.lock().unwrap();
-            s.with_wallet(|w| {
-                w.voucher_store.vouchers.get(&local_id).unwrap().clone()
-            }).unwrap()
+            s.with_wallet(|w| w.voucher_store.vouchers.get(&local_id).unwrap().clone())
+                .unwrap()
         };
-        assert!(updated_voucher.voucher.signatures.iter().any(|s| s.role == "guarantor"));
+        assert!(updated_voucher
+            .voucher
+            .signatures
+            .iter()
+            .any(|s| s.role == "guarantor"));
     }
 
     #[tokio::test]
@@ -3456,7 +3995,8 @@ mod tests {
         let base_dir = temp_test_dir("wot_and_market_test");
         let password = "TestPassword123!";
 
-        let alice_service = setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
+        let alice_service =
+            setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
         let bob_service = setup_test_app(&base_dir.join("bob"), "Bob", BOB_PHRASE, password);
 
         let alice_state = create_test_state(alice_service);
@@ -3474,18 +4014,39 @@ mod tests {
         let server_a = MockSyncServer::start("d-alice".to_string(), ADMIN_A.to_string()).await;
         let server_b = MockSyncServer::start("d-bob".to_string(), ADMIN_B.to_string()).await;
 
-        let (server_a_url, alice_drop) = setup_test_sync(&server_a, DROP_PUB_A, password, &alice_state).await;
-        let (server_b_url, bob_drop) = setup_test_sync(&server_b, DROP_PUB_B, password, &bob_state).await;
+        let (server_a_url, alice_drop) =
+            setup_test_sync(&server_a, DROP_PUB_A, password, &alice_state).await;
+        let (server_b_url, bob_drop) =
+            setup_test_sync(&server_b, DROP_PUB_B, password, &bob_state).await;
 
-        let alice_probe_b = probe_public_sync_impl(server_b_url.clone(), Some(password.to_string()), &alice_state).await.unwrap();
-        server_b.members.lock().unwrap().push(alice_probe_b.access_pubkey.clone());
-        let bob_probe_a = probe_public_sync_impl(server_a_url.clone(), Some(password.to_string()), &bob_state).await.unwrap();
-        server_a.members.lock().unwrap().push(bob_probe_a.access_pubkey.clone());
+        let alice_probe_b = probe_public_sync_impl(
+            server_b_url.clone(),
+            Some(password.to_string()),
+            &alice_state,
+        )
+        .await
+        .unwrap();
+        server_b
+            .members
+            .lock()
+            .unwrap()
+            .push(alice_probe_b.access_pubkey.clone());
+        let bob_probe_a =
+            probe_public_sync_impl(server_a_url.clone(), Some(password.to_string()), &bob_state)
+                .await
+                .unwrap();
+        server_a
+            .members
+            .lock()
+            .unwrap()
+            .push(bob_probe_a.access_pubkey.clone());
 
         let alice_syncs = vec![FrontendSyncDescriptor {
             write_url: server_a_url.clone(),
             read_url: format!("{}/{}", server_a.base_url, server_a.data_dir),
-            slot_id: Some(humoco_market::format_slot_id(&alice_drop.access_pubkey, Some("pc")).unwrap()),
+            slot_id: Some(
+                humoco_market::format_slot_id(&alice_drop.access_pubkey, Some("pc")).unwrap(),
+            ),
             drop_pub: DROP_PUB_A.to_string(),
             last_seen_at: None,
             last_error_at: None,
@@ -3498,7 +4059,9 @@ mod tests {
         let bob_syncs = vec![FrontendSyncDescriptor {
             write_url: server_b_url.clone(),
             read_url: format!("{}/{}", server_b.base_url, server_b.data_dir),
-            slot_id: Some(humoco_market::format_slot_id(&bob_drop.access_pubkey, Some("pc")).unwrap()),
+            slot_id: Some(
+                humoco_market::format_slot_id(&bob_drop.access_pubkey, Some("pc")).unwrap(),
+            ),
             drop_pub: DROP_PUB_B.to_string(),
             last_seen_at: None,
             last_error_at: None,
@@ -3525,7 +4088,9 @@ mod tests {
                 peer_list_updated_at: None,
                 syncs: bob_syncs.clone(),
             };
-            alice_state.save_contact(&mut s_alice, contact_bob, Some(password)).unwrap();
+            alice_state
+                .save_contact(&mut s_alice, contact_bob, Some(password))
+                .unwrap();
         }
 
         {
@@ -3545,32 +4110,65 @@ mod tests {
                 peer_list_updated_at: None,
                 syncs: alice_syncs.clone(),
             };
-            bob_state.save_contact(&mut s_bob, contact_alice, Some(password)).unwrap();
+            bob_state
+                .save_contact(&mut s_bob, contact_alice, Some(password))
+                .unwrap();
         }
 
         // Part A: WoT Handshake
-        send_wot_handshake_via_post_impl(bob_did.clone(), 1, true, Some(password.to_string()), &alice_state).await.unwrap();
+        send_wot_handshake_via_post_impl(
+            bob_did.clone(),
+            1,
+            true,
+            Some(password.to_string()),
+            &alice_state,
+        )
+        .await
+        .unwrap();
 
         // Bob syncs post drops: since Bob already has Alice in contacts as trust_level 1, it is SILENTLY auto-accepted! (Zero-Click)
-        let bob_sync_1 = sync_post_channels_impl(None, None, None, Some(password.to_string()), &bob_state).await.unwrap();
-        assert_eq!(bob_sync_1.new_wot_handshakes, 0, "Known trusted contacts must be silently auto-accepted without pending handshake banner");
+        let bob_sync_1 =
+            sync_post_channels_impl(None, None, None, Some(password.to_string()), &bob_state)
+                .await
+                .unwrap();
+        assert_eq!(
+            bob_sync_1.new_wot_handshakes, 0,
+            "Known trusted contacts must be silently auto-accepted without pending handshake banner"
+        );
 
         // Verify Bob's WoT register now contains Alice's list
         {
             let mut s_bob = bob_state.service.lock().unwrap();
-            let reg = bob_state.get_or_load_wot_register(&mut s_bob, Some(password)).unwrap();
-            assert!(reg.raw_list_store.contains_key(&alice_did) || reg.raw_list_store.contains_key(&crate::state::canonicalize_did(&alice_did).unwrap()));
+            let reg = bob_state
+                .get_or_load_wot_register(&mut s_bob, Some(password))
+                .unwrap();
+            assert!(
+                reg.raw_list_store.contains_key(&alice_did)
+                    || reg
+                        .raw_list_store
+                        .contains_key(&crate::state::canonicalize_did(&alice_did).unwrap())
+            );
         }
 
         // Alice already has Bob rated as trust_level 1, so Bob's auto-replied handshake is also silently auto-accepted!
-        let alice_sync_1 = sync_post_channels_impl(None, None, None, Some(password.to_string()), &alice_state).await.unwrap();
+        let alice_sync_1 =
+            sync_post_channels_impl(None, None, None, Some(password.to_string()), &alice_state)
+                .await
+                .unwrap();
         assert_eq!(alice_sync_1.new_wot_handshakes, 0);
 
         // Verify Alice's WoT register now contains Bob's list
         {
             let mut s_alice = alice_state.service.lock().unwrap();
-            let reg = alice_state.get_or_load_wot_register(&mut s_alice, Some(password)).unwrap();
-            assert!(reg.raw_list_store.contains_key(&bob_did) || reg.raw_list_store.contains_key(&crate::state::canonicalize_did(&bob_did).unwrap()));
+            let reg = alice_state
+                .get_or_load_wot_register(&mut s_alice, Some(password))
+                .unwrap();
+            assert!(
+                reg.raw_list_store.contains_key(&bob_did)
+                    || reg
+                        .raw_list_store
+                        .contains_key(&crate::state::canonicalize_did(&bob_did).unwrap())
+            );
         }
 
         // Part B: 1-Step Marketplace Inquiry
@@ -3592,7 +4190,9 @@ mod tests {
             allow_inquiries: true,
         };
         save_my_market_profile_impl(save_req, Some(password.to_string()), &bob_state).unwrap();
-        set_card_published_impl(true, false, Some(password.to_string()), &bob_state).await.unwrap();
+        set_card_published_impl(true, false, Some(password.to_string()), &bob_state)
+            .await
+            .unwrap();
 
         let ad_input = FrontendAdInput {
             id: None,
@@ -3605,7 +4205,8 @@ mod tests {
             is_remote: false,
             image_webp_data_uri: None,
         };
-        let updated_bob_profile = upsert_ad_impl(ad_input, Some(password.to_string()), &bob_state).unwrap();
+        let updated_bob_profile =
+            upsert_ad_impl(ad_input, Some(password.to_string()), &bob_state).unwrap();
         let ad_id = updated_bob_profile.ads[0].id.clone();
 
         // Alice sends inquiry
@@ -3624,7 +4225,10 @@ mod tests {
         .unwrap();
 
         // Bob syncs: receives inquiry
-        let bob_sync_2 = sync_post_channels_impl(None, None, None, Some(password.to_string()), &bob_state).await.unwrap();
+        let bob_sync_2 =
+            sync_post_channels_impl(None, None, None, Some(password.to_string()), &bob_state)
+                .await
+                .unwrap();
         assert_eq!(bob_sync_2.new_inquiries, 1);
 
         let bob_post_2 = load_post_state(&bob_state, Some(password)).unwrap();
@@ -3660,13 +4264,20 @@ mod tests {
         assert!(second_reply.is_err(), "Second reply must be rejected");
 
         // Alice syncs: receives reply
-        let alice_sync_2 = sync_post_channels_impl(None, None, None, Some(password.to_string()), &alice_state).await.unwrap();
+        let alice_sync_2 =
+            sync_post_channels_impl(None, None, None, Some(password.to_string()), &alice_state)
+                .await
+                .unwrap();
         assert_eq!(alice_sync_2.new_inquiry_replies, 1);
 
         let alice_post_2 = load_post_state(&alice_state, Some(password)).unwrap();
         assert!(alice_post_2.buyer_inquiries[0].reply.is_some());
         assert_eq!(
-            alice_post_2.buyer_inquiries[0].reply.as_ref().unwrap().decision,
+            alice_post_2.buyer_inquiries[0]
+                .reply
+                .as_ref()
+                .unwrap()
+                .decision,
             "confirm"
         );
 
@@ -3708,13 +4319,29 @@ mod tests {
         let laden_state = create_sub(&base_dir.join("laden"), "Alice Laden", Some("laden"));
         let privat_state = create_sub(&base_dir.join("privat"), "Alice Privat", Some("privat"));
 
-        let root_did = root_state.service.lock().unwrap().with_wallet(|w| w.get_user_id().to_string()).unwrap();
-        let laden_did = laden_state.service.lock().unwrap().with_wallet(|w| w.get_user_id().to_string()).unwrap();
-        let privat_did = privat_state.service.lock().unwrap().with_wallet(|w| w.get_user_id().to_string()).unwrap();
+        let root_did = root_state
+            .service
+            .lock()
+            .unwrap()
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
+        let laden_did = laden_state
+            .service
+            .lock()
+            .unwrap()
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
+        let privat_did = privat_state
+            .service
+            .lock()
+            .unwrap()
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
 
         let server = MockSyncServer::start("d-shared".to_string(), ADMIN_A.to_string()).await;
         let (_url_r, _drop_r) = setup_test_sync(&server, DROP_PUB_A, password, &root_state).await;
-        let (server_url, laden_drop) = setup_test_sync(&server, DROP_PUB_A, password, &laden_state).await;
+        let (server_url, laden_drop) =
+            setup_test_sync(&server, DROP_PUB_A, password, &laden_state).await;
         let (_url_p, _drop_p) = setup_test_sync(&server, DROP_PUB_A, password, &privat_state).await;
 
         // Root saves laden subaccount as contact (no trust level), and laden + privat save Root so post_accept_from_contacts accepts Root
@@ -3742,21 +4369,44 @@ mod tests {
         };
         {
             let mut s = root_state.service.lock().unwrap();
-            root_state.save_contact(&mut s, make_contact(laden_did.clone(), "Laden"), Some(password)).unwrap();
+            root_state
+                .save_contact(
+                    &mut s,
+                    make_contact(laden_did.clone(), "Laden"),
+                    Some(password),
+                )
+                .unwrap();
         }
         {
             let mut s = laden_state.service.lock().unwrap();
-            laden_state.save_contact(&mut s, make_contact(root_did.clone(), "Root"), Some(password)).unwrap();
+            laden_state
+                .save_contact(
+                    &mut s,
+                    make_contact(root_did.clone(), "Root"),
+                    Some(password),
+                )
+                .unwrap();
         }
         {
             let mut s = privat_state.service.lock().unwrap();
-            privat_state.save_contact(&mut s, make_contact(root_did.clone(), "Root"), Some(password)).unwrap();
+            privat_state
+                .save_contact(
+                    &mut s,
+                    make_contact(root_did.clone(), "Root"),
+                    Some(password),
+                )
+                .unwrap();
         }
 
         // Root creates voucher and sends to Laden subaccount
-        let standard_toml = test_utils::generate_signed_standard_toml("voucher_standards/freetaler_v1/standard.toml");
+        let standard_toml = test_utils::generate_signed_standard_toml(
+            "voucher_standards/freetaler_v1/standard.toml",
+        );
         let mut std_map = HashMap::new();
-        std_map.insert("a1b2c3d4-e5f6-4789-8012-3456789abcde".to_string(), standard_toml.clone());
+        std_map.insert(
+            "a1b2c3d4-e5f6-4789-8012-3456789abcde".to_string(),
+            standard_toml.clone(),
+        );
 
         {
             let mut s = root_state.service.lock().unwrap();
@@ -3776,6 +4426,7 @@ mod tests {
                     validity_duration: Some("P1Y".to_string()),
                     non_redeemable_test_voucher: false,
                     collateral: None,
+                    layer2_anchor: None,
                 },
                 Some(password),
             )
@@ -3783,13 +4434,14 @@ mod tests {
         }
         let local_id = {
             let s = root_state.service.lock().unwrap();
-            s.with_wallet_and_identity(|w, id| w.list_vouchers(Some(id), None, None, None)).unwrap()[0]
+            s.with_wallet_and_identity(|w, id| w.list_vouchers(Some(id), None, None, None))
+                .unwrap()[0]
                 .local_instance_id
                 .clone()
         };
         let bundle_res = {
             let mut s = root_state.service.lock().unwrap();
-            s.create_transfer_bundle_with_l2_intents(
+            s.create_transfer_bundle(
                 human_money_core::wallet::types::MultiTransferRequest {
                     recipient_id: laden_did.clone(),
                     sources: vec![human_money_core::wallet::types::SourceTransfer {
@@ -3805,7 +4457,6 @@ mod tests {
                 &std_map,
                 None,
                 Some(password),
-                0,
             )
             .unwrap()
         };
@@ -3834,32 +4485,66 @@ mod tests {
                 .unwrap();
         }
 
-        let dep = deposit_transfer_to_post_impl(bundle_res.bundle_id.clone(), Some(password.to_string()), &root_state)
-            .await
-            .unwrap();
+        let dep = deposit_transfer_to_post_impl(
+            bundle_res.bundle_id.clone(),
+            Some(password.to_string()),
+            &root_state,
+        )
+        .await
+        .unwrap();
         assert_eq!(dep.deposited_to, 1);
 
         // 1. Sibling subaccount ("privat") polls: must NOT fail with NotAnIntendedRecipient or import Laden's payment
-        let privat_sync = sync_post_channels_impl(None, None, Some(&std_map), Some(password.to_string()), &privat_state)
-            .await
-            .unwrap();
+        let privat_sync = sync_post_channels_impl(
+            None,
+            None,
+            Some(&std_map),
+            Some(password.to_string()),
+            &privat_state,
+        )
+        .await
+        .unwrap();
         assert_eq!(privat_sync.imported_payments, 0);
-        assert!(privat_sync.errors.is_empty(), "Sibling subaccount poll must stay error-free, got {:?}", privat_sync.errors);
+        assert!(
+            privat_sync.errors.is_empty(),
+            "Sibling subaccount poll must stay error-free, got {:?}",
+            privat_sync.errors
+        );
 
         // 2. Target subaccount ("laden") polls: receives payment cleanly and writes receipt to its own prefixed compartment
-        let laden_sync = sync_post_channels_impl(None, None, Some(&std_map), Some(password.to_string()), &laden_state)
-            .await
-            .unwrap();
+        let laden_sync = sync_post_channels_impl(
+            None,
+            None,
+            Some(&std_map),
+            Some(password.to_string()),
+            &laden_state,
+        )
+        .await
+        .unwrap();
         assert_eq!(laden_sync.imported_payments, 1);
-        assert!(laden_sync.errors.is_empty(), "Target subaccount poll must succeed without errors, got {:?}", laden_sync.errors);
+        assert!(
+            laden_sync.errors.is_empty(),
+            "Target subaccount poll must succeed without errors, got {:?}",
+            laden_sync.errors
+        );
 
         // Flush laden's receipt and verify its prefixed compartment key exists on server
-        let _ = sync_post_channels_impl(None, None, Some(&std_map), Some(password.to_string()), &laden_state)
-            .await
-            .unwrap();
+        let _ = sync_post_channels_impl(
+            None,
+            None,
+            Some(&std_map),
+            Some(password.to_string()),
+            &laden_state,
+        )
+        .await
+        .unwrap();
         let expected_laden_slot = format!("{}_laden.post", laden_drop.access_pubkey);
         assert!(
-            server.slots.lock().unwrap().contains_key(&expected_laden_slot),
+            server
+                .slots
+                .lock()
+                .unwrap()
+                .contains_key(&expected_laden_slot),
             "Subaccount must store its Post slot in dedicated prefixed compartment '{}'",
             expected_laden_slot
         );
@@ -3868,15 +4553,36 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_deposit_transfer_to_post_persists_outbox_when_sync_server_unreachable_and_sync_survives_outage() {
+    async fn test_deposit_transfer_to_post_persists_outbox_when_sync_server_unreachable_and_sync_survives_outage(
+    ) {
         let base_dir = temp_test_dir("post_sync_outage_test");
         let password = "TestPassword123!";
 
-        let alice_state = create_test_state(setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password));
-        let bob_state = create_test_state(setup_test_app(&base_dir.join("bob"), "Bob", BOB_PHRASE, password));
+        let alice_state = create_test_state(setup_test_app(
+            &base_dir.join("alice"),
+            "Alice",
+            ALICE_PHRASE,
+            password,
+        ));
+        let bob_state = create_test_state(setup_test_app(
+            &base_dir.join("bob"),
+            "Bob",
+            BOB_PHRASE,
+            password,
+        ));
 
-        let alice_did = alice_state.service.lock().unwrap().with_wallet(|w| w.get_user_id().to_string()).unwrap();
-        let bob_did = bob_state.service.lock().unwrap().with_wallet(|w| w.get_user_id().to_string()).unwrap();
+        let alice_did = alice_state
+            .service
+            .lock()
+            .unwrap()
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
+        let bob_did = bob_state
+            .service
+            .lock()
+            .unwrap()
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
 
         // Bind and drop a loopback listener to obtain a guaranteed unreachable port
         let closed_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -3904,13 +4610,21 @@ mod tests {
                 syncs: vec![FrontendSyncDescriptor {
                     write_url: dead_write_url.clone(),
                     read_url: dead_read_url.clone(),
-                    slot_id: Some(humoco_market::format_slot_id("1111111111111111111111111111111111111111111111111111111111111111", Some("pc")).unwrap()),
+                    slot_id: Some(
+                        humoco_market::format_slot_id(
+                            "1111111111111111111111111111111111111111111111111111111111111111",
+                            Some("pc"),
+                        )
+                        .unwrap(),
+                    ),
                     drop_pub: DROP_PUB_B.to_string(),
                     status: "active".to_string(),
                     ..Default::default()
                 }],
             };
-            alice_state.save_contact(&mut s_alice, contact_bob, Some(password)).unwrap();
+            alice_state
+                .save_contact(&mut s_alice, contact_bob, Some(password))
+                .unwrap();
         }
 
         // Configure Bob's own public sync to the dead port as well
@@ -3919,44 +4633,61 @@ mod tests {
             let mut bob_settings = bob_state
                 .load_settings(&mut s_bob, Some(password))
                 .unwrap_or_default();
-            bob_settings.public_syncs.push(crate::settings::StoredPublicSync {
-                write_url: dead_write_url,
-                read_url: dead_read_url,
-                drop_pub: DROP_PUB_B.to_string(),
-                access_pubkey: "1111111111111111111111111111111111111111111111111111111111111111".to_string(),
-                enabled: true,
-                authorized_channels: vec!["pc".to_string()],
-                ..Default::default()
-            });
-            bob_state.save_settings(&mut s_bob, bob_settings, Some(password)).unwrap();
+            bob_settings
+                .public_syncs
+                .push(crate::settings::StoredPublicSync {
+                    write_url: dead_write_url,
+                    read_url: dead_read_url,
+                    drop_pub: DROP_PUB_B.to_string(),
+                    access_pubkey:
+                        "1111111111111111111111111111111111111111111111111111111111111111"
+                            .to_string(),
+                    enabled: true,
+                    authorized_channels: vec!["pc".to_string()],
+                    ..Default::default()
+                });
+            bob_state
+                .save_settings(&mut s_bob, bob_settings, Some(password))
+                .unwrap();
         }
 
         // Alice creates a voucher and transfer bundle
-        let standard_toml = test_utils::generate_signed_standard_toml("voucher_standards/freetaler_v1/standard.toml");
+        let standard_toml = test_utils::generate_signed_standard_toml(
+            "voucher_standards/freetaler_v1/standard.toml",
+        );
         let mut std_map = HashMap::new();
-        std_map.insert("a1b2c3d4-e5f6-4789-8012-3456789abcde".to_string(), standard_toml.clone());
+        std_map.insert(
+            "a1b2c3d4-e5f6-4789-8012-3456789abcde".to_string(),
+            standard_toml.clone(),
+        );
 
         {
             let mut s_alice = alice_state.service.lock().unwrap();
             alice_state
-                .save_settings(&mut s_alice, crate::settings::AppSettings::default(), Some(password))
+                .save_settings(
+                    &mut s_alice,
+                    crate::settings::AppSettings::default(),
+                    Some(password),
+                )
                 .unwrap();
-            s_alice.create_new_voucher(
-                &standard_toml,
-                human_money_core::NewVoucherData {
-                    creator_profile: human_money_core::models::profile::PublicProfile {
-                        id: Some(alice_did.clone()),
+            s_alice
+                .create_new_voucher(
+                    &standard_toml,
+                    human_money_core::NewVoucherData {
+                        creator_profile: human_money_core::models::profile::PublicProfile {
+                            id: Some(alice_did.clone()),
+                            ..Default::default()
+                        },
+                        nominal_value: human_money_core::models::voucher::ValueDefinition {
+                            amount: "100".to_string(),
+                            unit: "Taler".to_string(),
+                            ..Default::default()
+                        },
                         ..Default::default()
                     },
-                    nominal_value: human_money_core::models::voucher::ValueDefinition {
-                        amount: "100".to_string(),
-                        unit: "Taler".to_string(),
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                },
-                Some(password),
-            ).unwrap();
+                    Some(password),
+                )
+                .unwrap();
         }
 
         let local_id = {
@@ -3995,14 +4726,20 @@ mod tests {
                 timestamp: Utc::now().to_rfc3339(),
                 summable_amounts: HashMap::from([("Taler".to_string(), "25".to_string())]),
                 countable_items: HashMap::new(),
-                involved_vouchers: bundle_res.involved_sources_details.iter().map(|d| d.local_instance_id.clone()).collect(),
+                involved_vouchers: bundle_res
+                    .involved_sources_details
+                    .iter()
+                    .map(|d| d.local_instance_id.clone())
+                    .collect(),
                 involved_sources_details: None,
                 bundle_data: bundle_res.bundle_data.clone(),
                 bundle_id: bundle_res.bundle_id.clone(),
                 notes: None,
                 sender_profile_name: Some("Alice".to_string()),
             };
-            alice_state.append_to_history(&mut s_alice, record, Some(password)).unwrap();
+            alice_state
+                .append_to_history(&mut s_alice, record, Some(password))
+                .unwrap();
         }
 
         // Deposit against dead sync server returns degraded result, and outbox entry is persisted on disk

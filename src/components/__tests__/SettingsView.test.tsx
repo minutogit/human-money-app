@@ -72,8 +72,19 @@ vi.mock('../../services/settingsService', () => ({
   settingsService: {
     getSettings: vi.fn(),
     saveSettings: vi.fn(),
-    benchmarkL2Servers: vi.fn().mockResolvedValue([]),
-    refreshRegionalMeshViews: vi.fn().mockResolvedValue(true),
+    probeLockServer: vi.fn(),
+    setOwnNominatedLockServer: vi.fn(),
+    assembleAnchorTemplate: vi.fn(),
+    prewarmL2Checkout: vi.fn().mockResolvedValue(undefined),
+    checkL2LockStatus: vi.fn().mockResolvedValue({
+      status: 'NoServers',
+      unresolvedIntentsCount: 0,
+      pendingRestoreReconciliation: false,
+      templatesCount: 0,
+      hasOwnNominatedServer: false,
+      staleServersCount: 0,
+      maxProbeAgeSecs: null,
+    }),
     getReachPreset: vi.fn().mockResolvedValue('medium'),
     applyReachPreset: vi.fn().mockResolvedValue({}),
   },
@@ -152,8 +163,9 @@ describe('SettingsView Component', () => {
   const mockSettings = {
     sessionTimeoutSeconds: 600, // 10 minutes
     privacyDefault: 'ask',
-    customServers: [],
-    regionalMeshSources: [],
+    l2AnchorTemplatesMeta: [],
+    ownNominatedLockServer: null,
+    l2ProbeCache: {},
   };
 
   const mockOnBack = vi.fn();

@@ -13,16 +13,25 @@ import {
 import { backupService } from "../services/backupService";
 import { marketService } from "../services/marketService";
 import { postService } from "../services/postService";
-import { settingsService, AnchorSyncStatus } from "../services/settingsService";
+import { settingsService } from "../services/settingsService";
 import { useNavigation } from "../context/NavigationContext";
 import { useSession } from "../context/SessionContext";
-import { FrontendAutoBackupStatusDto, FrontendSyncOverviewStatus } from "../types";
+import { FrontendAutoBackupStatusDto, FrontendSyncOverviewStatus, L2LockStatusDto } from "../types";
 import { BACKUP_UPDATED_EVENT } from "../utils/autoBackup";
 import { notifySyncStatusUpdated, SYNC_STATUS_UPDATED_EVENT } from "../utils/syncEvents";
 import { useRateLimitCooldown } from "../hooks/useRateLimitCooldown";
 import { rateLimitManager } from "../utils/rateLimitManager";
-import { logger } from "../utils/log";
 import { Button } from "./ui/Button";
+
+const DEFAULT_L2_LOCK_STATUS: L2LockStatusDto = {
+    status: "NoServers",
+    unresolvedIntentsCount: 0,
+    pendingRestoreReconciliation: false,
+    templatesCount: 0,
+    hasOwnNominatedServer: false,
+    staleServersCount: 0,
+    maxProbeAgeSecs: null,
+};
 
 export interface StatusChipProps {
     className?: string;
@@ -33,7 +42,7 @@ export type StatusLevel = "healthy" | "warning" | "critical";
 export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
     const { t } = useTranslation();
     const { navigateToSettingsSection, navigate } = useNavigation();
-    const { isSessionActive, triggerSecurityLockdown } = useSession();
+    const { isSessionActive } = useSession();
 
     // 1. Backup state
     const [backupStatus, setBackupStatus] = useState<FrontendAutoBackupStatusDto>({
@@ -59,7 +68,7 @@ export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
     });
 
     // 3. Realtime protection state
-    const [protectionStatus, setProtectionStatus] = useState<AnchorSyncStatus>("Offline");
+    const [protectionStatus, setProtectionStatus] = useState<L2LockStatusDto>(DEFAULT_L2_LOCK_STATUS);
 
     // 4. Expiring ads state
     const [expiringAdsCount, setExpiringAdsCount] = useState<number>(0);
@@ -149,26 +158,16 @@ export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
     // Fetch realtime protection status
     const refreshProtection = useCallback(async () => {
         if (!isSessionActive) {
-            setProtectionStatus("Offline");
+            setProtectionStatus(DEFAULT_L2_LOCK_STATUS);
             return;
         }
         try {
-            const nextStatus = await settingsService.checkAnchorSync();
+            const nextStatus = await settingsService.checkL2LockStatus();
             setProtectionStatus(nextStatus);
-            if (nextStatus === "SupersededByHandover") {
-                logger.warn("Live L2 anchor check returned SupersededByHandover");
-                triggerSecurityLockdown("handover");
-            } else if (nextStatus === "ConcurrentCloneDetected") {
-                logger.warn("Live L2 anchor check returned ConcurrentCloneDetected");
-                triggerSecurityLockdown("clone");
-            } else if (nextStatus === "ForkConflict") {
-                logger.warn("Live L2 anchor check returned ForkConflict");
-                triggerSecurityLockdown("fork");
-            }
         } catch {
-            setProtectionStatus("Offline");
+            setProtectionStatus(DEFAULT_L2_LOCK_STATUS);
         }
-    }, [isSessionActive, triggerSecurityLockdown]);
+    }, [isSessionActive]);
 
     // Fetch expiring ads
     const refreshAds = useCallback(async () => {
@@ -208,7 +207,7 @@ export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
                 ownSyncSoftWarning: false,
                 lastSyncAt: null,
             });
-            setProtectionStatus("Offline");
+            setProtectionStatus(DEFAULT_L2_LOCK_STATUS);
             setExpiringAdsCount(0);
             return;
         }
@@ -349,16 +348,11 @@ export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
     };
 
     // Row 3: Schutz (L2 Realtime Protection)
-    const criticalProtections: AnchorSyncStatus[] = [
-        "RollbackDetected",
-        "ForkConflict",
-        "ConcurrentCloneDetected",
-        "SupersededByHandover",
-        "SameDeviceRollback",
-    ];
-    const protectionIsCritical = criticalProtections.includes(protectionStatus);
-    const warningProtections: AnchorSyncStatus[] = ["Offline", "NoServers", "PendingLeapLock", "Inconclusive"];
-    const protectionIsWarning = !protectionIsCritical && warningProtections.includes(protectionStatus);
+    const protectionIsCritical = false;
+    const protectionIsWarning =
+        protectionStatus.status === "NoServers" ||
+        protectionStatus.status === "Degraded" ||
+        protectionStatus.status === "Syncing";
 
     const protectionLevel: StatusLevel = protectionIsCritical
         ? "critical"
@@ -367,13 +361,10 @@ export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
         : "healthy";
 
     const getProtectionSummary = (): string => {
-        if (protectionIsCritical) {
-            return t("statusChip.protectionAlert", "Kritischer Sicherheits- oder Konsensvorfall.");
-        }
-        if (protectionStatus === "Offline" || protectionStatus === "NoServers") {
+        if (protectionStatus.status === "NoServers" || protectionStatus.status === "Degraded") {
             return t("statusChip.protectionOffline", "Echtzeitschutz ist offline.");
         }
-        if (protectionStatus === "PendingLeapLock" || protectionStatus === "Inconclusive") {
+        if (protectionStatus.status === "Syncing") {
             return t("statusChip.protectionSyncing", "Echtzeitschutz gleicht ab...");
         }
         return t("statusChip.protectionOk", "Echtzeitschutz ist aktiv.");

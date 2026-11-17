@@ -1,6 +1,6 @@
-use serde::{Deserialize, Serialize};
 use super::voucher::FrontendTransaction;
 use human_money_core::models::conflict::ConflictRole;
+use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -10,7 +10,6 @@ pub struct FrontendProofOfDoubleSpendSummary {
     pub fork_point_prev_hash: String,
     pub report_timestamp: String,
     pub is_resolved: bool,
-    pub has_l2_verdict: bool,
     pub local_override: bool,
     pub local_note: Option<String>,
     pub conflict_role: String,
@@ -21,7 +20,9 @@ pub struct FrontendProofOfDoubleSpendSummary {
     pub is_cryptographically_attributed: bool,
 }
 
-impl From<human_money_core::wallet::types::ProofOfDoubleSpendSummary> for FrontendProofOfDoubleSpendSummary {
+impl From<human_money_core::wallet::types::ProofOfDoubleSpendSummary>
+    for FrontendProofOfDoubleSpendSummary
+{
     fn from(s: human_money_core::wallet::types::ProofOfDoubleSpendSummary) -> Self {
         let role_str = match s.conflict_role {
             ConflictRole::Victim => "victim",
@@ -35,7 +36,6 @@ impl From<human_money_core::wallet::types::ProofOfDoubleSpendSummary> for Fronte
             fork_point_prev_hash: s.fork_point_prev_hash,
             report_timestamp: s.report_timestamp,
             is_resolved: s.is_resolved,
-            has_l2_verdict: s.has_l2_verdict,
             local_override: s.local_override,
             local_note: s.local_note,
             conflict_role: role_str.to_string(),
@@ -59,7 +59,6 @@ pub struct FrontendProofOfDoubleSpend {
     pub report_timestamp: String,
     pub reporter_signature: String,
     pub resolutions: Option<Vec<FrontendResolutionEndorsement>>,
-    pub layer2_verdict: Option<serde_json::Value>,
     pub affected_voucher_name: Option<String>,
     pub voucher_standard_uuid: Option<String>,
     pub is_resolved: Option<bool>,
@@ -102,8 +101,9 @@ impl From<human_money_core::models::conflict::ProofOfDoubleSpend> for FrontendPr
             reporter_id: p.reporter_id,
             report_timestamp: p.report_timestamp,
             reporter_signature: p.reporter_signature,
-            resolutions: p.resolutions.map(|res| res.into_iter().map(|r| r.into()).collect()),
-            layer2_verdict: p.layer2_verdict.map(|v| serde_json::to_value(v).unwrap()),
+            resolutions: p
+                .resolutions
+                .map(|res| res.into_iter().map(|r| r.into()).collect()),
             affected_voucher_name: None,
             voucher_standard_uuid: None,
             is_resolved: None,
@@ -127,7 +127,9 @@ pub struct FrontendResolutionEndorsement {
     pub victim_signature: String,
 }
 
-impl From<human_money_core::models::conflict::ResolutionEndorsement> for FrontendResolutionEndorsement {
+impl From<human_money_core::models::conflict::ResolutionEndorsement>
+    for FrontendResolutionEndorsement
+{
     fn from(r: human_money_core::models::conflict::ResolutionEndorsement) -> Self {
         Self {
             endorsement_id: r.endorsement_id,
@@ -152,8 +154,14 @@ impl From<human_money_core::models::conflict::TrustStatus> for FrontendTrustStat
     fn from(s: human_money_core::models::conflict::TrustStatus) -> Self {
         match s {
             human_money_core::models::conflict::TrustStatus::Clean => Self::Clean,
-            human_money_core::models::conflict::TrustStatus::KnownOffender(id) => Self::KnownOffender(id),
-            human_money_core::models::conflict::TrustStatus::Resolved { proof_id, is_local, .. } => Self::Resolved(proof_id, is_local),
+            human_money_core::models::conflict::TrustStatus::KnownOffender(id) => {
+                Self::KnownOffender(id)
+            }
+            human_money_core::models::conflict::TrustStatus::Resolved {
+                proof_id,
+                is_local,
+                ..
+            } => Self::Resolved(proof_id, is_local),
         }
     }
 }

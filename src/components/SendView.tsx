@@ -161,6 +161,10 @@ export function SendView({ initialRecipientId, initialVoucherId, initialNote, in
     }, [initialRecipientId, initialNote]);
 
     useEffect(() => {
+        void settingsService.prewarmL2Checkout?.().catch(() => undefined);
+    }, []);
+
+    useEffect(() => {
         return () => {
             if (navigationTimerRef.current) {
                 clearTimeout(navigationTimerRef.current);

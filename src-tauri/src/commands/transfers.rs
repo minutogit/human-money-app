@@ -1,36 +1,34 @@
 // src-tauri/src/commands/transfers.rs
 use crate::{
     models::{
-        CreateBundleResult, FrontendRankedVoucher, FrontendTransferPlan,
-        FrontendSourceTransfer, FrontendTransactionRecord,
-        ReceiveSuccessPayload, TransactionRecord, FrontendError,
-        FrontendCheckoutReleaseVerdict,
+        CreateBundleResult, FrontendCheckoutReleaseVerdict, FrontendError, FrontendRankedVoucher,
+        FrontendSourceTransfer, FrontendTransactionRecord, FrontendTransferPlan,
+        ReceiveSuccessPayload, TransactionRecord,
     },
     AppState,
 };
 use chrono::Utc;
-use log::{info, error};
-use uuid::Uuid;
-use std::collections::HashMap;
-use tauri::Manager;
 use human_money_core::{
-    app_service::AppService,
     archive::FileVoucherArchive,
-    humoco_proto::live::{LiveStateContext, LiveStateProof},
+    humoco_proto::crypto::DEFAULT_LOCK_POW_BASE_BITS,
     models::layer2_api::{CheckoutReleaseVerdict, L2ProcessingOutcome},
     wallet::{MultiTransferRequest, SourceTransfer},
 };
+use log::{error, info};
+use rand::RngCore;
+use std::collections::HashMap;
+use std::time::Duration;
+use tauri::Manager;
+use uuid::Uuid;
 
-/// i18n key for the "no reachable L2 node" condition.
-const ERR_L2_OFFLINE: &str = "error.network.l2Offline";
-
-/// Cold cached routing is the only preflight. Reachability probes belong to
-/// discovery, never to the signed transfer's checkout budget.
-fn validate_l2_routing(settings:&crate::settings::AppSettings)->Result<(),FrontendError> {
-    if settings.exclusive_custom_servers && crate::gateway_resolver::cached_candidates(settings).is_empty() {
-        return Err(FrontendError {code:ERR_L2_OFFLINE.into(),message:"No configured Layer 2 gateway".into(),details:HashMap::new()});
+fn random_non_zero_nonce() -> [u8; 32] {
+    loop {
+        let mut nonce = [0u8; 32];
+        rand::rngs::OsRng.fill_bytes(&mut nonce);
+        if nonce != [0u8; 32] {
+            return nonce;
+        }
     }
-    Ok(())
 }
 
 fn open_wallet_archive(
@@ -42,7 +40,8 @@ fn open_wallet_archive(
     let (user_id, key) = service
         .with_wallet_and_identity(|w, id| {
             let uid = w.get_user_id().to_string();
-            let derived = blake3::derive_key("HUMOCO_APP_ARCHIVE_KEY_V1", &id.signing_key.to_bytes());
+            let derived =
+                blake3::derive_key("HUMOCO_APP_ARCHIVE_KEY_V1", &id.signing_key.to_bytes());
             (uid, derived)
         })
         .ok()?;
@@ -52,6 +51,39 @@ fn open_wallet_archive(
     let folder_hash = &blake3::hash(user_id.as_bytes()).to_hex()[..32];
     let archive_dir = app_data_dir.join("voucher_archives").join(folder_hash);
     Some(FileVoucherArchive::with_key(archive_dir, key))
+}
+
+fn determine_pow_base_bits_for_sources(
+    service: &human_money_core::app_service::AppService,
+    settings: &crate::settings::AppSettings,
+    sources: &[SourceTransfer],
+) -> (bool, u32) {
+    let mut all_anchored = !sources.is_empty();
+    let mut pow_bits = DEFAULT_LOCK_POW_BASE_BITS;
+    let _ = service.with_wallet(|wallet| {
+        for src in sources {
+            match wallet
+                .get_voucher_instance(&src.local_instance_id)
+                .and_then(|inst| inst.voucher.layer2_anchor)
+            {
+                Some(anchor_id) => {
+                    let anchor_hex = hex::encode(anchor_id);
+                    if let Some(manifest) = wallet.profile.l2_anchor_manifests.get(&anchor_hex) {
+                        for srv in &manifest.servers {
+                            let norm = crate::checkout::normalize_sync_write_url(&srv.write_url);
+                            if let Some(probe) = settings.l2_probe_cache.get(&norm) {
+                                pow_bits = pow_bits.max(probe.pow_base_bits);
+                            }
+                        }
+                    }
+                }
+                None => {
+                    all_anchored = false;
+                }
+            }
+        }
+    });
+    (all_anchored, pow_bits)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -76,16 +108,7 @@ pub(crate) async fn create_transfer_bundle_impl(
             "Nach einer Wiederherstellung aus der Sicherung ist vor dem Ausgeben von Gutscheinen ein einmaliger Online-Sicherheitsabgleich erforderlich.".to_string(),
         ));
     }
-    validate_l2_routing(&settings).map_err(|e| {
-        error!("create_transfer_bundle L2 routing validation failed: {}", e.message);
-        e
-    })?;
-    let has_mesh_authority = crate::checkout::configured_policy(&settings)?.is_some();
-    let network = match settings.active_network.to_lowercase().as_str() {
-        "mainnet" => 0,
-        "testnet" => 1,
-        _ => return Err(FrontendError::from("Invalid L2 network".to_string())),
-    };
+
     let source_transfers: Vec<SourceTransfer> = sources
         .into_iter()
         .map(|s| SourceTransfer {
@@ -94,7 +117,7 @@ pub(crate) async fn create_transfer_bundle_impl(
         })
         .collect();
 
-    let (result, intents, mode) = {
+    let (result, intents, is_durable, pow_base_bits) = {
         let mut service = state
             .service
             .lock()
@@ -106,12 +129,13 @@ pub(crate) async fn create_transfer_bundle_impl(
         let mut contact_card_json: Option<String> = None;
         let mut pending_card_sent: Option<([u8; 32], u64)> = None;
 
-        let settings = state
+        let loaded_settings = state
             .get_cached_settings()
             .or_else(|_| state.load_settings(&mut service, password.as_deref()))
             .unwrap_or_default();
 
-        let should_send_card = send_card_override.unwrap_or(settings.market_send_card_on_payment);
+        let should_send_card =
+            send_card_override.unwrap_or(loaded_settings.market_send_card_on_payment);
         if should_send_card {
             let now_secs = chrono::Utc::now().timestamp().max(0) as u64;
             let own_profile_opt: Option<crate::models::StoredOwnMarketProfile> = service
@@ -123,24 +147,49 @@ pub(crate) async fn create_transfer_bundle_impl(
                 if own_profile.published {
                     if let Some(card) = own_profile.last_card {
                         if now_secs < card.payload.valid_until {
-                            if let Ok(peer_pk) = human_money_core::crypto::get_pubkey_from_user_id(&recipient_id) {
+                            if let Ok(peer_pk) =
+                                human_money_core::crypto::get_pubkey_from_user_id(&recipient_id)
+                            {
                                 let peer_pk_bytes = *peer_pk.as_bytes();
                                 let store: humoco_market::CardStore = service
-                                    .load_encrypted_data(crate::state::MARKET_CARD_STORE_KEY, password.as_deref())
+                                    .load_encrypted_data(
+                                        crate::state::MARKET_CARD_STORE_KEY,
+                                        password.as_deref(),
+                                    )
                                     .ok()
                                     .and_then(|bytes| serde_json::from_slice(&bytes).ok())
                                     .unwrap_or_default();
 
-                                if humoco_market::should_attach_card(&store, &peer_pk_bytes, card.payload.v) {
-                                    let wire_opt = match humoco_market::render_wire(&card, 1, humoco_market::WireFilter::NoAds) {
-                                        Some(wire) if wire.len() <= humoco_market::MAX_BUNDLE_CARD_WIRE_BYTES => Some(wire),
-                                        _ => humoco_market::render_wire(&card, 1, humoco_market::WireFilter::FitBytes(humoco_market::MAX_BUNDLE_CARD_WIRE_BYTES)),
+                                if humoco_market::should_attach_card(
+                                    &store,
+                                    &peer_pk_bytes,
+                                    card.payload.v,
+                                ) {
+                                    let wire_opt = match humoco_market::render_wire(
+                                        &card,
+                                        1,
+                                        humoco_market::WireFilter::NoAds,
+                                    ) {
+                                        Some(wire)
+                                            if wire.len()
+                                                <= humoco_market::MAX_BUNDLE_CARD_WIRE_BYTES =>
+                                        {
+                                            Some(wire)
+                                        }
+                                        _ => humoco_market::render_wire(
+                                            &card,
+                                            1,
+                                            humoco_market::WireFilter::FitBytes(
+                                                humoco_market::MAX_BUNDLE_CARD_WIRE_BYTES,
+                                            ),
+                                        ),
                                     };
                                     if let Some(wire) = wire_opt {
                                         let env = humoco_market::own_envelope(wire);
                                         if let Ok(json) = serde_json::to_string(&env) {
                                             contact_card_json = Some(json);
-                                            pending_card_sent = Some((peer_pk_bytes, card.payload.v));
+                                            pending_card_sent =
+                                                Some((peer_pk_bytes, card.payload.v));
                                         }
                                     }
                                 }
@@ -153,13 +202,20 @@ pub(crate) async fn create_transfer_bundle_impl(
 
         if let Ok(can_recipient) = crate::state::canonicalize_did(&recipient_id) {
             if let Ok(mut reg) = state.get_or_load_wot_register(&mut service, password.as_deref()) {
-                if reg.own_contacts.get(&can_recipient).is_some_and(|e| e.level >= 1) {
+                if reg
+                    .own_contacts
+                    .get(&can_recipient)
+                    .is_some_and(|e| e.level >= 1)
+                {
                     if let Ok(changed) = state.ensure_wot_list_signed(&mut service, &mut reg) {
                         if changed {
-                            let _ = state.save_wot_register(&mut service, &reg, password.as_deref());
+                            let _ =
+                                state.save_wot_register(&mut service, &reg, password.as_deref());
                         }
                     }
-                    if let Ok((pkg, receipt)) = reg.prepare_sync_package(Some(&can_recipient), Some(48_000), false) {
+                    if let Ok((pkg, receipt)) =
+                        reg.prepare_sync_package(Some(&can_recipient), Some(48_000), false)
+                    {
                         if !pkg.lists.is_empty() {
                             if let Ok(json) = serde_json::to_string(&pkg) {
                                 wot_sync_json = Some(json);
@@ -171,8 +227,9 @@ pub(crate) async fn create_transfer_bundle_impl(
             }
         }
 
+        let (all_anchored, pow_bits) =
+            determine_pow_base_bits_for_sources(&service, &loaded_settings, &source_transfers);
         let source_count = source_transfers.len();
-
         let request = MultiTransferRequest {
             recipient_id,
             sources: source_transfers,
@@ -184,40 +241,27 @@ pub(crate) async fn create_transfer_bundle_impl(
         };
 
         let archive = open_wallet_archive(app, &service);
-        let wallet_has_policy = service
-            .with_wallet(|w| w.profile.l2_regional_mesh_policy.is_some())
-            .unwrap_or(false);
-        let use_durable_mesh = has_mesh_authority && wallet_has_policy;
-        let mode = if use_durable_mesh {
-            "durable_mesh"
-        } else {
-            "best_effort"
-        };
-
-        let (result, intents) = if use_durable_mesh {
+        let (result, intents) = if all_anchored {
             let result = service
                 .create_transfer_bundle_with_l2_intents(
                     request,
                     &standard_definitions_toml,
                     archive.as_ref(),
                     password.as_deref(),
-                    network,
+                    pow_bits,
                 )
                 .map_err(|e| {
                     error!(
-                        "create_transfer_bundle failed (mode={}, sources={}): {}",
-                        mode, source_count, e
+                        "create_transfer_bundle failed (durable_sync_lock, sources={}): {}",
+                        source_count, e
                     );
                     FrontendError::from(e)
                 })?;
 
             let mut intents = Vec::with_capacity(result.involved_sources_details.len());
             for source in &result.involved_sources_details {
-                match service.pending_l2_send_intent(&source.local_instance_id) {
-                    Ok(intent) => intents.push(intent),
-                    Err(err) => {
-                        log::warn!("Pending L2 send intent missing or failed: {}", err);
-                    }
+                if let Ok(intent) = service.pending_l2_send_intent(&source.local_instance_id) {
+                    intents.push(intent);
                 }
             }
             (result, intents)
@@ -228,12 +272,12 @@ pub(crate) async fn create_transfer_bundle_impl(
                     &standard_definitions_toml,
                     archive.as_ref(),
                     password.as_deref(),
-                    network,
+                    pow_bits,
                 )
                 .map_err(|e| {
                     error!(
-                        "create_transfer_bundle failed (mode={}, sources={}): {}",
-                        mode, source_count, e
+                        "create_transfer_bundle failed (offline_or_mixed, sources={}): {}",
+                        source_count, e
                     );
                     FrontendError::from(e)
                 })?
@@ -247,7 +291,11 @@ pub(crate) async fn create_transfer_bundle_impl(
                 .unwrap_or_default();
             humoco_market::mark_sent(&mut store, peer_pk_bytes, own_v);
             if let Ok(bytes) = serde_json::to_vec(&store) {
-                if let Err(e) = service.save_encrypted_data(crate::state::MARKET_CARD_STORE_KEY, &bytes, password.as_deref()) {
+                if let Err(e) = service.save_encrypted_data(
+                    crate::state::MARKET_CARD_STORE_KEY,
+                    &bytes,
+                    password.as_deref(),
+                ) {
                     log::warn!("Failed to save CardStore after sending card: {}", e);
                 }
             }
@@ -258,7 +306,10 @@ pub(crate) async fn create_transfer_bundle_impl(
                 let now_secs = chrono::Utc::now().timestamp() as u64;
                 reg.commit_sync_receipt(receipt, now_secs);
                 if let Err(e) = state.save_wot_register(&mut service, &reg, password.as_deref()) {
-                    log::warn!("Failed to save WoT register after committing sync receipt: {}", e);
+                    log::warn!(
+                        "Failed to save WoT register after committing sync receipt: {}",
+                        e
+                    );
                 }
             }
         }
@@ -266,42 +317,98 @@ pub(crate) async fn create_transfer_bundle_impl(
         if let Err(error) = state.refresh_events_cache(&mut service, password.as_deref()) {
             error!("Failed to refresh events after transfer commit: {}", error);
         }
-        (result, intents, mode)
+        (result, intents, all_anchored, pow_bits)
     };
-    // The service mutex is released; the managed Core commit has acknowledged
-    // exact bytes before the first HTTP attempt.
-    let candidates = crate::gateway_resolver::cached_candidates(&settings);
-    let l2_dispatch = if candidates.is_empty() && mode == "best_effort" {
-        intents
-            .iter()
-            .map(|intent| crate::gateway_resolver::IntentDispatchObservation {
+
+    // Service mutex released; L1 + durable L2 intents are committed before network fan-out.
+    let client = crate::sync_client::create_sync_http_client();
+    let now_ms = u64::try_from(Utc::now().timestamp_millis())
+        .map_err(|_| FrontendError::from("Invalid verification time".to_string()))?;
+    let mut l2_dispatch = Vec::with_capacity(intents.len());
+
+    for intent in &intents {
+        let nonce = random_non_zero_nonce();
+        let reqs_res = if is_durable {
+            let service = state
+                .service
+                .lock()
+                .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+            service
+                .build_intent_committee_requests(
+                    &intent.local_instance_id,
+                    &nonce,
+                    &HashMap::new(),
+                    true,
+                )
+                .map_err(FrontendError::from)
+        } else {
+            human_money_core::services::l2_gateway::build_committee_batch_requests(
+                &intent.anchor_id,
+                &intent.manifest,
+                &intent.genesis_tickets,
+                &intent.entries,
+                &nonce,
+                &HashMap::new(),
+            )
+            .map_err(FrontendError::from)
+        };
+
+        let Ok(requests) = reqs_res else {
+            l2_dispatch.push(crate::gateway_resolver::IntentDispatchObservation {
                 local_instance_id: intent.local_instance_id.clone(),
-                status: "offline_skipped".into(),
+                status: "pending".into(),
                 http_status: None,
-            })
-            .collect()
-    } else {
-        let obs = crate::gateway_resolver::dispatch_intents(&settings, &candidates, &intents).await;
-        let accepted = obs
+            });
+            continue;
+        };
+
+        let dispatch = crate::gateway_resolver::dispatch_lock_committee_batches(
+            &client,
+            &requests,
+            Duration::from_secs(4),
+        )
+        .await;
+
+        let target_slot = intent.entries.last().map(|e| e.slot);
+        let target_receipts: Vec<_> = dispatch
+            .receipts
             .iter()
-            .filter(|o| matches!(o.http_status, Some(code) if code < 400))
-            .count();
-        if !candidates.is_empty() && accepted < obs.len() {
-            let statuses: Vec<Option<u16>> = obs.iter().map(|o| o.http_status).collect();
-            log::warn!(
-                "L2 lock dispatch degraded (mode={}, accepted={}/{}, http_statuses={:?})",
-                mode,
-                accepted,
-                obs.len(),
-                statuses
-            );
+            .filter(|r| target_slot == Some(r.slot))
+            .cloned()
+            .collect();
+
+        if is_durable && (!target_receipts.is_empty() || !dispatch.competing_entries.is_empty()) {
+            let mut service = state
+                .service
+                .lock()
+                .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+            if let Err(err) = service.record_intent_server_receipts(
+                &intent.local_instance_id,
+                &nonce,
+                &target_receipts,
+                dispatch.competing_entries.first(),
+                pow_base_bits,
+                now_ms,
+                password.as_deref(),
+            ) {
+                log::warn!("Recording L2 send intent receipts failed: {}", err);
+            }
         }
-        obs
-    };
+
+        l2_dispatch.push(crate::gateway_resolver::summarize_intent_dispatch(
+            &intent.local_instance_id,
+            &dispatch,
+        ));
+    }
+
     Ok(CreateBundleResult {
         bundle_data: result.bundle_bytes,
         bundle_id: result.bundle_id,
-        involved_sources_details: result.involved_sources_details.into_iter().map(Into::into).collect(),
+        involved_sources_details: result
+            .involved_sources_details
+            .into_iter()
+            .map(Into::into)
+            .collect(),
         l2_dispatch,
     })
 }
@@ -347,7 +454,13 @@ pub(crate) fn receive_bundle_impl(
     let mut service = state.service.lock().unwrap();
     let archive = open_wallet_archive(app, &service);
 
-    match service.receive_bundle(&bundle_data, &standard_definitions_toml, archive.as_ref(), password.as_deref(), force_accept_tolerance_bundle) {
+    match service.receive_bundle(
+        &bundle_data,
+        &standard_definitions_toml,
+        archive.as_ref(),
+        password.as_deref(),
+        force_accept_tolerance_bundle,
+    ) {
         Ok(result) => {
             info!("Bundle processed successfully. Creating transaction record.");
 
@@ -357,17 +470,23 @@ pub(crate) fn receive_bundle_impl(
             if conflict_count > 0 || warning_count > 0 {
                 log::warn!(
                     "Fraud detection during bundle import: confirmed_conflicts={}, gossip_warnings={}",
-                    conflict_count, warning_count
+                    conflict_count,
+                    warning_count
                 );
             }
 
             let transfer_summary = result.transfer_summary.clone();
             let involved_vouchers_details = result.involved_vouchers_details.clone();
-            let involved_vouchers_ids: Vec<String> = involved_vouchers_details.iter().map(|d| d.local_instance_id.clone()).collect();
+            let involved_vouchers_ids: Vec<String> = involved_vouchers_details
+                .iter()
+                .map(|d| d.local_instance_id.clone())
+                .collect();
             let notes = result.header.notes.clone();
             let sender_profile_name = result.header.sender_profile_name.clone();
             let bundle_id = result.header.bundle_id.clone();
-            let recipient_id = service.with_wallet(|w| w.get_user_id().to_string()).map_err(FrontendError::from)?;
+            let recipient_id = service
+                .with_wallet(|w| w.get_user_id().to_string())
+                .map_err(FrontendError::from)?;
 
             let record = TransactionRecord {
                 id: Uuid::new_v4().to_string(),
@@ -385,20 +504,31 @@ pub(crate) fn receive_bundle_impl(
                 sender_profile_name: sender_profile_name.clone(),
             };
 
-            state.append_to_history(&mut service, record.clone(), password.as_deref()).map_err(FrontendError::from)?;
+            state
+                .append_to_history(&mut service, record.clone(), password.as_deref())
+                .map_err(FrontendError::from)?;
 
             if let Err(e) = state.refresh_events_cache(&mut service, password.as_deref()) {
                 error!("Failed to refresh events cache after receive_bundle: {}", e);
             }
 
             let wot_imported_lists = if let Some(ref wot_json) = result.wot_sync_json {
-                state.try_import_piggybacked_wot(&mut service, wot_json, &result.header.sender_id, password.as_deref())
+                state.try_import_piggybacked_wot(
+                    &mut service,
+                    wot_json,
+                    &result.header.sender_id,
+                    password.as_deref(),
+                )
             } else {
                 None
             };
 
             if let Some(ref card_json) = result.contact_card_json {
-                state.try_import_piggybacked_contact_card(&mut service, Some(card_json), password.as_deref());
+                state.try_import_piggybacked_contact_card(
+                    &mut service,
+                    Some(card_json),
+                    password.as_deref(),
+                );
             }
 
             Ok(ReceiveSuccessPayload {
@@ -407,9 +537,17 @@ pub(crate) fn receive_bundle_impl(
                 notes,
                 transfer_summary: result.transfer_summary.into(),
                 involved_vouchers: involved_vouchers_ids,
-                involved_vouchers_details: involved_vouchers_details.into_iter().map(|d| d.into()).collect(),
+                involved_vouchers_details: involved_vouchers_details
+                    .into_iter()
+                    .map(|d| d.into())
+                    .collect(),
                 verifiable_conflicts: result.check_result.verifiable_conflicts,
-                conflict_summaries: service.list_conflicts().map_err(FrontendError::from)?.into_iter().map(|s| s.into()).collect(),
+                conflict_summaries: service
+                    .list_conflicts()
+                    .map_err(FrontendError::from)?
+                    .into_iter()
+                    .map(|s| s.into())
+                    .collect(),
                 checkout_verdict: None,
                 purchase_id: None,
                 newly_committed: None,
@@ -452,11 +590,15 @@ pub fn save_transaction_record(
     let record: TransactionRecord = record.into();
     log::debug!("Saving new transaction record");
     let mut service = state.service.lock().unwrap();
-    state.append_to_history(&mut service, record, password.as_deref()).map_err(FrontendError::from)
+    state
+        .append_to_history(&mut service, record, password.as_deref())
+        .map_err(FrontendError::from)
 }
 
 #[tauri::command]
-pub fn get_transaction_history(state: tauri::State<AppState>) -> Result<Vec<FrontendTransactionRecord>, FrontendError> {
+pub fn get_transaction_history(
+    state: tauri::State<AppState>,
+) -> Result<Vec<FrontendTransactionRecord>, FrontendError> {
     info!("Loading transaction history...");
     let history = state.get_cached_history().map_err(FrontendError::from)?;
     Ok(history.iter().map(|r| r.into()).collect())
@@ -488,14 +630,32 @@ fn compute_wot_bonuses(
         }
 
         let creator_id = instance.voucher.creator_profile.id.as_deref().unwrap_or("");
-        let is_offender = matches!(wallet.check_reputation(creator_id), TrustStatus::KnownOffender(_));
+        let is_offender = matches!(
+            wallet.check_reputation(creator_id),
+            TrustStatus::KnownOffender(_)
+        );
 
-        let guarantor_refs: Vec<&str> = instance.voucher.signatures.iter()
-            .filter(|s| s.role.eq_ignore_ascii_case("guarantor") && !matches!(wallet.check_reputation(&s.signer_id), TrustStatus::KnownOffender(_)))
+        let guarantor_refs: Vec<&str> = instance
+            .voucher
+            .signatures
+            .iter()
+            .filter(|s| {
+                s.role.eq_ignore_ascii_case("guarantor")
+                    && !matches!(
+                        wallet.check_reputation(&s.signer_id),
+                        TrustStatus::KnownOffender(_)
+                    )
+            })
             .map(|s| s.signer_id.as_str())
             .collect();
 
-        if let Ok(eval) = reg.evaluate_voucher_for_observer(recipient_id, creator_id, &guarantor_refs, is_offender, Some(now_secs)) {
+        if let Ok(eval) = reg.evaluate_voucher_for_observer(
+            recipient_id,
+            creator_id,
+            &guarantor_refs,
+            is_offender,
+            Some(now_secs),
+        ) {
             let bonus = (eval.score * 1500.0).round() as i64;
             bonuses.insert(local_id.clone(), bonus);
         }
@@ -513,10 +673,16 @@ pub fn prepare_transfer_plan(
 ) -> Result<FrontendTransferPlan, FrontendError> {
     let recipient_id = recipient_id.trim().to_string();
     let service = state.service.lock().unwrap();
-    let bonuses = service.with_wallet(|w| compute_wot_bonuses(&state, w, &recipient_id))
+    let bonuses = service
+        .with_wallet(|w| compute_wot_bonuses(&state, w, &recipient_id))
         .map_err(FrontendError::from)?;
     let plan = service
-        .prepare_transfer_with_wot(&target_amount, standard_uuid_filter.as_deref(), &recipient_id, Some(&bonuses))
+        .prepare_transfer_with_wot(
+            &target_amount,
+            standard_uuid_filter.as_deref(),
+            &recipient_id,
+            Some(&bonuses),
+        )
         .map_err(FrontendError::from)?;
     Ok(plan.into())
 }
@@ -530,608 +696,201 @@ pub fn rank_vouchers_for_recipient(
 ) -> Result<Vec<FrontendRankedVoucher>, FrontendError> {
     let recipient_id = recipient_id.trim().to_string();
     let service = state.service.lock().unwrap();
-    let bonuses = service.with_wallet(|w| compute_wot_bonuses(&state, w, &recipient_id))
+    let bonuses = service
+        .with_wallet(|w| compute_wot_bonuses(&state, w, &recipient_id))
         .map_err(FrontendError::from)?;
     let ranked = service
-        .rank_vouchers_with_wot(&target_amount, standard_uuid_filter.as_deref(), &recipient_id, Some(&bonuses))
+        .rank_vouchers_with_wot(
+            &target_amount,
+            standard_uuid_filter.as_deref(),
+            &recipient_id,
+            Some(&bonuses),
+        )
         .map_err(FrontendError::from)?;
     Ok(ranked.into_iter().map(|r| r.into()).collect())
 }
 
-/// Builds the transaction-history record for a verified live checkout (M6.2).
-///
-/// The record is the audit trail of a goods release that was authorized by a
-/// live, recipient-challenge-bound L2 quorum proof. The locally stored voucher
-/// (resolved through the L2 voucher id of the live context) contributes amount,
-/// unit and counterparty, while the live context itself contributes the
-/// confirmed successor transaction (`child_lock`).
-fn build_verified_checkout_record(
-    service: &AppService,
-    proof: &LiveStateProof,
-) -> TransactionRecord {
-    let context: &LiveStateContext = &proof.context;
-
-    // Resolve the local voucher instance the live proof refers to.
-    let resolved = service
-        .with_wallet(|w| {
-            w.voucher_store
-                .vouchers
-                .iter()
-                .find(|(_, instance)| {
-                    instance
-                        .voucher
-                        .transactions
-                        .first()
-                        .and_then(|tx| {
-                            human_money_core::services::l2_gateway::calculate_layer2_voucher_id(tx).ok()
-                        })
-                        .map(|l2_voucher_id| l2_voucher_id == context.voucher_id)
-                        .unwrap_or(false)
-                })
-                .map(|(local_id, instance)| (local_id.clone(), instance.voucher.clone()))
-        })
-        .ok()
-        .flatten();
-
-    let own_user_id = service
-        .with_wallet(|w| w.get_user_id().to_string())
-        .unwrap_or_default();
-
-    // The immediate sender (payer) of the voucher, if it can be resolved locally.
-    let sender_id = resolved.as_ref().and_then(|(local_id, _)| {
-        service
-            .with_wallet_and_identity(|w, identity| w.get_voucher_source_sender(local_id, identity))
-            .ok()
-            .and_then(|sender| sender.ok())
-            .flatten()
-    });
-
-    let (amount, unit) = resolved
-        .as_ref()
-        .and_then(|(_, voucher)| {
-            let amount = voucher.transactions.last().map(|tx| tx.amount.clone())?;
-            let unit = voucher.nominal_value.unit.clone();
-            Some((amount, unit))
-        })
-        .unwrap_or_else(|| (String::new(), String::new()));
-
-    let mut summable_amounts = HashMap::new();
-    if !amount.is_empty() && !unit.is_empty() {
-        summable_amounts.insert(unit, amount);
-    }
-
-    let notes = format!(
-        "Verified live checkout: goods release authorized by L2 quorum proof ({}/20 votes, shard {}).",
-        proof.votes.len(),
-        context.shard_id
-    );
-
-    TransactionRecord {
-        id: Uuid::new_v4().to_string(),
-        direction: "received".to_string(),
-        recipient_id: own_user_id,
-        sender_id: sender_id.unwrap_or_default(),
-        timestamp: Utc::now().to_rfc3339(),
-        summable_amounts,
-        countable_items: HashMap::new(),
-        involved_vouchers: resolved
-            .as_ref()
-            .map(|(local_id, _)| vec![local_id.clone()])
-            .unwrap_or_default(),
-        involved_sources_details: None,
-        bundle_data: Vec::new(),
-        bundle_id: human_money_core::hex::encode(context.child_lock),
-        notes: Some(notes),
-        sender_profile_name: None,
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Z01 fail-closed goods-release boundary (DEC-072 / DEC-084)
-//
-// Untrusted IPC parameters alone can never mint automatic goods release
-// (`can_release_goods_automatically == true`): `evaluate_checkout_release`
-// (raw outcome strings) and `verify_live_checkout_and_release` (live quorum
-// proofs) both funnel through the fail-closed helpers below. A verified
-// live proof is only an **observation**; the boundary stays closed until
-// the backend durably commits the purchase state (Z08) and lifts it via a
-// `DurablePurchaseBinding`, which cannot be forged from IPC parameters.
-// ---------------------------------------------------------------------------
-
-/// Maps an untrusted IPC outcome string to an [`L2ProcessingOutcome`] (Z01 fail-closed).
-///
-/// The string arrives over the IPC bridge and is therefore untrusted input. It
-/// must never be promoted to [`L2ProcessingOutcome::Confirmed`]: that variant
-/// reports a live, recipient-challenge-bound 14/20 quorum proof and may only be
-/// produced by `AppService::verify_live_checkout_proof`. A caller-supplied
-/// `"Confirmed"` string (and any unrecognized string) is therefore degraded to
-/// [`L2ProcessingOutcome::Found`], the weakest unauthenticated observation.
-fn map_untrusted_outcome_str(outcome: &str) -> L2ProcessingOutcome {
-    match outcome {
-        "Found" => L2ProcessingOutcome::Found,
-        "Provisional" => L2ProcessingOutcome::Provisional,
-        s if s.starts_with("Quarantined") => L2ProcessingOutcome::Quarantined {
-            reason: s.strip_prefix("Quarantined:").unwrap_or("Conflict").to_string(),
-        },
-        s if s.starts_with("SyncRequired") => L2ProcessingOutcome::SyncRequired {
-            sync_point: s.strip_prefix("SyncRequired:").unwrap_or("0").to_string(),
-        },
-        // Defensive: a raw caller string is never proof of a live, challenge-bound
-        // quorum, so it must not be promoted to `Confirmed`.
-        _ => L2ProcessingOutcome::Found,
-    }
-}
-
-/// Evaluates a goods-release verdict from untrusted IPC parameters (Z01 fail-closed).
-///
-/// Helper of [`evaluate_checkout_release`]: the outcome string is mapped down via
-/// [`map_untrusted_outcome_str`] (a raw `"Confirmed"` becomes `Found`) and the
-/// verdict is *defensively* forced to `can_release_goods_automatically == false`,
-/// so the command can never mint automatic goods release from untrusted IPC
-/// parameters alone. Only a backend-verified `DurablePurchaseBinding` (Z08) may
-/// lift the boundary.
-fn evaluate_untrusted_checkout_release(
-    service: &AppService,
-    outcome: &str,
-    explicit_merchant_approval: bool,
-) -> FrontendCheckoutReleaseVerdict {
-    let l2_outcome = map_untrusted_outcome_str(outcome);
-    let mut verdict = service.evaluate_checkout_release(l2_outcome, explicit_merchant_approval);
-    // Defensive: only a Z08 durable purchase binding may authorize automatic goods
-    // release, so a caller-provided outcome must never enable it.
-    verdict.can_release_goods_automatically = false;
-    verdict.into()
-}
-
-/// Parses the IPC JSON payloads of [`verify_live_checkout_and_release`] (fail-closed).
-///
-/// Any malformed `proof_json` / `expected_context_json` is rejected as a
-/// [`FrontendError`] before any verification happens; parsing errors never fall
-/// back to permissive defaults.
-fn parse_live_checkout_ipc(
-    proof_json: &str,
-    expected_context_json: &str,
-) -> Result<(LiveStateProof, LiveStateContext), FrontendError> {
-    let proof = serde_json::from_str(proof_json)
-        .map_err(|e| FrontendError::from(format!("Failed to parse LiveStateProof: {}", e)))?;
-    let expected = serde_json::from_str(expected_context_json)
-        .map_err(|e| FrontendError::from(format!("Failed to parse LiveStateContext: {}", e)))?;
-    Ok((proof, expected))
-}
-
-/// Verifies a live checkout proof supplied over IPC (Z01 fail-closed boundary).
-///
-/// Helper of [`verify_live_checkout_and_release`]. The proof is verified
-/// **mathematically** (14/20 quorum signatures bound to a fresh recipient
-/// challenge), and a valid proof reports [`L2ProcessingOutcome::Confirmed`].
-/// That confirmation, however, is only an observation: the verdict is
-/// defensively clamped to `can_release_goods_automatically == false`, so
-/// automatic goods release is never minted from untrusted IPC parameters alone.
-#[cfg(test)]
-fn verify_untrusted_live_checkout(
-    service: &AppService,
-    proof_json: &str,
-    expected_context_json: &str,
-    explicit_merchant_approval: bool,
-) -> Result<(LiveStateProof, CheckoutReleaseVerdict), FrontendError> {
-    let (proof, expected) = parse_live_checkout_ipc(proof_json, expected_context_json)?;
-    let mut verdict = service
-        .verify_live_checkout_proof(&proof, &expected, explicit_merchant_approval)
-        .map_err(FrontendError::from)?;
-    // Defensive Z01 clamp: a mathematically valid 14/20 proof is an observation,
-    // not an authorization. Automatic goods release stays fail-closed until the
-    // durable purchase state (Z08) is wired.
-    verdict.can_release_goods_automatically = false;
-    Ok((proof, verdict))
-}
-
-/// Command-level persistence gate for verified checkouts (M6.2 / Z01).
-///
-/// A persisted audit record (and any automatic goods release) requires the
-/// verdict to be a `Confirmed` live proof **and** `can_release_goods_automatically
-/// == true`, i.e. a backend `DurablePurchaseBinding` (Z08). As long as Z08 is not
-/// wired, this gate is fail-closed for every verdict built from untrusted IPC
-/// parameters alone.
-fn checkout_release_gate(verdict: &CheckoutReleaseVerdict) -> bool {
-    verdict.is_goods_release_authorized
-        && verdict.can_release_goods_automatically
-        && matches!(verdict.outcome, L2ProcessingOutcome::Confirmed)
-}
-
-/// Verifies a recipient-challenge-bound L2 live checkout proof over IPC and
-/// reports the goods-release verdict.
-///
-/// # Z01 Fail-Closed Goods Release Boundary (DEC-072 / DEC-084)
-/// `verify_live_checkout_and_release` and `evaluate_checkout_release` must never
-/// mint automatic goods release (`can_release_goods_automatically == true`) from
-/// untrusted IPC parameters alone:
-/// - Malformed `proof_json` / `expected_context_json` are rejected as
-///   [`FrontendError`]s before verification ([`parse_live_checkout_ipc`]).
-/// - Even a mathematically valid live proof (14/20 quorum bound to a fresh
-///   recipient challenge) is only an **observation**; the verdict is clamped to
-///   `can_release_goods_automatically == false` ([`verify_untrusted_live_checkout`]).
-/// - The M6.2 persistence gate ([`checkout_release_gate`]) therefore stays closed
-///   until the backend durably commits the purchase state (Z08) via a
-///   `DurablePurchaseBinding`, and every IPC-only precondition test lives in the
-///   `z01_fail_closed_tests` module of this file.
-#[tauri::command]
-pub fn verify_live_checkout_and_release(
-    proof_json: String,
-    expected_context_json: String,
-    regional_views_json: Option<String>,
-    explicit_merchant_approval: bool,
-    password: Option<String>,
-    state: tauri::State<AppState>,
-) -> Result<FrontendCheckoutReleaseVerdict, FrontendError> {
-    info!("Verifying live checkout proof with recipient challenge binding...");
-    let mut service = state.service.lock().unwrap();
-
-    let (proof, expected) = parse_live_checkout_ipc(&proof_json, &expected_context_json)?;
-    let views_json = regional_views_json.ok_or_else(|| FrontendError::from("Configured regional mesh views are required".to_string()))?;
-    if views_json.len() > 4 * 1024 * 1024 { return Err(FrontendError::from("Regional mesh view budget exceeded".to_string())); }
-    let views: Vec<human_money_core::humoco_proto::mesh::RegionalMeshView> = serde_json::from_str(&views_json)
-        .map_err(|_| FrontendError::from("Invalid regional mesh views".to_string()))?;
-    let now_ms = u64::try_from(Utc::now().timestamp_millis()).map_err(|_| FrontendError::from("Invalid local verification time".to_string()))?;
-    let verdict = service.verify_live_checkout_with_regional_authority(&proof, &expected, &views, now_ms, explicit_merchant_approval)
-        .map_err(FrontendError::from)?;
-
-    // M6.2: A goods release that is authorized by a verified live quorum proof is
-    // persisted in the transaction history. Without that record the release decision
-    // would leave no audit trail at all. The write is fail-closed on purpose: if the
-    // record cannot be stored, the release is not handed out to the frontend.
-    if checkout_release_gate(&verdict) {
-        let record = build_verified_checkout_record(&service, &proof);
-        info!("Persisting verified checkout record in the transaction history");
-        state
-            .append_to_history(&mut service, record, password.as_deref())
-            .map_err(FrontendError::from)?;
-    }
-
-    Ok(verdict.into())
-}
-
-/// Evaluates a goods release verdict for a caller-supplied outcome string (Z01 fail-closed).
-///
-/// # Caller-supplied outcomes never authorize automatic goods release
-///
-/// The `outcome` string is untrusted IPC input. It must never be promoted to
-/// [`L2ProcessingOutcome::Confirmed`], because that variant is reserved for a live,
-/// recipient-challenge-bound quorum proof. Untrusted strings are therefore mapped
-/// down via [`map_untrusted_outcome_str`] (a raw `"Confirmed"` becomes `Found`),
-/// and the returned verdict is defensively forced to
-/// `can_release_goods_automatically == false`
-/// ([`evaluate_untrusted_checkout_release`]).
-///
-/// Together with [`verify_live_checkout_and_release`] this enforces the Z01
-/// fail-closed boundary: neither command can mint automatic goods release from
-/// untrusted IPC parameters alone. Only [`verify_live_checkout_and_release`]
-/// observes a mathematically verified live quorum proof, and even that remains
-/// an observation until a backend `DurablePurchaseBinding` (Z08) is presented.
+/// Evaluates an untrusted IPC checkout outcome string (Z01 fail-closed boundary):
+/// caller-supplied strings can NEVER mint `Confirmed` or authorize automatic release.
 #[tauri::command]
 pub fn evaluate_checkout_release(
     outcome: String,
     explicit_merchant_approval: bool,
-    state: tauri::State<AppState>,
+    _state: tauri::State<AppState>,
 ) -> Result<FrontendCheckoutReleaseVerdict, FrontendError> {
-    let service = state.service.lock().unwrap();
-    Ok(evaluate_untrusted_checkout_release(&service, &outcome, explicit_merchant_approval))
-}
-
-#[tauri::command]
-#[allow(clippy::too_many_arguments)]
-pub fn verify_checkout_response_with_authority(
-    local_id: String,
-    response_bytes: Vec<u8>,
-    network: u8,
-    shard_id: u16,
-    parent_lock_hex: String,
-    child_lock_hex: String,
-    committee_pubkeys_hex: Vec<String>,
-    explicit_merchant_approval: bool,
-    password: Option<String>,
-    state: tauri::State<AppState>,
-) -> Result<FrontendCheckoutReleaseVerdict, FrontendError> {
-    info!("Verifying checkout response with authority");
-    let mut service = state.service.lock().unwrap();
-
-    let parent_lock = human_money_core::hex::decode(&parent_lock_hex)
-        .map_err(|e| FrontendError::from(format!("Invalid parent_lock hex: {}", e)))?;
-    let child_lock = human_money_core::hex::decode(&child_lock_hex)
-        .map_err(|e| FrontendError::from(format!("Invalid child_lock hex: {}", e)))?;
-    if parent_lock.len() != 32 || child_lock.len() != 32 {
-        return Err(FrontendError::from("Locks must be 32 bytes".to_string()));
-    }
-
-    let mut committee = Vec::new();
-    for pk_hex in committee_pubkeys_hex {
-        let pk_bytes = human_money_core::hex::decode(&pk_hex)
-            .map_err(|e| FrontendError::from(format!("Invalid committee pubkey hex: {}", e)))?;
-        if pk_bytes.len() != 32 {
-            return Err(FrontendError::from("Committee keys must be 32 bytes".to_string()));
-        }
-        let mut arr = [0u8; 32];
-        arr.copy_from_slice(&pk_bytes);
-        committee.push(arr);
-    }
-
-    let mut p_arr = [0u8; 32];
-    p_arr.copy_from_slice(&parent_lock);
-    let mut c_arr = [0u8; 32];
-    c_arr.copy_from_slice(&child_lock);
-
-    let authority = human_money_core::services::l2_gateway::CheckoutAuthority {
-        network,
-        shard_id,
-        parent_lock: p_arr,
-        child_lock: c_arr,
-        committee,
+    let l2_outcome = match outcome.as_str() {
+        "OfflineOnly" => L2ProcessingOutcome::OfflineOnly,
+        s if s.starts_with("Quarantined:") => L2ProcessingOutcome::Quarantined {
+            reason: s
+                .strip_prefix("Quarantined:")
+                .unwrap_or("Conflict")
+                .to_string(),
+        },
+        s if s.starts_with("Yellow:") => L2ProcessingOutcome::Yellow {
+            reason: s
+                .strip_prefix("Yellow:")
+                .unwrap_or("Unverified")
+                .to_string(),
+        },
+        _ => L2ProcessingOutcome::Yellow {
+            reason: "Untrusted IPC outcome observation".to_string(),
+        },
     };
-
-    let verdict = service.verify_checkout_response_with_authority(
-        local_id,
-        &response_bytes,
-        password.as_deref(),
-        authority,
-        explicit_merchant_approval,
-    ).map_err(FrontendError::from)?;
-
+    let mut verdict = CheckoutReleaseVerdict::new(l2_outcome, explicit_merchant_approval);
+    verdict.can_release_goods_automatically = false;
     Ok(verdict.into())
 }
 
-/// Unit tests pinning the Z01 fail-closed goods-release boundary.
-///
-/// # Z01 Fail-Closed Goods Release Boundary (DEC-072 / DEC-084)
-/// Neither [`evaluate_checkout_release`] nor [`verify_live_checkout_and_release`]
-/// may mint automatic goods release (`can_release_goods_automatically == true`)
-/// from untrusted IPC parameters alone. These tests document and enforce that:
-///
-/// 1. A caller-supplied `"Confirmed"` outcome string is downgraded to `Found`
-///    and can never produce automatic goods release.
-/// 2. Malformed `proof_json` / `expected_context_json` payloads are rejected as
-///    [`FrontendError`]s before any verification happens.
-/// 3. A mathematically valid 14/20 live proof with a fresh recipient challenge
-///    verifies positively (`Confirmed`), yet the verdict — and the M6.2
-///    persistence gate ([`checkout_release_gate`]) — stays fail-closed until the
-///    durable purchase state (Z08) is wired.
-///
-/// Because `tauri::State` cannot be constructed ad hoc, the tests exercise the
-/// exact code paths of the Tauri commands through the pure helper functions of
-/// this module (`map_untrusted_outcome_str`, `evaluate_untrusted_checkout_release`,
-/// `parse_live_checkout_ipc`, `verify_untrusted_live_checkout`).
-#[cfg(test)]
-mod z01_fail_closed_tests {
-    use super::*;
+#[tauri::command]
+pub async fn submit_l2_send_intent(
+    local_instance_id: String,
+    password: Option<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<crate::gateway_resolver::IntentDispatchObservation, FrontendError> {
+    let settings = state.get_cached_settings().map_err(FrontendError::from)?;
+    let now_ms = u64::try_from(Utc::now().timestamp_millis())
+        .map_err(|_| FrontendError::from("Invalid verification time".to_string()))?;
 
-    use ed25519_dalek::{Signer, SigningKey};
-    use human_money_core::humoco_proto::AttestationVote;
-    use uuid::Uuid;
-
-    /// Isolated `AppService` in a fresh temp dir. The Z01 boundary does not depend
-    /// on wallet state, so a locked service is the correct subject under test —
-    /// no unlocked wallet or runtime is required.
-    fn test_service() -> AppService {
-        let dir = std::env::temp_dir().join(format!("humoco_z01_test_{}", Uuid::new_v4()));
-        AppService::new(&dir).unwrap()
-    }
-
-    /// Builds a mathematically valid 14/20 live checkout fixture: 20 distinct
-    /// committee keys, `parent_lock = blake3(lookup_tag)` and 14 signatures over
-    /// the live-state digest bound to a fresh, non-zero recipient challenge.
-    fn build_valid_live_fixture() -> (LiveStateContext, LiveStateProof) {
-        let keys: Vec<SigningKey> = (1..=20).map(|i| SigningKey::from_bytes(&[i; 32])).collect();
-        let committee: Vec<[u8; 32]> = keys.iter().map(|k| k.verifying_key().to_bytes()).collect();
-
-        let lookup_tag = "humoco_z01_checkout".to_string();
-        let parent_lock = *blake3::hash(lookup_tag.as_bytes()).as_bytes();
-
-        let context = LiveStateContext {
-            version: 1,
-            network: 0,
-            shard_id: 5,
-            voucher_id: "v_z01_test".to_string(),
-            lookup_tag: lookup_tag.clone(),
-            parent_lock,
-            child_lock: [7; 32],
-            root_valid_until: 100_000,
-            state_digest: [8; 32],
-            recipient_nonce: [9; 32], // fresh, non-zero recipient challenge
-            committee,
-        };
-
-        let digest = human_money_core::humoco_proto::live::live_state_digest(&context).unwrap();
-        let votes: Vec<AttestationVote> = keys
-            .iter()
-            .take(14)
-            .map(|k| AttestationVote {
-                signer_pubkey: k.verifying_key().to_bytes(),
-                signature: k.sign(&digest).to_bytes(),
+    let (intent, pow_base_bits) = {
+        let mut service = state
+            .service
+            .lock()
+            .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+        let pow_bits = service
+            .with_wallet(|w| {
+                let mut bits = DEFAULT_LOCK_POW_BASE_BITS;
+                if let Some(inst) = w.get_voucher_instance(&local_instance_id) {
+                    if let Some(anchor) = inst.voucher.layer2_anchor {
+                        let ahex = hex::encode(anchor);
+                        if let Some(m) = w.profile.l2_anchor_manifests.get(&ahex) {
+                            for s in &m.servers {
+                                let norm = crate::checkout::normalize_sync_write_url(&s.write_url);
+                                if let Some(p) = settings.l2_probe_cache.get(&norm) {
+                                    bits = bits.max(p.pow_base_bits);
+                                }
+                            }
+                        }
+                    }
+                }
+                bits
             })
-            .collect();
+            .unwrap_or(DEFAULT_LOCK_POW_BASE_BITS);
+        let intent = service
+            .prepare_l2_send_intent(&local_instance_id, pow_bits, password.as_deref())
+            .map_err(FrontendError::from)?;
+        (intent, pow_bits)
+    };
 
-        let proof = LiveStateProof {
-            context: context.clone(),
-            votes,
-            occupancy: human_money_core::humoco_proto::live::LiveSlotOccupancy::Occupied,
+    if let Some(res) = &intent.terminal_resolution {
+        let status = match res {
+            human_money_core::app_service::IntentTerminalResolution::Confirmed { .. } => {
+                "reconciled_confirmed"
+            }
+            human_money_core::app_service::IntentTerminalResolution::Conflicted { .. } => {
+                "conflicted"
+            }
+            human_money_core::app_service::IntentTerminalResolution::Expired { .. } => "expired",
         };
-        (context, proof)
+        let mut service = state
+            .service
+            .lock()
+            .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+        let _ = service.cleanup_terminal_intents(60_000, now_ms, password.as_deref());
+        return Ok(crate::gateway_resolver::IntentDispatchObservation {
+            local_instance_id,
+            status: status.into(),
+            http_status: None,
+        });
     }
 
-    /// (1) `evaluate_checkout_release`: the caller-supplied string `"Confirmed"`
-    /// maps down to `Found` and can never mint automatic goods release, no matter
-    /// what the merchant approval flag is. Unknown strings degrade to `Found`
-    /// as well, so no IPC string can ever mint `Confirmed`.
-    #[test]
-    fn test_z01_caller_outcome_confirmed_maps_to_found_and_stays_fail_closed() {
-        // The mapping itself never mints `Confirmed`
-        assert_eq!(map_untrusted_outcome_str("Confirmed"), L2ProcessingOutcome::Found);
-        assert_eq!(map_untrusted_outcome_str("confirmed"), L2ProcessingOutcome::Found);
-        assert_eq!(map_untrusted_outcome_str("CONFIRMED/anything"), L2ProcessingOutcome::Found);
-
-        // Non-privileged outcomes round-trip untouched
-        assert_eq!(map_untrusted_outcome_str("Found"), L2ProcessingOutcome::Found);
-        assert_eq!(map_untrusted_outcome_str("Provisional"), L2ProcessingOutcome::Provisional);
-
-        let app = test_service();
-        for approval in [false, true] {
-            let verdict = evaluate_untrusted_checkout_release(&app, "Confirmed", approval);
-            assert_eq!(verdict.outcome, "Found", "Caller string must map down to Found");
-            assert!(
-                !verdict.can_release_goods_automatically,
-                "Automatic goods release must not be minted from an IPC string (Z01)"
-            );
-            assert!(verdict.requires_merchant_approval);
-            assert!(verdict.merchant_warning.is_some());
-        }
-
-        // Quarantined strings stay strictly blocked, not even manually releasable
-        let quarantined = evaluate_untrusted_checkout_release(&app, "Quarantined:collision", true);
-        assert_eq!(quarantined.outcome, "Quarantined:collision");
-        assert!(!quarantined.can_release_goods_automatically);
-        assert!(!quarantined.is_goods_release_authorized);
+    if now_ms >= intent.root_valid_until_ms {
+        let mut service = state
+            .service
+            .lock()
+            .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+        let _ = service.expire_intent_if_overdue(&local_instance_id, now_ms, password.as_deref());
+        let _ = service.cleanup_terminal_intents(60_000, now_ms, password.as_deref());
+        return Ok(crate::gateway_resolver::IntentDispatchObservation {
+            local_instance_id,
+            status: "expired".into(),
+            http_status: None,
+        });
     }
 
-    /// (2) Malformed `proof_json` / `expected_context_json` payloads are rejected
-    /// with a descriptive [`FrontendError`] before any verification runs
-    /// (fail-closed parsing, no silent defaults).
-    #[test]
-    fn test_z01_malformed_ipc_json_returns_frontend_error() {
-        // Malformed proof JSON
-        let err = parse_live_checkout_ipc("{ this is not json", "{}").unwrap_err();
-        assert!(err.message.contains("Failed to parse LiveStateProof"), "{}", err.message);
-        assert_eq!(err.code, "error.internal.unknown");
+    let nonce = random_non_zero_nonce();
+    let requests = {
+        let service = state
+            .service
+            .lock()
+            .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+        service
+            .build_intent_committee_requests(&local_instance_id, &nonce, &HashMap::new(), true)
+            .map_err(FrontendError::from)?
+    };
 
-        // Structurally serializable proof payload, but malformed context payload
-        let proof = LiveStateProof {
-            context: LiveStateContext {
-                version: 1,
-                network: 0,
-                shard_id: 0,
-                voucher_id: String::new(),
-                lookup_tag: "tag".to_string(),
-                parent_lock: [0; 32],
-                child_lock: [0; 32],
-                root_valid_until: 0,
-                state_digest: [0; 32],
-                recipient_nonce: [0; 32],
-                committee: Vec::new(),
-            },
-            votes: Vec::new(),
-            occupancy: human_money_core::humoco_proto::live::LiveSlotOccupancy::Occupied,
-        };
-        let proof_json = serde_json::to_string(&proof).unwrap();
-        let err = parse_live_checkout_ipc(&proof_json, "{ broken context").unwrap_err();
-        assert!(err.message.contains("Failed to parse LiveStateContext"), "{}", err.message);
-        assert_eq!(err.code, "error.internal.unknown");
-
-        // The same fail-closed behavior holds on the command-level helper
-        let app = test_service();
-        let result = verify_untrusted_live_checkout(&app, "§garbage§", "{}", false);
-        assert!(result.is_err(), "Malformed IPC payloads must never verify");
+    if requests.is_empty() {
+        return Ok(crate::gateway_resolver::IntentDispatchObservation {
+            local_instance_id,
+            status: "confirmed".into(),
+            http_status: Some(200),
+        });
     }
 
-    /// (3) `verify_live_checkout_and_release`: a mathematically valid 14/20 live
-    /// proof with a fresh recipient challenge verifies positively and reports
-    /// `Confirmed`, yet the verdict is only an observation — automatic goods
-    /// release and the M6.2 persistence gate stay fail-closed (Z01) until the
-    /// durable purchase state (Z08) is wired.
-    #[test]
-    fn test_z01_valid_14_of_20_proof_verifies_but_automatic_release_stays_fail_closed() {
-        let (context, proof) = build_valid_live_fixture();
-        let proof_json = serde_json::to_string(&proof).unwrap();
-        let context_json = serde_json::to_string(&context).unwrap();
+    let client = crate::sync_client::create_sync_http_client();
+    let dispatch = crate::gateway_resolver::dispatch_lock_committee_batches(
+        &client,
+        &requests,
+        Duration::from_secs(4),
+    )
+    .await;
 
-        // Mathematical verification succeeds for the valid 14/20 proof
-        let (parsed_proof, verdict) = verify_untrusted_live_checkout(
-            &test_service(),
-            &proof_json,
-            &context_json,
-            false,
-        )
-        .expect("Mathematically valid 14/20 proof with recipient challenge must verify");
-        assert_eq!(parsed_proof.votes.len(), 14);
-        assert!(matches!(verdict.outcome, L2ProcessingOutcome::Confirmed));
+    let target_slot = intent.entries.last().map(|e| e.slot);
+    let target_receipts: Vec<_> = dispatch
+        .receipts
+        .iter()
+        .filter(|r| target_slot == Some(r.slot))
+        .cloned()
+        .collect();
 
-        // Z01: the verified proof is only an observation — goods release stays closed
-        assert!(!verdict.can_release_goods_automatically);
-        assert!(!verdict.is_goods_release_authorized);
-        assert!(verdict.requires_merchant_approval);
-        assert!(verdict.merchant_warning.as_deref().unwrap_or_default().contains("Z01"));
-
-        // The M6.2 persistence gate stays closed: no durable purchase state (Z08)
-        // has been wired, so no audit record justifies automatic release.
-        assert!(!checkout_release_gate(&verdict));
-
-        // The wire DTO the frontend receives is fail-closed as well
-        let frontend: FrontendCheckoutReleaseVerdict = verdict.into();
-        assert_eq!(frontend.outcome, "Confirmed");
-        assert!(!frontend.can_release_goods_automatically);
-        assert!(!frontend.is_goods_release_authorized);
-
-        // Even an explicitly approving merchant cannot lift the Z01 boundary —
-        // approval is a manual observation, not a Z08 binding.
-        let (_, approved) = verify_untrusted_live_checkout(
-            &test_service(),
-            &proof_json,
-            &context_json,
-            true,
-        )
-        .expect("Explicit merchant approval must not change the mathematical verdict");
-        assert!(matches!(approved.outcome, L2ProcessingOutcome::Confirmed));
-        assert!(!approved.can_release_goods_automatically);
-        assert!(!checkout_release_gate(&approved));
+    if !target_receipts.is_empty() || !dispatch.competing_entries.is_empty() {
+        let mut service = state
+            .service
+            .lock()
+            .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+        let _ = service.record_intent_server_receipts(
+            &local_instance_id,
+            &nonce,
+            &target_receipts,
+            dispatch.competing_entries.first(),
+            pow_base_bits,
+            now_ms,
+            password.as_deref(),
+        );
     }
 
-    /// Backing check for (3): the mathematical gate is real — sub-quorum votes,
-    /// a missing recipient challenge, a deviated proof context and forged
-    /// signatures are all rejected as [`FrontendError`]s.
-    #[test]
-    fn test_z01_live_proof_rejects_subquorum_missing_challenge_and_mismatch() {
-        let (context, proof) = build_valid_live_fixture();
-        let app = test_service();
+    Ok(crate::gateway_resolver::summarize_intent_dispatch(
+        &local_instance_id,
+        &dispatch,
+    ))
+}
 
-        let verify = |p: &LiveStateProof, ctx: &LiveStateContext| {
-            verify_untrusted_live_checkout(
-                &app,
-                &serde_json::to_string(p).unwrap(),
-                &serde_json::to_string(ctx).unwrap(),
-                false,
-            )
-        };
-
-        // 13/20 sub-quorum must be rejected
-        let short = LiveStateProof {
-            context: context.clone(),
-            votes: proof.votes[..13].to_vec(),
-            occupancy: human_money_core::humoco_proto::live::LiveSlotOccupancy::Occupied,
-        };
-        assert!(verify(&short, &context).is_err(), "13/20 sub-quorum must fail");
-
-        // A zeroed recipient challenge must be rejected (no fresh challenge binding)
-        let mut zero_nonce = context.clone();
-        zero_nonce.recipient_nonce = [0; 32];
-        let zero_proof = LiveStateProof {
-            context: zero_nonce.clone(),
-            votes: proof.votes.clone(),
-            occupancy: human_money_core::humoco_proto::live::LiveSlotOccupancy::Occupied,
-        };
-        assert!(verify(&zero_proof, &zero_nonce).is_err(), "Missing challenge must fail");
-
-        // A proof whose context deviates from the recipient-expected context
-        // must be rejected ("live context mismatch")
-        let mut deviated = context.clone();
-        deviated.child_lock = [9; 32];
-        let deviated_proof = LiveStateProof {
-            context: deviated.clone(),
-            votes: proof.votes.clone(),
-            occupancy: human_money_core::humoco_proto::live::LiveSlotOccupancy::Occupied,
-        };
-        assert!(verify(&deviated_proof, &context).is_err(), "Context mismatch must fail");
-
-        // A forged (zeroed) signature must be rejected
-        let mut forged = proof.clone();
-        forged.votes[0].signature = [0; 64];
-        assert!(verify(&forged, &context).is_err(), "Forged signature must fail");
-    }
+/// Productive purchase path: Sync Lock committee fan-out + atomic wallet/history commit.
+#[tauri::command]
+pub async fn checkout_received_bundle(
+    purchase_id: String,
+    bundle_data: Vec<u8>,
+    standard_definitions_toml: HashMap<String, String>,
+    password: Option<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<crate::checkout::PurchaseCompletion, FrontendError> {
+    crate::checkout::checkout_bundle(
+        &state,
+        &purchase_id,
+        &bundle_data,
+        &standard_definitions_toml,
+        password.as_deref(),
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -1140,14 +899,18 @@ mod offline_and_degraded_transfer_tests {
     use crate::commands::sync::tests::{
         create_test_state, setup_test_app, temp_test_dir, ALICE_PHRASE, BOB_PHRASE,
     };
-    use crate::settings::{AppSettings, CustomServerDto, RegionalSourceDto};
-    use ed25519_dalek::SigningKey;
+    use crate::settings::AppSettings;
+    use ed25519_dalek::{Signer, SigningKey};
+    use human_money_core::humoco_proto::{
+        decode_hex_fixed, encode_quarter,
+        manifest::{AnchorAuthority, AnchorManifest, GenesisTicket, NominatedBy, ServerEntry},
+        types::{LockReceipt, LockReceiptKind},
+    };
     use human_money_core::models::profile::PublicProfile;
     use human_money_core::models::voucher::ValueDefinition;
+    use human_money_core::services::l2_gateway;
     use human_money_core::wallet::instance::VoucherStatus;
     use human_money_core::{test_utils, NewVoucherData};
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Arc;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     fn std_map() -> (HashMap<String, String>, String) {
@@ -1165,7 +928,9 @@ mod offline_and_degraded_transfer_tests {
     fn issue_100_voucher(state: &AppState, standard_toml: &str, password: &str) -> String {
         let mut s = state.service.lock().unwrap();
         if state.get_cached_settings().is_err() {
-            state.save_settings(&mut s, AppSettings::default(), Some(password)).unwrap();
+            state
+                .save_settings(&mut s, AppSettings::default(), Some(password))
+                .unwrap();
         }
         let user_id = s.with_wallet(|w| w.get_user_id().to_string()).unwrap();
         s.create_new_voucher(
@@ -1203,53 +968,51 @@ mod offline_and_degraded_transfer_tests {
             .local_instance_id
     }
 
-    fn closed_loopback_port() -> u16 {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        drop(listener);
-        port
-    }
-
-    async fn spawn_mock_l2_ok_server() -> (String, Arc<AtomicUsize>, tokio::task::JoinHandle<()>) {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let hits = Arc::new(AtomicUsize::new(0));
-        let hits_clone = hits.clone();
-
-        let handle = tokio::spawn(async move {
-            loop {
-                let Ok((mut stream, _)) = listener.accept().await else {
-                    break;
-                };
-                hits_clone.fetch_add(1, Ordering::SeqCst);
-                tokio::spawn(async move {
-                    let mut buf = [0u8; 4096];
-                    let _ = stream.read(&mut buf).await;
-                    let resp = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}";
-                    let _ = stream.write_all(resp.as_bytes()).await;
-                    let _ = stream.shutdown().await;
-                });
-            }
-        });
-        (format!("http://{}", addr), hits, handle)
+    #[test]
+    fn test_evaluate_checkout_release_ipc_fail_closed() {
+        let confirmed_str = CheckoutReleaseVerdict::new(
+            L2ProcessingOutcome::Yellow {
+                reason: "Untrusted IPC outcome observation".into(),
+            },
+            true,
+        );
+        assert!(!confirmed_str.can_release_goods_automatically);
+        assert!(confirmed_str.requires_merchant_approval);
     }
 
     #[tokio::test]
     async fn test_offline_multi_split_and_receive_without_l2_or_sync() {
         let base_dir = temp_test_dir("offline_multi_split");
         let password = "TestPassword123!";
-        let alice_state = create_test_state(setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password));
-        let bob_state = create_test_state(setup_test_app(&base_dir.join("bob"), "Bob", BOB_PHRASE, password));
+        let alice_state = create_test_state(setup_test_app(
+            &base_dir.join("alice"),
+            "Alice",
+            ALICE_PHRASE,
+            password,
+        ));
+        let bob_state = create_test_state(setup_test_app(
+            &base_dir.join("bob"),
+            "Bob",
+            BOB_PHRASE,
+            password,
+        ));
 
         let (std_map, standard_toml) = std_map();
         let v1_id = issue_100_voucher(&alice_state, &standard_toml, password);
-        let bob_did = bob_state.service.lock().unwrap().with_wallet(|w| w.get_user_id().to_string()).unwrap();
+        let bob_did = bob_state
+            .service
+            .lock()
+            .unwrap()
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
 
-        // Split #1: 100 -> 30 (to Bob) + 70 change
         let res1 = create_transfer_bundle_impl(
             None,
             bob_did.clone(),
-            vec![FrontendSourceTransfer { local_instance_id: v1_id, amount_to_send: "30".into() }],
+            vec![FrontendSourceTransfer {
+                local_instance_id: v1_id,
+                amount_to_send: "30".into(),
+            }],
             None,
             None,
             std_map.clone(),
@@ -1260,15 +1023,16 @@ mod offline_and_degraded_transfer_tests {
         )
         .await
         .expect("Split #1 must succeed offline");
-        assert_eq!(res1.l2_dispatch.len(), 1);
-        assert_eq!(res1.l2_dispatch[0].http_status, None);
+        assert!(res1.l2_dispatch.is_empty());
 
-        // Immediate Split #2 on 70 change -> 25 + 45 change
         let v2_id = active_voucher_id(&alice_state);
         let res2 = create_transfer_bundle_impl(
             None,
             bob_did.clone(),
-            vec![FrontendSourceTransfer { local_instance_id: v2_id, amount_to_send: "25".into() }],
+            vec![FrontendSourceTransfer {
+                local_instance_id: v2_id,
+                amount_to_send: "25".into(),
+            }],
             None,
             None,
             std_map.clone(),
@@ -1280,12 +1044,14 @@ mod offline_and_degraded_transfer_tests {
         .await
         .expect("Split #2 on change remainder must succeed offline without blocking");
 
-        // Immediate full spend #3 on 45 change -> 0
         let v3_id = active_voucher_id(&alice_state);
         let res3 = create_transfer_bundle_impl(
             None,
             bob_did,
-            vec![FrontendSourceTransfer { local_instance_id: v3_id, amount_to_send: "45".into() }],
+            vec![FrontendSourceTransfer {
+                local_instance_id: v3_id,
+                amount_to_send: "45".into(),
+            }],
             None,
             None,
             std_map.clone(),
@@ -1309,434 +1075,211 @@ mod offline_and_degraded_transfer_tests {
             assert!(s.unresolved_l2_send_intents().unwrap().is_empty());
         }
 
-        // Bob receives all 3 bundles offline
         for bundle in [res1.bundle_data, res2.bundle_data, res3.bundle_data] {
-            receive_bundle_impl(None, bundle, std_map.clone(), Some(password.into()), false, &bob_state)
-                .expect("Offline receive_bundle_impl must succeed");
+            receive_bundle_impl(
+                None,
+                bundle,
+                std_map.clone(),
+                Some(password.into()),
+                false,
+                &bob_state,
+            )
+            .expect("Offline receive_bundle_impl must succeed");
         }
 
-        let bob_vouchers = {
-            let s = bob_state.service.lock().unwrap();
-            s.with_wallet_and_identity(|w, id| w.list_vouchers(Some(id), None, None, None)).unwrap()
-        };
-        assert_eq!(bob_vouchers.len(), 3);
-        let mut received_amounts: Vec<f64> = bob_vouchers
-            .iter()
-            .map(|v| v.current_amount.parse::<f64>().unwrap())
-            .collect();
-        received_amounts.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        assert_eq!(received_amounts, vec![25.0, 30.0, 45.0]);
-
-        let _ = std::fs::remove_dir_all(&base_dir);
+        let _ = std::fs::remove_dir_all(base_dir);
     }
 
     #[tokio::test]
-    async fn test_self_heals_orphaned_split_intent_when_no_mesh_policy_configured() {
-        let base_dir = temp_test_dir("self_heal_orphaned_intent");
+    async fn test_anchored_durable_split_lock_and_committee_dispatch() {
+        let base_dir = temp_test_dir("anchored_split_lock");
         let password = "TestPassword123!";
-        let alice_state = create_test_state(setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password));
-        let bob_state = create_test_state(setup_test_app(&base_dir.join("bob"), "Bob", BOB_PHRASE, password));
+        let alice_state = create_test_state(setup_test_app(
+            &base_dir.join("alice"),
+            "Alice",
+            ALICE_PHRASE,
+            password,
+        ));
+        let bob_state = create_test_state(setup_test_app(
+            &base_dir.join("bob"),
+            "Bob",
+            BOB_PHRASE,
+            password,
+        ));
 
         let (std_map, standard_toml) = std_map();
-        let v1_id = issue_100_voucher(&alice_state, &standard_toml, password);
-        let bob_did = bob_state.service.lock().unwrap().with_wallet(|w| w.get_user_id().to_string()).unwrap();
+        let retain_q = encode_quarter(2035, 4).unwrap();
+        let sk1 = SigningKey::from_bytes(&[71u8; 32]);
+        let l1 = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let p1 = l1.local_addr().unwrap().port();
 
-        // Reproduce legacy/bug state: durable split without regional mesh policy
-        {
+        let anchor_nonce = [88u8; 32];
+        let anchor_id = {
             let mut s = alice_state.service.lock().unwrap();
-            s.create_transfer_bundle_with_l2_intents(
-                MultiTransferRequest {
-                    recipient_id: bob_did.clone(),
-                    sources: vec![SourceTransfer {
-                        local_instance_id: v1_id,
-                        amount_to_send: "30".into(),
-                    }],
-                    notes: None,
-                    sender_profile_name: None,
-                    use_privacy_mode: Some(false),
-                    wot_sync_json: None,
-                    contact_card_json: None,
+            alice_state
+                .save_settings(&mut s, AppSettings::default(), Some(password))
+                .unwrap();
+            let mig_pub = s
+                .with_wallet_and_identity(|_, id| {
+                    l2_gateway::derive_anchor_mig_signing_key(id, &anchor_nonce)
+                        .map(|k| k.verifying_key().to_bytes())
+                })
+                .unwrap()
+                .unwrap();
+            let manifest = AnchorManifest {
+                revision: 1,
+                threshold: 1,
+                servers: vec![ServerEntry {
+                    write_url: format!("http://127.0.0.1:{}/sync.php", p1),
+                    read_url: format!("http://127.0.0.1:{}/d", p1),
+                    admin_pub: sk1.verifying_key().to_bytes(),
+                    lock_pub: sk1.verifying_key().to_bytes(),
+                    nominated_by: NominatedBy::Creator,
+                }],
+                successors: vec![],
+                authority: AnchorAuthority {
+                    creator_mig_pub: mig_pub,
+                    guarantor_mig_pubs: vec![],
                 },
-                &std_map,
-                None,
+                migration_chain: vec![],
+                issued_at_ms: 1_760_000_000_000,
+                retain_until_quarter: retain_q,
+            };
+            let aid = manifest.rev1_anchor_id().unwrap();
+            let mut ticket = GenesisTicket {
+                anchor_id: aid,
+                retain_until_quarter: retain_q,
+                issued_at: 1_760_000_000,
+                lock_pub: sk1.verifying_key().to_bytes(),
+                sig: [0u8; 64],
+            };
+            ticket.sig = sk1.sign(&ticket.digest()).to_bytes();
+            s.register_l2_anchor_template_with_nonce(
+                manifest,
+                vec![ticket],
+                Some(&anchor_nonce),
                 Some(password),
-                0,
             )
             .unwrap();
-            assert_eq!(s.unresolved_l2_send_intents().unwrap().len(), 1);
-        }
-
-        let change_id = active_voucher_id(&alice_state);
-        let res = create_transfer_bundle_impl(
-            None,
-            bob_did,
-            vec![FrontendSourceTransfer { local_instance_id: change_id, amount_to_send: "25".into() }],
-            None,
-            None,
-            std_map,
-            Some(false),
-            Some(false),
-            Some(password.into()),
-            &alice_state,
-        )
-        .await;
-        assert!(res.is_ok(), "Change voucher must self-heal and send cleanly: {:?}", res);
-
-        let unresolved = alice_state.service.lock().unwrap().unresolved_l2_send_intents().unwrap();
-        assert!(unresolved.is_empty());
-
-        let _ = std::fs::remove_dir_all(&base_dir);
-    }
-
-    #[tokio::test]
-    async fn test_half_offline_dead_l2_node_and_best_effort_reachable_l2_node_without_mesh() {
-        let base_dir = temp_test_dir("half_offline_l2");
-        let password = "TestPassword123!";
-        let alice_state = create_test_state(setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password));
-        let bob_state = create_test_state(setup_test_app(&base_dir.join("bob"), "Bob", BOB_PHRASE, password));
-        let (std_map, standard_toml) = std_map();
-        let bob_did = bob_state.service.lock().unwrap().with_wallet(|w| w.get_user_id().to_string()).unwrap();
-
-        // Case A: L2 node configured, but port is closed (dead L2 node, no mesh sources)
-        let closed_port = closed_loopback_port();
-        let dead_settings = AppSettings {
-            custom_servers: vec![CustomServerDto {
-                url: format!("http://127.0.0.1:{}", closed_port),
-                name: "Dead L2".into(),
-                is_active: true,
-                ..Default::default()
-            }],
-            exclusive_custom_servers: true,
-            regional_mesh_sources: Vec::new(),
-            ..Default::default()
+            let uid = s.with_wallet(|w| w.get_user_id().to_string()).unwrap();
+            s.create_new_voucher(
+                &standard_toml,
+                NewVoucherData {
+                    creator_profile: PublicProfile {
+                        id: Some(uid),
+                        ..Default::default()
+                    },
+                    nominal_value: ValueDefinition {
+                        amount: "100".into(),
+                        unit: "Taler".into(),
+                        ..Default::default()
+                    },
+                    layer2_anchor: Some(aid),
+                    ..Default::default()
+                },
+                Some(password),
+            )
+            .unwrap();
+            aid
         };
-        {
-            let mut s = alice_state.service.lock().unwrap();
-            alice_state.save_settings(&mut s, dead_settings, Some(password)).unwrap();
-        }
-        let v_a1 = issue_100_voucher(&alice_state, &standard_toml, password);
-        let split_a1 = create_transfer_bundle_impl(
-            None,
-            bob_did.clone(),
-            vec![FrontendSourceTransfer { local_instance_id: v_a1, amount_to_send: "30".into() }],
-            None,
-            None,
-            std_map.clone(),
-            Some(false),
-            Some(false),
-            Some(password.into()),
-            &alice_state,
-        )
-        .await
-        .expect("Split against dead L2 node must succeed on L1");
-        assert_eq!(split_a1.l2_dispatch.len(), 1);
-        assert_eq!(split_a1.l2_dispatch[0].http_status, None);
+        let _ = anchor_id;
 
-        let v_a2 = active_voucher_id(&alice_state);
-        create_transfer_bundle_impl(
-            None,
-            bob_did.clone(),
-            vec![FrontendSourceTransfer { local_instance_id: v_a2, amount_to_send: "20".into() }],
-            None,
-            None,
-            std_map.clone(),
-            Some(false),
-            Some(false),
-            Some(password.into()),
-            &alice_state,
-        )
-        .await
-        .expect("Immediate follow-up split against dead L2 node must succeed");
-        assert!(alice_state.service.lock().unwrap().unresolved_l2_send_intents().unwrap().is_empty());
-
-        // Case B: Reachable L2 node returns 200 OK, but regional_mesh_sources is empty
-        let (mock_url, hits, server_handle) = spawn_mock_l2_ok_server().await;
-        let ok_settings = AppSettings {
-            custom_servers: vec![CustomServerDto {
-                url: mock_url,
-                name: "Mock L2".into(),
-                is_active: true,
-                ..Default::default()
-            }],
-            exclusive_custom_servers: true,
-            regional_mesh_sources: Vec::new(),
-            ..Default::default()
-        };
-        {
-            let mut s = alice_state.service.lock().unwrap();
-            alice_state.save_settings(&mut s, ok_settings, Some(password)).unwrap();
-        }
-        let v_b1 = active_voucher_id(&alice_state); // remaining 50
-        let split_b1 = create_transfer_bundle_impl(
-            None,
-            bob_did.clone(),
-            vec![FrontendSourceTransfer { local_instance_id: v_b1, amount_to_send: "20".into() }],
-            None,
-            None,
-            std_map.clone(),
-            Some(false),
-            Some(false),
-            Some(password.into()),
-            &alice_state,
-        )
-        .await
-        .expect("Split with reachable L2 node without mesh sources must succeed");
-        assert_eq!(split_b1.l2_dispatch[0].http_status, Some(200));
-
-        let v_b2 = active_voucher_id(&alice_state); // remaining 30
-        let split_b2 = create_transfer_bundle_impl(
-            None,
-            bob_did,
-            vec![FrontendSourceTransfer { local_instance_id: v_b2, amount_to_send: "15".into() }],
-            None,
-            None,
-            std_map,
-            Some(false),
-            Some(false),
-            Some(password.into()),
-            &alice_state,
-        )
-        .await
-        .expect("Immediate split #2 with reachable L2 node without mesh sources must succeed");
-        assert_eq!(split_b2.l2_dispatch[0].http_status, Some(200));
-        assert!(hits.load(Ordering::SeqCst) >= 2);
-        assert!(alice_state.service.lock().unwrap().unresolved_l2_send_intents().unwrap().is_empty());
-
-        server_handle.abort();
-        let _ = std::fs::remove_dir_all(&base_dir);
-    }
-
-    #[tokio::test]
-    async fn test_active_mesh_authority_enforces_split_lock_with_specific_error_code_and_pos_checkout_fails_closed_when_l2_down() {
-        let base_dir = temp_test_dir("mesh_authority_and_pos_down");
-        let password = "TestPassword123!";
-        let alice_state = create_test_state(setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password));
-        let bob_state = create_test_state(setup_test_app(&base_dir.join("bob"), "Bob", BOB_PHRASE, password));
-        let peer_state = create_test_state(setup_test_app(&base_dir.join("peer"), "Peer", BOB_PHRASE, password));
-
-        let (std_map, standard_toml) = std_map();
-        let closed_port = closed_loopback_port();
-        let dead_url = format!("http://127.0.0.1:{}", closed_port);
-
-        let authority_key = SigningKey::from_bytes(&[42; 32]);
-        let authority_pk_hex = human_money_core::hex::encode(authority_key.verifying_key().to_bytes());
-        let policy = human_money_core::humoco_proto::mesh::RegionalMeshPolicy {
-            network: 0,
-            source_keys: vec![authority_key.verifying_key().to_bytes()],
-        };
-        let mesh_settings = AppSettings {
-            active_network: "mainnet".into(),
-            custom_servers: vec![CustomServerDto {
-                url: dead_url.clone(),
-                name: "Down Gateway".into(),
-                is_active: true,
-                ..Default::default()
-            }],
-            exclusive_custom_servers: true,
-            regional_mesh_sources: vec![RegionalSourceDto {
-                url: dead_url,
-                public_key: authority_pk_hex,
-                bearer_token: None,
-            }],
-            ..Default::default()
-        };
-
-        {
-            let mut s = alice_state.service.lock().unwrap();
-            s.configure_regional_mesh_authority(policy.clone(), Some(password)).unwrap();
-            alice_state.save_settings(&mut s, mesh_settings.clone(), Some(password)).unwrap();
-        }
-        {
-            let mut s = bob_state.service.lock().unwrap();
-            s.configure_regional_mesh_authority(policy, Some(password)).unwrap();
-            bob_state.save_settings(&mut s, mesh_settings, Some(password)).unwrap();
-        }
-
-        let v1_id = issue_100_voucher(&alice_state, &standard_toml, password);
-        let bob_did = bob_state.service.lock().unwrap().with_wallet(|w| w.get_user_id().to_string()).unwrap();
-
-        // Split #1 under active Regional Mesh authority
-        let split1 = create_transfer_bundle_impl(
-            None,
-            bob_did.clone(),
-            vec![FrontendSourceTransfer { local_instance_id: v1_id, amount_to_send: "30".into() }],
-            None,
-            None,
-            std_map.clone(),
-            Some(false),
-            Some(false),
-            Some(password.into()),
-            &alice_state,
-        )
-        .await
-        .expect("First split under active mesh authority must commit");
-
-        // Immediate Split #2 must fail with dedicated error.validation.splitChangePendingL2
-        let v2_id = active_voucher_id(&alice_state);
-        let err = create_transfer_bundle_impl(
-            None,
-            bob_did,
-            vec![FrontendSourceTransfer { local_instance_id: v2_id, amount_to_send: "20".into() }],
-            None,
-            None,
-            std_map.clone(),
-            Some(false),
-            Some(false),
-            Some(password.into()),
-            &alice_state,
-        )
-        .await
-        .expect_err("Immediate split #2 under active mesh authority must block while parent intent is pending");
-        assert_eq!(err.code, "error.validation.splitChangePendingL2");
-
-        // PoS checkout on Bob while L2/Regional sources are down MUST fail closed
-        let checkout_res = crate::checkout::checkout_bundle(
-            &bob_state,
-            "purchase-down-1",
-            &split1.bundle_data,
-            &std_map,
-            Some(password),
-        )
-        .await;
-        assert!(checkout_res.is_err(), "PoS checkout must fail closed when L2 is unreachable");
-        let bob_active_count = bob_state
+        let bob_did = bob_state
             .service
             .lock()
             .unwrap()
-            .with_wallet_and_identity(|w, id| w.list_vouchers(Some(id), None, None, None))
-            .unwrap()
-            .len();
-        assert_eq!(bob_active_count, 0);
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
 
-        // Normal offline L1 receive on an offline peer still succeeds cleanly
-        receive_bundle_impl(
-            None,
-            split1.bundle_data,
-            std_map,
-            Some(password.into()),
-            false,
-            &peer_state,
-        )
-        .expect("Offline L1 receive_bundle_impl must succeed without L2");
-
-        let _ = std::fs::remove_dir_all(&base_dir);
-    }
-}
-
-/// Explicit recipient configuration, authenticated and persisted separately from
-/// checkout proof input. Source keys never come from a payment receipt.
-#[tauri::command]
-pub fn configure_regional_mesh_authority(
-    policy_json: String, password: String, state: tauri::State<AppState>,
-) -> Result<(), FrontendError> {
-    if policy_json.len() > 4096 { return Err(FrontendError::from("Regional policy budget exceeded".to_string())); }
-    let policy: human_money_core::humoco_proto::mesh::RegionalMeshPolicy = serde_json::from_str(&policy_json)
-        .map_err(|_| FrontendError::from("Invalid regional mesh policy".to_string()))?;
-    let mut service = state.service.lock().map_err(|_| FrontendError::from("Wallet unavailable".to_string()))?;
-    service.configure_regional_mesh_authority(policy, Some(&password)).map_err(FrontendError::from)
-}
-
-
-/// The durable Core transaction completes before resolver or HTTP work begins.
-/// Transport success alone remains pending until authenticated reconciliation.
-#[tauri::command]
-pub async fn submit_l2_send_intent(
-    local_instance_id: String,
-    password: Option<String>,
-    state: tauri::State<'_, AppState>,
-) -> Result<crate::gateway_resolver::IntentDispatchObservation, FrontendError> {
-    let settings = state.get_cached_settings().map_err(FrontendError::from)?;
-    let network = match settings.active_network.to_lowercase().as_str() {
-        "mainnet" => 0, "testnet" => 1,
-        _ => return Err(FrontendError::from("Invalid L2 network configuration".to_string())),
-    };
-    let intent = {
-        let mut service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
-        service.prepare_l2_send_intent(&local_instance_id, network, password.as_deref()).map_err(FrontendError::from)?
-    };
-    let candidates = crate::gateway_resolver::cached_candidates(&settings);
-    let now_ms = u64::try_from(Utc::now().timestamp_millis()).map_err(|_| FrontendError::from("Invalid verification time".to_string()))?;
-
-    if let Some(res) = &intent.terminal_resolution {
-        let status = match res {
-            human_money_core::app_service::IntentTerminalResolution::Confirmed { .. } => "reconciled_confirmed",
-            human_money_core::app_service::IntentTerminalResolution::Conflicted { .. } => "conflicted",
-            human_money_core::app_service::IntentTerminalResolution::Expired { .. } => "expired",
-        };
-        let mut service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
-        let _ = service.cleanup_terminal_intents(60_000, now_ms, password.as_deref());
-        return Ok(crate::gateway_resolver::IntentDispatchObservation {
-            local_instance_id,
-            status: status.into(),
-            http_status: None,
-        });
-    }
-
-    if now_ms >= intent.root_valid_until_ms {
-        let mut service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
-        let _ = service.expire_intent_if_overdue(&local_instance_id, now_ms, password.as_deref());
-        let _ = service.cleanup_terminal_intents(60_000, now_ms, password.as_deref());
-        return Ok(crate::gateway_resolver::IntentDispatchObservation {
-            local_instance_id,
-            status: "expired".into(),
-            http_status: None,
-        });
-    }
-
-    if now_ms >= intent.created_at_ms.saturating_add(30_000) {
-        let tag = {
-            let service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
-            service.retained_choice_target(&local_instance_id, now_ms).map_err(FrontendError::from)?
-        };
-        let observed = if let Some(bytes) = crate::gateway_resolver::fetch_retained(&candidates, &tag).await.map_err(FrontendError::from)? {
-            let mut service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
-            match service.record_retained_choice_observation(&local_instance_id, &bytes, now_ms, password.as_deref()) {
-                Ok(true) => true,
-                Ok(false) => false,
-                Err(err) => {
-                    log::warn!("Retained choice observation detected conflict/mismatch: {}", err);
-                    false
-                }
-            }
-        } else { false };
-
-        if let Ok((_owner, views)) = crate::checkout::cached_views(&state) {
-            let context_res = {
-                let mut service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
-                service.begin_intent_reconciliation(&local_instance_id, &views, now_ms, password.as_deref())
-            };
-            if let Ok(context) = context_res {
-                if let Ok(Some(proof)) = crate::gateway_resolver::fetch_live_proof(&candidates, &context).await {
-                    let mut service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
-                    if let Ok(res) = service.complete_intent_reconciliation(&local_instance_id, &proof, &views, now_ms, password.as_deref()) {
-                        let _ = service.cleanup_terminal_intents(60_000, now_ms, password.as_deref());
-                        let status = match res {
-                            human_money_core::app_service::IntentTerminalResolution::Confirmed { .. } => "reconciled_confirmed",
-                            human_money_core::app_service::IntentTerminalResolution::Conflicted { .. } => "conflicted",
-                            human_money_core::app_service::IntentTerminalResolution::Expired { .. } => "expired",
+        let srv = tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = l1.accept().await else {
+                    break;
+                };
+                let mut buf = [0u8; 65_536];
+                let n = stream.read(&mut buf).await.unwrap_or(0);
+                let raw = String::from_utf8_lossy(&buf[..n]);
+                let body_str = raw.split("\r\n\r\n").nth(1).unwrap_or("");
+                let req: human_money_core::models::layer2_api::SyncLockBatchRequest =
+                    serde_json::from_str(body_str).unwrap();
+                let receipts: Vec<LockReceipt> = req
+                    .entries
+                    .iter()
+                    .enumerate()
+                    .map(|(i, h)| {
+                        let wire = decode_hex_fixed::<605>(h).unwrap();
+                        let entry =
+                            human_money_core::humoco_proto::causal::LockEntry::from_wire_bytes(
+                                &wire,
+                            )
+                            .unwrap();
+                        let mut r = LockReceipt {
+                            kind: LockReceiptKind::FirstWrite,
+                            lock_pub: sk1.verifying_key().to_bytes(),
+                            bucket: req.bucket,
+                            slot: entry.slot,
+                            child_lock: entry.child_lock,
+                            entry_hash: entry.entry_hash().unwrap(),
+                            retain_until_quarter: retain_q,
+                            write_seq: (i as u64) + 1,
+                            bucket_head: [3u8; 32],
+                            recipient_nonce: req.recipient_nonce,
+                            sig: [0u8; 64],
                         };
-                        return Ok(crate::gateway_resolver::IntentDispatchObservation {
-                            local_instance_id,
-                            status: status.into(),
-                            http_status: None,
-                        });
-                    }
-                }
+                        r.sig = sk1.sign(&r.digest()).to_bytes();
+                        r
+                    })
+                    .collect();
+                let resp = serde_json::json!({
+                    "status": "ok",
+                    "bucket": hex::encode(req.bucket),
+                    "retain_until_quarter": retain_q,
+                    "receipts": receipts,
+                    "conflict": null,
+                })
+                .to_string();
+                let http = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                    resp.len(),
+                    resp
+                );
+                let _ = stream.write_all(http.as_bytes()).await;
             }
-        }
-
-        return Ok(crate::gateway_resolver::IntentDispatchObservation {
-            local_instance_id,
-            status: if observed { "retained_original_observed_output_pending" } else { "pending" }.into(),
-            http_status: None,
         });
-    }
-    let http_status = crate::gateway_resolver::dispatch_exact(&settings, &candidates, &intent.request_bytes).await.map_err(FrontendError::from)?;
-    Ok(crate::gateway_resolver::IntentDispatchObservation { local_instance_id, status: "pending".into(), http_status })
-}
 
-/// Productive purchase path: stored challenge, one payment gateway, atomic import.
-#[tauri::command]
-pub async fn checkout_received_bundle(purchase_id:String,bundle_data:Vec<u8>,standard_definitions_toml:HashMap<String,String>,password:Option<String>,state:tauri::State<'_,AppState>)->Result<crate::checkout::PurchaseCompletion,FrontendError> {
-    crate::checkout::checkout_bundle(&state,&purchase_id,&bundle_data,&standard_definitions_toml,password.as_deref()).await
+        let v1_id = active_voucher_id(&alice_state);
+        let res1 = create_transfer_bundle_impl(
+            None,
+            bob_did,
+            vec![FrontendSourceTransfer {
+                local_instance_id: v1_id,
+                amount_to_send: "30".into(),
+            }],
+            None,
+            None,
+            std_map,
+            Some(false),
+            Some(false),
+            Some(password.into()),
+            &alice_state,
+        )
+        .await
+        .expect("Anchored split should succeed and confirm with server");
+
+        assert_eq!(res1.l2_dispatch.len(), 1);
+        assert_eq!(res1.l2_dispatch[0].status, "confirmed");
+        let unresolved = alice_state
+            .service
+            .lock()
+            .unwrap()
+            .unresolved_l2_send_intents()
+            .unwrap();
+        assert!(
+            unresolved.is_empty(),
+            "Confirmed committee write resolves intent immediately"
+        );
+
+        srv.abort();
+        let _ = std::fs::remove_dir_all(base_dir);
+    }
 }

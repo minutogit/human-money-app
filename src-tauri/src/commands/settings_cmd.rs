@@ -1,18 +1,29 @@
-use crate::{models::{SealUploadData, FrontendError, FrontendRollbackReconciliationDto, FrontendVoucherL2StatusDto}, AppState, settings::AppSettings};
-use log::{info, error};
+use std::collections::HashSet;
+
+use human_money_core::humoco_proto::{
+    crypto::DEFAULT_LOCK_POW_BASE_BITS,
+    decode_hex_fixed,
+    manifest::{AnchorAuthority, AnchorManifest, NominatedBy, ServerEntry, MAX_GUARANTORS},
+    parse_quarter,
+};
+use human_money_core::models::layer2_api::VoucherReconciliationResult;
+use human_money_core::services::l2_gateway;
+use log::{error, info};
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
-use std::time::{Duration, Instant};
 
-const MAINNET_SEED_FALLBACK: &str = "https://raw.githubusercontent.com/minutogit/seeds/main/mainnet.json";
-const TESTNET_SEED_FALLBACK: &str = "https://raw.githubusercontent.com/minutogit/seeds/main/testnet.json";
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct L2BenchmarkResult {
-    pub url: String,
-    pub latency_ms: Option<u64>,
-    pub reachable: bool,
-}
+use crate::{
+    gateway_resolver::{extract_registrable_domain, sybil_fold_committee, SybilServerCandidate},
+    models::{
+        FrontendError, FrontendRollbackReconciliationDto, FrontendVoucherL2StatusDto,
+        SealUploadData,
+    },
+    settings::{
+        AppSettings, NominatedLockServerMeta, StoredAnchorServerMeta, StoredAnchorTemplateMeta,
+    },
+    sync_client::{self, FrontendLockServerProbeResult},
+    AppState,
+};
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -24,12 +35,56 @@ pub struct ReachPresetDto {
     pub media_auto_load_max_hops: u8,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct AnchorServerInputDto {
+    pub write_url: String,
+    pub nominated_by: String, // "creator" | "guarantor"
+    #[serde(default)]
+    pub guarantor_index: Option<u8>,
+    #[serde(default)]
+    pub asn: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct FrontendL2LockStatusDto {
+    pub status: String, // "Ok" | "Syncing" | "NoServers" | "Degraded"
+    pub unresolved_intents_count: usize,
+    pub pending_restore_reconciliation: bool,
+    pub templates_count: usize,
+    pub has_own_nominated_server: bool,
+    pub stale_servers_count: usize,
+    pub max_probe_age_secs: Option<u64>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct StaticReconcileSummary {
+    pub active_anchored_count: usize,
+    pub reconciled_spent_count: usize,
+    pub spent_voucher_ids: Vec<String>,
+    pub all_responded: bool,
+    pub status: String, // "no_servers" | "offline" | "reconciled"
+}
+
+fn parse_asn_u32(raw: Option<&str>) -> Option<u32> {
+    raw.map(str::trim).filter(|s| !s.is_empty()).and_then(|s| {
+        s.trim_start_matches("AS")
+            .trim_start_matches("as")
+            .parse::<u32>()
+            .ok()
+    })
+}
+
 pub fn preset_values(preset: &str) -> Result<(u8, u8, u8, u8), FrontendError> {
     match preset {
         "near" => Ok((1, 2, 1, 1)),
         "medium" => Ok((2, 1, 2, 2)),
         "far" => Ok((3, 1, 3, 2)),
-        _ => Err(FrontendError::from(format!("Invalid reach preset: {}", preset))),
+        _ => Err(FrontendError::from(format!(
+            "Invalid reach preset: {}",
+            preset
+        ))),
     }
 }
 
@@ -39,17 +94,21 @@ pub fn detect_reach_preset(
     card_max_hops: u8,
     media_auto_load_max_hops: u8,
 ) -> String {
-    match (
-        own_list_max_hops,
-        share_min_level,
-        card_max_hops,
-        media_auto_load_max_hops,
-    ) {
-        (1, 2, 1, 1) => "near".to_string(),
-        (2, 1, 2, 2) => "medium".to_string(),
-        (3, 1, 3, 2) => "far".to_string(),
-        _ => "custom".to_string(),
+    for preset in ["near", "medium", "far"] {
+        if let Ok(expected) = preset_values(preset) {
+            if expected
+                == (
+                    own_list_max_hops,
+                    share_min_level,
+                    card_max_hops,
+                    media_auto_load_max_hops,
+                )
+            {
+                return preset.to_string();
+            }
+        }
     }
+    "custom".to_string()
 }
 
 pub fn get_reach_preset_impl(
@@ -57,25 +116,29 @@ pub fn get_reach_preset_impl(
     state: &AppState,
 ) -> Result<ReachPresetDto, FrontendError> {
     let settings = state.get_cached_settings().map_err(FrontendError::from)?;
+    let media_auto_load_max_hops = settings.media_auto_load_max_hops.min(3);
+    let share_min_level = settings.share_min_level.min(3);
+
     let (own_list_max_hops, card_max_hops) = {
-        let mut service = state.service.lock().unwrap();
+        let mut service = state
+            .service
+            .lock()
+            .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
         let reg = state
             .get_or_load_wot_register(&mut service, password.as_deref())
             .map_err(FrontendError::from)?;
-        let card_hops = crate::commands::market::get_own_card_max_hops_inner(
-            &mut service,
-            password.as_deref(),
-        );
+        let card_hops =
+            crate::commands::market::get_own_card_max_hops_inner(&mut service, password.as_deref());
         (reg.policy.own_list_max_hops.clamp(1, 3), card_hops)
     };
-    let share_min_level = settings.share_min_level.min(3);
-    let media_auto_load_max_hops = settings.media_auto_load_max_hops.min(3);
+
     let preset = detect_reach_preset(
         own_list_max_hops,
         share_min_level,
         card_max_hops,
         media_auto_load_max_hops,
     );
+
     Ok(ReachPresetDto {
         preset,
         own_list_max_hops,
@@ -101,18 +164,24 @@ pub fn apply_reach_preset_impl(
     let (own_list_max_hops, share_min_level, card_max_hops, media_auto_load_max_hops) =
         preset_values(&preset)?;
 
-    // Must be called before acquiring state.service lock because set_wot_max_hops_impl locks it internally.
+    // Called before locking state.service because set_wot_max_hops_impl acquires it internally.
     crate::commands::wot::set_wot_max_hops_impl(own_list_max_hops, password.clone(), state)?;
 
     {
-        let mut service = state.service.lock().unwrap();
+        let mut service = state
+            .service
+            .lock()
+            .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
         crate::commands::market::set_own_card_max_hops_inner(
             &mut service,
             card_max_hops,
             password.as_deref(),
         )?;
 
-        let mut settings = state.get_cached_settings().map_err(FrontendError::from)?;
+        let mut settings = state
+            .get_cached_settings()
+            .or_else(|_| state.load_settings(&mut service, password.as_deref()))
+            .unwrap_or_default();
         settings.share_min_level = share_min_level;
         settings.media_auto_load_max_hops = media_auto_load_max_hops;
         state
@@ -154,22 +223,10 @@ pub async fn save_app_settings(
     settings.media_auto_load_max_hops = settings.media_auto_load_max_hops.min(3);
     settings.share_min_level = settings.share_min_level.min(3);
     info!("Saving app settings to disk...");
-    {
-        let mut service = state.service.lock().unwrap();
-        if let Some(policy) = crate::checkout::configured_policy(&settings)? {
-            service.configure_regional_mesh_authority(policy, password.as_deref()).map_err(FrontendError::from)?;
-        } else if service
-            .with_wallet(|w| w.profile.l2_regional_mesh_policy.is_some())
-            .unwrap_or(false)
-        {
-            let _ = service.clear_regional_mesh_authority(password.as_deref());
-        }
-        *state.regional_views.lock().map_err(|_|FrontendError::from("Regional cache unavailable".to_string()))?=None;
-        state.save_settings(&mut service, settings, password.as_deref()).map_err(FrontendError::from)?;
-        drop(service);
-    }
-    if let Err(error)=crate::checkout::refresh_views(state.inner()).await {log::debug!("Proactive regional view refresh failed: {}",error.message);}
-    Ok(())
+    let mut service = state.service.lock().unwrap();
+    state
+        .save_settings(&mut service, settings, password.as_deref())
+        .map_err(FrontendError::from)
 }
 
 #[tauri::command]
@@ -180,287 +237,21 @@ pub fn set_conflict_local_override(
     password: Option<String>,
     state: tauri::State<AppState>,
 ) -> Result<(), FrontendError> {
-    info!("Setting local override for conflict {} to {} with note: {:?}", proof_id, value, note);
+    info!(
+        "Setting local override for conflict {} to {} with note: {:?}",
+        proof_id, value, note
+    );
     let mut service = state.service.lock().unwrap();
-    
+
     if let Some(ref pwd) = password {
         if let Err(e) = service.unlock_session(pwd, 300) {
             error!("Failed to unlock session for local override: {}", e);
         }
     }
-    
-    service.set_conflict_local_override(&proof_id, value, note, password.as_deref()).map_err(FrontendError::from)
-}
 
-// --- PEX / Seed Resolver ---
-
-async fn ping_url_3median(client: &reqwest::Client, url: &str) -> Option<u128> {
-    let mut successes: Vec<u128> = Vec::new();
-    let target = url.trim_end_matches('/');
-    if target.is_empty() {
-        return None;
-    }
-    for _ in 0..3 {
-        let start = Instant::now();
-        match client.get(target).send().await {
-            Ok(resp) => {
-                // Any response (even 404) counts as reachable; we just measure time to first byte
-                let _ = resp.status();
-                let elapsed = start.elapsed().as_millis();
-                successes.push(elapsed);
-            }
-            Err(_) => {
-                // failed attempt, ignore
-            }
-        }
-    }
-    if successes.is_empty() {
-        None
-    } else {
-        successes.sort_unstable();
-        Some(successes[successes.len() / 2])
-    }
-}
-
-async fn filter_reachable_with_median(candidates: Vec<String>) -> Vec<String> {
-    if candidates.is_empty() {
-        return Vec::new();
-    }
-    let client = match reqwest::Client::builder()
-        .timeout(Duration::from_millis(1800))
-        .build()
-    {
-        Ok(c) => c,
-        Err(e) => {
-            log::warn!("Failed to build HTTP client for median ping: {}", e);
-            return Vec::new();
-        }
-    };
-    let mut results: Vec<(String, u128)> = Vec::new();
-    for url in candidates {
-        let trimmed = url.trim().to_string();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if let Some(median) = ping_url_3median(&client, &trimmed).await {
-            results.push((trimmed, median));
-        } else {
-            log::debug!("Node unreachable filtered: {}", trimmed);
-        }
-    }
-    results.sort_by_key(|(_, lat)| *lat);
-    results.into_iter().map(|(url, _)| url).collect()
-}
-
-async fn fetch_seed_peers(seed_url: &str) -> Option<Vec<String>> {
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(Duration::from_millis(3000))
-        .build()
-        .ok()?;
-    let mut resp = client.get(seed_url).send().await.ok()?;
-    if !resp.status().is_success() {
-        log::debug!("Seed fetch failed with status {} for {}", resp.status(), seed_url);
-        return None;
-    }
-    if resp.content_length().is_some_and(|length| length > 65_536) { return None; }
-    let mut bytes = Vec::new();
-    while let Some(chunk) = resp.chunk().await.ok()? {
-        if bytes.len().saturating_add(chunk.len()) > 65_536 { return None; }
-        bytes.extend_from_slice(&chunk);
-    }
-    // Try direct Vec<String>
-    if let Ok(peers) = serde_json::from_slice::<Vec<String>>(&bytes) {
-        let filtered: Vec<String> = peers.into_iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
-        if !filtered.is_empty() {
-            return Some(filtered);
-        }
-    }
-    // Try object with known keys
-    if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&bytes) {
-        let keys_to_try = ["peers", "nodes", "servers", "urls", "endpoints", "seedPeers", "seed_peers"];
-        for key in keys_to_try {
-            if let Some(arr) = val.get(key).and_then(|v| v.as_array()) {
-                let peers: Vec<String> = arr.iter().filter_map(|v| v.as_str().map(|s| s.trim().to_string())).filter(|s| !s.is_empty()).collect();
-                if !peers.is_empty() {
-                    return Some(peers);
-                }
-            }
-        }
-        if let Some(obj) = val.as_object() {
-            for (_, v) in obj {
-                if let Some(arr) = v.as_array() {
-                    let peers: Vec<String> = arr.iter().filter_map(|x| x.as_str().map(|s| s.trim().to_string())).filter(|s| !s.is_empty()).collect();
-                    if !peers.is_empty() && peers.iter().any(|p| p.starts_with("http")) {
-                        return Some(peers);
-                    }
-                }
-            }
-        }
-    }
-    None
-}
-
-/// Resolves the active L2 nodes based on AppSettings.
-/// Steps:
-/// 1. If exclusive_custom_servers == true: use only active custom_servers.
-/// 2. If custom_servers are present: test these first.
-/// 3. Otherwise: use cached_peers for active network or load seed (GitHub fallback).
-/// 4. Uses 3-ping median measurement and filters unreachable nodes.
-/// 5. Returns empty list if no nodes reachable (clean offline mode, no panics).
-pub async fn resolve_active_l2_nodes_internal(settings: &AppSettings) -> Vec<String> {
-    let active_custom: Vec<String> = settings
-        .custom_servers
-        .iter()
-        .filter(|s| s.is_active)
-        .map(|s| s.url.trim().to_string())
-        .filter(|u| !u.is_empty())
-        .collect();
-
-    // 1. Exclusive mode: only active custom servers
-    if settings.exclusive_custom_servers {
-        if active_custom.is_empty() {
-            return Vec::new();
-        }
-        return filter_reachable_with_median(active_custom).await;
-    }
-
-    // 2. Custom servers present: test these first
-    if !active_custom.is_empty() {
-        let reachable_custom = filter_reachable_with_median(active_custom.clone()).await;
-        if !reachable_custom.is_empty() {
-            return reachable_custom;
-        }
-        // if none reachable, fall through to seed/cached peers
-    }
-
-    // 3. Use cached peers for active network or load seed
-    let is_testnet = settings.active_network.to_lowercase() == "testnet";
-    let cached = if is_testnet {
-        &settings.cached_peers_testnet
-    } else {
-        &settings.cached_peers_mainnet
-    };
-
-    let mut candidates: Vec<String> = if !cached.is_empty() {
-        cached.clone()
-    } else {
-        let seed_url = settings
-            .bootstrap_seed_url
-            .clone()
-            .unwrap_or_else(|| {
-                if is_testnet {
-                    TESTNET_SEED_FALLBACK.to_string()
-                } else {
-                    MAINNET_SEED_FALLBACK.to_string()
-                }
-            });
-        match fetch_seed_peers(&seed_url).await {
-            Some(peers) if !peers.is_empty() => peers,
-            _ => Vec::new(),
-        }
-    };
-
-    // Clean and dedup
-    candidates = candidates
-        .into_iter()
-        .map(|u| u.trim().to_string())
-        .filter(|u| !u.is_empty())
-        .collect();
-    candidates.sort();
-    candidates.dedup();
-
-    if candidates.is_empty() {
-        return Vec::new();
-    }
-
-    // 4. 3-ping median and filter unreachable
-    filter_reachable_with_median(candidates).await
-}
-
-/// Tauri command that benchmarks L2 servers and measures latencies using 3-ping median.
-/// If `urls` is Some, benchmarks those URLs directly; otherwise benchmarks the resolved active nodes.
-#[tauri::command]
-pub async fn benchmark_l2_servers(
-    state: tauri::State<'_, AppState>,
-    urls: Option<Vec<String>>,
-) -> Result<Vec<L2BenchmarkResult>, FrontendError> {
-    let candidates: Vec<String> = if let Some(provided) = urls {
-        provided
-            .into_iter()
-            .map(|u| u.trim().to_string())
-            .filter(|u| !u.is_empty())
-            .collect()
-    } else {
-        let settings = state.get_cached_settings().map_err(FrontendError::from)?;
-        let is_testnet = settings.active_network.to_lowercase() == "testnet";
-        let mut all: Vec<String> = Vec::new();
-        let active_custom: Vec<String> = settings
-            .custom_servers
-            .iter()
-            .filter(|s| s.is_active)
-            .map(|s| s.url.trim().to_string())
-            .filter(|u| !u.is_empty())
-            .collect();
-
-        if settings.exclusive_custom_servers {
-            all = active_custom;
-        } else {
-            all.extend(active_custom.clone());
-            let cached = if is_testnet {
-                &settings.cached_peers_testnet
-            } else {
-                &settings.cached_peers_mainnet
-            };
-            if !cached.is_empty() {
-                all.extend(cached.clone());
-            } else {
-                let seed_url = settings
-                    .bootstrap_seed_url
-                    .clone()
-                    .unwrap_or_else(|| {
-                        if is_testnet {
-                            TESTNET_SEED_FALLBACK.to_string()
-                        } else {
-                            MAINNET_SEED_FALLBACK.to_string()
-                        }
-                    });
-                if let Some(peers) = fetch_seed_peers(&seed_url).await {
-                    all.extend(peers);
-                }
-            }
-        }
-        all.into_iter().map(|u| u.trim().to_string()).filter(|u| !u.is_empty()).collect()
-    };
-
-    let mut deduped = candidates;
-    deduped.sort();
-    deduped.dedup();
-    if deduped.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_millis(1800))
-        .build()
-        .map_err(|e| FrontendError::from(e.to_string()))?;
-
-    let mut results: Vec<L2BenchmarkResult> = Vec::new();
-    for url in deduped {
-        let median = ping_url_3median(&client, &url).await;
-        results.push(L2BenchmarkResult {
-            url: url.clone(),
-            latency_ms: median.map(|m| m as u64),
-            reachable: median.is_some(),
-        });
-    }
-    results.sort_by(|a, b| match (a.latency_ms, b.latency_ms) {
-        (Some(a_lat), Some(b_lat)) => a_lat.cmp(&b_lat),
-        (Some(_), None) => std::cmp::Ordering::Less,
-        (None, Some(_)) => std::cmp::Ordering::Greater,
-        (None, None) => std::cmp::Ordering::Equal,
-    });
-    Ok(results)
+    service
+        .set_conflict_local_override(&proof_id, value, note, password.as_deref())
+        .map_err(FrontendError::from)
 }
 
 // --- WalletSeal / Sync Commands ---
@@ -468,7 +259,9 @@ pub async fn benchmark_l2_servers(
 #[tauri::command]
 pub fn get_seal_sync_status(state: tauri::State<AppState>) -> Result<String, FrontendError> {
     let service = state.service.lock().unwrap();
-    let status = service.get_seal_sync_status().map_err(FrontendError::from)?;
+    let status = service
+        .get_seal_sync_status()
+        .map_err(FrontendError::from)?;
     let status_str = match status {
         human_money_core::models::seal::SyncStatus::PendingUpload => "PendingUpload",
         human_money_core::models::seal::SyncStatus::Synced => "Synced",
@@ -477,16 +270,18 @@ pub fn get_seal_sync_status(state: tauri::State<AppState>) -> Result<String, Fro
 }
 
 #[tauri::command]
-pub fn get_seal_for_upload(state: tauri::State<AppState>) -> Result<Option<SealUploadData>, FrontendError> {
+pub fn get_seal_for_upload(
+    state: tauri::State<AppState>,
+) -> Result<Option<SealUploadData>, FrontendError> {
     let service = state.service.lock().unwrap();
-    
+
     let data = service.get_seal_for_upload().map_err(FrontendError::from)?;
     if let Some(bytes) = data {
         let seal: human_money_core::models::seal::WalletSeal = serde_json::from_slice(&bytes)
             .map_err(|e| FrontendError::from(format!("Failed to parse seal for hashing: {}", e)))?;
-        
+
         let hash = seal.compute_hash().map_err(FrontendError::from)?;
-            
+
         Ok(Some(SealUploadData {
             seal_bytes: bytes,
             seal_hash: hash,
@@ -503,110 +298,566 @@ pub fn acknowledge_seal_sync(
     state: tauri::State<AppState>,
 ) -> Result<(), FrontendError> {
     let mut service = state.service.lock().unwrap();
-    service.acknowledge_seal_sync(&uploaded_seal_hash, password.as_deref()).map_err(FrontendError::from)
+    service
+        .acknowledge_seal_sync(&uploaded_seal_hash, password.as_deref())
+        .map_err(FrontendError::from)
+}
+
+// --- Sync Lock Server Probing, Anchor Templates & Static Lock Reconciliation ---
+
+#[tauri::command]
+pub async fn probe_lock_server_cmd(
+    write_url: String,
+    expected_admin_pub: Option<String>,
+    password: Option<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<FrontendLockServerProbeResult, FrontendError> {
+    let client = sync_client::create_sync_probe_client();
+    let result = sync_client::probe_lock_server(
+        &client,
+        &write_url,
+        expected_admin_pub
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty()),
+    )
+    .await;
+
+    let norm_url = crate::checkout::normalize_sync_write_url(&result.write_url);
+    if !norm_url.is_empty() {
+        let mut settings = state.get_cached_settings().unwrap_or_default();
+        settings.l2_probe_cache.insert(norm_url, result.clone());
+        let mut service = state
+            .service
+            .lock()
+            .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+        let _ = state.save_settings(&mut service, settings, password.as_deref());
+    }
+
+    Ok(result)
 }
 
 #[tauri::command]
-pub async fn check_anchor_sync(
-    state: tauri::State<'_, AppState>,
-) -> Result<String, FrontendError> {
-    log::debug!("Checking L2 anchor sync status...");
-    let settings = match state.get_cached_settings() {
-        Ok(s) => s,
-        Err(_) => return Ok("Offline".to_string()),
+pub fn set_own_nominated_lock_server(
+    write_url: Option<String>,
+    asn: Option<String>,
+    password: Option<String>,
+    state: tauri::State<AppState>,
+) -> Result<Option<NominatedLockServerMeta>, FrontendError> {
+    let mut settings = state.get_cached_settings().unwrap_or_default();
+
+    let updated = match write_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        None => None,
+        Some(url) => {
+            sync_client::validate_sync_url(url).map_err(FrontendError::from)?;
+            let norm = crate::checkout::normalize_sync_write_url(url);
+            let probe = settings
+                .l2_probe_cache
+                .get(&norm)
+                .filter(|p| p.passed)
+                .ok_or_else(|| {
+                    FrontendError::from(
+                        "Server muss zuerst erfolgreich extern geprüft werden (?info, Probe-POST, ?lock_selftest, Kein Key-Leak)."
+                            .to_string(),
+                    )
+                })?;
+
+            Some(NominatedLockServerMeta {
+                write_url: probe.write_url.clone(),
+                read_url: probe.read_url.clone(),
+                drop_pub: probe.drop_pub.clone(),
+                admin_pub: probe.admin_pub.clone(),
+                lock_pub: probe.lock_pub.clone(),
+                asn: asn.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
+                probed_at_secs: probe.probed_at_secs,
+            })
+        }
     };
-    let candidates = crate::gateway_resolver::cached_candidates(&settings);
-    if candidates.is_empty() {
-        log::debug!("No L2 servers configured for anchor sync");
-        return Ok("NoServers".to_string());
+
+    settings.own_nominated_lock_server = updated.clone();
+    let mut service = state
+        .service
+        .lock()
+        .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+    state
+        .save_settings(&mut service, settings, password.as_deref())
+        .map_err(FrontendError::from)?;
+    Ok(updated)
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn assemble_anchor_template(
+    label: String,
+    retain_until_quarter_str: String,
+    servers: Vec<AnchorServerInputDto>,
+    guarantor_mig_pubs_hex: Vec<String>,
+    threshold: Option<u16>,
+    password: Option<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<StoredAnchorTemplateMeta, FrontendError> {
+    if servers.is_empty() || servers.len() > human_money_core::humoco_proto::MAX_COMMITTEE_SIZE {
+        return Err(FrontendError::from(
+            "Anker-Vorlage benötigt 1 bis 5 geprüfte Lock-Server.".to_string(),
+        ));
+    }
+    if guarantor_mig_pubs_hex.len() > MAX_GUARANTORS {
+        return Err(FrontendError::from(
+            "Too many guarantor authority keys".to_string(),
+        ));
     }
 
-    let query = {
-        let service = match state.service.lock() {
-            Ok(s) => s,
-            Err(_) => return Ok("Offline".to_string()),
-        };
-        match service.prepare_anchor_status_query() {
-            Ok((data, _, _)) => data,
-            Err(e) => {
-                log::debug!("prepare_anchor_status_query returned: {}", e);
-                return Ok("Offline".to_string());
+    let retain_until_quarter = parse_quarter(retain_until_quarter_str.trim())
+        .map_err(|e| FrontendError::from(format!("Invalid retain_until_quarter: {}", e)))?;
+
+    let settings = state.get_cached_settings().unwrap_or_default();
+    let mut server_entries = Vec::with_capacity(servers.len());
+    let mut stored_metas = Vec::with_capacity(servers.len());
+    let mut sybil_candidates = Vec::with_capacity(servers.len());
+    let mut allow_pow_flags = Vec::with_capacity(servers.len());
+
+    for input in &servers {
+        let norm = crate::checkout::normalize_sync_write_url(&input.write_url);
+        let probe = settings
+            .l2_probe_cache
+            .get(&norm)
+            .filter(|p| p.passed)
+            .ok_or_else(|| {
+                FrontendError::from(format!(
+                    "Lock-Server '{}' ist nicht erfolgreich geprüft und kann nicht gewählt werden.",
+                    input.write_url
+                ))
+            })?;
+
+        if retain_until_quarter > probe.max_retention_quarter {
+            return Err(FrontendError::from(format!(
+                "Server '{}' erlaubt maximal Aufbewahrung bis Quartal {}, gewählt wurde {}.",
+                probe.write_url, probe.max_retention_quarter, retain_until_quarter_str
+            )));
+        }
+
+        let admin_pub = decode_hex_fixed::<32>(&probe.admin_pub).map_err(|e| {
+            FrontendError::from(format!("Invalid server admin_pub in probe cache: {}", e))
+        })?;
+        let lock_pub = decode_hex_fixed::<32>(&probe.lock_pub).map_err(|e| {
+            FrontendError::from(format!("Invalid server lock_pub in probe cache: {}", e))
+        })?;
+
+        let nominated_by = match input.nominated_by.trim().to_ascii_lowercase().as_str() {
+            "guarantor" => {
+                let idx = input.guarantor_index.unwrap_or(0);
+                NominatedBy::Guarantor(idx)
             }
-        }
-    };
-
-    let client = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_millis(2500))
-        .build()
-    {
-        Ok(c) => c,
-        Err(e) => {
-            log::debug!("Failed to build HTTP client: {}", e);
-            return Ok("Offline".to_string());
-        }
-    };
-
-    let mut envelopes = Vec::new();
-    for candidate in &candidates {
-        let status_url = match crate::gateway_resolver::endpoint(candidate, "v1/status") {
-            Some(u) => u,
-            None => continue,
+            _ => NominatedBy::Creator,
         };
-        match client.post(status_url).json(&query).send().await {
-            Ok(resp) if resp.status().is_success() => {
-                if let Ok(resp_bytes) = resp.bytes().await {
-                    if let Ok(envelope) = serde_json::from_slice::<human_money_core::models::layer2_api::L2ResponseEnvelope>(&resp_bytes) {
-                        envelopes.push(envelope);
+
+        let srv_entry = ServerEntry {
+            write_url: probe.write_url.clone(),
+            read_url: probe.read_url.clone(),
+            admin_pub,
+            lock_pub,
+            nominated_by,
+        };
+        server_entries.push(srv_entry);
+        allow_pow_flags.push(probe.allow_pow_tickets);
+
+        let domain = extract_registrable_domain(&probe.write_url);
+        sybil_candidates.push(SybilServerCandidate {
+            write_url: probe.write_url.clone(),
+            lock_pub,
+            admin_pub: Some(admin_pub),
+            asn: parse_asn_u32(input.asn.as_deref()),
+        });
+
+        stored_metas.push(StoredAnchorServerMeta {
+            write_url: probe.write_url.clone(),
+            read_url: probe.read_url.clone(),
+            drop_pub: probe.drop_pub.clone(),
+            admin_pub: probe.admin_pub.clone(),
+            lock_pub: probe.lock_pub.clone(),
+            nominated_by: match nominated_by {
+                NominatedBy::Creator => "creator".to_string(),
+                NominatedBy::Guarantor(i) => format!("guarantor:{}", i),
+            },
+            operator_domain: domain,
+            asn: input.asn.clone().filter(|s| !s.trim().is_empty()),
+            info_fetched_at_secs: probe.probed_at_secs,
+            max_retention_quarter: probe.max_retention_quarter,
+            pow_base_bits: probe.pow_base_bits,
+        });
+    }
+
+    let folded = sybil_fold_committee(&sybil_candidates);
+    if folded.len() < servers.len() {
+        return Err(FrontendError::from(
+            "Sybil-Warnung: Mindestens zwei gewählte Lock-Server teilen sich Lock-Schlüssel, Admin-Schlüssel, Domain oder ASN."
+                .to_string(),
+        ));
+    }
+
+    let mut guarantor_mig_pubs = Vec::with_capacity(guarantor_mig_pubs_hex.len());
+    for g_hex in &guarantor_mig_pubs_hex {
+        let g = decode_hex_fixed::<32>(g_hex.trim()).map_err(|e| {
+            FrontendError::from(format!("Invalid guarantor migration pubkey: {}", e))
+        })?;
+        guarantor_mig_pubs.push(g);
+    }
+
+    let n = server_entries.len() as u16;
+    let min_q = (n / 2) + 1;
+    let q = threshold.unwrap_or(min_q).max(min_q).min(n);
+
+    let mut anchor_nonce = [0u8; 32];
+    rand::rngs::OsRng.fill_bytes(&mut anchor_nonce);
+
+    let (creator_mig_pub, signing_key_clone) = {
+        let service = state
+            .service
+            .lock()
+            .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+        service
+            .with_wallet_and_identity(|_, id| {
+                let mig_sk = l2_gateway::derive_anchor_mig_signing_key(id, &anchor_nonce)?;
+                Ok::<_, human_money_core::Error>((
+                    mig_sk.verifying_key().to_bytes(),
+                    id.signing_key.clone(),
+                ))
+            })
+            .map_err(FrontendError::from)?
+            .map_err(FrontendError::from)?
+    };
+
+    let now_secs = sync_client::current_unix_timestamp();
+    let manifest = AnchorManifest {
+        revision: 1,
+        threshold: q as u8,
+        servers: server_entries,
+        successors: Vec::new(),
+        authority: AnchorAuthority {
+            creator_mig_pub,
+            guarantor_mig_pubs,
+        },
+        migration_chain: Vec::new(),
+        issued_at_ms: now_secs.saturating_mul(1000),
+        retain_until_quarter,
+    };
+
+    let anchor_id = manifest
+        .rev1_anchor_id()
+        .map_err(|e| FrontendError::from(format!("Invalid AnchorManifest: {}", e)))?;
+
+    let client = sync_client::create_sync_http_client();
+    let mut ticket_set = tokio::task::JoinSet::new();
+    for (srv, &allow_pow) in manifest.servers.iter().zip(allow_pow_flags.iter()) {
+        let c = client.clone();
+        let wurl = srv.write_url.clone();
+        let sk_ref = if allow_pow {
+            None
+        } else {
+            Some(signing_key_clone.clone())
+        };
+        ticket_set.spawn(async move {
+            sync_client::request_genesis_ticket(
+                &c,
+                &wurl,
+                &anchor_id,
+                retain_until_quarter,
+                None,
+                sk_ref.as_ref(),
+            )
+            .await
+        });
+    }
+
+    let mut tickets = Vec::with_capacity(manifest.servers.len());
+    while let Some(joined) = ticket_set.join_next().await {
+        let res = joined.map_err(|e| FrontendError::from(e.to_string()))?;
+        tickets.push(res.map_err(FrontendError::from)?);
+    }
+
+    {
+        let mut service = state
+            .service
+            .lock()
+            .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+        service
+            .register_l2_anchor_template_with_nonce(
+                manifest,
+                tickets,
+                Some(&anchor_nonce),
+                password.as_deref(),
+            )
+            .map_err(FrontendError::from)?;
+    }
+
+    let anchor_hex = hex::encode(anchor_id);
+    let tmpl_meta = StoredAnchorTemplateMeta {
+        anchor_id: anchor_hex.clone(),
+        label: if label.trim().is_empty() {
+            format!("Sync-Anker ({}/{})", q, n)
+        } else {
+            label.trim().to_string()
+        },
+        threshold: q as u8,
+        retain_until_quarter,
+        created_at_secs: now_secs,
+        servers: stored_metas,
+    };
+
+    {
+        let mut updated_settings = state.get_cached_settings().unwrap_or_default();
+        updated_settings
+            .l2_anchor_templates_meta
+            .retain(|t| t.anchor_id != anchor_hex);
+        updated_settings
+            .l2_anchor_templates_meta
+            .push(tmpl_meta.clone());
+        let mut service = state
+            .service
+            .lock()
+            .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+        state
+            .save_settings(&mut service, updated_settings, password.as_deref())
+            .map_err(FrontendError::from)?;
+    }
+
+    Ok(tmpl_meta)
+}
+
+#[tauri::command]
+pub async fn prewarm_l2_checkout(state: tauri::State<'_, AppState>) -> Result<(), FrontendError> {
+    let Ok(settings) = state.get_cached_settings() else {
+        return Ok(());
+    };
+    let mut urls = Vec::new();
+    for s in &settings.public_syncs {
+        if s.enabled && s.status != "revoked" {
+            urls.push(s.write_url.clone());
+        }
+    }
+    if let Some(ref own) = settings.own_nominated_lock_server {
+        urls.push(own.write_url.clone());
+    }
+    for t in &settings.l2_anchor_templates_meta {
+        for srv in &t.servers {
+            urls.push(srv.write_url.clone());
+        }
+    }
+    let client = sync_client::create_sync_probe_client();
+    crate::gateway_resolver::prewarm_lock_urls(&client, &urls).await;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn check_l2_lock_status(
+    state: tauri::State<AppState>,
+) -> Result<FrontendL2LockStatusDto, FrontendError> {
+    let settings = state.get_cached_settings().unwrap_or_default();
+    let unresolved_intents_count = {
+        let service = state.service.lock().unwrap();
+        service
+            .unresolved_l2_send_intents()
+            .map(|v| v.len())
+            .unwrap_or(0)
+    };
+
+    let now_secs = sync_client::current_unix_timestamp();
+    let max_age_limit_secs = crate::settings::SYNC_BASE_MAX_AGE_SECS;
+    let mut stale_servers_count = 0usize;
+    let mut max_probe_age_secs: Option<u64> = None;
+
+    for probe in settings.l2_probe_cache.values() {
+        let age = now_secs.saturating_sub(probe.probed_at_secs);
+        max_probe_age_secs = Some(max_probe_age_secs.map(|m| m.max(age)).unwrap_or(age));
+        if age > max_age_limit_secs || !probe.passed || probe.inode_warning {
+            stale_servers_count += 1;
+        }
+    }
+
+    let templates_count = settings.l2_anchor_templates_meta.len();
+    let has_own_nominated_server = settings.own_nominated_lock_server.is_some();
+    let has_any_sync = settings
+        .public_syncs
+        .iter()
+        .any(|s| s.enabled && s.status != "revoked");
+
+    let status = if settings.pending_restore_l2_reconciliation || unresolved_intents_count > 0 {
+        "Syncing".to_string()
+    } else if templates_count == 0 && !has_own_nominated_server && !has_any_sync {
+        "NoServers".to_string()
+    } else if stale_servers_count > 0 {
+        "Degraded".to_string()
+    } else {
+        "Ok".to_string()
+    };
+
+    Ok(FrontendL2LockStatusDto {
+        status,
+        unresolved_intents_count,
+        pending_restore_reconciliation: settings.pending_restore_l2_reconciliation,
+        templates_count,
+        has_own_nominated_server,
+        stale_servers_count,
+        max_probe_age_secs,
+    })
+}
+
+pub(crate) async fn reconcile_vouchers_via_static_locks(
+    state: &AppState,
+    filter_ids: Option<&[String]>,
+    password: Option<&str>,
+) -> Result<StaticReconcileSummary, FrontendError> {
+    let settings = state.get_cached_settings().unwrap_or_default();
+    let filter_set: Option<HashSet<&str>> =
+        filter_ids.map(|ids| ids.iter().map(|s| s.as_str()).collect());
+
+    let (targets, missing_manifest_ids) = {
+        let service = state
+            .service
+            .lock()
+            .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+        service
+            .with_wallet_and_identity(|wallet, identity| {
+                let mut ready = Vec::new();
+                let mut missing = Vec::new();
+                for (id, instance) in &wallet.voucher_store.vouchers {
+                    if instance.status != human_money_core::wallet::instance::VoucherStatus::Active
+                    {
+                        continue;
+                    }
+                    if let Some(ref fset) = filter_set {
+                        if !fset.contains(id.as_str()) {
+                            continue;
+                        }
+                    }
+                    if instance.voucher.layer2_anchor.is_none() {
+                        continue;
+                    }
+                    match wallet.build_voucher_read_targets(identity, id, None) {
+                        Ok(target) => {
+                            let mut pow_bits = DEFAULT_LOCK_POW_BASE_BITS;
+                            for (srv, _) in &target.server_paths {
+                                let norm =
+                                    crate::checkout::normalize_sync_write_url(&srv.write_url);
+                                if let Some(p) = settings.l2_probe_cache.get(&norm) {
+                                    pow_bits = pow_bits.max(p.pow_base_bits);
+                                }
+                            }
+                            ready.push((id.clone(), target, pow_bits));
+                        }
+                        Err(_) => {
+                            missing.push(id.clone());
+                        }
                     }
                 }
+                (ready, missing)
+            })
+            .map_err(FrontendError::from)?
+    };
+
+    let active_anchored_count = targets.len().saturating_add(missing_manifest_ids.len());
+    if active_anchored_count == 0 {
+        return Ok(StaticReconcileSummary {
+            active_anchored_count: 0,
+            reconciled_spent_count: 0,
+            spent_voucher_ids: Vec::new(),
+            all_responded: true,
+            status: "reconciled".to_string(),
+        });
+    }
+
+    let client = sync_client::create_sync_probe_client();
+    let mut spent_voucher_ids = Vec::new();
+    let mut all_responded = missing_manifest_ids.is_empty();
+    let mut any_committee_reachable = false;
+
+    for (local_id, target, pow_bits) in targets {
+        let mut responded = 0usize;
+        let mut found_entry = None;
+
+        for (srv, rel_path) in &target.server_paths {
+            match sync_client::fetch_static_lock_entry(&client, &srv.read_url, rel_path).await {
+                Ok(Some(entry)) => {
+                    responded += 1;
+                    any_committee_reachable = true;
+                    found_entry = Some(entry);
+                    break;
+                }
+                Ok(None) => {
+                    responded += 1;
+                    any_committee_reachable = true;
+                }
+                Err(_) => {}
             }
-            Ok(resp) => {
-                log::debug!("Node {} returned HTTP {}", candidate, resp.status());
+        }
+
+        if let Some(entry) = found_entry {
+            let mut service = state
+                .service
+                .lock()
+                .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+            match service.reconcile_voucher_state(&local_id, Some(&entry), None, pow_bits, password)
+            {
+                Ok(VoucherReconciliationResult::AlreadySpent { .. })
+                | Ok(VoucherReconciliationResult::ConflictDetected { .. }) => {
+                    spent_voucher_ids.push(local_id);
+                }
+                Ok(VoucherReconciliationResult::UnspentSafe) | Err(_) => {}
             }
-            Err(e) => {
-                log::debug!("Node {} connection failed: {}", candidate, e);
-            }
+        } else if responded > 0 {
+            let mut service = state
+                .service
+                .lock()
+                .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+            let _ = service.reconcile_voucher_state(&local_id, None, None, pow_bits, password);
+        } else {
+            all_responded = false;
         }
     }
 
-    if envelopes.is_empty() {
-        return Ok("Offline".to_string());
+    let status = if !missing_manifest_ids.is_empty() && !any_committee_reachable {
+        "no_servers".to_string()
+    } else if any_committee_reachable {
+        "reconciled".to_string()
+    } else {
+        "offline".to_string()
+    };
+
+    Ok(StaticReconcileSummary {
+        active_anchored_count,
+        reconciled_spent_count: spent_voucher_ids.len(),
+        spent_voucher_ids,
+        all_responded,
+        status,
+    })
+}
+
+pub(crate) async fn reconcile_restored_wallet_if_pending(
+    state: &AppState,
+    password: Option<&str>,
+) -> Result<bool, FrontendError> {
+    let settings = match state.get_cached_settings() {
+        Ok(s) => s,
+        Err(_) => return Ok(false),
+    };
+    if !settings.pending_restore_l2_reconciliation {
+        return Ok(false);
     }
 
-    let verdict = {
-        let mut service = match state.service.lock() {
-            Ok(s) => s,
-            Err(_) => return Ok("Offline".to_string()),
-        };
-
-        match service.apply_verified_anchor_envelopes(&envelopes, None) {
-            Ok(v) => v,
-            Err(e) => {
-                log::debug!("apply_verified_anchor_envelopes returned: {}", e);
-                return Ok("Inconclusive".to_string());
-            }
+    let summary = reconcile_vouchers_via_static_locks(state, None, password).await?;
+    if summary.all_responded || summary.active_anchored_count == 0 {
+        let mut updated = settings;
+        updated.pending_restore_l2_reconciliation = false;
+        if let Ok(mut service) = state.service.lock() {
+            let _ = state.save_settings(&mut service, updated, password);
         }
-    };
-
-    let status_str = match verdict {
-        human_money_core::services::l2_gateway::AnchorSyncVerdict::Synchronized => "Synchronized",
-        human_money_core::services::l2_gateway::AnchorSyncVerdict::SupersededByHandover { .. } => "SupersededByHandover",
-        human_money_core::services::l2_gateway::AnchorSyncVerdict::SameDeviceRollback { .. } => "SameDeviceRollback",
-        human_money_core::services::l2_gateway::AnchorSyncVerdict::ConcurrentCloneDetected { .. } => "ConcurrentCloneDetected",
-        human_money_core::services::l2_gateway::AnchorSyncVerdict::RollbackDetected { .. } => "SameDeviceRollback",
-        human_money_core::services::l2_gateway::AnchorSyncVerdict::ForkConflict { .. } => "ForkConflict",
-        human_money_core::services::l2_gateway::AnchorSyncVerdict::PendingLeapLock { .. }
-        | human_money_core::services::l2_gateway::AnchorSyncVerdict::GenesisRequired => "PendingLeapLock",
-        human_money_core::services::l2_gateway::AnchorSyncVerdict::Inconclusive => "Inconclusive",
-    };
-
-    log::debug!("Anchor sync check evaluated to: {}", status_str);
-
-    if status_str == "PendingLeapLock" {
-        let _ = flush_pending_anchor_sync_inner(&state, None).await;
+        return Ok(true);
     }
-
-    Ok(status_str.to_string())
+    Ok(false)
 }
 
 #[tauri::command]
@@ -614,337 +865,43 @@ pub async fn reconcile_rollback(
     password: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<FrontendRollbackReconciliationDto, FrontendError> {
-    info!("Reconciling rollback with Layer 2 network...");
+    info!("Reconciling rollback against static Sync Lock committee files...");
     if let Some(ref pwd) = password {
-        let mut service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+        let mut service = state
+            .service
+            .lock()
+            .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
         let _ = service.unlock_session(pwd, 300);
     }
 
-    let settings = state.get_cached_settings().map_err(FrontendError::from)?;
-    let candidates = crate::gateway_resolver::cached_candidates(&settings);
-
-    let voucher_queries = {
-        let service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
-        service.with_wallet_and_identity(|wallet, identity| {
-            let mut queries = Vec::new();
-            for (id, instance) in &wallet.voucher_store.vouchers {
-                if instance.status == human_money_core::wallet::instance::VoucherStatus::Active {
-                    if let Ok(mut query) = wallet.build_voucher_status_query(identity, id, 1) {
-                        query.read_quorum = 1;
-                        queries.push((id.clone(), query));
-                    }
-                }
-            }
-            queries
-        }).map_err(FrontendError::from)?
-    };
-
-    let mut spent_voucher_ids = Vec::new();
-
-    if !candidates.is_empty() {
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_millis(2500))
-            .build()
-            .map_err(|_| FrontendError::from("HTTP client unavailable".to_string()))?;
-
-        for (local_id, query) in voucher_queries {
-            let body_bytes = match serde_json::to_vec(&query) {
-                Ok(b) => b,
-                Err(_) => continue,
-            };
-
-            for base in &candidates {
-                let Some(url) = crate::gateway_resolver::endpoint(base, "v1/status") else { continue };
-                let mut request = client.post(url.clone())
-                    .header("Content-Type", "application/json")
-                    .body(body_bytes.clone());
-
-                if let Some(provider) = settings.custom_servers.iter().find(|p| {
-                    p.is_active
-                        && crate::gateway_resolver::endpoint(&p.url, "v1/status")
-                            .is_some_and(|k| k.origin() == url.origin())
-                }) {
-                    if let Some(token) = &provider.auth_token {
-                        request = request.bearer_auth(token);
-                    }
-                    if let Some(token) = &provider.peer_token {
-                        if token.len() == 36 && token.starts_with("f2f_") && token[4..].bytes().all(|b| b.is_ascii_hexdigit()) {
-                            request = request.header("X-Peer-Token", token);
-                        }
-                    }
-                }
-
-                let response = tokio::time::timeout(std::time::Duration::from_millis(2500), request.send()).await;
-                let Ok(Ok(resp)) = response else { continue };
-                if !resp.status().is_success() { continue; }
-                let Ok(resp_bytes) = resp.bytes().await else { continue };
-
-                let verdict_opt = serde_json::from_slice::<human_money_core::models::layer2_api::L2ResponseEnvelope>(&resp_bytes)
-                    .ok()
-                    .map(|e| e.verdict);
-
-                if let Some(verdict) = verdict_opt {
-                    let mut service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
-                    match service.reconcile_voucher_verdict(&local_id, &verdict, password.as_deref()) {
-                        Ok(human_money_core::models::layer2_api::VoucherReconciliationResult::AlreadySpent { .. }) => {
-                            spent_voucher_ids.push(local_id);
-                            break;
-                        }
-                        Ok(human_money_core::models::layer2_api::VoucherReconciliationResult::ConflictDetected { .. }) => {
-                            spent_voucher_ids.push(local_id);
-                            break;
-                        }
-                        Ok(human_money_core::models::layer2_api::VoucherReconciliationResult::UnspentSafe) => {
-                            break;
-                        }
-                        Err(e) => {
-                            log::debug!("Voucher reconciliation rejected: {}", e);
-                        }
-                    }
-                }
-            }
-        }
-    }
+    let summary = reconcile_vouchers_via_static_locks(&state, None, password.as_deref()).await?;
 
     let report = {
-        let mut service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+        let mut service = state
+            .service
+            .lock()
+            .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
         service
-            .reconcile_rollback_with_diagnostics(&spent_voucher_ids, None, password.as_deref())
+            .reconcile_rollback_with_diagnostics(
+                &summary.spent_voucher_ids,
+                None,
+                password.as_deref(),
+            )
             .map_err(FrontendError::from)?
     };
 
-    if let Ok(mut settings) = state.get_cached_settings() {
-        if settings.pending_restore_l2_reconciliation && !candidates.is_empty() {
-            settings.pending_restore_l2_reconciliation = false;
-            if let Ok(mut service) = state.service.lock() {
-                let _ = state.save_settings(&mut service, settings, password.as_deref());
+    if summary.all_responded || summary.active_anchored_count == 0 {
+        if let Ok(mut settings) = state.get_cached_settings() {
+            if settings.pending_restore_l2_reconciliation {
+                settings.pending_restore_l2_reconciliation = false;
+                if let Ok(mut service) = state.service.lock() {
+                    let _ = state.save_settings(&mut service, settings, password.as_deref());
+                }
             }
         }
     }
 
     Ok(report.into())
-}
-
-pub(crate) async fn flush_pending_anchor_sync_inner(
-    state: &AppState,
-    password: Option<&str>,
-) -> Result<bool, FrontendError> {
-    info!("Flushing pending anchor sync to L2...");
-    let settings = state.get_cached_settings().map_err(FrontendError::from)?;
-    let candidates = crate::gateway_resolver::cached_candidates(&settings);
-    if candidates.is_empty() {
-        return Ok(false);
-    }
-
-    for _iteration in 0..8 {
-        let plan = {
-            let service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
-            match service.prepare_anchor_sync_upload().map_err(FrontendError::from)? {
-                Some(p) => p,
-                None => return Ok(false),
-            }
-        };
-
-        let mut advanced_conflict = false;
-
-        for step in &plan.tombstone_plans {
-            let outcome = crate::gateway_resolver::dispatch_anchor_chain(&settings, &candidates, &step.chain_request)
-                .await
-                .map_err(FrontendError::from)?;
-
-            match outcome {
-                crate::gateway_resolver::AnchorDispatchOutcome::Accepted(200 | 201) => {
-                    continue;
-                }
-                crate::gateway_resolver::AnchorDispatchOutcome::Conflict(boxed_lock) => {
-                    if let Some(existing_lock) = *boxed_lock {
-                        let mut service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
-                        let advanced = service
-                            .advance_pending_tombstone_from_conflict(step.old_epoch, &existing_lock, password)
-                            .map_err(FrontendError::from)?;
-                        if advanced {
-                            advanced_conflict = true;
-                            break;
-                        } else {
-                            return Ok(false);
-                        }
-                    } else {
-                        return Ok(false);
-                    }
-                }
-                _ => {
-                    return Ok(false);
-                }
-            }
-        }
-
-        if advanced_conflict {
-            continue;
-        }
-
-        if let Some(active_req) = &plan.active_chain_request {
-            let outcome = crate::gateway_resolver::dispatch_anchor_chain(&settings, &candidates, active_req)
-                .await
-                .map_err(FrontendError::from)?;
-
-            match outcome {
-                crate::gateway_resolver::AnchorDispatchOutcome::Accepted(200 | 201) => {
-                    let mut service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
-                    service
-                        .complete_anchor_sync_upload(plan.target_checkpoint, password)
-                        .map_err(FrontendError::from)?;
-                    return Ok(true);
-                }
-                _ => {
-                    log::debug!("Active anchor chain dispatch was not accepted: {:?}", outcome);
-                    return Ok(false);
-                }
-            }
-        } else {
-            let mut service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
-            service
-                .complete_anchor_sync_upload(plan.target_checkpoint, password)
-                .map_err(FrontendError::from)?;
-            return Ok(true);
-        }
-    }
-
-    Ok(false)
-}
-
-pub(crate) async fn probe_and_flush_cold_recovery_inner(
-    state: &AppState,
-    password: Option<&str>,
-) {
-    let settings = match state.get_cached_settings() {
-        Ok(s) => s,
-        Err(_) => return,
-    };
-    let candidates = crate::gateway_resolver::cached_candidates(&settings);
-    if candidates.is_empty() {
-        return;
-    }
-
-    let (target_epoch, probes) = {
-        let service = match state.service.lock() {
-            Ok(s) => s,
-            Err(_) => return,
-        };
-        match service.prepare_cold_recovery_probes(8) {
-            Ok(res) => res,
-            Err(_) => return,
-        }
-    };
-
-    let client = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_millis(2500))
-        .build()
-    {
-        Ok(c) => c,
-        Err(_) => return,
-    };
-
-    for (epoch, epoch_valid_until, query) in probes {
-        for candidate in candidates.iter().take(4) {
-            let status_url = match crate::gateway_resolver::endpoint(candidate, "v1/status") {
-                Some(u) => u,
-                None => continue,
-            };
-            let resp = match client.post(status_url).json(&query).send().await {
-                Ok(r) if r.status().is_success() => r,
-                _ => continue,
-            };
-            let resp_bytes = match resp.bytes().await {
-                Ok(b) => b,
-                Err(_) => continue,
-            };
-            if let Ok(envelope) = serde_json::from_slice::<human_money_core::models::layer2_api::L2ResponseEnvelope>(&resp_bytes) {
-                let lock_entry_opt = match envelope.verdict {
-                    human_money_core::models::layer2_api::L2Verdict::Verified { lock_entry } => Some(lock_entry),
-                    human_money_core::models::layer2_api::L2Verdict::Conflict { existing_lock } => Some(existing_lock),
-                    _ => None,
-                };
-
-                if let Some(entry) = lock_entry_opt {
-                    let checkpoint = entry.causal_output.map(|co| human_money_core::models::seal::SyncedAnchorCheckpoint {
-                        epoch,
-                        tx_nonce: 0,
-                        l2_slot: 1,
-                        seal_hash: "".to_string(),
-                        state_hash: "".to_string(),
-                        causal_state_hash: co.state_hash,
-                        epoch_valid_until: epoch_valid_until.clone(),
-                    });
-                    if let Ok(mut service) = state.service.lock() {
-                        let _ = service.queue_cold_recovery_tombstone(
-                            epoch,
-                            &epoch_valid_until,
-                            target_epoch,
-                            checkpoint,
-                            password,
-                        );
-                    }
-                    break;
-                }
-            }
-        }
-    }
-
-    let _ = flush_pending_anchor_sync_inner(state, password).await;
-}
-
-#[tauri::command]
-pub async fn flush_pending_anchor_sync(
-    password: Option<String>,
-    state: tauri::State<'_, AppState>,
-) -> Result<bool, FrontendError> {
-    flush_pending_anchor_sync_inner(&state, password.as_deref()).await
-}
-
-/// Explicit cold-path refresh. Public gateway directories select messengers;
-/// independently pinned regional authority remains the checkout trust source.
-#[tauri::command]
-pub async fn refresh_l2_gateway_cache(password: Option<String>, state: tauri::State<'_, AppState>) -> Result<Vec<String>, FrontendError> {
-    let settings = state.get_cached_settings().map_err(FrontendError::from)?;
-    let candidates = crate::gateway_resolver::cached_candidates(&settings);
-    if settings.exclusive_custom_servers { return Ok(candidates); }
-    let owner = {
-        let service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
-        service.with_wallet(|wallet| wallet.get_user_id().to_string()).map_err(FrontendError::from)?
-    };
-    let network = settings.active_network.clone();
-    let candidates = if candidates.is_empty() {
-        let seed = settings.bootstrap_seed_url.clone().unwrap_or_else(|| if network.eq_ignore_ascii_case("testnet") { TESTNET_SEED_FALLBACK.into() } else { MAINNET_SEED_FALLBACK.into() });
-        fetch_seed_peers(&seed).await.unwrap_or_default().into_iter().take(32).collect()
-    } else { candidates };
-    let mut refreshed = candidates.clone();
-    for url in crate::gateway_resolver::discover_gateways(&candidates).await {
-        if !refreshed.contains(&url) { refreshed.push(url); }
-        if refreshed.len() == 32 { break; }
-    }
-    let mut settings = state.get_cached_settings().map_err(FrontendError::from)?;
-    if settings.active_network != network { return Err(FrontendError::from("Network changed during discovery".to_string())); }
-    let existing_peers = if network.eq_ignore_ascii_case("testnet") {
-        &settings.cached_peers_testnet
-    } else if network.eq_ignore_ascii_case("mainnet") {
-        &settings.cached_peers_mainnet
-    } else {
-        return Err(FrontendError::from("Invalid L2 network configuration".to_string()));
-    };
-    if existing_peers != &refreshed {
-        if network.eq_ignore_ascii_case("testnet") { settings.cached_peers_testnet = refreshed.clone(); }
-        else { settings.cached_peers_mainnet = refreshed.clone(); }
-        let mut service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
-        if service.with_wallet(|wallet| wallet.get_user_id().to_string()).map_err(FrontendError::from)? != owner { return Err(FrontendError::from("Profile changed during discovery".to_string())); }
-        state.save_settings(&mut service, settings, password.as_deref()).map_err(FrontendError::from)?;
-    }
-    Ok(refreshed)
-}
-
-/// Refreshes authenticated observation sources on the cold path only.
-#[tauri::command]
-pub async fn refresh_regional_mesh_views(state:tauri::State<'_,AppState>)->Result<bool,FrontendError> {
-    crate::checkout::refresh_views(&state).await
 }
 
 #[tauri::command]
@@ -953,22 +910,61 @@ pub async fn check_voucher_l2_status(
     password: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<FrontendVoucherL2StatusDto, FrontendError> {
-    let (query, is_currently_archived) = {
-        let service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
-        service.with_wallet_and_identity(|wallet, identity| {
-            let instance = wallet.voucher_store.vouchers.get(&local_instance_id)
-                .ok_or_else(|| human_money_core::Error::App(human_money_core::error::AppError::InvariantViolation { message: "Voucher not found".into() }))?;
-            let is_archived = matches!(instance.status, human_money_core::wallet::instance::VoucherStatus::Archived);
-            let mut query = wallet.build_voucher_status_query(identity, &local_instance_id, 1)?;
-            query.read_quorum = 1;
-            Ok::<_, human_money_core::Error>((query, is_archived))
-        }).map_err(FrontendError::from)?
-        .map_err(FrontendError::from)?
+    let settings = state.get_cached_settings().unwrap_or_default();
+
+    let (target_opt, is_currently_archived, pow_bits) = {
+        let service = state
+            .service
+            .lock()
+            .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+        service
+            .with_wallet_and_identity(|wallet, identity| {
+                let instance = wallet
+                    .voucher_store
+                    .vouchers
+                    .get(&local_instance_id)
+                    .ok_or_else(|| {
+                        human_money_core::Error::App(
+                            human_money_core::error::AppError::InvariantViolation {
+                                message: "Voucher not found".into(),
+                            },
+                        )
+                    })?;
+                let is_archived = matches!(
+                    instance.status,
+                    human_money_core::wallet::instance::VoucherStatus::Archived
+                );
+                if instance.voucher.layer2_anchor.is_none() {
+                    return Ok::<_, human_money_core::Error>((
+                        None,
+                        is_archived,
+                        DEFAULT_LOCK_POW_BASE_BITS,
+                    ));
+                }
+                let target =
+                    wallet.build_voucher_read_targets(identity, &local_instance_id, None)?;
+                let mut bits = DEFAULT_LOCK_POW_BASE_BITS;
+                for (srv, _) in &target.server_paths {
+                    let norm = crate::checkout::normalize_sync_write_url(&srv.write_url);
+                    if let Some(p) = settings.l2_probe_cache.get(&norm) {
+                        bits = bits.max(p.pow_base_bits);
+                    }
+                }
+                Ok((Some(target), is_archived, bits))
+            })
+            .map_err(FrontendError::from)?
+            .map_err(FrontendError::from)?
     };
 
-    let settings = state.get_cached_settings().map_err(FrontendError::from)?;
-    let candidates = crate::gateway_resolver::cached_candidates(&settings);
-    if candidates.is_empty() {
+    let Some(target) = target_opt else {
+        return Ok(FrontendVoucherL2StatusDto {
+            status: "offline_only".to_string(),
+            archived: is_currently_archived,
+            successor_t_id: None,
+        });
+    };
+
+    if target.server_paths.is_empty() {
         return Ok(FrontendVoucherL2StatusDto {
             status: "no_servers".to_string(),
             archived: is_currently_archived,
@@ -976,96 +972,76 @@ pub async fn check_voucher_l2_status(
         });
     }
 
-    let client = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_millis(2500))
-        .build()
-    {
-        Ok(c) => c,
-        Err(e) => {
-            log::debug!("Failed to build HTTP client: {}", e);
-            return Ok(FrontendVoucherL2StatusDto {
-                status: "offline".to_string(),
-                archived: is_currently_archived,
-                successor_t_id: None,
-            });
-        }
-    };
+    let client = sync_client::create_sync_probe_client();
+    let mut responded = 0usize;
+    let mut found_entry = None;
 
-    let body_bytes = match serde_json::to_vec(&query) {
-        Ok(b) => b,
-        Err(_) => return Ok(FrontendVoucherL2StatusDto {
-            status: "offline".to_string(),
-            archived: is_currently_archived,
-            successor_t_id: None,
-        }),
-    };
-
-    let mut at_least_one_responded = false;
-
-    for base in &candidates {
-        let Some(url) = crate::gateway_resolver::endpoint(base, "v1/status") else { continue };
-        let mut request = client.post(url.clone())
-            .header("Content-Type", "application/json")
-            .body(body_bytes.clone());
-
-        if let Some(provider) = settings.custom_servers.iter().find(|p| {
-            p.is_active
-                && crate::gateway_resolver::endpoint(&p.url, "v1/status")
-                    .is_some_and(|k| k.origin() == url.origin())
-        }) {
-            if let Some(token) = &provider.auth_token {
-                request = request.bearer_auth(token);
+    for (srv, rel_path) in &target.server_paths {
+        match sync_client::fetch_static_lock_entry(&client, &srv.read_url, rel_path).await {
+            Ok(Some(entry)) => {
+                responded += 1;
+                found_entry = Some(entry);
+                break;
             }
-            if let Some(token) = &provider.peer_token {
-                if token.len() == 36 && token.starts_with("f2f_") && token[4..].bytes().all(|b| b.is_ascii_hexdigit()) {
-                    request = request.header("X-Peer-Token", token);
-                }
+            Ok(None) => {
+                responded += 1;
             }
+            Err(_) => {}
         }
+    }
 
-        let response = tokio::time::timeout(std::time::Duration::from_millis(2500), request.send()).await;
-        let Ok(Ok(resp)) = response else { continue };
-        at_least_one_responded = true;
-        if !resp.status().is_success() { continue; }
-        let Ok(resp_bytes) = resp.bytes().await else { continue };
-
-        let verdict_opt = serde_json::from_slice::<human_money_core::models::layer2_api::L2ResponseEnvelope>(&resp_bytes)
-            .ok()
-            .map(|e| e.verdict);
-
-        if let Some(verdict) = verdict_opt {
-            let mut service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
-            match service.reconcile_voucher_verdict(&local_instance_id, &verdict, password.as_deref()) {
-                Ok(human_money_core::models::layer2_api::VoucherReconciliationResult::AlreadySpent { successor_t_id }) => {
-                    return Ok(FrontendVoucherL2StatusDto {
-                        status: "spent".to_string(),
-                        archived: true,
-                        successor_t_id: Some(successor_t_id),
-                    });
-                }
-                Ok(human_money_core::models::layer2_api::VoucherReconciliationResult::ConflictDetected { conflicting_lock }) => {
-                    let successor_t_id = bs58::encode(conflicting_lock.t_id).into_string();
-                    return Ok(FrontendVoucherL2StatusDto {
-                        status: "conflict".to_string(),
-                        archived: true,
-                        successor_t_id: Some(successor_t_id),
-                    });
-                }
-                Ok(human_money_core::models::layer2_api::VoucherReconciliationResult::UnspentSafe) => {
-                    return Ok(FrontendVoucherL2StatusDto {
-                        status: "unspent".to_string(),
-                        archived: is_currently_archived,
-                        successor_t_id: None,
-                    });
-                }
-                Err(e) => {
-                    log::debug!("Voucher reconciliation rejected invalid verdict: {}", e);
-                }
+    if let Some(entry) = found_entry {
+        let mut service = state
+            .service
+            .lock()
+            .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+        match service.reconcile_voucher_state(
+            &local_instance_id,
+            Some(&entry),
+            None,
+            pow_bits,
+            password.as_deref(),
+        ) {
+            Ok(VoucherReconciliationResult::AlreadySpent { successor_t_id }) => {
+                return Ok(FrontendVoucherL2StatusDto {
+                    status: "spent".to_string(),
+                    archived: true,
+                    successor_t_id: Some(successor_t_id),
+                });
+            }
+            Ok(VoucherReconciliationResult::ConflictDetected { conflicting_entry }) => {
+                let successor_t_id = bs58::encode(conflicting_entry.child_lock).into_string();
+                return Ok(FrontendVoucherL2StatusDto {
+                    status: "conflict".to_string(),
+                    archived: true,
+                    successor_t_id: Some(successor_t_id),
+                });
+            }
+            Ok(VoucherReconciliationResult::UnspentSafe) => {
+                return Ok(FrontendVoucherL2StatusDto {
+                    status: "unspent".to_string(),
+                    archived: is_currently_archived,
+                    successor_t_id: None,
+                });
+            }
+            Err(e) => {
+                log::debug!("Voucher reconciliation rejected entry: {}", e);
             }
         }
     }
 
-    if at_least_one_responded {
+    if responded > 0 {
+        let mut service = state
+            .service
+            .lock()
+            .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+        let _ = service.reconcile_voucher_state(
+            &local_instance_id,
+            None,
+            None,
+            pow_bits,
+            password.as_deref(),
+        );
         Ok(FrontendVoucherL2StatusDto {
             status: "unspent".to_string(),
             archived: is_currently_archived,
@@ -1122,85 +1098,9 @@ mod tests {
             successor_t_id: None,
         };
         let unspent_json = serde_json::to_string(&unspent_dto).unwrap();
+        assert!(unspent_json.contains("\"status\":\"unspent\""));
+        assert!(unspent_json.contains("\"archived\":false"));
         assert!(!unspent_json.contains("successorTId"));
-    }
-
-    #[test]
-    fn test_anchor_sync_verdict_mapping_parity() {
-        use human_money_core::services::l2_gateway::AnchorSyncVerdict;
-
-        let fake_entry = human_money_core::models::layer2_api::L2LockEntry {
-            causal_output: None,
-            layer2_voucher_id: "vid".into(),
-            t_id: [1u8; 32],
-            sender_ephemeral_pub: [0u8; 32],
-            layer2_signature: [0u8; 64],
-            trap_r: Some("r".into()),
-            trap_s: Some("s".into()),
-            encrypted_timestamp: 0,
-            created_at_ms: 0,
-            deletable_at: None,
-            privacy_guard: None,
-        };
-
-        let map_verdict = |v: AnchorSyncVerdict| -> &'static str {
-            match v {
-                AnchorSyncVerdict::Synchronized => "Synchronized",
-                AnchorSyncVerdict::SupersededByHandover { .. } => "SupersededByHandover",
-                AnchorSyncVerdict::SameDeviceRollback { .. } => "SameDeviceRollback",
-                AnchorSyncVerdict::ConcurrentCloneDetected { .. } => "ConcurrentCloneDetected",
-                AnchorSyncVerdict::RollbackDetected { .. } => "SameDeviceRollback",
-                AnchorSyncVerdict::ForkConflict { .. } => "ForkConflict",
-                AnchorSyncVerdict::PendingLeapLock { .. }
-                | AnchorSyncVerdict::GenesisRequired => "PendingLeapLock",
-                AnchorSyncVerdict::Inconclusive => "Inconclusive",
-            }
-        };
-
-        assert_eq!(map_verdict(AnchorSyncVerdict::Synchronized), "Synchronized");
-        assert_eq!(
-            map_verdict(AnchorSyncVerdict::SupersededByHandover {
-                target_epoch: 2,
-                is_seed_recovery: false,
-                lock_entry: fake_entry.clone(),
-            }),
-            "SupersededByHandover"
-        );
-        assert_eq!(
-            map_verdict(AnchorSyncVerdict::SameDeviceRollback {
-                remote_t_id: [1u8; 32],
-                lock_entry: fake_entry.clone(),
-            }),
-            "SameDeviceRollback"
-        );
-        assert_eq!(
-            map_verdict(AnchorSyncVerdict::ConcurrentCloneDetected {
-                remote_t_id: [1u8; 32],
-                lock_entry: fake_entry.clone(),
-            }),
-            "ConcurrentCloneDetected"
-        );
-        assert_eq!(
-            map_verdict(AnchorSyncVerdict::RollbackDetected {
-                remote_t_id: [1u8; 32],
-                lock_entry: fake_entry.clone(),
-            }),
-            "SameDeviceRollback"
-        );
-        assert_eq!(
-            map_verdict(AnchorSyncVerdict::ForkConflict {
-                foreign_entry: fake_entry.clone(),
-            }),
-            "ForkConflict"
-        );
-        assert_eq!(
-            map_verdict(AnchorSyncVerdict::PendingLeapLock {
-                sync_point: "pt".into(),
-            }),
-            "PendingLeapLock"
-        );
-        assert_eq!(map_verdict(AnchorSyncVerdict::GenesisRequired), "PendingLeapLock");
-        assert_eq!(map_verdict(AnchorSyncVerdict::Inconclusive), "Inconclusive");
     }
 
     #[test]
@@ -1214,7 +1114,6 @@ mod tests {
         assert_eq!(detect_reach_preset(2, 1, 2, 2), "medium");
         assert_eq!(detect_reach_preset(3, 1, 3, 2), "far");
 
-        // Any deviation from a preset yields "custom"
         assert_eq!(detect_reach_preset(1, 1, 1, 1), "custom");
         assert_eq!(detect_reach_preset(2, 1, 3, 2), "custom");
         assert_eq!(detect_reach_preset(2, 2, 2, 2), "custom");

@@ -3,7 +3,9 @@ use crate::models::{FrontendError, FrontendQuickContact};
 use crate::AppState;
 
 #[tauri::command]
-pub fn get_my_quick_contact(state: tauri::State<AppState>) -> Result<FrontendQuickContact, FrontendError> {
+pub fn get_my_quick_contact(
+    state: tauri::State<AppState>,
+) -> Result<FrontendQuickContact, FrontendError> {
     get_my_quick_contact_impl(&state)
 }
 
@@ -124,7 +126,9 @@ pub fn get_my_quick_contact_impl(state: &AppState) -> Result<FrontendQuickContac
 pub fn encode_text_qr_svg(text: String) -> Result<String, FrontendError> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
-        return Err(FrontendError::from("QR payload must not be empty".to_string()));
+        return Err(FrontendError::from(
+            "QR payload must not be empty".to_string(),
+        ));
     }
     if trimmed.len() > humoco_market::MAX_QR_SHARE_BYTES {
         return Err(FrontendError::from(format!(
@@ -141,7 +145,10 @@ mod tests {
 
     #[test]
     fn test_get_my_quick_contact_formats_uri_and_svg() {
-        let temp_dir = std::env::temp_dir().join(format!("humoco_quick_contact_test_{}", uuid::Uuid::new_v4()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "humoco_quick_contact_test_{}",
+            uuid::Uuid::new_v4()
+        ));
         let password = "test-password-123";
         let mut alice_service = crate::commands::sync::tests::setup_test_app(
             &temp_dir,
@@ -232,7 +239,8 @@ mod tests {
 
     #[test]
     fn test_get_my_quick_contact_preserves_subaccount_prefix() {
-        let temp_dir = std::env::temp_dir().join(format!("humoco_quick_sub_test_{}", uuid::Uuid::new_v4()));
+        let temp_dir =
+            std::env::temp_dir().join(format!("humoco_quick_sub_test_{}", uuid::Uuid::new_v4()));
         let password = "test-password-123";
         let mut service = human_money_core::app_service::AppService::new(&temp_dir).unwrap();
         service
@@ -250,14 +258,24 @@ mod tests {
         service.unlock_session(password, 3600).unwrap();
 
         let state = crate::commands::sync::tests::create_test_state(service);
-        let quick = get_my_quick_contact_impl(&state).expect("subaccount quick contact should succeed");
-        assert!(quick.did.starts_with("laden:"), "Expected subaccount prefix in quick.did, got {}", quick.did);
+        let quick =
+            get_my_quick_contact_impl(&state).expect("subaccount quick contact should succeed");
+        assert!(
+            quick.did.starts_with("laden:"),
+            "Expected subaccount prefix in quick.did, got {}",
+            quick.did
+        );
         assert!(quick.did.contains("@did:key:"));
-        assert!(quick.uri.contains("did=laden%3A"), "Expected URL-encoded prefix in URI, got {}", quick.uri);
+        assert!(
+            quick.uri.contains("did=laden%3A"),
+            "Expected URL-encoded prefix in URI, got {}",
+            quick.uri
+        );
         let _ = std::fs::remove_dir_all(temp_dir);
 
         // Also explicitly verify a pure root profile (prefix = None) exports bare did:key:...
-        let root_dir = std::env::temp_dir().join(format!("humoco_quick_root_test_{}", uuid::Uuid::new_v4()));
+        let root_dir =
+            std::env::temp_dir().join(format!("humoco_quick_root_test_{}", uuid::Uuid::new_v4()));
         let mut root_service = human_money_core::app_service::AppService::new(&root_dir).unwrap();
         root_service
             .create_profile(
@@ -273,8 +291,13 @@ mod tests {
             .unwrap();
         root_service.unlock_session(password, 3600).unwrap();
         let root_state = crate::commands::sync::tests::create_test_state(root_service);
-        let root_quick = get_my_quick_contact_impl(&root_state).expect("root quick contact should succeed");
-        assert!(root_quick.did.starts_with("did:key:"), "Root profile must export bare did:key, got {}", root_quick.did);
+        let root_quick =
+            get_my_quick_contact_impl(&root_state).expect("root quick contact should succeed");
+        assert!(
+            root_quick.did.starts_with("did:key:"),
+            "Root profile must export bare did:key, got {}",
+            root_quick.did
+        );
         let _ = std::fs::remove_dir_all(root_dir);
     }
 }

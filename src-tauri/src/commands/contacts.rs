@@ -30,7 +30,9 @@ pub async fn save_contact(
     };
     {
         let mut service = state.service.lock().unwrap();
-        state.save_contact(&mut service, contact, password.as_deref()).map_err(FrontendError::from)?;
+        state
+            .save_contact(&mut service, contact, password.as_deref())
+            .map_err(FrontendError::from)?;
     }
 
     // Automatically send / sync WoT trust package in the background if trust level >= 1 (never to own root)
@@ -43,7 +45,8 @@ pub async fn save_contact(
                     true,
                     password,
                     &state,
-                ).await;
+                )
+                .await;
             }
         }
     }
@@ -60,7 +63,9 @@ pub fn delete_contact(
     let did = did.trim().to_string();
     info!("Deleting contact for DID: {}", did);
     let mut service = state.service.lock().unwrap();
-    state.delete_contact(&mut service, &did, password.as_deref()).map_err(FrontendError::from)
+    state
+        .delete_contact(&mut service, &did, password.as_deref())
+        .map_err(FrontendError::from)
 }
 
 #[cfg(test)]
@@ -97,7 +102,10 @@ mod tests {
         }"#;
 
         let result: Result<FrontendContact, _> = serde_json::from_str(valid_json);
-        assert!(result.is_ok(), "Valid FrontendContact JSON should parse successfully");
+        assert!(
+            result.is_ok(),
+            "Valid FrontendContact JSON should parse successfully"
+        );
 
         let contact = result.unwrap();
         assert_eq!(contact.did, "did:key:z123");
@@ -111,7 +119,7 @@ mod tests {
         use crate::models::FrontendAddressBook;
 
         let mut address_book = FrontendAddressBook::default();
-        
+
         let contact_json = r#"{
             "did": "did:key:z456",
             "profile": {
@@ -129,9 +137,13 @@ mod tests {
         let serialized = serde_json::to_string(&address_book);
         assert!(serialized.is_ok(), "FrontendAddressBook should serialize");
 
-        let deserialized: Result<FrontendAddressBook, _> = serde_json::from_str(&serialized.unwrap());
-        assert!(deserialized.is_ok(), "FrontendAddressBook should deserialize");
-        
+        let deserialized: Result<FrontendAddressBook, _> =
+            serde_json::from_str(&serialized.unwrap());
+        assert!(
+            deserialized.is_ok(),
+            "FrontendAddressBook should deserialize"
+        );
+
         let deserialized_book = deserialized.unwrap();
         assert_eq!(deserialized_book.contacts.len(), 1);
         assert!(deserialized_book.contacts.contains_key("did:key:z456"));
@@ -176,37 +188,43 @@ mod tests {
         assert_eq!(original.did, deserialized.did);
         assert_eq!(original.tags, deserialized.tags);
         assert_eq!(original.profile.first_name, deserialized.profile.first_name);
-        assert_eq!(original.profile.organization, deserialized.profile.organization);
+        assert_eq!(
+            original.profile.organization,
+            deserialized.profile.organization
+        );
     }
 
     #[test]
     fn test_get_contacts_uses_cache() {
-        use std::path::PathBuf;
-        use std::sync::Mutex;
+        use crate::models::{FrontendAddressBook, FrontendContact, FrontendUserProfile};
         use chrono::Utc;
         use human_money_core::app_service::AppService;
-        use crate::models::{FrontendAddressBook, FrontendContact, FrontendUserProfile};
+        use std::path::PathBuf;
+        use std::sync::Mutex;
 
         // Mock AppState with cached contacts
         let service = AppService::new(&PathBuf::from("/tmp")).unwrap();
         let mut book = FrontendAddressBook::default();
-        book.contacts.insert("did:key:test".to_string(), FrontendContact {
-            did: "did:key:test".to_string(),
-            profile: FrontendUserProfile {
-                id: Some("did:key:test".to_string()),
-                first_name: Some("Cached".to_string()),
-                last_name: Some("User".to_string()),
-                ..Default::default()
+        book.contacts.insert(
+            "did:key:test".to_string(),
+            FrontendContact {
+                did: "did:key:test".to_string(),
+                profile: FrontendUserProfile {
+                    id: Some("did:key:test".to_string()),
+                    first_name: Some("Cached".to_string()),
+                    last_name: Some("User".to_string()),
+                    ..Default::default()
+                },
+                tags: vec![],
+                added_at: Utc::now().to_rfc3339(),
+                notes: None,
+                trust_level: None,
+                desired_hops: None,
+                has_peer_list: false,
+                peer_list_updated_at: None,
+                syncs: vec![],
             },
-            tags: vec![],
-            added_at: Utc::now().to_rfc3339(),
-            notes: None,
-            trust_level: None,
-            desired_hops: None,
-            has_peer_list: false,
-            peer_list_updated_at: None,
-            syncs: vec![],
-        });
+        );
 
         let state_raw = AppState {
             service: Mutex::new(service),
@@ -214,7 +232,6 @@ mod tests {
             events: Mutex::new(None),
             contacts: Mutex::new(Some(book)),
             settings: Mutex::new(None),
-            regional_views: Mutex::new(None),
             wot: Mutex::new(None),
             media_negative_cache: Mutex::new(std::collections::HashMap::new()),
         };
@@ -222,15 +239,26 @@ mod tests {
         let cache = state_raw.contacts.lock().unwrap();
         assert!(cache.is_some());
         assert_eq!(cache.as_ref().unwrap().contacts.len(), 1);
-        assert_eq!(cache.as_ref().unwrap().contacts.get("did:key:test").unwrap().profile.first_name, Some("Cached".to_string()));
+        assert_eq!(
+            cache
+                .as_ref()
+                .unwrap()
+                .contacts
+                .get("did:key:test")
+                .unwrap()
+                .profile
+                .first_name,
+            Some("Cached".to_string())
+        );
     }
 
     #[test]
     fn test_save_contact_merges_syncs_and_auto_activates_friend_sync() {
+        use crate::models::{FrontendContact, FrontendSyncDescriptor, FrontendUserProfile};
         use chrono::Utc;
-        use crate::models::{FrontendContact, FrontendUserProfile, FrontendSyncDescriptor};
 
-        let temp_dir = std::env::temp_dir().join(format!("humoco_contacts_test_{}", uuid::Uuid::new_v4()));
+        let temp_dir =
+            std::env::temp_dir().join(format!("humoco_contacts_test_{}", uuid::Uuid::new_v4()));
         let password = "test-password-123";
         let alice_service = crate::commands::sync::tests::setup_test_app(
             &temp_dir.join("alice"),
@@ -244,7 +272,9 @@ mod tests {
             crate::commands::sync::tests::BOB_PHRASE,
             password,
         );
-        let bob_did = bob_service.with_wallet(|w| w.get_user_id().to_string()).unwrap();
+        let bob_did = bob_service
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
 
         let state = crate::commands::sync::tests::create_test_state(alice_service);
         let mut service = state.service.lock().unwrap();
@@ -281,7 +311,9 @@ mod tests {
             syncs: vec![sync1.clone()],
         };
 
-        state.save_contact(&mut service, initial_contact, Some(password)).unwrap();
+        state
+            .save_contact(&mut service, initial_contact, Some(password))
+            .unwrap();
 
         // Check settings: saving contact does not blindly auto-activate unverified syncs
         let settings = state.load_settings(&mut service, Some(password)).unwrap();
@@ -305,12 +337,21 @@ mod tests {
             syncs: vec![], // Empty!
         };
 
-        state.save_contact(&mut service, updated_contact, Some(password)).unwrap();
+        state
+            .save_contact(&mut service, updated_contact, Some(password))
+            .unwrap();
 
         // 3. Verify drops were deleted authoritatively and not resurrected
         let loaded_contacts = state.load_contacts(&mut service, Some(password)).unwrap();
-        let alice = loaded_contacts.iter().find(|c| c.did == *did).expect("Alice should exist");
+        let alice = loaded_contacts
+            .iter()
+            .find(|c| c.did == *did)
+            .expect("Alice should exist");
         assert_eq!(alice.profile.first_name, Some("Alice Renamed".to_string()));
-        assert_eq!(alice.syncs.len(), 0, "Sync endpoints must be deleted when saving with empty syncs");
+        assert_eq!(
+            alice.syncs.len(),
+            0,
+            "Sync endpoints must be deleted when saving with empty syncs"
+        );
     }
 }

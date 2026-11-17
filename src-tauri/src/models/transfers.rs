@@ -1,6 +1,8 @@
 // src-tauri/src/models/transfers.rs
+use human_money_core::wallet::coin_selection::{
+    RankedVoucher, ScoreBreakdown, SelectionReason, TransferPlan,
+};
 use serde::{Deserialize, Serialize};
-use human_money_core::wallet::coin_selection::{RankedVoucher, ScoreBreakdown, SelectionReason, TransferPlan};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -108,14 +110,19 @@ pub struct FrontendCheckoutReleaseVerdict {
     pub merchant_warning: Option<String>,
 }
 
-impl From<human_money_core::models::layer2_api::CheckoutReleaseVerdict> for FrontendCheckoutReleaseVerdict {
+impl From<human_money_core::models::layer2_api::CheckoutReleaseVerdict>
+    for FrontendCheckoutReleaseVerdict
+{
     fn from(v: human_money_core::models::layer2_api::CheckoutReleaseVerdict) -> Self {
         let outcome_str = match &v.outcome {
-            human_money_core::models::layer2_api::L2ProcessingOutcome::Confirmed => "Confirmed".to_string(),
-            human_money_core::models::layer2_api::L2ProcessingOutcome::Found => "Found".to_string(),
-            human_money_core::models::layer2_api::L2ProcessingOutcome::Provisional => "Provisional".to_string(),
-            human_money_core::models::layer2_api::L2ProcessingOutcome::SyncRequired { sync_point } => {
-                format!("SyncRequired:{}", sync_point)
+            human_money_core::models::layer2_api::L2ProcessingOutcome::Confirmed { .. } => {
+                "Confirmed".to_string()
+            }
+            human_money_core::models::layer2_api::L2ProcessingOutcome::OfflineOnly => {
+                "OfflineOnly".to_string()
+            }
+            human_money_core::models::layer2_api::L2ProcessingOutcome::Yellow { reason } => {
+                format!("Yellow:{}", reason)
             }
             human_money_core::models::layer2_api::L2ProcessingOutcome::Quarantined { reason } => {
                 format!("Quarantined:{}", reason)

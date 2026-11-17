@@ -1,15 +1,21 @@
-use std::collections::HashSet;
+//! Background worker driving mandatory `1..=N` committee completion for pending outbound Sync Lock sends.
+
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use chrono::Utc;
+use human_money_core::humoco_proto::crypto::DEFAULT_LOCK_POW_BASE_BITS;
 use human_money_core::models::l2_intent::L2SendIntent;
+use rand::RngCore;
 use tauri::Manager;
 
-use crate::{models::FrontendError, AppState};
+use crate::{models::FrontendError, settings::AppSettings, sync_client, AppState};
 
 const RECONCILIATION_DELAY_MS: u64 = 30_000;
 const TERMINAL_RETENTION_MS: u64 = 60_000;
 const RECONCILIATION_INTERVAL_SECS: u64 = 15;
+const INTENT_DISPATCH_TIMEOUT: Duration = Duration::from_secs(4);
 
 fn wallet_unavailable() -> FrontendError {
     FrontendError::from("Wallet service unavailable".to_string())
@@ -20,113 +26,111 @@ fn now_ms() -> Result<u64, FrontendError> {
         .map_err(|_| FrontendError::from("Invalid verification time".to_string()))
 }
 
+fn random_non_zero_nonce() -> [u8; 32] {
+    loop {
+        let mut nonce = [0u8; 32];
+        rand::rngs::OsRng.fill_bytes(&mut nonce);
+        if nonce != [0u8; 32] {
+            return nonce;
+        }
+    }
+}
+
+fn determine_intent_pow_base_bits(settings: &AppSettings, intent: &L2SendIntent) -> u32 {
+    let mut bits = DEFAULT_LOCK_POW_BASE_BITS;
+    for srv in &intent.manifest.servers {
+        let norm = crate::checkout::normalize_sync_write_url(&srv.write_url);
+        if let Some(probe) = settings.l2_probe_cache.get(&norm) {
+            bits = bits.max(probe.pow_base_bits);
+        }
+    }
+    bits
+}
+
 async fn reconcile_due_intent(
     state: &AppState,
+    settings: &AppSettings,
     intent: &L2SendIntent,
     owner: &str,
-    candidates: &[String],
     now: u64,
 ) -> Result<(), FrontendError> {
     let local_id = &intent.local_instance_id;
+    let nonce = random_non_zero_nonce();
 
-    if !intent.retained_original_observed {
-        let tag = {
-            let service = state.service.lock().map_err(|_| wallet_unavailable())?;
-            match service.retained_choice_target(local_id, now) {
-                Ok(tag) => Some(tag),
-                Err(error) => {
-                    log::debug!(
-                        "Retained choice target unavailable for {}: {}",
-                        local_id,
-                        error
-                    );
-                    None
-                }
-            }
-        };
-        if let Some(tag) = tag {
-            match crate::gateway_resolver::fetch_retained(candidates, &tag).await {
-                Ok(Some(bytes)) => {
-                    let mut service = state.service.lock().map_err(|_| wallet_unavailable())?;
-                    if let Err(error) = service.record_retained_choice_observation(
-                        local_id, &bytes, now, None,
-                    ) {
-                        log::debug!(
-                            "Retained choice observation rejected for {}: {}",
-                            local_id,
-                            error
-                        );
-                    }
-                }
-                Ok(None) => {}
-                Err(error) => {
-                    log::debug!("Retained choice fetch failed for {}: {}", local_id, error);
-                }
-            }
-        }
-    }
-
-    let (view_owner, views) = crate::checkout::ensure_cached_views(state).await?;
-    if view_owner != owner {
-        return Ok(());
-    }
-
-    let context = {
-        let mut service = state.service.lock().map_err(|_| wallet_unavailable())?;
-        service
-            .begin_intent_reconciliation(local_id, &views, now, None)
-            .map_err(FrontendError::from)?
-    };
-
-    let Some(proof) =
-        crate::gateway_resolver::fetch_live_proof(candidates, &context)
-            .await
-            .map_err(FrontendError::from)?
-    else {
-        return Ok(());
-    };
-
-    let (is_verified_unoccupied, intent_opt) = {
-        let mut service = state.service.lock().map_err(|_| wallet_unavailable())?;
+    let requests = {
+        let service = state.service.lock().map_err(|_| wallet_unavailable())?;
         let current_owner = service
             .with_wallet(|wallet| wallet.get_user_id().to_string())
             .map_err(FrontendError::from)?;
         if current_owner != owner {
             return Ok(());
         }
-
-        if proof.occupancy == human_money_core::humoco_proto::live::LiveSlotOccupancy::Unoccupied {
-            let is_unoccupied = service
-                .verify_intent_unoccupied_for_retry(local_id, &proof, &views, now, None)
-                .map_err(FrontendError::from)?;
-            let intent = if is_unoccupied {
-                service
-                    .with_wallet(|wallet| wallet.profile.l2_send_intents.get(local_id).cloned())
-                    .map_err(FrontendError::from)?
-            } else {
-                None
-            };
-            (is_unoccupied, intent)
-        } else {
-            if let Err(error) = service.complete_intent_reconciliation(
-                local_id, &proof, &views, now, None,
-            ) {
-                log::warn!(
-                    "L2 intent reconciliation verification failed: {}",
-                    error
-                );
-            }
-            let _ = service.cleanup_terminal_intents(TERMINAL_RETENTION_MS, now, None);
-            (false, None)
-        }
+        service
+            .build_intent_committee_requests(local_id, &nonce, &HashMap::new(), true)
+            .map_err(FrontendError::from)?
     };
 
-    if is_verified_unoccupied {
-        if let Some(intent) = intent_opt {
-            let settings = state.get_cached_settings().map_err(FrontendError::from)?;
-            let _ = crate::gateway_resolver::dispatch_intents(&settings, candidates, &[intent]).await;
-        }
+    if requests.is_empty() {
+        return Ok(());
     }
+
+    let client = sync_client::create_sync_http_client();
+    let dispatch = crate::gateway_resolver::dispatch_lock_committee_batches(
+        &client,
+        &requests,
+        INTENT_DISPATCH_TIMEOUT,
+    )
+    .await;
+
+    let target_slot = intent.entries.last().map(|e| e.slot);
+    let target_receipts: Vec<_> = dispatch
+        .receipts
+        .iter()
+        .filter(|r| target_slot == Some(r.slot))
+        .cloned()
+        .collect();
+
+    if target_receipts.is_empty() && dispatch.competing_entries.is_empty() {
+        return Ok(());
+    }
+
+    let pow_base_bits = determine_intent_pow_base_bits(settings, intent);
+    let mut service = state.service.lock().map_err(|_| wallet_unavailable())?;
+    let current_owner = service
+        .with_wallet(|wallet| wallet.get_user_id().to_string())
+        .map_err(FrontendError::from)?;
+    if current_owner != owner {
+        return Ok(());
+    }
+
+    let (resolution_opt, equivocation_opt) = service
+        .record_intent_server_receipts(
+            local_id,
+            &nonce,
+            &target_receipts,
+            dispatch.competing_entries.first(),
+            pow_base_bits,
+            now,
+            None,
+        )
+        .map_err(FrontendError::from)?;
+
+    if let Some(proof) = equivocation_opt {
+        log::error!(
+            "EquivocationProof detected for L2 send intent {} on server {}",
+            local_id,
+            hex::encode(proof.receipt_a.lock_pub)
+        );
+    }
+    if let Some(res) = resolution_opt {
+        log::info!(
+            "L2 send intent {} reached terminal state: {:?}",
+            local_id,
+            res
+        );
+    }
+    let _ = service.cleanup_terminal_intents(TERMINAL_RETENTION_MS, now, None);
+
     Ok(())
 }
 
@@ -142,13 +146,8 @@ pub async fn reconcile_due_intents(
             Ok(owner) => owner,
             Err(_) => return Ok(0),
         };
-        if let Err(error) =
-            service.cleanup_terminal_intents(TERMINAL_RETENTION_MS, now, None)
-        {
-            log::debug!(
-                "Failed to clean up terminal L2 send intents: {}",
-                error
-            );
+        if let Err(error) = service.cleanup_terminal_intents(TERMINAL_RETENTION_MS, now, None) {
+            log::debug!("Failed to clean up terminal L2 send intents: {}", error);
         }
         let intents = service
             .unresolved_l2_send_intents()
@@ -161,7 +160,6 @@ pub async fn reconcile_due_intents(
     }
 
     let settings = state.get_cached_settings().map_err(FrontendError::from)?;
-    let candidates = crate::gateway_resolver::cached_candidates(&settings);
     let mut handled = 0usize;
 
     for intent in intents {
@@ -172,13 +170,8 @@ pub async fn reconcile_due_intents(
             if let Err(error) = service.expire_intent_if_overdue(&local_id, now, None) {
                 log::debug!("Failed to expire L2 send intent {}: {}", local_id, error);
             }
-            if let Err(error) =
-                service.cleanup_terminal_intents(TERMINAL_RETENTION_MS, now, None)
-            {
-                log::debug!(
-                    "Failed to clean up terminal L2 send intents: {}",
-                    error
-                );
+            if let Err(error) = service.cleanup_terminal_intents(TERMINAL_RETENTION_MS, now, None) {
+                log::debug!("Failed to clean up terminal L2 send intents: {}", error);
             }
             handled += 1;
             continue;
@@ -188,24 +181,19 @@ pub async fn reconcile_due_intents(
             continue;
         }
 
-        if candidates.is_empty() || settings.regional_mesh_sources.is_empty() {
-            continue;
-        }
-
         {
-            let mut in_flight = in_flight.lock().map_err(|_| {
+            let mut in_flight_guard = in_flight.lock().map_err(|_| {
                 FrontendError::from("Intent reconciliation state unavailable".to_string())
             })?;
-            if !in_flight.insert(local_id.clone()) {
+            if !in_flight_guard.insert(local_id.clone()) {
                 continue;
             }
         }
 
-        let result =
-            reconcile_due_intent(state, &intent, &owner, &candidates, now).await;
+        let result = reconcile_due_intent(state, &settings, &intent, &owner, now).await;
 
-        if let Ok(mut in_flight) = in_flight.lock() {
-            in_flight.remove(&local_id);
+        if let Ok(mut in_flight_guard) = in_flight.lock() {
+            in_flight_guard.remove(&local_id);
         }
 
         match result {
@@ -224,21 +212,16 @@ pub async fn reconcile_due_intents(
 pub fn spawn_intent_reconciliation_worker(app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
         let in_flight = Arc::new(Mutex::new(HashSet::new()));
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(
-            RECONCILIATION_INTERVAL_SECS,
-        ));
+        let mut interval =
+            tokio::time::interval(std::time::Duration::from_secs(RECONCILIATION_INTERVAL_SECS));
         interval.tick().await;
         loop {
             interval.tick().await;
             let state = app.state::<AppState>();
             match reconcile_due_intents(state.inner(), &in_flight).await {
                 Ok(0) => {}
-                Ok(count) => {
-                    log::info!("Reconciled {} unresolved L2 send intent(s)", count)
-                }
-                Err(error) => {
-                    log::debug!("L2 intent reconciliation failed: {}", error.message)
-                }
+                Ok(count) => log::info!("Reconciled {} unresolved L2 send intent(s)", count),
+                Err(error) => log::debug!("L2 intent reconciliation failed: {}", error.message),
             }
         }
     });
@@ -247,10 +230,17 @@ pub fn spawn_intent_reconciliation_worker(app: tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::settings::AppSettings;
+    use ed25519_dalek::{Signer, SigningKey};
     use human_money_core::{
-        app_service::{AppService, IntentTerminalResolution},
-        models::{profile::PublicProfile, voucher::ValueDefinition},
+        app_service::AppService,
+        humoco_proto::{
+            encode_quarter,
+            manifest::{AnchorAuthority, AnchorManifest, GenesisTicket, NominatedBy, ServerEntry},
+        },
+        models::{
+            l2_intent::IntentTerminalResolution, profile::PublicProfile, voucher::ValueDefinition,
+        },
+        services::l2_gateway,
         test_utils::{self, ACTORS},
         NewVoucherData,
     };
@@ -267,10 +257,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(path);
     }
 
-    fn state_with(
-        service: AppService,
-        settings: Option<AppSettings>,
-    ) -> AppState {
+    fn state_with(service: AppService, settings: Option<AppSettings>) -> AppState {
         let state = AppState::new(service);
         *state.settings.lock().unwrap() = settings;
         state
@@ -284,6 +271,53 @@ mod tests {
             password,
         );
         service.unlock_session(password, 600).unwrap();
+
+        let anchor_nonce = [55u8; 32];
+        let creator_mig_pub = service
+            .with_wallet_and_identity(|_, id| {
+                l2_gateway::derive_anchor_mig_signing_key(id, &anchor_nonce)
+                    .map(|k| k.verifying_key().to_bytes())
+            })
+            .unwrap()
+            .unwrap();
+        let sk1 = SigningKey::from_bytes(&[81u8; 32]);
+        let retain_q = encode_quarter(2035, 4).unwrap();
+        let manifest = AnchorManifest {
+            revision: 1,
+            threshold: 1,
+            servers: vec![ServerEntry {
+                write_url: "https://s1.example/sync.php".into(),
+                read_url: "https://s1.example/d".into(),
+                admin_pub: sk1.verifying_key().to_bytes(),
+                lock_pub: sk1.verifying_key().to_bytes(),
+                nominated_by: NominatedBy::Creator,
+            }],
+            successors: vec![],
+            authority: AnchorAuthority {
+                creator_mig_pub,
+                guarantor_mig_pubs: vec![],
+            },
+            migration_chain: vec![],
+            issued_at_ms: 1_760_000_000_000,
+            retain_until_quarter: retain_q,
+        };
+        let anchor_id = manifest.rev1_anchor_id().unwrap();
+        let mut t = GenesisTicket {
+            anchor_id,
+            retain_until_quarter: retain_q,
+            issued_at: 1_760_000_000,
+            lock_pub: sk1.verifying_key().to_bytes(),
+            sig: [0u8; 64],
+        };
+        t.sig = sk1.sign(&t.digest()).to_bytes();
+        service
+            .register_l2_anchor_template_with_nonce(
+                manifest,
+                vec![t],
+                Some(&anchor_nonce),
+                Some(password),
+            )
+            .unwrap();
 
         let user = service
             .with_wallet(|wallet| wallet.get_user_id().to_string())
@@ -303,6 +337,7 @@ mod tests {
                         amount: "100".into(),
                         ..Default::default()
                     },
+                    layer2_anchor: Some(anchor_id),
                     ..Default::default()
                 },
                 Some(password),
@@ -317,7 +352,7 @@ mod tests {
             .local_instance_id
             .clone();
         service
-            .prepare_l2_send_intent(&local_id, 0, Some(password))
+            .prepare_l2_send_intent(&local_id, DEFAULT_LOCK_POW_BASE_BITS, Some(password))
             .unwrap();
 
         (state_with(service, Some(AppSettings::default())), local_id)
@@ -400,11 +435,7 @@ mod tests {
         {
             let mut service = state.service.lock().unwrap();
             let wallet = service.get_wallet_mut().unwrap();
-            let intent = wallet
-                .profile
-                .l2_send_intents
-                .get_mut(&local_id)
-                .unwrap();
+            let intent = wallet.profile.l2_send_intents.get_mut(&local_id).unwrap();
             intent.root_valid_until_ms = now.saturating_add(60_000);
             intent.terminal_resolution = Some(IntentTerminalResolution::Confirmed {
                 resolved_at_ms: now.saturating_sub(61_000),
@@ -425,39 +456,6 @@ mod tests {
         assert_eq!(handled, 0);
         let service = state.service.lock().unwrap();
         assert!(!service
-            .with_wallet(|wallet| wallet.profile.l2_send_intents.contains_key(&local_id))
-            .unwrap());
-        drop(service);
-        drop(state);
-        cleanup(&path);
-    }
-
-    #[tokio::test]
-    async fn skips_non_overdue_when_no_servers_or_sources_configured() {
-        let path = temp_path();
-        let password = "no-servers-intent-password";
-        let (state, local_id) = unlocked_fixture(&path, password);
-        let now = now_ms().unwrap();
-
-        {
-            let mut service = state.service.lock().unwrap();
-            let wallet = service.get_wallet_mut().unwrap();
-            let intent = wallet
-                .profile
-                .l2_send_intents
-                .get_mut(&local_id)
-                .unwrap();
-            intent.created_at_ms = now.saturating_sub(60_000);
-            intent.root_valid_until_ms = now.saturating_add(60_000);
-        }
-
-        let in_flight = Arc::new(Mutex::new(HashSet::new()));
-        let handled = reconcile_due_intents(&state, &in_flight).await.unwrap();
-
-        assert_eq!(handled, 0);
-
-        let service = state.service.lock().unwrap();
-        assert!(service
             .with_wallet(|wallet| wallet.profile.l2_send_intents.contains_key(&local_id))
             .unwrap());
         drop(service);

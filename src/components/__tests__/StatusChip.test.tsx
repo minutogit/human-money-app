@@ -53,6 +53,16 @@ vi.mock('react-i18next', () => ({
 }));
 
 describe('StatusChip Component', () => {
+    const okLockStatus = {
+        status: 'Ok' as const,
+        unresolvedIntentsCount: 0,
+        pendingRestoreReconciliation: false,
+        templatesCount: 1,
+        hasOwnNominatedServer: false,
+        staleServersCount: 0,
+        maxProbeAgeSecs: 60,
+    };
+
     beforeEach(() => {
         vi.clearAllMocks();
     });
@@ -77,7 +87,7 @@ describe('StatusChip Component', () => {
             ownSyncSoftWarning: false,
             lastSyncAt: Math.floor(Date.now() / 1000),
         });
-        vi.mocked(settingsService.checkAnchorSync).mockResolvedValue('Synchronized');
+        vi.mocked(settingsService.checkL2LockStatus).mockResolvedValue(okLockStatus);
 
         render(<StatusChip />);
 
@@ -106,7 +116,7 @@ describe('StatusChip Component', () => {
             ownSyncSoftWarning: false,
             lastSyncAt: null,
         });
-        vi.mocked(settingsService.checkAnchorSync).mockResolvedValue('Synchronized');
+        vi.mocked(settingsService.checkL2LockStatus).mockResolvedValue(okLockStatus);
 
         render(<StatusChip />);
 
@@ -135,7 +145,7 @@ describe('StatusChip Component', () => {
             ownSyncSoftWarning: false,
             lastSyncAt: Math.floor(Date.now() / 1000),
         });
-        vi.mocked(settingsService.checkAnchorSync).mockResolvedValue('Synchronized');
+        vi.mocked(settingsService.checkL2LockStatus).mockResolvedValue(okLockStatus);
 
         render(<StatusChip />);
 
@@ -164,7 +174,7 @@ describe('StatusChip Component', () => {
             ownSyncSoftWarning: false,
             lastSyncAt: null,
         });
-        vi.mocked(settingsService.checkAnchorSync).mockResolvedValue('Synchronized');
+        vi.mocked(settingsService.checkL2LockStatus).mockResolvedValue(okLockStatus);
 
         render(<StatusChip />);
 
@@ -193,7 +203,7 @@ describe('StatusChip Component', () => {
         }
     });
 
-    it('triggers lockdown when critical L2 fork conflict is detected', async () => {
+    it('renders warning recommendation when L2 lock status is Degraded', async () => {
         vi.mocked(backupService.getBackupStatus).mockResolvedValue({
             status: 'synced',
             lastBackupAt: new Date().toISOString(),
@@ -213,13 +223,16 @@ describe('StatusChip Component', () => {
             ownSyncSoftWarning: false,
             lastSyncAt: Math.floor(Date.now() / 1000),
         });
-        vi.mocked(settingsService.checkAnchorSync).mockResolvedValue('ForkConflict');
+        vi.mocked(settingsService.checkL2LockStatus).mockResolvedValue({
+            ...okLockStatus,
+            status: 'Degraded',
+            staleServersCount: 1,
+        });
 
         render(<StatusChip />);
 
         await waitFor(() => {
-            expect(mockTriggerSecurityLockdown).toHaveBeenCalledWith('fork');
-            expect(screen.getByText('Handlung nötig')).toBeInTheDocument();
+            expect(screen.getByText('1 Empfehlung')).toBeInTheDocument();
         });
     });
 
@@ -243,7 +256,7 @@ describe('StatusChip Component', () => {
             ownSyncSoftWarning: false,
             lastSyncAt: Math.floor(Date.now() / 1000),
         });
-        vi.mocked(settingsService.checkAnchorSync).mockResolvedValue('Synchronized');
+        vi.mocked(settingsService.checkL2LockStatus).mockResolvedValue(okLockStatus);
         vi.mocked(marketService.getMyMarketProfile).mockResolvedValue({
             profile: { id: 'did:key:test' },
             visibility: {} as any,

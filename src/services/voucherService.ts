@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { triggerAutoBackup } from "../utils/autoBackup";
-import { VoucherSummary, VoucherDetails, NewVoucherData, Voucher, TrustStatus, AggregatedBalance } from "../types";
+import { VoucherSummary, VoucherDetails, NewVoucherData, Voucher, TrustStatus, AggregatedBalance, GuarantorAnchorCheckDto } from "../types";
 
 export type SigningRequestConfig = 
     | { type: "Cleartext" }
@@ -34,6 +34,17 @@ export const voucherService = {
         const result = await invoke<void>("remove_voucher_signature", { localInstanceId, signatureId, password });
         triggerAutoBackup();
         return result;
+    },
+    evaluateGuarantorAnchorCheck: async (args: {
+        voucher: Voucher;
+        standardTomlContent: string;
+        manifestJson?: string | null;
+    }) => {
+        return await invoke<GuarantorAnchorCheckDto>("evaluate_guarantor_anchor_check", {
+            voucher: args.voucher,
+            standardTomlContent: args.standardTomlContent,
+            manifestJson: args.manifestJson ?? null,
+        });
     },
 
     createSigningRequest: async (localInstanceId: string, config: SigningRequestConfig) => {

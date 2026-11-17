@@ -381,9 +381,16 @@ amount_decimal_places = 4`,
         return Promise.resolve(mockSettings);
       }
       if (cmd === 'checkout_received_bundle') {
-        return Promise.reject({
-          code: 'pos.noServersConfigured',
-          message: 'No L2 servers configured'
+        return Promise.resolve({
+          purchaseId: 'pos-offline-1',
+          newlyCommitted: false,
+          verdict: {
+            outcome: 'OfflineOnly',
+            canReleaseGoodsAutomatically: false,
+            requiresMerchantApproval: true,
+            isGoodsReleaseAuthorized: false,
+            merchantWarning: 'No lock servers configured (N = 0).',
+          },
         });
       }
       if (cmd === 'receive_bundle') {
@@ -420,12 +427,12 @@ amount_decimal_places = 4`,
     const acceptTrustButton = screen.getByRole('button', { name: /Accept on Trust Basis/i });
     fireEvent.click(acceptTrustButton);
 
-    // 5. Assert onReceiveSuccess called with checkoutVerdict: 'UnverifiedOffline'
+    // 5. Assert onReceiveSuccess called with checkoutVerdict: 'OfflineOnly'
     await waitFor(() => {
       expect(mockOnReceiveSuccess).toHaveBeenCalledWith(
         expect.objectContaining({
           checkoutVerdict: expect.objectContaining({
-            outcome: 'UnverifiedOffline',
+            outcome: 'OfflineOnly',
           }),
           newlyCommitted: true,
         })

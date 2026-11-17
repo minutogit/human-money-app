@@ -1,33 +1,59 @@
 // src/components/settings/NetworkProtectionCard.tsx
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
     Network,
     Server,
-    Wifi,
-    WifiOff,
     ShieldCheck,
-    Globe,
-    Clock,
+    ShieldAlert,
     Plus,
     Trash2,
-    Gauge
+    RefreshCw,
+    Wifi,
+    WifiOff,
+    CheckCircle2,
+    XCircle,
 } from 'lucide-react';
-import { AppSettings, CustomServerDto, RegionalSourceDto } from '../../types';
+import {
+    AppSettings,
+    LockServerProbeResult,
+    AnchorServerInputDto,
+} from '../../types';
 import { settingsService } from '../../services/settingsService';
+import { useSession } from '../../context/SessionContext';
 import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
 import { HelpIcon } from '../ui/HelpIcon';
 import { AdvancedDisclosure } from '../ui/AdvancedDisclosure';
+import { TechId } from '../ui/TechId';
 import { translateError, stringifyError } from '../../utils/errorHelper';
 import { logger } from '../../utils/log';
+import { defaultQuarterYearsAhead, formatQuarter, parseQuarterStr } from '../../utils/retentionQuarter';
 
 export interface NetworkProtectionCardProps {
     settings: AppSettings | null;
     onSettingsUpdated: (updater: AppSettings | ((prev: AppSettings | null) => AppSettings | null)) => void;
     isDevUnlocked: boolean;
     initialOpen?: boolean;
+}
+
+interface DraftServerSelection {
+    writeUrl: string;
+    nominatedBy: 'creator' | 'guarantor';
+    asn: string;
+}
+
+function formatAgeLabel(tsSecs: number | null | undefined): string {
+    if (!tsSecs || tsSecs <= 0) return '—';
+    const diffSecs = Math.max(0, Math.floor(Date.now() / 1000) - tsSecs);
+    if (diffSecs < 60) return `${diffSecs}s`;
+    const mins = Math.floor(diffSecs / 60);
+    if (mins < 60) return `${mins}m`;
+    const hours = Math.floor(mins / 60);
+    if (hours < 48) return `${hours}h`;
+    const days = Math.floor(hours / 24);
+    return `${days}d`;
 }
 
 export const NetworkProtectionCard: React.FC<NetworkProtectionCardProps> = ({
@@ -37,147 +63,209 @@ export const NetworkProtectionCard: React.FC<NetworkProtectionCardProps> = ({
     initialOpen = false,
 }) => {
     const { t } = useTranslation();
+    const { protectAction } = useSession();
 
-    const [newServerName, setNewServerName] = useState('');
-    const [newServerUrl, setNewServerUrl] = useState('');
-    const [newServerAuthToken, setNewServerAuthToken] = useState('');
-    const [newServerPeerToken, setNewServerPeerToken] = useState('');
-    const [newRegionalUrl, setNewRegionalUrl] = useState('');
-    const [newRegionalPublicKey, setNewRegionalPublicKey] = useState('');
-    const [newRegionalBearerToken, setNewRegionalBearerToken] = useState('');
+    const [probeUrl, setProbeUrl] = useState('');
+    const [expectedAdminPub, setExpectedAdminPub] = useState('');
+    const [isProbing, setIsProbing] = useState(false);
+    const [lastProbe, setLastProbe] = useState<LockServerProbeResult | null>(null);
+    const [actionError, setActionError] = useState<string | null>(null);
+    const [actionSuccess, setActionSuccess] = useState<string | null>(null);
 
-    const [isRefreshingMesh, setIsRefreshingMesh] = useState(false);
-    const [meshRefreshFeedback, setMeshRefreshFeedback] = useState<string | null>(null);
+    const [ownServerUrl, setOwnServerUrl] = useState(settings?.ownNominatedLockServer?.writeUrl || '');
+    const [ownServerAsn, setOwnServerAsn] = useState(settings?.ownNominatedLockServer?.asn || '');
+    const [isSavingOwn, setIsSavingOwn] = useState(false);
 
-    const [benchmarkResults, setBenchmarkResults] = useState<Array<{ url: string; latencyMs?: number; reachable: boolean }>>([]);
-    const [isBenchmarking, setIsBenchmarking] = useState(false);
-    const [benchmarkError, setBenchmarkError] = useState<string | null>(null);
+    const [tplLabel, setTplLabel] = useState('');
+    const [tplQuarter, setTplQuarter] = useState(() => defaultQuarterYearsAhead(5));
+    const [tplThreshold, setTplThreshold] = useState('');
+    const [tplGuarantorKeys, setTplGuarantorKeys] = useState('');
+    const [selectedServers, setSelectedServers] = useState<DraftServerSelection[]>([]);
+    const [isAssembling, setIsAssembling] = useState(false);
 
-    const hasActiveServers = Boolean(
-        (settings?.customServers || []).some(s => s.isActive) ||
-        (settings?.regionalMeshSources || []).length > 0 ||
-        (settings?.activeNetwork === 'testnet' ? settings?.cachedPeersTestnet?.length : settings?.cachedPeersMainnet?.length)
+    useEffect(() => {
+        setOwnServerUrl(settings?.ownNominatedLockServer?.writeUrl || '');
+        setOwnServerAsn(settings?.ownNominatedLockServer?.asn || '');
+    }, [settings?.ownNominatedLockServer]);
+
+    const probeList = Object.values(settings?.l2ProbeCache || {}).sort(
+        (a, b) => (b.probedAtSecs || 0) - (a.probedAtSecs || 0)
     );
+    const passingProbes = probeList.filter((p) => p.passed);
+    const templates = settings?.l2AnchorTemplatesMeta || [];
+    const hasActiveLockConfig = Boolean(templates.length > 0 || settings?.ownNominatedLockServer);
 
-    const handleAddCustomServer = () => {
-        const trimmedUrl = newServerUrl.trim();
-        if (!trimmedUrl) return;
-        const newServer: CustomServerDto = {
-            url: trimmedUrl,
-            name: newServerName.trim() || trimmedUrl,
-            authToken: newServerAuthToken.trim() || undefined,
-            peerToken: newServerPeerToken.trim() || undefined,
-            isActive: true,
-        };
-        onSettingsUpdated(s => s ? { ...s, customServers: [...(s.customServers || []), newServer] } : s);
-        setNewServerName('');
-        setNewServerUrl('');
-        setNewServerAuthToken('');
-        setNewServerPeerToken('');
-    };
-
-    const handleRemoveCustomServer = (idx: number) => {
-        onSettingsUpdated(s => s ? { ...s, customServers: (s.customServers || []).filter((_, i) => i !== idx) } : s);
-    };
-
-    const handleAddRegionalSource = () => {
-        if (!newRegionalUrl.trim() || !newRegionalPublicKey.trim()) return;
-        const newSource: RegionalSourceDto = {
-            url: newRegionalUrl.trim(),
-            publicKey: newRegionalPublicKey.trim(),
-            bearerToken: newRegionalBearerToken.trim() || undefined,
-        };
-        onSettingsUpdated(s => s ? {
-            ...s,
-            regionalMeshSources: [...(s.regionalMeshSources || []), newSource]
-        } : s);
-        setNewRegionalUrl('');
-        setNewRegionalPublicKey('');
-        setNewRegionalBearerToken('');
-    };
-
-    const handleRemoveRegionalSource = (idx: number) => {
-        onSettingsUpdated(s => s ? { ...s, regionalMeshSources: (s.regionalMeshSources || []).filter((_, i) => i !== idx) } : s);
-    };
-
-    const handleRefreshMeshViews = async () => {
-        setIsRefreshingMesh(true);
-        setMeshRefreshFeedback(null);
+    const refreshSettings = async () => {
         try {
-            const success = await settingsService.refreshRegionalMeshViews();
-            setMeshRefreshFeedback(success ? t('settings.meshRefreshSuccess') : t('settings.meshRefreshNone'));
-        } catch (e) {
-            setMeshRefreshFeedback(translateError(e, t));
-        } finally {
-            setIsRefreshingMesh(false);
-            setTimeout(() => setMeshRefreshFeedback(null), 4000);
-        }
-    };
-
-    const handleBenchmark = async () => {
-        setIsBenchmarking(true);
-        setBenchmarkError(null);
-        try {
-            const urls = settings?.customServers?.map(s => s.url).filter(Boolean);
-            const results = await settingsService.benchmarkL2Servers(urls && urls.length > 0 ? urls : undefined);
-            setBenchmarkResults(results);
-            if (settings?.customServers && settings.customServers.length > 0 && results.length > 0) {
-                const orderMap = new Map(results.map((r, idx) => [r.url, idx] as const));
-                const sorted = [...(settings.customServers || [])].sort((a, b) => {
-                    const aIdx = orderMap.has(a.url) ? orderMap.get(a.url)! : 9999;
-                    const bIdx = orderMap.has(b.url) ? orderMap.get(b.url)! : 9999;
-                    if (aIdx !== bIdx) return aIdx - bIdx;
-                    return a.url.localeCompare(b.url);
-                });
-                const isSameOrder = sorted.every((s, i) => s.url === (settings.customServers || [])[i]?.url);
-                if (!isSameOrder) {
-                    onSettingsUpdated(prev => prev ? { ...prev, customServers: sorted } : prev);
-                }
+            const fresh = await settingsService.getSettings();
+            if (fresh) {
+                onSettingsUpdated(fresh);
             }
         } catch (e) {
-            const msg = translateError(e, t);
-            setBenchmarkError(msg);
-            logger.error(`Benchmark failed: ${stringifyError(e)}`);
-        } finally {
-            setIsBenchmarking(false);
+            logger.warn(`Failed to reload settings after lock update: ${stringifyError(e)}`);
         }
     };
 
-    const getLatencyColor = (latencyMs?: number, reachable?: boolean) => {
-        if (!reachable || latencyMs === undefined || latencyMs === null) return 'bg-slate-300 dark:bg-slate-600';
-        if (latencyMs < 100) return 'bg-emerald-500';
-        if (latencyMs < 300) return 'bg-yellow-500';
-        if (latencyMs < 600) return 'bg-orange-500';
-        return 'bg-rose-500';
+    const handleProbe = async () => {
+        const trimmed = probeUrl.trim();
+        if (!trimmed) return;
+        setIsProbing(true);
+        setActionError(null);
+        setActionSuccess(null);
+        try {
+            const res = await protectAction(async (pwd) => {
+                return await settingsService.probeLockServer(
+                    trimmed,
+                    expectedAdminPub.trim() || null,
+                    pwd || null
+                );
+            });
+            if (res) {
+                setLastProbe(res);
+                if (!res.passed && res.error) {
+                    setActionError(res.error);
+                } else if (res.passed) {
+                    setActionSuccess(t('settings.lockProbePassedMsg', 'Server passed external verification.'));
+                }
+                await refreshSettings();
+            }
+        } catch (e) {
+            setActionError(translateError(e, t));
+        } finally {
+            setIsProbing(false);
+        }
     };
 
-    const getLatencyWidth = (latencyMs?: number, reachable?: boolean, maxLatency?: number) => {
-        if (!reachable || latencyMs === undefined || latencyMs === null) return '10%';
-        const max = maxLatency && maxLatency > 0 ? maxLatency : 1000;
-        const pct = Math.min(100, Math.max(12, (latencyMs / max) * 100));
-        return `${pct}%`;
+    const handleSaveOwnNominated = async (clear = false) => {
+        setIsSavingOwn(true);
+        setActionError(null);
+        setActionSuccess(null);
+        try {
+            const targetUrl = clear ? null : ownServerUrl.trim() || null;
+            const targetAsn = clear ? null : ownServerAsn.trim() || null;
+            const res = await protectAction(async (pwd) => {
+                return await settingsService.setOwnNominatedLockServer(targetUrl, targetAsn, pwd || null);
+            });
+            onSettingsUpdated((s) => (s ? { ...s, ownNominatedLockServer: res ?? null } : s));
+            setActionSuccess(
+                clear
+                    ? t('settings.ownLockClearedMsg', 'Own nominated lock server removed.')
+                    : t('settings.ownLockSavedMsg', 'Own nominated lock server saved.')
+            );
+            await refreshSettings();
+        } catch (e) {
+            setActionError(translateError(e, t));
+        } finally {
+            setIsSavingOwn(false);
+        }
+    };
+
+    const toggleServerInDraft = (writeUrl: string) => {
+        setSelectedServers((prev) => {
+            const exists = prev.some((s) => s.writeUrl === writeUrl);
+            if (exists) {
+                return prev.filter((s) => s.writeUrl !== writeUrl);
+            }
+            if (prev.length >= 5) return prev;
+            const isOwn = settings?.ownNominatedLockServer?.writeUrl === writeUrl;
+            return [
+                ...prev,
+                {
+                    writeUrl,
+                    nominatedBy: isOwn ? 'guarantor' : 'creator',
+                    asn: isOwn ? settings?.ownNominatedLockServer?.asn || '' : '',
+                },
+            ];
+        });
+    };
+
+    const updateDraftServer = (
+        writeUrl: string,
+        patch: Partial<DraftServerSelection>
+    ) => {
+        setSelectedServers((prev) =>
+            prev.map((s) => (s.writeUrl === writeUrl ? { ...s, ...patch } : s))
+        );
+    };
+
+    const handleAssembleTemplate = async () => {
+        if (selectedServers.length === 0) return;
+        const parsedQ = parseQuarterStr(tplQuarter);
+        if (parsedQ === null) {
+            setActionError(t('settings.invalidQuarterFormat', 'Invalid quarter format. Expected YYYY-QN (e.g. 2031-Q4).'));
+            return;
+        }
+        setIsAssembling(true);
+        setActionError(null);
+        setActionSuccess(null);
+        try {
+            let guarantorIdx = 0;
+            const serverInputs: AnchorServerInputDto[] = selectedServers.map((s) => ({
+                writeUrl: s.writeUrl,
+                nominatedBy: s.nominatedBy,
+                guarantorIndex: s.nominatedBy === 'guarantor' ? guarantorIdx++ : null,
+                asn: s.asn.trim() || null,
+            }));
+            const guarantorKeys = tplGuarantorKeys
+                .split(/[\s,;]+/)
+                .map((k) => k.trim())
+                .filter(Boolean);
+            const parsedThresh = tplThreshold.trim()
+                ? Number.parseInt(tplThreshold.trim(), 10)
+                : null;
+
+            await protectAction(async (pwd) => {
+                return await settingsService.assembleAnchorTemplate({
+                    label: tplLabel.trim() || `Set (${selectedServers.length})`,
+                    retainUntilQuarterStr: tplQuarter.trim().toUpperCase(),
+                    servers: serverInputs,
+                    guarantorMigPubsHex: guarantorKeys,
+                    threshold: Number.isFinite(parsedThresh as number) ? parsedThresh : null,
+                    password: pwd || null,
+                });
+            });
+
+            setTplLabel('');
+            setTplThreshold('');
+            setTplGuarantorKeys('');
+            setSelectedServers([]);
+            setActionSuccess(t('settings.anchorTemplateSavedMsg', 'Anchor set template saved.'));
+            await refreshSettings();
+        } catch (e) {
+            setActionError(translateError(e, t));
+        } finally {
+            setIsAssembling(false);
+        }
     };
 
     return (
         <div id="settings-network-section">
-            <Card header={
-                <div className="flex items-center gap-2">
-                    <Network size={18} className="text-theme-primary" />
-                    <span className="font-black text-xs uppercase tracking-widest">{t('settings.l2ProtectionTitle')}</span>
-                    <HelpIcon topic="l2Protection" size={14} />
-                    {isDevUnlocked && (
-                        <span className="ml-2 text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200">DEV</span>
-                    )}
-                </div>
-            }>
+            <Card
+                header={
+                    <div className="flex items-center gap-2">
+                        <Network size={18} className="text-theme-primary" />
+                        <span className="font-black text-xs uppercase tracking-widest">
+                            {t('settings.l2ProtectionTitle')}
+                        </span>
+                        <HelpIcon topic="l2Protection" size={14} />
+                        {isDevUnlocked && (
+                            <span className="ml-2 text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200">
+                                DEV
+                            </span>
+                        )}
+                    </div>
+                }
+            >
                 <div className="space-y-6">
-                    {/* Network Status Overview Box */}
-                    <div className={`p-4 rounded-2xl border flex items-start gap-3.5 ${
-                        hasActiveServers 
-                            ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-950 dark:text-emerald-200'
-                            : 'bg-slate-500/10 border-slate-500/20 text-slate-900 dark:text-slate-200'
-                    }`}>
-                        {hasActiveServers ? (
+                    {/* Overview Banner */}
+                    <div
+                        className={`p-4 rounded-2xl border flex items-start gap-3.5 ${
+                            hasActiveLockConfig
+                                ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-950 dark:text-emerald-200'
+                                : 'bg-slate-500/10 border-slate-500/20 text-slate-900 dark:text-slate-200'
+                        }`}
+                    >
+                        {hasActiveLockConfig ? (
                             <Wifi size={20} className="text-emerald-600 shrink-0 mt-0.5" />
                         ) : (
                             <WifiOff size={20} className="text-slate-600 shrink-0 mt-0.5" />
@@ -185,25 +273,41 @@ export const NetworkProtectionCard: React.FC<NetworkProtectionCardProps> = ({
                         <div className="space-y-1">
                             <div className="flex items-center gap-2">
                                 <span className="text-xs font-black uppercase tracking-wider">
-                                    {hasActiveServers
+                                    {hasActiveLockConfig
                                         ? t('settings.l2ModeConnectedTitle')
                                         : t('settings.l2ModePureOfflineTitle')}
                                 </span>
-                                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                                    hasActiveServers ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-700'
-                                }`}>
-                                    {hasActiveServers ? 'Online' : 'Offline'}
+                                <span
+                                    className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                                        hasActiveLockConfig
+                                            ? 'bg-emerald-100 text-emerald-800'
+                                            : 'bg-slate-200 text-slate-700'
+                                    }`}
+                                >
+                                    {hasActiveLockConfig ? 'Sync-Locks' : 'N = 0'}
                                 </span>
                             </div>
                             <p className="text-xs text-theme-secondary/80 leading-relaxed font-medium">
-                                {hasActiveServers
+                                {hasActiveLockConfig
                                     ? t('settings.l2ModeConnectedDesc')
                                     : t('settings.l2ModePureOfflineDesc')}
                             </p>
                         </div>
                     </div>
 
-                    {/* Advanced Server & PoS Collapsible */}
+                    {actionError && (
+                        <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-800 font-medium flex items-start gap-2">
+                            <ShieldAlert size={16} className="shrink-0 mt-0.5 text-rose-600" />
+                            <span>{actionError}</span>
+                        </div>
+                    )}
+                    {actionSuccess && (
+                        <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-800 font-medium flex items-start gap-2">
+                            <CheckCircle2 size={16} className="shrink-0 mt-0.5 text-emerald-600" />
+                            <span>{actionSuccess}</span>
+                        </div>
+                    )}
+
                     <AdvancedDisclosure
                         icon={<Server size={14} className="text-theme-primary" />}
                         title={
@@ -211,271 +315,363 @@ export const NetworkProtectionCard: React.FC<NetworkProtectionCardProps> = ({
                                 {t('settings.advancedNetworkToggle')}
                             </span>
                         }
-                        defaultOpen={initialOpen || Boolean(settings?.customServers?.length || settings?.regionalMeshSources?.length)}
-                        isCustom={Boolean(settings?.enablePosMode || settings?.customServers?.length || settings?.regionalMeshSources?.length)}
+                        defaultOpen={initialOpen || hasActiveLockConfig || probeList.length > 0}
+                        isCustom={Boolean(settings?.enablePosMode || hasActiveLockConfig)}
                         className="border border-theme-subtle rounded-2xl overflow-hidden"
                         buttonClassName="w-full flex items-center justify-between gap-2 p-4 bg-slate-50/70 dark:bg-slate-800/40 hover:bg-slate-100/70 transition-colors text-left cursor-pointer"
                         contentClassName="p-4 space-y-6 border-t border-theme-subtle"
                     >
-                                {/* PoS Mode Toggle */}
-                                <div className="flex items-start gap-3 p-3 bg-white dark:bg-slate-900 border border-theme-subtle rounded-xl hover:border-theme-primary/40 transition-colors">
-                                    <input
-                                        type="checkbox"
-                                        id="enablePosMode"
-                                        checked={!!settings?.enablePosMode}
-                                        onChange={(e) => onSettingsUpdated(s => s ? { ...s, enablePosMode: e.target.checked } : null)}
-                                        className="mt-0.5 accent-theme-primary"
-                                    />
-                                    <div className="flex-1">
-                                        <div className="flex items-center gap-2">
-                                            <label htmlFor="enablePosMode" className="text-xs font-medium text-theme-secondary leading-relaxed cursor-pointer">
-                                                {t('settings.enablePosMode')}
-                                            </label>
-                                            <HelpIcon topic="posMode" size={14} />
-                                        </div>
-                                        <label htmlFor="enablePosMode" className="block text-[10px] text-theme-light/60 font-normal cursor-pointer">
-                                            {t('settings.enablePosModeDesc')}
-                                        </label>
-                                    </div>
-                                </div>
-
-                                {/* Network Selection */}
-                                <div className="space-y-3">
-                                    <label className="text-[10px] font-black text-theme-light uppercase tracking-widest">{t('settings.activeNetworkLabel')}</label>
-                                    <div className="flex gap-3">
-                                        <label className={`flex items-center gap-2 px-4 py-2.5 rounded-xl border-2 cursor-pointer transition-all ${settings?.activeNetwork !== 'testnet' ? 'bg-theme-primary text-white border-theme-primary shadow-sm' : 'bg-white dark:bg-slate-900 border-theme-subtle hover:border-theme-primary/30 text-theme-secondary'}`}>
-                                            <input
-                                                type="radio"
-                                                name="activeNetwork"
-                                                value="mainnet"
-                                                checked={settings?.activeNetwork !== 'testnet'}
-                                                onChange={() => onSettingsUpdated(s => s ? { ...s, activeNetwork: 'mainnet' } : null)}
-                                                className="sr-only"
-                                            />
-                                            <span className="text-sm">{settings?.activeNetwork !== 'testnet' ? '● Mainnet' : '○ Mainnet'}</span>
-                                        </label>
-                                        <label className={`flex items-center gap-2 px-4 py-2.5 rounded-xl border-2 cursor-pointer transition-all ${settings?.activeNetwork === 'testnet' ? 'bg-orange-500 text-white border-orange-500 shadow-sm' : 'bg-white dark:bg-slate-900 border-theme-subtle hover:border-orange-300 text-theme-secondary'}`}>
-                                            <input
-                                                type="radio"
-                                                name="activeNetwork"
-                                                value="testnet"
-                                                checked={settings?.activeNetwork === 'testnet'}
-                                                onChange={() => onSettingsUpdated(s => s ? { ...s, activeNetwork: 'testnet' } : null)}
-                                                className="sr-only"
-                                            />
-                                            <span className="text-sm">{settings?.activeNetwork === 'testnet' ? '● Testnet' : '○ Testnet'}</span>
-                                        </label>
-                                    </div>
-                                    <p className="text-[10px] text-theme-light/60 font-medium">{t('settings.activeNetworkDesc')}</p>
-                                </div>
-
-                                {/* Custom Servers */}
-                                <div className="space-y-3">
-                                    <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-2">
-                                        <Server size={12} /> {t('settings.customServersTitle')}
-                                        <HelpIcon topic="gatewayTokens" size={14} />
+                        {/* PoS Mode Toggle */}
+                        <div className="flex items-start gap-3 p-3 bg-white dark:bg-slate-900 border border-theme-subtle rounded-xl hover:border-theme-primary/40 transition-colors">
+                            <input
+                                type="checkbox"
+                                id="enablePosMode"
+                                checked={!!settings?.enablePosMode}
+                                onChange={(e) =>
+                                    onSettingsUpdated((s) =>
+                                        s ? { ...s, enablePosMode: e.target.checked } : null
+                                    )
+                                }
+                                className="mt-0.5 accent-theme-primary"
+                            />
+                            <div className="flex-1">
+                                <div className="flex items-center gap-2">
+                                    <label
+                                        htmlFor="enablePosMode"
+                                        className="text-xs font-medium text-theme-secondary leading-relaxed cursor-pointer"
+                                    >
+                                        {t('settings.enablePosMode')}
                                     </label>
-                                    {(settings?.customServers || []).length > 0 ? (
-                                        <div className="space-y-2">
-                                            {(settings?.customServers || []).map((srv, idx) => (
-                                                <div key={`${srv.url}-${idx}`} className="flex items-center gap-2 p-3 bg-slate-50 dark:bg-slate-800 border border-theme-subtle rounded-xl">
-                                                    <div className="flex-1 min-w-0">
-                                                        <div className="text-xs font-bold text-theme-secondary truncate">{srv.name || srv.url}</div>
-                                                        <div className="text-[10px] font-mono text-theme-light truncate">{srv.url}</div>
-                                                    </div>
-                                                    <Button
-                                                        type="button"
-                                                        variant="outline"
-                                                        onClick={() => handleRemoveCustomServer(idx)}
-                                                        className="px-2 py-1 text-xs shrink-0"
-                                                        title={t('common.remove')}
-                                                    >
-                                                        <Trash2 size={14} />
-                                                    </Button>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    ) : (
-                                        <p className="text-xs text-theme-light/60 italic">{t('settings.noCustomServers')}</p>
-                                    )}
-
-                                    {/* Add new server */}
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 p-3 bg-white dark:bg-slate-900 border border-dashed border-theme-subtle rounded-xl">
-                                        <Input
-                                            placeholder={t('settings.serverNamePlaceholder')}
-                                            value={newServerName}
-                                            onChange={(e) => setNewServerName(e.target.value)}
-                                            className="text-xs"
-                                        />
-                                        <Input
-                                            placeholder={t('settings.serverUrlPlaceholder')}
-                                            value={newServerUrl}
-                                            onChange={(e) => setNewServerUrl(e.target.value)}
-                                            className="text-xs font-mono"
-                                        />
-                                        <Input
-                                            placeholder={t('settings.authTokenPlaceholder')}
-                                            value={newServerAuthToken}
-                                            onChange={(e) => setNewServerAuthToken(e.target.value)}
-                                            className="text-xs font-mono"
-                                        />
-                                        <Input
-                                            placeholder={t('settings.peerTokenPlaceholder')}
-                                            value={newServerPeerToken}
-                                            onChange={(e) => setNewServerPeerToken(e.target.value)}
-                                            className="text-xs font-mono"
-                                        />
-                                        <div className="md:col-span-2">
-                                            <Button
-                                                type="button"
-                                                variant="outline"
-                                                onClick={handleAddCustomServer}
-                                                disabled={!newServerUrl.trim()}
-                                                className="w-full gap-2"
-                                            >
-                                                <Plus size={14} /> {t('settings.addServerButton')}
-                                            </Button>
-                                        </div>
-                                    </div>
+                                    <HelpIcon topic="posMode" size={14} />
                                 </div>
+                                <label
+                                    htmlFor="enablePosMode"
+                                    className="block text-[10px] text-theme-light/60 font-normal cursor-pointer"
+                                >
+                                    {t('settings.enablePosModeDesc')}
+                                </label>
+                            </div>
+                        </div>
 
-                                {/* Exclusive Checkbox */}
-                                <div className="flex items-start gap-3 p-3 bg-amber-50/50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 rounded-xl hover:bg-amber-50 transition-colors">
-                                    <input
-                                        type="checkbox"
-                                        id="exclusiveCustomServers"
-                                        checked={!!settings?.exclusiveCustomServers}
-                                        onChange={(e) => onSettingsUpdated(s => s ? { ...s, exclusiveCustomServers: e.target.checked } : null)}
-                                        className="mt-0.5 accent-theme-primary"
-                                    />
-                                    <div className="flex-1">
-                                        <div className="flex items-center gap-2">
-                                            <label htmlFor="exclusiveCustomServers" className="text-xs font-medium text-theme-secondary leading-relaxed cursor-pointer">
-                                                {t('settings.exclusiveServersLabel')}
-                                            </label>
-                                            <HelpIcon topic="exclusiveGateways" size={14} />
-                                        </div>
-                                        <label htmlFor="exclusiveCustomServers" className="block text-[10px] text-theme-light/60 font-normal cursor-pointer">
-                                            {t('settings.exclusiveServersDesc')}
-                                        </label>
-                                    </div>
-                                </div>
-
-                                {/* Regional Mesh (Dev-only) */}
-                                {isDevUnlocked && (
-                                    <div className="space-y-3 pt-4 border-t border-theme-subtle">
-                                        <div className="flex flex-wrap items-center justify-between gap-2">
-                                            <label className="text-[10px] font-black text-theme-light uppercase tracking-widest flex items-center gap-1.5">
-                                                <ShieldCheck size={12} /> {t('settings.regionalMeshTitle')}
-                                            </label>
-                                            <Button
-                                                type="button"
-                                                variant="outline"
-                                                onClick={handleRefreshMeshViews}
-                                                disabled={isRefreshingMesh}
-                                                className="text-[10px] px-2.5 py-1 gap-1"
-                                            >
-                                                {isRefreshingMesh ? <Clock className="animate-spin" size={12} /> : <Globe size={12} />}
-                                                {isRefreshingMesh ? t('common.processing') : t('settings.coldRefreshButton')}
-                                            </Button>
-                                        </div>
-                                        {meshRefreshFeedback && (
-                                            <p className={`text-xs font-medium ${meshRefreshFeedback.includes('Fehler') || meshRefreshFeedback.includes('error') ? 'text-rose-600' : 'text-emerald-600'}`}>
-                                                {meshRefreshFeedback}
-                                            </p>
-                                        )}
-                                        {(settings?.regionalMeshSources || []).length > 0 ? (
-                                            <div className="space-y-2">
-                                                {(settings?.regionalMeshSources || []).map((src, idx) => (
-                                                    <div key={`${src.url}-${idx}`} className="flex items-center gap-2 p-3 bg-slate-50 dark:bg-slate-800 border border-theme-subtle rounded-xl">
-                                                        <div className="flex-1 min-w-0">
-                                                            <div className="text-xs font-bold text-theme-secondary truncate">{src.url}</div>
-                                                            <div className="text-[10px] font-mono text-theme-light truncate">Key: {src.publicKey}</div>
-                                                        </div>
-                                                        <Button
-                                                            type="button"
-                                                            variant="outline"
-                                                            onClick={() => handleRemoveRegionalSource(idx)}
-                                                            className="px-2 py-1 text-xs shrink-0"
-                                                            title={t('common.remove')}
-                                                        >
-                                                            <Trash2 size={14} />
-                                                        </Button>
-                                                    </div>
-                                                ))}
-                                            </div>
-                                        ) : (
-                                            <p className="text-xs text-theme-light/60 italic">{t('settings.noRegionalMesh')}</p>
-                                        )}
-
-                                        {/* Add regional source */}
-                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 p-3 bg-white dark:bg-slate-900 border border-dashed border-theme-subtle rounded-xl">
-                                            <Input
-                                                placeholder={t('settings.serverUrlPlaceholder')}
-                                                value={newRegionalUrl}
-                                                onChange={(e) => setNewRegionalUrl(e.target.value)}
-                                                className="text-xs font-mono"
-                                            />
-                                            <Input
-                                                placeholder="Public Key (Ed25519 Hex / Base58)"
-                                                value={newRegionalPublicKey}
-                                                onChange={(e) => setNewRegionalPublicKey(e.target.value)}
-                                                className="text-xs font-mono"
-                                            />
-                                            <div className="md:col-span-2">
-                                                <Button
-                                                    type="button"
-                                                    variant="outline"
-                                                    onClick={handleAddRegionalSource}
-                                                    disabled={!newRegionalUrl.trim() || !newRegionalPublicKey.trim()}
-                                                    className="w-full gap-2"
-                                                >
-                                                    <Plus size={14} /> {t('settings.addRegionalSourceButton')}
-                                                </Button>
-                                            </div>
-                                        </div>
-                                    </div>
+                        {/* 1. External Server Probe */}
+                        <div className="space-y-3 p-4 rounded-xl bg-white dark:bg-slate-900 border border-theme-subtle">
+                            <div className="flex items-center justify-between gap-2">
+                                <h4 className="text-xs font-black uppercase tracking-wider text-theme-primary flex items-center gap-1.5">
+                                    <RefreshCw size={13} />
+                                    {t('settings.lockProbeTitle', 'External Lock Server Verification')}
+                                </h4>
+                            </div>
+                            <p className="text-[11px] text-theme-light leading-relaxed">
+                                {t(
+                                    'settings.lockProbeDesc',
+                                    'Verifies ?info delegation, POST ?lock WAF probe, ?lock_selftest, key-leak protection, latency, and max retention quarter.'
                                 )}
+                            </p>
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                                <div className="sm:col-span-2">
+                                    <Input
+                                        value={probeUrl}
+                                        onChange={(e) => setProbeUrl(e.target.value)}
+                                        placeholder="https://sync.example.org/sync.php"
+                                        aria-label={t('settings.lockServerUrlLabel', 'Lock Server URL')}
+                                    />
+                                </div>
+                                <Input
+                                    value={expectedAdminPub}
+                                    onChange={(e) => setExpectedAdminPub(e.target.value)}
+                                    placeholder={t('settings.expectedAdminPubPlaceholder', 'Expected Admin Pub (optional hex)')}
+                                    aria-label={t('settings.expectedAdminPubPlaceholder', 'Expected Admin Pub (optional hex)')}
+                                />
+                            </div>
+                            <div className="flex items-center justify-end">
+                                <Button
+                                    type="button"
+                                    size="sm"
+                                    onClick={handleProbe}
+                                    disabled={isProbing || !probeUrl.trim()}
+                                >
+                                    {isProbing
+                                        ? t('settings.probingLockServer', 'Probing...')
+                                        : t('settings.probeLockServerBtn', 'Verify Server')}
+                                </Button>
+                            </div>
 
-                                {/* Benchmark */}
-                                <div className="space-y-3">
+                            {lastProbe && (
+                                <div
+                                    data-testid="last-lock-probe-result"
+                                    className={`p-3 rounded-xl border text-xs space-y-1.5 ${
+                                        lastProbe.passed
+                                            ? 'bg-emerald-50/70 border-emerald-200 text-emerald-950'
+                                            : 'bg-rose-50/70 border-rose-200 text-rose-950'
+                                    }`}
+                                >
+                                    <div className="flex items-center justify-between gap-2 font-bold">
+                                        <span className="truncate">{lastProbe.writeUrl}</span>
+                                        <span>
+                                            {lastProbe.latencyMs} ms · Max {formatQuarter(lastProbe.maxRetentionQuarter)}
+                                        </span>
+                                    </div>
+                                    <div className="flex flex-wrap gap-2 text-[10px]">
+                                        <span className="inline-flex items-center gap-1">
+                                            {lastProbe.delegationValid ? <CheckCircle2 size={11} /> : <XCircle size={11} />}
+                                            ?info Delegation
+                                        </span>
+                                        <span className="inline-flex items-center gap-1">
+                                            {lastProbe.wafProbePassed ? <CheckCircle2 size={11} /> : <XCircle size={11} />}
+                                            WAF POST
+                                        </span>
+                                        <span className="inline-flex items-center gap-1">
+                                            {lastProbe.selftestPassed ? <CheckCircle2 size={11} /> : <XCircle size={11} />}
+                                            ?lock_selftest
+                                        </span>
+                                        <span className="inline-flex items-center gap-1">
+                                            {lastProbe.keyLeakSafe ? <CheckCircle2 size={11} /> : <XCircle size={11} />}
+                                            No Key Leak
+                                        </span>
+                                    </div>
+                                    <div className="text-[10px] flex flex-wrap items-center gap-2 opacity-80">
+                                        <span>Lock Pub:</span>
+                                        <TechId value={lastProbe.lockPub} kind="hash" />
+                                        {lastProbe.inodeWarning && (
+                                            <span className="px-1.5 py-0.5 rounded bg-amber-200 text-amber-900 font-bold">
+                                                Inodes {lastProbe.usedInodes}/{lastProbe.maxInodes}
+                                            </span>
+                                        )}
+                                    </div>
+                                </div>
+                            )}
+
+                            {probeList.length > 0 && (
+                                <div className="space-y-1.5 pt-1">
+                                    <p className="text-[10px] font-bold uppercase tracking-wider text-theme-light">
+                                        {t('settings.cachedLockProbes', 'Verified Lock Servers')} ({passingProbes.length}/{probeList.length})
+                                    </p>
+                                    <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                                        {probeList.map((p) => (
+                                            <div
+                                                key={p.writeUrl}
+                                                className="flex items-center justify-between gap-2 p-2 rounded-lg border border-theme-subtle/60 bg-bg-app/30 text-[11px]"
+                                            >
+                                                <div className="min-w-0 flex-1">
+                                                    <div className="flex items-center gap-1.5 font-semibold truncate">
+                                                        {p.passed ? (
+                                                            <CheckCircle2 size={12} className="text-emerald-600 shrink-0" />
+                                                        ) : (
+                                                            <XCircle size={12} className="text-rose-500 shrink-0" />
+                                                        )}
+                                                        <span className="truncate">{p.writeUrl}</span>
+                                                    </div>
+                                                    <div className="text-[10px] text-theme-light">
+                                                        {p.latencyMs} ms · Max {formatQuarter(p.maxRetentionQuarter)} ·{' '}
+                                                        {t('settings.probeAgeLabel', 'Age')}: {formatAgeLabel(p.probedAtSecs)}
+                                                    </div>
+                                                </div>
+                                                {p.passed && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setOwnServerUrl(p.writeUrl)}
+                                                        className="text-[10px] font-bold text-theme-primary hover:underline shrink-0 cursor-pointer"
+                                                    >
+                                                        {t('settings.useAsOwnServer', 'Use as own')}
+                                                    </button>
+                                                )}
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+
+                        {/* 2. Own Guarantor Nominated Lock Server */}
+                        <div className="space-y-3 p-4 rounded-xl bg-white dark:bg-slate-900 border border-theme-subtle">
+                            <h4 className="text-xs font-black uppercase tracking-wider text-theme-primary flex items-center gap-1.5">
+                                <ShieldCheck size={13} />
+                                {t('settings.ownNominatedServerTitle', 'Own Trusted Lock Server (Guarantor Check)')}
+                            </h4>
+                            <p className="text-[11px] text-theme-light leading-relaxed">
+                                {t(
+                                    'settings.ownNominatedServerDesc',
+                                    'Verified server required to countersign vouched vouchers. Automatically treated as trusted at checkout.'
+                                )}
+                            </p>
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                                <div className="sm:col-span-2">
+                                    <Input
+                                        value={ownServerUrl}
+                                        onChange={(e) => setOwnServerUrl(e.target.value)}
+                                        placeholder="https://my-lock-server.example.org/sync.php"
+                                        aria-label={t('settings.ownLockUrlLabel', 'Own Lock Server URL')}
+                                    />
+                                </div>
+                                <Input
+                                    value={ownServerAsn}
+                                    onChange={(e) => setOwnServerAsn(e.target.value)}
+                                    placeholder={t('settings.asnOptionalPlaceholder', 'ASN (optional, e.g. AS24940)')}
+                                    aria-label={t('settings.asnOptionalPlaceholder', 'ASN (optional)')}
+                                />
+                            </div>
+                            <div className="flex items-center justify-between gap-2">
+                                {settings?.ownNominatedLockServer ? (
                                     <Button
                                         type="button"
+                                        size="sm"
                                         variant="outline"
-                                        onClick={handleBenchmark}
-                                        disabled={isBenchmarking}
-                                        className="w-full gap-2"
+                                        onClick={() => handleSaveOwnNominated(true)}
+                                        disabled={isSavingOwn}
                                     >
-                                        {isBenchmarking ? <Clock className="animate-spin" size={16} /> : <Gauge size={16} />}
-                                        {isBenchmarking ? t('settings.testing') : t('settings.benchmarkButton')}
+                                        <Trash2 size={13} className="mr-1" />
+                                        {t('settings.clearOwnServerBtn', 'Remove')}
                                     </Button>
-                                    {benchmarkError && (
-                                        <p className="text-xs text-rose-600 font-medium">{benchmarkError}</p>
-                                    )}
-                                    {benchmarkResults.length > 0 && (
-                                        <div className="space-y-2">
-                                            {(() => {
-                                                const maxLatency = Math.max(...benchmarkResults.filter(r => r.reachable && r.latencyMs !== undefined).map(r => r.latencyMs || 0), 0);
-                                                return benchmarkResults.map((res) => (
-                                                    <div key={res.url} className="p-2.5 bg-white dark:bg-slate-900 border border-theme-subtle rounded-xl space-y-1.5">
-                                                        <div className="flex items-center justify-between gap-2">
-                                                            <span className="text-[11px] font-mono text-theme-secondary truncate flex-1" title={res.url}>{res.url}</span>
-                                                            <span className={`text-[11px] font-bold shrink-0 ${!res.reachable ? 'text-slate-400' : (res.latencyMs !== undefined && res.latencyMs < 300 ? 'text-emerald-600' : res.latencyMs !== undefined && res.latencyMs < 600 ? 'text-orange-600' : 'text-rose-600')}`}>
-                                                                {res.reachable && res.latencyMs !== undefined ? `${res.latencyMs} ms` : t('settings.unreachable')}
-                                                            </span>
-                                                        </div>
-                                                        <div className="h-2 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
-                                                            <div
-                                                                className={`h-full rounded-full transition-all ${getLatencyColor(res.latencyMs, res.reachable)}`}
-                                                                style={{ width: getLatencyWidth(res.latencyMs, res.reachable, maxLatency) }}
-                                                            />
-                                                        </div>
+                                ) : (
+                                    <span />
+                                )}
+                                <Button
+                                    type="button"
+                                    size="sm"
+                                    onClick={() => handleSaveOwnNominated(false)}
+                                    disabled={isSavingOwn || !ownServerUrl.trim()}
+                                >
+                                    {t('settings.saveOwnServerBtn', 'Save Own Server')}
+                                </Button>
+                            </div>
+                        </div>
+
+                        {/* 3. Anchor Set Templates (1..=5 Servers) */}
+                        <div className="space-y-3 p-4 rounded-xl bg-white dark:bg-slate-900 border border-theme-subtle">
+                            <h4 className="text-xs font-black uppercase tracking-wider text-theme-primary flex items-center gap-1.5">
+                                <Plus size={13} />
+                                {t('settings.anchorTemplatesTitle', 'Lock Committee Templates (1–5 Servers)')}
+                            </h4>
+                            <p className="text-[11px] text-theme-light leading-relaxed">
+                                {t(
+                                    'settings.anchorTemplatesDesc',
+                                    'Combine 1 to 5 independently verified servers into a reusable double-spend protection template for new vouchers.'
+                                )}
+                            </p>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                                <Input
+                                    value={tplLabel}
+                                    onChange={(e) => setTplLabel(e.target.value)}
+                                    placeholder={t('settings.anchorLabelPlaceholder', 'Template name (e.g. Regional 2-of-3)')}
+                                />
+                                <Input
+                                    value={tplQuarter}
+                                    onChange={(e) => setTplQuarter(e.target.value)}
+                                    placeholder="2031-Q4"
+                                    aria-label={t('settings.retainUntilQuarterLabel', 'Retain until quarter')}
+                                />
+                                <Input
+                                    value={tplThreshold}
+                                    onChange={(e) => setTplThreshold(e.target.value)}
+                                    placeholder={t('settings.quorumOptionalPlaceholder', 'Threshold Q (default majority)')}
+                                />
+                            </div>
+
+                            {passingProbes.length > 0 ? (
+                                <div className="space-y-1.5">
+                                    <p className="text-[10px] font-bold uppercase tracking-wider text-theme-light">
+                                        {t('settings.selectCommitteeServers', 'Select 1–5 verified servers')}
+                                    </p>
+                                    {passingProbes.map((p) => {
+                                        const draft = selectedServers.find((s) => s.writeUrl === p.writeUrl);
+                                        return (
+                                            <div
+                                                key={p.writeUrl}
+                                                className="p-2 rounded-lg border border-theme-subtle/70 flex flex-wrap items-center justify-between gap-2 text-xs"
+                                            >
+                                                <label className="flex items-center gap-2 cursor-pointer min-w-0 flex-1">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={Boolean(draft)}
+                                                        onChange={() => toggleServerInDraft(p.writeUrl)}
+                                                        className="accent-theme-primary"
+                                                    />
+                                                    <span className="truncate font-medium">{p.writeUrl}</span>
+                                                    <span className="text-[10px] text-theme-light shrink-0">
+                                                        (≤ {formatQuarter(p.maxRetentionQuarter)})
+                                                    </span>
+                                                </label>
+                                                {draft && (
+                                                    <div className="flex items-center gap-1.5">
+                                                        <select
+                                                            value={draft.nominatedBy}
+                                                            onChange={(e) =>
+                                                                updateDraftServer(p.writeUrl, {
+                                                                    nominatedBy: e.target.value as 'creator' | 'guarantor',
+                                                                })
+                                                            }
+                                                            className="text-[11px] bg-white dark:bg-slate-800 border border-theme-subtle rounded-lg px-2 py-1"
+                                                        >
+                                                            <option value="creator">Creator</option>
+                                                            <option value="guarantor">Guarantor</option>
+                                                        </select>
+                                                        <input
+                                                            type="text"
+                                                            value={draft.asn}
+                                                            onChange={(e) =>
+                                                                updateDraftServer(p.writeUrl, { asn: e.target.value })
+                                                            }
+                                                            placeholder="ASN"
+                                                            className="w-20 text-[11px] bg-white dark:bg-slate-800 border border-theme-subtle rounded-lg px-2 py-1"
+                                                        />
                                                     </div>
-                                                ));
-                                            })()}
-                                        </div>
-                                    )}
+                                                )}
+                                            </div>
+                                        );
+                                    })}
                                 </div>
+                            ) : (
+                                <p className="text-[11px] italic text-theme-light">
+                                    {t('settings.probeServersFirstHint', 'Verify at least one server above before assembling a template.')}
+                                </p>
+                            )}
+
+                            <Input
+                                value={tplGuarantorKeys}
+                                onChange={(e) => setTplGuarantorKeys(e.target.value)}
+                                placeholder={t('settings.guarantorMigKeysPlaceholder', 'Guarantor rotation keys (optional, comma-separated 64-hex)')}
+                            />
+
+                            <div className="flex justify-end">
+                                <Button
+                                    type="button"
+                                    size="sm"
+                                    onClick={handleAssembleTemplate}
+                                    disabled={isAssembling || selectedServers.length === 0}
+                                >
+                                    {isAssembling
+                                        ? t('common.saving', 'Saving...')
+                                        : t('settings.createAnchorTemplateBtn', 'Assemble Anchor Set')}
+                                </Button>
+                            </div>
+
+                            {templates.length > 0 && (
+                                <div className="space-y-2 pt-2 border-t border-theme-subtle/50">
+                                    <p className="text-[10px] font-bold uppercase tracking-wider text-theme-light">
+                                        {t('settings.savedAnchorTemplates', 'Saved Anchor Sets')} ({templates.length})
+                                    </p>
+                                    {templates.map((tpl) => (
+                                        <div
+                                            key={tpl.anchorId}
+                                            className="p-3 rounded-xl border border-theme-subtle bg-bg-app/30 text-xs space-y-1"
+                                        >
+                                            <div className="flex items-center justify-between gap-2 font-bold">
+                                                <span>{tpl.label}</span>
+                                                <span className="text-[11px] font-mono">
+                                                    {tpl.threshold}/{tpl.servers.length} · ≥ {formatQuarter(tpl.retainUntilQuarter)}
+                                                </span>
+                                            </div>
+                                            <div className="flex flex-wrap items-center gap-2 text-[10px] text-theme-light">
+                                                <span>Anchor:</span>
+                                                <TechId value={tpl.anchorId} kind="hash" />
+                                                <span>· {t('settings.probeAgeLabel', 'Age')}: {formatAgeLabel(tpl.createdAtSecs)}</span>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
                     </AdvancedDisclosure>
                 </div>
             </Card>

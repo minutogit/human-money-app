@@ -2,6 +2,7 @@
 import React, { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { 
+    AlertTriangle,
     Check,
     CheckCheck,
     ShieldAlert, 
@@ -47,11 +48,11 @@ interface StatusConfig {
 const STATUS_CONFIGS: Record<L2VerdictState, StatusConfig> = {
     final: {
         labelKey: "transfer.l2.finalTitle",
-        defaultLabel: "Maximale Sicherheit",
+        defaultLabel: "Quorum bestätigt",
         sublabelKey: "transfer.l2.finalSub",
-        defaultSublabel: "Großes Server-Netz",
+        defaultSublabel: "Sync-Lock-Komitee",
         merchantHintKey: "transfer.l2.finalHint",
-        defaultMerchantHint: "Ein großes, weltweites Server-Netzwerk hat die Zahlung final abgesichert. Höchste Sicherheitsstufe – ein Betrug ist praktisch unmöglich.",
+        defaultMerchantHint: "Vertraute Lock-Server haben den Transfer nach der Grün-Regel abgesichert. Die Ware kann sicher herausgegeben werden.",
         badgeStyle: "bg-emerald-50 border-emerald-200 text-emerald-950 shadow-emerald-500/10",
         pillStyle: "bg-emerald-600 text-white",
         borderStyle: "border-emerald-300",
@@ -65,9 +66,9 @@ const STATUS_CONFIGS: Record<L2VerdictState, StatusConfig> = {
         labelKey: "transfer.l2.provisionalTitle",
         defaultLabel: "Hohe Sicherheit",
         sublabelKey: "transfer.l2.provisionalSub",
-        defaultSublabel: "Kleines Server-Netz",
+        defaultSublabel: "Sync-Lock-Quorum",
         merchantHintKey: "transfer.l2.provisionalHint",
-        defaultMerchantHint: "Ein kleineres Server-Netzwerk hat die Zahlung geprüft und abgesichert. Hohe Sicherheit – ein Betrug ist extrem unwahrscheinlich. Ware kann problemlos herausgegeben werden.",
+        defaultMerchantHint: "Lock-Server haben den Transfer vorläufig abgesichert.",
         badgeStyle: "bg-emerald-50/70 border-emerald-200/90 text-emerald-900 shadow-emerald-500/5",
         pillStyle: "bg-emerald-500 text-white",
         borderStyle: "border-emerald-200",
@@ -76,6 +77,22 @@ const STATUS_CONFIGS: Record<L2VerdictState, StatusConfig> = {
         dotColor: "bg-emerald-400",
         levelDots: "●○",
         Icon: Check,
+    },
+    yellow: {
+        labelKey: "transfer.l2.yellowTitle",
+        defaultLabel: "Eingeschränkt (Gelb)",
+        sublabelKey: "transfer.l2.yellowSub",
+        defaultSublabel: "Unvollständiges Lock-Quorum",
+        merchantHintKey: "transfer.l2.yellowHint",
+        defaultMerchantHint: "Es liegen nicht genug Quittungen vertrauter Lock-Server für eine automatische Grün-Freigabe vor. Prüfe die Umstände vor einer Annahme.",
+        badgeStyle: "bg-amber-50 border-amber-200 text-amber-950 shadow-amber-500/10",
+        pillStyle: "bg-amber-600 text-white",
+        borderStyle: "border-amber-300",
+        textStyle: "text-amber-800",
+        iconStyle: "text-amber-600",
+        dotColor: "bg-amber-500",
+        levelDots: "●○",
+        Icon: AlertTriangle,
     },
     conflict: {
         labelKey: "transfer.l2.conflictTitle",
@@ -105,6 +122,22 @@ const STATUS_CONFIGS: Record<L2VerdictState, StatusConfig> = {
         borderStyle: "border-slate-300",
         textStyle: "text-slate-700",
         iconStyle: "text-slate-500",
+        dotColor: "bg-slate-400",
+        levelDots: "○○",
+        Icon: WifiOff,
+    },
+    offline_only: {
+        labelKey: "transfer.l2.offlineOnlyTitle",
+        defaultLabel: "Nur Offline (N = 0)",
+        sublabelKey: "transfer.l2.offlineOnlySub",
+        defaultSublabel: "Kein Lock-Komitee konfiguriert",
+        merchantHintKey: "transfer.l2.offlineOnlyHint",
+        defaultMerchantHint: "Dieser Gutschein hat kein Lock-Server-Komitee (N = 0) und wird rein lokal über Layer-1/Vertrauen abgesichert.",
+        badgeStyle: "bg-slate-50 border-slate-200 text-slate-800 shadow-slate-500/10",
+        pillStyle: "bg-slate-600 text-white",
+        borderStyle: "border-slate-300",
+        textStyle: "text-slate-700",
+        iconStyle: "text-slate-600",
         dotColor: "bg-slate-400",
         levelDots: "○○",
         Icon: WifiOff,
@@ -186,8 +219,10 @@ export const L2QuorumBadge: React.FC<L2QuorumBadgeProps> = ({
     const statusLabels: Record<L2VerdictState, string> = {
         final: t('transfer.l2.statusFinal'),
         provisional: t('transfer.l2.statusProvisional'),
+        yellow: t('transfer.l2.statusYellow', 'Eingeschränkt'),
         conflict: t('transfer.l2.statusConflict'),
         offline: t('transfer.l2.statusOffline'),
+        offline_only: t('transfer.l2.statusOfflineOnly', 'Offline (N=0)'),
         unverified: t('transfer.l2.statusUnverified'),
     };
 
@@ -197,7 +232,7 @@ export const L2QuorumBadge: React.FC<L2QuorumBadgeProps> = ({
         : effectiveStatus;
 
     const quorumRatioText = effectiveSignerCount !== undefined
-        ? t('transfer.l2.serverConfirmations', `${effectiveSignerCount}${effectiveActiveNodes !== undefined ? `/${effectiveActiveNodes}` : ''} Nodes`, { count: effectiveSignerCount, total: effectiveActiveNodes })
+        ? t('transfer.l2.serverConfirmations', `${effectiveSignerCount}${effectiveActiveNodes !== undefined ? `/${effectiveActiveNodes}` : ''} Server`, { count: effectiveSignerCount, total: effectiveActiveNodes })
         : null;
 
     const percentage = (effectiveSignerCount !== undefined && effectiveActiveNodes !== undefined && effectiveActiveNodes > 0)
@@ -328,7 +363,7 @@ export const L2QuorumBadge: React.FC<L2QuorumBadgeProps> = ({
                                         )}
                                         <span className="flex items-center gap-1">
                                             <ShieldCheck size={12} />
-                                            {t("transfer.l2.bftQuorum", "14/20 BFT Shard Quorum")}
+                                            {t("transfer.l2.bftQuorum", "Sync-Lock Quorum")}
                                         </span>
                                     </div>
 

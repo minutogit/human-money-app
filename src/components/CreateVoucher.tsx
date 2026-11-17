@@ -42,11 +42,15 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
         isLoading,
         coordWarning,
         errors,
+        anchorTemplates,
+        selectedAnchorId,
+        retentionInsufficient,
         setAmount,
         setValidityValue,
         setValidityUnit,
         setNonRedeemable,
         setIdentity,
+        setSelectedAnchorId,
         handleStandardChange,
         handleLoadProfile,
         handleCoordBlur,
@@ -196,6 +200,10 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
                         amountRef={amountRef}
                         parsedStandard={parsedStandard}
                         onManageStandards={navigation ? () => navigation.navigateToSettingsSection('standards') : undefined}
+                        anchorTemplates={anchorTemplates}
+                        selectedAnchorId={selectedAnchorId}
+                        onSelectedAnchorChange={setSelectedAnchorId}
+                        retentionInsufficient={retentionInsufficient}
                     />
 
                     <CreatorIdentityForm 
@@ -226,7 +234,7 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
                                 <span className="text-xs font-bold">{t('voucher.create.missingPrefix')}{getMissingFieldNames(errors)}</span>
                             </div>
                         )}
-                        <Button type="submit" disabled={isLoading || accessMode === 'receiveOnly'} className="w-full sm:w-auto sm:min-w-[320px] py-5 rounded-3xl shadow-premium-lg text-lg gap-3">
+                        <Button type="submit" disabled={isLoading || accessMode === 'receiveOnly' || retentionInsufficient} className="w-full sm:w-auto sm:min-w-[320px] py-5 rounded-3xl shadow-premium-lg text-lg gap-3">
                             {isLoading ? <Clock className="animate-spin" size={24} /> : <PlusCircle size={24} />}
                             {isLoading ? t('voucher.create.creating') : t('voucher.create')}
                         </Button>

@@ -2,26 +2,26 @@
 use crate::{
     models::{
         BackupDeltaContainer, FrontendAutoBackupStatusDto, FrontendBackupInspectionDto,
-        FrontendBackupProbeDto, FrontendBackupSummaryDto, FrontendBackupSyncResult,
-        FrontendError, FrontendRestoreOutcomeDto, FrontendRestoreReconcileResultDto,
-        LocalProfileCollisionDto, MnemonicIdentityPreviewDto, MnemonicLanguage,
-        PortableBackupContainer, ResolvedSyncTargetDto, SyncBackupProbeResultDto,
+        FrontendBackupProbeDto, FrontendBackupSummaryDto, FrontendBackupSyncResult, FrontendError,
+        FrontendRestoreOutcomeDto, FrontendRestoreReconcileResultDto, LocalProfileCollisionDto,
+        MnemonicIdentityPreviewDto, MnemonicLanguage, PortableBackupContainer,
+        ResolvedSyncTargetDto, SyncBackupProbeResultDto,
     },
     AppState,
 };
-use sha2::{Digest, Sha256};
 use chrono::Utc;
 use human_money_core::{
     app_service::{AppService, ProfileInfo},
     models::{
         backup::{BackupProtection, BackupRestoreCredentials, EncryptedBackupManifest},
-        seal::{AnchorLockKind, LocalSealRecord, PendingEpochTombstone, SyncStatus, WalletSeal},
+        seal::{LocalSealRecord, SyncStatus, WalletSeal},
         storage_integrity::StorageIntegrityRecord,
         voucher_standard_definition::VoucherStandardDefinition,
     },
     storage::{seal_service::SealService, WalletLockGuard},
     AuthMethod, FileStorage, UserIdentity, Wallet,
 };
+use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
     fs,
@@ -40,9 +40,12 @@ pub(crate) fn write_file_atomic(path: &Path, bytes: &[u8]) -> Result<(), Fronten
     );
     let tmp_path = parent.join(tmp_name);
     {
-        let mut file = fs::File::create(&tmp_path).map_err(|e| FrontendError::from(e.to_string()))?;
-        file.write_all(bytes).map_err(|e| FrontendError::from(e.to_string()))?;
-        file.sync_all().map_err(|e| FrontendError::from(e.to_string()))?;
+        let mut file =
+            fs::File::create(&tmp_path).map_err(|e| FrontendError::from(e.to_string()))?;
+        file.write_all(bytes)
+            .map_err(|e| FrontendError::from(e.to_string()))?;
+        file.sync_all()
+            .map_err(|e| FrontendError::from(e.to_string()))?;
     }
     fs::rename(&tmp_path, path).map_err(|e| FrontendError::from(e.to_string()))?;
     Ok(())
@@ -64,7 +67,11 @@ pub(crate) fn collect_custom_standards_from_dir(standards_dir: &Path) -> HashMap
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            let standard_id = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+            let standard_id = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
             let toml_path = path.join("standard.toml");
             if toml_path.exists() {
                 if let Ok(content) = fs::read_to_string(&toml_path) {
@@ -94,7 +101,8 @@ pub(crate) fn restore_custom_standards_to_dir(
         let target_file = target_dir.join("standard.toml");
         if !target_file.exists() {
             fs::create_dir_all(&target_dir).map_err(|e| FrontendError::from(e.to_string()))?;
-            fs::write(&target_file, toml_content).map_err(|e| FrontendError::from(e.to_string()))?;
+            fs::write(&target_file, toml_content)
+                .map_err(|e| FrontendError::from(e.to_string()))?;
             count += 1;
         }
     }
@@ -111,18 +119,25 @@ fn parse_credentials<'a>(
 ) -> Result<BackupRestoreCredentials<'a>, FrontendError> {
     match credential_mode {
         "password" => {
-            let pwd = backup_password.ok_or_else(|| FrontendError::from("Missing backup password".to_string()))?;
+            let pwd = backup_password
+                .ok_or_else(|| FrontendError::from("Missing backup password".to_string()))?;
             if pwd.is_empty() {
-                return Err(FrontendError::from("Backup password cannot be empty".to_string()));
+                return Err(FrontendError::from(
+                    "Backup password cannot be empty".to_string(),
+                ));
             }
             Ok(BackupRestoreCredentials::BackupPassword(pwd))
         }
         "mnemonic" => {
-            let phrase = mnemonic.ok_or_else(|| FrontendError::from("Missing mnemonic phrase".to_string()))?;
+            let phrase = mnemonic
+                .ok_or_else(|| FrontendError::from("Missing mnemonic phrase".to_string()))?;
             if phrase.trim().is_empty() {
-                return Err(FrontendError::from("Mnemonic phrase cannot be empty".to_string()));
+                return Err(FrontendError::from(
+                    "Mnemonic phrase cannot be empty".to_string(),
+                ));
             }
-            let lang: human_money_core::MnemonicLanguage = language.unwrap_or(MnemonicLanguage::English).into();
+            let lang: human_money_core::MnemonicLanguage =
+                language.unwrap_or(MnemonicLanguage::English).into();
             Ok(BackupRestoreCredentials::Mnemonic {
                 phrase,
                 passphrase,
@@ -130,7 +145,10 @@ fn parse_credentials<'a>(
                 language: lang,
             })
         }
-        _ => Err(FrontendError::from(format!("Invalid credential mode: {}", credential_mode))),
+        _ => Err(FrontendError::from(format!(
+            "Invalid credential mode: {}",
+            credential_mode
+        ))),
     }
 }
 
@@ -141,7 +159,8 @@ pub(crate) fn export_backup_file_impl(
     service: &mut AppService,
     custom_standards: HashMap<String, String>,
 ) -> Result<FrontendBackupSummaryDto, FrontendError> {
-    let diff = service.create_differential_backup(None, protection, password)
+    let diff = service
+        .create_differential_backup(None, protection, password)
         .map_err(FrontendError::from)?;
 
     let mut blobs_hex = HashMap::with_capacity(diff.put_blobs.len());
@@ -201,7 +220,8 @@ pub(crate) fn sync_backup_folder_impl(
         None
     };
 
-    let diff = service.create_differential_backup(previous_manifest_bytes.as_deref(), protection, password)
+    let diff = service
+        .create_differential_backup(previous_manifest_bytes.as_deref(), protection, password)
         .map_err(FrontendError::from)?;
 
     let blobs_dir = base_dir.join("blobs");
@@ -211,7 +231,10 @@ pub(crate) fn sync_backup_folder_impl(
 
     for (name, data) in &diff.put_blobs {
         if name.contains('/') || name.contains('\\') || name.contains("..") {
-            return Err(FrontendError::from(format!("Unsafe blob name in diff: {}", name)));
+            return Err(FrontendError::from(format!(
+                "Unsafe blob name in diff: {}",
+                name
+            )));
         }
         write_file_atomic(&blobs_dir.join(name), data)?;
     }
@@ -220,10 +243,16 @@ pub(crate) fn sync_backup_folder_impl(
         if id.contains('/') || id.contains('\\') || id.contains("..") {
             continue;
         }
-        write_file_atomic(&standards_dir.join(format!("{}.toml", id)), content.as_bytes())?;
+        write_file_atomic(
+            &standards_dir.join(format!("{}.toml", id)),
+            content.as_bytes(),
+        )?;
     }
 
-    write_file_atomic(&base_dir.join("manifest.enc"), &diff.encrypted_manifest_bytes)?;
+    write_file_atomic(
+        &base_dir.join("manifest.enc"),
+        &diff.encrypted_manifest_bytes,
+    )?;
 
     for del_name in &diff.delete_blobs {
         if !del_name.contains('/') && !del_name.contains('\\') && !del_name.contains("..") {
@@ -348,7 +377,9 @@ pub(crate) fn find_local_profile_collision_impl(
     None
 }
 
-pub(crate) fn user_ids_from_metadata_dir(wallet_data_dir: &Path) -> HashMap<String, Option<String>> {
+pub(crate) fn user_ids_from_metadata_dir(
+    wallet_data_dir: &Path,
+) -> HashMap<String, Option<String>> {
     crate::commands::auth::load_profile_metadata_map_from_dir(wallet_data_dir)
         .into_iter()
         .map(|(k, (_ts, uid))| (k, uid))
@@ -364,15 +395,21 @@ pub(crate) fn inspect_backup_with_collision_impl(
     user_ids_by_folder: &HashMap<String, Option<String>>,
 ) -> Result<FrontendBackupInspectionDto, FrontendError> {
     let (manifest_bytes, blob_count, custom_standard_count) = if source_path.is_file() {
-        let bytes = fs::read(source_path).map_err(|e| FrontendError::from(format!("Failed to read backup file: {}", e)))?;
+        let bytes = fs::read(source_path)
+            .map_err(|e| FrontendError::from(format!("Failed to read backup file: {}", e)))?;
         let container: PortableBackupContainer = serde_json::from_slice(&bytes)
             .map_err(|e| FrontendError::from(format!("Invalid backup container: {}", e)))?;
         let m_bytes = human_money_core::hex::decode(&container.manifest_hex)
             .map_err(|e| FrontendError::from(format!("Invalid manifest hex encoding: {}", e)))?;
-        (m_bytes, container.blobs_hex.len(), container.custom_standards.len())
+        (
+            m_bytes,
+            container.blobs_hex.len(),
+            container.custom_standards.len(),
+        )
     } else if source_path.is_dir() {
         let manifest_path = source_path.join("manifest.enc");
-        let m_bytes = fs::read(&manifest_path).map_err(|e| FrontendError::from(format!("Failed to read manifest.enc: {}", e)))?;
+        let m_bytes = fs::read(&manifest_path)
+            .map_err(|e| FrontendError::from(format!("Failed to read manifest.enc: {}", e)))?;
         let b_count = fs::read_dir(source_path.join("blobs"))
             .map(|d| d.flatten().filter(|e| e.path().is_file()).count())
             .unwrap_or(0);
@@ -381,13 +418,17 @@ pub(crate) fn inspect_backup_with_collision_impl(
             .unwrap_or(0);
         (m_bytes, b_count, s_count)
     } else {
-        return Err(FrontendError::from(format!("Backup path not found: {}", source_path.display())));
+        return Err(FrontendError::from(format!(
+            "Backup path not found: {}",
+            source_path.display()
+        )));
     };
 
     let enc_manifest: EncryptedBackupManifest = serde_json::from_slice(&manifest_bytes)
         .map_err(|e| FrontendError::from(format!("Failed to parse encrypted manifest: {}", e)))?;
 
-    let report = service.inspect_backup(&manifest_bytes, credentials)
+    let report = service
+        .inspect_backup(&manifest_bytes, credentials)
         .map_err(FrontendError::from)?;
 
     let local_collision = wallet_data_dir_opt.and_then(|dir| {
@@ -437,15 +478,17 @@ struct BackupParts {
 
 fn read_backup_parts(source_path: &Path) -> Result<BackupParts, FrontendError> {
     if source_path.is_file() {
-        let bytes = fs::read(source_path).map_err(|e| FrontendError::from(format!("Failed to read backup file: {}", e)))?;
+        let bytes = fs::read(source_path)
+            .map_err(|e| FrontendError::from(format!("Failed to read backup file: {}", e)))?;
         let container: PortableBackupContainer = serde_json::from_slice(&bytes)
             .map_err(|e| FrontendError::from(format!("Invalid backup container: {}", e)))?;
         let m_bytes = human_money_core::hex::decode(&container.manifest_hex)
             .map_err(|e| FrontendError::from(format!("Invalid manifest hex encoding: {}", e)))?;
         let mut blob_map = HashMap::with_capacity(container.blobs_hex.len());
         for (name, hex_data) in container.blobs_hex {
-            let data = human_money_core::hex::decode(&hex_data)
-                .map_err(|e| FrontendError::from(format!("Invalid hex encoding for blob {}: {}", name, e)))?;
+            let data = human_money_core::hex::decode(&hex_data).map_err(|e| {
+                FrontendError::from(format!("Invalid hex encoding for blob {}: {}", name, e))
+            })?;
             blob_map.insert(name, data);
         }
         Ok(BackupParts {
@@ -455,7 +498,8 @@ fn read_backup_parts(source_path: &Path) -> Result<BackupParts, FrontendError> {
         })
     } else if source_path.is_dir() {
         let manifest_path = source_path.join("manifest.enc");
-        let m_bytes = fs::read(&manifest_path).map_err(|e| FrontendError::from(format!("Failed to read manifest.enc: {}", e)))?;
+        let m_bytes = fs::read(&manifest_path)
+            .map_err(|e| FrontendError::from(format!("Failed to read manifest.enc: {}", e)))?;
         let blobs_dir = source_path.join("blobs");
         let mut blob_map = HashMap::new();
         if blobs_dir.exists() {
@@ -472,11 +516,17 @@ fn read_backup_parts(source_path: &Path) -> Result<BackupParts, FrontendError> {
         let standards_dir = source_path.join("standards");
         let mut std_map = HashMap::new();
         if standards_dir.exists() {
-            for entry in fs::read_dir(&standards_dir).map_err(|e| FrontendError::from(e.to_string()))? {
+            for entry in
+                fs::read_dir(&standards_dir).map_err(|e| FrontendError::from(e.to_string()))?
+            {
                 let entry = entry.map_err(|e| FrontendError::from(e.to_string()))?;
                 let p = entry.path();
                 if p.is_file() && p.extension().is_some_and(|ext| ext == "toml") {
-                    let stem = p.file_stem().unwrap_or_default().to_string_lossy().to_string();
+                    let stem = p
+                        .file_stem()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string();
                     if let Ok(content) = fs::read_to_string(&p) {
                         std_map.insert(stem, content);
                     }
@@ -489,7 +539,10 @@ fn read_backup_parts(source_path: &Path) -> Result<BackupParts, FrontendError> {
             custom_standards: std_map,
         })
     } else {
-        Err(FrontendError::from(format!("Backup path not found: {}", source_path.display())))
+        Err(FrontendError::from(format!(
+            "Backup path not found: {}",
+            source_path.display()
+        )))
     }
 }
 
@@ -499,16 +552,25 @@ pub(crate) fn restore_backup_impl(
     new_password: &str,
     local_instance_id: String,
     service: &mut AppService,
-) -> Result<(human_money_core::models::backup::RestoreOutcome, String, HashMap<String, String>), FrontendError> {
+) -> Result<
+    (
+        human_money_core::models::backup::RestoreOutcome,
+        String,
+        HashMap<String, String>,
+    ),
+    FrontendError,
+> {
     let parts = read_backup_parts(source_path)?;
 
-    let outcome = service.restore_backup(
-        &parts.manifest_bytes,
-        &parts.blobs,
-        credentials,
-        new_password,
-        local_instance_id,
-    ).map_err(FrontendError::from)?;
+    let outcome = service
+        .restore_backup(
+            &parts.manifest_bytes,
+            &parts.blobs,
+            credentials,
+            new_password,
+            local_instance_id,
+        )
+        .map_err(FrontendError::from)?;
 
     let profile_name = service
         .list_profiles()
@@ -528,14 +590,18 @@ pub(crate) fn restore_backup_impl(
 pub fn probe_wallet_backup(source_path: String) -> Result<FrontendBackupProbeDto, FrontendError> {
     let path = Path::new(&source_path);
     if path.is_file() {
-        let bytes = fs::read(path).map_err(|e| FrontendError::from(format!("Failed to read backup file: {}", e)))?;
+        let bytes = fs::read(path)
+            .map_err(|e| FrontendError::from(format!("Failed to read backup file: {}", e)))?;
         let container: PortableBackupContainer = serde_json::from_slice(&bytes)
             .map_err(|e| FrontendError::from(format!("Invalid backup container: {}", e)))?;
         let manifest_bytes = human_money_core::hex::decode(&container.manifest_hex)
             .map_err(|e| FrontendError::from(format!("Invalid manifest hex encoding: {}", e)))?;
-        let manifest: EncryptedBackupManifest = serde_json::from_slice(&manifest_bytes)
-            .map_err(|e| FrontendError::from(format!("Invalid encrypted backup manifest: {}", e)))?;
-        let supports_password = manifest.protection_mode != "mnemonic" && manifest.protection_mode != "mnemonic_only";
+        let manifest: EncryptedBackupManifest =
+            serde_json::from_slice(&manifest_bytes).map_err(|e| {
+                FrontendError::from(format!("Invalid encrypted backup manifest: {}", e))
+            })?;
+        let supports_password =
+            manifest.protection_mode != "mnemonic" && manifest.protection_mode != "mnemonic_only";
         Ok(FrontendBackupProbeDto {
             source_kind: "file".to_string(),
             protection_mode: manifest.protection_mode,
@@ -547,18 +613,25 @@ pub fn probe_wallet_backup(source_path: String) -> Result<FrontendBackupProbeDto
     } else if path.is_dir() {
         let manifest_path = path.join("manifest.enc");
         if !manifest_path.exists() {
-            return Err(FrontendError::from(format!("Directory does not contain a valid backup: manifest.enc missing at {}", manifest_path.display())));
+            return Err(FrontendError::from(format!(
+                "Directory does not contain a valid backup: manifest.enc missing at {}",
+                manifest_path.display()
+            )));
         }
-        let manifest_bytes = fs::read(&manifest_path).map_err(|e| FrontendError::from(format!("Failed to read manifest.enc: {}", e)))?;
-        let manifest: EncryptedBackupManifest = serde_json::from_slice(&manifest_bytes)
-            .map_err(|e| FrontendError::from(format!("Invalid encrypted backup manifest: {}", e)))?;
+        let manifest_bytes = fs::read(&manifest_path)
+            .map_err(|e| FrontendError::from(format!("Failed to read manifest.enc: {}", e)))?;
+        let manifest: EncryptedBackupManifest =
+            serde_json::from_slice(&manifest_bytes).map_err(|e| {
+                FrontendError::from(format!("Invalid encrypted backup manifest: {}", e))
+            })?;
         let blob_count = fs::read_dir(path.join("blobs"))
             .map(|d| d.flatten().filter(|e| e.path().is_file()).count())
             .unwrap_or(0);
         let custom_standard_count = fs::read_dir(path.join("standards"))
             .map(|d| d.flatten().filter(|e| e.path().is_file()).count())
             .unwrap_or(0);
-        let supports_password = manifest.protection_mode != "mnemonic" && manifest.protection_mode != "mnemonic_only";
+        let supports_password =
+            manifest.protection_mode != "mnemonic" && manifest.protection_mode != "mnemonic_only";
         Ok(FrontendBackupProbeDto {
             source_kind: "folder".to_string(),
             protection_mode: manifest.protection_mode,
@@ -568,7 +641,10 @@ pub fn probe_wallet_backup(source_path: String) -> Result<FrontendBackupProbeDto
             custom_standard_count,
         })
     } else {
-        Err(FrontendError::from(format!("Backup path not found: {}", source_path)))
+        Err(FrontendError::from(format!(
+            "Backup path not found: {}",
+            source_path
+        )))
     }
 }
 
@@ -587,15 +663,25 @@ pub fn export_wallet_backup_file(
         "custom_password" | "custom_backup_password" | "backup_password" => {
             let pwd = backup_password.as_deref().unwrap_or("");
             if pwd.is_empty() {
-                return Err(FrontendError::from("Backup password cannot be empty".to_string()));
+                return Err(FrontendError::from(
+                    "Backup password cannot be empty".to_string(),
+                ));
             }
             BackupProtection::CustomBackupPassword(pwd)
         }
-        _ => return Err(FrontendError::from(format!("Invalid backup protection mode: {}", protection_mode))),
+        _ => {
+            return Err(FrontendError::from(format!(
+                "Invalid backup protection mode: {}",
+                protection_mode
+            )));
+        }
     };
 
     let custom_standards = collect_custom_standards(&app);
-    let mut service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+    let mut service = state
+        .service
+        .lock()
+        .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
     let summary = export_backup_file_impl(
         Path::new(&destination_path),
         protection,
@@ -635,15 +721,25 @@ pub fn sync_wallet_backup_folder(
         "custom_password" | "custom_backup_password" | "backup_password" => {
             let pwd = backup_password.as_deref().unwrap_or("");
             if pwd.is_empty() {
-                return Err(FrontendError::from("Backup password cannot be empty".to_string()));
+                return Err(FrontendError::from(
+                    "Backup password cannot be empty".to_string(),
+                ));
             }
             BackupProtection::CustomBackupPassword(pwd)
         }
-        _ => return Err(FrontendError::from(format!("Invalid backup protection mode: {}", protection_mode))),
+        _ => {
+            return Err(FrontendError::from(format!(
+                "Invalid backup protection mode: {}",
+                protection_mode
+            )));
+        }
     };
 
     let custom_standards = collect_custom_standards(&app);
-    let mut service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+    let mut service = state
+        .service
+        .lock()
+        .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
     let summary = sync_backup_folder_impl(
         Path::new(&folder_path),
         expected_mode,
@@ -693,7 +789,8 @@ pub fn inspect_wallet_backup(
 
     let derived_identity = if credential_mode == "mnemonic" {
         if let Some(ref phrase) = mnemonic {
-            let core_lang: human_money_core::MnemonicLanguage = language.unwrap_or(MnemonicLanguage::English).into();
+            let core_lang: human_money_core::MnemonicLanguage =
+                language.unwrap_or(MnemonicLanguage::English).into();
             Wallet::new_from_mnemonic(
                 phrase,
                 passphrase.as_deref(),
@@ -718,7 +815,10 @@ pub fn inspect_wallet_backup(
         .join("wallet_data");
     let user_ids = user_ids_from_metadata_dir(&wallet_data_dir);
 
-    let service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+    let service = state
+        .service
+        .lock()
+        .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
     inspect_backup_with_collision_impl(
         Path::new(&source_path),
         &credentials,
@@ -758,7 +858,9 @@ fn replace_local_profile_with_restored(
                 .load_integrity()
                 .ok()
                 .flatten()
-                .is_some_and(|ir| verify_integrity_record_signature(&ir, &restored_identity.user_id));
+                .is_some_and(|ir| {
+                    verify_integrity_record_signature(&ir, &restored_identity.user_id)
+                });
 
     if !(seal_matches || meta_matches || integrity_matches) {
         log::warn!(
@@ -873,109 +975,22 @@ pub(crate) async fn finalize_restored_wallet_and_reconcile_l2(
         profile_name = "Restored Profile".to_string();
     }
 
-    let restored_standards_count = restore_custom_standards_to_dir(standards_dir, &custom_standards)?;
+    let restored_standards_count =
+        restore_custom_standards_to_dir(standards_dir, &custom_standards)?;
 
-    let active_voucher_queries_count = outcome.voucher_queries.len();
-    let settings = state.get_cached_settings().map_err(FrontendError::from)?;
-    let candidates = crate::gateway_resolver::cached_candidates(&settings);
+    let summary = crate::commands::settings_cmd::reconcile_vouchers_via_static_locks(
+        state,
+        Some(&outcome.voucher_ids_to_check),
+        Some(new_password),
+    )
+    .await?;
 
-    let mut reconciled_spent_count = 0;
-    let l2_reconciliation_status = if candidates.is_empty() {
-        "no_servers".to_string()
-    } else {
-        let client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .map_err(|_| FrontendError::from("HTTP client unavailable".to_string()))?;
-        let mut at_least_one_gateway_responded = false;
-
-        for (local_id, mut query) in outcome.voucher_queries {
-            query.read_quorum = 1;
-            let body_bytes = match serde_json::to_vec(&query) {
-                Ok(b) => b,
-                Err(_) => continue,
-            };
-
-            for base in candidates.iter().take(4) {
-                let Some(url) = crate::gateway_resolver::endpoint(base, "v1/status") else {
-                    continue;
-                };
-                let mut request = client
-                    .post(url.clone())
-                    .header("Content-Type", "application/json")
-                    .body(body_bytes.clone());
-
-                if let Some(provider) = settings.custom_servers.iter().find(|p| {
-                    p.is_active
-                        && crate::gateway_resolver::endpoint(&p.url, "v1/status")
-                            .is_some_and(|k| k.origin() == url.origin())
-                }) {
-                    if let Some(token) = &provider.auth_token {
-                        request = request.bearer_auth(token);
-                    }
-                    if let Some(token) = &provider.peer_token {
-                        if token.len() == 36
-                            && token.starts_with("f2f_")
-                            && token[4..].bytes().all(|b| b.is_ascii_hexdigit())
-                        {
-                            request = request.header("X-Peer-Token", token);
-                        }
-                    }
-                }
-
-                let response = tokio::time::timeout(
-                    std::time::Duration::from_millis(2500),
-                    request.send(),
-                )
-                .await;
-
-                let Ok(Ok(resp)) = response else { continue };
-                at_least_one_gateway_responded = true;
-                if !resp.status().is_success() {
-                    continue;
-                }
-                let Ok(resp_bytes) = resp.bytes().await else {
-                    continue;
-                };
-
-                let verdict_opt = serde_json::from_slice::<
-                    human_money_core::models::layer2_api::L2ResponseEnvelope,
-                >(&resp_bytes)
-                .ok()
-                .map(|e| e.verdict);
-
-                if let Some(verdict) = verdict_opt {
-                    let mut service = state
-                        .service
-                        .lock()
-                        .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
-                    match service.reconcile_voucher_verdict(&local_id, &verdict, Some(new_password)) {
-                        Ok(human_money_core::models::layer2_api::VoucherReconciliationResult::AlreadySpent { .. })
-                        | Ok(human_money_core::models::layer2_api::VoucherReconciliationResult::ConflictDetected { .. }) => {
-                            reconciled_spent_count += 1;
-                            break;
-                        }
-                        Ok(human_money_core::models::layer2_api::VoucherReconciliationResult::UnspentSafe) => {
-                            break;
-                        }
-                        Err(e) => {
-                            log::debug!("Backup voucher reconciliation rejected: {}", e);
-                        }
-                    }
-                }
-            }
-        }
-
-        if at_least_one_gateway_responded {
-            "reconciled".to_string()
-        } else {
-            "offline".to_string()
-        }
-    };
+    let active_voucher_queries_count = summary.active_anchored_count;
+    let reconciled_spent_count = summary.reconciled_spent_count;
+    let l2_reconciliation_status = summary.status;
 
     // Mandatory SST-V4 offline-spend lock (§5)
-    let pending_restore_l2 =
-        active_voucher_queries_count > 0 && l2_reconciliation_status != "reconciled";
+    let pending_restore_l2 = active_voucher_queries_count > 0 && !summary.all_responded;
     if let Ok(mut settings) = state.get_cached_settings() {
         settings.pending_restore_l2_reconciliation = pending_restore_l2;
         if let Ok(mut service) = state.service.lock() {
@@ -997,7 +1012,7 @@ pub(crate) async fn finalize_restored_wallet_and_reconcile_l2(
         tauri::async_runtime::spawn(async move {
             use tauri::Manager;
             let app_state = app_handle.state::<AppState>();
-            let _ = crate::commands::settings_cmd::flush_pending_anchor_sync_inner(
+            let _ = crate::commands::settings_cmd::reconcile_restored_wallet_if_pending(
                 &app_state,
                 Some(&pwd),
             )
@@ -1032,10 +1047,14 @@ pub async fn restore_wallet_backup(
     app: tauri::AppHandle,
 ) -> Result<FrontendRestoreOutcomeDto, FrontendError> {
     if local_instance_id.is_empty() {
-        return Err(FrontendError::from("Device instance ID is required".to_string()));
+        return Err(FrontendError::from(
+            "Device instance ID is required".to_string(),
+        ));
     }
     if new_password.is_empty() {
-        return Err(FrontendError::from("New password cannot be empty".to_string()));
+        return Err(FrontendError::from(
+            "New password cannot be empty".to_string(),
+        ));
     }
 
     let cleaned_prefix = user_prefix
@@ -1099,13 +1118,19 @@ pub(crate) fn reset_local_password_via_backup_impl(
     app_opt: Option<&tauri::AppHandle>,
 ) -> Result<(), FrontendError> {
     if !is_safe_folder_name(target_folder_name) {
-        return Err(FrontendError::from("Invalid target profile folder name".to_string()));
+        return Err(FrontendError::from(
+            "Invalid target profile folder name".to_string(),
+        ));
     }
     if new_password.is_empty() {
-        return Err(FrontendError::from("New password cannot be empty".to_string()));
+        return Err(FrontendError::from(
+            "New password cannot be empty".to_string(),
+        ));
     }
     if local_instance_id.is_empty() {
-        return Err(FrontendError::from("Device instance ID is required".to_string()));
+        return Err(FrontendError::from(
+            "Device instance ID is required".to_string(),
+        ));
     }
 
     if credential_mode == "mnemonic" {
@@ -1153,8 +1178,7 @@ pub(crate) fn reset_local_password_via_backup_impl(
 
         let parts = read_backup_parts(source_path)?;
         let temp_local_pw = format!("tmp_{}", uuid::Uuid::new_v4());
-        let mut temp_service =
-            AppService::new(&temp_dir).map_err(FrontendError::from)?;
+        let mut temp_service = AppService::new(&temp_dir).map_err(FrontendError::from)?;
         temp_service
             .restore_backup(
                 &parts.manifest_bytes,
@@ -1200,7 +1224,9 @@ pub(crate) fn reset_local_password_via_backup_impl(
         } else {
             let local_dir = wallet_data_dir.join(target_folder_name);
             if !local_dir.exists() {
-                return Err(FrontendError::from("Local profile directory not found".to_string()));
+                return Err(FrontendError::from(
+                    "Local profile directory not found".to_string(),
+                ));
             }
             if local_dir.join(".wallet.undo.enc").exists() {
                 return Err(FrontendError::from(
@@ -1269,26 +1295,10 @@ pub(crate) fn reset_local_password_via_backup_impl(
             )
             .map_err(FrontendError::from)?;
 
-            let mut pending_tombstones = existing_seal
-                .as_ref()
-                .map(|r| r.pending_tombstones.clone())
-                .unwrap_or_default();
-            if let Some(old_rec) = &existing_seal {
-                pending_tombstones.push(PendingEpochTombstone {
-                    old_epoch: old_rec.seal.payload.epoch,
-                    old_epoch_valid_until: old_rec.seal.payload.epoch_valid_until.clone(),
-                    target_epoch: recovered_seal.payload.epoch,
-                    kind: AnchorLockKind::SeedRecoveryTombstone,
-                    last_known_checkpoint: old_rec.last_synced_anchor.clone(),
-                });
-            }
-
             let new_record = LocalSealRecord {
                 seal: recovered_seal,
                 sync_status: SyncStatus::PendingUpload,
                 lock_reason: None,
-                pending_tombstones,
-                last_synced_anchor: None,
             };
             let auth_new_pw = AuthMethod::Password(new_password);
             local_storage
@@ -1340,7 +1350,7 @@ pub(crate) fn reset_local_password_via_backup_impl(
         tauri::async_runtime::spawn(async move {
             use tauri::Manager;
             let app_state = app_handle.state::<AppState>();
-            crate::commands::settings_cmd::probe_and_flush_cold_recovery_inner(
+            let _ = crate::commands::settings_cmd::reconcile_restored_wallet_if_pending(
                 &app_state,
                 Some(&pwd),
             )
@@ -1411,10 +1421,17 @@ pub fn compute_backup_status_dto(
     let last_sync_backup_at = settings.last_sync_backup_at.clone();
 
     let has_friend_syncs = !settings.market_selected_syncs.is_empty();
-    let has_public_syncs = settings.public_syncs.iter().any(|d| d.enabled && !d.write_url.is_empty());
-    let has_authorized_sync_backup_target = has_friend_syncs || has_public_syncs || has_own_sync || last_sync_backup_at.is_some();
+    let has_public_syncs = settings
+        .public_syncs
+        .iter()
+        .any(|d| d.enabled && !d.write_url.is_empty());
+    let has_authorized_sync_backup_target =
+        has_friend_syncs || has_public_syncs || has_own_sync || last_sync_backup_at.is_some();
 
-    let folder_str_opt = settings.backup_sync_folder.as_ref().filter(|f| !f.trim().is_empty());
+    let folder_str_opt = settings
+        .backup_sync_folder
+        .as_ref()
+        .filter(|f| !f.trim().is_empty());
     let local_configured = folder_str_opt.is_some();
     let folder_str = folder_str_opt.cloned();
 
@@ -1424,8 +1441,15 @@ pub fn compute_backup_status_dto(
         false
     };
 
-    let local_current = local_configured && local_connected && !settings.backup_dirty && !is_older_than_14_days(&settings.last_backup_at);
-    let sync_current = sync_backup_enabled && has_authorized_sync_backup_target && !settings.backup_dirty && last_sync_backup_at.is_some() && !is_older_than_14_days(&last_sync_backup_at);
+    let local_current = local_configured
+        && local_connected
+        && !settings.backup_dirty
+        && !is_older_than_14_days(&settings.last_backup_at);
+    let sync_current = sync_backup_enabled
+        && has_authorized_sync_backup_target
+        && !settings.backup_dirty
+        && last_sync_backup_at.is_some()
+        && !is_older_than_14_days(&last_sync_backup_at);
 
     let has_sync_target = sync_backup_enabled && has_authorized_sync_backup_target;
 
@@ -1454,19 +1478,23 @@ pub fn compute_backup_status_dto(
 }
 
 #[tauri::command]
-pub fn get_backup_status(state: tauri::State<AppState>) -> Result<FrontendAutoBackupStatusDto, FrontendError> {
+pub fn get_backup_status(
+    state: tauri::State<AppState>,
+) -> Result<FrontendAutoBackupStatusDto, FrontendError> {
     let settings = match state.get_cached_settings() {
         Ok(s) => s,
-        Err(_) => return Ok(FrontendAutoBackupStatusDto {
-            status: "notConfigured".to_string(),
-            last_backup_at: None,
-            backup_dirty: false,
-            sync_folder: None,
-            changed_blobs: None,
-            sync_backup_enabled: false,
-            last_sync_backup_at: None,
-            has_authorized_sync_backup_target: false,
-        }),
+        Err(_) => {
+            return Ok(FrontendAutoBackupStatusDto {
+                status: "notConfigured".to_string(),
+                last_backup_at: None,
+                backup_dirty: false,
+                sync_folder: None,
+                changed_blobs: None,
+                sync_backup_enabled: false,
+                last_sync_backup_at: None,
+                has_authorized_sync_backup_target: false,
+            });
+        }
     };
 
     let has_own_sync = state
@@ -1477,7 +1505,9 @@ pub fn get_backup_status(state: tauri::State<AppState>) -> Result<FrontendAutoBa
             service
                 .load_encrypted_data(crate::state::MARKET_SYNC_ADMIN_KEY, None)
                 .ok()
-                .and_then(|bytes| serde_json::from_slice::<crate::state::StoredSyncAdmin>(&bytes).ok())
+                .and_then(|bytes| {
+                    serde_json::from_slice::<crate::state::StoredSyncAdmin>(&bytes).ok()
+                })
         })
         .map(|admin| !admin.descriptor.write_url.is_empty())
         .unwrap_or(false);
@@ -1492,16 +1522,18 @@ pub fn run_auto_backup_sync(
 ) -> Result<FrontendAutoBackupStatusDto, FrontendError> {
     let mut settings = match state.get_cached_settings() {
         Ok(s) => s,
-        Err(_) => return Ok(FrontendAutoBackupStatusDto {
-            status: "notConfigured".to_string(),
-            last_backup_at: None,
-            backup_dirty: false,
-            sync_folder: None,
-            changed_blobs: None,
-            sync_backup_enabled: false,
-            last_sync_backup_at: None,
-            has_authorized_sync_backup_target: false,
-        }),
+        Err(_) => {
+            return Ok(FrontendAutoBackupStatusDto {
+                status: "notConfigured".to_string(),
+                last_backup_at: None,
+                backup_dirty: false,
+                sync_folder: None,
+                changed_blobs: None,
+                sync_backup_enabled: false,
+                last_sync_backup_at: None,
+                has_authorized_sync_backup_target: false,
+            });
+        }
     };
 
     let has_own_sync = state
@@ -1512,7 +1544,9 @@ pub fn run_auto_backup_sync(
             service
                 .load_encrypted_data(crate::state::MARKET_SYNC_ADMIN_KEY, None)
                 .ok()
-                .and_then(|bytes| serde_json::from_slice::<crate::state::StoredSyncAdmin>(&bytes).ok())
+                .and_then(|bytes| {
+                    serde_json::from_slice::<crate::state::StoredSyncAdmin>(&bytes).ok()
+                })
         })
         .map(|admin| !admin.descriptor.write_url.is_empty())
         .unwrap_or(false);
@@ -1524,7 +1558,9 @@ pub fn run_auto_backup_sync(
         }
     };
 
-    if !settings.auto_backup_enabled || settings.backup_protection_mode.as_deref() == Some("custom_password") {
+    if !settings.auto_backup_enabled
+        || settings.backup_protection_mode.as_deref() == Some("custom_password")
+    {
         return Ok(compute_backup_status_dto(&settings, has_own_sync));
     }
 
@@ -1540,7 +1576,10 @@ pub fn run_auto_backup_sync(
         return Ok(compute_backup_status_dto(&settings, has_own_sync));
     }
 
-    let mut service = state.service.lock().map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+    let mut service = state
+        .service
+        .lock()
+        .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
     let custom_standards = collect_custom_standards(&app);
 
     match sync_backup_folder_impl(
@@ -1586,7 +1625,8 @@ pub(crate) fn cleanup_stale_tmp_restore_files(tmp_dir: &Path) {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_file() {
-                if path.file_name().and_then(|n| n.to_str()) == Some("active_recovery_session.json") {
+                if path.file_name().and_then(|n| n.to_str()) == Some("active_recovery_session.json")
+                {
                     continue;
                 }
                 if let Ok(metadata) = fs::metadata(&path) {
@@ -1627,17 +1667,13 @@ fn sign_backup_channel_request(
     body: &[u8],
 ) -> Result<humoco_market::SignedDropHeaders, String> {
     if signer.is_public {
-        let (r_sk, _, _) =
-            humoco_market::derive_public_drop_keypair(signer.master_seed, &signer.drop_desc.write_url)
-                .map_err(|e| e.to_string())?;
+        let (r_sk, _, _) = humoco_market::derive_public_drop_keypair(
+            signer.master_seed,
+            &signer.drop_desc.write_url,
+        )
+        .map_err(|e| e.to_string())?;
         Ok(humoco_market::sign_member_request_direct(
-            &r_sk,
-            method,
-            "backup",
-            prefix,
-            now_secs,
-            nonce,
-            body,
+            &r_sk, method, "backup", prefix, now_secs, nonce, body,
         ))
     } else {
         humoco_market::sign_member_request_stealth(
@@ -1689,7 +1725,14 @@ pub(crate) async fn fetch_and_merge_backup_slot(
     let delta_prefix = humoco_market::derive_delta_prefix(base_prefix);
     let (base_res, delta_res) = tokio::join!(
         crate::sync_client::get_slot(client, read_url, pubkey_hex, base_prefix, "backup", None),
-        crate::sync_client::get_slot(client, read_url, pubkey_hex, Some(delta_prefix.as_str()), "backup", None),
+        crate::sync_client::get_slot(
+            client,
+            read_url,
+            pubkey_hex,
+            Some(delta_prefix.as_str()),
+            "backup",
+            None
+        ),
     );
 
     let base_slot_bytes = match base_res {
@@ -1698,13 +1741,25 @@ pub(crate) async fn fetch_and_merge_backup_slot(
     };
 
     let unpadded_base = humoco_market::unpad_backup_slot_bytes(&base_slot_bytes).ok()?;
-    let mut base_container: PortableBackupContainer = serde_json::from_slice(&unpadded_base).ok()?;
+    let mut base_container: PortableBackupContainer =
+        serde_json::from_slice(&unpadded_base).ok()?;
 
-    if let Ok(crate::sync_client::SlotFetchResult::Modified { bytes: delta_slot_bytes, .. }) = delta_res {
+    if let Ok(crate::sync_client::SlotFetchResult::Modified {
+        bytes: delta_slot_bytes,
+        ..
+    }) = delta_res
+    {
         if let Ok(unpadded_delta) = humoco_market::unpad_backup_slot_bytes(&delta_slot_bytes) {
-            if let Ok(delta_container) = serde_json::from_slice::<BackupDeltaContainer>(&unpadded_delta) {
-                if let Err(e) = merge_backup_delta_into_base(&mut base_container, &delta_container) {
-                    log::warn!("Ignoring stale/mismatched backup delta from {}: {}", read_url, e);
+            if let Ok(delta_container) =
+                serde_json::from_slice::<BackupDeltaContainer>(&unpadded_delta)
+            {
+                if let Err(e) = merge_backup_delta_into_base(&mut base_container, &delta_container)
+                {
+                    log::warn!(
+                        "Ignoring stale/mismatched backup delta from {}: {}",
+                        read_url,
+                        e
+                    );
                 }
             }
         }
@@ -1955,11 +2010,9 @@ pub(crate) async fn sync_backup_with_standards_impl(
                         delete_blobs: diff.delete_blobs,
                         custom_standards: custom_standards.clone(),
                     };
-                    serde_json::to_vec(&delta_container)
-                        .ok()
-                        .and_then(|bytes| {
-                            humoco_market::pad_backup_slot_bytes(&bytes, max_target_bytes).ok()
-                        })
+                    serde_json::to_vec(&delta_container).ok().and_then(|bytes| {
+                        humoco_market::pad_backup_slot_bytes(&bytes, max_target_bytes).ok()
+                    })
                 }
                 Err(_) => None,
             }
@@ -1976,7 +2029,11 @@ pub(crate) async fn sync_backup_with_standards_impl(
 
         let (base_m_bytes, base_m_sha, base_padded) = if any_mirror_needs_base {
             let diff = service
-                .create_differential_backup(None, BackupProtection::MnemonicOnly, password.as_deref())
+                .create_differential_backup(
+                    None,
+                    BackupProtection::MnemonicOnly,
+                    password.as_deref(),
+                )
                 .map_err(FrontendError::from)?;
             let mut blobs_hex = HashMap::with_capacity(diff.put_blobs.len());
             for (name, data) in diff.put_blobs {
@@ -2000,7 +2057,13 @@ pub(crate) async fn sync_backup_with_standards_impl(
             (None, None, None)
         };
 
-        (stored_state, base_m_bytes, base_m_sha, base_padded, delta_attempt)
+        (
+            stored_state,
+            base_m_bytes,
+            base_m_sha,
+            base_padded,
+            delta_attempt,
+        )
     };
 
     let client = crate::sync_client::create_sync_http_client();
@@ -2032,7 +2095,9 @@ pub(crate) async fn sync_backup_with_standards_impl(
         if upload_bytes.len() > target.effective_max_bytes {
             errors.push(format!(
                 "Upload to {} skipped: backup size {} exceeds channel limit {}",
-                target.desc.write_url, upload_bytes.len(), target.effective_max_bytes
+                target.desc.write_url,
+                upload_bytes.len(),
+                target.effective_max_bytes
             ));
             continue;
         }
@@ -2133,7 +2198,10 @@ pub(crate) async fn sync_backup_with_standards_impl(
                 }
             }
             Err(e) => {
-                errors.push(format!("Signing failed for {}: {}", target.desc.write_url, e));
+                errors.push(format!(
+                    "Signing failed for {}: {}",
+                    target.desc.write_url, e
+                ));
             }
         }
     }
@@ -2210,9 +2278,7 @@ pub(crate) fn preview_mnemonic_identity_impl(
     wallet_data_dir: &Path,
     service: &AppService,
 ) -> Result<MnemonicIdentityPreviewDto, FrontendError> {
-    let cleaned_prefix = user_prefix
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
+    let cleaned_prefix = user_prefix.map(str::trim).filter(|s| !s.is_empty());
     let core_lang: human_money_core::MnemonicLanguage =
         language.unwrap_or(MnemonicLanguage::English).into();
     let (_, identity) = Wallet::new_from_mnemonic(
@@ -2367,21 +2433,41 @@ pub(crate) async fn probe_sync_backup_impl(
     let mut candidate_tasks: Vec<SyncCandidateTask> = Vec::new();
 
     for trimmed in non_empty_inputs {
-        let (pasted_write_url, pasted_read_url, pasted_drop_pub, pasted_slot_id, pasted_register_url) =
-            if trimmed.starts_with('{') {
-                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&trimmed) {
-                    let w = val.get("writeUrl").and_then(|v| v.as_str()).map(|s| s.to_string());
-                    let r = val.get("readUrl").and_then(|v| v.as_str()).map(|s| s.to_string());
-                    let d = val.get("dropPub").and_then(|v| v.as_str()).map(|s| s.to_string());
-                    let sid = val.get("slotId").and_then(|v| v.as_str()).map(|s| s.to_string());
-                    let reg = val.get("registerUrl").and_then(|v| v.as_str()).map(|s| s.to_string());
-                    (w, r, d, sid, reg)
-                } else {
-                    (None, None, None, None, None)
-                }
+        let (
+            pasted_write_url,
+            pasted_read_url,
+            pasted_drop_pub,
+            pasted_slot_id,
+            pasted_register_url,
+        ) = if trimmed.starts_with('{') {
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&trimmed) {
+                let w = val
+                    .get("writeUrl")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                let r = val
+                    .get("readUrl")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                let d = val
+                    .get("dropPub")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                let sid = val
+                    .get("slotId")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                let reg = val
+                    .get("registerUrl")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                (w, r, d, sid, reg)
             } else {
                 (None, None, None, None, None)
-            };
+            }
+        } else {
+            (None, None, None, None, None)
+        };
 
         let raw_url = pasted_write_url.unwrap_or_else(|| trimmed.clone());
         let canonical_write_url = match humoco_market::canonicalize_write_url(&raw_url) {
@@ -2392,25 +2478,26 @@ pub(crate) async fn probe_sync_backup_impl(
             }
         };
 
-        let mut push_candidate = |read_url: String,
-                                  pubkey_hex: String,
-                                  pfx: Option<String>,
-                                  kind: &str,
-                                  fallback_target: Option<ResolvedSyncTargetDto>| {
-            if !read_url.is_empty()
-                && !candidate_tasks.iter().any(|t| {
-                    t.read_url == read_url && t.pubkey_hex == pubkey_hex && t.prefix_opt == pfx
-                })
-            {
-                candidate_tasks.push(SyncCandidateTask {
-                    read_url,
-                    pubkey_hex,
-                    prefix_opt: pfx,
-                    kind: kind.to_string(),
-                    fallback_target,
-                });
-            }
-        };
+        let mut push_candidate =
+            |read_url: String,
+             pubkey_hex: String,
+             pfx: Option<String>,
+             kind: &str,
+             fallback_target: Option<ResolvedSyncTargetDto>| {
+                if !read_url.is_empty()
+                    && !candidate_tasks.iter().any(|t| {
+                        t.read_url == read_url && t.pubkey_hex == pubkey_hex && t.prefix_opt == pfx
+                    })
+                {
+                    candidate_tasks.push(SyncCandidateTask {
+                        read_url,
+                        pubkey_hex,
+                        prefix_opt: pfx,
+                        kind: kind.to_string(),
+                        fallback_target,
+                    });
+                }
+            };
 
         match crate::sync_client::fetch_sync_info(&probe_client, &canonical_write_url).await {
             Ok(info) => {
@@ -2484,7 +2571,13 @@ pub(crate) async fn probe_sync_backup_impl(
                     let (base_pk, sid_pfx) =
                         humoco_market::parse_slot_id(sid).unwrap_or_else(|_| (sid.clone(), None));
                     let eff_pfx = sid_pfx.or_else(|| normalized_prefix.clone());
-                    push_candidate(info.read_url.clone(), base_pk.clone(), eff_pfx.clone(), "slot_id", None);
+                    push_candidate(
+                        info.read_url.clone(),
+                        base_pk.clone(),
+                        eff_pfx.clone(),
+                        "slot_id",
+                        None,
+                    );
                     if let Some(ref p_read) = pasted_read_url {
                         push_candidate(p_read.clone(), base_pk, eff_pfx, "slot_id", None);
                     }
@@ -2497,7 +2590,8 @@ pub(crate) async fn probe_sync_backup_impl(
                     .map(|(b, _)| b)
                     .unwrap_or(&canonical_write_url);
                 let own_read_url = format!("{}/{}", origin_dir.trim_end_matches('/'), own_data_dir);
-                let (admin_sk, admin_vk, _) = humoco_market::derive_drop_admin_keypair(&master_seed, 0);
+                let (admin_sk, admin_vk, _) =
+                    humoco_market::derive_drop_admin_keypair(&master_seed, 0);
                 if let Ok(own_stealth) =
                     humoco_market::derive_member_stealth_pubkey_admin(&admin_sk, &admin_vk)
                 {
@@ -2552,13 +2646,7 @@ pub(crate) async fn probe_sync_backup_impl(
                         let (base_pk, sid_pfx) = humoco_market::parse_slot_id(sid)
                             .unwrap_or_else(|_| (sid.clone(), None));
                         let eff_pfx = sid_pfx.or_else(|| normalized_prefix.clone());
-                        push_candidate(
-                            r_url,
-                            base_pk,
-                            eff_pfx,
-                            "slot_id",
-                            Some(fallback_target),
-                        );
+                        push_candidate(r_url, base_pk, eff_pfx, "slot_id", Some(fallback_target));
                     }
                 }
                 errors.push(format!("{}: {}", canonical_write_url, info_err));
@@ -2628,7 +2716,13 @@ pub(crate) async fn probe_sync_backup_impl(
                 Some(&identity),
                 &user_ids,
             ) {
-                inspected_candidates.push((staged_path, inspection, kind, source_url, fallback_target));
+                inspected_candidates.push((
+                    staged_path,
+                    inspection,
+                    kind,
+                    source_url,
+                    fallback_target,
+                ));
             } else {
                 let _ = fs::remove_file(&staged_path);
             }
@@ -2739,138 +2833,20 @@ pub async fn reconcile_restored_wallet_l2(
         let _ = service.unlock_session(pwd, 300);
     }
 
+    let summary = crate::commands::settings_cmd::reconcile_vouchers_via_static_locks(
+        &state,
+        None,
+        password.as_deref(),
+    )
+    .await?;
+
+    let active_voucher_queries_count = summary.active_anchored_count;
+    let reconciled_spent_count = summary.reconciled_spent_count;
+    let l2_reconciliation_status = summary.status;
+
     let settings = state.get_cached_settings().map_err(FrontendError::from)?;
-    let candidates = crate::gateway_resolver::cached_candidates(&settings);
-
-    let voucher_queries = {
-        let service = state
-            .service
-            .lock()
-            .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
-        service
-            .with_wallet_and_identity(|wallet, identity| {
-                let mut queries = Vec::new();
-                for (id, instance) in &wallet.voucher_store.vouchers {
-                    if instance.status == human_money_core::wallet::instance::VoucherStatus::Active {
-                        if let Ok(mut query) = wallet.build_voucher_status_query(identity, id, 1) {
-                            query.read_quorum = 1;
-                            queries.push((id.clone(), query));
-                        }
-                    }
-                }
-                queries
-            })
-            .map_err(FrontendError::from)?
-    };
-
-    let active_voucher_queries_count = voucher_queries.len();
-    let mut reconciled_spent_count = 0;
-
-    let (l2_reconciliation_status, all_reconciled) = if candidates.is_empty() {
-        ("no_servers".to_string(), false)
-    } else {
-        let client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .timeout(std::time::Duration::from_millis(2500))
-            .build()
-            .map_err(|_| FrontendError::from("HTTP client unavailable".to_string()))?;
-
-        let mut at_least_one_gateway_responded = false;
-        let mut all_ok = true;
-
-        for (local_id, query) in voucher_queries {
-            let body_bytes = match serde_json::to_vec(&query) {
-                Ok(b) => b,
-                Err(_) => {
-                    all_ok = false;
-                    continue;
-                }
-            };
-            let mut reconciled_this = false;
-
-            for base in candidates.iter().take(4) {
-                let Some(url) = crate::gateway_resolver::endpoint(base, "v1/status") else { continue };
-                let mut request = client
-                    .post(url.clone())
-                    .header("Content-Type", "application/json")
-                    .body(body_bytes.clone());
-
-                if let Some(provider) = settings.custom_servers.iter().find(|p| {
-                    p.is_active
-                        && crate::gateway_resolver::endpoint(&p.url, "v1/status")
-                            .is_some_and(|k| k.origin() == url.origin())
-                }) {
-                    if let Some(token) = &provider.auth_token {
-                        request = request.bearer_auth(token);
-                    }
-                    if let Some(token) = &provider.peer_token {
-                        if token.len() == 36 && token.starts_with("f2f_") && token[4..].bytes().all(|b| b.is_ascii_hexdigit()) {
-                            request = request.header("X-Peer-Token", token);
-                        }
-                    }
-                }
-
-                let response = tokio::time::timeout(
-                    std::time::Duration::from_millis(2500),
-                    request.send(),
-                )
-                .await;
-
-                let Ok(Ok(resp)) = response else { continue };
-                at_least_one_gateway_responded = true;
-                if !resp.status().is_success() { continue; }
-                let Ok(resp_bytes) = resp.bytes().await else { continue };
-
-                let verdict_opt = serde_json::from_slice::<human_money_core::models::layer2_api::L2ResponseEnvelope>(&resp_bytes)
-                    .ok()
-                    .map(|e| e.verdict);
-
-                if let Some(verdict) = verdict_opt {
-                    let mut service = state
-                        .service
-                        .lock()
-                        .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
-                    match service.reconcile_voucher_verdict(&local_id, &verdict, password.as_deref()) {
-                        Ok(human_money_core::models::layer2_api::VoucherReconciliationResult::AlreadySpent { .. }) => {
-                            reconciled_spent_count += 1;
-                            reconciled_this = true;
-                            break;
-                        }
-                        Ok(human_money_core::models::layer2_api::VoucherReconciliationResult::ConflictDetected { .. }) => {
-                            reconciled_spent_count += 1;
-                            reconciled_this = true;
-                            break;
-                        }
-                        Ok(human_money_core::models::layer2_api::VoucherReconciliationResult::UnspentSafe) => {
-                            reconciled_this = true;
-                            break;
-                        }
-                        Err(e) => {
-                            log::debug!("Backup voucher reconciliation rejected: {}", e);
-                        }
-                    }
-                }
-            }
-
-            if !reconciled_this {
-                all_ok = false;
-            }
-        }
-
-        if at_least_one_gateway_responded {
-            let _ = crate::commands::settings_cmd::flush_pending_anchor_sync_inner(&state, password.as_deref()).await;
-            if all_ok || active_voucher_queries_count == 0 {
-                ("reconciled".to_string(), true)
-            } else {
-                ("offline".to_string(), false)
-            }
-        } else {
-            ("offline".to_string(), false)
-        }
-    };
-
     let mut pending_restore_l2 = settings.pending_restore_l2_reconciliation;
-    if all_reconciled {
+    if summary.all_responded || active_voucher_queries_count == 0 {
         pending_restore_l2 = false;
         let mut new_settings = settings;
         new_settings.pending_restore_l2_reconciliation = false;
@@ -2895,23 +2871,29 @@ mod tests {
     const PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 
     fn temp_test_dir(name: &str) -> PathBuf {
-        let p = std::env::temp_dir().join(format!("humoco_backup_test_{}_{}", name, uuid::Uuid::new_v4()));
+        let p = std::env::temp_dir().join(format!(
+            "humoco_backup_test_{}_{}",
+            name,
+            uuid::Uuid::new_v4()
+        ));
         fs::create_dir_all(&p).unwrap();
         p
     }
 
     fn setup_test_app(dir: &Path, profile_name: &str, password: &str) -> AppService {
         let mut service = AppService::new(dir).unwrap();
-        service.create_profile(
-            profile_name,
-            PHRASE,
-            None,
-            Some("pc"),
-            password,
-            human_money_core::MnemonicLanguage::English,
-            "device-test-1".into(),
-            true,
-        ).unwrap();
+        service
+            .create_profile(
+                profile_name,
+                PHRASE,
+                None,
+                Some("pc"),
+                password,
+                human_money_core::MnemonicLanguage::English,
+                "device-test-1".into(),
+                true,
+            )
+            .unwrap();
         service
     }
 
@@ -2932,12 +2914,14 @@ mod tests {
             Some(password),
             &mut service,
             custom_stds.clone(),
-        ).unwrap();
+        )
+        .unwrap();
         assert!(summary1.total_blobs > 0);
         assert_eq!(summary1.custom_standard_count, 1);
 
         // Probe mnemonic backup
-        let probe1 = probe_wallet_backup(mnemonic_export_file.to_string_lossy().to_string()).unwrap();
+        let probe1 =
+            probe_wallet_backup(mnemonic_export_file.to_string_lossy().to_string()).unwrap();
         assert_eq!(probe1.source_kind, "file");
         assert_eq!(probe1.protection_mode, "mnemonic");
         assert!(!probe1.supports_password_restore);
@@ -2963,7 +2947,8 @@ mod tests {
             "NewPassword456!",
             "inst_1".to_string(),
             &mut restore_service1,
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(restored_name1, "Alice Test");
         assert!(outcome1.folder_name.starts_with("restore_"));
 
@@ -2976,7 +2961,8 @@ mod tests {
             Some(password),
             &mut service,
             custom_stds,
-        ).unwrap();
+        )
+        .unwrap();
         assert!(summary2.total_blobs > 0);
 
         // Probe password backup
@@ -2991,12 +2977,17 @@ mod tests {
         assert_eq!(inspect2.profile_name, "Alice Test");
 
         // Inspect with mnemonic (dual recovery slot!)
-        let inspect2_mn = inspect_backup_impl(&pwd_export_file, &BackupRestoreCredentials::Mnemonic {
-            phrase: PHRASE,
-            passphrase: None,
-            prefix: Some("pc"),
-            language: human_money_core::MnemonicLanguage::English,
-        }, &service).unwrap();
+        let inspect2_mn = inspect_backup_impl(
+            &pwd_export_file,
+            &BackupRestoreCredentials::Mnemonic {
+                phrase: PHRASE,
+                passphrase: None,
+                prefix: Some("pc"),
+                language: human_money_core::MnemonicLanguage::English,
+            },
+            &service,
+        )
+        .unwrap();
         assert_eq!(inspect2_mn.profile_name, "Alice Test");
 
         // Restore password backup
@@ -3008,7 +2999,8 @@ mod tests {
             "NewPassword789!",
             "inst_2".to_string(),
             &mut restore_service2,
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(restored_name2, "Alice Test");
 
         let _ = fs::remove_dir_all(base_dir);
@@ -3031,7 +3023,8 @@ mod tests {
             false,
             &mut service,
             HashMap::new(),
-        ).unwrap();
+        )
+        .unwrap();
         assert!(summary1.changed_blobs > 0);
         assert!(sync_dir.join("manifest.enc").exists());
         assert!(sync_dir.join("blobs").exists());
@@ -3051,7 +3044,8 @@ mod tests {
             false,
             &mut service,
             HashMap::new(),
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(summary2.changed_blobs, 0);
         assert_eq!(summary2.deleted_blobs, 0);
         assert_eq!(summary2.total_blobs, summary1.total_blobs);
@@ -3071,7 +3065,8 @@ mod tests {
             "NewPasswordFolder!",
             "inst_f".to_string(),
             &mut restore_service,
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(name, "Bob Diff");
         assert!(outcome.folder_name.starts_with("restore_"));
 
@@ -3094,7 +3089,8 @@ mod tests {
             false,
             &mut service,
             HashMap::new(),
-        ).unwrap();
+        )
+        .unwrap();
 
         // Tamper a blob inside blobs/
         let mut tampered = false;
@@ -3126,7 +3122,8 @@ mod tests {
             "NewPasswordTamper!",
             "inst_t".to_string(),
             &mut restore_service,
-        ).unwrap_err();
+        )
+        .unwrap_err();
         let msg = err.message.to_lowercase();
         assert!(msg.contains("mismatch") || msg.contains("integrity") || msg.contains("invalid"));
 
@@ -3146,7 +3143,10 @@ mod tests {
         // It must NOT create directories if disconnected!
         let is_connected = non_existent_usb.is_dir();
         assert!(!is_connected);
-        assert!(!non_existent_usb.exists(), "USB path must not have been created");
+        assert!(
+            !non_existent_usb.exists(),
+            "USB path must not have been created"
+        );
 
         let _ = fs::remove_dir_all(base_dir);
     }
@@ -3154,7 +3154,9 @@ mod tests {
     #[test]
     fn test_is_older_than_14_days() {
         assert!(is_older_than_14_days(&None));
-        assert!(is_older_than_14_days(&Some("invalid-timestamp".to_string())));
+        assert!(is_older_than_14_days(&Some(
+            "invalid-timestamp".to_string()
+        )));
 
         let recent = (Utc::now() - chrono::Duration::days(2)).to_rfc3339();
         assert!(!is_older_than_14_days(&Some(recent)));
@@ -3165,10 +3167,14 @@ mod tests {
 
     #[test]
     fn test_sync_backup_slot_padding_integration() {
-        use humoco_market::slot::{pad_backup_slot_bytes, unpad_backup_slot_bytes, DROP_BACKUP_MAX_BYTES, BACKUP_PAD_BLOCK_BYTES};
+        use humoco_market::slot::{
+            pad_backup_slot_bytes, unpad_backup_slot_bytes, BACKUP_PAD_BLOCK_BYTES,
+            DROP_BACKUP_MAX_BYTES,
+        };
 
         let fake_backup = b"HMC_BACKUP_CONTAINER_V1_MOCK_PAYLOAD_DATA";
-        let padded = pad_backup_slot_bytes(fake_backup, DROP_BACKUP_MAX_BYTES).expect("padding must succeed");
+        let padded = pad_backup_slot_bytes(fake_backup, DROP_BACKUP_MAX_BYTES)
+            .expect("padding must succeed");
         assert_eq!(padded.len() % BACKUP_PAD_BLOCK_BYTES, 0);
         assert_eq!(padded.len(), BACKUP_PAD_BLOCK_BYTES);
 
@@ -3183,7 +3189,8 @@ mod tests {
             mnemonic,
             None,
             human_money_core::MnemonicLanguage::English,
-        ).expect("key derivation failed");
+        )
+        .expect("key derivation failed");
 
         // Simulate Drop master key
         let sync_sk = ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng);
@@ -3195,8 +3202,9 @@ mod tests {
         assert_eq!(stealth_pk.len(), 64);
 
         // 2. Candidate keys generation in restore:
-        let candidate_stealth = humoco_market::derive_member_stealth_pubkey(&my_ed_sk, &drop_pub_hex)
-            .expect("candidate derivation failed");
+        let candidate_stealth =
+            humoco_market::derive_member_stealth_pubkey(&my_ed_sk, &drop_pub_hex)
+                .expect("candidate derivation failed");
         assert_eq!(candidate_stealth, stealth_pk);
     }
 
@@ -3295,11 +3303,23 @@ mod tests {
 
         super::merge_backup_delta_into_base(&mut base, &delta).expect("matching base must merge");
         assert_eq!(base.created_at, "2026-01-02T00:00:00Z");
-        assert_eq!(base.manifest_hex, human_money_core::hex::encode(b"manifest-v2"));
+        assert_eq!(
+            base.manifest_hex,
+            human_money_core::hex::encode(b"manifest-v2")
+        );
         assert!(!base.blobs_hex.contains_key("remove.bin"));
-        assert_eq!(base.blobs_hex.get("keep.bin").map(String::as_str), Some("aa"));
-        assert_eq!(base.blobs_hex.get("added.bin").map(String::as_str), Some("cc"));
-        assert_eq!(base.custom_standards.get("std1").map(String::as_str), Some("toml"));
+        assert_eq!(
+            base.blobs_hex.get("keep.bin").map(String::as_str),
+            Some("aa")
+        );
+        assert_eq!(
+            base.blobs_hex.get("added.bin").map(String::as_str),
+            Some("cc")
+        );
+        assert_eq!(
+            base.custom_standards.get("std1").map(String::as_str),
+            Some("toml")
+        );
 
         // Mismatching base_manifest_sha256 must be rejected
         let mut bad_delta = delta;
@@ -3316,7 +3336,8 @@ mod tests {
 
         let base_dir = temp_test_dir("sync_backup_base_delta_e2e");
         let password = "TestPassword123!";
-        let service = setup_sync_test_app(&base_dir.join("wallet"), "Alice", ALICE_PHRASE, password);
+        let service =
+            setup_sync_test_app(&base_dir.join("wallet"), "Alice", ALICE_PHRASE, password);
         let state = create_test_state(service);
 
         let (_admin_sk, admin_vk, _) = humoco_market::derive_drop_admin_keypair(&[0x42u8; 32], 0);
@@ -3347,7 +3368,9 @@ mod tests {
                 drop_pub: drop_pub.clone(),
                 ..Default::default()
             }];
-            state.save_settings(&mut s, settings, Some(password)).unwrap();
+            state
+                .save_settings(&mut s, settings, Some(password))
+                .unwrap();
         }
 
         // 1. Small wallet (< 64 KiB compressed): repeated mutations overwrite Base, never create Delta
@@ -3419,14 +3442,10 @@ mod tests {
         assert!(server.slots.lock().unwrap().contains_key(&delta_slot_key));
 
         let fetch_client = crate::sync_client::create_sync_http_client();
-        let merged_bytes = super::fetch_and_merge_backup_slot(
-            &fetch_client,
-            &read_url,
-            &stealth_pk,
-            Some("pc"),
-        )
-        .await
-        .expect("merged backup container must be fetched");
+        let merged_bytes =
+            super::fetch_and_merge_backup_slot(&fetch_client, &read_url, &stealth_pk, Some("pc"))
+                .await
+                .expect("merged backup container must be fetched");
         let staged_file = base_dir.join("merged_sync_restore.hmcbackup");
         super::write_file_atomic(&staged_file, &merged_bytes).unwrap();
 
@@ -3449,7 +3468,12 @@ mod tests {
         assert_eq!(profile_name, "Alice");
         let mut verify_service = AppService::new(&restored_wallet_dir).unwrap();
         verify_service
-            .login(&outcome.folder_name, password, false, "device-restored".to_string())
+            .login(
+                &outcome.folder_name,
+                password,
+                false,
+                "device-restored".to_string(),
+            )
             .unwrap();
         assert_eq!(
             verify_service
@@ -3516,7 +3540,9 @@ mod tests {
             &service,
         )
         .unwrap();
-        let coll = root_preview.local_collision.expect("root profile must collide");
+        let coll = root_preview
+            .local_collision
+            .expect("root profile must collide");
         assert_eq!(coll.profile_name, "Alice Root");
         assert_eq!(coll.local_epoch, Some(0));
         assert_eq!(coll.local_tx_nonce, Some(1));
@@ -3577,7 +3603,9 @@ mod tests {
                 drop_pub: drop_pub.clone(),
                 ..Default::default()
             }];
-            state.save_settings(&mut s, settings, Some(password)).unwrap();
+            state
+                .save_settings(&mut s, settings, Some(password))
+                .unwrap();
         }
 
         // 1. Before any backup is uploaded -> status must be "not_found" + resolved_sync_targets populated
@@ -3623,7 +3651,10 @@ mod tests {
         .unwrap();
         assert_eq!(found_res.status, "found");
         assert_eq!(found_res.matched_key_kind.as_deref(), Some("stealth"));
-        assert!(found_res.staged_path.as_deref().is_some_and(|p| Path::new(p).exists()));
+        assert!(found_res
+            .staged_path
+            .as_deref()
+            .is_some_and(|p| Path::new(p).exists()));
         let inspection = found_res.inspection.expect("inspection must be populated");
         assert_eq!(inspection.profile_name, "Alice");
         assert!(inspection.local_collision.is_some());
@@ -3643,7 +3674,9 @@ mod tests {
 
         let mut service = setup_test_app(&wallet_dir, "Alice", old_pass);
         let original_folder = service.list_profiles().unwrap()[0].folder_name.clone();
-        let alice_uid = service.with_wallet(|w| w.get_user_id().to_string()).unwrap();
+        let alice_uid = service
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
 
         let bkp_file = base_dir.join("alice.hmcbackup");
         super::export_backup_file_impl(
@@ -3679,9 +3712,26 @@ mod tests {
         {
             let mut s = state.service.lock().unwrap();
             s.logout();
-            assert!(s.login(&original_folder, old_pass, false, "inst-pw-reset".to_string()).is_err());
-            assert!(s.login(&original_folder, new_pass, false, "inst-pw-reset".to_string()).is_ok());
-            assert_eq!(s.with_wallet(|w| w.get_user_id().to_string()).unwrap(), alice_uid);
+            assert!(s
+                .login(
+                    &original_folder,
+                    old_pass,
+                    false,
+                    "inst-pw-reset".to_string()
+                )
+                .is_err());
+            assert!(s
+                .login(
+                    &original_folder,
+                    new_pass,
+                    false,
+                    "inst-pw-reset".to_string()
+                )
+                .is_ok());
+            assert_eq!(
+                s.with_wallet(|w| w.get_user_id().to_string()).unwrap(),
+                alice_uid
+            );
             s.logout();
         }
 

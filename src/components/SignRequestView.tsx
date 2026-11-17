@@ -11,7 +11,7 @@ import { revealItemInDir } from '@tauri-apps/plugin-opener';
 import { logger } from '../utils/log';
 import { translateError, stringifyError } from '../utils/errorHelper';
 import { translateRuleMessage, translateGentleHint } from '../utils/signatureHints';
-import { VoucherDetails, VoucherStandardInfo, AppSettings, SignatureImpact, VoucherTrustDto, PublicProfile, VoucherStandardDefinition } from '../types';
+import { VoucherDetails, VoucherStandardInfo, AppSettings, SignatureImpact, VoucherTrustDto, PublicProfile, VoucherStandardDefinition, GuarantorAnchorCheckDto } from '../types';
 import { updateLastUsedDirectory } from '../utils/settingsUtils';
 import { Button } from './ui/Button';
 import { Card } from './ui/Card';
@@ -68,6 +68,7 @@ export function SignRequestView({ voucherData, requestMsgId, senderDid, onBack }
     const [selectedGender, setSelectedGender] = useState<string>("1");
     const [isSavingGender, setIsSavingGender] = useState(false);
     const [standardsLoaded, setStandardsLoaded] = useState(false);
+    const [guarantorCheck, setGuarantorCheck] = useState<GuarantorAnchorCheckDto | null>(null);
 
 
 
@@ -182,6 +183,7 @@ export function SignRequestView({ voucherData, requestMsgId, senderDid, onBack }
         let active = true;
         if (!selectedRole || !standardContent) {
             setImpact(null);
+            setGuarantorCheck(null);
             return;
         }
 
@@ -203,7 +205,27 @@ export function SignRequestView({ voucherData, requestMsgId, senderDid, onBack }
                 if (active) setIsImpactLoading(false);
             }
         }
+
         fetchImpact();
+
+        if (selectedRole.toLowerCase() === 'guarantor') {
+            voucherService
+                .evaluateGuarantorAnchorCheck({
+                    voucher: voucherData.voucher,
+                    standardTomlContent: standardContent,
+                })
+                .then((res) => {
+                    if (active && res && typeof res.required === 'boolean') {
+                        setGuarantorCheck(res);
+                    }
+                })
+                .catch(() => {
+                    if (active) setGuarantorCheck(null);
+                });
+        } else {
+            setGuarantorCheck(null);
+        }
+
         return () => { active = false; };
     }, [selectedRole, standardContent, voucherData]);
 
@@ -546,6 +568,47 @@ export function SignRequestView({ voucherData, requestMsgId, senderDid, onBack }
                                     </p>
                                 </div>
                             )}
+
+                            {selectedRole.toLowerCase() === 'guarantor' && guarantorCheck?.required && (
+                                <div
+                                    data-testid="guarantor-anchor-check"
+                                    className={`p-4 rounded-2xl border space-y-2 ${
+                                        guarantorCheck.passed
+                                            ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                                            : 'bg-rose-50 border-rose-200 text-rose-900'
+                                    }`}
+                                >
+                                    <div className="flex items-center justify-between gap-2">
+                                        <span className="text-xs font-black uppercase tracking-wider flex items-center gap-1.5">
+                                            {guarantorCheck.passed ? (
+                                                <ShieldCheck size={16} className="text-emerald-600" />
+                                            ) : (
+                                                <ShieldAlert size={16} className="text-rose-600" />
+                                            )}
+                                            {t('voucher.signRequest.guarantorAnchorTitle', 'L2 Anchor Verification')}
+                                        </span>
+                                        <span className="text-[11px] font-mono font-bold">
+                                            Sybil: {guarantorCheck.sybilIndependentCount}/{guarantorCheck.threshold}
+                                        </span>
+                                    </div>
+                                    <div className="flex flex-wrap gap-2 text-[11px]">
+                                        <span>Anchor: {guarantorCheck.hasLayer2Anchor ? '✓' : '✕'}</span>
+                                        {guarantorCheck.retentionOk !== null && guarantorCheck.retentionOk !== undefined && (
+                                            <span>Retention: {guarantorCheck.retentionOk ? '✓' : '✕'}</span>
+                                        )}
+                                        {guarantorCheck.ownServerPresent !== null && guarantorCheck.ownServerPresent !== undefined && (
+                                            <span>Own Server: {guarantorCheck.ownServerPresent ? '✓' : '✕'}</span>
+                                        )}
+                                    </div>
+                                    {guarantorCheck.issues.length > 0 && (
+                                        <ul className="list-disc list-inside text-[11px] font-semibold space-y-0.5">
+                                            {guarantorCheck.issues.map((issue) => (
+                                                <li key={issue}>{t(`voucher.signRequest.anchorIssue.${issue}`, issue)}</li>
+                                            ))}
+                                        </ul>
+                                    )}
+                                </div>
+                            )}
                         </div>
                     </Card>
                 </div>
@@ -640,7 +703,12 @@ export function SignRequestView({ voucherData, requestMsgId, senderDid, onBack }
                     <Button
                         size="lg"
                         onClick={handleSign}
-                        disabled={!selectedRole || isSigning || (impact !== null && (!impact.isAllowedRole || impact.fatalConflicts.length > 0))}
+                        disabled={
+                            !selectedRole ||
+                            isSigning ||
+                            (selectedRole.toLowerCase() === 'guarantor' && Boolean(guarantorCheck?.required && !guarantorCheck.passed)) ||
+                            (impact !== null && (!impact.isAllowedRole || impact.fatalConflicts.length > 0))
+                        }
                         className="w-full py-5 rounded-3xl shadow-premium-lg text-lg gap-3 disabled:opacity-30 disabled:grayscale transition-all"
                     >
                         {isSigning ? <ShieldCheck className="animate-pulse" size={24} /> : <PenTool size={24} />}

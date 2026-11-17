@@ -3,14 +3,14 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 pub mod commands;
+mod gateway_resolver;
+pub(crate) mod intent_reconciliation;
 pub mod models;
 pub mod pin_keystore;
 pub mod settings;
+pub mod state;
 pub mod sync_client;
 pub mod sync_zip;
-mod gateway_resolver;
-pub(crate) mod intent_reconciliation;
-pub mod state;
 
 pub use state::AppState;
 
@@ -19,14 +19,18 @@ use std::fs;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
 
+use human_money_core::app_service::AppService;
 use log::info;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_log::{
     log::LevelFilter, Builder as LogBuilder, Target, TargetKind, TimezoneStrategy,
 };
-use human_money_core::app_service::AppService;
 
-use crate::commands::{vouchers::*, transfers::*, settings_cmd::*, auth::*, queries::*, utils::*, contacts::*, integrity::*, standards::*, backup::*, wot::*, market::*, sync::*, post::*, profile::*, recovery::*};
+use crate::commands::{
+    auth::*, backup::*, contacts::*, integrity::*, market::*, post::*, profile::*, queries::*,
+    recovery::*, settings_cmd::*, standards::*, sync::*, transfers::*, utils::*, vouchers::*,
+    wot::*,
+};
 
 const LOG_TARGET_NAME: &str = "human_money_app.log";
 
@@ -45,16 +49,25 @@ fn setup_log_rotation(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>>
     }
 
     // Now that we know the file exists, read it and rotate if not empty.
-    let lines: Vec<String> =
-        BufReader::new(File::open(&log_file_path)?).lines().map_while(Result::ok).collect();
+    let lines: Vec<String> = BufReader::new(File::open(&log_file_path)?)
+        .lines()
+        .map_while(Result::ok)
+        .collect();
 
     if !lines.is_empty() {
         let total_lines = lines.len();
         let lines_to_skip = (total_lines as f64 * 0.20).ceil() as usize;
-        let lines_to_keep = lines.into_iter().skip(lines_to_skip).collect::<Vec<String>>();
+        let lines_to_keep = lines
+            .into_iter()
+            .skip(lines_to_skip)
+            .collect::<Vec<String>>();
         let mut log_file = File::create(&log_file_path)?;
         let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S");
-        writeln!(log_file, "--- Log rotated at {} (top 20% removed) ---", timestamp)?;
+        writeln!(
+            log_file,
+            "--- Log rotated at {} (top 20% removed) ---",
+            timestamp
+        )?;
         log_file.write_all(lines_to_keep.join("\n").as_bytes())?;
     }
 
@@ -85,7 +98,6 @@ pub fn run() {
 
             let service = AppService::new(&wallet_path).expect("Failed to create AppService");
             app.manage(AppState::new(service));
-            spawn_regional_view_renewal_worker(app.handle().clone());
             crate::intent_reconciliation::spawn_intent_reconciliation_worker(app.handle().clone());
 
             Ok(())
@@ -95,7 +107,9 @@ pub fn run() {
                 .targets([
                     Target::new(TargetKind::Stdout),
                     Target::new(TargetKind::Webview),
-                    Target::new(TargetKind::LogDir { file_name: Some("human_money_app".into()) }),
+                    Target::new(TargetKind::LogDir {
+                        file_name: Some("human_money_app".into()),
+                    }),
                 ])
                 .level(LevelFilter::Info)
                 .timezone_strategy(TimezoneStrategy::UseLocal)
@@ -119,47 +133,119 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
-            profile_exists, list_profiles, create_profile, login, login_with_pin,
-            get_profile_pin_status, get_session_access_mode, enable_profile_pin, disable_profile_pin,
+            profile_exists,
+            list_profiles,
+            create_profile,
+            login,
+            login_with_pin,
+            get_profile_pin_status,
+            get_session_access_mode,
+            enable_profile_pin,
+            disable_profile_pin,
             elevate_session_with_password,
-            recover_wallet_and_set_new_password, logout,
-            delete_profile, verify_profile_password,
+            recover_wallet_and_set_new_password,
+            logout,
+            delete_profile,
+            verify_profile_password,
             handover_to_this_device,
-            unlock_session, lock_session, refresh_session_activity, is_session_active, // <--- NEU
-            generate_mnemonic, get_bip39_wordlist, get_voucher_standards, validate_mnemonic, get_local_instance_id, get_latest_logs,
-            get_user_id, get_user_profile, get_total_balance_by_currency, get_voucher_summaries, get_voucher_details,
+            unlock_session,
+            lock_session,
+            refresh_session_activity,
+            is_session_active, // <--- NEU
+            generate_mnemonic,
+            get_bip39_wordlist,
+            get_voucher_standards,
+            validate_mnemonic,
+            get_local_instance_id,
+            get_latest_logs,
+            get_user_id,
+            get_user_profile,
+            get_total_balance_by_currency,
+            get_voucher_summaries,
+            get_voucher_details,
             get_active_asset_classes,
-            create_new_voucher, create_transfer_bundle, receive_bundle, save_transaction_record,
-            get_transaction_history, prepare_transfer_plan, rank_vouchers_for_recipient,
-            checkout_received_bundle, submit_l2_send_intent, configure_regional_mesh_authority, verify_live_checkout_and_release, evaluate_checkout_release, verify_checkout_response_with_authority,
-            get_app_settings, save_app_settings, get_reach_preset, apply_reach_preset,
+            create_new_voucher,
+            create_transfer_bundle,
+            receive_bundle,
+            save_transaction_record,
+            get_transaction_history,
+            prepare_transfer_plan,
+            rank_vouchers_for_recipient,
+            checkout_received_bundle,
+            submit_l2_send_intent,
+            evaluate_checkout_release,
+            get_app_settings,
+            save_app_settings,
+            get_reach_preset,
+            apply_reach_preset,
             log_to_backend,
             // Multi-signature commands
-            create_signing_request_bundle, open_voucher_signing_request, create_detached_signature_response_bundle,
-            process_and_attach_signature, get_allowed_signature_roles_from_standard, evaluate_signature_suitability,
+            create_signing_request_bundle,
+            open_voucher_signing_request,
+            create_detached_signature_response_bundle,
+            process_and_attach_signature,
+            get_allowed_signature_roles_from_standard,
+            evaluate_signature_suitability,
+            evaluate_guarantor_anchor_check,
             remove_voucher_signature,
-            get_double_spend_conflicts, get_proof_of_double_spend, get_proof_id_for_voucher,
+            get_double_spend_conflicts,
+            get_proof_of_double_spend,
+            get_proof_id_for_voucher,
             get_voucher_source_sender,
-            check_reputation, set_conflict_local_override,
+            check_reputation,
+            set_conflict_local_override,
             get_event_history,
-            parse_standard_toml, export_voucher_standard, inspect_voucher_standard_file, import_voucher_standard, delete_voucher_standard,
+            parse_standard_toml,
+            export_voucher_standard,
+            inspect_voucher_standard_file,
+            import_voucher_standard,
+            delete_voucher_standard,
             // Address Book
-            get_contacts, save_contact, delete_contact, get_my_quick_contact, encode_text_qr_svg,
-            // WalletSeal / Sync
-            get_seal_sync_status, get_seal_for_upload, acknowledge_seal_sync,
-            check_anchor_sync, reconcile_rollback, flush_pending_anchor_sync,
+            get_contacts,
+            save_contact,
+            delete_contact,
+            get_my_quick_contact,
+            encode_text_qr_svg,
+            // WalletSeal / Sync Locks
+            get_seal_sync_status,
+            get_seal_for_upload,
+            acknowledge_seal_sync,
+            reconcile_rollback,
             check_voucher_l2_status,
-            benchmark_l2_servers,
-            refresh_l2_gateway_cache, refresh_regional_mesh_views,
+            probe_lock_server_cmd,
+            set_own_nominated_lock_server,
+            assemble_anchor_template,
+            prewarm_l2_checkout,
+            check_l2_lock_status,
             // Integrity
-            check_wallet_integrity, repair_wallet_integrity, export_double_spend_proof, import_double_spend_proof,
+            check_wallet_integrity,
+            repair_wallet_integrity,
+            export_double_spend_proof,
+            import_double_spend_proof,
             // Wallet Backups
-            probe_wallet_backup, export_wallet_backup_file, sync_wallet_backup_folder, inspect_wallet_backup, restore_wallet_backup,
-            get_backup_status, run_auto_backup_sync, sync_backup, probe_sync_backup, preview_mnemonic_identity,
-            stage_dropped_backup_bytes, reset_local_password_via_backup, reconcile_restored_wallet_l2,
+            probe_wallet_backup,
+            export_wallet_backup_file,
+            sync_wallet_backup_folder,
+            inspect_wallet_backup,
+            restore_wallet_backup,
+            get_backup_status,
+            run_auto_backup_sync,
+            sync_backup,
+            probe_sync_backup,
+            preview_mnemonic_identity,
+            stage_dropped_backup_bytes,
+            reset_local_password_via_backup,
+            reconcile_restored_wallet_l2,
             // Web of Trust (WoT)
-            get_wot_summary, set_wot_max_hops, export_wot_package, import_wot_package, evaluate_voucher_trust_preview,
-            get_wot_providers, set_wot_provider_trust, remove_wot_provider, refresh_wot_provider_url,
+            get_wot_summary,
+            set_wot_max_hops,
+            export_wot_package,
+            import_wot_package,
+            evaluate_voucher_trust_preview,
+            get_wot_providers,
+            set_wot_provider_trust,
+            remove_wot_provider,
+            refresh_wot_provider_url,
             // Marketplace
             get_my_market_profile,
             save_my_market_profile,
@@ -225,30 +311,3 @@ pub fn run() {
 }
 
 mod checkout;
-
-fn spawn_regional_view_renewal_worker(app: tauri::AppHandle) {
-    tauri::async_runtime::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
-        interval.tick().await;
-        loop {
-            interval.tick().await;
-            let state = app.state::<AppState>();
-            let settings = match state.get_cached_settings() {
-                Ok(s) => s,
-                Err(_) => continue,
-            };
-            if settings.regional_mesh_sources.is_empty() {
-                continue;
-            }
-            let unlocked = match state.service.lock() {
-                Ok(service) => service.with_wallet(|_| ()).is_ok(),
-                Err(_) => false,
-            };
-            if unlocked {
-                if let Err(error) = crate::checkout::ensure_cached_views(state.inner()).await {
-                    log::debug!("Regional view renewal failed: {}", error.message);
-                }
-            }
-        }
-    });
-}

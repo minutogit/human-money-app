@@ -97,16 +97,26 @@ export function ReceiveSuccessView({ payload, onDone }: ReceiveSuccessViewProps)
     const isConfirmed = isLiveConfirmed && !isReplay;
     const isQuarantined = isVictim || (checkoutVerdict ? checkoutVerdict.outcome.startsWith('Quarantined') : false);
     const isProvisional = outcome === 'Provisional' && checkoutVerdict?.canReleaseGoodsAutomatically === true && !isReplay;
+    const isOfflineOnly = outcome === 'OfflineOnly';
+    const isYellow = Boolean(outcome && outcome.startsWith('Yellow'));
 
-    // Only a verified Confirmed checkout verdict with full 14/20 live quorum can yield 'final'.
     // Unverified bundle import or raw response DTOs must never confirm payment or release goods automatically.
     const l2Quorum: L2QuorumInfo = isQuarantined
-        ? { status: 'conflict', details: t('transfer.receiveSuccess.conflictDesc') }
+        ? { status: 'conflict', details: checkoutVerdict?.merchantWarning || t('transfer.receiveSuccess.conflictDesc') }
         : isLiveConfirmed
-            ? { status: 'final', signerCount: 14, activeNodesCount: 20, details: t('transfer.l2.finalHint') }
+            ? {
+                  status: 'final',
+                  signerCount: payload.l2Quorum?.signerCount,
+                  activeNodesCount: payload.l2Quorum?.activeNodesCount,
+                  details: t('transfer.l2.finalHint'),
+              }
             : isProvisional
                 ? { status: 'provisional', details: t('transfer.l2.provisionalHint') }
-                : { status: 'unverified' };
+                : isYellow
+                    ? { status: 'yellow', details: checkoutVerdict?.merchantWarning || t('transfer.l2.yellowHint') }
+                    : isOfflineOnly
+                        ? { status: 'offline_only', details: checkoutVerdict?.merchantWarning || t('transfer.l2.offlineOnlyHint') }
+                        : { status: 'unverified' };
 
     return (
         <div className="flex flex-col items-center justify-center min-h-[80vh] py-12 px-4 animate-in fade-in zoom-in-95 duration-500">

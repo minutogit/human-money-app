@@ -92,7 +92,6 @@ describe('SyncServiceSettingsCard Component', () => {
     const defaultSettings: AppSettings = {
         sessionTimeoutSeconds: 300,
         privacyDefault: 'public',
-        activeNetwork: 'mainnet',
         postAcceptFromContacts: true,
         marketSendCardOnPayment: false,
         marketSyncEnabled: true,

@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback } from "react";
 import { standardsService } from "../services/standardsService";
 import { profileService } from "../services/profileService";
 import { marketService } from "../services/marketService";
+import { settingsService } from "../services/settingsService";
 import { logger } from "../utils/log";
 import { stringifyError } from "../utils/errorHelper";
 import { 
@@ -10,9 +11,11 @@ import {
     VoucherStandardDefinition, 
     CreatorData, 
     CollateralData, 
-    NewVoucherData
+    NewVoucherData,
+    StoredAnchorTemplateMeta
 } from "../types";
 import { normalizeCoordinates } from "../utils/geoUtils";
+import { estimateIsoDurationMs, quarterEndUtcMs, formatQuarter } from "../utils/retentionQuarter";
 
 /**
  * Checks whether a voucher standard's immutable custom CEL rules require the creator's own gender.
@@ -83,6 +86,26 @@ export function useVoucherCreation() {
     const [isLoading, setIsLoading] = useState(true);
     const [coordWarning, setCoordWarning] = useState("");
     const [errors, setErrors] = useState<Record<string, boolean>>({});
+    const [anchorTemplates, setAnchorTemplates] = useState<StoredAnchorTemplateMeta[]>([]);
+    const [selectedAnchorId, setSelectedAnchorId] = useState<string | null>(null);
+
+    useEffect(() => {
+        let active = true;
+        settingsService
+            .getSettings()
+            .then((s) => {
+                if (!active || !s?.l2AnchorTemplatesMeta) return;
+                const templates = s.l2AnchorTemplatesMeta;
+                setAnchorTemplates(templates);
+                if (templates.length > 0) {
+                    setSelectedAnchorId((prev) => prev ?? templates[0].anchorId);
+                }
+            })
+            .catch(() => {
+                // Keep offline-only default if settings are unavailable in isolated tests
+            });
+        return () => { active = false; };
+    }, []);
 
     useEffect(() => {
         let active = true;
@@ -275,6 +298,22 @@ export function useVoucherCreation() {
         return newErrors;
     }, [selectedStandardId, amount, identity, parsedStandard]);
 
+    const validityDurationStr = validityValue > 0 ? `P${validityValue}${validityUnit}` : parsedStandard?.mutable?.appConfig?.defaultValidityDuration;
+    const historyRetentionIso = parsedStandard?.mutable?.appConfig?.serverHistoryRetention || "P1Y";
+    const estimatedDeletableAtMs =
+        Date.now() +
+        estimateIsoDurationMs(validityDurationStr) +
+        estimateIsoDurationMs(historyRetentionIso);
+    const selectedAnchorTemplate =
+        anchorTemplates.find((tpl) => tpl.anchorId === selectedAnchorId) || null;
+    const retentionInsufficient = Boolean(
+        selectedAnchorTemplate &&
+            (quarterEndUtcMs(selectedAnchorTemplate.retainUntilQuarter) ?? 0) < estimatedDeletableAtMs
+    );
+    const selectedAnchorQuarterLabel = selectedAnchorTemplate
+        ? formatQuarter(selectedAnchorTemplate.retainUntilQuarter)
+        : null;
+
     const prepareVoucherData = useCallback((): NewVoucherData => {
         const validityDuration = validityValue > 0 ? `P${validityValue}${validityUnit}` : null;
         const { street, houseNumber, zipCode, city, country } = identity.address;
@@ -291,8 +330,9 @@ export function useVoucherCreation() {
                 gender: creatorGender,
                 address: { ...identity.address, fullAddress }
             },
+            layer2Anchor: selectedAnchorId || null,
         };
-    }, [identity, collateral, amount, nonRedeemable, parsedStandard, validityValue, validityUnit]);
+    }, [identity, collateral, amount, nonRedeemable, parsedStandard, validityValue, validityUnit, selectedAnchorId]);
 
     return {
         standards,
@@ -307,6 +347,11 @@ export function useVoucherCreation() {
         isLoading,
         coordWarning,
         errors,
+        anchorTemplates,
+        selectedAnchorId,
+        selectedAnchorTemplate,
+        selectedAnchorQuarterLabel,
+        retentionInsufficient,
         setAmount,
         setValidityValue,
         setValidityUnit,
@@ -314,6 +359,7 @@ export function useVoucherCreation() {
         setIdentity,
         setCollateral,
         setErrors,
+        setSelectedAnchorId,
         handleStandardChange,
         handleLoadProfile,
         handleCoordBlur,

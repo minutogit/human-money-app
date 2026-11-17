@@ -182,6 +182,7 @@ export interface NewVoucherData {
     };
     collateral: CollateralData;
     creator: CreatorData;
+    layer2Anchor?: string | null;
 }
 
 export interface TransactionHistoryEntry {
@@ -205,6 +206,7 @@ export interface Voucher {
     creator: PublicProfile;
     signatures: VoucherSignature[];
     transactions: TransactionHistoryEntry[];
+    layer2Anchor?: string | null;
 }
 
 export interface VoucherDetails {
@@ -225,7 +227,7 @@ export interface SignatureImpact {
     gentleHints: string[];
 }
 
-export type L2VerdictState = 'final' | 'provisional' | 'conflict' | 'offline' | 'unverified';
+export type L2VerdictState = 'final' | 'provisional' | 'yellow' | 'conflict' | 'offline' | 'offline_only' | 'unverified';
 
 export interface L2QuorumInfo {
     status: L2VerdictState;
@@ -236,7 +238,7 @@ export interface L2QuorumInfo {
 }
 
 export interface VoucherL2StatusDto {
-    status: "no_servers" | "offline" | "unspent" | "spent" | "conflict";
+    status: "offline_only" | "no_servers" | "offline" | "unspent" | "spent" | "conflict";
     archived: boolean;
     successorTId?: string;
 }

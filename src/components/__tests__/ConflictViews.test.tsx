@@ -193,7 +193,6 @@ describe('Conflict Views (.hmcproof export and import)', () => {
               conflictRole: 'victim',
               isResolved: false,
               localOverride: false,
-              hasL2Verdict: true,
             },
           ]);
         }

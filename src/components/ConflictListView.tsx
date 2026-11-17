@@ -122,13 +122,6 @@ export function ConflictListView({ onBack, onViewConflict }: ConflictListViewPro
                                     {t('conflict.unresolved')}
                                 </span>
                             )}
-                            {conflict.hasL2Verdict && (
-                                <Advanced>
-                                    <span className="px-3 py-1 text-xs font-bold rounded-full bg-purple-100 text-purple-800">
-                                        {t('conflict.l2VerdictAvailable')}
-                                    </span>
-                                </Advanced>
-                            )}
                         </div>
                         <h3 className="font-semibold text-theme-primary mb-1">
                             {conflict.displayAffectedVoucherName || conflict.affectedVoucherName || t('conflict.unknownVoucher')}

@@ -35,17 +35,89 @@ export interface SealUploadData {
     sealHash: string;
 }
 
-export type AnchorSyncStatus =
-    | 'Synchronized'
-    | 'Offline'
-    | 'NoServers'
-    | 'PendingLeapLock'
-    | 'Inconclusive'
-    | 'SameDeviceRollback'
-    | 'SupersededByHandover'
-    | 'ConcurrentCloneDetected'
-    | 'RollbackDetected'
-    | 'ForkConflict';
+export interface LockServerProbeResult {
+    writeUrl: string;
+    readUrl: string;
+    dropPub: string;
+    adminPub: string;
+    lockPub: string;
+    delegationValid: boolean;
+    wafProbePassed: boolean;
+    selftestPassed: boolean;
+    keyLeakSafe: boolean;
+    passed: boolean;
+    latencyMs: number;
+    maxRetentionQuarter: number;
+    powBaseBits: number;
+    allowPowTickets: boolean;
+    inodeWarning: boolean;
+    usedInodes: number;
+    maxInodes: number;
+    probedAtSecs: number;
+    error?: string | null;
+}
+
+export interface StoredAnchorServerMeta {
+    writeUrl: string;
+    readUrl: string;
+    dropPub: string;
+    adminPub: string;
+    lockPub: string;
+    nominatedBy: string;
+    operatorDomain?: string | null;
+    asn?: string | null;
+    infoFetchedAtSecs: number;
+    maxRetentionQuarter: number;
+    powBaseBits: number;
+}
+
+export interface StoredAnchorTemplateMeta {
+    anchorId: string;
+    label: string;
+    threshold: number;
+    retainUntilQuarter: number;
+    createdAtSecs: number;
+    servers: StoredAnchorServerMeta[];
+}
+
+export interface NominatedLockServerMeta {
+    writeUrl: string;
+    readUrl: string;
+    dropPub: string;
+    adminPub: string;
+    lockPub: string;
+    asn?: string | null;
+    probedAtSecs: number;
+}
+
+export interface AnchorServerInputDto {
+    writeUrl: string;
+    nominatedBy: 'creator' | 'guarantor';
+    guarantorIndex?: number | null;
+    asn?: string | null;
+}
+
+export interface L2LockStatusDto {
+    status: 'Ok' | 'Syncing' | 'NoServers' | 'Degraded';
+    unresolvedIntentsCount: number;
+    pendingRestoreReconciliation: boolean;
+    templatesCount: number;
+    hasOwnNominatedServer: boolean;
+    staleServersCount: number;
+    maxProbeAgeSecs?: number | null;
+}
+
+export interface GuarantorAnchorCheckDto {
+    required: boolean;
+    passed: boolean;
+    hasLayer2Anchor: boolean;
+    retentionOk?: boolean | null;
+    ownServerPresent?: boolean | null;
+    sybilIndependentCount: number;
+    threshold: number;
+    serverCount: number;
+    issues: string[];
+}
 
 export interface RollbackReport {
     quarantinedVoucherIds?: string[];
@@ -61,32 +133,14 @@ export interface RollbackReport {
     message: string;
 }
 
-export interface CustomServerDto {
-    url: string;
-    name: string;
-    authToken?: string;
-    peerToken?: string;
-    isActive: boolean;
-}
-
-export interface RegionalSourceDto {
-    url: string;
-    publicKey: string;
-    bearerToken?: string | null;
-}
-
 export interface AppSettings {
     sessionTimeoutSeconds: number;
     lastUsedDirectory?: string;
     privacyDefault: PrivacyDefault;
-    activeNetwork?: string;
-    bootstrapSeedUrl?: string | null;
-    customServers?: CustomServerDto[];
-    exclusiveCustomServers?: boolean;
-    cachedPeersMainnet?: string[];
-    cachedPeersTestnet?: string[];
     devModeUnlocked?: boolean;
-    regionalMeshSources?: RegionalSourceDto[];
+    l2AnchorTemplatesMeta?: StoredAnchorTemplateMeta[];
+    ownNominatedLockServer?: NominatedLockServerMeta | null;
+    l2ProbeCache?: Record<string, LockServerProbeResult>;
     enablePosMode?: boolean;
     marketShowUnknown?: boolean;
     maxStoredCards?: number;
