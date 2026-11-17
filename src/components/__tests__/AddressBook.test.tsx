@@ -621,7 +621,7 @@ describe('AddressBook Component', () => {
 
     await waitFor(() => {
       expect(writeText).toHaveBeenCalledWith(expect.stringContaining('did%3Akey%3AzMe12345'));
-      expect(writeText).toHaveBeenCalledWith(expect.stringContaining('sync=https%3A%2F%2Fsync1.domain.org%2Fsync.php'));
+      expect(writeText).toHaveBeenCalledWith(expect.stringContaining('sync=sync1.domain.org'));
     });
   });
 

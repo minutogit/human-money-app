@@ -120,10 +120,8 @@ pub fn parse_webp_dimensions(webp_bytes: &[u8]) -> Result<(u16, u16), MarketErro
             // VP8X extended:
             // 24-bit canvas width - 1 at bytes 24..27
             // 24-bit canvas height - 1 at bytes 27..30
-            let w_minus_1 =
-                u32::from_le_bytes([webp_bytes[24], webp_bytes[25], webp_bytes[26], 0]);
-            let h_minus_1 =
-                u32::from_le_bytes([webp_bytes[27], webp_bytes[28], webp_bytes[29], 0]);
+            let w_minus_1 = u32::from_le_bytes([webp_bytes[24], webp_bytes[25], webp_bytes[26], 0]);
+            let h_minus_1 = u32::from_le_bytes([webp_bytes[27], webp_bytes[28], webp_bytes[29], 0]);
             if w_minus_1 >= 65535 || h_minus_1 >= 65535 {
                 return Err(MarketError::Validation(format!(
                     "VP8X dimensions exceed u16 limit: w-1={}, h-1={}",
@@ -209,7 +207,18 @@ pub fn parse_jpeg_dimensions(jpeg_bytes: &[u8]) -> Result<(u16, u16), MarketErro
         // Check if this is an SOF marker (SOF0..SOF3, SOF5..SOF7, SOF9..SOF11, SOF13..SOF15)
         if matches!(
             marker,
-            0xC0 | 0xC1 | 0xC2 | 0xC3 | 0xC5 | 0xC6 | 0xC7 | 0xC9 | 0xCA | 0xCB | 0xCD | 0xCE | 0xCF
+            0xC0 | 0xC1
+                | 0xC2
+                | 0xC3
+                | 0xC5
+                | 0xC6
+                | 0xC7
+                | 0xC9
+                | 0xCA
+                | 0xCB
+                | 0xCD
+                | 0xCE
+                | 0xCF
         ) {
             // SOF segment structure:
             // length: 2 bytes
@@ -314,12 +323,15 @@ pub fn validate_avatar_data_uri(data_uri: &str) -> Result<(), MarketError> {
     let trimmed = data_uri.trim();
     let (w, h) = if trimmed.starts_with(MEDIA_DATA_URI_PREFIX) {
         parse_webp_dimensions(&image_bytes)?
-    } else if trimmed.starts_with(JPEG_DATA_URI_PREFIX) || trimmed.starts_with(JPG_DATA_URI_PREFIX) {
+    } else if trimmed.starts_with(JPEG_DATA_URI_PREFIX) || trimmed.starts_with(JPG_DATA_URI_PREFIX)
+    {
         parse_jpeg_dimensions(&image_bytes)?
     } else if trimmed.starts_with(PNG_DATA_URI_PREFIX) {
         parse_png_dimensions(&image_bytes)?
     } else {
-        return Err(MarketError::Validation("Unsupported image format".to_string()));
+        return Err(MarketError::Validation(
+            "Unsupported image format".to_string(),
+        ));
     };
 
     if (w, h) != (AVATAR_IMAGE_DIM, AVATAR_IMAGE_DIM) {
@@ -421,8 +433,8 @@ pub fn seal_media_blob(
     let blob_id = derive_media_blob_id(&image_token)?;
     let (key, nonce) = derive_media_key_and_nonce(&image_token)?;
 
-    let cipher = XChaCha20Poly1305::new_from_slice(&key)
-        .map_err(|e| MarketError::Crypto(e.to_string()))?;
+    let cipher =
+        XChaCha20Poly1305::new_from_slice(&key).map_err(|e| MarketError::Crypto(e.to_string()))?;
     let xnonce = XNonce::from_slice(&nonce);
     let payload = Payload {
         msg: webp_bytes,
@@ -446,8 +458,8 @@ pub fn open_media_blob(image_token: &str, ciphertext: &[u8]) -> Result<Vec<u8>, 
     let blob_id = derive_media_blob_id(image_token)?;
     let (key, nonce) = derive_media_key_and_nonce(image_token)?;
 
-    let cipher = XChaCha20Poly1305::new_from_slice(&key)
-        .map_err(|e| MarketError::Crypto(e.to_string()))?;
+    let cipher =
+        XChaCha20Poly1305::new_from_slice(&key).map_err(|e| MarketError::Crypto(e.to_string()))?;
     let xnonce = XNonce::from_slice(&nonce);
     let payload = Payload {
         msg: ciphertext,

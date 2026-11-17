@@ -47,24 +47,43 @@ impl From<human_money_core::app_service::AppFacadeError> for FrontendError {
     fn from(error: human_money_core::app_service::AppFacadeError) -> Self {
         let message = error.to_string();
         let mut details = HashMap::new();
-        
+
         let code = match &error {
-            human_money_core::app_service::AppFacadeError::WalletLocked => "error.wallet.locked".to_string(),
-            human_money_core::app_service::AppFacadeError::SessionExpired(_) => "error.auth.sessionTimeout".to_string(),
-            human_money_core::app_service::AppFacadeError::SessionNotActive(_) => "error.auth.sessionNotActive".to_string(),
-            human_money_core::app_service::AppFacadeError::DoubleSpendAttemptBlocked { local_instance_id } => {
+            human_money_core::app_service::AppFacadeError::WalletLocked => {
+                "error.wallet.locked".to_string()
+            }
+            human_money_core::app_service::AppFacadeError::SessionExpired(_) => {
+                "error.auth.sessionTimeout".to_string()
+            }
+            human_money_core::app_service::AppFacadeError::SessionNotActive(_) => {
+                "error.auth.sessionNotActive".to_string()
+            }
+            human_money_core::app_service::AppFacadeError::DoubleSpendAttemptBlocked {
+                local_instance_id,
+            } => {
                 details.insert("localInstanceId".to_string(), local_instance_id.clone());
                 "error.conflict.doubleSpendBlocked".to_string()
             }
-            human_money_core::app_service::AppFacadeError::RequiresSealRecovery => "error.security.sealRecoveryRequired".to_string(),
-            human_money_core::app_service::AppFacadeError::StateRollbackDetected => "error.security.rollbackDetected".to_string(),
-            human_money_core::app_service::AppFacadeError::WalletLockedDueToFork => "error.security.walletLockedDueToFork".to_string(),
-            human_money_core::app_service::AppFacadeError::WalletSupersededByHandover { target_epoch, is_seed_recovery } => {
+            human_money_core::app_service::AppFacadeError::RequiresSealRecovery => {
+                "error.security.sealRecoveryRequired".to_string()
+            }
+            human_money_core::app_service::AppFacadeError::StateRollbackDetected => {
+                "error.security.rollbackDetected".to_string()
+            }
+            human_money_core::app_service::AppFacadeError::WalletLockedDueToFork => {
+                "error.security.walletLockedDueToFork".to_string()
+            }
+            human_money_core::app_service::AppFacadeError::WalletSupersededByHandover {
+                target_epoch,
+                is_seed_recovery,
+            } => {
                 details.insert("targetEpoch".to_string(), target_epoch.to_string());
                 details.insert("isSeedRecovery".to_string(), is_seed_recovery.to_string());
                 "error.security.supersededByHandover".to_string()
             }
-            human_money_core::app_service::AppFacadeError::WalletConcurrentCloneDetected => "error.security.concurrentCloneDetected".to_string(),
+            human_money_core::app_service::AppFacadeError::WalletConcurrentCloneDetected => {
+                "error.security.concurrentCloneDetected".to_string()
+            }
             human_money_core::app_service::AppFacadeError::App(
                 human_money_core::error::AppError::InsufficientAccessMode { required, current },
             ) => {
@@ -73,7 +92,10 @@ impl From<human_money_core::app_service::AppFacadeError> for FrontendError {
                 "error.auth.insufficientAccessMode".to_string()
             }
             human_money_core::app_service::AppFacadeError::VoucherNotActive(status) => {
-                if matches!(status, human_money_core::wallet::instance::VoucherStatus::Quarantined { .. }) {
+                if matches!(
+                    status,
+                    human_money_core::wallet::instance::VoucherStatus::Quarantined { .. }
+                ) {
                     "error.conflict.voucherQuarantined".to_string()
                 } else {
                     "error.validation.voucherNotActive".to_string()
@@ -90,12 +112,16 @@ impl From<human_money_core::app_service::AppFacadeError> for FrontendError {
                     }
                     "error.validation.initAmountMismatch".to_string()
                 } else if msg.contains("Insufficient funds") {
-                    if let Some((needed, available)) = extract_two_labeled_values(&msg, "Needed:", "Available:") {
+                    if let Some((needed, available)) =
+                        extract_two_labeled_values(&msg, "Needed:", "Available:")
+                    {
                         details.insert("needed".into(), needed);
                         details.insert("available".into(), available);
                     }
                     "error.validation.insufficientFunds".to_string()
-                } else if msg.contains("Split change voucher is blocked by unresolved or conflicted parent intent") {
+                } else if msg.contains(
+                    "Split change voucher is blocked by unresolved or conflicted parent intent",
+                ) {
                     "error.validation.splitChangePendingL2".to_string()
                 } else if msg.contains("Output has an unresolved durable L2 send intent") {
                     "error.validation.intentPendingL2".to_string()
@@ -153,7 +179,10 @@ fn classify_error(msg: &str) -> (String, HashMap<String, String>) {
     if msg.starts_with("Password required") {
         return ("error.auth.passwordRequired".into(), details);
     }
-    if msg.contains("device mismatch") || msg.contains("belongs to a different device") || msg.contains("Device Mismatch") {
+    if msg.contains("device mismatch")
+        || msg.contains("belongs to a different device")
+        || msg.contains("Device Mismatch")
+    {
         return ("error.auth.deviceMismatch".into(), details);
     }
 
@@ -179,7 +208,8 @@ fn classify_error(msg: &str) -> (String, HashMap<String, String>) {
     }
 
     if msg.contains("Insufficient funds") {
-        if let Some((needed, available)) = extract_two_labeled_values(msg, "Needed:", "Available:") {
+        if let Some((needed, available)) = extract_two_labeled_values(msg, "Needed:", "Available:")
+        {
             details.insert("needed".into(), needed);
             details.insert("available".into(), available);
         }
@@ -216,7 +246,9 @@ fn extract_expected_found(msg: &str) -> Option<(String, String)> {
     let expected = expected_part.split(',').next()?.trim().to_string();
 
     let found_part = msg.split_once("Found: ")?.1;
-    let found = found_part.trim_matches(|c: char| c == '.' || c == ' ').to_string();
+    let found = found_part
+        .trim_matches(|c: char| c == '.' || c == ' ')
+        .to_string();
 
     Some((expected, found))
 }
@@ -227,7 +259,9 @@ fn extract_two_labeled_values(msg: &str, label1: &str, label2: &str) -> Option<(
     let val1 = val1_part.split(',').next()?.trim().to_string();
 
     let val2_part = msg.split_once(label2)?.1;
-    let val2 = val2_part.trim_matches(|c: char| c == '.' || c == ' ').to_string();
+    let val2 = val2_part
+        .trim_matches(|c: char| c == '.' || c == ' ')
+        .to_string();
 
     Some((val1, val2))
 }
@@ -245,8 +279,14 @@ mod tests {
         };
         let frontend_err = FrontendError::from(err);
         assert_eq!(frontend_err.code, "error.security.supersededByHandover");
-        assert_eq!(frontend_err.details.get("targetEpoch"), Some(&"4".to_string()));
-        assert_eq!(frontend_err.details.get("isSeedRecovery"), Some(&"true".to_string()));
+        assert_eq!(
+            frontend_err.details.get("targetEpoch"),
+            Some(&"4".to_string())
+        );
+        assert_eq!(
+            frontend_err.details.get("isSeedRecovery"),
+            Some(&"true".to_string())
+        );
     }
 
     #[test]
@@ -258,13 +298,19 @@ mod tests {
 
     #[test]
     fn test_classify_error_fallback() {
-        let (code1, _) = classify_error("Security Notice: This wallet profile was transferred to another device (target epoch #2, is_seed_recovery: false). Deactivated on this device.");
+        let (code1, _) = classify_error(
+            "Security Notice: This wallet profile was transferred to another device (target epoch #2, is_seed_recovery: false). Deactivated on this device.",
+        );
         assert_eq!(code1, "error.security.supersededByHandover");
 
-        let (code2, _) = classify_error("Security Lockdown: Concurrent clone detected! Another device has performed transactions with the exact same prefix without a handover.");
+        let (code2, _) = classify_error(
+            "Security Lockdown: Concurrent clone detected! Another device has performed transactions with the exact same prefix without a handover.",
+        );
         assert_eq!(code2, "error.security.concurrentCloneDetected");
 
-        let (code3, _) = classify_error("Security Lockdown: Wallet is locked due to a detected fork in the transaction history. Recovery required.");
+        let (code3, _) = classify_error(
+            "Security Lockdown: Wallet is locked due to a detected fork in the transaction history. Recovery required.",
+        );
         assert_eq!(code3, "error.security.walletLockedDueToFork");
     }
 
@@ -286,10 +332,14 @@ mod tests {
         let mapped_intent = FrontendError::from(intent_err);
         assert_eq!(mapped_intent.code, "error.validation.intentPendingL2");
 
-        let (classified_split, _) = classify_error("Validation Error: Security violation: Split change voucher is blocked by unresolved or conflicted parent intent");
+        let (classified_split, _) = classify_error(
+            "Validation Error: Security violation: Split change voucher is blocked by unresolved or conflicted parent intent",
+        );
         assert_eq!(classified_split, "error.validation.splitChangePendingL2");
 
-        let (classified_intent, _) = classify_error("Validation Error: Security violation: Output has an unresolved durable L2 send intent");
+        let (classified_intent, _) = classify_error(
+            "Validation Error: Security violation: Output has an unresolved durable L2 send intent",
+        );
         assert_eq!(classified_intent, "error.validation.intentPendingL2");
     }
 }

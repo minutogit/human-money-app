@@ -159,7 +159,15 @@ fn test_build_card_bundle_sorting_and_trimming() {
 
     let now = 1_700_000_000;
     let card_refs: Vec<&StoredCard> = store.cards.values().collect();
-    let bundle = build_card_bundle(Some("own-wire~"), &card_refs, None, now, &trust_level, 16, 524_288);
+    let bundle = build_card_bundle(
+        Some("own-wire~"),
+        &card_refs,
+        None,
+        now,
+        &trust_level,
+        16,
+        524_288,
+    );
     // Own card is first
     assert_eq!(bundle.envelopes[0].card_wire, "own-wire~");
     assert_eq!(bundle.envelopes[0].hops, 1);
@@ -265,7 +273,15 @@ fn test_build_card_bundle_fair_hop_interleave_and_geo_remote_priority() {
     let refs = vec![&h1_far, &h1_near, &h2_far, &h2_remote];
     let trust_level = |_did: &str| -> u8 { 2 };
     let berlin = Some((52.52, 13.405));
-    let bundle = build_card_bundle(Some("own~"), &refs, berlin, 1_700_000_000, &trust_level, 16, 524_288);
+    let bundle = build_card_bundle(
+        Some("own~"),
+        &refs,
+        berlin,
+        1_700_000_000,
+        &trust_level,
+        16,
+        524_288,
+    );
 
     // Expect fair 50/50 interleave with geo/remote priority:
     // [own, H1_near, H2_remote, H1_far, H2_far]
@@ -276,16 +292,32 @@ fn test_build_card_bundle_fair_hop_interleave_and_geo_remote_priority() {
     assert_eq!(bundle.envelopes[3].hops, 2);
     assert_eq!(bundle.envelopes[4].hops, 3);
     assert!(
-        humoco_market::verify_sd_card(&bundle.envelopes[1].card_wire).unwrap().payload.did == h1_near_did
+        humoco_market::verify_sd_card(&bundle.envelopes[1].card_wire)
+            .unwrap()
+            .payload
+            .did
+            == h1_near_did
     );
     assert!(
-        humoco_market::verify_sd_card(&bundle.envelopes[2].card_wire).unwrap().payload.did == h2_remote_did
+        humoco_market::verify_sd_card(&bundle.envelopes[2].card_wire)
+            .unwrap()
+            .payload
+            .did
+            == h2_remote_did
     );
     assert!(
-        humoco_market::verify_sd_card(&bundle.envelopes[3].card_wire).unwrap().payload.did == h1_far_did
+        humoco_market::verify_sd_card(&bundle.envelopes[3].card_wire)
+            .unwrap()
+            .payload
+            .did
+            == h1_far_did
     );
     assert!(
-        humoco_market::verify_sd_card(&bundle.envelopes[4].card_wire).unwrap().payload.did == h2_far_did
+        humoco_market::verify_sd_card(&bundle.envelopes[4].card_wire)
+            .unwrap()
+            .payload
+            .did
+            == h2_far_did
     );
 }
 
@@ -397,9 +429,13 @@ fn test_multi_class_slot_blob_validation_and_errors() {
     assert!(matches!(err_readers, Err(MarketError::Validation(_))));
 
     // Payload too large
-    let valid_single: Vec<(&[u8], &[VerifyingKey])> = vec![(payload, std::slice::from_ref(&reader_vk))];
+    let valid_single: Vec<(&[u8], &[VerifyingKey])> =
+        vec![(payload, std::slice::from_ref(&reader_vk))];
     let err_too_large = seal_multi_class_slot_blob(&valid_single, 100);
-    assert!(matches!(err_too_large, Err(MarketError::PayloadTooLarge(_))));
+    assert!(matches!(
+        err_too_large,
+        Err(MarketError::PayloadTooLarge(_))
+    ));
 
     // Truncated buffers
     let valid_blob = seal_multi_class_slot_blob(&valid_single, 65536).unwrap();
@@ -472,7 +508,10 @@ fn test_backup_slot_padding_exact_multiples_across_sizes() {
     assert_eq!(padded_rand.len(), 2 * BACKUP_PAD_BLOCK_BYTES);
     assert_eq!(padded_rand.len() % BACKUP_PAD_BLOCK_BYTES, 0);
     assert_eq!(&padded_rand[0..8], BACKUP_SLOT_MAGIC);
-    assert_eq!(unpad_backup_slot_bytes(&padded_rand).unwrap(), random_payload);
+    assert_eq!(
+        unpad_backup_slot_bytes(&padded_rand).unwrap(),
+        random_payload
+    );
 }
 
 #[test]
@@ -489,7 +528,10 @@ fn test_backup_slot_padding_rejections_and_limits() {
     let mut payload = vec![0u8; 70 * 1024];
     OsRng.fill_bytes(&mut payload);
     let err_too_large = pad_backup_slot_bytes(&payload, 65_536);
-    assert!(matches!(err_too_large, Err(MarketError::PayloadTooLarge(_))));
+    assert!(matches!(
+        err_too_large,
+        Err(MarketError::PayloadTooLarge(_))
+    ));
 
     // Valid padding
     let valid_padded = pad_backup_slot_bytes(&[0x77u8; 100], DROP_BACKUP_MAX_BYTES).unwrap();
@@ -517,4 +559,3 @@ fn test_backup_slot_padding_rejections_and_limits() {
     bad_huge_len[8..12].copy_from_slice(&1_000_000u32.to_be_bytes());
     assert!(unpad_backup_slot_bytes(&bad_huge_len).is_err());
 }
-

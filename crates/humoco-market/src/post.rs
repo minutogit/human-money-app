@@ -51,8 +51,8 @@ pub fn derive_post_shared_secret(
 
 /// Computes the 16-byte recipient tag for fast, trial-decryption-free routing (§6.1).
 pub fn compute_post_tag16(shared_secret: &[u8; 32], msg_nonce: &[u8; 24]) -> [u8; 16] {
-    let mut mac =
-        <HmacSha256 as Mac>::new_from_slice(shared_secret).expect("HMAC can accept key of any size");
+    let mut mac = <HmacSha256 as Mac>::new_from_slice(shared_secret)
+        .expect("HMAC can accept key of any size");
     mac.update(b"humoco-post-tag-v1");
     mac.update(msg_nonce);
     let result = mac.finalize().into_bytes();
@@ -251,7 +251,9 @@ pub fn try_open_post_box_from_sender(
         .map_err(|e| MarketError::Crypto(format!("AEAD authentication failed: {}", e)))?;
 
     if decrypted.len() < 4 {
-        return Err(MarketError::Slot("Decrypted post box too short".to_string()));
+        return Err(MarketError::Slot(
+            "Decrypted post box too short".to_string(),
+        ));
     }
 
     let inner_len =
@@ -303,8 +305,11 @@ pub fn encode_post_slot(
     let needed_dummies = 2usize.saturating_sub(entries.len());
     for _ in 0..needed_dummies {
         let dummy = create_dummy_post_box(master_seed);
-        let current_size: usize =
-            10 + entries.iter().map(|e| 44 + e.ciphertext.len()).sum::<usize>();
+        let current_size: usize = 10
+            + entries
+                .iter()
+                .map(|e| 44 + e.ciphertext.len())
+                .sum::<usize>();
         if current_size + 44 + dummy.ciphertext.len() <= max_bytes {
             entries.push(dummy);
         } else {
@@ -321,7 +326,11 @@ pub fn encode_post_slot(
         )));
     }
 
-    let total_len: usize = 10 + entries.iter().map(|e| 44 + e.ciphertext.len()).sum::<usize>();
+    let total_len: usize = 10
+        + entries
+            .iter()
+            .map(|e| 44 + e.ciphertext.len())
+            .sum::<usize>();
     if total_len > max_bytes {
         return Err(MarketError::PayloadTooLarge(format!(
             "Encoded post slot size {} exceeds max allowed {}",
@@ -574,9 +583,7 @@ pub fn validate_market_inquiry(inquiry: &MarketInquiry) -> Result<(), MarketErro
     }
     match &inquiry.target {
         InquiryTarget::Ad { ad_id, ad_title } => {
-            if ad_id.len() != 16
-                || !ad_id.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f'))
-            {
+            if ad_id.len() != 16 || !ad_id.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')) {
                 return Err(MarketError::Validation(format!(
                     "ad_id must be exactly 16 lowercase hex chars, got {}",
                     ad_id

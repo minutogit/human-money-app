@@ -206,7 +206,11 @@ pub fn compute_drop_members_with_stats(
 // =========================================================================
 
 pub fn parse_ed25519_pubkey_hex64(hex_str: &str) -> Result<VerifyingKey, MarketError> {
-    if hex_str.len() != 64 || !hex_str.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
+    if hex_str.len() != 64
+        || !hex_str
+            .bytes()
+            .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+    {
         return Err(MarketError::Validation(format!(
             "Public key must be a 64-character lowercase hex string, got '{}'",
             hex_str
@@ -228,10 +232,7 @@ fn sha256_hex(data: &[u8]) -> String {
 //  DETERMINISTIC ADMIN KEY & DATADIR (§7.1)
 // =========================================================================
 
-pub fn derive_drop_admin_seed(
-    master_seed: &[u8; 32],
-    drop_index: u32,
-) -> [u8; 32] {
+pub fn derive_drop_admin_seed(master_seed: &[u8; 32], drop_index: u32) -> [u8; 32] {
     let mut material = [0u8; 36];
     material[..32].copy_from_slice(master_seed);
     material[32..36].copy_from_slice(&drop_index.to_be_bytes());
@@ -386,17 +387,16 @@ pub fn canonicalize_write_url(raw_url: &str) -> Result<String, MarketError> {
     let host_lower = host.to_ascii_lowercase();
 
     let port_num: Option<u16> = if let Some(p) = port_opt {
-        let p_num = p.parse::<u16>().map_err(|e| {
-            MarketError::Validation(format!("Invalid port '{}': {}", p, e))
-        })?;
+        let p_num = p
+            .parse::<u16>()
+            .map_err(|e| MarketError::Validation(format!("Invalid port '{}': {}", p, e)))?;
         Some(p_num)
     } else {
         None
     };
 
-    let is_loopback = host_lower == "localhost"
-        || host_lower == "127.0.0.1"
-        || host_lower == "[::1]";
+    let is_loopback =
+        host_lower == "localhost" || host_lower == "127.0.0.1" || host_lower == "[::1]";
 
     match scheme_lower.as_str() {
         "https" => {}
@@ -720,4 +720,3 @@ pub fn sign_delete_account_request(
         &[],
     )
 }
-

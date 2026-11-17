@@ -8,8 +8,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::card::forward_envelope;
 use crate::model::{
-    Ad, DropDescriptor, EntrySource, StandardRef, StoredCard, TrustTier,
-    MAX_SKILL_TEXT_CHARS, MAX_SKILL_TITLE_CHARS,
+    Ad, DropDescriptor, EntrySource, StandardRef, StoredCard, TrustTier, MAX_SKILL_TEXT_CHARS,
+    MAX_SKILL_TITLE_CHARS,
 };
 use crate::sd_card::{active_ads, decoded_items, extract_public_profile, extract_skills, CardItem};
 
@@ -285,7 +285,11 @@ pub fn build_market_view<'a>(
                 .iter()
                 .filter(|(item, _)| matches!(item, CardItem::Ad(_)))
                 .count() as u8;
-            ads_pending = stored.card.payload.ad_count.saturating_sub(disclosed_ads_count);
+            ads_pending = stored
+                .card
+                .payload
+                .ad_count
+                .saturating_sub(disclosed_ads_count);
             allow_inquiries = stored.card.payload.allow_inquiries;
             sources.push(EntrySource::Card { hops: stored.hops });
             can_forward = forward_envelope(stored).is_some();

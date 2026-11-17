@@ -3,8 +3,8 @@ use human_money_core::models::profile::PublicProfile;
 use human_money_core::models::voucher::{Voucher, VoucherStandard};
 use human_money_core::services::crypto::create_user_id;
 use humoco_market::{
-    build_ad_board, build_market_view, new_ad_id, render_wire, sign_sd_card, Ad, AdKind,
-    CardItem, CardPayloadInput, EntrySource, Skill, SkillOrigin, StoredCard, TrustTier, WireFilter,
+    build_ad_board, build_market_view, new_ad_id, render_wire, sign_sd_card, Ad, AdKind, CardItem,
+    CardPayloadInput, EntrySource, Skill, SkillOrigin, StoredCard, TrustTier, WireFilter,
     MAX_SKILL_TEXT_CHARS, MAX_SKILL_TITLE_CHARS,
 };
 use proptest::prelude::*;
@@ -222,8 +222,24 @@ fn test_hidden_trust_tier_excluded() {
     let sk2 = create_keypair();
     let did2 = create_user_id(&sk2.verifying_key(), None).unwrap();
 
-    let v1 = make_test_voucher(&did1, "2026-01-01T10:00:00Z", Some("Good"), None, "M", "1", false);
-    let v2 = make_test_voucher(&did2, "2026-01-01T10:00:00Z", Some("Offender"), None, "M", "1", false);
+    let v1 = make_test_voucher(
+        &did1,
+        "2026-01-01T10:00:00Z",
+        Some("Good"),
+        None,
+        "M",
+        "1",
+        false,
+    );
+    let v2 = make_test_voucher(
+        &did2,
+        "2026-01-01T10:00:00Z",
+        Some("Offender"),
+        None,
+        "M",
+        "1",
+        false,
+    );
 
     let vouchers = vec![v1, v2];
     let classify = |did: &str| {
@@ -244,7 +260,15 @@ fn test_person_without_skills_is_included() {
     let sk = create_keypair();
     let did = create_user_id(&sk.verifying_key(), None).unwrap();
 
-    let v = make_test_voucher(&did, "2026-01-01T10:00:00Z", None, Some("   "), "M", "1", false);
+    let v = make_test_voucher(
+        &did,
+        "2026-01-01T10:00:00Z",
+        None,
+        Some("   "),
+        "M",
+        "1",
+        false,
+    );
     let vouchers = vec![v];
     let classify = |_did: &str| TrustTier::Unknown;
 
@@ -269,28 +293,84 @@ fn test_word_boundary_truncation_rules() {
     let text_250 = format!("{} end of offer", "d ".repeat(100));
 
     // Test text_60: title len 60, text None
-    let v1 = make_test_voucher(&did, "2026-01-01T10:00:00Z", Some(&text_60), None, "M", "1", false);
-    let p1 = build_market_view(&[v1], &[], "did:key:other", &|_| TrustTier::Trusted, 1700000000);
+    let v1 = make_test_voucher(
+        &did,
+        "2026-01-01T10:00:00Z",
+        Some(&text_60),
+        None,
+        "M",
+        "1",
+        false,
+    );
+    let p1 = build_market_view(
+        &[v1],
+        &[],
+        "did:key:other",
+        &|_| TrustTier::Trusted,
+        1700000000,
+    );
     assert_eq!(p1[0].skills[0].title.chars().count(), 60);
     assert_eq!(p1[0].skills[0].text, None);
 
     // Test text_70_words: title truncated at word boundary <= 60, text is Some(text_70_words)
-    let v2 = make_test_voucher(&did, "2026-01-01T10:00:00Z", Some(&text_70_words), None, "M", "1", false);
-    let p2 = build_market_view(&[v2], &[], "did:key:other", &|_| TrustTier::Trusted, 1700000000);
+    let v2 = make_test_voucher(
+        &did,
+        "2026-01-01T10:00:00Z",
+        Some(&text_70_words),
+        None,
+        "M",
+        "1",
+        false,
+    );
+    let p2 = build_market_view(
+        &[v2],
+        &[],
+        "did:key:other",
+        &|_| TrustTier::Trusted,
+        1700000000,
+    );
     assert!(p2[0].skills[0].title.chars().count() <= 60);
     assert!(p2[0].skills[0].title.ends_with('…'));
     assert_eq!(p2[0].skills[0].text, Some(text_70_words));
 
     // Test text_80_single_word: hard cut at 59 + '…' = 60 chars
-    let v3 = make_test_voucher(&did, "2026-01-01T10:00:00Z", Some(&text_80_single_word), None, "M", "1", false);
-    let p3 = build_market_view(&[v3], &[], "did:key:other", &|_| TrustTier::Trusted, 1700000000);
+    let v3 = make_test_voucher(
+        &did,
+        "2026-01-01T10:00:00Z",
+        Some(&text_80_single_word),
+        None,
+        "M",
+        "1",
+        false,
+    );
+    let p3 = build_market_view(
+        &[v3],
+        &[],
+        "did:key:other",
+        &|_| TrustTier::Trusted,
+        1700000000,
+    );
     assert_eq!(p3[0].skills[0].title.chars().count(), 60);
     assert_eq!(p3[0].skills[0].title, format!("{}…", "c".repeat(59)));
     assert_eq!(p3[0].skills[0].text, Some(text_80_single_word));
 
     // Test text_250: title <= 60, text <= 160
-    let v4 = make_test_voucher(&did, "2026-01-01T10:00:00Z", Some(&text_250), None, "M", "1", false);
-    let p4 = build_market_view(&[v4], &[], "did:key:other", &|_| TrustTier::Trusted, 1700000000);
+    let v4 = make_test_voucher(
+        &did,
+        "2026-01-01T10:00:00Z",
+        Some(&text_250),
+        None,
+        "M",
+        "1",
+        false,
+    );
+    let p4 = build_market_view(
+        &[v4],
+        &[],
+        "did:key:other",
+        &|_| TrustTier::Trusted,
+        1700000000,
+    );
     assert!(p4[0].skills[0].title.chars().count() <= 60);
     let text = p4[0].skills[0].text.as_ref().unwrap();
     assert!(text.chars().count() <= 160);
@@ -308,9 +388,33 @@ fn test_sorting_order() {
     let sk3 = create_keypair();
     let did3 = create_user_id(&sk3.verifying_key(), None).unwrap();
 
-    let v1 = make_test_voucher(&did1, "2026-05-01T10:00:00Z", Some("U2"), None, "M", "1", false);
-    let v2 = make_test_voucher(&did2, "2026-01-01T10:00:00Z", Some("T1"), None, "M", "1", false);
-    let v3 = make_test_voucher(&did3, "2026-08-01T10:00:00Z", Some("T3"), None, "M", "1", false);
+    let v1 = make_test_voucher(
+        &did1,
+        "2026-05-01T10:00:00Z",
+        Some("U2"),
+        None,
+        "M",
+        "1",
+        false,
+    );
+    let v2 = make_test_voucher(
+        &did2,
+        "2026-01-01T10:00:00Z",
+        Some("T1"),
+        None,
+        "M",
+        "1",
+        false,
+    );
+    let v3 = make_test_voucher(
+        &did3,
+        "2026-08-01T10:00:00Z",
+        Some("T3"),
+        None,
+        "M",
+        "1",
+        false,
+    );
 
     let vouchers = vec![v1, v2, v3];
     let classify = |did: &str| {

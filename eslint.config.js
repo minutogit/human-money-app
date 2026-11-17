@@ -35,6 +35,7 @@ export default [
         Set: "readonly",
         React: "readonly",
         crypto: "readonly",
+        createImageBitmap: "readonly",
       },
     },
     plugins: {

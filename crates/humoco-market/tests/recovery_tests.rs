@@ -13,12 +13,12 @@ use humoco_market::{
     unseal_recovery_master_payload, validate_and_canonicalize_answers, validate_kdf_params,
     verify_guardian_vault_entry, verify_rehearsal_answers, DropDescriptor, EmergencyKitData,
     GuardianLocatorUpdate, GuardianReleasePayload, GuardianRevoke, GuardianVaultAck,
-    GuardianVaultEntry, GuardianVaultStore, MarketError, RecoveryKdfParams,
-    RecoveryMasterPayload, ShamirShare, KDF_M_KIB_MAX, KDF_M_KIB_MIN, KDF_M_KIB_PRODUCTION,
-    KDF_P_COST_MAX, KDF_P_COST_MIN, KDF_P_COST_PRODUCTION, KDF_T_COST_MAX, KDF_T_COST_MIN,
-    KDF_T_COST_PRODUCTION, MAX_GUARDIAN_WARDS, PAYLOAD_GUARDIAN_ACK_V1,
-    PAYLOAD_GUARDIAN_ASSIGN_V1, PAYLOAD_GUARDIAN_LOCATOR_V1, PAYLOAD_GUARDIAN_REVOKE_V1,
-    RECOVERY_MIN_ANSWER_LEN, RECOVERY_MIN_TOTAL_LEN, RECOVERY_QUESTION_COUNT,
+    GuardianVaultEntry, GuardianVaultStore, MarketError, RecoveryKdfParams, RecoveryMasterPayload,
+    ShamirShare, KDF_M_KIB_MAX, KDF_M_KIB_MIN, KDF_M_KIB_PRODUCTION, KDF_P_COST_MAX,
+    KDF_P_COST_MIN, KDF_P_COST_PRODUCTION, KDF_T_COST_MAX, KDF_T_COST_MIN, KDF_T_COST_PRODUCTION,
+    MAX_GUARDIAN_WARDS, PAYLOAD_GUARDIAN_ACK_V1, PAYLOAD_GUARDIAN_ASSIGN_V1,
+    PAYLOAD_GUARDIAN_LOCATOR_V1, PAYLOAD_GUARDIAN_REVOKE_V1, RECOVERY_MIN_ANSWER_LEN,
+    RECOVERY_MIN_TOTAL_LEN, RECOVERY_QUESTION_COUNT,
 };
 use proptest::prelude::*;
 use rand::rngs::OsRng;
@@ -167,11 +167,7 @@ fn test_shamir_rejections_and_failures() {
 
     // Duplicate share index rejected
     assert!(combine_shares_32(
-        &[
-            shares[0].clone(),
-            shares[0].clone(),
-            shares[1].clone(),
-        ],
+        &[shares[0].clone(), shares[0].clone(), shares[1].clone(),],
         3
     )
     .is_err());
@@ -347,8 +343,7 @@ fn test_extended_12_question_catalog_and_rehearsal_verifiers() {
     // Question ID 13 must be rejected
     assert!(derive_recovery_key(&[7, 10, 13], &answers, &params).is_err());
 
-    let verifiers =
-        compute_rehearsal_verifiers(owner_did, 1, &q_ids, &answers, &params).unwrap();
+    let verifiers = compute_rehearsal_verifiers(owner_did, 1, &q_ids, &answers, &params).unwrap();
 
     // Exact & normalized inputs match per-question
     let normalized_match = verify_rehearsal_answers(
@@ -375,15 +370,8 @@ fn test_extended_12_question_catalog_and_rehearsal_verifiers() {
     assert_eq!(partial_match, [true, false, true]);
 
     // Different epoch invalidates verifiers
-    let wrong_epoch = verify_rehearsal_answers(
-        owner_did,
-        2,
-        &q_ids,
-        &answers,
-        &verifiers,
-        &params,
-    )
-    .unwrap();
+    let wrong_epoch =
+        verify_rehearsal_answers(owner_did, 2, &q_ids, &answers, &verifiers, &params).unwrap();
     assert_eq!(wrong_epoch, [false, false, false]);
 }
 
@@ -544,7 +532,8 @@ fn test_guardian_vault_store_capacity_and_lifecycle() {
     for i in 1..=MAX_GUARDIAN_WARDS as u8 {
         let sk = make_signing_key(i);
         let did = create_user_id(&sk.verifying_key(), None).unwrap();
-        let payload = RecoveryMasterPayload::new(&did, vec![i; 16], MnemonicLanguage::English, None, false);
+        let payload =
+            RecoveryMasterPayload::new(&did, vec![i; 16], MnemonicLanguage::English, None, false);
         let bundle = create_social_recovery_vault_bundle(
             &sk,
             &did,
@@ -568,7 +557,13 @@ fn test_guardian_vault_store_capacity_and_lifecycle() {
     // 65th distinct ward is rejected
     let sk_65 = make_signing_key(65);
     let did_65 = create_user_id(&sk_65.verifying_key(), None).unwrap();
-    let payload_65 = RecoveryMasterPayload::new(&did_65, vec![65; 16], MnemonicLanguage::English, None, false);
+    let payload_65 = RecoveryMasterPayload::new(
+        &did_65,
+        vec![65; 16],
+        MnemonicLanguage::English,
+        None,
+        false,
+    );
     let bundle_65 = create_social_recovery_vault_bundle(
         &sk_65,
         &did_65,
@@ -592,7 +587,8 @@ fn test_guardian_vault_store_capacity_and_lifecycle() {
     // Updating existing ward with higher rotation_epoch succeeds without exceeding capacity
     let sk_1 = make_signing_key(1);
     let did_1 = create_user_id(&sk_1.verifying_key(), None).unwrap();
-    let payload_1 = RecoveryMasterPayload::new(&did_1, vec![1; 16], MnemonicLanguage::English, None, false);
+    let payload_1 =
+        RecoveryMasterPayload::new(&did_1, vec![1; 16], MnemonicLanguage::English, None, false);
     let bundle_1_v2 = create_social_recovery_vault_bundle(
         &sk_1,
         &did_1,
@@ -640,7 +636,11 @@ fn test_guardian_vault_store_capacity_and_lifecycle() {
     };
     assert!(store.update_locator(&locator_update).unwrap());
     assert_eq!(
-        store.get_ward(&did_1).unwrap().backup_sync_descriptors.len(),
+        store
+            .get_ward(&did_1)
+            .unwrap()
+            .backup_sync_descriptors
+            .len(),
         1
     );
 
@@ -736,7 +736,10 @@ fn test_guardian_release_reply_sealing_and_verification() {
 
     let uri_len = reply_uri.len();
     let raw_payload_bytes = bincode::serialize(&reply_payload).unwrap();
-    println!("Measured raw payload bincode len: {} bytes", raw_payload_bytes.len());
+    println!(
+        "Measured raw payload bincode len: {} bytes",
+        raw_payload_bytes.len()
+    );
     println!("Measured recovery-reply URI length: {} chars", uri_len);
     assert!(uri_len < 2000, "Reply URI too large: {} chars", uri_len);
 
@@ -959,7 +962,8 @@ fn test_recovery_uris_tolerate_chat_punctuation_and_uppercase_scheme() {
         released_at: 1700000200,
     };
     let reply_uri = seal_guardian_release_reply(&pk_temp, &reply_payload).unwrap();
-    let upper_scheme_reply = reply_uri.replacen("humoco://recovery-reply?", "HUMOCO://RECOVERY-REPLY?", 1);
+    let upper_scheme_reply =
+        reply_uri.replacen("humoco://recovery-reply?", "HUMOCO://RECOVERY-REPLY?", 1);
     let chat_reply = format!("Hier deine Antwort: {}!", upper_scheme_reply);
     let opened = open_and_verify_guardian_release_reply(&sk_temp, &chat_reply).unwrap();
     assert_eq!(opened, reply_payload);

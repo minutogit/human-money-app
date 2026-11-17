@@ -1081,7 +1081,11 @@ dependencies = [
  "bincode",
  "blake3",
  "ed25519-dalek",
+ "hex",
+ "hmac",
  "serde",
+ "sha2",
+ "sha3",
 ]
 
 [[package]]

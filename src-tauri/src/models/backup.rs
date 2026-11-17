@@ -5,9 +5,9 @@ use std::collections::HashMap;
 /// Portable single-file container for offline export/import.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct PortableBackupContainer {
-    pub container_format: String, // "humoco-app-backup-v1"
-    pub created_at: String,       // RFC3339
-    pub manifest_hex: String,     // Hex-encoded EncryptedBackupManifest JSON bytes
+    pub container_format: String,           // "humoco-app-backup-v1"
+    pub created_at: String,                 // RFC3339
+    pub manifest_hex: String,               // Hex-encoded EncryptedBackupManifest JSON bytes
     pub blobs_hex: HashMap<String, String>, // blob_name -> hex-encoded blob bytes
     #[serde(default)]
     pub custom_standards: HashMap<String, String>, // standard_id -> standard.toml content

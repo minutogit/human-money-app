@@ -1,5 +1,5 @@
+use crate::models::{FrontendError, FrontendSignatureImpact, VoucherStandardDefinitionDto};
 use crate::AppState;
-use crate::models::{VoucherStandardDefinitionDto, FrontendSignatureImpact, FrontendError};
 use human_money_core::models::secure_container::ContainerConfig;
 use log::info;
 use tauri::Manager;
@@ -11,7 +11,8 @@ pub fn parse_standard_toml(
     toml_content: String,
     _state: tauri::State<AppState>,
 ) -> Result<VoucherStandardDefinitionDto, FrontendError> {
-    let (core_standard, _) = VoucherStandardDefinition::from_toml(&toml_content).map_err(FrontendError::from)?;
+    let (core_standard, _) =
+        VoucherStandardDefinition::from_toml(&toml_content).map_err(FrontendError::from)?;
     Ok(core_standard.into())
 }
 
@@ -36,7 +37,9 @@ pub fn evaluate_signature_suitability(
     info!("Evaluating signature suitability for role: {}", role);
     let service = state.service.lock().unwrap();
     let core_voucher = human_money_core::models::voucher::Voucher::from(voucher);
-    let impact = service.evaluate_signature_suitability(&core_voucher, &role, &standard_toml_content).map_err(FrontendError::from)?;
+    let impact = service
+        .evaluate_signature_suitability(&core_voucher, &role, &standard_toml_content)
+        .map_err(FrontendError::from)?;
     Ok(impact.into())
 }
 
@@ -48,16 +51,27 @@ pub fn export_voucher_standard(
     state: tauri::State<AppState>,
 ) -> Result<Vec<u8>, FrontendError> {
     info!("Exporting voucher standard '{}'...", standard_id);
-    let app_data_dir = app.path().app_data_dir().map_err(|e| FrontendError::from(e.to_string()))?;
-    let toml_path = app_data_dir.join("voucher_standards").join(&standard_id).join("standard.toml");
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| FrontendError::from(e.to_string()))?;
+    let toml_path = app_data_dir
+        .join("voucher_standards")
+        .join(&standard_id)
+        .join("standard.toml");
     if !toml_path.exists() {
-        return Err(FrontendError::from(format!("Standard file standard.toml not found for ID '{}'", standard_id)));
+        return Err(FrontendError::from(format!(
+            "Standard file standard.toml not found for ID '{}'",
+            standard_id
+        )));
     }
     let toml_content = std::fs::read_to_string(&toml_path)
         .map_err(|e| FrontendError::from(format!("Failed to read standard file: {}", e)))?;
 
     let service = state.service.lock().unwrap();
-    service.export_voucher_standard(&toml_content, config).map_err(FrontendError::from)
+    service
+        .export_voucher_standard(&toml_content, config)
+        .map_err(FrontendError::from)
 }
 
 #[tauri::command]
@@ -82,11 +96,15 @@ pub fn import_voucher_standard(
     state: tauri::State<AppState>,
 ) -> Result<String, FrontendError> {
     info!("Importing voucher standard from container file...");
-    let app_data_dir = app.path().app_data_dir().map_err(|e| FrontendError::from(e.to_string()))?;
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| FrontendError::from(e.to_string()))?;
     let standards_dir = app_data_dir.join("voucher_standards");
     if !standards_dir.exists() {
-        std::fs::create_dir_all(&standards_dir)
-            .map_err(|e| FrontendError::from(format!("Failed to create standards directory: {}", e)))?;
+        std::fs::create_dir_all(&standards_dir).map_err(|e| {
+            FrontendError::from(format!("Failed to create standards directory: {}", e))
+        })?;
     }
 
     let service = state.service.lock().unwrap();
@@ -102,7 +120,10 @@ pub fn delete_voucher_standard(
     state: tauri::State<AppState>,
 ) -> Result<(), FrontendError> {
     info!("Attempting to delete voucher standard '{}'...", standard_id);
-    let app_data_dir = app.path().app_data_dir().map_err(|e| FrontendError::from(e.to_string()))?;
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| FrontendError::from(e.to_string()))?;
     let standards_dir = app_data_dir.join("voucher_standards");
 
     let service = state.service.lock().unwrap();
@@ -110,4 +131,3 @@ pub fn delete_voucher_standard(
         .delete_voucher_standard(&standard_id, &standards_dir)
         .map_err(FrontendError::from)
 }
-

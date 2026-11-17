@@ -159,9 +159,8 @@ pub fn accept_envelope_with_writer(
             } else if card.payload.v == ext.card.payload.v && card.jws == ext.card.jws {
                 merge(&mut ext.card, card.clone());
                 ext.hops = ext.hops.min(effective_hops);
-                ext.card_wire =
-                    crate::sd_card::render_wire(&ext.card, ext.hops, WireFilter::Full)
-                        .unwrap_or_else(|| ext.card_wire.clone());
+                ext.card_wire = crate::sd_card::render_wire(&ext.card, ext.hops, WireFilter::Full)
+                    .unwrap_or_else(|| ext.card_wire.clone());
                 false
             } else {
                 // Either card.payload.v < ext.card.payload.v or

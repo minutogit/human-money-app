@@ -183,8 +183,9 @@ fn validate_drops(drops: &[DropDescriptor]) -> Result<(), MarketError> {
             .map_err(|e| MarketError::Validation(format!("drop[{}] drop_pub error: {}", i, e)))?;
 
         if let Some(ref slot_id) = drop.slot_id {
-            crate::sync_access::parse_slot_id(slot_id)
-                .map_err(|e| MarketError::Validation(format!("drop[{}] slot_id error: {}", i, e)))?;
+            crate::sync_access::parse_slot_id(slot_id).map_err(|e| {
+                MarketError::Validation(format!("drop[{}] slot_id error: {}", i, e))
+            })?;
         }
     }
     Ok(())
@@ -374,12 +375,7 @@ fn validate_card_item_fields(item: &CardItem, valid_until: u64) -> Result<(), Ma
             }
         }
         CardItem::Ad(ad) => {
-            if ad.id.len() != 16
-                || !ad
-                    .id
-                    .chars()
-                    .all(|c| matches!(c, '0'..='9' | 'a'..='f'))
-            {
+            if ad.id.len() != 16 || !ad.id.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')) {
                 return Err(MarketError::Validation(format!(
                     "Ad id must be exactly 16 lowercase hex chars, got {}",
                     ad.id
@@ -517,9 +513,9 @@ pub fn validate_sd_card(card: &SdCard, wire_len: usize) -> Result<(), MarketErro
             )));
         }
 
-        let disc_bytes = URL_SAFE_NO_PAD
-            .decode(raw_b64)
-            .map_err(|e| MarketError::Validation(format!("Disclosure base64 decode failed: {e}")))?;
+        let disc_bytes = URL_SAFE_NO_PAD.decode(raw_b64).map_err(|e| {
+            MarketError::Validation(format!("Disclosure base64 decode failed: {e}"))
+        })?;
 
         let (salt_b64, max_distance, item): (String, u8, CardItem) =
             serde_json::from_slice(&disc_bytes).map_err(|e| {
@@ -639,8 +635,8 @@ pub fn sign_sd_card(
         let salt_b64 = URL_SAFE_NO_PAD.encode(salt_bytes);
 
         let tuple = (&salt_b64, max_distance, item);
-        let tuple_json = serde_json::to_string(&tuple)
-            .map_err(|e| MarketError::Serialization(e.to_string()))?;
+        let tuple_json =
+            serde_json::to_string(&tuple).map_err(|e| MarketError::Serialization(e.to_string()))?;
         let raw_b64 = URL_SAFE_NO_PAD.encode(tuple_json.as_bytes());
 
         let digest = compute_digest128(&raw_b64);
@@ -681,8 +677,8 @@ pub fn sign_sd_card(
         typ: SD_CARD_TYP.to_string(),
     };
 
-    let header_json = serde_json::to_string(&header)
-        .map_err(|e| MarketError::Serialization(e.to_string()))?;
+    let header_json =
+        serde_json::to_string(&header).map_err(|e| MarketError::Serialization(e.to_string()))?;
     let payload_canonical_json = serde_json_canonicalizer::to_string(&payload)
         .map_err(|e| MarketError::Serialization(e.to_string()))?;
 
@@ -777,9 +773,9 @@ pub fn verify_sd_card(wire: &str) -> Result<SdCard, MarketError> {
     let sig_bytes = URL_SAFE_NO_PAD
         .decode(sig_b64)
         .map_err(|e| MarketError::InvalidJws(format!("Signature base64 decode failed: {}", e)))?;
-    let sig_arr: [u8; 64] = sig_bytes.try_into().map_err(|_| {
-        MarketError::InvalidJws("Signature must be exactly 64 bytes".to_string())
-    })?;
+    let sig_arr: [u8; 64] = sig_bytes
+        .try_into()
+        .map_err(|_| MarketError::InvalidJws("Signature must be exactly 64 bytes".to_string()))?;
     let signature = Signature::from_bytes(&sig_arr);
 
     let signing_input = format!("{}.{}", header_b64, payload_b64);
@@ -809,7 +805,9 @@ pub fn verify_sd_card(wire: &str) -> Result<SdCard, MarketError> {
         }
 
         // Duplicate disclosures in incoming wire are ignored (first occurrence retained)
-        disclosures.entry(digest).or_insert_with(|| raw_disc.to_string());
+        disclosures
+            .entry(digest)
+            .or_insert_with(|| raw_disc.to_string());
     }
 
     let card = SdCard {

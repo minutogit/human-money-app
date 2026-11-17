@@ -64,10 +64,7 @@ fn test_drop_access_deterministic_vectors() {
     assert_eq!(data_dir.len(), 18); // "d-" + 16 hex chars
 
     // Member stealth key derivation
-    let member_seeds = [
-        [17u8; 32],
-        [34u8; 32],
-    ];
+    let member_seeds = [[17u8; 32], [34u8; 32]];
 
     let mut members = Vec::new();
     let test_message = b"Humoco Stealth Protocol Test Message V1";
@@ -241,14 +238,7 @@ fn test_http_request_signers() {
 
     // Stealth member signer (None prefix)
     let stealth_headers = sign_member_request_stealth(
-        &member_sk,
-        &admin_pub,
-        "PUT",
-        "card",
-        None,
-        timestamp,
-        nonce,
-        body,
+        &member_sk, &admin_pub, "PUT", "card", None, timestamp, nonce, body,
     )
     .unwrap();
     assert_eq!(stealth_headers.timestamp, timestamp);
@@ -264,8 +254,12 @@ fn test_http_request_signers() {
     .is_ok());
 
     // Direct member signer (for public drop user R, None prefix)
-    let direct_headers = sign_member_request_direct(&member_sk, "PUT", "card", None, timestamp, nonce, body);
-    assert_eq!(direct_headers.pubkey_hex, hex::encode(member_sk.verifying_key().as_bytes()));
+    let direct_headers =
+        sign_member_request_direct(&member_sk, "PUT", "card", None, timestamp, nonce, body);
+    assert_eq!(
+        direct_headers.pubkey_hex,
+        hex::encode(member_sk.verifying_key().as_bytes())
+    );
     assert_eq!(direct_headers.prefix, None);
     assert!(verify_ed25519_detached_hex(
         &direct_headers.pubkey_hex,
@@ -287,7 +281,8 @@ fn test_http_request_signers() {
     )
     .unwrap();
     assert_eq!(stealth_pfx_headers.prefix, Some("alice-1".to_string()));
-    let expected_pfx_msg = format_member_request_message("PUT", "card", Some("alice-1"), timestamp, nonce, body);
+    let expected_pfx_msg =
+        format_member_request_message("PUT", "card", Some("alice-1"), timestamp, nonce, body);
     assert!(expected_pfx_msg.contains("HUMOCO-DROP-REQ-V1\nPUT\ncard\nalice-1\n1700000000\n"));
     assert!(verify_ed25519_detached_hex(
         &stealth_pfx_headers.pubkey_hex,
@@ -307,7 +302,8 @@ fn test_http_request_signers() {
         body,
     );
     assert_eq!(direct_pfx_headers.prefix, Some("bob-2".to_string()));
-    let expected_bob_msg = format_member_request_message("PUT", "card", Some("bob-2"), timestamp, nonce, body);
+    let expected_bob_msg =
+        format_member_request_message("PUT", "card", Some("bob-2"), timestamp, nonce, body);
     assert!(expected_bob_msg.contains("HUMOCO-DROP-REQ-V1\nPUT\ncard\nbob-2\n1700000000\n"));
     assert!(verify_ed25519_detached_hex(
         &direct_pfx_headers.pubkey_hex,
@@ -328,7 +324,8 @@ fn test_http_request_signers() {
     assert_eq!(de_some.prefix, Some("bob-2".to_string()));
 
     // Admin request signer
-    let admin_headers = sign_admin_request(&admin_sk, "PUT_MEMBERS", "card", timestamp, nonce, body);
+    let admin_headers =
+        sign_admin_request(&admin_sk, "PUT_MEMBERS", "card", timestamp, nonce, body);
     assert_eq!(admin_headers.pubkey_hex, admin_pub);
     let admin_msg = format_admin_request_message("PUT_MEMBERS", "card", timestamp, nonce, body);
     assert!(verify_ed25519_detached_hex(
@@ -346,13 +343,28 @@ fn test_validate_sync_prefix_rules() {
     assert_eq!(validate_sync_prefix(Some("")).unwrap(), None);
 
     // Valid prefixes
-    assert_eq!(validate_sync_prefix(Some("a")).unwrap(), Some("a".to_string()));
-    assert_eq!(validate_sync_prefix(Some("alice")).unwrap(), Some("alice".to_string()));
-    assert_eq!(validate_sync_prefix(Some("alice-123")).unwrap(), Some("alice-123".to_string()));
-    assert_eq!(validate_sync_prefix(Some("alice-bob-charlie")).unwrap(), Some("alice-bob-charlie".to_string()));
+    assert_eq!(
+        validate_sync_prefix(Some("a")).unwrap(),
+        Some("a".to_string())
+    );
+    assert_eq!(
+        validate_sync_prefix(Some("alice")).unwrap(),
+        Some("alice".to_string())
+    );
+    assert_eq!(
+        validate_sync_prefix(Some("alice-123")).unwrap(),
+        Some("alice-123".to_string())
+    );
+    assert_eq!(
+        validate_sync_prefix(Some("alice-bob-charlie")).unwrap(),
+        Some("alice-bob-charlie".to_string())
+    );
 
     let max_len_63 = "a".repeat(63);
-    assert_eq!(validate_sync_prefix(Some(&max_len_63)).unwrap(), Some(max_len_63));
+    assert_eq!(
+        validate_sync_prefix(Some(&max_len_63)).unwrap(),
+        Some(max_len_63)
+    );
 
     // > 63 chars rejected
     let too_long_64 = "a".repeat(64);

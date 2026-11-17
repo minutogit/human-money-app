@@ -1,6 +1,6 @@
+use human_money_core::models::voucher_standard_definition as core;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use human_money_core::models::voucher_standard_definition as core;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -169,7 +169,11 @@ impl From<core::ImmutableZone> for ImmutableZoneDto {
             blueprint: z.blueprint.into(),
             features: z.features.into(),
             issuance: z.issuance.into(),
-            custom_rules: z.custom_rules.into_iter().map(|(k, v)| (k, v.into())).collect(),
+            custom_rules: z
+                .custom_rules
+                .into_iter()
+                .map(|(k, v)| (k, v.into()))
+                .collect(),
         }
     }
 }

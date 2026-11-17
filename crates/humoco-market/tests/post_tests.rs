@@ -99,8 +99,7 @@ fn test_post_tag16_and_box_sealing_unauthorized_isolation() {
 
     // Multi-sender lookup without Alice returns Ok(None)
     let senders_without_alice = vec![(charlie_did, charlie_vk)];
-    let unmatched =
-        try_open_post_box_any_sender(&bob_sk, &senders_without_alice, &entry).unwrap();
+    let unmatched = try_open_post_box_any_sender(&bob_sk, &senders_without_alice, &entry).unwrap();
     assert_eq!(unmatched, None);
 }
 
@@ -234,8 +233,12 @@ fn test_multi_device_if_match_merge() {
     let entry_3 = seal_post_box(&alice_sk, &bob_vk, &sample_envelope("item-3", 80)).unwrap();
 
     // Device A encodes slot with entry_1 (generates 1 dummy)
-    let slot_dev_a =
-        encode_post_slot(&master_seed, std::slice::from_ref(&entry_1), DROP_POST_MAX_BYTES).unwrap();
+    let slot_dev_a = encode_post_slot(
+        &master_seed,
+        std::slice::from_ref(&entry_1),
+        DROP_POST_MAX_BYTES,
+    )
+    .unwrap();
 
     // Device B merges entry_2 and entry_3, acknowledging entry_1's tag
     let merged_slot = merge_post_slot(
@@ -280,8 +283,12 @@ fn test_decode_post_slot_corruptions() {
     let bob_vk = make_key(2).verifying_key();
     let real_entry = seal_post_box(&alice_sk, &bob_vk, &sample_envelope("c", 20)).unwrap();
 
-    let valid_slot =
-        encode_post_slot(&master_seed, std::slice::from_ref(&real_entry), DROP_POST_MAX_BYTES).unwrap();
+    let valid_slot = encode_post_slot(
+        &master_seed,
+        std::slice::from_ref(&real_entry),
+        DROP_POST_MAX_BYTES,
+    )
+    .unwrap();
 
     // Too short (< 10 bytes)
     assert!(matches!(

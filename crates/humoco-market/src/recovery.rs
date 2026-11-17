@@ -307,7 +307,9 @@ pub fn verify_rehearsal_answers(
             &norm,
             kdf_params,
         )?;
-        let diff = (0..32).fold(0u8, |acc, idx| acc | (actual[idx] ^ expected_verifiers[i][idx]));
+        let diff = (0..32).fold(0u8, |acc, idx| {
+            acc | (actual[idx] ^ expected_verifiers[i][idx])
+        });
         matches[i] = diff == 0;
     }
     Ok(matches)
@@ -624,8 +626,9 @@ pub fn unseal_recovery_master_payload(
 
     let payload: RecoveryMasterPayload = match bincode::deserialize(&plaintext) {
         Ok(p) => p,
-        Err(_) => serde_json::from_slice(&plaintext)
-            .map_err(|e| MarketError::Serialization(format!("AEAD master unsealing failed: {}", e)))?,
+        Err(_) => serde_json::from_slice(&plaintext).map_err(|e| {
+            MarketError::Serialization(format!("AEAD master unsealing failed: {}", e))
+        })?,
     };
     Ok(payload)
 }
@@ -771,10 +774,7 @@ pub fn verify_guardian_vault_entry(entry: &GuardianVaultEntry) -> Result<(), Mar
         )));
     }
 
-    if entry.threshold_m < 2
-        || entry.threshold_m > entry.total_n
-        || entry.total_n > 16
-    {
+    if entry.threshold_m < 2 || entry.threshold_m > entry.total_n || entry.total_n > 16 {
         return Err(MarketError::Validation(format!(
             "Invalid threshold bounds: m={}, n={}",
             entry.threshold_m, entry.total_n
@@ -833,11 +833,8 @@ pub fn verify_guardian_vault_entry(entry: &GuardianVaultEntry) -> Result<(), Mar
         ));
     }
 
-    let expected_commit = compute_share_commitment(
-        &entry.owner_did,
-        entry.rotation_epoch,
-        &entry.share,
-    );
+    let expected_commit =
+        compute_share_commitment(&entry.owner_did, entry.rotation_epoch, &entry.share);
     let recorded_commit = entry.share_commitments[(entry.share.index - 1) as usize];
     if expected_commit != recorded_commit {
         return Err(MarketError::Validation(format!(
@@ -996,11 +993,7 @@ impl RecoveryRequestLink {
 }
 
 /// Builds `humoco://recovery-req?v=1&pk=<base64url>&ts=<unix>&name=<url_encoded>`
-pub fn build_recovery_request_uri(
-    pk_temp: &[u8; 32],
-    ts: u64,
-    name_hint: Option<&str>,
-) -> String {
+pub fn build_recovery_request_uri(pk_temp: &[u8; 32], ts: u64, name_hint: Option<&str>) -> String {
     let pk_b64 = URL_SAFE_NO_PAD.encode(pk_temp);
     let mut query = format!("v=1&pk={}&ts={}", pk_b64, ts);
     if let Some(name) = name_hint {
@@ -1038,24 +1031,24 @@ pub fn parse_recovery_request_uri(uri: &str) -> Result<RecoveryRequestLink, Mark
     for (key, val) in form_urlencoded::parse(query_str.as_bytes()) {
         match key.as_ref() {
             "v" => {
-                let ver: u8 = val
-                    .parse()
-                    .map_err(|_| MarketError::Validation("Invalid version in recovery request".to_string()))?;
+                let ver: u8 = val.parse().map_err(|_| {
+                    MarketError::Validation("Invalid version in recovery request".to_string())
+                })?;
                 v = Some(ver);
             }
             "pk" => {
                 let pk_bytes = URL_SAFE_NO_PAD
                     .decode(val.as_bytes())
                     .map_err(|e| MarketError::Validation(format!("Invalid pk base64url: {}", e)))?;
-                let arr: [u8; 32] = pk_bytes
-                    .try_into()
-                    .map_err(|_| MarketError::Validation("pk must be exactly 32 bytes".to_string()))?;
+                let arr: [u8; 32] = pk_bytes.try_into().map_err(|_| {
+                    MarketError::Validation("pk must be exactly 32 bytes".to_string())
+                })?;
                 pk_opt = Some(arr);
             }
             "ts" => {
-                let ts: u64 = val
-                    .parse()
-                    .map_err(|_| MarketError::Validation("Invalid ts in recovery request".to_string()))?;
+                let ts: u64 = val.parse().map_err(|_| {
+                    MarketError::Validation("Invalid ts in recovery request".to_string())
+                })?;
                 ts_opt = Some(ts);
             }
             "name" => {
@@ -1068,15 +1061,21 @@ pub fn parse_recovery_request_uri(uri: &str) -> Result<RecoveryRequestLink, Mark
         }
     }
 
-    let version = v.ok_or_else(|| MarketError::Validation("Missing 'v' in recovery request URI".to_string()))?;
+    let version = v.ok_or_else(|| {
+        MarketError::Validation("Missing 'v' in recovery request URI".to_string())
+    })?;
     if version != 1 {
         return Err(MarketError::Validation(format!(
             "Unsupported recovery request version: {}",
             version
         )));
     }
-    let pk_temp = pk_opt.ok_or_else(|| MarketError::Validation("Missing 'pk' in recovery request URI".to_string()))?;
-    let ts = ts_opt.ok_or_else(|| MarketError::Validation("Missing 'ts' in recovery request URI".to_string()))?;
+    let pk_temp = pk_opt.ok_or_else(|| {
+        MarketError::Validation("Missing 'pk' in recovery request URI".to_string())
+    })?;
+    let ts = ts_opt.ok_or_else(|| {
+        MarketError::Validation("Missing 'ts' in recovery request URI".to_string())
+    })?;
 
     Ok(RecoveryRequestLink {
         version,
@@ -1119,7 +1118,9 @@ pub fn seal_guardian_release_reply(
     let hkdf = Hkdf::<Sha256>::new(None, shared.as_bytes());
     let mut k_reply = [0u8; 32];
     hkdf.expand(b"HUMOCO-REC-REPLY-V1", &mut k_reply)
-        .map_err(|e| MarketError::Crypto(format!("HKDF expand failed for recovery reply: {}", e)))?;
+        .map_err(|e| {
+            MarketError::Crypto(format!("HKDF expand failed for recovery reply: {}", e))
+        })?;
 
     let cipher = XChaCha20Poly1305::new_from_slice(&k_reply)
         .map_err(|e| MarketError::Crypto(e.to_string()))?;
@@ -1128,8 +1129,8 @@ pub fn seal_guardian_release_reply(
     OsRng.fill_bytes(&mut msg_nonce);
     let nonce = XNonce::from_slice(&msg_nonce);
 
-    let plaintext = bincode::serialize(payload)
-        .map_err(|e| MarketError::Serialization(e.to_string()))?;
+    let plaintext =
+        bincode::serialize(payload).map_err(|e| MarketError::Serialization(e.to_string()))?;
 
     let ciphertext = cipher
         .encrypt(
@@ -1176,9 +1177,9 @@ pub fn open_and_verify_guardian_release_reply(
     for (key, val) in form_urlencoded::parse(query_str.as_bytes()) {
         match key.as_ref() {
             "v" => {
-                let ver: u8 = val
-                    .parse()
-                    .map_err(|_| MarketError::Validation("Invalid version in recovery reply".to_string()))?;
+                let ver: u8 = val.parse().map_err(|_| {
+                    MarketError::Validation("Invalid version in recovery reply".to_string())
+                })?;
                 v = Some(ver);
             }
             "data" => {
@@ -1188,14 +1189,17 @@ pub fn open_and_verify_guardian_release_reply(
         }
     }
 
-    let version = v.ok_or_else(|| MarketError::Validation("Missing 'v' in recovery reply URI".to_string()))?;
+    let version =
+        v.ok_or_else(|| MarketError::Validation("Missing 'v' in recovery reply URI".to_string()))?;
     if version != 1 {
         return Err(MarketError::Validation(format!(
             "Unsupported recovery reply version: {}",
             version
         )));
     }
-    let data_b64 = data_opt.ok_or_else(|| MarketError::Validation("Missing 'data' in recovery reply URI".to_string()))?;
+    let data_b64 = data_opt.ok_or_else(|| {
+        MarketError::Validation("Missing 'data' in recovery reply URI".to_string())
+    })?;
 
     let package = URL_SAFE_NO_PAD
         .decode(data_b64.as_bytes())
@@ -1228,7 +1232,9 @@ pub fn open_and_verify_guardian_release_reply(
     let hkdf = Hkdf::<Sha256>::new(None, shared.as_bytes());
     let mut k_reply = [0u8; 32];
     hkdf.expand(b"HUMOCO-REC-REPLY-V1", &mut k_reply)
-        .map_err(|e| MarketError::Crypto(format!("HKDF expand failed for recovery reply: {}", e)))?;
+        .map_err(|e| {
+            MarketError::Crypto(format!("HKDF expand failed for recovery reply: {}", e))
+        })?;
 
     let cipher = XChaCha20Poly1305::new_from_slice(&k_reply)
         .map_err(|e| MarketError::Crypto(e.to_string()))?;
@@ -1246,8 +1252,9 @@ pub fn open_and_verify_guardian_release_reply(
 
     let payload: GuardianReleasePayload = match bincode::deserialize(&plaintext) {
         Ok(p) => p,
-        Err(_) => serde_json::from_slice(&plaintext)
-            .map_err(|e| MarketError::Serialization(format!("Failed to parse GuardianReleasePayload: {}", e)))?,
+        Err(_) => serde_json::from_slice(&plaintext).map_err(|e| {
+            MarketError::Serialization(format!("Failed to parse GuardianReleasePayload: {}", e))
+        })?,
     };
 
     verify_guardian_vault_entry(&payload.entry)?;
@@ -1512,9 +1519,9 @@ pub fn parse_emergency_kit_uri(uri: &str) -> Result<EmergencyKitData, MarketErro
     for (key, val) in form_urlencoded::parse(query_str.as_bytes()) {
         match key.as_ref() {
             "v" => {
-                let ver: u8 = val
-                    .parse()
-                    .map_err(|_| MarketError::Validation("Invalid version number in kit".to_string()))?;
+                let ver: u8 = val.parse().map_err(|_| {
+                    MarketError::Validation("Invalid version number in kit".to_string())
+                })?;
                 v = Some(ver);
             }
             "ent" => {
@@ -1530,9 +1537,9 @@ pub fn parse_emergency_kit_uri(uri: &str) -> Result<EmergencyKitData, MarketErro
                 ent = Some(ent_str);
             }
             "lang" => {
-                let code: u8 = val
-                    .parse()
-                    .map_err(|_| MarketError::Validation("Invalid language code in kit".to_string()))?;
+                let code: u8 = val.parse().map_err(|_| {
+                    MarketError::Validation("Invalid language code in kit".to_string())
+                })?;
                 if !(1..=11).contains(&code) {
                     return Err(MarketError::Validation(format!(
                         "Language code out of range: {}",
@@ -1552,11 +1559,13 @@ pub fn parse_emergency_kit_uri(uri: &str) -> Result<EmergencyKitData, MarketErro
                 }
             },
             "sync" => {
-                let sync_bytes = URL_SAFE_NO_PAD
-                    .decode(val.as_bytes())
-                    .map_err(|e| MarketError::Validation(format!("Invalid sync base64url: {}", e)))?;
+                let sync_bytes = URL_SAFE_NO_PAD.decode(val.as_bytes()).map_err(|e| {
+                    MarketError::Validation(format!("Invalid sync base64url: {}", e))
+                })?;
                 let descriptors: Vec<DropDescriptor> = serde_json::from_slice(&sync_bytes)
-                    .map_err(|e| MarketError::Serialization(format!("Invalid sync descriptors JSON: {}", e)))?;
+                    .map_err(|e| {
+                        MarketError::Serialization(format!("Invalid sync descriptors JSON: {}", e))
+                    })?;
                 sync = Some(descriptors);
             }
             "prefix" => {
@@ -1569,16 +1578,22 @@ pub fn parse_emergency_kit_uri(uri: &str) -> Result<EmergencyKitData, MarketErro
         }
     }
 
-    let version = v.ok_or_else(|| MarketError::Validation("Missing 'v' in emergency kit URI".to_string()))?;
+    let version =
+        v.ok_or_else(|| MarketError::Validation("Missing 'v' in emergency kit URI".to_string()))?;
     if version != 1 {
         return Err(MarketError::Validation(format!(
             "Unsupported emergency kit version: {}",
             version
         )));
     }
-    let entropy_hex = ent.ok_or_else(|| MarketError::Validation("Missing 'ent' in emergency kit URI".to_string()))?;
-    let language_code = lang.ok_or_else(|| MarketError::Validation("Missing 'lang' in emergency kit URI".to_string()))?;
-    let has_bip39_passphrase = pass.ok_or_else(|| MarketError::Validation("Missing 'pass' in emergency kit URI".to_string()))?;
+    let entropy_hex = ent
+        .ok_or_else(|| MarketError::Validation("Missing 'ent' in emergency kit URI".to_string()))?;
+    let language_code = lang.ok_or_else(|| {
+        MarketError::Validation("Missing 'lang' in emergency kit URI".to_string())
+    })?;
+    let has_bip39_passphrase = pass.ok_or_else(|| {
+        MarketError::Validation("Missing 'pass' in emergency kit URI".to_string())
+    })?;
     let sync_descriptors = sync.unwrap_or_default();
 
     Ok(EmergencyKitData {

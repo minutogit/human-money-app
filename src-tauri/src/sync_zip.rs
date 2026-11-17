@@ -19,7 +19,7 @@ pub fn generate_sync_config_php(
         None => "null".to_string(),
     };
     format!(
-r#"<?php // config.php – adjust to your needs
+        r#"<?php // config.php – adjust to your needs
 return [
     // 64-hex lowercase Ed25519 VerifyingKey of the sync admin
     'admin_pubkey'         => '{}',
@@ -348,7 +348,7 @@ fn build_pkzip_archive(entries: &[ZipEntry]) -> Vec<u8> {
         central_dir.extend_from_slice(&[0x00, 0x00]); // Comment len
         central_dir.extend_from_slice(&[0x00, 0x00]); // Disk number start
         central_dir.extend_from_slice(&[0x00, 0x00]); // Internal attributes
-        // External attributes: 0o100644 << 16 = 0x81a40000 -> little endian [0x00, 0x00, 0xa4, 0x81]
+                                                      // External attributes: 0o100644 << 16 = 0x81a40000 -> little endian [0x00, 0x00, 0xa4, 0x81]
         central_dir.extend_from_slice(&[0x00, 0x00, 0xa4, 0x81]);
         central_dir.extend_from_slice(&offset.to_le_bytes()); // Relative offset of local header
         central_dir.extend_from_slice(name_bytes);
@@ -407,13 +407,24 @@ mod tests {
                 // Central directory or EOCD reached
                 break;
             }
-            assert_eq!(sig, [0x50, 0x4b, 0x03, 0x04], "Invalid local header signature at {}", offset);
+            assert_eq!(
+                sig,
+                [0x50, 0x4b, 0x03, 0x04],
+                "Invalid local header signature at {}",
+                offset
+            );
 
             let crc = u32::from_le_bytes(zip_bytes[offset + 14..offset + 18].try_into().unwrap());
-            let c_size = u32::from_le_bytes(zip_bytes[offset + 18..offset + 22].try_into().unwrap()) as usize;
-            let u_size = u32::from_le_bytes(zip_bytes[offset + 22..offset + 26].try_into().unwrap()) as usize;
-            let name_len = u16::from_le_bytes(zip_bytes[offset + 26..offset + 28].try_into().unwrap()) as usize;
-            let extra_len = u16::from_le_bytes(zip_bytes[offset + 28..offset + 30].try_into().unwrap()) as usize;
+            let c_size = u32::from_le_bytes(zip_bytes[offset + 18..offset + 22].try_into().unwrap())
+                as usize;
+            let u_size = u32::from_le_bytes(zip_bytes[offset + 22..offset + 26].try_into().unwrap())
+                as usize;
+            let name_len =
+                u16::from_le_bytes(zip_bytes[offset + 26..offset + 28].try_into().unwrap())
+                    as usize;
+            let extra_len =
+                u16::from_le_bytes(zip_bytes[offset + 28..offset + 30].try_into().unwrap())
+                    as usize;
 
             assert_eq!(c_size, u_size);
             let name_start = offset + 30;

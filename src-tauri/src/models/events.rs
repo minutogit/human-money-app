@@ -40,13 +40,27 @@ pub enum FrontendWalletEventType {
 impl From<human_money_core::models::wallet_event::WalletEventType> for FrontendWalletEventType {
     fn from(t: human_money_core::models::wallet_event::WalletEventType) -> Self {
         match t {
-            human_money_core::models::wallet_event::WalletEventType::VoucherCreated => Self::VoucherCreated,
-            human_money_core::models::wallet_event::WalletEventType::TransferSent => Self::TransferSent,
-            human_money_core::models::wallet_event::WalletEventType::TransferReceived => Self::TransferReceived,
-            human_money_core::models::wallet_event::WalletEventType::VoucherQuarantined => Self::VoucherQuarantined,
-            human_money_core::models::wallet_event::WalletEventType::VoucherActivated => Self::VoucherActivated,
-            human_money_core::models::wallet_event::WalletEventType::VoucherVoided => Self::VoucherVoided,
-            human_money_core::models::wallet_event::WalletEventType::VoucherExpired => Self::VoucherExpired,
+            human_money_core::models::wallet_event::WalletEventType::VoucherCreated => {
+                Self::VoucherCreated
+            }
+            human_money_core::models::wallet_event::WalletEventType::TransferSent => {
+                Self::TransferSent
+            }
+            human_money_core::models::wallet_event::WalletEventType::TransferReceived => {
+                Self::TransferReceived
+            }
+            human_money_core::models::wallet_event::WalletEventType::VoucherQuarantined => {
+                Self::VoucherQuarantined
+            }
+            human_money_core::models::wallet_event::WalletEventType::VoucherActivated => {
+                Self::VoucherActivated
+            }
+            human_money_core::models::wallet_event::WalletEventType::VoucherVoided => {
+                Self::VoucherVoided
+            }
+            human_money_core::models::wallet_event::WalletEventType::VoucherExpired => {
+                Self::VoucherExpired
+            }
             human_money_core::models::wallet_event::WalletEventType::Unknown(s) => Self::Unknown(s),
             _ => Self::Unknown("NewEnumValue".to_string()),
         }

@@ -95,7 +95,11 @@ fn save_keystore_file(keystore_dir: &Path, store: &PinKeystoreFile) -> Result<()
     fs::create_dir_all(keystore_dir)
         .map_err(|e| format!("Failed to create PIN keystore directory: {}", e))?;
     let path = keystore_path(keystore_dir);
-    let tmp = keystore_dir.join(format!("{}.tmp.{}", PIN_KEYSTORE_FILE, uuid::Uuid::new_v4()));
+    let tmp = keystore_dir.join(format!(
+        "{}.tmp.{}",
+        PIN_KEYSTORE_FILE,
+        uuid::Uuid::new_v4()
+    ));
     let bytes = serde_json::to_vec_pretty(store)
         .map_err(|e| format!("Failed to serialize PIN keystore: {}", e))?;
     fs::write(&tmp, &bytes).map_err(|e| format!("Failed to write temp PIN keystore: {}", e))?;
@@ -143,7 +147,10 @@ pub fn create_and_store_pepper(
     Ok(derive_pin_secret(&pepper, folder_name, pin))
 }
 
-pub fn get_entry(keystore_dir: &Path, folder_name: &str) -> Result<Option<PinKeystoreEntry>, String> {
+pub fn get_entry(
+    keystore_dir: &Path,
+    folder_name: &str,
+) -> Result<Option<PinKeystoreEntry>, String> {
     let store = load_keystore_file(keystore_dir)?;
     Ok(store.entries.get(folder_name).cloned())
 }
@@ -184,16 +191,19 @@ pub fn begin_pin_attempt(
         .decode(&enc_b64)
         .map_err(|e| format!("Corrupt PIN keystore entry: {}", e))?;
     let wrap_key = derive_keystore_wrap_key(device_binding_id);
-    let plain = Zeroizing::new(
-        crypto::decrypt_data(&wrap_key, &encrypted)
-            .map_err(|_| "Failed to unwrap device pepper (device identity changed).".to_string())?,
-    );
+    let plain =
+        Zeroizing::new(crypto::decrypt_data(&wrap_key, &encrypted).map_err(|_| {
+            "Failed to unwrap device pepper (device identity changed).".to_string()
+        })?);
     let pepper: [u8; 32] = plain
         .as_slice()
         .try_into()
         .map_err(|_| "Invalid unwrapped pepper length.".to_string())?;
 
-    Ok((derive_pin_secret(&pepper, folder_name, pin), current_attempt))
+    Ok((
+        derive_pin_secret(&pepper, folder_name, pin),
+        current_attempt,
+    ))
 }
 
 pub fn reset_failed_attempts(keystore_dir: &Path, folder_name: &str) -> Result<(), String> {

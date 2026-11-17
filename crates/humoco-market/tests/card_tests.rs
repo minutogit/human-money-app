@@ -115,7 +115,12 @@ fn test_sd_card_manipulation_rejection() {
 
     // 2. Foreign disclosure token (from another card, not in _sd) -> verify fails
     let foreign_sk = make_key(99);
-    let foreign_card = sign_sd_card(valid_payload_input(&foreign_sk), sample_items(), &foreign_sk).unwrap();
+    let foreign_card = sign_sd_card(
+        valid_payload_input(&foreign_sk),
+        sample_items(),
+        &foreign_sk,
+    )
+    .unwrap();
     let foreign_wire = render_wire(&foreign_card, 1, WireFilter::Full).unwrap();
     let foreign_disc = foreign_wire.split('~').nth(1).unwrap();
 
@@ -130,7 +135,10 @@ fn test_sd_card_manipulation_rejection() {
     omitted_parts.extend_from_slice(&parts3[2..]); // omit disclosure 1
     let omitted_wire = omitted_parts.join("~");
     let verified_omitted = verify_sd_card(&omitted_wire).unwrap();
-    assert_eq!(verified_omitted.disclosures.len(), signed.disclosures.len() - 1);
+    assert_eq!(
+        verified_omitted.disclosures.len(),
+        signed.disclosures.len() - 1
+    );
 }
 
 #[test]
@@ -144,13 +152,17 @@ fn test_render_wire_per_distance() {
     let wire_dist1 = render_wire(&card, 1, WireFilter::Full).unwrap();
     let verified_dist1 = verify_sd_card(&wire_dist1).unwrap();
     let items_dist1 = humoco_market::sd_card::decoded_items(&verified_dist1);
-    assert!(items_dist1.iter().any(|(item, _)| matches!(item, CardItem::Phone(_))));
+    assert!(items_dist1
+        .iter()
+        .any(|(item, _)| matches!(item, CardItem::Phone(_))));
 
     // Distance 2: Phone (max_distance = 1) is omitted!
     let wire_dist2 = render_wire(&card, 2, WireFilter::Full).unwrap();
     let verified_dist2 = verify_sd_card(&wire_dist2).unwrap();
     let items_dist2 = humoco_market::sd_card::decoded_items(&verified_dist2);
-    assert!(!items_dist2.iter().any(|(item, _)| matches!(item, CardItem::Phone(_))));
+    assert!(!items_dist2
+        .iter()
+        .any(|(item, _)| matches!(item, CardItem::Phone(_))));
     assert_eq!(items_dist2.len(), items_dist1.len() - 1);
 
     // Distance 3 (> max_hops 2): Returns None
@@ -192,8 +204,12 @@ fn test_fit_bytes_budget_2900() {
     let verified = verify_sd_card(&qr_wire).unwrap();
     let decoded = humoco_market::sd_card::decoded_items(&verified);
     // Name and City are prioritized and must be present
-    assert!(decoded.iter().any(|(item, _)| matches!(item, CardItem::Name { .. })));
-    assert!(decoded.iter().any(|(item, _)| matches!(item, CardItem::City { .. })));
+    assert!(decoded
+        .iter()
+        .any(|(item, _)| matches!(item, CardItem::Name { .. })));
+    assert!(decoded
+        .iter()
+        .any(|(item, _)| matches!(item, CardItem::City { .. })));
 }
 
 #[test]
@@ -255,9 +271,14 @@ fn test_no_ads_wire_filter_fits_7168_with_8_skills() {
 
     let verified = verify_sd_card(&no_ads_wire).unwrap();
     let decoded = humoco_market::sd_card::decoded_items(&verified);
-    assert!(!decoded.iter().any(|(item, _)| matches!(item, CardItem::Ad(_))));
+    assert!(!decoded
+        .iter()
+        .any(|(item, _)| matches!(item, CardItem::Ad(_))));
     assert_eq!(
-        decoded.iter().filter(|(item, _)| matches!(item, CardItem::Skill(_))).count(),
+        decoded
+            .iter()
+            .filter(|(item, _)| matches!(item, CardItem::Skill(_)))
+            .count(),
         8
     );
 }
@@ -273,18 +294,12 @@ fn test_merge_two_partial_wires() {
     assert!(all_discs.len() >= 4);
 
     // Wire 1: contains disclosures 0 and 1
-    let wire_1 = format!(
-        "{}~{}~{}~",
-        card.jws, all_discs[0].1, all_discs[1].1
-    );
+    let wire_1 = format!("{}~{}~{}~", card.jws, all_discs[0].1, all_discs[1].1);
     let mut card_1 = verify_sd_card(&wire_1).unwrap();
     assert_eq!(card_1.disclosures.len(), 2);
 
     // Wire 2: contains disclosures 2 and 3
-    let wire_2 = format!(
-        "{}~{}~{}~",
-        card.jws, all_discs[2].1, all_discs[3].1
-    );
+    let wire_2 = format!("{}~{}~{}~", card.jws, all_discs[2].1, all_discs[3].1);
     let card_2 = verify_sd_card(&wire_2).unwrap();
     assert_eq!(card_2.disclosures.len(), 2);
 
@@ -376,7 +391,9 @@ fn test_receiver_rule_strip_contacts_at_hop2() {
     let pk_bytes = *sk.verifying_key().as_bytes();
     let stored = store.cards.get(&pk_bytes).unwrap();
     let decoded = humoco_market::sd_card::decoded_items(&stored.card);
-    assert!(!decoded.iter().any(|(item, _)| matches!(item, CardItem::Phone(_))));
+    assert!(!decoded
+        .iter()
+        .any(|(item, _)| matches!(item, CardItem::Phone(_))));
 }
 
 #[test]
@@ -777,9 +794,18 @@ fn test_geo_eviction_remote_protection() {
     let pk_b = *sk_b.verifying_key().as_bytes();
     let pk_c = *sk_c.verifying_key().as_bytes();
 
-    assert!(store.cards.contains_key(&pk_a), "Card A (close local) should be kept");
-    assert!(store.cards.contains_key(&pk_b), "Card B (remote protected) should be kept");
-    assert!(!store.cards.contains_key(&pk_c), "Card C (farther local) should be evicted");
+    assert!(
+        store.cards.contains_key(&pk_a),
+        "Card A (close local) should be kept"
+    );
+    assert!(
+        store.cards.contains_key(&pk_b),
+        "Card B (remote protected) should be kept"
+    );
+    assert!(
+        !store.cards.contains_key(&pk_c),
+        "Card C (farther local) should be evicted"
+    );
 }
 
 #[test]
@@ -893,9 +919,18 @@ fn test_geo_eviction_hop1_protection() {
     let pk2 = *sk2.verifying_key().as_bytes();
     let pk3 = *sk3.verifying_key().as_bytes();
 
-    assert!(store.cards.contains_key(&pk1), "Card 1 (Hop 1 protected) should be kept");
-    assert!(store.cards.contains_key(&pk3), "Card 3 (closer Hop 2) should be kept");
-    assert!(!store.cards.contains_key(&pk2), "Card 2 (farther Hop 2) should be evicted");
+    assert!(
+        store.cards.contains_key(&pk1),
+        "Card 1 (Hop 1 protected) should be kept"
+    );
+    assert!(
+        store.cards.contains_key(&pk3),
+        "Card 3 (closer Hop 2) should be kept"
+    );
+    assert!(
+        !store.cards.contains_key(&pk2),
+        "Card 2 (farther Hop 2) should be evicted"
+    );
 }
 
 #[test]
@@ -1009,9 +1044,18 @@ fn test_geo_eviction_far_vs_near() {
     let pk2 = *sk2.verifying_key().as_bytes();
     let pk3 = *sk3.verifying_key().as_bytes();
 
-    assert!(!store.cards.contains_key(&pk1), "Card 1 (Munich, far) should be evicted");
-    assert!(store.cards.contains_key(&pk2), "Card 2 (Potsdam, closer) should be kept");
-    assert!(store.cards.contains_key(&pk3), "Card 3 (Berlin, closest) should be kept");
+    assert!(
+        !store.cards.contains_key(&pk1),
+        "Card 1 (Munich, far) should be evicted"
+    );
+    assert!(
+        store.cards.contains_key(&pk2),
+        "Card 2 (Potsdam, closer) should be kept"
+    );
+    assert!(
+        store.cards.contains_key(&pk3),
+        "Card 3 (Berlin, closest) should be kept"
+    );
 }
 
 proptest! {

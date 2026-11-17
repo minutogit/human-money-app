@@ -283,9 +283,13 @@ impl FrontendBoardItem {
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum FrontendEntrySource {
     Voucher,
-    Card { hops: u8 },
+    Card {
+        hops: u8,
+    },
     #[serde(rename_all = "camelCase")]
-    Sync { read_url: String },
+    Sync {
+        read_url: String,
+    },
 }
 
 impl From<humoco_market::EntrySource> for FrontendEntrySource {

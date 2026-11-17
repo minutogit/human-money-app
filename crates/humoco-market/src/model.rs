@@ -1,5 +1,5 @@
-use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 use crate::sd_card::SdCard;
 
@@ -120,8 +120,8 @@ pub struct StoredCard {
 }
 
 pub mod hex_key_map {
-    use std::collections::BTreeMap;
     use serde::{de::Deserializer, ser::Serializer, Deserialize, Serialize};
+    use std::collections::BTreeMap;
 
     pub fn serialize<S, V>(map: &BTreeMap<[u8; 32], V>, serializer: S) -> Result<S::Ok, S::Error>
     where

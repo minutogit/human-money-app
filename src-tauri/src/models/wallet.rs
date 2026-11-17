@@ -29,8 +29,12 @@ impl From<MnemonicLanguage> for human_money_core::MnemonicLanguage {
             MnemonicLanguage::Korean => human_money_core::MnemonicLanguage::Korean,
             MnemonicLanguage::Portuguese => human_money_core::MnemonicLanguage::Portuguese,
             MnemonicLanguage::Czech => human_money_core::MnemonicLanguage::Czech,
-            MnemonicLanguage::ChineseSimplified => human_money_core::MnemonicLanguage::ChineseSimplified,
-            MnemonicLanguage::ChineseTraditional => human_money_core::MnemonicLanguage::ChineseTraditional,
+            MnemonicLanguage::ChineseSimplified => {
+                human_money_core::MnemonicLanguage::ChineseSimplified
+            }
+            MnemonicLanguage::ChineseTraditional => {
+                human_money_core::MnemonicLanguage::ChineseTraditional
+            }
         }
     }
 }
@@ -206,7 +210,7 @@ pub struct TransactionRecord {
 
     pub summable_amounts: std::collections::HashMap<String, String>,
     pub countable_items: std::collections::HashMap<String, u32>,
-    
+
     pub involved_vouchers: Vec<String>, // local_instance_ids
     pub involved_sources_details: Option<Vec<human_money_core::wallet::types::InvolvedVoucherInfo>>,
 
@@ -233,7 +237,10 @@ impl From<&TransactionRecord> for FrontendTransactionRecord {
             summable_amounts: r.summable_amounts.clone(),
             countable_items: r.countable_items.clone(),
             involved_vouchers: r.involved_vouchers.clone(),
-            involved_sources_details: r.involved_sources_details.as_ref().map(|v| v.iter().map(|i| i.clone().into()).collect()),
+            involved_sources_details: r
+                .involved_sources_details
+                .as_ref()
+                .map(|v| v.iter().map(|i| i.clone().into()).collect()),
             bundle_data: r.bundle_data.clone(),
             bundle_id: r.bundle_id.clone(),
             notes: r.notes.clone(),
@@ -253,7 +260,9 @@ impl From<FrontendTransactionRecord> for TransactionRecord {
             summable_amounts: r.summable_amounts,
             countable_items: r.countable_items,
             involved_vouchers: r.involved_vouchers,
-            involved_sources_details: r.involved_sources_details.map(|v| v.into_iter().map(|i| i.into()).collect()),
+            involved_sources_details: r
+                .involved_sources_details
+                .map(|v| v.into_iter().map(|i| i.into()).collect()),
             bundle_data: r.bundle_data,
             bundle_id: r.bundle_id,
             notes: r.notes,
@@ -278,7 +287,10 @@ pub struct ReceiveSuccessPayload {
     pub transfer_summary: crate::models::FrontendTransferSummary,
     pub involved_vouchers: Vec<String>,
     pub involved_vouchers_details: Vec<crate::models::FrontendInvolvedVoucherInfo>,
-    pub verifiable_conflicts: std::collections::HashMap<String, Vec<human_money_core::models::conflict::TransactionFingerprint>>,
+    pub verifiable_conflicts: std::collections::HashMap<
+        String,
+        Vec<human_money_core::models::conflict::TransactionFingerprint>,
+    >,
     pub conflict_summaries: Vec<crate::models::FrontendProofOfDoubleSpendSummary>,
     pub checkout_verdict: Option<crate::models::FrontendCheckoutReleaseVerdict>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -318,7 +330,9 @@ pub struct FrontendRollbackReconciliationDto {
     pub message: String,
 }
 
-impl From<human_money_core::models::seal::RollbackReconciliationReport> for FrontendRollbackReconciliationDto {
+impl From<human_money_core::models::seal::RollbackReconciliationReport>
+    for FrontendRollbackReconciliationDto
+{
     fn from(r: human_money_core::models::seal::RollbackReconciliationReport) -> Self {
         Self {
             quarantined_voucher_ids: r.quarantined_voucher_ids,
@@ -339,4 +353,3 @@ pub struct FrontendVoucherL2StatusDto {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub successor_t_id: Option<String>,
 }
-

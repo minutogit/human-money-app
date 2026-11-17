@@ -111,7 +111,9 @@ fn compressed_bundle_len(envelopes: &[CardEnvelope]) -> usize {
         envelopes: &'a [CardEnvelope],
     }
     let json = serde_json::to_vec(&BundleRef { envelopes }).unwrap_or_default();
-    deflate_compress(&json).map(|v| v.len()).unwrap_or(json.len())
+    deflate_compress(&json)
+        .map(|v| v.len())
+        .unwrap_or(json.len())
 }
 
 /// Builds a prioritized, Deflate-budget-trimmed card bundle without hard card count limits.
@@ -248,8 +250,8 @@ pub fn seal_slot_payload(
     OsRng.fill_bytes(&mut payload_nonce_bytes);
     let payload_nonce = XNonce::from_slice(&payload_nonce_bytes);
 
-    let payload_cipher = XChaCha20Poly1305::new_from_slice(&k)
-        .map_err(|e| MarketError::Crypto(e.to_string()))?;
+    let payload_cipher =
+        XChaCha20Poly1305::new_from_slice(&k).map_err(|e| MarketError::Crypto(e.to_string()))?;
     let payload_ciphertext = payload_cipher
         .encrypt(payload_nonce, compressed_plaintext.as_slice())
         .map_err(|e| MarketError::Crypto(e.to_string()))?;
@@ -337,8 +339,8 @@ pub fn seal_slot_blob(
     readers: &[VerifyingKey],
     max_bytes: usize,
 ) -> Result<Vec<u8>, MarketError> {
-    let payload_bytes = serde_json::to_vec(bundle)
-        .map_err(|e| MarketError::Serialization(e.to_string()))?;
+    let payload_bytes =
+        serde_json::to_vec(bundle).map_err(|e| MarketError::Serialization(e.to_string()))?;
     seal_slot_payload(&payload_bytes, readers, max_bytes)
 }
 
@@ -351,7 +353,9 @@ pub fn open_slot_payload(
     }
 
     if &blob[0..8] != SLOT_MAGIC {
-        return Err(MarketError::Slot("Invalid SlotBlob magic header".to_string()));
+        return Err(MarketError::Slot(
+            "Invalid SlotBlob magic header".to_string(),
+        ));
     }
 
     let recipient_count = u16::from_be_bytes([blob[8], blob[9]]) as usize;
@@ -409,8 +413,11 @@ pub fn open_slot_payload(
                     Ok(c) => c,
                     Err(_) => continue,
                 };
-                if let Ok(compressed_bytes) = payload_cipher.decrypt(payload_nonce, payload_ciphertext) {
-                    let decompressed = deflate_decompress_bounded(&compressed_bytes, MAX_DECOMPRESSED_SLOT_BYTES)?;
+                if let Ok(compressed_bytes) =
+                    payload_cipher.decrypt(payload_nonce, payload_ciphertext)
+                {
+                    let decompressed =
+                        deflate_decompress_bounded(&compressed_bytes, MAX_DECOMPRESSED_SLOT_BYTES)?;
                     return Ok(Some(decompressed));
                 }
             }
@@ -494,11 +501,15 @@ pub fn open_multi_class_slot_blob(
     my_x25519_secret: &StaticSecret,
 ) -> Result<Option<Vec<u8>>, MarketError> {
     if blob.len() < 9 {
-        return Err(MarketError::Slot("Multi-class SlotBlob too short".to_string()));
+        return Err(MarketError::Slot(
+            "Multi-class SlotBlob too short".to_string(),
+        ));
     }
 
     if &blob[0..8] != SLOT_MULTI_MAGIC {
-        return Err(MarketError::Slot("Invalid multi-class SlotBlob magic header".to_string()));
+        return Err(MarketError::Slot(
+            "Invalid multi-class SlotBlob magic header".to_string(),
+        ));
     }
 
     let count = blob[8] as usize;
@@ -618,12 +629,8 @@ pub fn unpad_backup_slot_bytes(slot_bytes: &[u8]) -> Result<Vec<u8>, MarketError
         ));
     }
 
-    let inner_len = u32::from_be_bytes([
-        slot_bytes[8],
-        slot_bytes[9],
-        slot_bytes[10],
-        slot_bytes[11],
-    ]) as usize;
+    let inner_len =
+        u32::from_be_bytes([slot_bytes[8], slot_bytes[9], slot_bytes[10], slot_bytes[11]]) as usize;
 
     if inner_len == 0 || 12 + inner_len > slot_bytes.len() {
         return Err(MarketError::Slot(format!(
@@ -633,6 +640,8 @@ pub fn unpad_backup_slot_bytes(slot_bytes: &[u8]) -> Result<Vec<u8>, MarketError
         )));
     }
 
-    deflate_decompress_bounded(&slot_bytes[12..12 + inner_len], MAX_DECOMPRESSED_BACKUP_BYTES)
+    deflate_decompress_bounded(
+        &slot_bytes[12..12 + inner_len],
+        MAX_DECOMPRESSED_BACKUP_BYTES,
+    )
 }
-

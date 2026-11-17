@@ -12,12 +12,10 @@ use humoco_market::media::{
     MEDIA_DATA_URI_PREFIX, PNG_DATA_URI_PREFIX,
 };
 use humoco_market::model::{
-    Ad, AdKind, CardPayloadInput, DropDescriptor, WireFilter, AVATAR_IMAGE_DIM,
-    MAX_AD_IMAGE_DIM, MAX_AD_MEDIA_BYTES, MAX_AVATAR_DATA_URI_CHARS, MAX_QR_SHARE_BYTES,
+    Ad, AdKind, CardPayloadInput, DropDescriptor, WireFilter, AVATAR_IMAGE_DIM, MAX_AD_IMAGE_DIM,
+    MAX_AD_MEDIA_BYTES, MAX_AVATAR_DATA_URI_CHARS, MAX_QR_SHARE_BYTES,
 };
-use humoco_market::sd_card::{
-    decoded_items, render_wire, sign_sd_card, verify_sd_card, CardItem,
-};
+use humoco_market::sd_card::{decoded_items, render_wire, sign_sd_card, verify_sd_card, CardItem};
 
 fn make_key(seed_byte: u8) -> SigningKey {
     let seed = [seed_byte; 32];
@@ -492,12 +490,7 @@ fn test_resigning_card_preserves_image_token_and_decryptability() {
         drops: vec![],
     };
 
-    let card2 = sign_sd_card(
-        payload2,
-        vec![(CardItem::Ad(ad_renewed), 2)],
-        &sk,
-    )
-    .unwrap();
+    let card2 = sign_sd_card(payload2, vec![(CardItem::Ad(ad_renewed), 2)], &sk).unwrap();
     let wire2 = render_wire(&card2, 1, WireFilter::Full).unwrap();
     let verified2 = verify_sd_card(&wire2).unwrap();
     let items2 = decoded_items(&verified2);
@@ -580,12 +573,20 @@ fn test_fit_bytes_wire_filter_excludes_picture_and_ad() {
     let decoded = decoded_items(&verified);
 
     // Guaranteed 100% picture-free and ad-free!
-    assert!(!decoded.iter().any(|(item, _)| matches!(item, CardItem::Picture(_))));
-    assert!(!decoded.iter().any(|(item, _)| matches!(item, CardItem::Ad(_))));
+    assert!(!decoded
+        .iter()
+        .any(|(item, _)| matches!(item, CardItem::Picture(_))));
+    assert!(!decoded
+        .iter()
+        .any(|(item, _)| matches!(item, CardItem::Ad(_))));
 
     // Name and City must be present
-    assert!(decoded.iter().any(|(item, _)| matches!(item, CardItem::Name { .. })));
-    assert!(decoded.iter().any(|(item, _)| matches!(item, CardItem::City { .. })));
+    assert!(decoded
+        .iter()
+        .any(|(item, _)| matches!(item, CardItem::Name { .. })));
+    assert!(decoded
+        .iter()
+        .any(|(item, _)| matches!(item, CardItem::City { .. })));
 }
 
 #[test]
@@ -597,7 +598,10 @@ fn test_sign_media_request() {
     let body = b"test payload";
 
     let signed = sign_media_request(sk.as_bytes(), "PUT", blob_id, timestamp, nonce, body).unwrap();
-    assert_eq!(signed.pubkey_hex, hex::encode(sk.verifying_key().as_bytes()));
+    assert_eq!(
+        signed.pubkey_hex,
+        hex::encode(sk.verifying_key().as_bytes())
+    );
     assert_eq!(signed.timestamp, timestamp);
     assert_eq!(signed.nonce_hex, nonce);
     assert_eq!(signed.signature_hex.len(), 128);
