@@ -350,6 +350,9 @@ impl From<human_money_core::models::seal::RollbackReconciliationReport>
 pub struct FrontendVoucherL2StatusDto {
     pub status: String,
     pub archived: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub successor_t_id: Option<String>,
+    pub reduced_guarantor_protection: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub manifest_revision: Option<u64>,
 }

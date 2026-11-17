@@ -119,6 +119,52 @@ export interface GuarantorAnchorCheckDto {
     issues: string[];
 }
 
+export interface AnchorLifecycleDto {
+    anchorId: string;
+    revision: number;
+    reducedGuarantorProtection: boolean;
+    unhealthyServers: string[];
+    revokedServers: string[];
+    activeRotationPhase?: string | null;
+    effectiveAtSecs?: number | null;
+    lastCheckedSecs: number;
+    lastError?: string | null;
+}
+
+export interface L2LifecycleStatusDto {
+    lastTickSecs: number;
+    trackedAnchorsCount: number;
+    guarantorRolesCount: number;
+    serverOffendersCount: number;
+    autoVetoesSent: number;
+    lastVetoReason?: string | null;
+    anchors: AnchorLifecycleDto[];
+}
+
+export interface AnchorDiscoveryDto {
+    anchorId: string;
+    revision: number;
+    threshold: number;
+    serverCount: number;
+    reducedGuarantorProtection: boolean;
+    manifestJson: string;
+}
+
+export interface ClaimBundleDto {
+    bundleData: number[];
+    bundleId: string;
+    guarantorId: string;
+    claimedAmount: string;
+}
+
+export interface DeadQuorumAdjudicationDto {
+    winnerRecipientId?: string | null;
+    winnerDepth?: number | null;
+    replacementBundleData?: number[] | null;
+    exposedOffenderDids: string[];
+    doubleSpendProofsCount: number;
+}
+
 export interface RollbackReport {
     quarantinedVoucherIds?: string[];
     archivedVoucherIds?: string[];

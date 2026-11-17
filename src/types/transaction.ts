@@ -73,6 +73,8 @@ export interface CheckoutReleaseVerdict {
     requiresMerchantApproval: boolean;
     isGoodsReleaseAuthorized: boolean;
     merchantWarning?: string;
+    reducedGuarantorProtection?: boolean;
+    manifestRevision?: number | null;
 }
 
 export interface PurchaseCompletion {

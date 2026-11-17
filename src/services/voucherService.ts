@@ -1,6 +1,16 @@
 import { invoke } from "@tauri-apps/api/core";
 import { triggerAutoBackup } from "../utils/autoBackup";
-import { VoucherSummary, VoucherDetails, NewVoucherData, Voucher, TrustStatus, AggregatedBalance, GuarantorAnchorCheckDto } from "../types";
+import {
+    VoucherSummary,
+    VoucherDetails,
+    NewVoucherData,
+    Voucher,
+    TrustStatus,
+    AggregatedBalance,
+    GuarantorAnchorCheckDto,
+    ClaimBundleDto,
+    DeadQuorumAdjudicationDto,
+} from "../types";
 
 export type SigningRequestConfig = 
     | { type: "Cleartext" }
@@ -88,5 +98,69 @@ export const voucherService = {
 
     getUserId: async () => {
         return await invoke<string>("get_user_id");
+    },
+
+    createGuarantorClaimBundle: async (args: {
+        localInstanceId: string;
+        guarantorId: string;
+        amount: string;
+        standardToml: string;
+        notes?: string | null;
+        password?: string | null;
+    }) => {
+        const result = await invoke<ClaimBundleDto>("create_guarantor_claim_bundle", {
+            localInstanceId: args.localInstanceId,
+            guarantorId: args.guarantorId,
+            amount: args.amount,
+            standardToml: args.standardToml,
+            notes: args.notes ?? null,
+            password: args.password ?? null,
+        });
+        triggerAutoBackup();
+        return result;
+    },
+
+    createDeadQuorumSwapOffer: async (args: {
+        deadAnchorIdHex: string;
+        replacementAnchorIdHex: string;
+        claimWindowSecs?: number | null;
+        powBits?: number | null;
+        password?: string | null;
+    }) => {
+        return await invoke<string>("create_dead_quorum_swap_offer_cmd", {
+            deadAnchorIdHex: args.deadAnchorIdHex,
+            replacementAnchorIdHex: args.replacementAnchorIdHex,
+            claimWindowSecs: args.claimWindowSecs ?? null,
+            powBits: args.powBits ?? null,
+            password: args.password ?? null,
+        });
+    },
+
+    createDeadQuorumSwapClaim: async (args: {
+        offerJson: string;
+        localInstanceId: string;
+        password?: string | null;
+    }) => {
+        return await invoke<string>("create_dead_quorum_swap_claim_cmd", {
+            offerJson: args.offerJson,
+            localInstanceId: args.localInstanceId,
+            password: args.password ?? null,
+        });
+    },
+
+    adjudicateDeadQuorumSwap: async (args: {
+        offerJson: string;
+        submissionsJson: string[];
+        standardToml: string;
+        password?: string | null;
+    }) => {
+        const result = await invoke<DeadQuorumAdjudicationDto>("adjudicate_dead_quorum_swap_cmd", {
+            offerJson: args.offerJson,
+            submissionsJson: args.submissionsJson,
+            standardToml: args.standardToml,
+            password: args.password ?? null,
+        });
+        triggerAutoBackup();
+        return result;
     }
 };

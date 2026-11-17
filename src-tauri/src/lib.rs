@@ -5,6 +5,7 @@
 pub mod commands;
 mod gateway_resolver;
 pub(crate) mod intent_reconciliation;
+pub mod l2_lifecycle;
 pub mod models;
 pub mod pin_keystore;
 pub mod settings;
@@ -30,6 +31,12 @@ use crate::commands::{
     auth::*, backup::*, contacts::*, integrity::*, market::*, post::*, profile::*, queries::*,
     recovery::*, settings_cmd::*, standards::*, sync::*, transfers::*, utils::*, vouchers::*,
     wot::*,
+};
+use crate::l2_lifecycle::{
+    adjudicate_dead_quorum_swap_cmd, create_dead_quorum_swap_claim_cmd,
+    create_dead_quorum_swap_offer_cmd, create_guarantor_claim_bundle,
+    create_key_successor_attestation_cmd, discover_anchor_manifest_cmd, get_l2_lifecycle_status,
+    import_key_successor_attestation_cmd, register_guarantor_anchor_role, run_l2_lifecycle_tick,
 };
 
 const LOG_TARGET_NAME: &str = "human_money_app.log";
@@ -217,6 +224,16 @@ pub fn run() {
             assemble_anchor_template,
             prewarm_l2_checkout,
             check_l2_lock_status,
+            get_l2_lifecycle_status,
+            run_l2_lifecycle_tick,
+            discover_anchor_manifest_cmd,
+            register_guarantor_anchor_role,
+            create_key_successor_attestation_cmd,
+            import_key_successor_attestation_cmd,
+            create_guarantor_claim_bundle,
+            create_dead_quorum_swap_offer_cmd,
+            create_dead_quorum_swap_claim_cmd,
+            adjudicate_dead_quorum_swap_cmd,
             // Integrity
             check_wallet_integrity,
             repair_wallet_integrity,

@@ -370,6 +370,14 @@ pub fn get_voucher_details(
                     .unwrap_or("");
                 frontend_details.trust =
                     state.evaluate_voucher_trust(w, creator_id, &raw_details.voucher.signatures);
+                if let Some(anchor_id) = raw_details.voucher.layer2_anchor {
+                    let anchor_hex = hex::encode(anchor_id);
+                    if let Some(manifest) = w.profile.l2_anchor_manifests.get(&anchor_hex) {
+                        frontend_details.reduced_guarantor_protection =
+                            manifest.has_reduced_guarantor_protection().unwrap_or(false);
+                        frontend_details.manifest_revision = Some(manifest.revision);
+                    }
+                }
                 Ok(frontend_details)
             },
         )

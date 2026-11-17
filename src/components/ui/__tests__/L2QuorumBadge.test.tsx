@@ -94,4 +94,22 @@ describe('L2QuorumBadge', () => {
     expect(screen.getByText('Eingeschränkt (Gelb)')).toBeInTheDocument();
     expect(screen.getByTestId('l2-quorum-badge').className).toContain('amber');
   });
+
+  it('renders reduced guarantor protection warning badge only when enabled', () => {
+    const { rerender } = render(
+      <L2QuorumBadge status="final" isVerifiedCheckout={true} />
+    );
+    expect(screen.queryByTestId('reduced-guarantor-protection-badge')).not.toBeInTheDocument();
+
+    rerender(
+      <L2QuorumBadge
+        status="final"
+        isVerifiedCheckout={true}
+        reducedGuarantorProtection={true}
+      />
+    );
+    expect(screen.getByTestId('reduced-guarantor-protection-badge')).toHaveTextContent(
+      'voucher.reducedGuarantorProtectionBadge'
+    );
+  });
 });

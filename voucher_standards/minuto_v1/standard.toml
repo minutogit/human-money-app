@@ -1,31 +1,47 @@
 # voucher_standards/minuto_v1/standard.toml
 # ==============================================================================
-# IMMUTABLE-ZONE
+# IMMUTABLE ZONE (Consensus Core)
+# All parameters in this zone determine the SHA-256 logic_hash of the standard.
 # ==============================================================================
 [immutable.identity]
+# (String) Unique economic anchor (UUID)
 uuid = "MINUTO-V1-2025-09"
+# (String) Primary display name of the currency
 name = "Minuto"
+# (String) Official currency abbreviation
 abbreviation = "Minuto"
 
 [immutable.blueprint]
+# (String) Countable unit of service
 unit = "Minuto"
+# (Enum: goods_or_services, time, physical_asset) Redemption type
 primary_redemption_type = "goods_or_services"
+# (Enum: personal_guarantee, fiat_backed, crypto_backed, physical_asset) Collateral type
 collateral_type = "personal_guarantee"
 
 [immutable.features]
+# (Boolean) Allows partial transfers (split)
 allow_partial_transfers = true
+# (Boolean) Allows balance aggregation in wallet UI
 balances_are_summable = true
+# (Integer) Decimal places (0 = integers/minutes)
 amount_decimal_places = 0
+# (Enum: public, stealth, flexible) Privacy mode on L2
 privacy_mode = "flexible"
 
-allowed_t_types = ["init", "transfer", "split"]
+# (Array[String]) Allowed transaction types
+allowed_t_types = ["init", "transfer", "split", "redeem", "claim"]
 [immutable.issuance]
+# (Array[String]) Allowed total validity duration range [Min, Max] (ISO 8601)
 validity_duration_range = ["P1Y", "P10Y"]
+# (String) Circulation firewall: Required remaining validity duration upon creation
 issuance_minimum_validity_duration = "P3Y"
+# (Array[Integer]) Required number of guarantors [Min, Max]
 additional_signatures_range = [2, 2]
+# (Array[String]) Allowed signature roles
 allowed_signature_roles = ["guarantor"]
 
-
+# CEL rules: Gender parity for personal guarantees according to ISO 5218
 [immutable.custom_rules.gender_balance_male]
 expression = "Voucher.signatures.filter(s, s.role != 'creator' && has(s.details.gender) && s.details.gender == '1').size() == 1"
 message = "According to ISO 5218, exactly one male (1) guarantor is required."
@@ -35,7 +51,8 @@ expression = "Voucher.signatures.filter(s, s.role != 'creator' && has(s.details.
 message = "According to ISO 5218, exactly one female (2) guarantor is required."
 
 # ==============================================================================
-# MUTABLE-ZONE
+# MUTABLE ZONE (Presentation & Metadata Layer)
+# Changes here do NOT alter the logic_hash.
 # ==============================================================================
 [mutable.metadata]
 issuer_name = "Human Money Project"
@@ -49,11 +66,15 @@ keywords = [
 ]
 
 [mutable.app_config]
+# (String) Preselected validity duration in the wallet form
 default_validity_duration = "P5Y"
+# (String) Rounding up validity duration to end of year
 round_up_validity_to = "P1Y"
+# (String) Retention period on L2 nodes after expiration
 server_history_retention = "P3M"
 
 [mutable.i18n.descriptions]
+# Multilingual contract texts with {{amount}} placeholder
 de = "Ein Gutschein für Waren oder Dienstleistungen im Wert von {{amount}} Minuten qualitativer Leistung."
 en = "A voucher for goods or services worth {{amount}} minutes of quality performance."
 
@@ -62,8 +83,8 @@ de = "Gutschein-Nutzung nur für Mitspieler/innen."
 en = "Voucher use for participants only."
 
 [signature]
-# Die `did:key` des Herausgebers, die seinen öffentlichen Schlüssel enthält.
-issuer_id = "0:riw@did:key:z6Mki8QqVMb66hjtTwcceVXbZuSHTk61jqiprRvEhuotZmSA"
+# The issuer `did:key` containing their public key.
+issuer_id = "0:KjY@did:key:z6Mkis9kjqMUCyP1nM6MmyTgN6JGpG9XyUYYCfQSwr9CVPox"
 
-# Die finale Base58-kodierte Ed25519-Signatur des kanonisierten Inhalts (ohne diesen Block).
-signature = "5aomSjj76rEb4VVjhAd6p6qvmU79wkkTpj84AnY3D9p8xRDNfxBqKL4EbEHTKfPevggafJeJuzhgYV4rvhLgMs5m"
+# The final Base58-encoded Ed25519 signature of the canonicalized content (without this block).
+signature = "wLJu7LXpQY4F3zBN7wJNgUueNAkvpUHTeVG55TzfZcgv4G8CmNZM57RAb7caAKJFLgWyf22tUCJAeEq2h7F3HBN"

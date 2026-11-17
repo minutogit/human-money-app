@@ -176,6 +176,32 @@ pub fn open_voucher_signing_request(
             let is_test_voucher = v.non_redeemable_test_voucher;
             let current_amount = v.nominal_value.amount.clone();
 
+            let reduced_guarantor_protection = v
+                .layer2_anchor
+                .and_then(|aid| {
+                    service
+                        .with_wallet(|w| {
+                            w.profile
+                                .l2_anchor_manifests
+                                .get(&hex::encode(aid))
+                                .map(|m| m.has_reduced_guarantor_protection().unwrap_or(false))
+                        })
+                        .ok()
+                        .flatten()
+                })
+                .unwrap_or(false);
+            let manifest_revision = v.layer2_anchor.and_then(|aid| {
+                service
+                    .with_wallet(|w| {
+                        w.profile
+                            .l2_anchor_manifests
+                            .get(&hex::encode(aid))
+                            .map(|m| m.revision)
+                    })
+                    .ok()
+                    .flatten()
+            });
+
             Ok(crate::models::FrontendVoucherDetails {
                 local_instance_id: format!(
                     "external-{}",
@@ -188,6 +214,8 @@ pub fn open_voucher_signing_request(
                 display_standard_name,
                 is_test_voucher,
                 trust: Default::default(),
+                reduced_guarantor_protection,
+                manifest_revision,
             })
         }
         Err(e) => Err(FrontendError::from(e)),

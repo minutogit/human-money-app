@@ -7,6 +7,12 @@ last_updated: "2026-11-17"
 blocks: []
 blocked_by: []
 priority_tasks:
+  - id: "APP-071"
+    title: "Automated Lock Committee Rotation, Auto Guarantor Veto, Discovery Cascade, Guarantor `Tx_claim` & Dead-Quorum Swap UX"
+    status: "completed"
+    priority: "high"
+    depends_on: ["CORE-021", "SYNC-007", "WOT-013"]
+    description: "Implemented full Sync-Lock lifecycle automation, guarantor protection enforcement, long-term discovery, and L1 fallback UI across backend (`src-tauri/src/l2_lifecycle.rs`, `sync_client.rs`, `gateway_resolver.rs`, `checkout.rs`, `intent_reconciliation.rs`, `models/`, `commands/`, `lib.rs`, `voucher_standards/`) and frontend (`L2QuorumBadge.tsx`, `ReceiveSuccessView.tsx`, `VoucherDetailsView.tsx`, `NetworkProtectionCard.tsx`, `types/`, `services/`, all 5 locales): 1) Permanent `ServerOffenderList` (`WOT-013`) persisted from equivocations (`EquivocationProof`) and filtered in trusted lock checks, probe cache, and committee assembly; 2) 4-stage `discover_anchor_manifest` cascade with monotonic local/cache/CardStore/AddressBook/`KeySuccessorAttestation` resolution and automatic `409 epoch_frozen` checkout/intent upgrades + retries; 3) Background & manual health worker (`run_l2_lifecycle_tick`, 5-day unhealthy hysteresis + immediate rotation on signed `SyncRevocationNotice`/`410`, crash-resumable 3-phase `propose` -> `fetch_snapshot`/`import` -> `sign_commit`/`finalize` preserving guarantor seats and flagged `reducedGuarantorProtection`); 4) Online guarantor auto-veto (`MigrationVeto`) blocking unauthorized guarantor protection reductions during timelock; 5) Voucher-details UI + commands for partial/full guarantor `Tx_claim` bundle creation (`create_guarantor_claim_bundle`), `DeadQuorumSwap` emergency exchange, `reducedGuarantorProtection` amber badges, and Settings lifecycle/guarantor role registration. Verified with `run-tests.sh --quiet` (`check-versions`, `tsc --noEmit`, `eslint` 0 errors, `601/601` Vitest tests across 81 files incl. `i18n:check`, `glossaryLint`, `uiModeLint`, `L2QuorumBadge` & `SettingsView`, `101/101` `humoco-market` tests, `124/124` `src-tauri` tests, `cargo clippy --all-targets -- -D warnings` 0 warnings), `cargo fmt --all --check`, and `npm run build`."
   - id: "APP-070"
     title: "Sync-Locks Migration (`LockCommittee`), External Probe UI, Anchor Templates & Guarantor Check"
     status: "completed"

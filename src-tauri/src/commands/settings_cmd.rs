@@ -313,7 +313,7 @@ pub async fn probe_lock_server_cmd(
     state: tauri::State<'_, AppState>,
 ) -> Result<FrontendLockServerProbeResult, FrontendError> {
     let client = sync_client::create_sync_probe_client();
-    let result = sync_client::probe_lock_server(
+    let mut result = sync_client::probe_lock_server(
         &client,
         &write_url,
         expected_admin_pub
@@ -325,12 +325,24 @@ pub async fn probe_lock_server_cmd(
 
     let norm_url = crate::checkout::normalize_sync_write_url(&result.write_url);
     if !norm_url.is_empty() {
-        let mut settings = state.get_cached_settings().unwrap_or_default();
-        settings.l2_probe_cache.insert(norm_url, result.clone());
         let mut service = state
             .service
             .lock()
             .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+        let offenders =
+            crate::l2_lifecycle::load_server_offender_list(&mut service, password.as_deref());
+        if let Ok(lock_pk) = decode_hex_fixed::<32>(&result.lock_pub) {
+            let admin_pk = decode_hex_fixed::<32>(&result.admin_pub).ok();
+            if crate::l2_lifecycle::is_server_key_revoked(&offenders, &lock_pk, admin_pk.as_ref()) {
+                result.passed = false;
+                result.error = Some(
+                    "Server key or operator key is permanently revoked on ServerOffenderList"
+                        .to_string(),
+                );
+            }
+        }
+        let mut settings = state.get_cached_settings().unwrap_or_default();
+        settings.l2_probe_cache.insert(norm_url, result.clone());
         let _ = state.save_settings(&mut service, settings, password.as_deref());
     }
 
@@ -365,6 +377,23 @@ pub fn set_own_nominated_lock_server(
                             .to_string(),
                     )
                 })?;
+
+            let lock_pk = decode_hex_fixed::<32>(&probe.lock_pub)
+                .map_err(|e| FrontendError::from(e.to_string()))?;
+            let admin_pk = decode_hex_fixed::<32>(&probe.admin_pub).ok();
+            let offenders = {
+                let mut service = state
+                    .service
+                    .lock()
+                    .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+                crate::l2_lifecycle::load_server_offender_list(&mut service, password.as_deref())
+            };
+            if crate::l2_lifecycle::is_server_key_revoked(&offenders, &lock_pk, admin_pk.as_ref()) {
+                return Err(FrontendError::from(
+                    "Server steht auf der lokalen Server-Sanktionsliste (ServerOffenderList) und kann nicht gewählt werden."
+                        .to_string(),
+                ));
+            }
 
             Some(NominatedLockServerMeta {
                 write_url: probe.write_url.clone(),
@@ -415,6 +444,13 @@ pub async fn assemble_anchor_template(
         .map_err(|e| FrontendError::from(format!("Invalid retain_until_quarter: {}", e)))?;
 
     let settings = state.get_cached_settings().unwrap_or_default();
+    let offenders = {
+        let mut service = state
+            .service
+            .lock()
+            .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+        crate::l2_lifecycle::load_server_offender_list(&mut service, password.as_deref())
+    };
     let mut server_entries = Vec::with_capacity(servers.len());
     let mut stored_metas = Vec::with_capacity(servers.len());
     let mut sybil_candidates = Vec::with_capacity(servers.len());
@@ -446,6 +482,12 @@ pub async fn assemble_anchor_template(
         let lock_pub = decode_hex_fixed::<32>(&probe.lock_pub).map_err(|e| {
             FrontendError::from(format!("Invalid server lock_pub in probe cache: {}", e))
         })?;
+        if crate::l2_lifecycle::is_server_key_revoked(&offenders, &lock_pub, Some(&admin_pub)) {
+            return Err(FrontendError::from(format!(
+                "Lock-Server '{}' steht auf der lokalen Sanktionsliste (ServerOffenderList).",
+                probe.write_url
+            )));
+        }
 
         let nominated_by = match input.nominated_by.trim().to_ascii_lowercase().as_str() {
             "guarantor" => {
@@ -912,7 +954,7 @@ pub async fn check_voucher_l2_status(
 ) -> Result<FrontendVoucherL2StatusDto, FrontendError> {
     let settings = state.get_cached_settings().unwrap_or_default();
 
-    let (target_opt, is_currently_archived, pow_bits) = {
+    let (target_opt, is_currently_archived, pow_bits, reduced_protection, manifest_rev) = {
         let service = state
             .service
             .lock()
@@ -934,13 +976,27 @@ pub async fn check_voucher_l2_status(
                     instance.status,
                     human_money_core::wallet::instance::VoucherStatus::Archived
                 );
-                if instance.voucher.layer2_anchor.is_none() {
+                let Some(anchor_id) = instance.voucher.layer2_anchor else {
                     return Ok::<_, human_money_core::Error>((
                         None,
                         is_archived,
                         DEFAULT_LOCK_POW_BASE_BITS,
+                        false,
+                        None,
                     ));
-                }
+                };
+                let anchor_hex = hex::encode(anchor_id);
+                let (reduced, rev) = wallet
+                    .profile
+                    .l2_anchor_manifests
+                    .get(&anchor_hex)
+                    .map(|m| {
+                        (
+                            m.has_reduced_guarantor_protection().unwrap_or(false),
+                            Some(m.revision),
+                        )
+                    })
+                    .unwrap_or((false, None));
                 let target =
                     wallet.build_voucher_read_targets(identity, &local_instance_id, None)?;
                 let mut bits = DEFAULT_LOCK_POW_BASE_BITS;
@@ -950,7 +1006,7 @@ pub async fn check_voucher_l2_status(
                         bits = bits.max(p.pow_base_bits);
                     }
                 }
-                Ok((Some(target), is_archived, bits))
+                Ok((Some(target), is_archived, bits, reduced, rev))
             })
             .map_err(FrontendError::from)?
             .map_err(FrontendError::from)?
@@ -961,6 +1017,8 @@ pub async fn check_voucher_l2_status(
             status: "offline_only".to_string(),
             archived: is_currently_archived,
             successor_t_id: None,
+            reduced_guarantor_protection: reduced_protection,
+            manifest_revision: manifest_rev,
         });
     };
 
@@ -969,6 +1027,8 @@ pub async fn check_voucher_l2_status(
             status: "no_servers".to_string(),
             archived: is_currently_archived,
             successor_t_id: None,
+            reduced_guarantor_protection: reduced_protection,
+            manifest_revision: manifest_rev,
         });
     }
 
@@ -1007,6 +1067,8 @@ pub async fn check_voucher_l2_status(
                     status: "spent".to_string(),
                     archived: true,
                     successor_t_id: Some(successor_t_id),
+                    reduced_guarantor_protection: reduced_protection,
+                    manifest_revision: manifest_rev,
                 });
             }
             Ok(VoucherReconciliationResult::ConflictDetected { conflicting_entry }) => {
@@ -1015,6 +1077,8 @@ pub async fn check_voucher_l2_status(
                     status: "conflict".to_string(),
                     archived: true,
                     successor_t_id: Some(successor_t_id),
+                    reduced_guarantor_protection: reduced_protection,
+                    manifest_revision: manifest_rev,
                 });
             }
             Ok(VoucherReconciliationResult::UnspentSafe) => {
@@ -1022,6 +1086,8 @@ pub async fn check_voucher_l2_status(
                     status: "unspent".to_string(),
                     archived: is_currently_archived,
                     successor_t_id: None,
+                    reduced_guarantor_protection: reduced_protection,
+                    manifest_revision: manifest_rev,
                 });
             }
             Err(e) => {
@@ -1046,12 +1112,16 @@ pub async fn check_voucher_l2_status(
             status: "unspent".to_string(),
             archived: is_currently_archived,
             successor_t_id: None,
+            reduced_guarantor_protection: reduced_protection,
+            manifest_revision: manifest_rev,
         })
     } else {
         Ok(FrontendVoucherL2StatusDto {
             status: "offline".to_string(),
             archived: is_currently_archived,
             successor_t_id: None,
+            reduced_guarantor_protection: reduced_protection,
+            manifest_revision: manifest_rev,
         })
     }
 }
@@ -1086,16 +1156,22 @@ mod tests {
             status: "spent".to_string(),
             archived: true,
             successor_t_id: Some("succ123".to_string()),
+            reduced_guarantor_protection: true,
+            manifest_revision: Some(2),
         };
         let json = serde_json::to_string(&dto).unwrap();
         assert!(json.contains("\"status\":\"spent\""));
         assert!(json.contains("\"archived\":true"));
         assert!(json.contains("\"successorTId\":\"succ123\""));
+        assert!(json.contains("\"reducedGuarantorProtection\":true"));
+        assert!(json.contains("\"manifestRevision\":2"));
 
         let unspent_dto = FrontendVoucherL2StatusDto {
             status: "unspent".to_string(),
             archived: false,
             successor_t_id: None,
+            reduced_guarantor_protection: false,
+            manifest_revision: None,
         };
         let unspent_json = serde_json::to_string(&unspent_dto).unwrap();
         assert!(unspent_json.contains("\"status\":\"unspent\""));

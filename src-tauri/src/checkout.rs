@@ -39,7 +39,7 @@ pub struct PurchaseCompletion {
     pub purchase_id: String,
     pub newly_committed: bool,
     pub verdict: crate::models::FrontendCheckoutReleaseVerdict,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub receive_payload: Option<crate::models::ReceiveSuccessPayload>,
 }
 
@@ -229,10 +229,20 @@ pub(crate) async fn resolve_trusted_lock_keys(
         trusted_urls.insert(u);
     }
 
+    let offenders = {
+        let mut svc_guard = state.service.lock().ok();
+        svc_guard
+            .as_deref_mut()
+            .map(|s| crate::l2_lifecycle::load_server_offender_list(s, None))
+            .unwrap_or_default()
+    };
+
     let mut urls_to_live_probe: Vec<String> = Vec::new();
     for url in &trusted_urls {
         if let Some(pk) = known_url_to_key.get(url) {
-            trusted_keys.insert(*pk);
+            if !crate::l2_lifecycle::is_server_key_revoked(&offenders, pk, None) {
+                trusted_keys.insert(*pk);
+            }
         } else if manifest.is_some_and(|m| {
             m.servers
                 .iter()
@@ -258,13 +268,17 @@ pub(crate) async fn resolve_trusted_lock_keys(
                     if !sync_client::verify_lock_delegation(&lock.lock_pub, del, None) {
                         return None;
                     }
-                    decode_hex_fixed::<32>(&lock.lock_pub).ok()
+                    let lock_pk = decode_hex_fixed::<32>(&lock.lock_pub).ok()?;
+                    let admin_pk = decode_hex_fixed::<32>(&del.admin_pub).ok()?;
+                    Some((lock_pk, admin_pk))
                 })
             });
         }
         while let Some(res) = join_set.join_next().await {
-            if let Ok(Some(pk)) = res {
-                trusted_keys.insert(pk);
+            if let Ok(Some((pk, admin_pk))) = res {
+                if !crate::l2_lifecycle::is_server_key_revoked(&offenders, &pk, Some(&admin_pk)) {
+                    trusted_keys.insert(pk);
+                }
             }
         }
     }
@@ -459,6 +473,23 @@ pub(crate) async fn checkout_bundle(
             .replay_checkout_purchase(purchase_id, bundle)
             .map_err(FrontendError::from)?
         {
+            let mut verdict_fe: crate::models::FrontendCheckoutReleaseVerdict =
+                completion.verdict.into();
+            if let Ok(Ok(b)) = service.with_wallet_and_identity(|_, id| {
+                bundle_processor::open_and_verify_bundle(id, bundle)
+            }) {
+                if let Some(aid) = b.vouchers.first().and_then(|v| v.layer2_anchor) {
+                    let ahex = hex::encode(aid);
+                    let _ = service.with_wallet(|w| {
+                        if let Some(m) = w.profile.l2_anchor_manifests.get(&ahex) {
+                            verdict_fe.reduced_guarantor_protection =
+                                m.has_reduced_guarantor_protection().unwrap_or(false);
+                            verdict_fe.manifest_revision = Some(m.revision);
+                        }
+                    });
+                }
+            }
+
             let receive_payload = build_receive_payload_and_record(
                 state,
                 &mut service,
@@ -466,7 +497,7 @@ pub(crate) async fn checkout_bundle(
                 bundle,
                 standards,
                 false,
-                completion.verdict.clone().into(),
+                verdict_fe.clone(),
                 password,
             )
             .map(|(payload, _)| payload)
@@ -475,7 +506,7 @@ pub(crate) async fn checkout_bundle(
             return Ok(PurchaseCompletion {
                 purchase_id: completion.purchase_id,
                 newly_committed: completion.newly_committed,
-                verdict: completion.verdict.into(),
+                verdict: verdict_fe,
                 receive_payload,
             });
         }
@@ -538,34 +569,73 @@ pub(crate) async fn checkout_bundle(
         ));
     }
     let voucher = opened_bundle.vouchers[0].clone();
+    let anchor_id = voucher
+        .layer2_anchor
+        .ok_or_else(|| fail("Anchored voucher missing layer2_anchor"))?;
+    let guarantor_dids: Vec<String> = voucher
+        .signatures
+        .iter()
+        .filter(|s| s.role.eq_ignore_ascii_case("guarantor"))
+        .map(|s| s.signer_id.clone())
+        .collect();
     let settings = state.get_cached_settings().map_err(FrontendError::from)?;
     let client = sync_client::create_sync_http_client();
-    let pow_base_bits = opened_bundle
+    let mut pow_base_bits = opened_bundle
         .anchor_manifest
         .as_ref()
         .map(|m| determine_pow_base_bits(&settings, m))
         .unwrap_or(DEFAULT_LOCK_POW_BASE_BITS);
 
-    // 3. Prepare durable challenge context + per-server SyncLockBatchRequests
-    let (context, requests) = {
+    // 3. Prepare durable challenge context + per-server SyncLockBatchRequests (running Discovery if local manifest missing)
+    let first_prepare = {
         let mut service = state
             .service
             .lock()
             .map_err(|_| fail("Wallet service unavailable"))?;
-        service
-            .prepare_checkout_requests(
-                purchase_id,
-                bundle,
-                pow_base_bits,
-                now()?,
-                &HashMap::new(),
+        service.prepare_checkout_requests(
+            purchase_id,
+            bundle,
+            pow_base_bits,
+            now()?,
+            &HashMap::new(),
+            password,
+        )
+    };
+    let (mut context, mut requests) = match first_prepare {
+        Ok(pair) => pair,
+        Err(_) => {
+            let discovered = crate::l2_lifecycle::discover_anchor_manifest(
+                state,
+                &settings,
+                &client,
+                &anchor_id,
+                voucher.creator_profile.id.as_deref(),
+                &guarantor_dids,
                 password,
             )
-            .map_err(FrontendError::from)?
+            .await?;
+            if let Some(ref m) = discovered {
+                pow_base_bits = pow_base_bits.max(determine_pow_base_bits(&settings, m));
+            }
+            let mut service = state
+                .service
+                .lock()
+                .map_err(|_| fail("Wallet service unavailable"))?;
+            service
+                .prepare_checkout_requests(
+                    purchase_id,
+                    bundle,
+                    pow_base_bits,
+                    now()?,
+                    &HashMap::new(),
+                    password,
+                )
+                .map_err(FrontendError::from)?
+        }
     };
 
     // 4. Resolve trusted LockPubKeys & fan out committee batches in parallel
-    let (base_trusted_keys, independently_pinned_creator_keys) = resolve_trusted_lock_keys(
+    let (mut base_trusted_keys, mut independently_pinned_creator_keys) = resolve_trusted_lock_keys(
         state,
         &settings,
         &client,
@@ -574,12 +644,119 @@ pub(crate) async fn checkout_bundle(
     )
     .await;
 
-    let dispatch = crate::gateway_resolver::dispatch_lock_committee_batches(
+    let mut dispatch = crate::gateway_resolver::dispatch_lock_committee_batches(
         &client,
         &requests,
         CHECKOUT_BATCH_TIMEOUT,
     )
     .await;
+
+    // 4b. Handle `409 epoch_frozen`, `410 revoked`, or total NXDOMAIN committee failure via Discovery Cascade
+    {
+        let now_secs = sync_client::current_unix_timestamp();
+        if !dispatch.revoked_notices.is_empty() {
+            if let Ok(mut service) = state.service.lock() {
+                let _ = crate::l2_lifecycle::record_revoked_servers(
+                    &mut service,
+                    &anchor_id,
+                    &dispatch.revoked_notices,
+                    &context.manifest.servers,
+                    now_secs,
+                    password,
+                );
+            }
+        }
+
+        let mut best_upgraded: Option<AnchorManifest> = None;
+        for m in &dispatch.epoch_frozen_manifests {
+            if m.revision > context.manifest.revision
+                && m.verify_anchor_id(&anchor_id).is_ok()
+                && best_upgraded
+                    .as_ref()
+                    .map(|b| m.revision > b.revision)
+                    .unwrap_or(true)
+            {
+                best_upgraded = Some(m.clone());
+            }
+        }
+
+        let all_unreachable = dispatch.receipts.is_empty()
+            && dispatch.competing_entries.is_empty()
+            && (!dispatch.transport_errors.is_empty() || !dispatch.rejected_errors.is_empty());
+        if best_upgraded.is_none()
+            && (all_unreachable || !dispatch.epoch_frozen_manifests.is_empty())
+        {
+            if let Ok(Some(discovered)) = crate::l2_lifecycle::discover_anchor_manifest(
+                state,
+                &settings,
+                &client,
+                &anchor_id,
+                voucher.creator_profile.id.as_deref(),
+                &guarantor_dids,
+                password,
+            )
+            .await
+            {
+                if discovered.revision > context.manifest.revision {
+                    best_upgraded = Some(discovered);
+                }
+            }
+        }
+
+        if let Some(newer_manifest) = best_upgraded {
+            pow_base_bits = pow_base_bits.max(determine_pow_base_bits(&settings, &newer_manifest));
+            let upgraded_pair = {
+                let mut service = state
+                    .service
+                    .lock()
+                    .map_err(|_| fail("Wallet service unavailable"))?;
+                service
+                    .update_l2_anchor_manifest(newer_manifest, password)
+                    .map_err(FrontendError::from)?;
+                service
+                    .prepare_checkout_requests(
+                        purchase_id,
+                        bundle,
+                        pow_base_bits,
+                        now()?,
+                        &HashMap::new(),
+                        password,
+                    )
+                    .map_err(FrontendError::from)?
+            };
+            context = upgraded_pair.0;
+            requests = upgraded_pair.1;
+            let keys = resolve_trusted_lock_keys(
+                state,
+                &settings,
+                &client,
+                voucher.creator_profile.id.as_deref(),
+                Some(&context.manifest),
+            )
+            .await;
+            base_trusted_keys = keys.0;
+            independently_pinned_creator_keys = keys.1;
+            dispatch = crate::gateway_resolver::dispatch_lock_committee_batches(
+                &client,
+                &requests,
+                CHECKOUT_BATCH_TIMEOUT,
+            )
+            .await;
+        }
+    }
+
+    if let Some(equiv_proof) = l2_gateway::detect_equivocation(&dispatch.receipts) {
+        if let Ok(mut service) = state.service.lock() {
+            let now_secs = sync_client::current_unix_timestamp().max(1);
+            let _ = crate::l2_lifecycle::record_equivocation_proof(
+                &mut service,
+                None,
+                &equiv_proof,
+                now_secs,
+                password,
+            );
+        }
+    }
 
     // 5. Evaluate outcome under Green-Rule & LÜCKE-03 isolation
     let outcome = l2_gateway::evaluate_bundle_checkout(
@@ -593,6 +770,12 @@ pub(crate) async fn checkout_bundle(
         &base_trusted_keys,
         &independently_pinned_creator_keys,
     );
+
+    let reduced_guarantor_protection = context
+        .manifest
+        .has_reduced_guarantor_protection()
+        .unwrap_or(false);
+    let manifest_revision = Some(context.manifest.revision);
 
     let mut service = state
         .service
@@ -635,6 +818,11 @@ pub(crate) async fn checkout_bundle(
                 log::warn!("Checkout committed; event cache refresh failed: {}", error);
             }
 
+            let mut verdict_fe: crate::models::FrontendCheckoutReleaseVerdict =
+                completion.verdict.into();
+            verdict_fe.reduced_guarantor_protection = reduced_guarantor_protection;
+            verdict_fe.manifest_revision = manifest_revision;
+
             let (receive_payload, record_opt) = build_receive_payload_and_record(
                 state,
                 &mut service,
@@ -642,7 +830,7 @@ pub(crate) async fn checkout_bundle(
                 bundle,
                 standards,
                 completion.newly_committed,
-                completion.verdict.clone().into(),
+                verdict_fe.clone(),
                 password,
             )?;
 
@@ -674,13 +862,15 @@ pub(crate) async fn checkout_bundle(
             Ok(PurchaseCompletion {
                 purchase_id: completion.purchase_id,
                 newly_committed: completion.newly_committed,
-                verdict: completion.verdict.into(),
+                verdict: verdict_fe,
                 receive_payload: Some(receive_payload),
             })
         }
         L2ProcessingOutcome::Yellow { reason } => {
-            let verdict_fe: crate::models::FrontendCheckoutReleaseVerdict =
+            let mut verdict_fe: crate::models::FrontendCheckoutReleaseVerdict =
                 CheckoutReleaseVerdict::new(L2ProcessingOutcome::Yellow { reason }, false).into();
+            verdict_fe.reduced_guarantor_protection = reduced_guarantor_protection;
+            verdict_fe.manifest_revision = manifest_revision;
             let receive_payload = build_receive_payload_and_record(
                 state,
                 &mut service,
@@ -701,9 +891,11 @@ pub(crate) async fn checkout_bundle(
             })
         }
         L2ProcessingOutcome::Quarantined { reason } => {
-            let verdict_fe: crate::models::FrontendCheckoutReleaseVerdict =
+            let mut verdict_fe: crate::models::FrontendCheckoutReleaseVerdict =
                 CheckoutReleaseVerdict::new(L2ProcessingOutcome::Quarantined { reason }, false)
                     .into();
+            verdict_fe.reduced_guarantor_protection = reduced_guarantor_protection;
+            verdict_fe.manifest_revision = manifest_revision;
             Ok(PurchaseCompletion {
                 purchase_id: purchase_id.to_string(),
                 newly_committed: false,

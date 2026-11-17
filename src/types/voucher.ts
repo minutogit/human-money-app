@@ -218,6 +218,8 @@ export interface VoucherDetails {
     displayStandardName: string;
     isTestVoucher: boolean;
     trust?: VoucherTrustDto;
+    reducedGuarantorProtection?: boolean;
+    manifestRevision?: number | null;
 }
 
 export interface SignatureImpact {
@@ -241,5 +243,7 @@ export interface VoucherL2StatusDto {
     status: "offline_only" | "no_servers" | "offline" | "unspent" | "spent" | "conflict";
     archived: boolean;
     successorTId?: string;
+    reducedGuarantorProtection?: boolean;
+    manifestRevision?: number | null;
 }
 

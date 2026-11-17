@@ -1,9 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import {
+    AnchorDiscoveryDto,
     AnchorServerInputDto,
     AppSettings,
+    L2LifecycleStatusDto,
     L2LockStatusDto,
     LockServerProbeResult,
+    MnemonicLanguage,
     NominatedLockServerMeta,
     ReachPresetDto,
     ReachPresetId,
@@ -99,6 +102,72 @@ export const settingsService = {
     checkVoucherL2Status: async (localInstanceId: string, password?: string | null) => {
         return await invoke<VoucherL2StatusDto>("check_voucher_l2_status", {
             localInstanceId,
+            password: password ?? null,
+        });
+    },
+
+    getL2LifecycleStatus: async (password?: string | null) => {
+        return await invoke<L2LifecycleStatusDto>("get_l2_lifecycle_status", {
+            password: password ?? null,
+        });
+    },
+
+    runL2LifecycleTick: async (force: boolean, password?: string | null) => {
+        return await invoke<L2LifecycleStatusDto>("run_l2_lifecycle_tick", {
+            force,
+            password: password ?? null,
+        });
+    },
+
+    discoverAnchorManifest: async (args: {
+        anchorIdHex: string;
+        creatorDid?: string | null;
+        guarantorDids?: string[];
+        password?: string | null;
+    }) => {
+        return await invoke<AnchorDiscoveryDto | null>("discover_anchor_manifest_cmd", {
+            anchorIdHex: args.anchorIdHex,
+            creatorDid: args.creatorDid ?? null,
+            guarantorDids: args.guarantorDids ?? [],
+            password: args.password ?? null,
+        });
+    },
+
+    registerGuarantorAnchorRole: async (args: {
+        anchorIdHex: string;
+        guarantorIndex: number;
+        contextNonceHex?: string | null;
+        password?: string | null;
+    }) => {
+        return await invoke<string>("register_guarantor_anchor_role", {
+            anchorIdHex: args.anchorIdHex,
+            guarantorIndex: args.guarantorIndex,
+            contextNonceHex: args.contextNonceHex ?? null,
+            password: args.password ?? null,
+        });
+    },
+
+    createKeySuccessorAttestation: async (args: {
+        newMnemonic: string;
+        language?: MnemonicLanguage | null;
+        passphrase?: string | null;
+        reason: string;
+        newCreatorMigPubHex?: string | null;
+        password?: string | null;
+    }) => {
+        return await invoke<string>("create_key_successor_attestation_cmd", {
+            newMnemonic: args.newMnemonic,
+            language: args.language ?? null,
+            passphrase: args.passphrase ?? null,
+            reason: args.reason,
+            newCreatorMigPubHex: args.newCreatorMigPubHex ?? null,
+            password: args.password ?? null,
+        });
+    },
+
+    importKeySuccessorAttestation: async (attestationJson: string, password?: string | null) => {
+        return await invoke<string>("import_key_successor_attestation_cmd", {
+            attestationJson,
             password: password ?? null,
         });
     },

@@ -26,6 +26,7 @@ export interface L2QuorumBadgeProps {
     className?: string;
     isVerifiedCheckout?: boolean;
     pillarLabel?: string;
+    reducedGuarantorProtection?: boolean;
 }
 
 interface StatusConfig {
@@ -172,6 +173,7 @@ export const L2QuorumBadge: React.FC<L2QuorumBadgeProps> = ({
     className = "",
     isVerifiedCheckout = false,
     pillarLabel,
+    reducedGuarantorProtection = false,
 }) => {
     const { t } = useTranslation();
     const [isExpanded, setIsExpanded] = useState<boolean>(showDetails);
@@ -270,6 +272,16 @@ export const L2QuorumBadge: React.FC<L2QuorumBadgeProps> = ({
                                 </span>
                                 <span>{displayStatus}</span>
                             </span>
+                            {reducedGuarantorProtection && (
+                                <span
+                                    data-testid="reduced-guarantor-protection-badge"
+                                    title={t("voucher.reducedGuarantorProtectionHint")}
+                                    className="inline-flex items-center gap-1 rounded-full text-[10px] px-2 py-0.5 font-bold bg-amber-100 text-amber-900 border border-amber-300"
+                                >
+                                    <AlertTriangle size={11} />
+                                    <span>{t("voucher.reducedGuarantorProtectionBadge")}</span>
+                                </span>
+                            )}
                         </div>
                         <p className={`text-[11px] font-medium truncate ${config.textStyle}`}>
                             {sublabel}

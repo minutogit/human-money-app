@@ -4,8 +4,8 @@ import { settingsService } from "../services/settingsService";
 import { profileService } from "../services/profileService";
 import { standardsService } from "../services/standardsService";
 import { contactService } from "../services/contactService";
-import { open } from "@tauri-apps/plugin-dialog";
-import { readFile } from "@tauri-apps/plugin-fs";
+import { open, save } from "@tauri-apps/plugin-dialog";
+import { readFile, writeFile } from "@tauri-apps/plugin-fs";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { logger } from "../utils/log";
 import { Button } from "./ui/Button";
@@ -15,7 +15,7 @@ import { TrustBadge } from "./ui/TrustBadge";
 import { HelpIcon } from "./ui/HelpIcon";
 import { useSession } from "../context/SessionContext";
 import { useTranslation } from "react-i18next";
-import { AppSettings, VoucherDetails, Contact, TrustStatus, PublicProfile, VoucherStandardDefinition, VoucherL2StatusDto } from "../types";
+import { AppSettings, VoucherDetails, Contact, TrustStatus, PublicProfile, VoucherStandardDefinition, VoucherL2StatusDto, DeadQuorumAdjudicationDto } from "../types";
 import { getMissingProfileHint } from "../utils/signatureHints";
 import { stringifyError, translateError } from "../utils/errorHelper";
 import ContactDialog from "./ContactDialog";
@@ -24,12 +24,15 @@ import { PageLoadingState, PageErrorState } from "./ui/PageState";
 import { AlertBanner } from "./ui/AlertBanner";
 import { InfoRow } from "./ui/InfoRow";
 import { Advanced } from "./ui/Advanced";
+import { AdvancedDisclosure } from "./ui/AdvancedDisclosure";
 import { TechId } from "./ui/TechId";
 import { 
     Shield, 
     History, 
     FileSignature, 
     AlertCircle, 
+    AlertTriangle,
+    ArrowLeftRight,
     Info, 
     Terminal as Json,
     CheckCircle2,
@@ -83,6 +86,19 @@ export function VoucherDetailsView() {
     const [isCheckingL2, setIsCheckingL2] = useState(false);
     const [l2Status, setL2Status] = useState<VoucherL2StatusDto | null>(null);
     const [l2Error, setL2Error] = useState<string | null>(null);
+    const [claimPanelOpen, setClaimPanelOpen] = useState(false);
+    const [selectedGuarantorId, setSelectedGuarantorId] = useState("");
+    const [claimAmount, setClaimAmount] = useState("");
+    const [isClaimingGuarantor, setIsClaimingGuarantor] = useState(false);
+    const [claimFeedback, setClaimFeedback] = useState<{ type: 'success' | 'error'; msg: string } | null>(null);
+    const [swapOfferJson, setSwapOfferJson] = useState("");
+    const [swapClaimJson, setSwapClaimJson] = useState("");
+    const [deadAnchorHexInput, setDeadAnchorHexInput] = useState("");
+    const [replAnchorHexInput, setReplAnchorHexInput] = useState("");
+    const [swapSubmissionsText, setSwapSubmissionsText] = useState("");
+    const [swapAdjudication, setSwapAdjudication] = useState<DeadQuorumAdjudicationDto | null>(null);
+    const [swapError, setSwapError] = useState<string | null>(null);
+    const [isRunningSwap, setIsRunningSwap] = useState(false);
 
 
     const voucher = details?.voucher;
@@ -287,6 +303,147 @@ export function VoucherDetailsView() {
         });
     };
 
+    const guarantorSignatures = (voucher?.signatures || []).filter(
+        (s) => s.role === 'guarantor' && s.signerId && s.signerId !== ownUserId
+    );
+    const canClaimAtGuarantor =
+        statusInfo?.id === 'active' && !isOwnVoucher && guarantorSignatures.length > 0;
+
+    const findMatchingStandardToml = async (): Promise<string> => {
+        if (!voucher) return "";
+        const targetUuid = voucher.voucherStandard.uuid;
+        const standardsList = await standardsService.getStandards();
+        const matchingStd = standardsList.find((s) => {
+            const match = s.content.match(/uuid\s*=\s*["']([^"']+)["']/);
+            return match && match[1] === targetUuid;
+        });
+        return matchingStd?.content || "";
+    };
+
+    const handleOpenClaimPanel = () => {
+        if (!voucher || !details) return;
+        setClaimFeedback(null);
+        if (!selectedGuarantorId && guarantorSignatures.length > 0) {
+            setSelectedGuarantorId(guarantorSignatures[0].signerId);
+        }
+        setClaimAmount(details.currentAmount ?? voucher.nominalValue.amount);
+        setClaimPanelOpen((prev) => !prev);
+    };
+
+    const handleCreateGuarantorClaim = async () => {
+        if (!voucher || !details) return;
+        const targetGuarantor = selectedGuarantorId || guarantorSignatures[0]?.signerId;
+        if (!targetGuarantor) return;
+        setIsClaimingGuarantor(true);
+        setClaimFeedback(null);
+        try {
+            const standardToml = await findMatchingStandardToml();
+            const res = await protectAction(async (pwd) => {
+                return await voucherService.createGuarantorClaimBundle({
+                    localInstanceId: details.localInstanceId,
+                    guarantorId: targetGuarantor,
+                    amount: claimAmount.trim() || (details.currentAmount ?? voucher.nominalValue.amount),
+                    standardToml,
+                    notes: t('voucher.claimNoteDefault'),
+                    password: pwd || null,
+                });
+            });
+            if (res) {
+                const filePath = await save({
+                    defaultPath: settings?.lastUsedDirectory
+                        ? `${settings.lastUsedDirectory}/claim-${voucher.voucherId.slice(0, 8)}.hmcbundle`
+                        : `claim-${voucher.voucherId.slice(0, 8)}.hmcbundle`,
+                    filters: [
+                        { name: t('voucher.export.allFiles'), extensions: ['hmcbundle', '*'] },
+                    ],
+                });
+                if (filePath) {
+                    await writeFile(filePath, new Uint8Array(res.bundleData));
+                }
+                setClaimFeedback({ type: 'success', msg: t('voucher.claimBundleSaved') });
+                setClaimPanelOpen(false);
+                await refreshDetails();
+            }
+        } catch (e) {
+            setClaimFeedback({ type: 'error', msg: translateError(e, t) });
+        } finally {
+            setIsClaimingGuarantor(false);
+        }
+    };
+
+    const handleCreateSwapOffer = async () => {
+        if (!deadAnchorHexInput.trim() || !replAnchorHexInput.trim()) return;
+        setIsRunningSwap(true);
+        setSwapError(null);
+        try {
+            const offer = await protectAction(async (pwd) => {
+                return await voucherService.createDeadQuorumSwapOffer({
+                    deadAnchorIdHex: deadAnchorHexInput.trim(),
+                    replacementAnchorIdHex: replAnchorHexInput.trim(),
+                    password: pwd || null,
+                });
+            });
+            if (offer) setSwapOfferJson(offer);
+        } catch (e) {
+            setSwapError(translateError(e, t));
+        } finally {
+            setIsRunningSwap(false);
+        }
+    };
+
+    const handleCreateSwapClaim = async () => {
+        if (!details || !swapOfferJson.trim()) return;
+        setIsRunningSwap(true);
+        setSwapError(null);
+        try {
+            const claimJson = await protectAction(async (pwd) => {
+                return await voucherService.createDeadQuorumSwapClaim({
+                    offerJson: swapOfferJson.trim(),
+                    localInstanceId: details.localInstanceId,
+                    password: pwd || null,
+                });
+            });
+            if (claimJson) setSwapClaimJson(claimJson);
+        } catch (e) {
+            setSwapError(translateError(e, t));
+        } finally {
+            setIsRunningSwap(false);
+        }
+    };
+
+    const handleAdjudicateSwap = async () => {
+        if (!swapOfferJson.trim() || !swapSubmissionsText.trim()) return;
+        setIsRunningSwap(true);
+        setSwapError(null);
+        try {
+            let submissions: string[];
+            const raw = swapSubmissionsText.trim();
+            if (raw.startsWith('[')) {
+                const arr = JSON.parse(raw) as unknown[];
+                submissions = arr.map((item) => (typeof item === 'string' ? item : JSON.stringify(item)));
+            } else {
+                submissions = raw.split(/\n---\n|\n(?=\{)/).map((s) => s.trim()).filter(Boolean);
+            }
+            const standardToml = await findMatchingStandardToml();
+            const adj = await protectAction(async (pwd) => {
+                return await voucherService.adjudicateDeadQuorumSwap({
+                    offerJson: swapOfferJson.trim(),
+                    submissionsJson: submissions,
+                    standardToml,
+                    password: pwd || null,
+                });
+            });
+            if (adj) {
+                setSwapAdjudication(adj);
+                await refreshDetails();
+            }
+        } catch (e) {
+            setSwapError(translateError(e, t));
+        } finally {
+            setIsRunningSwap(false);
+        }
+    };
+
     const handleImportSignatureFile = async () => {
         try {
             setSignatureImportFeedback(null);
@@ -388,6 +545,18 @@ export function VoucherDetailsView() {
                             {t('voucher.redeemAtIssuerBtn')}
                         </Button>
                     )}
+                    {canClaimAtGuarantor && (
+                        <Button
+                            data-testid="claim-at-guarantor-btn"
+                            variant="secondary"
+                            size="sm"
+                            onClick={handleOpenClaimPanel}
+                            className="gap-2 text-xs font-bold bg-amber-50 text-amber-900 border border-amber-300 hover:bg-amber-100 shadow-sm"
+                        >
+                            <Shield size={15} />
+                            {t('voucher.claimAtGuarantorBtn')}
+                        </Button>
+                    )}
                     {statusInfo?.id === 'active' && (
                         <Advanced>
                             <Button 
@@ -484,6 +653,16 @@ export function VoucherDetailsView() {
                                     <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${statusInfo?.bgColor} ${statusInfo?.color}`}>{statusInfo?.label}</span>
                                     {details.isTestVoucher && <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-rose-500 text-white shadow-lg shadow-rose-200">{t('voucher.testVoucher')}</span>}
                                     <TrustBadge trust={details.trust} size="md" />
+                                    {(details.reducedGuarantorProtection || l2Status?.reducedGuarantorProtection) && (
+                                        <span
+                                            data-testid="reduced-guarantor-protection-badge"
+                                            title={t('voucher.reducedGuarantorProtectionHint')}
+                                            className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider bg-amber-100 text-amber-900 border border-amber-300"
+                                        >
+                                            <AlertTriangle size={12} />
+                                            {t('voucher.reducedGuarantorProtectionBadge')}
+                                        </span>
+                                    )}
                                     {l2Status && (
                                         <Advanced>
                                             <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${
@@ -545,6 +724,90 @@ export function VoucherDetailsView() {
                     />
                 )}
 
+                {claimFeedback && (
+                    <AlertBanner
+                        variant={claimFeedback.type}
+                        onDismiss={() => setClaimFeedback(null)}
+                    >
+                        {claimFeedback.msg}
+                    </AlertBanner>
+                )}
+
+                {claimPanelOpen && canClaimAtGuarantor && (
+                    <Card className="border border-amber-200 bg-amber-50/50 shadow-premium">
+                        <div className="space-y-4">
+                            <div className="flex items-start justify-between gap-2">
+                                <div>
+                                    <h3 className="text-sm font-black text-amber-950 uppercase tracking-wider">
+                                        {t('voucher.claimAtGuarantorTitle')}
+                                    </h3>
+                                    <p className="text-xs text-amber-900/80 mt-0.5">
+                                        {t('voucher.claimAtGuarantorDesc')}
+                                    </p>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => setClaimPanelOpen(false)}
+                                    className="p-1 text-amber-800 hover:bg-amber-100 rounded-lg"
+                                    aria-label={t('common.close')}
+                                >
+                                    <X size={16} />
+                                </button>
+                            </div>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                <div>
+                                    <label className="block text-[10px] font-bold uppercase text-amber-950 mb-1">
+                                        {t('voucher.claimGuarantorSelectLabel')}
+                                    </label>
+                                    <select
+                                        value={selectedGuarantorId || guarantorSignatures[0]?.signerId || ""}
+                                        onChange={(e) => setSelectedGuarantorId(e.target.value)}
+                                        className="w-full px-3 py-2 text-xs font-mono rounded-xl border border-amber-300 bg-white"
+                                    >
+                                        {guarantorSignatures.map((sig) => (
+                                            <option key={sig.signerId} value={sig.signerId}>
+                                                {sig.details?.firstName || sig.details?.lastName
+                                                    ? `${sig.details.firstName || ''} ${sig.details.lastName || ''}`.trim()
+                                                    : sig.signerId.slice(0, 22)}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="block text-[10px] font-bold uppercase text-amber-950 mb-1">
+                                        {t('voucher.claimAmountLabel')} ({details.displayCurrency})
+                                    </label>
+                                    <input
+                                        type="text"
+                                        value={claimAmount}
+                                        onChange={(e) => setClaimAmount(e.target.value)}
+                                        disabled={!allowPartialTransfers}
+                                        className="w-full px-3 py-2 text-xs font-bold rounded-xl border border-amber-300 bg-white disabled:opacity-70"
+                                    />
+                                </div>
+                            </div>
+                            <div className="flex justify-end gap-2">
+                                <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="secondary"
+                                    onClick={() => setClaimPanelOpen(false)}
+                                >
+                                    {t('common.cancel')}
+                                </Button>
+                                <Button
+                                    type="button"
+                                    size="sm"
+                                    onClick={handleCreateGuarantorClaim}
+                                    disabled={isClaimingGuarantor}
+                                >
+                                    {isClaimingGuarantor ? t('common.saving') : t('voucher.claimExportBtn')}
+                                </Button>
+                            </div>
+                        </div>
+                    </Card>
+                )}
+
                 {showJson && (
                     <Advanced>
                         <Card variant="glass" className="bg-slate-900 border-none shadow-2xl p-0 overflow-hidden">
@@ -595,6 +858,16 @@ export function VoucherDetailsView() {
                             <div className="space-y-4">
                                 <div>
                                     <TrustBadge trust={details.trust} size="md" />
+                                    {(details.reducedGuarantorProtection || l2Status?.reducedGuarantorProtection) && (
+                                        <span
+                                            data-testid="reduced-guarantor-protection-badge"
+                                            title={t('voucher.reducedGuarantorProtectionHint')}
+                                            className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider bg-amber-100 text-amber-900 border border-amber-300"
+                                        >
+                                            <AlertTriangle size={12} />
+                                            {t('voucher.reducedGuarantorProtectionBadge')}
+                                        </span>
+                                    )}
                                 </div>
                                 {!details.trust?.isOwnVoucher && !details.trust?.blockedByOffender && (
                                     <div className="pt-3 border-t border-theme-subtle/30 text-xs">
@@ -645,6 +918,101 @@ export function VoucherDetailsView() {
                                 </div>
                             </div>
                         </Card>
+
+                        <AdvancedDisclosure
+                            title={t('voucher.deadQuorumSwapTitle')}
+                            subtitle={t('voucher.deadQuorumSwapSubtitle')}
+                            icon={<ArrowLeftRight size={15} className="text-theme-primary" />}
+                        >
+                            <div className="space-y-3 pt-1 text-xs">
+                                {swapError && (
+                                    <p className="text-[11px] font-medium text-rose-600">{swapError}</p>
+                                )}
+                                <div className="space-y-1.5">
+                                    <p className="font-bold text-[11px] text-theme-secondary">
+                                        {t('voucher.swapClaimSectionTitle')}
+                                    </p>
+                                    <textarea
+                                        rows={2}
+                                        value={swapOfferJson}
+                                        onChange={(e) => setSwapOfferJson(e.target.value)}
+                                        placeholder={t('voucher.swapOfferJsonPlaceholder')}
+                                        className="w-full p-2 text-[11px] font-mono rounded-lg border border-theme-subtle bg-bg-input"
+                                    />
+                                    <Button
+                                        type="button"
+                                        size="sm"
+                                        onClick={handleCreateSwapClaim}
+                                        disabled={isRunningSwap || !swapOfferJson.trim() || statusInfo?.id !== 'active'}
+                                    >
+                                        {t('voucher.createSwapClaimBtn')}
+                                    </Button>
+                                    {swapClaimJson && (
+                                        <textarea
+                                            readOnly
+                                            rows={3}
+                                            value={swapClaimJson}
+                                            className="w-full p-2 text-[10px] font-mono rounded-lg border border-emerald-300 bg-emerald-50/40"
+                                        />
+                                    )}
+                                </div>
+
+                                <div className="pt-2 border-t border-theme-subtle/40 space-y-2">
+                                    <p className="font-bold text-[11px] text-theme-secondary">
+                                        {t('voucher.swapAdjudicateSectionTitle')}
+                                    </p>
+                                    <input
+                                        type="text"
+                                        value={deadAnchorHexInput}
+                                        onChange={(e) => setDeadAnchorHexInput(e.target.value)}
+                                        placeholder={t('voucher.deadAnchorHexPlaceholder')}
+                                        className="w-full px-2.5 py-1.5 text-[11px] font-mono rounded-lg border border-theme-subtle bg-bg-input"
+                                    />
+                                    <input
+                                        type="text"
+                                        value={replAnchorHexInput}
+                                        onChange={(e) => setReplAnchorHexInput(e.target.value)}
+                                        placeholder={t('voucher.replAnchorHexPlaceholder')}
+                                        className="w-full px-2.5 py-1.5 text-[11px] font-mono rounded-lg border border-theme-subtle bg-bg-input"
+                                    />
+                                    <Button
+                                        type="button"
+                                        size="sm"
+                                        variant="secondary"
+                                        onClick={handleCreateSwapOffer}
+                                        disabled={isRunningSwap || !deadAnchorHexInput.trim() || !replAnchorHexInput.trim()}
+                                    >
+                                        {t('voucher.createSwapOfferBtn')}
+                                    </Button>
+                                    <textarea
+                                        rows={2}
+                                        value={swapSubmissionsText}
+                                        onChange={(e) => setSwapSubmissionsText(e.target.value)}
+                                        placeholder={t('voucher.swapSubmissionsPlaceholder')}
+                                        className="w-full p-2 text-[11px] font-mono rounded-lg border border-theme-subtle bg-bg-input"
+                                    />
+                                    <Button
+                                        type="button"
+                                        size="sm"
+                                        onClick={handleAdjudicateSwap}
+                                        disabled={isRunningSwap || !swapOfferJson.trim() || !swapSubmissionsText.trim()}
+                                    >
+                                        {t('voucher.adjudicateSwapBtn')}
+                                    </Button>
+                                    {swapAdjudication && (
+                                        <div className="p-2.5 rounded-lg border border-emerald-200 bg-emerald-50/50 text-[11px] space-y-1">
+                                            <div>
+                                                <span className="font-bold">{t('voucher.swapWinnerLabel')}: </span>
+                                                <span className="font-mono">{swapAdjudication.winnerRecipientId || t('common.na')}</span>
+                                            </div>
+                                            <div>
+                                                {t('voucher.swapOffendersExposed', { count: swapAdjudication.exposedOffenderDids.length })}
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        </AdvancedDisclosure>
                     </div>
                 </div>
             </div>

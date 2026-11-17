@@ -1,9 +1,9 @@
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use human_money_core::humoco_proto::{
     causal::{LockEntry, LOCK_ENTRY_WIRE_LEN},
-    crypto::solve_ticket_pow,
-    decode_hex_fixed,
-    manifest::GenesisTicket,
+    crypto::{solve_ticket_pow, verify_ed25519_strict},
+    decode_hex_fixed, AnchorManifest, CommitteeSignature, GenesisTicket, ImportAck, MigrationCert,
+    MigrationProposal, QuorumCertificate, SnapshotExport,
 };
 use human_money_core::models::layer2_api::{SyncLockBatchRequest, SyncLockBatchResponse};
 use humoco_market::SignedDropHeaders;
@@ -1201,10 +1201,30 @@ pub enum SyncLockBatchOutcome {
         status_code: u16,
         body: Box<SyncLockBatchResponse>,
     },
+    EpochFrozen {
+        status_code: u16,
+        error: String,
+        latest_manifest: Option<Box<AnchorManifest>>,
+    },
+    Revoked {
+        status_code: u16,
+        notice: Option<Box<SyncRevocationNotice>>,
+    },
     Rejected {
         status_code: u16,
         error: String,
     },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct LockFreezeStatusDto {
+    pub anchor_id: String,
+    pub bucket: String,
+    pub active_manifest: Option<AnchorManifest>,
+    pub last_creator_activity_secs: Option<u64>,
+    pub bucket_freeze_state: serde_json::Value,
+    pub voted_proposal: Option<MigrationProposal>,
+    pub snapshot_export: Option<SnapshotExport>,
 }
 
 pub fn normalize_lock_read_base(read_url: &str) -> String {
@@ -1591,6 +1611,17 @@ pub async fn post_lock_batch(
         )
     })?;
 
+    if status_code == 410 {
+        let notice = serde_json::from_str::<serde_json::Value>(&text)
+            .ok()
+            .and_then(|v| v.get("revocation").cloned())
+            .and_then(|rv| serde_json::from_value::<SyncRevocationNotice>(rv).ok());
+        return Ok(SyncLockBatchOutcome::Revoked {
+            status_code,
+            notice: notice.map(Box::new),
+        });
+    }
+
     if status_code == 200 || status_code == 201 || status_code == 409 {
         let val: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
             format!(
@@ -1611,6 +1642,17 @@ pub async fn post_lock_batch(
             .and_then(|v| v.as_str())
             .unwrap_or(text.trim())
             .to_string();
+        if status_code == 409 && err_msg == "epoch_frozen" {
+            let latest_manifest = val
+                .get("latest_manifest")
+                .cloned()
+                .and_then(|m| serde_json::from_value::<AnchorManifest>(m).ok());
+            return Ok(SyncLockBatchOutcome::EpochFrozen {
+                status_code,
+                error: err_msg,
+                latest_manifest: latest_manifest.map(Box::new),
+            });
+        }
         return Ok(SyncLockBatchOutcome::Rejected {
             status_code,
             error: err_msg,
@@ -1623,6 +1665,295 @@ pub async fn post_lock_batch(
         status_code,
         text.trim()
     ))
+}
+
+pub async fn get_lock_freeze_status(
+    client: &reqwest::Client,
+    write_url: &str,
+    anchor_id_hex: &str,
+) -> Result<Option<LockFreezeStatusDto>, String> {
+    validate_sync_url(write_url)?;
+    let sep = if write_url.contains('?') { "&" } else { "?" };
+    let url = format!(
+        "{}{}lock_freeze&anchor_id={}",
+        write_url.trim(),
+        sep,
+        anchor_id_hex.trim()
+    );
+    let resp = client.get(&url).send().await.map_err(|e| {
+        format!(
+            "Network error querying ?lock_freeze on {}: {}",
+            write_url, e
+        )
+    })?;
+    let code = resp.status().as_u16();
+    if code == 404 {
+        return Ok(None);
+    }
+    if code == 429 {
+        let secs = parse_retry_after(resp.headers());
+        return Err(format!("Rate limited (HTTP 429). Retry-After: {}s", secs));
+    }
+    if !resp.status().is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!(
+            "Lock server {} returned HTTP {} on GET ?lock_freeze: {}",
+            write_url,
+            code,
+            text.trim()
+        ));
+    }
+    let parsed: LockFreezeStatusDto = resp
+        .json()
+        .await
+        .map_err(|e| format!("Invalid ?lock_freeze status JSON: {}", e))?;
+    Ok(Some(parsed))
+}
+
+pub async fn post_lock_freeze_action(
+    client: &reqwest::Client,
+    write_url: &str,
+    body: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    validate_sync_url(write_url)?;
+    let sep = if write_url.contains('?') { "&" } else { "?" };
+    let url = format!("{}{}lock_freeze", write_url.trim(), sep);
+    let resp = client
+        .post(&url)
+        .json(body)
+        .send()
+        .await
+        .map_err(|e| format!("Network error posting ?lock_freeze to {}: {}", write_url, e))?;
+    let code = resp.status().as_u16();
+    if code == 429 {
+        let secs = parse_retry_after(resp.headers());
+        return Err(format!("Rate limited (HTTP 429). Retry-After: {}s", secs));
+    }
+    let text = resp.text().await.unwrap_or_default();
+    if !(200..300).contains(&code) {
+        return Err(format!(
+            "Lock server {} returned HTTP {} on POST ?lock_freeze: {}",
+            write_url,
+            code,
+            text.trim()
+        ));
+    }
+    serde_json::from_str(&text)
+        .map_err(|e| format!("Invalid POST ?lock_freeze response JSON: {}", e))
+}
+
+#[derive(Deserialize)]
+struct LockImportResponseDto {
+    import_ack: ImportAck,
+}
+
+pub async fn post_lock_import(
+    client: &reqwest::Client,
+    write_url: &str,
+    anchor_id: &[u8; 32],
+    active_manifest: &AnchorManifest,
+    proposal: &MigrationProposal,
+    snapshots: &[SnapshotExport],
+    quorum_certificates: &[QuorumCertificate],
+) -> Result<ImportAck, String> {
+    validate_sync_url(write_url)?;
+    let sep = if write_url.contains('?') { "&" } else { "?" };
+    let url = format!("{}{}lock_import", write_url.trim(), sep);
+    let payload = serde_json::json!({
+        "anchor_id": hex::encode(anchor_id),
+        "active_manifest": active_manifest,
+        "proposal": proposal,
+        "snapshots": snapshots,
+        "quorum_certificates": quorum_certificates,
+    });
+    let resp = client
+        .post(&url)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("Network error posting ?lock_import to {}: {}", write_url, e))?;
+    let code = resp.status().as_u16();
+    if code == 429 {
+        let secs = parse_retry_after(resp.headers());
+        return Err(format!("Rate limited (HTTP 429). Retry-After: {}s", secs));
+    }
+    let text = resp.text().await.unwrap_or_default();
+    if !(200..300).contains(&code) {
+        return Err(format!(
+            "Lock server {} returned HTTP {} on ?lock_import: {}",
+            write_url,
+            code,
+            text.trim()
+        ));
+    }
+    let parsed: LockImportResponseDto = serde_json::from_str(&text)
+        .map_err(|e| format!("Invalid ?lock_import response JSON: {}", e))?;
+    if parsed.import_ack.anchor_id != *anchor_id || !parsed.import_ack.verify() {
+        return Err("Returned ImportAck failed signature or anchor_id verification".to_string());
+    }
+    Ok(parsed.import_ack)
+}
+
+#[derive(Deserialize)]
+struct LockCommitSignResponseDto {
+    committee_signature: CommitteeSignature,
+}
+
+pub async fn post_lock_commit_sign(
+    client: &reqwest::Client,
+    write_url: &str,
+    anchor_id: &[u8; 32],
+    proposal: &MigrationProposal,
+    imported_state_hash: &[u8; 32],
+    import_acks: &[ImportAck],
+) -> Result<CommitteeSignature, String> {
+    validate_sync_url(write_url)?;
+    let sep = if write_url.contains('?') { "&" } else { "?" };
+    let url = format!("{}{}lock_commit", write_url.trim(), sep);
+    let payload = serde_json::json!({
+        "action": "sign_commit",
+        "anchor_id": hex::encode(anchor_id),
+        "proposal": proposal,
+        "imported_state_hash": hex::encode(imported_state_hash),
+        "import_acks": import_acks,
+    });
+    let resp = client
+        .post(&url)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("Network error posting ?lock_commit to {}: {}", write_url, e))?;
+    let code = resp.status().as_u16();
+    if code == 429 {
+        let secs = parse_retry_after(resp.headers());
+        return Err(format!("Rate limited (HTTP 429). Retry-After: {}s", secs));
+    }
+    let text = resp.text().await.unwrap_or_default();
+    if !(200..300).contains(&code) {
+        return Err(format!(
+            "Lock server {} returned HTTP {} on ?lock_commit sign_commit: {}",
+            write_url,
+            code,
+            text.trim()
+        ));
+    }
+    let parsed: LockCommitSignResponseDto = serde_json::from_str(&text)
+        .map_err(|e| format!("Invalid ?lock_commit response JSON: {}", e))?;
+    let prop_hash = proposal.core_digest()?;
+    let digest =
+        MigrationCert::commit_digest(anchor_id, &prop_hash, proposal.to_rev, imported_state_hash);
+    if !verify_ed25519_strict(
+        &parsed.committee_signature.lock_pub,
+        &digest,
+        &parsed.committee_signature.sig,
+    ) {
+        return Err("Returned CommitteeSignature failed verification".to_string());
+    }
+    Ok(parsed.committee_signature)
+}
+
+pub async fn post_lock_commit_finalize(
+    client: &reqwest::Client,
+    write_url: &str,
+    anchor_id: &[u8; 32],
+    new_manifest: &AnchorManifest,
+) -> Result<(), String> {
+    validate_sync_url(write_url)?;
+    let sep = if write_url.contains('?') { "&" } else { "?" };
+    let url = format!("{}{}lock_commit", write_url.trim(), sep);
+    let payload = serde_json::json!({
+        "action": "finalize",
+        "anchor_id": hex::encode(anchor_id),
+        "new_manifest": new_manifest,
+    });
+    let resp = client.post(&url).json(&payload).send().await.map_err(|e| {
+        format!(
+            "Network error finalizing ?lock_commit on {}: {}",
+            write_url, e
+        )
+    })?;
+    let code = resp.status().as_u16();
+    if !resp.status().is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!(
+            "Lock server {} returned HTTP {} on ?lock_commit finalize: {}",
+            write_url,
+            code,
+            text.trim()
+        ));
+    }
+    Ok(())
+}
+
+pub fn anchor_manifest_candidate_urls(
+    base_url: &str,
+    anchor_hex: &str,
+) -> Result<Vec<String>, String> {
+    validate_sync_url(base_url)?;
+    let trimmed = base_url.trim().trim_end_matches('/');
+    let mut urls = Vec::new();
+    if trimmed.ends_with("/sync.php") || trimmed.ends_with("/sync") {
+        let root = trimmed
+            .rsplit_once('/')
+            .map(|(prefix, _)| prefix)
+            .unwrap_or(trimmed);
+        urls.push(format!("{}/anchors/{}.bin", root, anchor_hex));
+    } else {
+        let read_base = normalize_lock_read_base(trimmed);
+        urls.push(format!("{}/anchors/{}.bin", read_base, anchor_hex));
+        if let Ok(parsed) = reqwest::Url::parse(&read_base) {
+            if let Some(host) = parsed.host_str() {
+                let port_part = parsed.port().map(|p| format!(":{}", p)).unwrap_or_default();
+                urls.push(format!(
+                    "{}://{}{}/anchors/{}.bin",
+                    parsed.scheme(),
+                    host,
+                    port_part,
+                    anchor_hex
+                ));
+            }
+        }
+    }
+    urls.dedup();
+    Ok(urls)
+}
+
+pub async fn fetch_anchor_manifest_bin(
+    client: &reqwest::Client,
+    base_url: &str,
+    anchor_id: &[u8; 32],
+) -> Result<Option<AnchorManifest>, String> {
+    let anchor_hex = hex::encode(anchor_id);
+    let urls = anchor_manifest_candidate_urls(base_url, &anchor_hex)?;
+    for url in urls {
+        let Ok(resp) = client.get(&url).send().await else {
+            continue;
+        };
+        let code = resp.status().as_u16();
+        if code == 404 {
+            continue;
+        }
+        if code == 429 {
+            let secs = parse_retry_after(resp.headers());
+            return Err(format!(
+                "Rate limited fetching anchor manifest (HTTP 429). Retry-After: {}s",
+                secs
+            ));
+        }
+        if !resp.status().is_success() {
+            continue;
+        }
+        let Ok(bytes) = resp.bytes().await else {
+            continue;
+        };
+        let Ok(manifest) = serde_json::from_slice::<AnchorManifest>(&bytes) else {
+            continue;
+        };
+        if manifest.verify_anchor_id(anchor_id).is_ok() {
+            return Ok(Some(manifest));
+        }
+    }
+    Ok(None)
 }
 
 pub async fn fetch_static_lock_entry(

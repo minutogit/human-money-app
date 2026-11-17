@@ -163,8 +163,10 @@ pub struct FrontendVoucherDetails {
     pub display_currency: String,
     pub display_standard_name: String,
     pub is_test_voucher: bool,
-    #[serde(default)]
     pub trust: super::wot::FrontendVoucherTrustDto,
+    pub reduced_guarantor_protection: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub manifest_revision: Option<u64>,
 }
 
 impl From<human_money_core::wallet::types::VoucherDetails> for FrontendVoucherDetails {
@@ -188,6 +190,8 @@ impl From<human_money_core::wallet::types::VoucherDetails> for FrontendVoucherDe
             display_standard_name: d.display_standard_name,
             is_test_voucher: d.is_test_voucher,
             trust: super::wot::FrontendVoucherTrustDto::default(),
+            reduced_guarantor_protection: false,
+            manifest_revision: None,
         }
     }
 }

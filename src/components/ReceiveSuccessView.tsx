@@ -206,6 +206,7 @@ export function ReceiveSuccessView({ payload, onDone }: ReceiveSuccessViewProps)
                         quorum={l2Quorum} 
                         isVerifiedCheckout={Boolean(isLiveConfirmed || isProvisional)} 
                         pillarLabel={t('transfer.pillars.l2Prefix', '2. Netzwerkschutz (L2)')}
+                        reducedGuarantorProtection={checkoutVerdict?.reducedGuarantorProtection}
                     />
                 </div>
 

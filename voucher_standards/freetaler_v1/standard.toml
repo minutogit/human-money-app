@@ -1,35 +1,62 @@
+# voucher_standards/freetaler_v1/standard.toml
+# ==============================================================================
+# IMMUTABLE ZONE (Consensus Core)
+# All parameters in this zone determine the SHA-256 logic_hash of the standard.
+# ==============================================================================
 [immutable.identity]
+# (String) Unique economic anchor (UUID)
 uuid = "a1b2c3d4-e5f6-4789-8012-3456789abcde"
+# (String) Primary display name of the currency
 name = "FreeTaler"
+# (String) Official currency abbreviation
 abbreviation = "Taler"
 
 [immutable.blueprint]
+# (String) Countable unit of service
 unit = "Taler"
+# (Enum: goods_or_services, time, physical_asset) Redemption type
 primary_redemption_type = "goods_or_services"
+# (Enum: personal_guarantee, fiat_backed, crypto_backed, physical_asset) Collateral type
 collateral_type = "personal_guarantee"
 
 [immutable.features]
+# (Boolean) Allows partial transfers (split)
 allow_partial_transfers = true
+# (Boolean) Allows balance aggregation in wallet UI
 balances_are_summable = true
+# (Integer) Decimal places (2 = cent divisibility)
 amount_decimal_places = 2
+# (Enum: public, stealth, flexible) Privacy mode on L2
 privacy_mode = "flexible"
-allowed_t_types = ["init", "transfer", "split"]
+# (Array[String]) Allowed transaction types
+allowed_t_types = ["init", "transfer", "split", "redeem", "claim"]
 
 [immutable.issuance]
+# (Array[String]) Allowed total validity duration range [Min, Max] (ISO 8601)
 validity_duration_range = ["P1Y", "P10Y"]
+# (String) Circulation firewall: Required remaining validity duration upon creation
 issuance_minimum_validity_duration = "P1M"
+# (Array[Integer]) Required number of guarantors [Min, Max] (0 to 3 guarantors allowed, MVP mode)
 additional_signatures_range = [0, 3]
+# (Array[String]) Allowed signature roles
 allowed_signature_roles = ["guarantor"]
 
+# No special dynamic CEL rules for the generic FreeTaler standard
 [immutable.custom_rules]
 
+# ==============================================================================
+# MUTABLE ZONE (Presentation & Metadata Layer)
+# Changes here do NOT alter the logic_hash.
+# ==============================================================================
 [mutable.metadata]
 issuer_name = "Human Money Project"
 homepage_url = "https://human-money.org"
 keywords = ["free", "taler", "example", "community", "mvp"]
 
 [mutable.app_config]
+# (String) Preselected validity duration in the wallet form
 default_validity_duration = "P1Y"
+# (String) Retention period on L2 nodes after expiration
 server_history_retention = "P3M"
 
 [mutable.i18n.descriptions]
@@ -45,8 +72,8 @@ en = "This voucher is technically usable immediately after signature by the issu
 de = "Dieser Gutschein ist sofort nach der Signatur durch den Aussteller technisch nutzbar. Weitere Signaturen (z. B. durch Bürgen oder Institutionen) sind möglich und im Web of Trust empfohlen, um die soziale Akzeptanz zu erhöhen, für dieses MVP aber nicht zwingend erforderlich."
 
 [signature]
-# Die `did:key` des Herausgebers, die seinen öffentlichen Schlüssel enthält.
-issuer_id = "0:riw@did:key:z6Mki8QqVMb66hjtTwcceVXbZuSHTk61jqiprRvEhuotZmSA"
+# The issuer `did:key` containing their public key.
+issuer_id = "0:KjY@did:key:z6Mkis9kjqMUCyP1nM6MmyTgN6JGpG9XyUYYCfQSwr9CVPox"
 
-# Die finale Base58-kodierte Ed25519-Signatur des kanonisierten Inhalts (ohne diesen Block).
-signature = "2s2TV9N8ex812gtcTHETNVsGku5sz4cH3v8h149yE7vEwyCZ39vCwpdfSG5AHV2QDvVvJMgmKQm7dGcJCqiDFads"
+# The final Base58-encoded Ed25519 signature of the canonicalized content (without this block).
+signature = "4e88qmvL5nvR3gWQpA9YmD3DdrFqbu7UmAcwpfBLWBzUEY83hZnKwu3yV6wa1hRHXYYyotu7VpxpAPmdXRXStHso"

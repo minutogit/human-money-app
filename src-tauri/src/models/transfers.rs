@@ -108,6 +108,9 @@ pub struct FrontendCheckoutReleaseVerdict {
     pub requires_merchant_approval: bool,
     pub is_goods_release_authorized: bool,
     pub merchant_warning: Option<String>,
+    pub reduced_guarantor_protection: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub manifest_revision: Option<u64>,
 }
 
 impl From<human_money_core::models::layer2_api::CheckoutReleaseVerdict>
@@ -135,6 +138,8 @@ impl From<human_money_core::models::layer2_api::CheckoutReleaseVerdict>
             requires_merchant_approval: v.requires_merchant_approval,
             is_goods_release_authorized: v.is_goods_release_authorized,
             merchant_warning: v.merchant_warning,
+            reduced_guarantor_protection: false,
+            manifest_revision: None,
         }
     }
 }

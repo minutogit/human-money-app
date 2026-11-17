@@ -75,12 +75,53 @@ async fn reconcile_due_intent(
     }
 
     let client = sync_client::create_sync_http_client();
-    let dispatch = crate::gateway_resolver::dispatch_lock_committee_batches(
+    let mut dispatch = crate::gateway_resolver::dispatch_lock_committee_batches(
         &client,
         &requests,
         INTENT_DISPATCH_TIMEOUT,
     )
     .await;
+
+    // If a committee server rotated to a newer manifest, adopt it and retry missing servers once
+    let mut best_upgraded: Option<human_money_core::humoco_proto::manifest::AnchorManifest> = None;
+    for m in &dispatch.epoch_frozen_manifests {
+        if m.revision > intent.manifest.revision
+            && m.verify_anchor_id(&intent.anchor_id).is_ok()
+            && best_upgraded
+                .as_ref()
+                .map(|b| m.revision > b.revision)
+                .unwrap_or(true)
+        {
+            best_upgraded = Some(m.clone());
+        }
+    }
+    if let Some(newer_manifest) = best_upgraded {
+        let upgraded_reqs = {
+            let mut service = state.service.lock().map_err(|_| wallet_unavailable())?;
+            if service
+                .update_l2_anchor_manifest(newer_manifest, None)
+                .is_ok()
+            {
+                service
+                    .build_intent_committee_requests(local_id, &nonce, &HashMap::new(), true)
+                    .ok()
+            } else {
+                None
+            }
+        };
+        if let Some(next_reqs) = upgraded_reqs {
+            if !next_reqs.is_empty() {
+                let extra = crate::gateway_resolver::dispatch_lock_committee_batches(
+                    &client,
+                    &next_reqs,
+                    INTENT_DISPATCH_TIMEOUT,
+                )
+                .await;
+                dispatch.receipts.extend(extra.receipts);
+                dispatch.competing_entries.extend(extra.competing_entries);
+            }
+        }
+    }
 
     let target_slot = intent.entries.last().map(|e| e.slot);
     let target_receipts: Vec<_> = dispatch
@@ -120,6 +161,14 @@ async fn reconcile_due_intent(
             "EquivocationProof detected for L2 send intent {} on server {}",
             local_id,
             hex::encode(proof.receipt_a.lock_pub)
+        );
+        let now_secs = sync_client::current_unix_timestamp().max(1);
+        let _ = crate::l2_lifecycle::record_equivocation_proof(
+            &mut service,
+            None,
+            &proof,
+            now_secs,
+            None,
         );
     }
     if let Some(res) = resolution_opt {
@@ -223,6 +272,7 @@ pub fn spawn_intent_reconciliation_worker(app: tauri::AppHandle) {
                 Ok(count) => log::info!("Reconciled {} unresolved L2 send intent(s)", count),
                 Err(error) => log::debug!("L2 intent reconciliation failed: {}", error.message),
             }
+            crate::l2_lifecycle::maybe_run_background_lifecycle_tick(state.inner()).await;
         }
     });
 }

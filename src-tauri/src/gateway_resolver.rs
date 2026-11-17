@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use human_money_core::humoco_proto::{
     causal::LockEntry,
-    manifest::ServerEntry,
+    manifest::{AnchorManifest, ServerEntry},
     types::{LockPubKey, LockReceipt, LockReceiptKind},
 };
 use human_money_core::models::layer2_api::SyncLockBatchRequest;
@@ -34,6 +34,8 @@ pub struct CommitteeDispatchResult {
     pub rejected_errors: Vec<(LockPubKey, u16, String)>,
     pub transport_errors: Vec<(LockPubKey, String)>,
     pub pending_retries: Vec<(ServerEntry, SyncLockBatchRequest)>,
+    pub epoch_frozen_manifests: Vec<AnchorManifest>,
+    pub revoked_notices: Vec<(LockPubKey, sync_client::SyncRevocationNotice)>,
 }
 
 /// Candidate lock server metadata considered for Sybil folding (`assemble_anchor_template` & Bürgen-Check).
@@ -223,6 +225,29 @@ pub async fn dispatch_lock_committee_batches(
                 if !had_server_receipt {
                     out.pending_retries.push((server, req));
                 }
+            }
+            Ok(Ok(SyncLockBatchOutcome::EpochFrozen {
+                status_code,
+                error,
+                latest_manifest,
+            })) => {
+                out.http_statuses.push((server.lock_pub, Some(status_code)));
+                if let Some(m) = latest_manifest {
+                    out.epoch_frozen_manifests.push(*m);
+                }
+                out.rejected_errors
+                    .push((server.lock_pub, status_code, error));
+            }
+            Ok(Ok(SyncLockBatchOutcome::Revoked {
+                status_code,
+                notice,
+            })) => {
+                out.http_statuses.push((server.lock_pub, Some(status_code)));
+                if let Some(n) = notice {
+                    out.revoked_notices.push((server.lock_pub, *n));
+                }
+                out.rejected_errors
+                    .push((server.lock_pub, status_code, "revoked".to_string()));
             }
             Ok(Ok(SyncLockBatchOutcome::Rejected { status_code, error })) => {
                 out.http_statuses.push((server.lock_pub, Some(status_code)));
