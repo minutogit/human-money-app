@@ -2,6 +2,8 @@
 use crc32fast::Hasher;
 
 const SYNC_PHP: &[u8] = include_bytes!("../../../humoco-sync/php/sync.php");
+const LOCK_HANDLER_PHP: &[u8] = include_bytes!("../../../humoco-sync/php/lock_handler.php");
+const LOCK_ROTATION_PHP: &[u8] = include_bytes!("../../../humoco-sync/php/lock_rotation.php");
 const HTACCESS: &[u8] = include_bytes!("../../../humoco-sync/php/.htaccess");
 const ROBOTS_TXT: &[u8] = include_bytes!("../../../humoco-sync/php/robots.txt");
 const INDEX_HTML: &[u8] = include_bytes!("../../../humoco-sync/php/index.html");
@@ -53,6 +55,16 @@ return [
             'max_channel_mb' => 100,
             'ttl_days'       => 180,
         ],
+    ],
+
+    // Lock channel settings (SPEC.md Section 6, Concept Sections 5 & 6)
+    'lock' => [
+        'enabled'               => true,
+        'max_retention_quarter' => 8159,
+        'max_inodes'            => 50000,
+        'pow_base_bits'         => 8,
+        'allow_pow_tickets'     => false,
+        'ticket_pow_bits'       => 16,
     ],
 ];
 "#,
@@ -140,6 +152,17 @@ max_user_count = 12
 max_user_bytes = 3145728
 max_channel_mb = 512
 ttl_days = 90
+
+[lock]
+enabled = true
+max_retention_quarter = 8159
+max_inodes = 50000
+pow_base_bits = 8
+allow_pow_tickets = false
+ticket_pow_bits = 16
+pre_freeze_ttl_secs = 1800
+proposal_timelock_secs = 259200
+creator_inactivity_secs = 2592000
 
 [security]
 # Generate via: humoco-sync-server hash-token
@@ -276,6 +299,14 @@ pub fn build_sync_zip_bytes(
         ZipEntry {
             name: "sync.php",
             data: SYNC_PHP,
+        },
+        ZipEntry {
+            name: "lock_handler.php",
+            data: LOCK_HANDLER_PHP,
+        },
+        ZipEntry {
+            name: "lock_rotation.php",
+            data: LOCK_ROTATION_PHP,
         },
         ZipEntry {
             name: "config.php",
@@ -440,9 +471,11 @@ mod tests {
             offset = data_start + c_size;
         }
 
-        // Verify all 6 files are present
-        assert_eq!(extracted_files.len(), 6);
+        // Verify all 8 files are present
+        assert_eq!(extracted_files.len(), 8);
         assert!(extracted_files.contains_key("sync.php"));
+        assert!(extracted_files.contains_key("lock_handler.php"));
+        assert!(extracted_files.contains_key("lock_rotation.php"));
         assert!(extracted_files.contains_key("config.php"));
         assert!(extracted_files.contains_key(".htaccess"));
         assert!(extracted_files.contains_key("robots.txt"));
@@ -451,6 +484,8 @@ mod tests {
 
         // Verify embedded files equality
         assert_eq!(extracted_files["sync.php"], SYNC_PHP);
+        assert_eq!(extracted_files["lock_handler.php"], LOCK_HANDLER_PHP);
+        assert_eq!(extracted_files["lock_rotation.php"], LOCK_ROTATION_PHP);
         assert_eq!(extracted_files[".htaccess"], HTACCESS);
         assert_eq!(extracted_files["robots.txt"], ROBOTS_TXT);
         assert_eq!(extracted_files["index.html"], INDEX_HTML);
@@ -470,6 +505,8 @@ mod tests {
         assert!(cfg_str.contains("'backup'"));
         assert!(cfg_str.contains("'post'"));
         assert!(cfg_str.contains("'media'"));
+        assert!(cfg_str.contains("'lock'"));
+        assert!(cfg_str.contains("'max_retention_quarter'"));
     }
 
     #[test]
@@ -488,6 +525,7 @@ mod tests {
         assert!(toml_cfg.contains("max_admin_members = 300"));
         assert!(toml_cfg.contains("max_total_storage_mb = 512"));
         assert!(toml_cfg.contains("max_free_pool_mb = 128"));
+        assert!(toml_cfg.contains("[lock]"));
         assert!(toml_cfg.contains("[profiles.free]"));
         assert!(toml_cfg.contains("[profiles.friends]"));
         assert!(toml_cfg.contains("[profiles.pro]"));
