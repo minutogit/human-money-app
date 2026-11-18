@@ -142,7 +142,7 @@ pub struct StoredBackupSyncState {
 /// # Lock Ordering Invariant
 /// Whenever multiple mutexes on `AppState` must be acquired simultaneously,
 /// acquire them strictly in the following total order to prevent deadlocks:
-/// `service -> settings -> contacts -> wot -> history -> events -> media_negative_cache`.
+/// `service -> settings -> own_market_profile -> contacts -> wot -> history -> events -> media_negative_cache`.
 ///
 /// Never hold any `MutexGuard` across an `.await` point.
 pub struct AppState {
@@ -151,6 +151,7 @@ pub struct AppState {
     pub events: Mutex<Option<Vec<human_money_core::models::wallet_event::WalletEvent>>>,
     pub contacts: Mutex<Option<crate::models::FrontendAddressBook>>,
     pub settings: Mutex<Option<AppSettings>>,
+    pub own_market_profile: Mutex<Option<crate::models::StoredOwnMarketProfile>>,
     pub wot: Mutex<Option<humoco_wot::TrustRegister>>,
     pub recovery_owner: Mutex<Option<Option<crate::models::recovery::RecoveryOwnerState>>>,
     pub guardian_vault: Mutex<Option<humoco_market::GuardianVaultStore>>,
@@ -216,6 +217,7 @@ impl AppState {
             events: Mutex::new(None),
             contacts: Mutex::new(None),
             settings: Mutex::new(None),
+            own_market_profile: Mutex::new(None),
             wot: Mutex::new(None),
             recovery_owner: Mutex::new(None),
             guardian_vault: Mutex::new(None),
@@ -274,9 +276,12 @@ impl AppState {
     pub fn save_settings(
         &self,
         service: &mut AppService,
-        settings: AppSettings,
+        mut settings: AppSettings,
         password: Option<&str>,
     ) -> Result<(), AppFacadeError> {
+        if !settings.enable_pos_mode {
+            settings.pos_cashier_active = false;
+        }
         let prev_min = {
             let guard = self.settings.lock().unwrap();
             guard.as_ref().map(|s| s.share_min_level)
@@ -291,7 +296,9 @@ impl AppState {
         save_encrypted_json(service, SETTINGS_KEY, &settings, password)?;
         *self.settings.lock().unwrap() = Some(settings);
         if prev_min.is_some_and(|prev| new_min > prev) {
-            crate::services::market_service::bump_own_card_version_for_eviction(service, password);
+            crate::services::market_service::bump_own_card_version_for_eviction(
+                self, service, password,
+            );
         }
         Ok(())
     }
@@ -424,9 +431,6 @@ impl AppState {
             if contact.added_at.is_empty() {
                 contact.added_at = old.added_at.clone();
             }
-            if contact.tags.is_empty() && !old.tags.is_empty() {
-                contact.tags = old.tags.clone();
-            }
             if !contact.has_peer_list && old.has_peer_list {
                 contact.has_peer_list = true;
                 contact.peer_list_updated_at =
@@ -441,9 +445,6 @@ impl AppState {
                 }
                 if contact.added_at.is_empty() {
                     contact.added_at = old.added_at;
-                }
-                if contact.tags.is_empty() && !old.tags.is_empty() {
-                    contact.tags = old.tags;
                 }
                 if !contact.has_peer_list && old.has_peer_list {
                     contact.has_peer_list = true;
@@ -596,7 +597,7 @@ impl AppState {
 
             if new_eff_level < prev_level {
                 crate::services::market_service::bump_own_card_version_for_eviction(
-                    service, password,
+                    self, service, password,
                 );
             }
         }
@@ -779,6 +780,7 @@ impl AppState {
         *self.events.lock().unwrap() = None;
         *self.contacts.lock().unwrap() = None;
         *self.settings.lock().unwrap() = None;
+        *self.own_market_profile.lock().unwrap() = None;
         *self.wot.lock().unwrap() = None;
         *self.recovery_owner.lock().unwrap() = None;
         *self.guardian_vault.lock().unwrap() = None;
@@ -880,6 +882,20 @@ impl AppState {
             }
             Err(e) => {
                 log::warn!("Failed to pre-load guardian vault: {}", e);
+            }
+        }
+
+        // 8. Pre-cache own market profile (supports timeout = 0)
+        match load_encrypted_json_or_default::<crate::models::StoredOwnMarketProfile>(
+            service,
+            MARKET_OWN_PROFILE_KEY,
+            Some(credential),
+        ) {
+            Ok(own_profile) => {
+                *self.own_market_profile.lock().unwrap() = Some(own_profile);
+            }
+            Err(e) => {
+                log::warn!("Failed to pre-load own market profile: {}", e);
             }
         }
 
@@ -1609,6 +1625,7 @@ impl AppState {
             let updated_syncs = settings.market_selected_syncs.clone();
             let _ = self.save_settings(service, settings, password);
             crate::services::market_service::sync_own_card_drops_on_settings_change(
+                self,
                 service,
                 &updated_syncs,
                 password,
@@ -2195,6 +2212,67 @@ mod tests {
             bob3.syncs.len(),
             0,
             "All syncs must be removed authoritatively"
+        );
+    }
+
+    #[test]
+    fn test_save_contact_allows_clearing_last_tag() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("humoco_tag_clear_test_{}", uuid::Uuid::new_v4()));
+        let password = "test-password-123";
+        let alice_service = crate::test_support::setup_test_app(
+            &temp_dir.join("alice"),
+            "Test Alice",
+            crate::test_support::ALICE_PHRASE,
+            password,
+        );
+        let state = super::AppState::new(alice_service);
+        let bob_did = "did:key:z6MkrJVnaZkeFzdQyMZu1cgjg7k1pZZ6pvBQ7XJPt4swbTQ2";
+        let mut service = state.service.lock().unwrap();
+
+        let with_tags = crate::models::FrontendContact {
+            did: bob_did.to_string(),
+            profile: crate::models::FrontendUserProfile {
+                first_name: Some("Bob".to_string()),
+                ..Default::default()
+            },
+            tags: vec!["friend".to_string(), "neighbor".to_string()],
+            added_at: String::new(),
+            notes: None,
+            trust_level: Some(2),
+            desired_hops: Some(2),
+            has_peer_list: false,
+            peer_list_updated_at: None,
+            syncs: vec![],
+        };
+        state
+            .save_contact(&mut service, with_tags, Some(password))
+            .unwrap();
+
+        let cleared_tags = crate::models::FrontendContact {
+            did: bob_did.to_string(),
+            profile: crate::models::FrontendUserProfile {
+                first_name: Some("Bob".to_string()),
+                ..Default::default()
+            },
+            tags: vec![],
+            added_at: String::new(),
+            notes: None,
+            trust_level: Some(2),
+            desired_hops: Some(2),
+            has_peer_list: false,
+            peer_list_updated_at: None,
+            syncs: vec![],
+        };
+        state
+            .save_contact(&mut service, cleared_tags, Some(password))
+            .unwrap();
+
+        let contacts = state.load_contacts(&mut service, Some(password)).unwrap();
+        let bob = contacts.iter().find(|c| c.did == bob_did).unwrap();
+        assert!(
+            bob.tags.is_empty(),
+            "Clearing the last tag must persist empty tags instead of restoring old tags"
         );
     }
 

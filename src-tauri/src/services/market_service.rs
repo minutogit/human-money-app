@@ -109,18 +109,52 @@ pub(crate) fn load_drops_from_settings(
     ))
 }
 
-fn load_own_market_profile_state(
+pub(crate) fn load_own_market_profile_state(
+    state: &AppState,
     service: &mut AppService,
     password: Option<&str>,
-) -> StoredOwnMarketProfile {
-    service
-        .load_encrypted_data(MARKET_OWN_PROFILE_KEY, password)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or_default()
+) -> Result<StoredOwnMarketProfile, FrontendError> {
+    match crate::state::load_encrypted_json_or_default::<StoredOwnMarketProfile>(
+        service,
+        MARKET_OWN_PROFILE_KEY,
+        password,
+    ) {
+        Ok(stored) => {
+            *state.own_market_profile.lock().unwrap() = Some(stored.clone());
+            Ok(stored)
+        }
+        Err(human_money_core::app_service::AppFacadeError::App(
+            human_money_core::error::AppError::SessionNotActive { .. },
+        )) if password.is_none() => {
+            if let Some(cached) = state.own_market_profile.lock().unwrap().clone() {
+                return Ok(cached);
+            }
+            Err(FrontendError::from(
+                human_money_core::app_service::AppFacadeError::App(
+                    human_money_core::error::AppError::SessionNotActive {
+                        reason: "Password required. Please use 'unlock_session'.".to_string(),
+                    },
+                ),
+            ))
+        }
+        Err(e) => Err(FrontendError::from(e)),
+    }
+}
+
+fn load_own_market_profile_for_write(
+    service: &mut AppService,
+    password: Option<&str>,
+) -> Result<StoredOwnMarketProfile, FrontendError> {
+    crate::state::load_encrypted_json_or_default::<StoredOwnMarketProfile>(
+        service,
+        MARKET_OWN_PROFILE_KEY,
+        password,
+    )
+    .map_err(FrontendError::from)
 }
 
 fn save_own_market_profile_state(
+    state: &AppState,
     service: &mut AppService,
     stored: &StoredOwnMarketProfile,
     password: Option<&str>,
@@ -130,7 +164,9 @@ fn save_own_market_profile_state(
     })?;
     service
         .save_encrypted_data(MARKET_OWN_PROFILE_KEY, &bytes, password)
-        .map_err(FrontendError::from)
+        .map_err(FrontendError::from)?;
+    *state.own_market_profile.lock().unwrap() = Some(stored.clone());
+    Ok(())
 }
 
 fn cleanup_unused_own_media(
@@ -168,10 +204,14 @@ fn try_load_cached_media(
     Some(encode_media_data_uri(&media_bytes))
 }
 
-pub(crate) fn get_own_card_max_hops_inner(service: &mut AppService, password: Option<&str>) -> u8 {
-    load_own_market_profile_state(service, password)
-        .max_hops
-        .clamp(1, 3)
+pub(crate) fn get_own_card_max_hops_inner(
+    state: &AppState,
+    service: &mut AppService,
+    password: Option<&str>,
+) -> u8 {
+    load_own_market_profile_state(state, service, password)
+        .map(|s| s.max_hops.clamp(1, 3))
+        .unwrap_or(1)
 }
 
 pub(crate) fn update_shrink_window(
@@ -241,14 +281,14 @@ pub(crate) fn sign_unpublish_tombstone_card(
 
 /// Re-signs `last_card` with a strictly higher version `v` so evicted contacts
 /// accept and apply the `<jws>~` empty-shell tombstone over cached disclosures.
-pub(crate) fn bump_own_card_version_for_eviction(service: &mut AppService, password: Option<&str>) {
-    let mut stored: StoredOwnMarketProfile = match service
-        .load_encrypted_data(MARKET_OWN_PROFILE_KEY, password)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-    {
-        Some(s) => s,
-        None => return,
+pub(crate) fn bump_own_card_version_for_eviction(
+    state: &AppState,
+    service: &mut AppService,
+    password: Option<&str>,
+) {
+    let mut stored = match load_own_market_profile_for_write(service, password) {
+        Ok(s) => s,
+        Err(_) => return,
     };
     if stored.last_card.is_none() {
         return;
@@ -261,17 +301,23 @@ pub(crate) fn bump_own_card_version_for_eviction(service: &mut AppService, passw
         sign_unpublish_tombstone_card(service, &mut stored, now)
     };
     if res.is_ok() {
-        let _ = save_own_market_profile_state(service, &stored, password);
+        let _ = save_own_market_profile_state(state, service, &stored, password);
     }
 }
 
 pub(crate) fn set_own_card_max_hops_inner(
+    state: &AppState,
     service: &mut AppService,
     max_hops: u8,
     password: Option<&str>,
 ) -> Result<u8, FrontendError> {
+    crate::services::common::ensure_access_mode(
+        service,
+        human_money_core::AccessMode::DailyPay,
+        password,
+    )?;
     let clamped = max_hops.clamp(1, 3);
-    let mut stored = load_own_market_profile_state(service, password);
+    let mut stored = load_own_market_profile_for_write(service, password)?;
 
     let now = chrono::Utc::now().timestamp().max(0) as u64;
     update_shrink_window(&mut stored, clamped, now);
@@ -281,22 +327,18 @@ pub(crate) fn set_own_card_max_hops_inner(
         rebuild_and_sign_own_card_with_drops(service, &mut stored, now, drops_opt)?;
     }
 
-    save_own_market_profile_state(service, &stored, password)?;
+    save_own_market_profile_state(state, service, &stored, password)?;
 
     Ok(clamped)
 }
 
 pub fn sync_own_card_drops_on_settings_change(
+    state: &AppState,
     service: &mut AppService,
     syncs: &[FrontendSyncDescriptor],
     password: Option<&str>,
 ) {
-    let existing_opt: Option<StoredOwnMarketProfile> = service
-        .load_encrypted_data(MARKET_OWN_PROFILE_KEY, password)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok());
-
-    if let Some(mut existing) = existing_opt {
+    if let Ok(mut existing) = load_own_market_profile_for_write(service, password) {
         if existing.published {
             let now_unix = chrono::Utc::now().timestamp().max(0) as u64;
             let drops =
@@ -310,7 +352,7 @@ pub fn sync_own_card_drops_on_settings_change(
                 });
             let _ =
                 rebuild_and_sign_own_card_with_drops(service, &mut existing, now_unix, Some(drops));
-            let _ = save_own_market_profile_state(service, &existing, password);
+            let _ = save_own_market_profile_state(state, service, &existing, password);
         }
     }
 }
@@ -628,7 +670,7 @@ pub fn get_my_market_profile_impl(
     state: &AppState,
 ) -> Result<FrontendMyMarketProfile, FrontendError> {
     let mut service = state.service.lock().unwrap();
-    let stored = load_own_market_profile_state(&mut service, password.as_deref());
+    let stored = load_own_market_profile_state(state, &mut service, password.as_deref())?;
 
     let core_profile = service
         .with_wallet(|w| w.profile.to_public_profile())
@@ -720,6 +762,11 @@ pub fn save_my_market_profile_impl(
     }
 
     let mut service = state.service.lock().unwrap();
+    crate::services::common::ensure_access_mode(
+        &mut service,
+        human_money_core::AccessMode::Full,
+        password.as_deref(),
+    )?;
 
     let mut core_profile = service
         .with_wallet(|w| w.profile.to_public_profile())
@@ -768,7 +815,7 @@ pub fn save_my_market_profile_impl(
         .update_public_profile(core_profile, password.as_deref())
         .map_err(|e| FrontendError::from(format!("Failed to update Core public profile: {}", e)))?;
 
-    let mut stored = load_own_market_profile_state(&mut service, password.as_deref());
+    let mut stored = load_own_market_profile_for_write(&mut service, password.as_deref())?;
 
     let now = chrono::Utc::now().timestamp().max(0) as u64;
     let new_max_hops = request.max_hops.clamp(1, 3);
@@ -796,7 +843,7 @@ pub fn save_my_market_profile_impl(
         rebuild_and_sign_own_card_with_drops(&mut service, &mut stored, now, drops_opt)?;
     }
 
-    save_own_market_profile_state(&mut service, &stored, password.as_deref())?;
+    save_own_market_profile_state(state, &mut service, &stored, password.as_deref())?;
 
     drop(service);
     get_my_market_profile_impl(password, state)
@@ -811,7 +858,12 @@ pub async fn set_card_published_impl(
     let now = chrono::Utc::now().timestamp().max(0) as u64;
     {
         let mut service = state.service.lock().unwrap();
-        let mut stored = load_own_market_profile_state(&mut service, password.as_deref());
+        crate::services::common::ensure_access_mode(
+            &mut service,
+            human_money_core::AccessMode::DailyPay,
+            password.as_deref(),
+        )?;
+        let mut stored = load_own_market_profile_for_write(&mut service, password.as_deref())?;
 
         if published {
             stored.published = true;
@@ -828,7 +880,7 @@ pub async fn set_card_published_impl(
             }
         }
 
-        save_own_market_profile_state(&mut service, &stored, password.as_deref())?;
+        save_own_market_profile_state(state, &mut service, &stored, password.as_deref())?;
     }
 
     if !published && delete_remote {
@@ -883,7 +935,12 @@ pub fn upsert_ad_impl(
 
     let now = chrono::Utc::now().timestamp().max(0) as u64;
     let mut service = state.service.lock().unwrap();
-    let mut stored = load_own_market_profile_state(&mut service, password.as_deref());
+    crate::services::common::ensure_access_mode(
+        &mut service,
+        human_money_core::AccessMode::DailyPay,
+        password.as_deref(),
+    )?;
+    let mut stored = load_own_market_profile_for_write(&mut service, password.as_deref())?;
 
     let existing_idx = ad_input
         .id
@@ -891,8 +948,9 @@ pub fn upsert_ad_impl(
         .and_then(|id| stored.ads.iter().position(|a| &a.id == id));
 
     let new_image_token: Option<String> = match ad_input.image_webp_data_uri {
-        Some(ref uri) if uri.trim().is_empty() => None,
-        Some(ref uri) => {
+        Some(None) => None,
+        Some(Some(ref uri)) if uri.trim().is_empty() => None,
+        Some(Some(ref uri)) => {
             let uri_trimmed = uri.trim();
             if !humoco_market::is_supported_media_data_uri(uri_trimmed) {
                 return Err(FrontendError::from(format!(
@@ -983,7 +1041,7 @@ pub fn upsert_ad_impl(
         rebuild_and_sign_own_card(&mut service, &mut stored, now)?;
     }
 
-    save_own_market_profile_state(&mut service, &stored, password.as_deref())?;
+    save_own_market_profile_state(state, &mut service, &stored, password.as_deref())?;
 
     if let Some(ref old_t) = old_token_to_clean {
         cleanup_unused_own_media(&mut service, &stored.ads, old_t, password.as_deref());
@@ -1007,7 +1065,12 @@ pub fn renew_ad_impl(
 
     let now = chrono::Utc::now().timestamp().max(0) as u64;
     let mut service = state.service.lock().unwrap();
-    let mut stored = load_own_market_profile_state(&mut service, password.as_deref());
+    crate::services::common::ensure_access_mode(
+        &mut service,
+        human_money_core::AccessMode::DailyPay,
+        password.as_deref(),
+    )?;
+    let mut stored = load_own_market_profile_for_write(&mut service, password.as_deref())?;
 
     let ad_idx = stored
         .ads
@@ -1035,7 +1098,7 @@ pub fn renew_ad_impl(
         rebuild_and_sign_own_card(&mut service, &mut stored, now)?;
     }
 
-    save_own_market_profile_state(&mut service, &stored, password.as_deref())?;
+    save_own_market_profile_state(state, &mut service, &stored, password.as_deref())?;
 
     drop(service);
     get_my_market_profile_impl(password, state)
@@ -1048,7 +1111,12 @@ pub fn delete_ad_impl(
 ) -> Result<FrontendMyMarketProfile, FrontendError> {
     let now = chrono::Utc::now().timestamp().max(0) as u64;
     let mut service = state.service.lock().unwrap();
-    let mut stored = load_own_market_profile_state(&mut service, password.as_deref());
+    crate::services::common::ensure_access_mode(
+        &mut service,
+        human_money_core::AccessMode::DailyPay,
+        password.as_deref(),
+    )?;
+    let mut stored = load_own_market_profile_for_write(&mut service, password.as_deref())?;
 
     let old_token_opt = stored
         .ads
@@ -1065,7 +1133,7 @@ pub fn delete_ad_impl(
         rebuild_and_sign_own_card(&mut service, &mut stored, now)?;
     }
 
-    save_own_market_profile_state(&mut service, &stored, password.as_deref())?;
+    save_own_market_profile_state(state, &mut service, &stored, password.as_deref())?;
 
     drop(service);
     get_my_market_profile_impl(password, state)
@@ -1185,10 +1253,7 @@ pub fn get_market_view_impl(
     let mut service = state.service.lock().unwrap();
 
     // Auto-renew own card if published and (validity < 30 days OR active ads count changed)
-    let mut stored_opt: Option<StoredOwnMarketProfile> = service
-        .load_encrypted_data(MARKET_OWN_PROFILE_KEY, password.as_deref())
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+    let mut stored_opt = load_own_market_profile_state(state, &mut service, password.as_deref()).ok();
 
     if let Some(ref mut stored) = stored_opt {
         if stored.published {
@@ -1208,6 +1273,7 @@ pub fn get_market_view_impl(
                 {
                     if let Ok(()) = rebuild_and_sign_own_card(&mut service, stored, now) {
                         let _ = save_own_market_profile_state(
+                            state,
                             &mut service,
                             stored,
                             password.as_deref(),
@@ -1661,6 +1727,11 @@ pub fn delete_foreign_contact_card_impl(
     state: &AppState,
 ) -> Result<(), FrontendError> {
     let mut service = state.service.lock().unwrap();
+    crate::services::common::ensure_access_mode(
+        &mut service,
+        human_money_core::AccessMode::DailyPay,
+        password.as_deref(),
+    )?;
 
     let mut store: humoco_market::CardStore = service
         .load_encrypted_data(MARKET_CARD_STORE_KEY, password.as_deref())
@@ -2344,7 +2415,7 @@ mod tests {
             duration_days: 90,
             allow_inquiries: true,
             is_remote: false,
-            image_webp_data_uri: Some(ad_data_uri.clone()),
+            image_webp_data_uri: Some(Some(ad_data_uri.clone())),
         };
         let p_after_ad =
             upsert_ad_impl(ad_with_img, Some(password.to_string()), &alice_state).unwrap();
@@ -2388,18 +2459,19 @@ mod tests {
         assert_eq!(p_edit.ads[0].image_token, Some(token.clone()));
         assert_eq!(p_edit.media_used_count, 1);
 
-        // 5. Edit ad removing image (image_webp_data_uri: Some("")) -> image_token becomes None
-        let edit_remove_img = FrontendAdInput {
-            id: Some(ad_id.clone()),
-            kind: humoco_market::AdKind::Offer,
-            title: "Handmade Pottery (No Photo)".to_string(),
-            text: Some("High quality clay".to_string()),
-            pricing: Some("15 M".to_string()),
-            duration_days: 90,
-            allow_inquiries: true,
-            is_remote: false,
-            image_webp_data_uri: Some("".to_string()),
-        };
+        // 5. Edit ad removing image (JSON null -> Some(None)) -> image_token becomes None
+        let edit_remove_img: FrontendAdInput = serde_json::from_value(serde_json::json!({
+            "id": ad_id.clone(),
+            "kind": "offer",
+            "title": "Handmade Pottery (No Photo)",
+            "text": "High quality clay",
+            "pricing": "15 M",
+            "durationDays": 90,
+            "allowInquiries": true,
+            "isRemote": false,
+            "imageWebpDataUri": null
+        }))
+        .unwrap();
         let p_removed =
             upsert_ad_impl(edit_remove_img, Some(password.to_string()), &alice_state).unwrap();
         assert_eq!(p_removed.ads[0].image_token, None);
@@ -2417,7 +2489,7 @@ mod tests {
             duration_days: 30,
             allow_inquiries: true,
             is_remote: true,
-            image_webp_data_uri: Some(jpeg_ad_data_uri.clone()),
+            image_webp_data_uri: Some(Some(jpeg_ad_data_uri.clone())),
         };
         let p_after_jpeg_ad =
             upsert_ad_impl(ad_with_jpeg, Some(password.to_string()), &alice_state).unwrap();
@@ -2651,5 +2723,145 @@ mod tests {
             "expected JWS validation error status after successful URI/JSON parse, got: {}",
             res.status
         );
+    }
+
+    #[tokio::test]
+    async fn test_k1_k2_market_cache_error_propagation_and_access_mode_guards() {
+        let base_dir = temp_test_dir("market_k1_k2_guards");
+        let password = "MasterPassword123!";
+        let receive_pin = "112233";
+        let daily_pin = "445566";
+        let mut alice_service =
+            setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
+        alice_service
+            .enable_secondary_auth(password, receive_pin, human_money_core::SecondaryScope::ReceiveOnly)
+            .unwrap();
+        let folder = alice_service.list_profiles().unwrap()[0].folder_name.clone();
+        let alice_state = create_test_state(alice_service);
+
+        // Populate market profile with a skill and published card
+        save_my_market_profile_impl(
+            FrontendSaveMyMarketProfileRequest {
+                profile: FrontendUserProfile {
+                    first_name: Some("Alice".to_string()),
+                    ..Default::default()
+                },
+                visibility: CardFieldVisibility::default(),
+                skills: vec![humoco_market::Skill {
+                    title: "Baking".to_string(),
+                    text: None,
+                    pricing: None,
+                    is_remote: false,
+                }],
+                max_hops: 2,
+                validity_years: 2,
+                allow_inquiries: true,
+                published: Some(true),
+            },
+            Some(password.to_string()),
+            &alice_state,
+        )
+        .unwrap();
+        upsert_ad_impl(
+            FrontendAdInput {
+                id: None,
+                kind: humoco_market::AdKind::Offer,
+                title: "Sourdough".to_string(),
+                text: None,
+                pricing: None,
+                duration_days: 30,
+                allow_inquiries: true,
+                is_remote: false,
+                image_webp_data_uri: None,
+            },
+            Some(password.to_string()),
+            &alice_state,
+        )
+        .unwrap();
+
+        // K1: Without login pre-cache and with timeout=0 (password: None), read MUST return Err instead of empty default
+        alice_state.clear_all_caches();
+        assert!(
+            get_my_market_profile_impl(None, &alice_state).is_err(),
+            "K1: Unauthenticated read without cache must fail instead of returning empty default"
+        );
+
+        // K1: Re-login with timeout = 0 populates the own_market_profile cache so read succeeds
+        {
+            let mut s = alice_state.service.lock().unwrap();
+            alice_state
+                .initialize_profile_session(&mut s, password)
+                .unwrap();
+        }
+        let cached_profile = get_my_market_profile_impl(None, &alice_state).unwrap();
+        assert_eq!(cached_profile.skills.len(), 1);
+        assert!(cached_profile.published);
+
+        // K2: Log in with ReceiveOnly PIN + active session cache (timeout > 0); all mutations must fail closed
+        alice_state.clear_all_caches();
+        {
+            let mut s = alice_state.service.lock().unwrap();
+            s.logout();
+            let granted = s
+                .login_with_secondary(&folder, receive_pin, true, "device-market-test".into())
+                .unwrap();
+            assert_eq!(granted, human_money_core::AccessMode::ReceiveOnly);
+            s.unlock_secondary_session(receive_pin, 300).unwrap();
+        }
+
+        let err_pub = set_card_published_impl(false, false, None, &alice_state)
+            .await
+            .unwrap_err();
+        assert!(err_pub.message.to_lowercase().contains("access") || err_pub.message.to_lowercase().contains("insufficient") || err_pub.message.to_lowercase().contains("mode"));
+
+        let ad_id = cached_profile.ads[0].id.clone();
+        assert!(delete_ad_impl(ad_id.clone(), None, &alice_state).is_err());
+        assert!(renew_ad_impl(ad_id, 90, None, &alice_state).is_err());
+        assert!(upsert_ad_impl(
+            FrontendAdInput {
+                id: None,
+                kind: humoco_market::AdKind::Offer,
+                title: "Unauthorized".to_string(),
+                text: None,
+                pricing: None,
+                duration_days: 30,
+                allow_inquiries: true,
+                is_remote: false,
+                image_webp_data_uri: None,
+            },
+            None,
+            &alice_state,
+        )
+        .is_err());
+
+        // Switching to DailyPay PIN allows ad mutations while profile edits still require Full
+        {
+            let mut s = alice_state.service.lock().unwrap();
+            s.logout();
+            s.login(&folder, password, true, "device-market-test".into())
+                .unwrap();
+            s.enable_secondary_auth(password, daily_pin, human_money_core::SecondaryScope::DailyPay)
+                .unwrap();
+            s.logout();
+            s.login_with_secondary(&folder, daily_pin, true, "device-market-test".into())
+                .unwrap();
+            s.unlock_secondary_session(daily_pin, 300).unwrap();
+        }
+        assert!(upsert_ad_impl(
+            FrontendAdInput {
+                id: None,
+                kind: humoco_market::AdKind::Offer,
+                title: "Authorized DailyPay Ad".to_string(),
+                text: None,
+                pricing: None,
+                duration_days: 30,
+                allow_inquiries: true,
+                is_remote: false,
+                image_webp_data_uri: None,
+            },
+            None,
+            &alice_state,
+        )
+        .is_ok());
     }
 }

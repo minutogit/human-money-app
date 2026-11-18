@@ -167,7 +167,13 @@ export const NetworkProtectionCard: React.FC<NetworkProtectionCardProps> = ({
                                 checked={!!settings?.enablePosMode}
                                 onChange={(e) =>
                                     onSettingsUpdated((s) =>
-                                        s ? { ...s, enablePosMode: e.target.checked } : null
+                                        s
+                                            ? {
+                                                  ...s,
+                                                  enablePosMode: e.target.checked,
+                                                  ...(e.target.checked ? {} : { posCashierActive: false }),
+                                              }
+                                            : null
                                     )
                                 }
                                 className="mt-0.5 accent-theme-primary"

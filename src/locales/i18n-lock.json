@@ -757,6 +757,28 @@
     },
     "source_text": "Wallet Password"
   },
+  "backup.restoreSeedOnlyDesc": {
+    "ai_hint": "Description shown on PostRestoreSummary when social recovery finishes without a sync backup archive.",
+    "source_text": "Your identity was restored, but no backup archive was loaded. Previously sent or received vouchers are not included.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated",
+      "en": "ai-translated"
+    }
+  },
+  "backup.restoreSeedOnlyTitle": {
+    "ai_hint": "Heading shown on PostRestoreSummary when social recovery finishes without a sync backup archive.",
+    "source_text": "New empty profile set up",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated",
+      "en": "ai-translated"
+    }
+  },
   "common.abort": {
     "ai_hint": "Button label to abort/cancel a destructive action like profile deletion.",
     "status": {
@@ -6090,6 +6112,17 @@
       "es": "ai-translated",
       "fr": "ai-translated",
       "it": "ai-translated"
+    }
+  },
+  "history.redepositOwnCopyOnly": {
+    "ai_hint": "Feedback when backup sync deposited the sender copy only because the recipient has no active sync service.",
+    "source_text": "Saved as your own backup copy only — recipient has no active sync service.",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated",
+      "en": "ai-translated"
     }
   },
   "history.redepositSuccess": {
@@ -13231,20 +13264,8 @@
     },
     "ai_hint": "Title header for app settings panel."
   },
-  "settings.tabIdentityProfile": {
-    "source_text": "Identity Profile",
-    "status": {
-      "de": "ai-translated",
-      "fr": "ai-translated",
-      "es": "ai-translated",
-      "it": "ai-translated",
-      "en": "ai-translated"
-    },
-    "ai_hint": "Text or status label in settings."
-  },
-  "settings.tabMarketplace": {
-    "source_text": "Marketplace",
-    "ai_hint": "Tab title for marketplace settings in SettingsView",
+  "settings.tabAdvanced": {
+    "source_text": "Advanced",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -13253,16 +13274,35 @@
       "en": "ai-translated"
     }
   },
-  "settings.tabSecurityOps": {
-    "source_text": "Security & Ops",
+  "settings.tabConnection": {
+    "source_text": "Sync Service",
     "status": {
       "de": "ai-translated",
-      "fr": "ai-translated",
       "es": "ai-translated",
+      "fr": "ai-translated",
       "it": "ai-translated",
       "en": "ai-translated"
-    },
-    "ai_hint": "Text or status label in settings."
+    }
+  },
+  "settings.tabProfile": {
+    "source_text": "Profile",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated",
+      "en": "ai-translated"
+    }
+  },
+  "settings.tabSecurityBackup": {
+    "source_text": "Security & Backup",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated",
+      "en": "ai-translated"
+    }
   },
   "settings.testing": {
     "source_text": "Testing...",

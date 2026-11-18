@@ -483,6 +483,7 @@ mod tests {
             }])),
             contacts: Mutex::new(None),
             settings: Mutex::new(None),
+            own_market_profile: Mutex::new(None),
             wot: Mutex::new(None),
             recovery_owner: Mutex::new(None),
             guardian_vault: Mutex::new(None),

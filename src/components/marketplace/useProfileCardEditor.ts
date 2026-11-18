@@ -1,5 +1,5 @@
 // src/components/marketplace/useProfileCardEditor.ts
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
     CardFieldVisibility,
@@ -131,10 +131,21 @@ export function useProfileCardEditor({
     const [coordPrecision, setCoordPrecision] = useState<CoordinatePrecision>(2);
     const [isLocating, setIsLocating] = useState(false);
     const [geoError, setGeoError] = useState<string | null>(null);
+    const wasOpenRef = useRef(false);
+    const loadedDidRef = useRef<string | null>(null);
 
-    // Synchronize initial state and enforce P8 guardrails (street never public, public coords max ~1 km).
+    // Synchronize initial state only on open transition or DID switch so background syncs do not wipe edits.
     useEffect(() => {
-        if (!isOpen) return;
+        if (!isOpen) {
+            wasOpenRef.current = false;
+            return;
+        }
+        const currentDid = myProfile.profile.id ?? null;
+        if (wasOpenRef.current && loadedDidRef.current === currentDid) {
+            return;
+        }
+        wasOpenRef.current = true;
+        loadedDidRef.current = currentDid;
         const clampedVis = clampStreetVisibility(myProfile.visibility);
         const initialProfile = roundProfileCoordinatesIfPublic(
             { ...myProfile.profile },

@@ -146,6 +146,9 @@ export interface ApprovedSwapClaimDto {
     voucherId: string;
     tipTId: string;
     approvedAmount: string;
+    replacementVoucherId?: string | null;
+    replacementBundleId?: string | null;
+    replacementBundleBytes?: number[] | null;
 }
 
 export interface RejectedSwapClaimDto {

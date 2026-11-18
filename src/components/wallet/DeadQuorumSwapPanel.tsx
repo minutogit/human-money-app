@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ArrowLeftRight } from 'lucide-react';
 import { voucherService } from '../../services/voucherService';
+import { postService } from '../../services/postService';
 import { translateError } from '../../utils/errorHelper';
 import type { ProtectActionFn } from '../../utils/fileIo';
 import { Button } from '../ui/Button';
@@ -95,12 +96,27 @@ export function DeadQuorumSwapPanel({
             }
             const standardToml = await findMatchingStandardToml();
             const adj = await protectAction(async (pwd) => {
-                return await voucherService.adjudicateDeadQuorumSwap({
+                const res = await voucherService.adjudicateDeadQuorumSwap({
                     offerJson: swapOfferJson.trim(),
                     submissionsJson: submissions,
                     standardToml,
                     password: pwd || null,
                 });
+                if (res?.approved?.length) {
+                    for (const claim of res.approved) {
+                        if (claim.replacementBundleId) {
+                            try {
+                                await postService.depositTransferToPost(
+                                    claim.replacementBundleId,
+                                    pwd || undefined,
+                                );
+                            } catch {
+                                // Replacement bundle remains in transaction history for offline/manual sharing.
+                            }
+                        }
+                    }
+                }
+                return res;
             });
             if (adj) {
                 setSwapAdjudication(adj);
@@ -224,6 +240,11 @@ export function DeadQuorumSwapPanel({
                                         {swapAdjudication.approved.map((claim, idx) => (
                                             <li key={`${claim.voucherId}-${claim.tipTId}-${idx}`} className="break-all">
                                                 {claim.claimantDid} ({claim.approvedAmount})
+                                                {claim.replacementVoucherId && (
+                                                    <span className="ml-1 text-emerald-700 dark:text-emerald-300">
+                                                        → {claim.replacementVoucherId.slice(0, 12)}…
+                                                    </span>
+                                                )}
                                             </li>
                                         ))}
                                     </ul>

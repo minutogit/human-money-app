@@ -1,8 +1,9 @@
 // src/components/wallet/GuarantorClaimPanel.tsx
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { X, AlertTriangle, Save } from 'lucide-react';
+import { X, AlertTriangle, Save, RefreshCw } from 'lucide-react';
 import { voucherService } from '../../services/voucherService';
+import { backupService } from '../../services/backupService';
 import { postService } from '../../services/postService';
 import { saveBytesToFile, type ProtectActionFn } from '../../utils/fileIo';
 import { translateError } from '../../utils/errorHelper';
@@ -46,6 +47,10 @@ export function GuarantorClaimPanel({
     const [showConfirm, setShowConfirm] = useState(false);
     const [pendingBundle, setPendingBundle] = useState<ClaimBundleDto | null>(null);
     const [saveRequiredWarning, setSaveRequiredWarning] = useState(false);
+    const [isReconcilingL2, setIsReconcilingL2] = useState(false);
+    const [reconciledLocally, setReconciledLocally] = useState(false);
+
+    const needsL2Reconcile = Boolean(settings?.pendingRestoreL2Reconciliation) && !reconciledLocally;
 
     useEffect(() => {
         if (!selectedGuarantorId && guarantorSignatures.length > 0) {
@@ -81,9 +86,27 @@ export function GuarantorClaimPanel({
         }
     };
 
+    const handleReconcileL2 = async () => {
+        setIsReconcilingL2(true);
+        onFeedback(null);
+        try {
+            await protectAction(async (pwd) => {
+                const res = await backupService.reconcileRestoredWalletL2(pwd || undefined);
+                if (res.l2ReconciliationStatus === 'reconciled' || !res.pendingRestoreL2Reconciliation) {
+                    setReconciledLocally(true);
+                    await onRefreshDetails();
+                }
+            });
+        } catch (err) {
+            onFeedback({ type: 'error', msg: translateError(err, t) });
+        } finally {
+            setIsReconcilingL2(false);
+        }
+    };
+
     const handleCreateGuarantorClaim = async () => {
         const targetGuarantor = selectedGuarantorId || guarantorSignatures[0]?.signerId;
-        if (!targetGuarantor) return;
+        if (!targetGuarantor || needsL2Reconcile) return;
 
         setShowConfirm(false);
         setIsClaimingGuarantor(true);
@@ -207,6 +230,31 @@ export function GuarantorClaimPanel({
                         />
                     </div>
                 </div>
+                {needsL2Reconcile && (
+                    <div className="p-3 rounded-xl bg-amber-100/80 border border-amber-300 text-amber-950 text-xs space-y-2">
+                        <div className="flex items-center gap-2 font-bold text-amber-900">
+                            <AlertTriangle size={15} className="shrink-0" />
+                            <span>{t('transfer.pendingL2ReconciliationTitle')}</span>
+                        </div>
+                        <p className="leading-relaxed">{t('transfer.pendingL2ReconciliationDesc')}</p>
+                        <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            disabled={isReconcilingL2}
+                            onClick={handleReconcileL2}
+                            className="w-full"
+                        >
+                            <RefreshCw
+                                size={14}
+                                className={isReconcilingL2 ? 'animate-spin mr-2' : 'mr-2'}
+                            />
+                            {isReconcilingL2
+                                ? t('profile.backupRestoreReconcilingL2')
+                                : t('profile.backupRestoreReconcileL2Btn')}
+                        </Button>
+                    </div>
+                )}
                 {saveRequiredWarning && pendingBundle && (
                     <div className="p-3 rounded-xl border border-rose-300 bg-rose-50 text-xs text-rose-900 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                         <div className="flex items-start gap-2">
@@ -234,7 +282,7 @@ export function GuarantorClaimPanel({
                             type="button"
                             size="sm"
                             onClick={() => setShowConfirm(true)}
-                            disabled={isClaimingGuarantor}
+                            disabled={isClaimingGuarantor || needsL2Reconcile}
                         >
                             {isClaimingGuarantor ? t('common.saving') : t('voucher.claimExportBtn')}
                         </Button>

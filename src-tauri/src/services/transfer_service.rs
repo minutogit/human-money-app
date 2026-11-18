@@ -42,11 +42,13 @@ pub async fn create_transfer_bundle_impl(
     let recipient_id = recipient_id.trim().to_string();
     log::debug!("Creating transfer bundle (sources={})", sources.len());
 
-    let settings = state.get_cached_settings().map_err(FrontendError::from)?;
-    if settings.pending_restore_l2_reconciliation {
-        return Err(FrontendError::from(
-            "Nach einer Wiederherstellung aus der Sicherung ist vor dem Ausgeben von Gutscheinen ein einmaliger Online-Sicherheitsabgleich erforderlich.".to_string(),
-        ));
+    {
+        let mut service = state.lock_service()?;
+        crate::services::common::ensure_restore_l2_reconciled(
+            state,
+            &mut service,
+            password.as_deref(),
+        )?;
     }
 
     let source_transfers: Vec<SourceTransfer> = sources
@@ -75,10 +77,13 @@ pub async fn create_transfer_bundle_impl(
             send_card_override.unwrap_or(loaded_settings.market_send_card_on_payment);
         if should_send_card {
             let now_secs = chrono::Utc::now().timestamp().max(0) as u64;
-            let own_profile_opt: Option<crate::models::StoredOwnMarketProfile> = service
-                .load_encrypted_data(crate::state::MARKET_OWN_PROFILE_KEY, password.as_deref())
-                .ok()
-                .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+            let own_profile_opt: Option<crate::models::StoredOwnMarketProfile> =
+                crate::services::market_service::load_own_market_profile_state(
+                    state,
+                    &mut service,
+                    password.as_deref(),
+                )
+                .ok();
 
             if let Some(own_profile) = own_profile_opt {
                 if own_profile.published {

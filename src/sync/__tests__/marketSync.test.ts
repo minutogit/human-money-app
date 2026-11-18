@@ -85,7 +85,10 @@ describe('marketSync & first-contact onboarding debounce', () => {
         startMarketSyncLoop(DEFAULT_MARKET_SYNC_INTERVAL_MS);
 
         await Promise.resolve();
-        expect(invoke).toHaveBeenCalledWith('sync_market_channels', { respectCooldown: true });
+        expect(invoke).toHaveBeenCalledWith('sync_market_channels', {
+            respectCooldown: true,
+            isWifi: true,
+        });
         expect(invoke).toHaveBeenCalledTimes(1);
 
         // Before 20 minutes -> no second run
@@ -126,7 +129,10 @@ describe('marketSync & first-contact onboarding debounce', () => {
 
         expect(memberCalls).toHaveLength(1);
         expect(marketCallsAfter).toHaveLength(1);
-        expect(marketCallsAfter[0]).toEqual(['sync_market_channels', { forceUpload: true }]);
+        expect(marketCallsAfter[0]).toEqual([
+            'sync_market_channels',
+            { forceUpload: true, isWifi: true },
+        ]);
     });
 
     it('does not schedule market onboarding publish for trustLevel 0 (Level 0 exclusion)', async () => {
@@ -152,7 +158,10 @@ describe('marketSync & first-contact onboarding debounce', () => {
         expect(invoke).not.toHaveBeenCalled();
 
         await runMarketSyncPass({ forceUpload: true });
-        expect(invoke).toHaveBeenCalledWith('sync_market_channels', { forceUpload: true });
+        expect(invoke).toHaveBeenCalledWith('sync_market_channels', {
+            forceUpload: true,
+            isWifi: true,
+        });
     });
 
     it('emits CONTACTS_UPDATED and MARKET_CARD_UPDATED when market sync imports cards', async () => {

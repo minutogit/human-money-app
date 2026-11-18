@@ -22,6 +22,7 @@ import {
     FrontendAppNoticesResponse,
 } from "../types";
 import { APP_EVENTS, emitAppEvent } from "../utils/appEvents";
+import { detectIsWifiConnection } from "../utils/networkStatus";
 import { notifyAppNoticesUpdated, notifyMyProfileUpdated } from "../utils/syncEvents";
 
 export const marketService = {
@@ -267,8 +268,9 @@ export const marketService = {
         args?: { isWifi?: boolean; forceUpload?: boolean; background?: boolean },
         password?: string
     ): Promise<FrontendMarketSyncResult> => {
-        const payload: Record<string, unknown> = {};
-        if (args?.isWifi !== undefined) payload.isWifi = args.isWifi;
+        const payload: Record<string, unknown> = {
+            isWifi: args?.isWifi !== undefined ? args.isWifi : detectIsWifiConnection(),
+        };
         if (args?.forceUpload !== undefined) payload.forceUpload = args.forceUpload;
         if (args?.background) payload.respectCooldown = true;
         if (password) payload.password = password;

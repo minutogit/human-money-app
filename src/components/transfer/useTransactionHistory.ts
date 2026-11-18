@@ -202,15 +202,32 @@ export function useTransactionHistory() {
             const res = await protectAction(async (pwd) => {
                 return await postService.depositTransferToPost(bundleId, pwd || undefined);
             });
-            if (res && res.depositedTo > 0) {
-                setRedepositFeedback((prev) => ({
-                    ...prev,
-                    [bundleId]: t('history.redepositSuccess', 'In {{count}} Ablage(n) hinterlegt', {
-                        count: res.depositedTo,
-                    }),
-                }));
-            } else if (res && res.errors.length > 0) {
-                setRedepositFeedback((prev) => ({ ...prev, [bundleId]: res.errors.join('; ') }));
+            if (res) {
+                const recipientCount = res.recipientDepositedTo ?? 0;
+                const parts: string[] = [];
+                if (recipientCount > 0) {
+                    parts.push(
+                        t('history.redepositSuccess', 'In {{count}} Ablage(n) hinterlegt', {
+                            count: recipientCount,
+                        }),
+                    );
+                } else if (res.depositedTo > 0) {
+                    parts.push(
+                        t(
+                            'history.redepositOwnCopyOnly',
+                            'Nur als eigene Kopie gesichert – Empfänger hat keinen aktiven Sync-Dienst.',
+                        ),
+                    );
+                }
+                if (res.errors.length > 0) {
+                    parts.push(res.errors.join('; '));
+                }
+                if (parts.length > 0) {
+                    setRedepositFeedback((prev) => ({
+                        ...prev,
+                        [bundleId]: parts.join(' — '),
+                    }));
+                }
             }
         } catch (err) {
             setRedepositFeedback((prev) => ({ ...prev, [bundleId]: stringifyError(err) }));

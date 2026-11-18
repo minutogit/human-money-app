@@ -72,7 +72,7 @@ export function MarketplaceView({
 }: MarketplaceViewProps) {
     const { t } = useTranslation();
     const { navigate, goBack, appState, navigateToSettingsSection } = useNavigation();
-    const { protectAction } = useSession();
+    const { protectAction, accessMode } = useSession();
     const handleBack = onBack || goBack;
 
     const [activeTab, setActiveTab] = useState<MarketplaceTab>(initialTab || 'board');
@@ -237,9 +237,12 @@ export function MarketplaceView({
 
     const handleConfirmPublishAndCreateAd = async () => {
         try {
-            const updated = await protectAction(async (pwd) => {
-                return await marketService.setCardPublished(true, false, pwd || undefined);
-            });
+            const updated = await protectAction(
+                async (pwd) => {
+                    return await marketService.setCardPublished(true, false, pwd || undefined);
+                },
+                { requireFullAccess: accessMode === 'receiveOnly' },
+            );
             if (updated) {
                 setMyProfile(updated);
                 setIsPublishPromptOpen(false);
@@ -254,9 +257,12 @@ export function MarketplaceView({
 
     const handleTogglePublished = async (published: boolean) => {
         try {
-            const updated = await protectAction(async (pwd) => {
-                return await marketService.setCardPublished(published, false, pwd || undefined);
-            });
+            const updated = await protectAction(
+                async (pwd) => {
+                    return await marketService.setCardPublished(published, false, pwd || undefined);
+                },
+                { requireFullAccess: accessMode === 'receiveOnly' },
+            );
             if (updated) {
                 setMyProfile(updated);
             }
@@ -268,9 +274,12 @@ export function MarketplaceView({
 
     const handleSaveAd = async (input: FrontendAdInput) => {
         try {
-            await protectAction(async (pwd) => {
-                await marketService.upsertAd(input, pwd || undefined);
-            });
+            await protectAction(
+                async (pwd) => {
+                    await marketService.upsertAd(input, pwd || undefined);
+                },
+                { requireFullAccess: accessMode === 'receiveOnly' },
+            );
             setIsCreateAdOpen(false);
             setEditingAd(null);
             await refreshData(false);
@@ -283,9 +292,12 @@ export function MarketplaceView({
 
     const handleRenewAd = async (id: string, durationDays: number) => {
         try {
-            await protectAction(async (pwd) => {
-                await marketService.renewAd(id, durationDays, pwd || undefined);
-            });
+            await protectAction(
+                async (pwd) => {
+                    await marketService.renewAd(id, durationDays, pwd || undefined);
+                },
+                { requireFullAccess: accessMode === 'receiveOnly' },
+            );
             setRenewingAd(null);
             await refreshData(false);
         } catch (err) {
@@ -297,9 +309,12 @@ export function MarketplaceView({
 
     const handleDeleteAd = async (id: string) => {
         try {
-            await protectAction(async (pwd) => {
-                await marketService.deleteAd(id, pwd || undefined);
-            });
+            await protectAction(
+                async (pwd) => {
+                    await marketService.deleteAd(id, pwd || undefined);
+                },
+                { requireFullAccess: accessMode === 'receiveOnly' },
+            );
             await refreshData(false);
         } catch (err) {
             logger.error('Failed to delete ad: ' + stringifyError(err));
@@ -308,10 +323,14 @@ export function MarketplaceView({
     };
 
     const handleSaveProfile = async (req: FrontendSaveMyMarketProfileRequest) => {
+        if (!myProfile) return;
         try {
-            const updated = await protectAction(async (pwd) => {
-                return await marketService.saveMyMarketProfile(req, pwd || undefined);
-            });
+            const updated = await protectAction(
+                async (pwd) => {
+                    return await marketService.saveMyMarketProfile(req, pwd || undefined);
+                },
+                { requireFullAccess: true },
+            );
             if (updated) {
                 setMyProfile(updated);
             }
@@ -325,19 +344,23 @@ export function MarketplaceView({
     };
 
     const handleUpdateMyProfileOptions = async (patch: { maxHops?: number; validityYears?: number; allowInquiries?: boolean }) => {
+        if (!myProfile) return;
         try {
             const req: FrontendSaveMyMarketProfileRequest = {
-                profile: currentProfile.profile,
-                visibility: currentProfile.visibility,
-                skills: currentProfile.skills,
-                maxHops: patch.maxHops ?? currentProfile.maxHops,
-                validityYears: patch.validityYears ?? currentProfile.validityYears ?? 2,
-                allowInquiries: patch.allowInquiries ?? currentProfile.allowInquiries,
-                published: currentProfile.published,
+                profile: myProfile.profile,
+                visibility: myProfile.visibility,
+                skills: myProfile.skills,
+                maxHops: patch.maxHops ?? myProfile.maxHops,
+                validityYears: patch.validityYears ?? myProfile.validityYears ?? 2,
+                allowInquiries: patch.allowInquiries ?? myProfile.allowInquiries,
+                published: myProfile.published,
             };
-            const updated = await protectAction(async (pwd) => {
-                return await marketService.saveMyMarketProfile(req, pwd || undefined);
-            });
+            const updated = await protectAction(
+                async (pwd) => {
+                    return await marketService.saveMyMarketProfile(req, pwd || undefined);
+                },
+                { requireFullAccess: true },
+            );
             if (updated) {
                 setMyProfile(updated);
             }
@@ -594,7 +617,10 @@ export function MarketplaceView({
                         <Button
                             size="sm"
                             variant="outline"
-                            onClick={() => setIsProfileEditorOpen(true)}
+                            onClick={() => {
+                                if (myProfile) setIsProfileEditorOpen(true);
+                            }}
+                            disabled={!myProfile}
                             className="flex items-center gap-1.5"
                         >
                             <Edit3 size={15} />
@@ -765,7 +791,9 @@ export function MarketplaceView({
                             myProfile={currentProfile}
                             inbox={inboxSummary || defaultEmptyInbox}
                             contacts={contacts}
-                            onOpenProfileEditor={() => setIsProfileEditorOpen(true)}
+                            onOpenProfileEditor={() => {
+                                if (myProfile) setIsProfileEditorOpen(true);
+                            }}
                             onOpenShareCard={() => setIsShareModalOpen(true)}
                             onTogglePublished={handleTogglePublished}
                             onCreateAd={handleCreateAdClick}
@@ -820,12 +848,14 @@ export function MarketplaceView({
             />
 
             {/* Profile & Business Card Editor */}
-            <ProfileCardEditor
-                isOpen={isProfileEditorOpen}
-                onClose={() => setIsProfileEditorOpen(false)}
-                myProfile={currentProfile}
-                onSave={handleSaveProfile}
-            />
+            {myProfile && (
+                <ProfileCardEditor
+                    isOpen={isProfileEditorOpen}
+                    onClose={() => setIsProfileEditorOpen(false)}
+                    myProfile={myProfile}
+                    onSave={handleSaveProfile}
+                />
+            )}
 
             {/* Share Card Modal */}
             <ShareCardModal

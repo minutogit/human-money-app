@@ -1820,10 +1820,11 @@ pub async fn complete_social_recovery_impl(
         .iter()
         .filter_map(|d| serde_json::to_string(d).ok())
         .collect();
+    let has_sync_inputs = !sync_inputs.is_empty();
     let fe_lang = core_to_frontend_language(lang);
     let allow_empty = allow_empty_fallback.unwrap_or(false);
 
-    let (resolved_targets, local_collision) = if !sync_inputs.is_empty() {
+    let (resolved_targets, local_collision) = if has_sync_inputs {
         let probe = probe_sync_backup_impl(
             sync_inputs,
             phrase.clone(),
@@ -1998,6 +1999,24 @@ pub async fn complete_social_recovery_impl(
                     .to_string(),
             ));
         }
+    }
+
+    if !has_sync_inputs && !allow_empty {
+        return Ok(RecoveryCompletionResultDto {
+            folder_name: String::new(),
+            profile_name: profile_name.unwrap_or_default(),
+            mode,
+            outcome: "sync_empty_requires_confirm".to_string(),
+            backup_epoch: None,
+            backup_tx_nonce: None,
+            active_voucher_queries_count: 0,
+            reconciled_spent_count: 0,
+            restored_standards_count: 0,
+            l2_reconciliation_status: "no_servers".to_string(),
+            pending_restore_l2_reconciliation: false,
+            local_collision: None,
+            resolved_sync_targets: resolved_targets,
+        });
     }
 
     // Confirmed seed-only profile setup (either no sync descriptors existed or user explicitly confirmed empty start)
@@ -2532,7 +2551,38 @@ mod tests {
             "Active recovery session MUST NOT be deleted when answers are incorrect!"
         );
 
-        // 10. RIGHT answers: succeeds, restores wallet, and cleans up session file!
+        // 10. RIGHT answers: first without allow_empty_fallback requests seed-only confirmation
+        let confirm_res = complete_social_recovery_impl(
+            alice_did.clone(),
+            1,
+            [
+                "Berlin".to_string(),
+                "Fluffy".to_string(),
+                "Pizza".to_string(),
+            ],
+            None,
+            "restore_new_device".to_string(),
+            "NewPassword456!".to_string(),
+            Some("Alice Restored".to_string()),
+            None,
+            "device-restored-1".to_string(),
+            Some(false),
+            None,
+            &session_file,
+            &restored_state,
+            &restored_base,
+            &restored_wallet_dir,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(confirm_res.outcome, "sync_empty_requires_confirm");
+        assert!(
+            session_file.exists(),
+            "Session file must remain while awaiting seed-only confirmation"
+        );
+
+        // Now confirm seed-only setup explicitly with allow_empty_fallback: Some(true)
         let right_res = complete_social_recovery_impl(
             alice_did.clone(),
             1,
@@ -2547,7 +2597,7 @@ mod tests {
             Some("Alice Restored".to_string()),
             None,
             "device-restored-1".to_string(),
-            None,
+            Some(true),
             None,
             &session_file,
             &restored_state,

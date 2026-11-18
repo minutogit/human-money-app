@@ -2883,7 +2883,7 @@ pub(crate) mod tests {
                 duration_days: 90,
                 allow_inquiries: true,
                 is_remote: false,
-                image_webp_data_uri: Some(webp_uri),
+                image_webp_data_uri: Some(Some(webp_uri)),
             },
             Some(password.to_string()),
             &alice_state,

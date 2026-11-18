@@ -2549,11 +2549,6 @@ pub(crate) async fn reconcile_restored_wallet_l2_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendRestoreReconcileResultDto, FrontendError> {
-    if let Some(ref pwd) = password {
-        let mut service = state.lock_service()?;
-        let _ = service.unlock_session(pwd, 300);
-    }
-
     let summary = crate::services::l2_anchor_service::reconcile_vouchers_via_static_locks(
         state,
         None,

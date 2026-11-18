@@ -17,6 +17,7 @@ import { Button } from '../../ui/Button';
 import { Card } from '../../ui/Card';
 import { truncateUserId } from '../../../utils/userIdHelper';
 import { recoveryService } from '../../../services/recoveryService';
+import { useOptionalSession } from '../../../context/SessionContext';
 import type { useNavigation } from '../../../context/NavigationContext';
 import type {
     AggregatedBalance,
@@ -78,6 +79,7 @@ export function DashboardBanners({
     onOpenRehearsalModal,
 }: DashboardBannersProps) {
     const { t } = useTranslation();
+    const session = useOptionalSession();
 
     const getIntegrityDetails = (report: IntegrityReport) => {
         switch (report.type) {
@@ -450,10 +452,29 @@ export function DashboardBanners({
                                 variant="secondary"
                                 size="xs"
                                 onClick={() => {
-                                    onSnoozeRehearsal();
-                                    void recoveryService
-                                        .snoozeRecoveryRehearsal?.(24)
-                                        .catch(() => undefined);
+                                    const runSnooze = async () => {
+                                        if (typeof recoveryService?.snoozeRecoveryRehearsal !== 'function') {
+                                            onSnoozeRehearsal();
+                                            return;
+                                        }
+                                        if (session?.protectAction) {
+                                            let didPersist = false;
+                                            await session.protectAction(async (pwd) => {
+                                                await recoveryService.snoozeRecoveryRehearsal(
+                                                    24,
+                                                    pwd || undefined,
+                                                );
+                                                didPersist = true;
+                                            });
+                                            if (didPersist) {
+                                                onSnoozeRehearsal();
+                                            }
+                                        } else {
+                                            await recoveryService.snoozeRecoveryRehearsal(24);
+                                            onSnoozeRehearsal();
+                                        }
+                                    };
+                                    void runSnooze().catch(() => undefined);
                                 }}
                                 data-testid="rehearsal-snooze-btn"
                             >

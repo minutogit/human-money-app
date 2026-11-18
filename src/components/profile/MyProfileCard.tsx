@@ -35,6 +35,7 @@ export const MyProfileCard: React.FC<MyProfileCardProps> = ({
         session = null;
     }
     const [internalProfile, setInternalProfile] = useState<FrontendMyMarketProfile | null>(null);
+    const [loadFailed, setLoadFailed] = useState(false);
     const [isTogglingPublish, setIsTogglingPublish] = useState(false);
 
     const loadOwnProfile = useCallback(async () => {
@@ -43,8 +44,9 @@ export const MyProfileCard: React.FC<MyProfileCardProps> = ({
         try {
             const p = await marketService.getMyMarketProfile();
             setInternalProfile(p);
+            setLoadFailed(false);
         } catch {
-            // Silently ignore if wallet is locked or mock doesn't return
+            setLoadFailed(true);
         }
     }, [externalProfile]);
 
@@ -85,9 +87,12 @@ export const MyProfileCard: React.FC<MyProfileCardProps> = ({
             if (onTogglePublished) {
                 await onTogglePublished(nextPublished);
             } else if (session?.protectAction) {
-                const updated = await session.protectAction(async (pwd) => {
-                    return await marketService.setCardPublished(nextPublished, false, pwd || undefined);
-                });
+                const updated = await session.protectAction(
+                    async (pwd) => {
+                        return await marketService.setCardPublished(nextPublished, false, pwd || undefined);
+                    },
+                    { requireFullAccess: session.accessMode === "receiveOnly" },
+                );
                 if (updated) {
                     setInternalProfile(updated);
                 }
@@ -120,6 +125,7 @@ export const MyProfileCard: React.FC<MyProfileCardProps> = ({
                     size="sm"
                     variant="primary"
                     onClick={handleEditClick}
+                    disabled={loadFailed || (externalProfile === undefined && typeof marketService?.getMyMarketProfile === "function")}
                     aria-label={t("marketplace.editProfileCardBtn", "Visitenkarte bearbeiten")}
                     className="flex items-center gap-1.5 shrink-0"
                 >

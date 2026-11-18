@@ -20,13 +20,35 @@ describe('UX Glossary Linting (docs/UX_GLOSSARY.md)', () => {
     const de = deJson as Record<string, string>;
     const en = enJson as Record<string, string>;
 
-    const stripPlaceholders = (text: string): string => text.replace(/\{\{[^}]+\}\}/g, '');
+    const stripPlaceholders = (text: string): string =>
+        text.replace(/\{\{[^}]+\}\}/g, '').replace(/humoco-sync-server/g, '');
 
     const isAllowlisted = (key: string): boolean => {
         // Only help.*.long, help.*.deepDive, settings.advanced*, and *.expert.* keys may use technical terms
         if (/^help\.[^.]+\.(long|deepDive)$/.test(key)) return true;
         if (/^settings\.advanced/.test(key)) return true;
         if (/\.expert(\.|$)/.test(key)) return true;
+        return false;
+    };
+
+    const isTechnicalLockServerKey = (key: string): boolean => {
+        if (key === 'error.network.l2Offline' || key === 'profile.backupRestoreOfflineNotice') return true;
+        if (key.startsWith('help.')) return true;
+        if (
+            key.startsWith('transfer.checkout.') ||
+            key.startsWith('transfer.l2.') ||
+            key === 'transfer.l2PreparedOfflineDesc'
+        ) {
+            return true;
+        }
+        if (key.startsWith('voucher.')) return true;
+        if (
+            /^settings\.(addServerButton|anchorTemplates|benchmarkButton|cachedLockProbes|clearOwnServerBtn|customServersTitle|l2Mode|lifecycle|lockProbe|lockServerUrlLabel|noCustomServers|ownLock|ownNominated|probeLockServerBtn|probeServersFirstHint|probingLockServer|saveOwnServerBtn|selectCommitteeServers|serverNamePlaceholder|serverUrlPlaceholder|useAsOwnServer)/.test(
+                key,
+            )
+        ) {
+            return true;
+        }
         return false;
     };
 
@@ -44,9 +66,10 @@ describe('UX Glossary Linting (docs/UX_GLOSSARY.md)', () => {
         { name: 'Betrugsmeldung', pattern: /Betrugsmeldung/i },
         { name: 'Feed', pattern: /\bFeed\b/i },
         { name: 'Listing', pattern: /\bListing\b/i },
+        { name: 'Server', pattern: /\bServer\w*/i },
     ];
 
-    const WOT_KEY_PREFIXES = ['addressBook.', 'wot.', 'help.wot', 'help.trustLevels'];
+    const WOT_KEY_PREFIXES = ['addressBook.', 'contacts.', 'wot.', 'help.wot', 'help.trustLevels'];
     const WOT_FORBIDDEN_DE_PATTERN = /\b(bürg\w*|buerg\w*|haft\w*)\b/i;
 
     it('ensures de.json contains no forbidden terms in standard keys', () => {
@@ -58,6 +81,7 @@ describe('UX Glossary Linting (docs/UX_GLOSSARY.md)', () => {
 
             const cleanText = stripPlaceholders(value);
             for (const { name, pattern } of FORBIDDEN_DE_PATTERNS) {
+                if (name === 'Server' && isTechnicalLockServerKey(key)) continue;
                 if (pattern.test(cleanText)) {
                     violations.push({ key, term: name, text: value });
                 }
@@ -156,6 +180,7 @@ describe('UX Glossary Linting (docs/UX_GLOSSARY.md)', () => {
             'Neue Betrugsmeldung eingegangen',
             'Pinnwand Feed aktualisieren',
             'Neues Listing anlegen',
+            'Sync-Server verbinden',
         ];
 
         for (const sample of sampleViolations) {

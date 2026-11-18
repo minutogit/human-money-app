@@ -106,7 +106,15 @@ export function TransferSuccessView({
                 setRecipientDeliveredTo(nextRecipientDelivered);
                 if (nextRecipientDelivered > 0) {
                     setFeedback(t('transfer.depositedInPostSuccess'));
-                } else if (res.errors && res.errors.length > 0) {
+                } else if (res.depositedTo > 0) {
+                    setFeedback(
+                        t(
+                            'history.redepositOwnCopyOnly',
+                            'Nur als eigene Kopie gesichert – Empfänger hat keinen aktiven Sync-Dienst.',
+                        ),
+                    );
+                }
+                if (res.errors && res.errors.length > 0) {
                     setRedepositError(res.errors.join('; '));
                 }
             }
@@ -263,6 +271,11 @@ export function TransferSuccessView({
                                 <p className="text-xs text-emerald-700 font-medium leading-relaxed">
                                     {t('transfer.depositedInPostDesc', { count: depositedTo })}
                                 </p>
+                                {redepositError && (
+                                    <p className="text-xs text-amber-800 font-medium leading-relaxed">
+                                        {redepositError}
+                                    </p>
+                                )}
                             </div>
                         ) : bundleId ? (
                             <div data-testid="post-deposit-retry-card" className="p-5 bg-amber-50/80 border border-amber-200 rounded-3xl space-y-3">

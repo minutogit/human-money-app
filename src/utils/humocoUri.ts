@@ -146,6 +146,24 @@ export function buildContactUri({ did, name, syncUrls }: ContactCardParams): str
   return `humoco://contact?${params.toString().replace(/\+/g, '%20').replace(/\(/g, '%28').replace(/\)/g, '%29')}`;
 }
 
+function stripSurroundingWrappers(value: string): string {
+  return value
+    .trim()
+    .replace(/^["'`<(\[]+/, '')
+    .replace(/["'`>)\],.;:!?]+$/, '')
+    .trim();
+}
+
+function isValidUserIdFormat(id: string): boolean {
+  if (/^did:key:z[a-zA-Z0-9]+$/.test(id)) return true;
+  const atIdx = id.indexOf('@');
+  if (atIdx <= 0) return false;
+  const hrp = id.slice(0, atIdx);
+  const didPart = id.slice(atIdx + 1);
+  if (!/^did:key:z[a-zA-Z0-9]+$/.test(didPart)) return false;
+  return /^[a-z0-9](?:[a-z0-9]|-(?=[a-z0-9])){0,62}:[1-9A-HJ-NP-Za-km-z]{2,8}$/.test(hrp);
+}
+
 /**
  * Parses a contact card from raw text or humoco://contact URI.
  * 
@@ -161,7 +179,8 @@ export function parseContactCard(input: string): ParsedContactCard | null {
   if (match && match[1]) {
     try {
       const searchParams = new URLSearchParams(stripTrailingPunctuation(match[1]));
-      const did = searchParams.get('did')?.trim();
+      const rawDid = searchParams.get('did');
+      const did = rawDid ? stripSurroundingWrappers(rawDid) : '';
       const name = searchParams.get('name')?.trim() || undefined;
       const rawSync = searchParams.getAll('sync');
       const syncUrls = rawSync
@@ -171,7 +190,7 @@ export function parseContactCard(input: string): ParsedContactCard | null {
         .filter(Boolean)
         .slice(0, 2);
 
-      if (did && (did.startsWith('did:') || did.includes('@did:'))) {
+      if (did && isValidUserIdFormat(did)) {
         return {
           did,
           name,
@@ -183,18 +202,20 @@ export function parseContactCard(input: string): ParsedContactCard | null {
     }
   }
 
-  const trimmed = input.trim();
-  // Check if the trimmed input is a standalone DID
-  if ((trimmed.startsWith('did:') || trimmed.includes('@did:')) && !/\s/.test(trimmed)) {
-    return { did: trimmed };
+  const standalone = stripSurroundingWrappers(input);
+  // Check if the trimmed/unwrapped input is a standalone DID or subaccount ID
+  if (!/\s/.test(standalone) && (standalone.startsWith('did:') || standalone.includes('@did:'))) {
+    return isValidUserIdFormat(standalone) ? { did: standalone } : null;
   }
 
-  // Fallback: extract embedded did:key:... (optionally with prefix:tag@) from chat/email text
-  const embeddedDidMatch = trimmed.match(
-    /(?:[a-zA-Z0-9_-]+:[a-zA-Z0-9_-]+@)?did:key:[1-9A-HJ-NP-Za-km-z]+/
+  // Fallback: extract embedded user ID (including any prefix before @did:key:) from chat/email text.
+  // Never strip an invalid prefix and fall back to the root DID.
+  const embeddedDidMatch = input.trim().match(
+    /(?:[^\s"'`<(\[\]]+@)?did:key:[a-zA-Z0-9]+/
   );
   if (embeddedDidMatch) {
-    return { did: embeddedDidMatch[0] };
+    const candidate = stripSurroundingWrappers(embeddedDidMatch[0]);
+    return isValidUserIdFormat(candidate) ? { did: candidate } : null;
   }
 
   return null;
@@ -286,9 +307,10 @@ export function parsePaymentRequest(input: string): ParsedPaymentRequest | null 
 
   try {
     const searchParams = new URLSearchParams(stripTrailingPunctuation(match[1]));
-    const to = searchParams.get('to')?.trim();
+    const rawTo = searchParams.get('to');
+    const to = rawTo ? stripSurroundingWrappers(rawTo) : '';
 
-    if (!to || (!to.startsWith('did:') && !to.includes('@did:'))) {
+    if (!to || !isValidUserIdFormat(to)) {
       return null;
     }
 

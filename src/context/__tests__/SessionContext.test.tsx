@@ -39,6 +39,7 @@ vi.mock('../../services/authService', () => ({
     unlockSession: vi.fn(),
     lockSession: vi.fn().mockResolvedValue(undefined),
     elevateSessionWithPassword: vi.fn().mockResolvedValue('full'),
+    getSessionAccessMode: vi.fn().mockResolvedValue('full'),
     refreshSessionActivity: vi.fn().mockResolvedValue(true),
   },
 }));
@@ -472,5 +473,84 @@ describe('SessionContext and Session Timeout UX (APP-017)', () => {
 
     membersResetSpy.mockRestore();
     cooldownClearSpy.mockRestore();
+  });
+
+  it('steps up from dailyPay PIN session on timeout=0 without leaving a persistent session cache', async () => {
+    (authService.isSessionActive as Mock).mockResolvedValue(false);
+    (authService as unknown as { getSessionAccessMode: Mock }).getSessionAccessMode.mockResolvedValue('dailyPay');
+    (settingsService.getSettings as Mock).mockResolvedValue({ sessionTimeoutSeconds: 0 });
+    (authService.elevateSessionWithPassword as Mock).mockResolvedValue('full');
+
+    let sessionCtx!: ReturnType<typeof useSession>;
+    render(
+      <SessionProvider>
+        <SessionConsumer onContextReady={(ctx) => { sessionCtx = ctx; }} />
+      </SessionProvider>
+    );
+
+    await act(async () => {
+      screen.getByText('Login Alice').click();
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('is-authenticated').textContent).toBe('true');
+    });
+
+    let capturedPwd: string | null = null;
+    let actionPromise!: Promise<unknown>;
+    await act(async () => {
+      actionPromise = sessionCtx.protectAction(async (pwd) => {
+        capturedPwd = pwd;
+        return 'elevated-ok';
+      }, { requireFullAccess: true });
+    });
+
+    const input = await screen.findByPlaceholderText('Profile Password');
+    fireEvent.change(input, { target: { value: 'master-pw' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    });
+
+    await expect(actionPromise).resolves.toBe('elevated-ok');
+    expect(capturedPwd).toBe('master-pw');
+    expect(authService.elevateSessionWithPassword).toHaveBeenCalledWith('master-pw');
+    expect(authService.unlockSession).not.toHaveBeenCalled();
+    expect(screen.getByTestId('is-session-active').textContent).toBe('false');
+  });
+
+  it('elevates seamlessly when an expired PIN session receives master password in session modal (timeout > 0)', async () => {
+    (authService.isSessionActive as Mock).mockResolvedValue(false);
+    (authService as unknown as { getSessionAccessMode: Mock }).getSessionAccessMode.mockResolvedValue('dailyPay');
+    (settingsService.getSettings as Mock).mockResolvedValue({ sessionTimeoutSeconds: 300 });
+    (authService.unlockSession as Mock).mockRejectedValue({
+      code: 'error.auth.insufficientAccessMode',
+      message: 'InsufficientAccessMode',
+    });
+    (authService.elevateSessionWithPassword as Mock).mockResolvedValue('full');
+
+    let sessionCtx!: ReturnType<typeof useSession>;
+    render(
+      <SessionProvider>
+        <SessionConsumer onContextReady={(ctx) => { sessionCtx = ctx; }} />
+      </SessionProvider>
+    );
+
+    await act(async () => {
+      screen.getByText('Login Alice').click();
+    });
+
+    let actionPromise!: Promise<unknown>;
+    await act(async () => {
+      actionPromise = sessionCtx.protectAction(async () => 'unlocked-after-expiry');
+    });
+
+    const input = await screen.findByPlaceholderText('Profile Password');
+    fireEvent.change(input, { target: { value: 'master-pw' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    });
+
+    await expect(actionPromise).resolves.toBe('unlocked-after-expiry');
+    expect(authService.elevateSessionWithPassword).toHaveBeenCalledWith('master-pw');
+    expect(screen.getByTestId('is-session-active').textContent).toBe('true');
   });
 });

@@ -29,8 +29,15 @@ export interface SecurityLockdownDetails {
     isSeedRecovery?: boolean;
 }
 
+export interface ProtectActionOptions {
+    requireFullAccess?: boolean;
+}
+
 export interface SessionContextType {
-    protectAction: <T>(action: (password: string | null) => Promise<T>) => Promise<T | void>;
+    protectAction: <T>(
+        action: (password: string | null) => Promise<T>,
+        options?: ProtectActionOptions,
+    ) => Promise<T | void>;
     requireFullAccess: <T>(action: (masterPassword: string) => Promise<T>) => Promise<T | void>;
     elevateSession: (masterPassword: string) => Promise<void>;
     accessMode: SessionAccessMode;
@@ -103,6 +110,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
     // Refs for throttling, session state, and modal prompt queue
     const lastHeartbeatRef = useRef(0);
+    const accessModeRef = useRef<SessionAccessMode>('full');
     const isSessionActiveRef = useRef(false);
     const isAuthenticatedRef = useRef(false);
     const pendingQueueRef = useRef<PendingModalRequest[]>([]);
@@ -147,6 +155,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     useEffect(() => {
         isSessionActiveRef.current = isSessionActive;
     }, [isSessionActive]);
+
+    useEffect(() => {
+        accessModeRef.current = accessMode;
+    }, [accessMode]);
 
     useEffect(() => {
         isAuthenticatedRef.current = isAuthenticated;
@@ -195,6 +207,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     const notifyLogin = useCallback((name?: string, folder?: string) => {
         setIsAuthenticated(true);
         isAuthenticatedRef.current = true;
+        accessModeRef.current = 'full';
         if (name) setProfileName(name);
         if (folder) setFolderName(folder);
         activateSession();
@@ -203,13 +216,17 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
         authService.getSessionAccessMode?.()
             ?.then((mode) => {
-                if (mode === 'full' || mode === 'dailyPay' || mode === 'receiveOnly') {
-                    setAccessMode(mode);
-                } else {
-                    setAccessMode('full');
-                }
+                const resolved: SessionAccessMode =
+                    mode === 'full' || mode === 'dailyPay' || mode === 'receiveOnly'
+                        ? mode
+                        : 'full';
+                accessModeRef.current = resolved;
+                setAccessMode(resolved);
             })
-            ?.catch(() => setAccessMode('full'));
+            ?.catch(() => {
+                accessModeRef.current = 'full';
+                setAccessMode('full');
+            });
 
         authService.isSessionActive()
             .then((active) => {
@@ -234,6 +251,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         isAuthenticatedRef.current = false;
         setIsSessionActive(false);
         isSessionActiveRef.current = false;
+        accessModeRef.current = 'full';
         setAccessMode('full');
         setProfileName("");
         setDisplayProfileName("");
@@ -255,10 +273,18 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
     const elevateSession = useCallback(async (masterPassword: string) => {
         const nextMode = await authService.elevateSessionWithPassword(masterPassword);
+        accessModeRef.current = nextMode;
         setAccessMode(nextMode);
-        activateSession();
-        if (isAuthenticatedRef.current) {
-            startSyncLoops(masterPassword);
+        try {
+            const settings = await settingsService.getSettings();
+            if (settings.sessionTimeoutSeconds > 0) {
+                activateSession();
+                if (isAuthenticatedRef.current) {
+                    startSyncLoops(masterPassword);
+                }
+            }
+        } catch {
+            // Do not activate persistent session timer when settings are unavailable or timeout is 0.
         }
     }, [activateSession, startSyncLoops]);
 
@@ -266,7 +292,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         return enqueuePendingRequest<T>('stepUp', (pwd) => action(pwd || ''));
     }, [enqueuePendingRequest]);
 
-    const protectAction = useCallback(async <T,>(action: (password: string | null) => Promise<T>): Promise<T | void> => {
+    const protectAction = useCallback(async <T,>(
+        action: (password: string | null) => Promise<T>,
+        options?: ProtectActionOptions,
+    ): Promise<T | void> => {
         const executeWithSessionCheck = async (pwd: string | null): Promise<T> => {
             try {
                 return await action(pwd);
@@ -314,10 +343,15 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         try {
             const settings = await settingsService.getSettings();
             const timeout = settings.sessionTimeoutSeconds;
+            const needsStepUp = Boolean(options?.requireFullAccess && accessModeRef.current !== 'full');
 
             // Mode A: Always prompt for password (timeout = 0)
             if (timeout === 0) {
-                return enqueuePendingRequest<T>('session', action);
+                return enqueuePendingRequest<T>(needsStepUp ? 'stepUp' : 'session', action);
+            }
+
+            if (needsStepUp) {
+                return enqueuePendingRequest<T>('stepUp', action);
             }
 
             // Mode B: Reuse active session when unlocked
@@ -416,18 +450,33 @@ export function SessionProvider({ children }: { children: ReactNode }) {
                     if ((unlocked as unknown) === false) {
                         throw new Error('Invalid password');
                     }
+                    setModalErrorMsg('');
+                    activateSession();
+                    if (isAuthenticatedRef.current) {
+                        startSyncLoops(password);
+                    }
+                    logger.info(`Session unlocked via modal for ${timeout} seconds.`);
                 } catch (err) {
-                    isModalSubmittingRef.current = false;
-                    setModalErrorMsg(translateError(err, t));
-                    return;
+                    const msg = stringifyError(err);
+                    const code = isBackendError(err) ? err.code : '';
+                    const isInsufficient =
+                        code === 'error.auth.insufficientAccessMode' ||
+                        msg.includes('InsufficientAccessMode');
+                    if (isInsufficient && accessModeRef.current !== 'full') {
+                        try {
+                            await elevateSession(password);
+                            setModalErrorMsg('');
+                        } catch (elevErr) {
+                            isModalSubmittingRef.current = false;
+                            setModalErrorMsg(translateError(elevErr, t));
+                            return;
+                        }
+                    } else {
+                        isModalSubmittingRef.current = false;
+                        setModalErrorMsg(translateError(err, t));
+                        return;
+                    }
                 }
-
-                setModalErrorMsg('');
-                activateSession();
-                if (isAuthenticatedRef.current) {
-                    startSyncLoops(password);
-                }
-                logger.info(`Session unlocked via modal for ${timeout} seconds.`);
 
                 pendingQueueRef.current.shift();
                 const toRun: PendingModalRequest[] = [currentPending];

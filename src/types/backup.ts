@@ -61,6 +61,7 @@ export interface RestoreOutcomeDto {
     reconciledSpentCount: number;
     restoredStandardsCount: number;
     l2ReconciliationStatus: 'no_servers' | 'offline' | 'reconciled' | string;
+    seedOnly?: boolean;
 }
 
 export interface FrontendBackupSyncResult {

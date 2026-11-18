@@ -90,6 +90,17 @@ describe('humocoUri Utilities', () => {
       expect(parseContactCard(saiChatText)).toEqual({ did: sampleSai });
     });
 
+    it('strips surrounding quotes/backticks on standalone IDs and rejects malformed subaccount prefixes instead of falling back to root DID', () => {
+      expect(parseContactCard(`"kasse:7x9@${sampleDid}"`)).toEqual({
+        did: `kasse:7x9@${sampleDid}`,
+      });
+      expect(parseContactCard(`Bitte zahle an \`kasse:7x9@${sampleDid}\``)).toEqual({
+        did: `kasse:7x9@${sampleDid}`,
+      });
+      expect(parseContactCard(`Bitte zahle an kasse@${sampleDid}`)).toBeNull();
+      expect(parseContactCard(`"${sampleDid}"`)).toEqual({ did: sampleDid });
+    });
+
     it('returns null for arbitrary text or invalid did', () => {
       expect(parseContactCard('')).toBeNull();
       expect(parseContactCard('random chatter without any did')).toBeNull();

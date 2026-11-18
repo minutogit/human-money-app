@@ -10,6 +10,7 @@ export function useVoucherSelection(vouchers: VoucherSummary[]) {
   vouchersRef.current = vouchers;
 
   const toggleVoucher = useCallback((localInstanceId: string, amount: string) => {
+    latestRequestId.current += 1;
     setCurrentPlan(null);
     const currentVouchers = vouchersRef.current;
     const targetVoucher = currentVouchers.find(v => v.localInstanceId === localInstanceId);
@@ -34,6 +35,7 @@ export function useVoucherSelection(vouchers: VoucherSummary[]) {
   }, []);
 
   const setVoucherAmount = useCallback((localInstanceId: string, amount: string) => {
+    latestRequestId.current += 1;
     setCurrentPlan(null);
     const normalized = amount.replace(',', '.');
     setSelectedMap(prev => {
@@ -51,6 +53,7 @@ export function useVoucherSelection(vouchers: VoucherSummary[]) {
     isTest: boolean | null = null,
     standardUuid: string | null = null
   ) => {
+    latestRequestId.current += 1;
     setCurrentPlan(null);
     const matchingActive = vouchers.filter(v => {
       const statusName = typeof v.status === 'string' ? v.status : Object.keys(v.status)[0];
@@ -112,6 +115,7 @@ export function useVoucherSelection(vouchers: VoucherSummary[]) {
   }, [vouchers]);
 
   const clearSelection = useCallback(() => {
+    latestRequestId.current += 1;
     setSelectedMap(new Map());
     setCurrentPlan(null);
   }, []);

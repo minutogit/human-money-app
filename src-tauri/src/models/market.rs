@@ -235,6 +235,14 @@ pub struct FrontendSaveMyMarketProfileRequest {
     pub published: Option<bool>,
 }
 
+fn deserialize_double_option<'de, T, D>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    T: Deserialize<'de>,
+    D: serde::Deserializer<'de>,
+{
+    Deserialize::deserialize(deserializer).map(Some)
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct FrontendAdInput {
@@ -249,8 +257,12 @@ pub struct FrontendAdInput {
     pub allow_inquiries: bool,
     #[serde(default)]
     pub is_remote: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub image_webp_data_uri: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_double_option"
+    )]
+    pub image_webp_data_uri: Option<Option<String>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]

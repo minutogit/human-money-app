@@ -396,12 +396,6 @@ pub(crate) fn create_detached_signature_response_bundle_impl(
         ));
     }
 
-    if let Some(ref pwd) = password {
-        if let Err(e) = service.unlock_session(pwd, 300) {
-            error!("Failed to unlock session during signature creation: {}", e);
-        }
-    }
-
     service
         .create_detached_signature_response_bundle(
             &core_voucher_preview,

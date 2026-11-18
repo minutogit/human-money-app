@@ -11,6 +11,7 @@ import {
 } from "../types";
 import { afterWalletMutation, triggerAutoBackup } from "../sync/autoBackup";
 import { APP_EVENTS, emitAppEvent, POST_INBOX_UPDATED_EVENT } from "../utils/appEvents";
+import { detectIsWifiConnection } from "../utils/networkStatus";
 import { notifyAppNoticesUpdated } from "../utils/syncEvents";
 
 export { POST_INBOX_UPDATED_EVENT };
@@ -158,7 +159,7 @@ export const postService = {
     },
 
     dismissPendingPostItem: async (
-        itemKind: 'sign_request' | 'wot_handshake' | 'inquiry',
+        itemKind: 'sign_request' | 'wot_handshake' | 'inquiry' | 'pos_payment',
         id: string,
         password?: string
     ): Promise<void> => {
@@ -181,7 +182,7 @@ export const postService = {
         password?: string
     ): Promise<FrontendPostSyncResult> => {
         const res = await invoke<FrontendPostSyncResult>("sync_post_channels", {
-            isWifi: typeof isWifi === 'boolean' ? isWifi : undefined,
+            isWifi: typeof isWifi === 'boolean' ? isWifi : detectIsWifiConnection(),
             password: password || undefined,
         });
         if (!res) {

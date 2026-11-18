@@ -6,6 +6,7 @@ import { Ad, FrontendEntrySource, FrontendTrustTier } from '../../types';
 import { Button } from '../ui/Button';
 import { TrustBadge } from '../ui/TrustBadge';
 import { truncateUserId } from '../../utils/userIdHelper';
+import { isMeteredOrCellularConnection } from '../../utils/networkStatus';
 import { marketService } from '../../services/marketService';
 
 const adImageCache = new Map<string, string | null>();
@@ -19,16 +20,6 @@ export function resolveAuthorHops(sources?: FrontendEntrySource[]): number {
     return Math.min(
         ...sources.map((s) => (s.kind === 'card' ? s.hops : 1))
     );
-}
-
-type NavigatorWithConnection = Navigator & {
-    connection?: { type?: string; saveData?: boolean };
-};
-
-function isMeteredOrCellularConnection(): boolean {
-    if (typeof navigator === 'undefined') return false;
-    const conn = (navigator as NavigatorWithConnection).connection;
-    return Boolean(conn?.saveData || conn?.type === 'cellular');
 }
 
 export interface AdCardProps {

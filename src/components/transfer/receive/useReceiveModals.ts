@@ -30,6 +30,7 @@ export interface PendingPosFallbackState {
     merchantWarning?: string;
     verdict: CheckoutReleaseVerdict;
     purchaseId: string;
+    postPaymentId?: string;
 }
 
 export interface PendingPasswordImportState {
@@ -51,6 +52,7 @@ export function useReceiveModals({
     resetAllSelections,
     clearSelection,
     executeReceiveDirectly,
+    onDismissPosPayment,
 }: {
     onBack: () => void;
     onReceiveSuccess: (payload: ReceiveSuccessPayload | VoucherDetails) => void;
@@ -69,6 +71,7 @@ export function useReceiveModals({
         name: string,
         password?: string,
     ) => Promise<void>;
+    onDismissPosPayment?: (postPaymentId: string) => Promise<void>;
 }) {
     const { t } = useTranslation();
     const [showConfirm, setShowConfirm] = useState(false);
@@ -245,16 +248,24 @@ export function useReceiveModals({
         handleCancelPassword,
         confirmToleranceImport,
         cancelToleranceImport: () => {
+            const postPaymentId = tolerancePosFallbackRef.current?.postPaymentId;
             tolerancePosFallbackRef.current = null;
             setToleranceModal(null);
             setConfirmText('');
             setIsProcessing(false);
             setShowConfirm(false);
+            if (postPaymentId && onDismissPosPayment) {
+                void onDismissPosPayment(postPaymentId);
+            }
         },
         handleAcceptPosTrustFallback,
         handleCancelPosFallback: () => {
+            const postPaymentId = pendingPosFallback?.postPaymentId;
             setPendingPosFallback(null);
             clearSelection();
+            if (postPaymentId && onDismissPosPayment) {
+                void onDismissPosPayment(postPaymentId);
+            }
         },
         confirmResultModal: () => {
             if (!resultModal) return;

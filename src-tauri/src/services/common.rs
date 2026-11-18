@@ -195,27 +195,30 @@ pub(crate) fn open_wallet_archive(
     Some(FileVoucherArchive::with_key(archive_dir, key))
 }
 
-/// Ensures the active session satisfies `required` `AccessMode` (or unlocks with non-empty `password`).
+/// Ensures the active session satisfies `required` `AccessMode` (or a valid credential override was provided).
 pub(crate) fn ensure_access_mode(
     service: &mut AppService,
     required: human_money_core::AccessMode,
     password: Option<&str>,
 ) -> Result<(), FrontendError> {
-    if let Some(pw) = password.filter(|p| !p.is_empty()) {
-        service
-            .unlock_session(pw, 300)
-            .map_err(FrontendError::from)?;
-        return Ok(());
-    }
-    let current = service.get_access_mode().map_err(FrontendError::from)?;
-    if !current.satisfies(required) {
+    service
+        .require_access_mode(required, password)
+        .map_err(FrontendError::from)
+}
+
+/// Blocks voucher spending operations until the mandatory post-restore L2 reconciliation completes.
+pub(crate) fn ensure_restore_l2_reconciled(
+    state: &crate::state::AppState,
+    service: &mut AppService,
+    password: Option<&str>,
+) -> Result<(), FrontendError> {
+    let settings = state
+        .get_cached_settings()
+        .or_else(|_| state.load_settings(service, password))
+        .map_err(FrontendError::from)?;
+    if settings.pending_restore_l2_reconciliation {
         return Err(FrontendError::from(
-            human_money_core::app_service::AppFacadeError::App(
-                human_money_core::error::AppError::InsufficientAccessMode {
-                    required: required.as_str().to_string(),
-                    current: current.as_str().to_string(),
-                },
-            ),
+            "Nach einer Wiederherstellung aus der Sicherung ist vor dem Ausgeben von Gutscheinen ein einmaliger Online-Sicherheitsabgleich erforderlich.".to_string(),
         ));
     }
     Ok(())

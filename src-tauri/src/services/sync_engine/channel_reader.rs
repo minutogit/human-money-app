@@ -1204,7 +1204,12 @@ pub async fn save_public_sync_impl(
             .save_settings(&mut service, settings, password.as_deref())
             .map_err(FrontendError::from)?;
 
-        sync_own_card_drops_on_settings_change(&mut service, &selected_syncs, password.as_deref());
+        sync_own_card_drops_on_settings_change(
+            state,
+            &mut service,
+            &selected_syncs,
+            password.as_deref(),
+        );
     }
 
     let _ = enqueue_guardian_locator_updates_if_configured(state, password.clone()).await;
@@ -1299,7 +1304,12 @@ pub async fn remove_public_sync_impl(
             .save_settings(&mut service, settings, password.as_deref())
             .map_err(FrontendError::from)?;
 
-        sync_own_card_drops_on_settings_change(&mut service, &selected_syncs, password.as_deref());
+        sync_own_card_drops_on_settings_change(
+            state,
+            &mut service,
+            &selected_syncs,
+            password.as_deref(),
+        );
 
         if let Ok(mut reg) = state.get_or_load_wot_register(&mut service, password.as_deref()) {
             reg.clear_drop_sent_log(Some(&canonical_url));

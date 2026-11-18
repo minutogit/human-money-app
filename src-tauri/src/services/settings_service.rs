@@ -1,4 +1,4 @@
-use log::{error, info};
+use log::info;
 
 use crate::{
     models::{FrontendError, ReachPresetDto},
@@ -58,7 +58,7 @@ pub fn get_reach_preset_impl(
         let reg = state
             .get_or_load_wot_register(&mut service, password.as_deref())
             .map_err(FrontendError::from)?;
-        let card_hops = get_own_card_max_hops_inner(&mut service, password.as_deref());
+        let card_hops = get_own_card_max_hops_inner(state, &mut service, password.as_deref());
         (reg.policy.own_list_max_hops.clamp(1, 3), card_hops)
     };
 
@@ -98,7 +98,7 @@ pub fn apply_reach_preset_impl(
             .service
             .lock()
             .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
-        set_own_card_max_hops_inner(&mut service, card_max_hops, password.as_deref())?;
+        set_own_card_max_hops_inner(state, &mut service, card_max_hops, password.as_deref())?;
 
         let mut settings = state
             .get_cached_settings()
@@ -132,6 +132,9 @@ pub fn save_app_settings_impl(
 ) -> Result<(), FrontendError> {
     settings.media_auto_load_max_hops = settings.media_auto_load_max_hops.min(3);
     settings.share_min_level = settings.share_min_level.min(3);
+    if !settings.enable_pos_mode {
+        settings.pos_cashier_active = false;
+    }
     info!("Saving app settings to disk...");
     let mut service = state.service.lock().unwrap();
     crate::services::common::ensure_access_mode(
@@ -157,11 +160,11 @@ pub fn set_conflict_local_override_impl(
     );
     let mut service = state.service.lock().unwrap();
 
-    if let Some(ref pwd) = password {
-        if let Err(e) = service.unlock_session(pwd, 300) {
-            error!("Failed to unlock session for local override: {}", e);
-        }
-    }
+    crate::services::common::ensure_access_mode(
+        &mut service,
+        human_money_core::AccessMode::DailyPay,
+        password.as_deref(),
+    )?;
 
     service
         .set_conflict_local_override(&proof_id, value, note, password.as_deref())

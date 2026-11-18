@@ -148,6 +148,12 @@ pub struct FrontendApprovedSwapClaimDto {
     pub voucher_id: String,
     pub tip_t_id: String,
     pub approved_amount: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replacement_voucher_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replacement_bundle_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replacement_bundle_bytes: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

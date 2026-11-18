@@ -203,13 +203,23 @@ export const AutoSyncSummaryCard: React.FC<AutoSyncSummaryCardProps> = ({
             const info = await marketService.probePublicSync(drop.writeUrl);
             if (info) {
                 const hasAuth = (info.authorizedChannels || []).length > 0;
-                await marketService.savePublicSync({
-                    writeUrl: info.writeUrl,
-                    readUrl: info.readUrl,
-                    dropPub: info.dropPub,
-                    registerUrl: info.registerUrl,
-                    enabled: hasAuth,
-                });
+                const saveAction = async (pwd: string | null) => {
+                    await marketService.savePublicSync(
+                        {
+                            writeUrl: info.writeUrl,
+                            readUrl: info.readUrl,
+                            dropPub: info.dropPub,
+                            registerUrl: info.registerUrl,
+                            enabled: hasAuth,
+                        },
+                        pwd || undefined,
+                    );
+                };
+                if (session?.protectAction) {
+                    await session.protectAction(saveAction);
+                } else {
+                    await saveAction(null);
+                }
                 const fresh = await settingsService.getSettings().catch(() => null);
                 if (fresh) {
                     onSettingsSynced?.(fresh);
@@ -236,13 +246,23 @@ export const AutoSyncSummaryCard: React.FC<AutoSyncSummaryCardProps> = ({
             const info = await marketService.probePublicSync(COMMUNITY_SYNC_PRESET_URL);
             if (info) {
                 const hasAuth = info.authorizedChannels.length > 0;
-                await marketService.savePublicSync({
-                    writeUrl: info.writeUrl,
-                    readUrl: info.readUrl,
-                    dropPub: info.dropPub,
-                    registerUrl: info.registerUrl,
-                    enabled: hasAuth,
-                });
+                const saveAction = async (pwd: string | null) => {
+                    await marketService.savePublicSync(
+                        {
+                            writeUrl: info.writeUrl,
+                            readUrl: info.readUrl,
+                            dropPub: info.dropPub,
+                            registerUrl: info.registerUrl,
+                            enabled: hasAuth,
+                        },
+                        pwd || undefined,
+                    );
+                };
+                if (session?.protectAction) {
+                    await session.protectAction(saveAction);
+                } else {
+                    await saveAction(null);
+                }
                 const fresh = await settingsService.getSettings().catch(() => null);
                 if (fresh) {
                     onSettingsSynced?.(fresh);

@@ -17,7 +17,6 @@ use crate::settings::{
 use crate::state::{
     apply_revocation_notice, apply_revocation_notice_to_address_book, canonicalize_did,
     clear_revocation, AppState, StoredSyncState, CONTACTS_DATA_NAME, MARKET_CARD_STORE_KEY,
-    MARKET_OWN_PROFILE_KEY,
 };
 use crate::sync_client::{self, PutSlotOutcome, SyncRevocationNotice};
 
@@ -551,6 +550,7 @@ pub async fn probe_contact_syncs_impl(
         let _ = state.save_settings(&mut service, settings.clone(), password.as_deref());
         if auto_activated {
             sync_own_card_drops_on_settings_change(
+                state,
                 &mut service,
                 &settings.market_selected_syncs,
                 password.as_deref(),
@@ -600,7 +600,7 @@ pub async fn set_selected_upload_syncs_impl(
             .save_settings(&mut service, settings, password.as_deref())
             .map_err(FrontendError::from)?;
 
-        sync_own_card_drops_on_settings_change(&mut service, &syncs, password.as_deref());
+        sync_own_card_drops_on_settings_change(state, &mut service, &syncs, password.as_deref());
     }
 
     let _ = enqueue_guardian_locator_updates_if_configured(state, password.clone()).await;
@@ -708,10 +708,13 @@ fn load_card_upload_context(
     };
 
     let my_can_did = canonicalize_did(&id_ctx.my_did).ok();
-    let own_profile_opt: Option<StoredOwnMarketProfile> = service
-        .load_encrypted_data(MARKET_OWN_PROFILE_KEY, password)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+    let own_profile_opt: Option<StoredOwnMarketProfile> =
+        crate::services::market_service::load_own_market_profile_state(
+            state,
+            &mut service,
+            password,
+        )
+        .ok();
     // Include unexpired <jws>~ tombstone cards even when `published == false`.
     let own_card_opt = own_profile_opt.as_ref().and_then(|p| p.last_card.clone());
 

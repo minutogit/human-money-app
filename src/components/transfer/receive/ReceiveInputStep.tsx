@@ -26,6 +26,7 @@ import type { PendingPosFallbackState } from './useReceiveFlow';
 interface ReceiveInputStepProps {
     settings: AppSettings | null;
     isPosMode: boolean;
+    hasStagedPosPayments?: boolean;
     purchaseId: string;
     onPosModeToggle: (checked: boolean) => void;
     onPurchaseIdChange: (value: string) => void;
@@ -49,6 +50,7 @@ interface ReceiveInputStepProps {
 export function ReceiveInputStep({
     settings,
     isPosMode,
+    hasStagedPosPayments = false,
     purchaseId,
     onPosModeToggle,
     onPurchaseIdChange,
@@ -74,7 +76,7 @@ export function ReceiveInputStep({
 
     return (
         <div className="space-y-8">
-            {settings?.enablePosMode && (
+            {(settings?.enablePosMode || hasStagedPosPayments) && (
                 <div className="flex flex-col sm:flex-row items-center justify-between gap-4 p-4 bg-white/40 border border-theme-subtle/50 rounded-2xl">
                     <div className="flex items-center gap-2">
                         <label className="flex items-center gap-3 cursor-pointer select-none">

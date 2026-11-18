@@ -235,6 +235,7 @@ export const RestoreBackupView: React.FC<RestoreBackupViewProps> = ({
                     existingSession={flow.activeSocialSession}
                     onBack={() => flow.setMethod('choose')}
                     onSuccess={(res) => {
+                        const isSeedOnly = res.outcome !== 'restored_from_sync';
                         const outcome: RestoreOutcomeDto = {
                             folderName: res.folderName,
                             profileName: res.profileName,
@@ -242,13 +243,10 @@ export const RestoreBackupView: React.FC<RestoreBackupViewProps> = ({
                             reconciledSpentCount: res.reconciledSpentCount,
                             restoredStandardsCount: res.restoredStandardsCount,
                             l2ReconciliationStatus: res.l2ReconciliationStatus,
+                            seedOnly: isSeedOnly,
                         };
-                        if (res.outcome === 'restored_from_sync') {
-                            flow.setRestoreOutcome(outcome);
-                            flow.setMethod('completed');
-                        } else {
-                            onRestoreSuccess(outcome);
-                        }
+                        flow.setRestoreOutcome(outcome);
+                        flow.setMethod('completed');
                     }}
                 />
             )}

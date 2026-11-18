@@ -60,6 +60,7 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseRec
     const [isProcessing, setIsProcessing] = useState(false);
     const [isDragOver, setIsDragOver] = useState(false);
     const [isPosMode, setIsPosMode] = useState(false);
+    const [hasStagedPosPayments, setHasStagedPosPayments] = useState(false);
     const [isSettingsLoaded, setIsSettingsLoaded] = useState(false);
     const [purchaseId, setPurchaseId] = useState('');
     const [settings, setSettings] = useState<AppSettings | null>(null);
@@ -67,6 +68,8 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseRec
     const [postCheckStatus, setPostCheckStatus] = useState<{ variant: 'info' | 'success' | 'error'; message: string } | null>(null);
     const processedDroppedFileRef = useRef<{ name: string; bytes: number[] } | null>(null);
     const autoStagedPosMsgIdRef = useRef<string | null>(null);
+    const activePosPaymentIdRef = useRef<string | null>(null);
+    const dismissPosPaymentRef = useRef<((postPaymentId: string) => Promise<void>) | null>(null);
 
     const modalsRef = useRef<ReturnType<typeof useReceiveModals> | null>(null);
     const wotRef = useRef<ReturnType<typeof useReceiveWotImport> | null>(null);
@@ -102,9 +105,13 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseRec
             name: string,
             password?: string,
             forcePos?: boolean,
+            postPaymentId?: string,
         ) => {
             setIsProcessing(true);
             setFeedbackMsg('');
+            if (postPaymentId) {
+                activePosPaymentIdRef.current = postPaymentId;
+            }
             try {
                 const outcome = await executeReceiveImport({
                     fileData,
@@ -119,6 +126,8 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseRec
                 });
 
                 if (outcome.kind === 'success') {
+                    activePosPaymentIdRef.current = null;
+                    autoStagedPosMsgIdRef.current = null;
                     onReceiveSuccess(outcome.payload);
                 } else if (outcome.kind === 'posFallback') {
                     modalsRef.current?.setPendingPosFallback({
@@ -128,6 +137,7 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseRec
                         merchantWarning: outcome.merchantWarning,
                         verdict: outcome.verdict,
                         purchaseId: outcome.purchaseId,
+                        postPaymentId: postPaymentId ?? activePosPaymentIdRef.current ?? undefined,
                     });
                 } else if (outcome.kind === 'signatureAttached') {
                     modalsRef.current?.setResultModal({
@@ -247,6 +257,8 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseRec
         resetAllSelections,
         clearSelection,
         executeReceiveDirectly,
+        onDismissPosPayment: (postPaymentId: string) =>
+            dismissPosPaymentRef.current?.(postPaymentId) ?? Promise.resolve(),
     });
     modalsRef.current = modals;
 
@@ -311,8 +323,45 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseRec
         };
     }, [t]);
 
+    const dismissPosPayment = useCallback(
+        async (postPaymentId: string) => {
+            try {
+                await protectAction(async (pwd) => {
+                    await postService.dismissPendingPostItem(
+                        'pos_payment',
+                        postPaymentId,
+                        pwd || undefined,
+                    );
+                });
+                autoStagedPosMsgIdRef.current = null;
+                activePosPaymentIdRef.current = null;
+                if (typeof postService?.getPostInboxSummary === 'function') {
+                    const summary = await postService.getPostInboxSummary().catch(() => null);
+                    const remaining = summary?.pendingPosPayments ?? [];
+                    setHasStagedPosPayments(remaining.length > 0);
+                    const next = remaining[0];
+                    if (next && Array.isArray(next.bundleBytes) && next.bundleBytes.length > 0) {
+                        autoStagedPosMsgIdRef.current = next.id;
+                        await executeReceiveDirectly(
+                            next.bundleBytes,
+                            'transfer',
+                            `post-${next.id}.transfer`,
+                            undefined,
+                            true,
+                            next.id,
+                        );
+                    }
+                }
+            } catch (err) {
+                setFeedbackMsg(translateError(err, t));
+            }
+        },
+        [executeReceiveDirectly, protectAction, t],
+    );
+    dismissPosPaymentRef.current = dismissPosPayment;
+
     useEffect(() => {
-        if (!isSettingsLoaded || !isPosMode || droppedFile || isProcessing) {
+        if (!isSettingsLoaded || droppedFile || isProcessing) {
             return;
         }
         const checkStagedPosPayments = () => {
@@ -320,10 +369,14 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseRec
             postService
                 .getPostInboxSummary()
                 .then((summary) => {
-                    const next = summary?.pendingPosPayments?.[0];
+                    const staged = summary?.pendingPosPayments ?? [];
+                    setHasStagedPosPayments(staged.length > 0);
+                    if (!isPosMode && staged.length === 0) return;
+                    const next = staged[0];
                     if (
                         next &&
                         next.id !== autoStagedPosMsgIdRef.current &&
+                        !modalsRef.current?.pendingPosFallback &&
                         Array.isArray(next.bundleBytes) &&
                         next.bundleBytes.length > 0
                     ) {
@@ -334,6 +387,7 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseRec
                             `post-${next.id}.transfer`,
                             undefined,
                             true,
+                            next.id,
                         );
                     }
                 })
@@ -478,18 +532,21 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseRec
         try {
             const res = await postService.syncPostChannels();
             let stagedPosPayments = res.pendingPosPayments ?? [];
-            if (isPosMode && stagedPosPayments.length === 0 && typeof postService.getPostInboxSummary === 'function') {
+            if (stagedPosPayments.length === 0 && typeof postService.getPostInboxSummary === 'function') {
                 const summary = await postService.getPostInboxSummary().catch(() => null);
                 stagedPosPayments = summary?.pendingPosPayments ?? [];
             }
-            if (isPosMode && stagedPosPayments.length > 0) {
+            setHasStagedPosPayments(stagedPosPayments.length > 0);
+            if (stagedPosPayments.length > 0 && (isPosMode || !settings?.enablePosMode)) {
                 const nextPayment = stagedPosPayments[0];
+                autoStagedPosMsgIdRef.current = nextPayment.id;
                 await executeReceiveDirectly(
                     nextPayment.bundleBytes,
                     'transfer',
                     `post-${nextPayment.id}.transfer`,
                     undefined,
                     true,
+                    nextPayment.id,
                 );
                 return;
             }
@@ -565,6 +622,7 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseRec
         setIsDragOver,
         settings,
         isPosMode,
+        hasStagedPosPayments,
         purchaseId,
         setPurchaseId,
         handlePosModeToggle,

@@ -252,6 +252,7 @@ mod tests {
             events: Mutex::new(None),
             contacts: Mutex::new(Some(book)),
             settings: Mutex::new(None),
+            own_market_profile: Mutex::new(None),
             wot: Mutex::new(None),
             recovery_owner: Mutex::new(None),
             guardian_vault: Mutex::new(None),

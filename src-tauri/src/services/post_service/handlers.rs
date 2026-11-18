@@ -139,7 +139,7 @@ fn handle_transaction_bundle(
             let mut s = ctx.state.service.lock().unwrap();
             ctx.state.load_settings(&mut s, ctx.password)
         })
-        .map(|s| s.pos_cashier_active)
+        .map(|s| s.enable_pos_mode && s.pos_cashier_active)
         .unwrap_or(false);
 
     if pos_cashier_active {

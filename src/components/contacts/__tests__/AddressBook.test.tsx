@@ -270,7 +270,10 @@ describe('AddressBook Component', () => {
     fireEvent.click(syncBtn);
 
     await waitFor(() => {
-      expect(invoke).toHaveBeenCalledWith('sync_market_channels', { forceUpload: true });
+      expect(invoke).toHaveBeenCalledWith('sync_market_channels', {
+        forceUpload: true,
+        isWifi: true,
+      });
     });
   });
 

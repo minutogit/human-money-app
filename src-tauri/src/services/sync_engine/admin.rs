@@ -110,7 +110,7 @@ fn remove_sync_from_selected_settings(
     if settings.market_selected_syncs.len() != initial_len {
         let selected_clone = settings.market_selected_syncs.clone();
         let _ = state.save_settings(service, settings, password);
-        sync_own_card_drops_on_settings_change(service, &selected_clone, password);
+        sync_own_card_drops_on_settings_change(state, service, &selected_clone, password);
     }
 }
 

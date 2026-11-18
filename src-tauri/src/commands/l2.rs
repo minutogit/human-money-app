@@ -6,10 +6,7 @@ use human_money_core::models::voucher::Voucher;
 use human_money_core::models::voucher_standard_definition::VoucherStandardDefinition;
 use human_money_core::services::{
     crypto::derive_ed25519_keypair,
-    dead_quorum_swap::{
-        adjudicate_dead_quorum_claims, solve_swap_ticket_pow, DeadQuorumClaimSubmission,
-        DeadQuorumSwapOffer,
-    },
+    dead_quorum_swap::{solve_swap_ticket_pow, DeadQuorumClaimSubmission, DeadQuorumSwapOffer},
     l2_rotation,
 };
 use humoco_wot::{KeyRotationReason, KeySuccessorAttestation};
@@ -323,9 +320,11 @@ pub async fn create_guarantor_claim_bundle(
             .lock()
             .map_err(|_| lifecycle_err("Wallet service unavailable"))?;
 
-        if let Some(ref pwd) = password {
-            let _ = service.unlock_session(pwd, 300);
-        }
+        crate::services::common::ensure_restore_l2_reconciled(
+            &state,
+            &mut service,
+            password.as_deref(),
+        )?;
 
         let (sender_id, source_voucher_id) = service
             .with_wallet(|w| {
@@ -493,6 +492,7 @@ pub async fn create_guarantor_claim_bundle(
     })
 }
 
+#[allow(unused_variables)]
 #[tauri::command]
 pub fn create_dead_quorum_swap_offer_cmd(
     dead_anchor_id_hex: String,
@@ -511,13 +511,10 @@ pub fn create_dead_quorum_swap_offer_cmd(
     let bits = pow_bits.unwrap_or(10);
     let now_secs = sync_client::current_unix_timestamp().max(1);
 
-    let mut service = state
+    let service = state
         .service
         .lock()
         .map_err(|_| lifecycle_err("Wallet service unavailable"))?;
-    if let Some(ref pwd) = password {
-        let _ = service.unlock_session(pwd, 300);
-    }
 
     let offer = service
         .with_wallet_and_identity(|_, id| {
@@ -633,35 +630,70 @@ pub fn adjudicate_dead_quorum_swap_cmd(
     }
 
     let now_secs = sync_client::current_unix_timestamp();
-    let dead_hex = hex::encode(offer.dead_anchor_id);
 
     let mut service = state
         .service
         .lock()
         .map_err(|_| lifecycle_err("Wallet service unavailable"))?;
-    if let Some(ref pwd) = password {
-        let _ = service.unlock_session(pwd, 300);
-    }
+
+    let sender_id = service
+        .with_wallet(|w| w.get_user_id().to_string())
+        .map_err(FrontendError::from)?;
 
     let adj = service
-        .with_wallet_and_identity(|w, id| {
-            let dead_manifest = w.profile.l2_anchor_manifests.get(&dead_hex);
-            adjudicate_dead_quorum_claims(
-                &offer,
-                dead_manifest,
-                &std_def,
-                &submissions,
-                id,
-                now_secs,
-            )
-        })
-        .map_err(FrontendError::from)?
+        .execute_dead_quorum_swap(
+            &offer,
+            &standard_toml,
+            &submissions,
+            now_secs,
+            password.as_deref(),
+        )
         .map_err(FrontendError::from)?;
 
     let proofs_count = adj.double_spend_proofs.len();
     for proof in adj.double_spend_proofs {
         let _ = service.import_proof(proof, password.as_deref());
     }
+
+    for approved in &adj.approved {
+        if let (Some(ref bundle_id), Some(ref bundle_bytes)) = (
+            &approved.replacement_bundle_id,
+            &approved.replacement_bundle_bytes,
+        ) {
+            let is_test = submissions
+                .iter()
+                .find(|s| {
+                    s.voucher.voucher_id == approved.voucher_id
+                        && s.claimant_did == approved.claimant_did
+                })
+                .is_some_and(|s| s.voucher.non_redeemable_test_voucher);
+            let raw_unit = &std_def.immutable.blueprint.unit;
+            let display_currency = if is_test && !raw_unit.starts_with("TEST-") {
+                format!("TEST-{}", raw_unit)
+            } else {
+                raw_unit.clone()
+            };
+            let mut summable_amounts = std::collections::HashMap::new();
+            summable_amounts.insert(display_currency, approved.approved_amount.clone());
+            let record = TransactionRecord {
+                id: Uuid::new_v4().to_string(),
+                direction: "sent".to_string(),
+                recipient_id: approved.claimant_did.clone(),
+                sender_id: sender_id.clone(),
+                timestamp: Utc::now().to_rfc3339(),
+                summable_amounts,
+                countable_items: std::collections::HashMap::new(),
+                involved_vouchers: approved.replacement_voucher_id.iter().cloned().collect(),
+                involved_sources_details: None,
+                bundle_data: bundle_bytes.clone(),
+                bundle_id: bundle_id.clone(),
+                notes: Some(format!("swap:{}", approved.voucher_id)),
+                sender_profile_name: None,
+            };
+            let _ = state.append_to_history(&mut service, record, password.as_deref());
+        }
+    }
+    let _ = state.refresh_events_cache(&mut service, password.as_deref());
 
     Ok(FrontendDeadQuorumAdjudicationDto {
         approved: adj
@@ -672,6 +704,9 @@ pub fn adjudicate_dead_quorum_swap_cmd(
                 voucher_id: a.voucher_id,
                 tip_t_id: a.tip_t_id,
                 approved_amount: a.approved_amount,
+                replacement_voucher_id: a.replacement_voucher_id,
+                replacement_bundle_id: a.replacement_bundle_id,
+                replacement_bundle_bytes: a.replacement_bundle_bytes,
             })
             .collect(),
         rejected: adj

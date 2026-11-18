@@ -330,6 +330,25 @@ export function useSendTransfer({
             dispatch({ type: 'SET_FEEDBACK', msg: t('transfer.assetSelectionRequired') });
             return;
         }
+        if (state.selectedStandardId) {
+            const expectedUuid =
+                standardIdToUuidMap.get(state.selectedStandardId) || state.selectedStandardId;
+            const mismatched = Array.from(selectedMap.keys()).some((vId) => {
+                const found = availableVouchers.find((v) => v.localInstanceId === vId);
+                return (
+                    found &&
+                    (found.voucherStandardUuid !== expectedUuid ||
+                        (state.selectedIsTest !== null &&
+                            Boolean(found.isTestVoucher) !== Boolean(state.selectedIsTest)))
+                );
+            });
+            if (mismatched) {
+                clearSelection();
+                dispatch({ type: 'SET_TARGET_AMOUNT', amount: '' });
+                dispatch({ type: 'SET_FEEDBACK', msg: t('transfer.assetSelectionRequired') });
+                return;
+            }
+        }
         if (detectedPrivacy === 'incompatible' || (detectedPrivacy === 'flexible' && state.privacyMode === null)) {
             dispatch({ type: 'SET_PRIVACY_ERROR', value: true });
             dispatch({ type: 'SET_FEEDBACK', msg: t(detectedPrivacy === 'incompatible' ? 'transfer.privacyConflict' : 'transfer.privacyRequired') });
@@ -401,12 +420,8 @@ export function useSendTransfer({
         handleAmountChange: (id: string, amt: string) => { preserveInitialVoucherRef.current = false; setVoucherAmount(id, amt); },
         handleStandardSelect: (id: string | null, isTest: boolean | null) => {
             preserveInitialVoucherRef.current = false;
-            if (isTest !== null && selectedMap.size > 0) {
-                const hasOpp = Array.from(selectedMap.keys()).some((vId) => {
-                    const found = availableVouchers.find((v) => v.localInstanceId === vId);
-                    return found && Boolean(found.isTestVoucher) !== Boolean(isTest);
-                });
-                if (hasOpp) clearSelection();
+            if (id !== state.selectedStandardId || isTest !== state.selectedIsTest) {
+                clearSelection();
             }
             dispatch({ type: 'SET_STANDARD', id, isTest });
         },

@@ -211,7 +211,7 @@ export function getDiscoveredDropBadge(drop: FrontendDiscoveredSync, t: TFunctio
     } else if (status === 'pending_auth') {
         badgeColor = 'bg-amber-100 text-amber-800 border border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800';
         statusText = t('settings.syncStatusPendingAuthBadge', 'Erreichbar, nicht freigeschaltet');
-        statusTooltip = t('settings.syncStatusPendingAuthDesc', 'Server erreichbar, aber dein Schlüssel ist beim Betreiber noch nicht freigeschaltet.');
+        statusTooltip = t('settings.syncStatusPendingAuthDesc', 'Sync-Dienst erreichbar, aber dein Schlüssel ist beim Betreiber noch nicht freigeschaltet.');
     } else if (status === 'unreachable') {
         badgeColor = 'bg-rose-100 text-rose-800 border border-rose-200 dark:bg-rose-950/40 dark:text-rose-300 dark:border-rose-800';
         statusText = t('settings.syncStatusOffline', 'Nicht erreichbar (Offline)');

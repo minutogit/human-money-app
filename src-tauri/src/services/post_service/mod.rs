@@ -11,8 +11,7 @@ use crate::models::{FrontendError, FrontendSyncDescriptor};
 use crate::services::common::{are_dids_equal, SyncIdentityContext};
 use crate::settings::AppSettings;
 use crate::state::{
-    AppState, PostOutboxEntry, StoredPostState, MARKET_CARD_STORE_KEY, MARKET_OWN_PROFILE_KEY,
-    MARKET_POST_STATE_KEY,
+    AppState, PostOutboxEntry, StoredPostState, MARKET_CARD_STORE_KEY, MARKET_POST_STATE_KEY,
 };
 
 mod handlers;
@@ -486,20 +485,18 @@ pub(crate) fn check_inquiry_target(
     password: Option<&str>,
 ) -> bool {
     let mut service = state.service.lock().unwrap();
-    if let Ok(bytes) = service.load_encrypted_data(MARKET_OWN_PROFILE_KEY, password) {
-        if let Ok(stored) =
-            serde_json::from_slice::<crate::models::market::StoredOwnMarketProfile>(&bytes)
-        {
-            match target {
-                humoco_market::InquiryTarget::Ad { ad_id, .. } => {
-                    return stored
-                        .ads
-                        .iter()
-                        .any(|a| &a.id == ad_id && a.expires_at > now_secs && a.allow_inquiries);
-                }
-                humoco_market::InquiryTarget::Person { .. } => {
-                    return stored.published && stored.allow_inquiries;
-                }
+    if let Ok(stored) =
+        crate::services::market_service::load_own_market_profile_state(state, &mut service, password)
+    {
+        match target {
+            humoco_market::InquiryTarget::Ad { ad_id, .. } => {
+                return stored
+                    .ads
+                    .iter()
+                    .any(|a| &a.id == ad_id && a.expires_at > now_secs && a.allow_inquiries);
+            }
+            humoco_market::InquiryTarget::Person { .. } => {
+                return stored.published && stored.allow_inquiries;
             }
         }
     }

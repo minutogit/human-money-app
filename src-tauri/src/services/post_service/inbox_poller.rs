@@ -15,7 +15,7 @@ use crate::models::{
     FrontendSyncDescriptor,
 };
 use crate::settings::AppSettings;
-use crate::state::{AppState, StoredPostState, MARKET_CARD_STORE_KEY, MARKET_OWN_PROFILE_KEY};
+use crate::state::{AppState, StoredPostState, MARKET_CARD_STORE_KEY};
 use crate::sync_client;
 
 use super::handlers::{dispatch_post_payload, PostDispatchStats, PostEnvelopeContext};
@@ -275,21 +275,18 @@ fn collect_authorized_post_senders(
         }
     }
 
-    let has_inquiry_listing = service
-        .load_encrypted_data(MARKET_OWN_PROFILE_KEY, password)
-        .ok()
-        .and_then(|bytes| {
-            serde_json::from_slice::<crate::models::market::StoredOwnMarketProfile>(&bytes).ok()
-        })
-        .map(|stored| {
-            stored.published
-                && (stored.allow_inquiries
-                    || stored
-                        .ads
-                        .iter()
-                        .any(|a| a.expires_at > now_secs && a.allow_inquiries))
-        })
-        .unwrap_or(false);
+    let has_inquiry_listing =
+        crate::services::market_service::load_own_market_profile_state(state, &mut service, password)
+            .ok()
+            .map(|stored| {
+                stored.published
+                    && (stored.allow_inquiries
+                        || stored
+                            .ads
+                            .iter()
+                            .any(|a| a.expires_at > now_secs && a.allow_inquiries))
+            })
+            .unwrap_or(false);
 
     if let Ok(bytes) = service.load_encrypted_data(MARKET_CARD_STORE_KEY, password) {
         if let Ok(cs) = serde_json::from_slice::<humoco_market::CardStore>(&bytes) {
