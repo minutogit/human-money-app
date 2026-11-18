@@ -608,33 +608,48 @@ fn compute_wot_bonuses(
     state: &AppState,
     wallet: &human_money_core::wallet::Wallet,
     recipient_id: &str,
-) -> HashMap<String, i64> {
+) -> (HashMap<String, i64>, HashMap<String, u8>, bool) {
     use human_money_core::models::conflict::TrustStatus;
     let mut bonuses = HashMap::new();
+    let mut trust_percents = HashMap::new();
 
-    if crate::state::canonicalize_did(recipient_id).is_err() {
-        return bonuses;
+    // Always exclude local KnownOffender creators regardless of recipient or WoT graph state.
+    for (local_id, instance) in &wallet.voucher_store.vouchers {
+        if instance.status != human_money_core::wallet::instance::VoucherStatus::Active {
+            continue;
+        }
+        let creator_id = instance.voucher.creator_profile.id.as_deref().unwrap_or("");
+        if matches!(
+            wallet.check_reputation(creator_id),
+            TrustStatus::KnownOffender(_)
+        ) {
+            bonuses.insert(local_id.clone(), -1);
+        }
     }
+
+    let Ok(can_recipient) = crate::state::canonicalize_did(recipient_id) else {
+        return (bonuses, trust_percents, false);
+    };
 
     let wot_guard = state.wot.lock().unwrap();
     let reg = match wot_guard.as_ref() {
         Some(r) => r,
-        None => return bonuses,
+        None => return (bonuses, trust_percents, false),
     };
 
+    let recipient_list_known =
+        reg.raw_list_store.contains_key(&can_recipient) || can_recipient == reg.self_did;
     let now_secs = chrono::Utc::now().timestamp() as u64;
 
     for (local_id, instance) in &wallet.voucher_store.vouchers {
         if instance.status != human_money_core::wallet::instance::VoucherStatus::Active {
             continue;
         }
+        if bonuses.get(local_id).is_some_and(|&v| v < 0) {
+            continue;
+        }
 
         let creator_id = instance.voucher.creator_profile.id.as_deref().unwrap_or("");
-        let is_offender = matches!(
-            wallet.check_reputation(creator_id),
-            TrustStatus::KnownOffender(_)
-        );
-
         let guarantor_refs: Vec<&str> = instance
             .voucher
             .signatures
@@ -653,15 +668,55 @@ fn compute_wot_bonuses(
             recipient_id,
             creator_id,
             &guarantor_refs,
-            is_offender,
+            false,
             Some(now_secs),
         ) {
-            let bonus = (eval.score * 1500.0).round() as i64;
-            bonuses.insert(local_id.clone(), bonus);
+            if eval.blocked_by_offender {
+                bonuses.insert(local_id.clone(), -1);
+            } else if recipient_list_known || eval.score >= 1.0 {
+                let bonus = (eval.score * 6000.0).round() as i64;
+                let pct = (eval.score * 100.0).round().clamp(0.0, 100.0) as u8;
+                bonuses.insert(local_id.clone(), bonus);
+                trust_percents.insert(local_id.clone(), pct);
+            }
         }
     }
 
-    bonuses
+    (bonuses, trust_percents, recipient_list_known)
+}
+
+pub(crate) fn prepare_transfer_plan_impl(
+    target_amount: String,
+    standard_uuid_filter: Option<String>,
+    recipient_id: String,
+    is_test_voucher: Option<bool>,
+    state: &AppState,
+) -> Result<FrontendTransferPlan, FrontendError> {
+    let recipient_id = recipient_id.trim().to_string();
+    let service = state.service.lock().unwrap();
+    let (bonuses, trust_percents, recipient_list_known) = service
+        .with_wallet(|w| compute_wot_bonuses(state, w, &recipient_id))
+        .map_err(FrontendError::from)?;
+    let plan = service
+        .prepare_transfer_with_context(
+            &target_amount,
+            standard_uuid_filter.as_deref(),
+            is_test_voucher,
+            &recipient_id,
+            Some(&bonuses),
+        )
+        .map_err(FrontendError::from)?;
+    let min_recipient_trust_percent = if recipient_list_known && !plan.selected.is_empty() {
+        plan.selected
+            .iter()
+            .filter_map(|rv| trust_percents.get(&rv.local_instance_id).copied())
+            .min()
+    } else {
+        None
+    };
+    let mut frontend_plan: FrontendTransferPlan = plan.into();
+    frontend_plan.min_recipient_trust_percent = min_recipient_trust_percent;
+    Ok(frontend_plan)
 }
 
 #[tauri::command]
@@ -669,22 +724,16 @@ pub fn prepare_transfer_plan(
     target_amount: String,
     standard_uuid_filter: Option<String>,
     recipient_id: String,
+    is_test_voucher: Option<bool>,
     state: tauri::State<AppState>,
 ) -> Result<FrontendTransferPlan, FrontendError> {
-    let recipient_id = recipient_id.trim().to_string();
-    let service = state.service.lock().unwrap();
-    let bonuses = service
-        .with_wallet(|w| compute_wot_bonuses(&state, w, &recipient_id))
-        .map_err(FrontendError::from)?;
-    let plan = service
-        .prepare_transfer_with_wot(
-            &target_amount,
-            standard_uuid_filter.as_deref(),
-            &recipient_id,
-            Some(&bonuses),
-        )
-        .map_err(FrontendError::from)?;
-    Ok(plan.into())
+    prepare_transfer_plan_impl(
+        target_amount,
+        standard_uuid_filter,
+        recipient_id,
+        is_test_voucher,
+        &state,
+    )
 }
 
 #[tauri::command]
@@ -692,17 +741,19 @@ pub fn rank_vouchers_for_recipient(
     target_amount: String,
     standard_uuid_filter: Option<String>,
     recipient_id: String,
+    is_test_voucher: Option<bool>,
     state: tauri::State<AppState>,
 ) -> Result<Vec<FrontendRankedVoucher>, FrontendError> {
     let recipient_id = recipient_id.trim().to_string();
     let service = state.service.lock().unwrap();
-    let bonuses = service
+    let (bonuses, _, _) = service
         .with_wallet(|w| compute_wot_bonuses(&state, w, &recipient_id))
         .map_err(FrontendError::from)?;
     let ranked = service
-        .rank_vouchers_with_wot(
+        .rank_vouchers_with_context(
             &target_amount,
             standard_uuid_filter.as_deref(),
+            is_test_voucher,
             &recipient_id,
             Some(&bonuses),
         )

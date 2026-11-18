@@ -2252,6 +2252,8 @@
   "transfer.receiveTitle": "Recevoir",
   "transfer.recipient": "Destinataire",
   "transfer.recipientSearchPlaceholder": "Rechercher un contact ou coller un code…",
+  "transfer.recipientTrustFit": "Le destinataire connaît l'émetteur ({{percent}} %)",
+  "transfer.recipientTrustUnknownHint": "L'émetteur est encore inconnu selon la liste de confiance du destinataire",
   "transfer.reputationAlert": "Alerte de réputation",
   "transfer.reputationAlertDesc": "Cette identité est associée à des conflits de registre passés. Faites preuve d'une extrême prudence.",
   "transfer.requestPayment.amount": "Montant",

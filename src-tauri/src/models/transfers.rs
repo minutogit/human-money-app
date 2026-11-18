@@ -86,6 +86,7 @@ pub struct FrontendTransferPlan {
     pub target: String,
     pub needs_split: bool,
     pub plan_reason: String,
+    pub min_recipient_trust_percent: Option<u8>,
 }
 
 impl From<TransferPlan> for FrontendTransferPlan {
@@ -96,6 +97,7 @@ impl From<TransferPlan> for FrontendTransferPlan {
             target: p.target.to_string(),
             needs_split: p.needs_split,
             plan_reason: reason_to_string(&p.plan_reason),
+            min_recipient_trust_percent: None,
         }
     }
 }

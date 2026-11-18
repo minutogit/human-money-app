@@ -2252,6 +2252,8 @@
   "transfer.receiveTitle": "Recibir",
   "transfer.recipient": "Destinatario",
   "transfer.recipientSearchPlaceholder": "Buscar contacto o pegar código…",
+  "transfer.recipientTrustFit": "El destinatario conoce al emisor ({{percent}}%)",
+  "transfer.recipientTrustUnknownHint": "El destinatario aún no conoce a este emisor según su lista de confianza",
   "transfer.reputationAlert": "Alerta de Reputación",
   "transfer.reputationAlertDesc": "Esta identidad está asociada con conflictos de libro mayor pasados. Tenga extrema precaución.",
   "transfer.requestPayment.amount": "Importe",

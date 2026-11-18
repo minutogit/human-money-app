@@ -52,6 +52,7 @@ export interface TransferPlan {
     target: string;
     needsSplit: boolean;
     planReason: string;
+    minRecipientTrustPercent?: number | null;
 }
 
 export const transferService = {
@@ -59,11 +60,17 @@ export const transferService = {
         return await invoke<TransactionRecord[]>("get_transaction_history");
     },
 
-    prepareTransferPlan: async (args: { targetAmount: string; standardUuidFilter?: string | null; recipientId: string }) => {
+    prepareTransferPlan: async (args: {
+        targetAmount: string;
+        standardUuidFilter?: string | null;
+        recipientId: string;
+        isTestVoucher?: boolean | null;
+    }) => {
         return await invoke<TransferPlan>("prepare_transfer_plan", {
             targetAmount: args.targetAmount,
             standardUuidFilter: args.standardUuidFilter ?? null,
-            recipientId: args.recipientId
+            recipientId: args.recipientId,
+            isTestVoucher: args.isTestVoucher ?? null,
         });
     },
 

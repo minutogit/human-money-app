@@ -185,6 +185,7 @@ amount_decimal_places = 4`,
     render(<SendView />);
 
     await waitFor(() => expect(screen.getAllByText(/PrecisionStd/i).length).toBeGreaterThan(0));
+    fireEvent.click(screen.getByTestId('manual-voucher-selection-toggle'));
     expect(await screen.findByText(/100.12/)).toBeInTheDocument();
     expect(screen.queryByText('100.1234')).not.toBeInTheDocument();
   });
@@ -234,7 +235,8 @@ amount_decimal_places = 4`,
     const recipientInput = await screen.findByRole('textbox', { name: /User ID/i });
     fireEvent.change(recipientInput, { target: { value: 'did:key:z456' } });
 
-    // Click on the voucher card to select it
+    // Expand manual voucher selection and click on the voucher card to select it
+    fireEvent.click(await screen.findByTestId('manual-voucher-selection-toggle'));
     const freetalerVouchers = await screen.findAllByText('FreeTaler');
     const freetalerVoucher = freetalerVouchers[freetalerVouchers.length - 1];
     fireEvent.click(freetalerVoucher);
@@ -361,6 +363,8 @@ amount_decimal_places = 4`,
 
     render(<SendView />);
 
+    fireEvent.click(await screen.findByTestId('edit-sender-name-btn'));
+
     await waitFor(() => {
       expect(screen.getByPlaceholderText(/Your name for the recipient/i)).toBeInTheDocument();
     });
@@ -417,6 +421,14 @@ amount_decimal_places = 4`,
 
     render(<SendView />);
 
+    // Fixed sender display is shown by default until pencil icon is clicked
+    await waitFor(() => {
+      expect(screen.getByText('Test User')).toBeInTheDocument();
+    });
+    expect(screen.queryByPlaceholderText(/Your name for the recipient/i)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('edit-sender-name-btn'));
+
     await waitFor(() => {
       expect(screen.getByPlaceholderText(/Your name for the recipient/i)).toBeInTheDocument();
     });
@@ -441,6 +453,7 @@ amount_decimal_places = 4`,
     fireEvent.change(recipientInput, { target: { value: 'did:key:z456' } });
 
     // Select voucher
+    fireEvent.click(screen.getByTestId('manual-voucher-selection-toggle'));
     const freetalerVouchers = await screen.findAllByText('FreeTaler');
     fireEvent.click(freetalerVouchers[freetalerVouchers.length - 1]);
 
@@ -466,9 +479,9 @@ amount_decimal_places = 4`,
       expect(screen.getAllByText('FreeTaler').length).toBeGreaterThan(0);
     });
 
-    // Click "All" pill (sets selectedStandardId = null)
-    const allPill = screen.getByRole('button', { name: /All|Alle/i });
-    fireEvent.click(allPill);
+    // Select "All" in unified currency dropdown (sets selectedStandardId = null)
+    const currencySelect = screen.getByTestId('currency-select');
+    fireEvent.change(currencySelect, { target: { value: 'ALL' } });
 
     const amountInput = document.getElementById('target-amount') as HTMLInputElement | null;
     expect(amountInput).toBeInTheDocument();
@@ -720,6 +733,77 @@ amount_decimal_places = 4`,
       expect(screen.getByText(/awaiting Layer 2 confirmation/i)).toBeInTheDocument();
     });
     expect(screen.queryByText(/Validation failed\./i)).not.toBeInTheDocument();
+  });
+
+  it('shows fixed sender display with pencil toggle and renders recipient WoT fit from prepare_transfer_plan', async () => {
+    const baseImpl = (invoke as Mock).getMockImplementation();
+    (invoke as Mock).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === 'get_my_market_profile') {
+        return Promise.resolve({
+          published: true,
+          profile: { firstName: 'Alice', lastName: 'Card', organization: '' },
+        });
+      }
+      if (cmd === 'prepare_transfer_plan') {
+        return Promise.resolve({
+          selected: [
+            {
+              localInstanceId: 'voucher1',
+              score: 5100,
+              breakdown: {
+                sBoomerang: 0,
+                sEigen: 0,
+                sCorridor: 0,
+                sAge: 0,
+                sChain: 0,
+                sFit: 0,
+                sWot: 5100,
+              },
+              reason: 'greedy',
+              amount: '25.00',
+              standardUuid: 'a1b2c3d4-e5f6-4789-8012-3456789abcde',
+            },
+          ],
+          totalSelected: '25.00',
+          target: '25',
+          needsSplit: true,
+          planReason: 'greedy',
+          minRecipientTrustPercent: 85,
+        });
+      }
+      return baseImpl ? baseImpl(cmd, args) : Promise.resolve(undefined);
+    });
+
+    render(<SendView />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Alice Card')).toBeInTheDocument();
+    });
+    expect(screen.queryByPlaceholderText(/Your name for the recipient/i)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('edit-sender-name-btn'));
+    const senderInput = await screen.findByPlaceholderText(/Your name for the recipient/i);
+    fireEvent.change(senderInput, { target: { value: 'Alice Custom' } });
+    fireEvent.click(screen.getByTestId('save-sender-name-btn'));
+    expect(screen.getByText('Alice Custom')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByTestId('recipient-search-input'), {
+      target: { value: 'did:key:z999999999999' },
+    });
+    fireEvent.change(document.getElementById('target-amount') as HTMLInputElement, {
+      target: { value: '25' },
+    });
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith(
+        'prepare_transfer_plan',
+        expect.objectContaining({
+          isTestVoucher: false,
+          recipientId: 'did:key:z999999999999',
+        })
+      );
+      expect(screen.getByText(/Recipient knows issuer \(85%\)/i)).toBeInTheDocument();
+    });
   });
 });
 

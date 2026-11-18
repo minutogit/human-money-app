@@ -2568,6 +2568,8 @@
   "transfer.receiveTitle": "Receive",
   "transfer.recipient": "Recipient",
   "transfer.recipientSearchPlaceholder": "Search contact or paste code…",
+  "transfer.recipientTrustFit": "Recipient knows issuer ({{percent}}%)",
+  "transfer.recipientTrustUnknownHint": "Recipient's trust list does not show this issuer yet",
   "transfer.reputationAlert": "Trust Alert",
   "transfer.reputationAlertDesc": "This identity has a flagged trust status. Exercise caution.",
   "transfer.requestPayment.amount": "Amount",

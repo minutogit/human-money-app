@@ -2568,6 +2568,8 @@
   "transfer.receiveTitle": "Empfangen",
   "transfer.recipient": "Empfänger",
   "transfer.recipientSearchPlaceholder": "Kontakt suchen oder Code einfügen…",
+  "transfer.recipientTrustFit": "Empfänger kennt Aussteller ({{percent}} %)",
+  "transfer.recipientTrustUnknownHint": "Aussteller ist laut Vertrauensliste beim Empfänger noch unbekannt",
   "transfer.reputationAlert": "Vertrauenswarnung",
   "transfer.reputationAlertDesc": "Diese Identität hat einen auffälligen Vertrauensstatus. Bitte Vorsicht walten lassen.",
   "transfer.requestPayment.amount": "Betrag",

@@ -124,7 +124,7 @@ export function useVoucherSelection(vouchers: VoucherSummary[]) {
   ) => {
     const normalizedTarget = targetAmountStr.trim().replace(',', '.');
     const target = parseFloat(normalizedTarget);
-    if (!target || target <= 0 || !recipientId || recipientId.trim().length < 10) {
+    if (!target || target <= 0) {
       return null;
     }
     const requestId = ++latestRequestId.current;
@@ -132,9 +132,13 @@ export function useVoucherSelection(vouchers: VoucherSummary[]) {
       const plan = await transferService.prepareTransferPlan({
         targetAmount: normalizedTarget,
         standardUuidFilter: standardUuid,
-        recipientId: recipientId.trim()
+        recipientId: recipientId.trim(),
+        isTestVoucher: isTest,
       });
       if (requestId !== latestRequestId.current) return null;
+      if (!plan) {
+        throw new Error('Transfer plan unavailable');
+      }
 
       // Guardrail: never allow mixed Test + Real vouchers from transfer plan
       const selectedVouchers = plan.selected
