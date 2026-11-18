@@ -440,7 +440,7 @@ amount_decimal_places = 4`,
     });
   });
 
-  it('APP-UX-09 P3 Simple Mode: renders unified My Code QR + Select File without tabs, PoS toggle, or technical file guides', async () => {
+  it('APP-UX-09 P3 Simple Mode: renders unified My Code QR + Select File + PoS toggle without tabs or technical file guides', async () => {
     localStorage.setItem(UI_MODE_STORAGE_KEY, 'simple');
 
     const { container } = render(
@@ -454,7 +454,7 @@ amount_decimal_places = 4`,
     expect(screen.getByText('My Code')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Select File/i })).toBeInTheDocument();
     expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
-    expect(screen.queryByRole('checkbox', { name: /PoS Cashier Mode/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: /PoS Cashier Mode/i })).toBeInTheDocument();
     expect(screen.queryByText(/\.transfer/)).not.toBeInTheDocument();
     expect(screen.queryByText(/\.ask/)).not.toBeInTheDocument();
     expect(container.textContent).not.toContain('did:key:');

@@ -136,6 +136,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         setIsSessionActive(false);
         isSessionActiveRef.current = false;
         stopSyncLoops();
+        emitAppEvent(APP_EVENTS.SESSION_LOCKED);
         // DO NOT clear profileName and DO NOT set isAuthenticated to false
     }, [stopSyncLoops]);
 
@@ -279,7 +280,12 @@ export function SessionProvider({ children }: { children: ReactNode }) {
                     setIsSessionActive(false);
                     isSessionActiveRef.current = false;
                     stopSyncLoops();
+                    emitAppEvent(APP_EVENTS.SESSION_LOCKED);
                     throw new Error("SESSION_EXPIRED_RETRY");
+                }
+                if (errCode === 'error.auth.insufficientAccessMode' || errMsg.includes("InsufficientAccessMode")) {
+                    logger.info("Backend requires elevated session access mode; prompting step-up auth.");
+                    throw new Error("STEP_UP_REQUIRED_RETRY");
                 }
                 if (errCode === 'error.security.supersededByHandover'
                     || errMsg.includes("SupersededByHandover") || errMsg.includes("transferred to another device")) {
@@ -321,6 +327,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
                 } catch (e) {
                     if (e instanceof Error && e.message === "SESSION_EXPIRED_RETRY") {
                         return enqueuePendingRequest<T>('session', action);
+                    }
+                    if (e instanceof Error && e.message === "STEP_UP_REQUIRED_RETRY") {
+                        return enqueuePendingRequest<T>('stepUp', action);
                     }
                     throw e;
                 }

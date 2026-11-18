@@ -680,8 +680,10 @@ amount_decimal_places = 4`,
     fireEvent.click(confirmBtn);
 
     await waitFor(() => {
-      expect(invoke).toHaveBeenCalledWith('save_transaction_record', expect.any(Object));
+      expect(invoke).toHaveBeenCalledWith('create_transfer_bundle', expect.any(Object));
+      expect(invoke).toHaveBeenCalledWith('deposit_transfer_to_post', expect.objectContaining({ bundleId: 'bundle-123' }));
     });
+    expect(invoke).not.toHaveBeenCalledWith('save_transaction_record', expect.any(Object));
     expect(screen.queryByText(/Transfer failed/i)).not.toBeInTheDocument();
 
     await waitFor(

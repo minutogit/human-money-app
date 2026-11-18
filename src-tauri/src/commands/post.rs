@@ -25,10 +25,18 @@ pub async fn deposit_transfer_to_post(
 pub async fn send_signing_request_via_post(
     recipient_did: String,
     container_bytes: Vec<u8>,
+    local_instance_id: Option<String>,
     password: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<FrontendPostDepositResult, FrontendError> {
-    send_signing_request_via_post_impl(recipient_did, container_bytes, password, &state).await
+    send_signing_request_via_post_impl(
+        recipient_did,
+        container_bytes,
+        local_instance_id,
+        password,
+        &state,
+    )
+    .await
 }
 
 #[tauri::command]

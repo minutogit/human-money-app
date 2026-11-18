@@ -55,6 +55,7 @@ fn sample_envelope(msg_id: &str, byte_len: usize) -> PostEnvelope {
             drop_pub: hex::encode([7u8; 32]),
         }],
         container_bytes: vec![42u8; byte_len],
+        anchor_manifest_json: None,
     }
 }
 

@@ -1,20 +1,25 @@
 // src/components/transfer/receive/ReceiveInputStep.tsx
-import React from 'react';
+import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
     UploadCloud,
     FileCheck,
     FileSignature,
-    ArrowRightLeft,
     Lock,
     X,
     CheckCircle2,
+    RefreshCw,
+    ClipboardPaste,
     AlertCircle,
+    ArrowRightLeft,
 } from 'lucide-react';
 import { Button } from '../../ui/Button';
 import { Input } from '../../ui/Input';
+import { Textarea } from '../../ui/Textarea';
+import { AlertBanner } from '../../ui/AlertBanner';
 import { Advanced } from '../../ui/Advanced';
 import { HelpIcon } from '../../ui/HelpIcon';
+import { readFromClipboard } from '../../../utils/clipboard';
 import type { AppSettings } from '../../../types';
 import type { PendingPosFallbackState } from './useReceiveFlow';
 
@@ -28,6 +33,10 @@ interface ReceiveInputStepProps {
     onAcceptPosFallback: () => void;
     onCancelPosFallback: () => void;
     isProcessing: boolean;
+    isCheckingPost?: boolean;
+    postCheckStatus?: { variant: 'info' | 'success' | 'error'; message: string } | null;
+    onCheckPostNow?: () => void;
+    onPasteRawInput?: (rawText: string) => Promise<boolean>;
     isDragOver: boolean;
     bundleName: string | null;
     onDragOver: (e: React.DragEvent<HTMLDivElement>) => void;
@@ -47,6 +56,10 @@ export function ReceiveInputStep({
     onAcceptPosFallback,
     onCancelPosFallback,
     isProcessing,
+    isCheckingPost = false,
+    postCheckStatus = null,
+    onCheckPostNow,
+    onPasteRawInput,
     isDragOver,
     bundleName,
     onDragOver,
@@ -56,42 +69,42 @@ export function ReceiveInputStep({
     onClearSelection,
 }: ReceiveInputStepProps) {
     const { t } = useTranslation();
+    const [showPasteBox, setShowPasteBox] = useState(false);
+    const [pastedText, setPastedText] = useState('');
 
     return (
         <div className="space-y-8">
-            <Advanced>
-                {settings?.enablePosMode && (
-                    <div className="flex flex-col sm:flex-row items-center justify-between gap-4 p-4 bg-white/40 border border-theme-subtle/50 rounded-2xl">
-                        <div className="flex items-center gap-2">
-                            <label className="flex items-center gap-3 cursor-pointer select-none">
-                                <input
-                                    type="checkbox"
-                                    checked={isPosMode}
-                                    onChange={(e) => onPosModeToggle(e.target.checked)}
-                                    className="rounded accent-theme-primary h-4 w-4"
-                                />
-                                <span className="text-xs font-bold text-theme-secondary">
-                                    {t('transfer.posModeToggle', 'PoS Cashier Mode (Point-of-Sale Checkout)')}
-                                </span>
-                            </label>
-                            <HelpIcon topic="posMode" size={14} />
-                        </div>
-                        {isPosMode && (
-                            <div className="w-full sm:w-64">
-                                <Input
-                                    placeholder={t(
-                                        'transfer.purchaseIdPlaceholder',
-                                        'Receipt / Purchase ID (optional)',
-                                    )}
-                                    value={purchaseId}
-                                    onChange={(e) => onPurchaseIdChange(e.target.value)}
-                                    className="text-xs font-mono py-1.5"
-                                />
-                            </div>
-                        )}
+            {settings?.enablePosMode && (
+                <div className="flex flex-col sm:flex-row items-center justify-between gap-4 p-4 bg-white/40 border border-theme-subtle/50 rounded-2xl">
+                    <div className="flex items-center gap-2">
+                        <label className="flex items-center gap-3 cursor-pointer select-none">
+                            <input
+                                type="checkbox"
+                                checked={isPosMode}
+                                onChange={(e) => onPosModeToggle(e.target.checked)}
+                                className="rounded accent-theme-primary h-4 w-4"
+                            />
+                            <span className="text-xs font-bold text-theme-secondary">
+                                {t('transfer.posModeToggle', 'PoS Cashier Mode (Point-of-Sale Checkout)')}
+                            </span>
+                        </label>
+                        <HelpIcon topic="posMode" size={14} />
                     </div>
-                )}
-            </Advanced>
+                    {isPosMode && (
+                        <div className="w-full sm:w-64">
+                            <Input
+                                placeholder={t(
+                                    'transfer.purchaseIdPlaceholder',
+                                    'Receipt / Purchase ID (optional)',
+                                )}
+                                value={purchaseId}
+                                onChange={(e) => onPurchaseIdChange(e.target.value)}
+                                className="text-xs font-mono py-1.5"
+                            />
+                        </div>
+                    )}
+                </div>
+            )}
 
             {pendingPosFallback && (
                 <div
@@ -228,7 +241,7 @@ export function ReceiveInputStep({
                                 </p>
                             </Advanced>
                         </div>
-                        <div className="pt-4">
+                        <div className="pt-4 flex flex-wrap items-center justify-center gap-2.5">
                             <Button
                                 type="button"
                                 onClick={(e) => {
@@ -240,10 +253,102 @@ export function ReceiveInputStep({
                             >
                                 {t('transfer.importFile.selectFile')}
                             </Button>
+                            {onCheckPostNow && (
+                                <Button
+                                    type="button"
+                                    variant="outline"
+                                    data-testid="receive-check-post-btn"
+                                    disabled={isCheckingPost || isProcessing}
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        onCheckPostNow();
+                                    }}
+                                    className="rounded-2xl gap-1.5"
+                                >
+                                    <RefreshCw size={14} className={isCheckingPost ? 'animate-spin' : ''} />
+                                    <span>{t('transfer.checkPostNowBtn', 'Postfach jetzt prüfen')}</span>
+                                </Button>
+                            )}
+                            {onPasteRawInput && (
+                                <Button
+                                    type="button"
+                                    variant="outline"
+                                    data-testid="receive-toggle-paste-btn"
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        setShowPasteBox((prev) => !prev);
+                                    }}
+                                    className="rounded-2xl gap-1.5"
+                                >
+                                    <ClipboardPaste size={14} />
+                                    <span>{t('common.pasteLinkBtn', 'Link / Code einfügen')}</span>
+                                </Button>
+                            )}
                         </div>
                     </div>
                 )}
             </div>
+
+            {postCheckStatus && (
+                <AlertBanner variant={postCheckStatus.variant}>
+                    {postCheckStatus.message}
+                </AlertBanner>
+            )}
+
+            {showPasteBox && onPasteRawInput && (
+                <div className="p-4 bg-white border border-theme-subtle rounded-2xl space-y-3 shadow-sm">
+                    <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-bold text-theme-secondary">
+                            {t('common.pasteModalTitle', 'Link oder Code einfügen')}
+                        </span>
+                        <Button
+                            type="button"
+                            size="xs"
+                            variant="outline"
+                            onClick={async () => {
+                                const clip = await readFromClipboard();
+                                if (!clip.error && clip.text.trim()) {
+                                    setPastedText(clip.text);
+                                }
+                            }}
+                        >
+                            <ClipboardPaste size={12} className="mr-1" />
+                            {t('common.pasteFromClipboard', 'Aus Zwischenablage einfügen')}
+                        </Button>
+                    </div>
+                    <Textarea
+                        rows={3}
+                        value={pastedText}
+                        onChange={(e) => setPastedText(e.target.value)}
+                        placeholder={t('common.pastePlaceholder', 'z. B. humoco://pay?… oder ganze Chat-/E-Mail-Nachricht')}
+                    />
+                    <div className="flex justify-end gap-2">
+                        <Button
+                            type="button"
+                            size="xs"
+                            variant="outline"
+                            onClick={() => setShowPasteBox(false)}
+                        >
+                            {t('common.cancel')}
+                        </Button>
+                        <Button
+                            type="button"
+                            size="xs"
+                            variant="primary"
+                            disabled={!pastedText.trim() || isProcessing}
+                            onClick={async () => {
+                                const ok = await onPasteRawInput(pastedText);
+                                if (ok) {
+                                    setPastedText('');
+                                    setShowPasteBox(false);
+                                }
+                            }}
+                        >
+                            {t('common.pasteOpenBtn', 'Öffnen')}
+                        </Button>
+                    </div>
+                </div>
+            )}
 
             <Advanced>
                 <div className="text-center">

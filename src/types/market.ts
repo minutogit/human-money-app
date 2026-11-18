@@ -254,7 +254,6 @@ export interface FrontendSyncOverviewStatus {
     friendSyncs: number;
     publicSyncs: number;
     hasOwnSync: boolean;
-    ownSyncSoftWarning: boolean;
     lastSyncAt?: number | null;
     pendingAuthCount?: number;
     failingCount?: number;
@@ -338,6 +337,7 @@ export interface FrontendTrustChangeImpact {
 
 export interface FrontendPostDepositResult {
     depositedTo: number;
+    recipientDepositedTo: number;
     msgId: string;
     errors: string[];
 }
@@ -349,6 +349,7 @@ export interface FrontendPendingSignRequest {
     createdAt: number;
     replySyncs: FrontendSyncDescriptor[];
     containerBytes: number[];
+    anchorManifestJson?: string | null;
 }
 
 export interface FrontendPendingWotHandshake {

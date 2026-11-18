@@ -8,8 +8,8 @@ use humoco_market::media::{
     detect_media_data_uri_prefix, extract_media_bytes, is_supported_media_data_uri,
     is_valid_image_token, open_media_blob, parse_image_dimensions, parse_jpeg_dimensions,
     parse_png_dimensions, parse_webp_dimensions, seal_media_blob, sign_media_request,
-    validate_ad_media, validate_ad_webp, validate_avatar_data_uri, JPEG_DATA_URI_PREFIX,
-    MEDIA_DATA_URI_PREFIX, PNG_DATA_URI_PREFIX,
+    validate_ad_media, validate_avatar_data_uri, JPEG_DATA_URI_PREFIX, MEDIA_DATA_URI_PREFIX,
+    PNG_DATA_URI_PREFIX,
 };
 use humoco_market::model::{
     Ad, AdKind, CardPayloadInput, DropDescriptor, WireFilter, AVATAR_IMAGE_DIM, MAX_AD_IMAGE_DIM,
@@ -302,20 +302,20 @@ fn test_decompression_bomb_rejection() {
     // WebP with dimensions > 1024x1024 (e.g. 1025x768 or 8000x8000)
     let bomb_vp8 = make_vp8_webp(1025, 768);
     assert!(matches!(
-        validate_ad_webp(&bomb_vp8),
+        validate_ad_media(&bomb_vp8),
         Err(MarketError::Validation(_))
     ));
 
     let bomb_vp8x = make_vp8x_webp(4096, 4096);
     assert!(matches!(
-        validate_ad_webp(&bomb_vp8x),
+        validate_ad_media(&bomb_vp8x),
         Err(MarketError::Validation(_))
     ));
 
     // Exactly 1024x1024 is accepted
     let max_ok = make_vp8_webp(MAX_AD_IMAGE_DIM, MAX_AD_IMAGE_DIM);
     assert_eq!(
-        validate_ad_webp(&max_ok).unwrap(),
+        validate_ad_media(&max_ok).unwrap(),
         (MAX_AD_IMAGE_DIM, MAX_AD_IMAGE_DIM)
     );
 }

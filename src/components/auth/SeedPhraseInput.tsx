@@ -7,6 +7,7 @@ import { profileService } from '../../services/profileService';
 import { recoveryService } from '../../services/recoveryService';
 import { cleanSeedText } from '../../utils/seedUtils';
 import { translateError } from '../../utils/errorHelper';
+import { extractHumocoDeepLink } from '../../utils/humocoFileClassifier';
 import { Input } from '../ui/Input';
 import { HelpIcon } from '../ui/HelpIcon';
 import { PrefixInfoModal } from '../ui/PrefixInfoModal';
@@ -129,8 +130,11 @@ export const SeedPhraseInput: React.FC<SeedPhraseInputProps> = ({
 
     const applyKitUri = useCallback(
         async (rawText: string) => {
-            const match = rawText.match(/humoco:\/\/kit[^\s"'<>)]+/i);
-            const uri = match ? match[0].replace(/[.,;:!\]]+$/, '') : rawText.trim();
+            const extracted = extractHumocoDeepLink(rawText);
+            const uri =
+                extracted && extracted.toLowerCase().startsWith('humoco://kit')
+                    ? extracted
+                    : rawText.trim();
             try {
                 const kit = await recoveryService.inspectEmergencyKitUri(uri);
                 const kitWords = kit.phrase.trim().split(/\s+/).filter(Boolean);

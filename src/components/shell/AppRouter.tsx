@@ -25,8 +25,10 @@ import { SupportView } from '../support/SupportView';
 import { BugReportView } from '../support/BugReportView';
 import { HelpCenterView } from '../support/HelpCenterView';
 import { MarketplaceView } from '../marketplace/MarketplaceView';
+import { useTranslation } from 'react-i18next';
 
 export const AppRouter: React.FC = () => {
+    const { t } = useTranslation();
     const { notifyLogin, isSessionActive } = useSession();
     const { appState, navigate, goBack } = useNavigation();
 
@@ -34,7 +36,7 @@ export const AppRouter: React.FC = () => {
         case "loading":
             return (
                 <div className="flex h-full w-full items-center justify-center">
-                    <p className="text-theme-light">Loading application...</p>
+                    <p className="text-theme-light">{t('common.loadingApp', 'App wird geladen...')}</p>
                 </div>
             );
         case "needs_profile":
@@ -100,8 +102,17 @@ export const AppRouter: React.FC = () => {
         case "needs_recovery":
             return <WalletRecovery 
                 initialPayload={appState.initialPayload}
-                onRecoverySuccess={(folder) => {
-                    notifyLogin(undefined, folder);
+                onRecoverySuccess={async (folder, profileName) => {
+                    let resolvedName = profileName;
+                    if (!resolvedName && folder) {
+                        try {
+                            const profiles = await authService.listProfiles();
+                            resolvedName = profiles.find((p) => p.folderName === folder)?.profileName;
+                        } catch {
+                            // fallback below
+                        }
+                    }
+                    notifyLogin(resolvedName, folder);
                     navigate({ view: "logged_in" });
                 }} 
                 onSwitchToLogin={() => navigate({ view: "needs_login" })} 
@@ -133,7 +144,12 @@ export const AppRouter: React.FC = () => {
                 onBack={goBack}
                 onReceiveSuccess={(payload) => {
                     if ('localInstanceId' in payload) {
-                        navigate({ view: "sign_request", voucherData: payload as VoucherDetails });
+                        const details = payload as VoucherDetails;
+                        navigate({
+                            view: "sign_request",
+                            voucherData: details,
+                            anchorManifestJson: details.anchorManifestJson,
+                        });
                     } else if (payload.isSignatureAttached && payload.voucherId) {
                         navigate({ view: "voucher_details", voucherId: payload.voucherId });
                     } else {
@@ -151,6 +167,7 @@ export const AppRouter: React.FC = () => {
                 l2Dispatch={appState.l2Dispatch}
                 bundleId={appState.bundleId}
                 initialDepositedTo={appState.depositedTo}
+                initialRecipientDepositedTo={appState.recipientDepositedTo}
                 depositError={appState.depositError}
                 onDone={() => navigate({ view: "logged_in" })}
             />;
@@ -161,6 +178,7 @@ export const AppRouter: React.FC = () => {
                 voucherData={appState.voucherData}
                 requestMsgId={appState.requestMsgId}
                 senderDid={appState.senderDid}
+                anchorManifestJson={appState.anchorManifestJson}
                 onBack={goBack}
             />;
         case "conflict_details":
@@ -187,7 +205,7 @@ export const AppRouter: React.FC = () => {
         default:
             return (
                 <div className="flex h-full w-full items-center justify-center">
-                    <p className="text-theme-error">Error: Invalid application state.</p>
+                    <p className="text-theme-error">{t('common.invalidAppState', 'Fehler: Ungültiger Anwendungszustand.')}</p>
                 </div>
             );
     }

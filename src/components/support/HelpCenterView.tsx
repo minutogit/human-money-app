@@ -7,6 +7,7 @@ import { useUiMode } from '../../context/UiModeContext';
 import { AuthLayout } from '../auth/AuthLayout';
 import { PageLayout } from '../ui/PageLayout';
 import { Card } from '../ui/Card';
+import { Button } from '../ui/Button';
 import { BackButton } from '../ui/BackButton';
 import { Disclosure } from '../ui/Disclosure';
 import { AdvancedDisclosure } from '../ui/AdvancedDisclosure';
@@ -25,6 +26,8 @@ import {
     ChevronRight,
     ArrowLeft,
     Compass,
+    Heart,
+    Terminal,
 } from 'lucide-react';
 
 interface HelpCenterViewProps {
@@ -387,6 +390,32 @@ export const HelpCenterView: React.FC<HelpCenterViewProps> = ({ initialTopic, on
                 title={t('helpCenter.title')}
                 description={t('helpCenter.subtitle')}
                 onBack={handleBack}
+                actions={
+                    <div className="flex items-center gap-2">
+                        <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => navigate({ view: 'support' })}
+                            className="gap-1.5"
+                            data-testid="help-center-support-btn"
+                        >
+                            <Heart size={15} />
+                            <span>{t('common.supportMenu')}</span>
+                        </Button>
+                        <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => navigate({ view: 'bug_report' })}
+                            className="gap-1.5"
+                            data-testid="help-center-bug-report-btn"
+                        >
+                            <Terminal size={15} />
+                            <span>{t('common.bugReportTitle')}</span>
+                        </Button>
+                    </div>
+                }
             >
                 <div className="max-w-5xl mx-auto py-4">
                     <Card className="p-6 md:p-8 shadow-premium rounded-[32px]">

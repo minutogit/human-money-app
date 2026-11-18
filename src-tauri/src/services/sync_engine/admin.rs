@@ -62,6 +62,11 @@ fn load_admin_with_signing_key(
     password: Option<&str>,
 ) -> Result<(StoredSyncAdmin, ed25519_dalek::SigningKey, Vec<u8>), FrontendError> {
     let mut service = state.lock_service()?;
+    crate::services::common::ensure_access_mode(
+        &mut service,
+        human_money_core::AccessMode::Full,
+        password,
+    )?;
     let bytes = service
         .load_encrypted_data(MARKET_SYNC_ADMIN_KEY, password)
         .map_err(FrontendError::from)?;
@@ -580,6 +585,50 @@ pub async fn finalize_sync_setup_impl(
             ))
         })?;
 
+    let mut lock_probe_result = None;
+    if let Some(ref lock_info) = info.lock {
+        let lock_pub_hex = lock_info.lock_pub.trim().to_ascii_lowercase();
+        if humoco_market::parse_ed25519_pubkey_hex64(&lock_pub_hex).is_ok() {
+            let delegation_valid = lock_info.delegation.as_ref().is_some_and(|d| {
+                sync_client::verify_lock_delegation(
+                    &lock_pub_hex,
+                    d,
+                    Some(&admin.descriptor.drop_pub),
+                )
+            });
+            let mut ready = delegation_valid;
+            if !delegation_valid {
+                match sync_client::push_lock_delegation(
+                    &client,
+                    &write_url,
+                    &admin_sk,
+                    &lock_pub_hex,
+                    sync_client::current_unix_timestamp().max(1),
+                )
+                .await
+                {
+                    Ok(_) => ready = true,
+                    Err(err) => {
+                        log::warn!(
+                            "Auto-pushing lock delegation for {} failed: {}",
+                            write_url,
+                            err
+                        );
+                    }
+                }
+            }
+            if ready {
+                let probe = sync_client::probe_lock_server(
+                    &client,
+                    &write_url,
+                    Some(&admin.descriptor.drop_pub),
+                )
+                .await;
+                lock_probe_result = Some(probe);
+            }
+        }
+    }
+
     admin.descriptor.write_url = write_url.clone();
     admin.descriptor.read_url = server_read_url;
 
@@ -618,7 +667,7 @@ pub async fn finalize_sync_setup_impl(
         return Err(err);
     }
 
-    // Add own drop to settings.market_selected_syncs if < 3
+    // Add own drop to settings.market_selected_syncs if < 3 and cache lock probe if available
     {
         let mut service = state.lock_service()?;
         let mut settings = state
@@ -626,6 +675,7 @@ pub async fn finalize_sync_setup_impl(
             .or_else(|_| state.load_settings(&mut service, password.as_deref()))
             .unwrap_or_default();
 
+        let mut settings_dirty = false;
         let desc_dto: FrontendSyncDescriptor = admin.descriptor.clone().into();
         let norm_desc_read = normalize_sync_url(&desc_dto.read_url);
         if settings.market_selected_syncs.len() < 3
@@ -635,6 +685,16 @@ pub async fn finalize_sync_setup_impl(
                 .any(|d| normalize_sync_url(&d.read_url) == norm_desc_read)
         {
             settings.market_selected_syncs.push(desc_dto);
+            settings_dirty = true;
+        }
+        if let Some(probe) = lock_probe_result {
+            let norm_write = normalize_sync_url(&probe.write_url);
+            if !norm_write.is_empty() {
+                settings.l2_probe_cache.insert(norm_write, probe);
+                settings_dirty = true;
+            }
+        }
+        if settings_dirty {
             let _ = state.save_settings(&mut service, settings, password.as_deref());
         }
 
@@ -943,6 +1003,11 @@ pub fn delete_sync_admin_impl(
     state: &AppState,
 ) -> Result<(), FrontendError> {
     let mut service = state.lock_service()?;
+    crate::services::common::ensure_access_mode(
+        &mut service,
+        human_money_core::AccessMode::Full,
+        password.as_deref(),
+    )?;
     let admin_opt = load_stored_sync_admin_opt(&mut service, password.as_deref());
 
     service

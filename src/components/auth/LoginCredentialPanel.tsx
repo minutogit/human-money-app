@@ -272,10 +272,15 @@ export const LoginCredentialPanel: React.FC<LoginCredentialPanelProps> = ({
                             </span>
                             <HelpIcon topic="handover" size={14} className="text-amber-600 animate-pulse" />
                         </div>
+                        {!password.trim() && (
+                            <p className="text-xs font-medium text-amber-800 dark:text-amber-200 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-xl px-3.5 py-2.5">
+                                {t('profile.handoverEnterPasswordHint', 'Bitte gib oben dein Profil-Passwort ein, um die Geräte-Übernahme zu bestätigen.')}
+                            </p>
+                        )}
                         <Button
                             type="button"
                             onClick={onHandover}
-                            disabled={isLoggingIn}
+                            disabled={isLoggingIn || !password.trim()}
                             className="w-full py-5 rounded-3xl !bg-amber-600 hover:!bg-amber-700 shadow-premium-lg text-lg gap-3"
                         >
                             {isLoggingIn ? <RefreshCw className="animate-spin" /> : <ShieldAlert size={24} />}

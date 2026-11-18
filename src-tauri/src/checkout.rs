@@ -34,6 +34,7 @@ fn now() -> Result<u64, FrontendError> {
 pub struct PurchaseCompletion {
     pub purchase_id: String,
     pub newly_committed: bool,
+    pub is_replay: bool,
     pub verdict: crate::models::FrontendCheckoutReleaseVerdict,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub receive_payload: Option<crate::models::ReceiveSuccessPayload>,
@@ -297,7 +298,9 @@ fn build_receive_payload_and_record(
     bundle_data: &[u8],
     standards: &HashMap<String, String>,
     newly_committed: bool,
+    is_replay: bool,
     verdict: crate::models::FrontendCheckoutReleaseVerdict,
+    l2_quorum: Option<crate::models::FrontendL2QuorumDto>,
     password: Option<&str>,
 ) -> Result<
     (
@@ -425,6 +428,24 @@ fn build_receive_payload_and_record(
         }
     }
 
+    let receive_kind = if !opened_bundle.vouchers.is_empty()
+        && opened_bundle
+            .vouchers
+            .iter()
+            .all(|v| v.transactions.last().is_some_and(|t| t.t_type == "claim"))
+    {
+        Some("claim".to_string())
+    } else if !opened_bundle.vouchers.is_empty()
+        && opened_bundle
+            .vouchers
+            .iter()
+            .all(|v| v.transactions.last().is_some_and(|t| t.t_type == "redeem"))
+    {
+        Some("redeem".to_string())
+    } else {
+        Some("transfer".to_string())
+    };
+
     let payload = crate::models::ReceiveSuccessPayload {
         sender_id: opened_bundle.sender_id,
         sender_profile_name: opened_bundle.sender_profile_name,
@@ -437,10 +458,12 @@ fn build_receive_payload_and_record(
             .collect(),
         verifiable_conflicts: Default::default(),
         conflict_summaries,
+        l2_quorum,
+        receive_kind,
         checkout_verdict: Some(verdict),
         purchase_id: Some(purchase_id.to_string()),
         newly_committed: Some(newly_committed),
-        is_replay: Some(!newly_committed),
+        is_replay: Some(is_replay),
         wot_imported_lists,
     };
 
@@ -484,6 +507,25 @@ pub(crate) async fn checkout_bundle(
                 }
             }
 
+            let replay_l2_quorum = if verdict_fe.outcome == "Confirmed" {
+                service
+                    .with_wallet_and_identity(|w, id| {
+                        let b = bundle_processor::open_and_verify_bundle(id, bundle).ok()?;
+                        let aid = b.vouchers.first()?.layer2_anchor?;
+                        let manifest = w.profile.l2_anchor_manifests.get(&hex::encode(aid))?;
+                        Some(crate::models::FrontendL2QuorumDto {
+                            status: "final".to_string(),
+                            signer_count: Some(manifest.threshold as usize),
+                            active_nodes_count: Some(manifest.servers.len()),
+                            details: None,
+                        })
+                    })
+                    .ok()
+                    .flatten()
+            } else {
+                None
+            };
+
             let receive_payload = build_receive_payload_and_record(
                 state,
                 &mut service,
@@ -491,7 +533,9 @@ pub(crate) async fn checkout_bundle(
                 bundle,
                 standards,
                 false,
+                true,
                 verdict_fe.clone(),
+                replay_l2_quorum,
                 password,
             )
             .map(|(payload, _)| payload)
@@ -500,6 +544,7 @@ pub(crate) async fn checkout_bundle(
             return Ok(PurchaseCompletion {
                 purchase_id: completion.purchase_id,
                 newly_committed: completion.newly_committed,
+                is_replay: true,
                 verdict: verdict_fe,
                 receive_payload,
             });
@@ -537,7 +582,9 @@ pub(crate) async fn checkout_bundle(
                 bundle,
                 standards,
                 false,
+                false,
                 verdict_fe.clone(),
+                None,
                 password,
             )
             .map(|(p, _)| p)
@@ -546,15 +593,44 @@ pub(crate) async fn checkout_bundle(
         return Ok(PurchaseCompletion {
             purchase_id: purchase_id.to_string(),
             newly_committed: false,
+            is_replay: false,
             verdict: verdict_fe,
             receive_payload,
         });
     }
 
     if opened_bundle.vouchers.len() != 1 {
-        return Err(fail(
-            "Automatic Sync-Lock checkout requires a single anchored voucher",
-        ));
+        let verdict_core = CheckoutReleaseVerdict::new(
+            L2ProcessingOutcome::Yellow {
+                reason: "MultiVoucherManualApproval".to_string(),
+            },
+            false,
+        );
+        let verdict_fe: crate::models::FrontendCheckoutReleaseVerdict = verdict_core.into();
+        let receive_payload = {
+            let mut service = state.lock_service()?;
+            build_receive_payload_and_record(
+                state,
+                &mut service,
+                purchase_id,
+                bundle,
+                standards,
+                false,
+                false,
+                verdict_fe.clone(),
+                None,
+                password,
+            )
+            .map(|(p, _)| p)
+            .ok()
+        };
+        return Ok(PurchaseCompletion {
+            purchase_id: purchase_id.to_string(),
+            newly_committed: false,
+            is_replay: false,
+            verdict: verdict_fe,
+            receive_payload,
+        });
     }
     let voucher = opened_bundle.vouchers[0].clone();
     let anchor_id = voucher
@@ -789,7 +865,21 @@ pub(crate) async fn checkout_bundle(
     }
 
     match outcome {
-        L2ProcessingOutcome::Confirmed { .. } => {
+        L2ProcessingOutcome::Confirmed {
+            ref quorum_certificates,
+        } => {
+            let signer_count = quorum_certificates
+                .last()
+                .map(|qc| qc.receipts.len())
+                .or(Some(context.manifest.threshold as usize));
+            let active_nodes_count = Some(context.manifest.servers.len());
+            let l2_quorum = Some(crate::models::FrontendL2QuorumDto {
+                status: "final".to_string(),
+                signer_count,
+                active_nodes_count,
+                details: None,
+            });
+
             let completion = service
                 .complete_checkout_purchase(
                     purchase_id,
@@ -819,7 +909,9 @@ pub(crate) async fn checkout_bundle(
                 bundle,
                 standards,
                 completion.newly_committed,
+                false,
                 verdict_fe.clone(),
+                l2_quorum,
                 password,
             )?;
 
@@ -851,6 +943,7 @@ pub(crate) async fn checkout_bundle(
             Ok(PurchaseCompletion {
                 purchase_id: completion.purchase_id,
                 newly_committed: completion.newly_committed,
+                is_replay: false,
                 verdict: verdict_fe,
                 receive_payload: Some(receive_payload),
             })
@@ -867,7 +960,9 @@ pub(crate) async fn checkout_bundle(
                 bundle,
                 standards,
                 false,
+                false,
                 verdict_fe.clone(),
+                None,
                 password,
             )
             .map(|(p, _)| p)
@@ -875,6 +970,7 @@ pub(crate) async fn checkout_bundle(
             Ok(PurchaseCompletion {
                 purchase_id: purchase_id.to_string(),
                 newly_committed: false,
+                is_replay: false,
                 verdict: verdict_fe,
                 receive_payload,
             })
@@ -885,11 +981,26 @@ pub(crate) async fn checkout_bundle(
                     .into();
             verdict_fe.reduced_guarantor_protection = reduced_guarantor_protection;
             verdict_fe.manifest_revision = manifest_revision;
+            let receive_payload = build_receive_payload_and_record(
+                state,
+                &mut service,
+                purchase_id,
+                bundle,
+                standards,
+                false,
+                false,
+                verdict_fe.clone(),
+                None,
+                password,
+            )
+            .map(|(p, _)| p)
+            .ok();
             Ok(PurchaseCompletion {
                 purchase_id: purchase_id.to_string(),
                 newly_committed: false,
+                is_replay: false,
                 verdict: verdict_fe,
-                receive_payload: None,
+                receive_payload,
             })
         }
         L2ProcessingOutcome::OfflineOnly => unreachable!("handled prior to anchored prepare"),
@@ -1286,9 +1397,101 @@ mod tests {
         .await
         .unwrap();
         assert!(green.newly_committed);
+        assert!(!green.is_replay);
         assert_eq!(green.verdict.outcome, "Confirmed");
         assert!(green.verdict.can_release_goods_automatically);
         assert!(green.verdict.is_goods_release_authorized);
+
+        let replay = checkout_bundle(
+            &state_bob,
+            "pos-green",
+            &transfer.bundle_bytes,
+            &standards,
+            Some(pw),
+        )
+        .await
+        .unwrap();
+        assert!(replay.is_replay);
+        assert!(!replay.newly_committed);
+        assert_eq!(replay.verdict.outcome, "Confirmed");
+        assert_eq!(
+            replay.receive_payload.as_ref().and_then(|p| p.is_replay),
+            Some(true)
+        );
+
+        // Case C: Multi-voucher bundle (2 vouchers) must yield Yellow:MultiVoucherManualApproval
+        let _ = svc_alice
+            .create_new_voucher(
+                &std_toml,
+                NewVoucherData {
+                    creator_profile: PublicProfile {
+                        id: Some(
+                            svc_alice
+                                .with_wallet(|w| w.get_user_id().to_string())
+                                .unwrap(),
+                        ),
+                        ..Default::default()
+                    },
+                    nominal_value: ValueDefinition {
+                        amount: "40".into(),
+                        ..Default::default()
+                    },
+                    layer2_anchor: Some(anchor_id),
+                    ..Default::default()
+                },
+                Some(pw),
+            )
+            .unwrap();
+        let all_ids: Vec<String> = svc_alice
+            .with_wallet_and_identity(|w, id| w.list_vouchers(Some(id), None, None, None))
+            .unwrap()
+            .into_iter()
+            .map(|v| v.local_instance_id)
+            .collect();
+        assert_eq!(all_ids.len(), 2);
+        let multi_transfer = svc_alice
+            .create_transfer_bundle(
+                MultiTransferRequest {
+                    recipient_id: state_bob
+                        .lock_service()
+                        .unwrap()
+                        .with_wallet(|w| w.get_user_id().to_string())
+                        .unwrap(),
+                    sources: all_ids
+                        .into_iter()
+                        .map(|lid| SourceTransfer {
+                            local_instance_id: lid,
+                            amount_to_send: "10".into(),
+                        })
+                        .collect(),
+                    notes: None,
+                    sender_profile_name: None,
+                    use_privacy_mode: None,
+                    wot_sync_json: None,
+                    contact_card_json: None,
+                },
+                &standards,
+                None,
+                Some(pw),
+            )
+            .unwrap();
+        let multi_res = checkout_bundle(
+            &state_bob,
+            "pos-multi",
+            &multi_transfer.bundle_bytes,
+            &standards,
+            Some(pw),
+        )
+        .await
+        .unwrap();
+        assert!(!multi_res.newly_committed);
+        assert!(!multi_res.is_replay);
+        assert_eq!(
+            multi_res.verdict.outcome,
+            "Yellow:MultiVoucherManualApproval"
+        );
+        assert!(multi_res.verdict.requires_merchant_approval);
+        assert!(multi_res.verdict.merchant_warning.is_some());
 
         h1.abort();
         h2.abort();

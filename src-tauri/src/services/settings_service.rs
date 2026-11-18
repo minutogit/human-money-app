@@ -134,6 +134,11 @@ pub fn save_app_settings_impl(
     settings.share_min_level = settings.share_min_level.min(3);
     info!("Saving app settings to disk...");
     let mut service = state.service.lock().unwrap();
+    crate::services::common::ensure_access_mode(
+        &mut service,
+        human_money_core::AccessMode::DailyPay,
+        password.as_deref(),
+    )?;
     state
         .save_settings(&mut service, settings, password.as_deref())
         .map_err(FrontendError::from)

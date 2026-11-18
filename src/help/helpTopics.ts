@@ -64,9 +64,7 @@ export type HelpTopicId =
     | 'handover'
     | 'deviceBinding'
     | 'posMode'
-    | 'l2Protection'
-    | 'exclusiveGateways'
-    | 'gatewayTokens';
+    | 'l2Protection';
 
 export type HelpAudience = 'everyone' | 'expert';
 
@@ -566,23 +564,5 @@ export const HELP_TOPICS: Record<HelpTopicId, HelpTopic> = {
         longKey: 'help.l2Protection.long',
         deepDiveKey: 'help.l2Protection.deepDive',
         related: ['connection', 'offlineProtection', 'posMode', 'offlineRisk'],
-    },
-    exclusiveGateways: {
-        id: 'exclusiveGateways',
-        group: 'expert',
-        audience: 'expert',
-        titleKey: 'help.exclusiveGateways.title',
-        shortKey: 'help.exclusiveGateways.short',
-        longKey: 'help.exclusiveGateways.long',
-        related: ['gatewayTokens', 'connection'],
-    },
-    gatewayTokens: {
-        id: 'gatewayTokens',
-        group: 'expert',
-        audience: 'expert',
-        titleKey: 'help.gatewayTokens.title',
-        shortKey: 'help.gatewayTokens.short',
-        longKey: 'help.gatewayTokens.long',
-        related: ['exclusiveGateways'],
     },
 };

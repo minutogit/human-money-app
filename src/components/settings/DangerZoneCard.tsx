@@ -13,7 +13,15 @@ import { translateError } from '../../utils/errorHelper';
 
 export const DangerZoneCard: React.FC = () => {
     const { t } = useTranslation();
-    const { profileName, folderName, notifyLogout, clearLocks, protectAction } = useSession();
+    const {
+        profileName,
+        folderName,
+        notifyLogout,
+        clearLocks,
+        protectAction,
+        accessMode = 'full',
+        requireFullAccess,
+    } = useSession();
     const nav = useOptionalNavigation();
 
     const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -85,7 +93,15 @@ export const DangerZoneCard: React.FC = () => {
                     <Button
                         type="button"
                         variant="danger"
-                        onClick={() => setIsDeleteModalOpen(true)}
+                        onClick={() => {
+                            if (accessMode !== 'full' && requireFullAccess) {
+                                void requireFullAccess(async () => {
+                                    setIsDeleteModalOpen(true);
+                                }).catch(() => undefined);
+                                return;
+                            }
+                            setIsDeleteModalOpen(true);
+                        }}
                         className="gap-2 text-xs"
                     >
                         <Trash2 size={14} />

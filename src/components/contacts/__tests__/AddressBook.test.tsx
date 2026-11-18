@@ -360,7 +360,6 @@ describe('AddressBook Component', () => {
           friendSyncs: 0,
           publicSyncs: 0,
           hasOwnSync: false,
-          ownSyncSoftWarning: false,
           lastSyncAt: null,
         });
       }

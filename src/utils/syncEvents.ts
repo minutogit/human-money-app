@@ -10,7 +10,7 @@ export const TRANSIENT_SYNC_TOAST_EVENT = 'humoco:transient-sync-toast';
 
 export interface TransientSyncToastDetail {
     message: string;
-    variant?: 'info' | 'success';
+    variant?: 'info' | 'success' | 'error';
 }
 
 export function notifySyncStatusUpdated(detail?: FrontendSyncOverviewStatus): void {

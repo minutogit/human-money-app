@@ -167,6 +167,8 @@ pub struct FrontendVoucherDetails {
     pub reduced_guarantor_protection: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub manifest_revision: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub anchor_manifest_json: Option<String>,
 }
 
 impl From<human_money_core::wallet::types::VoucherDetails> for FrontendVoucherDetails {
@@ -192,6 +194,7 @@ impl From<human_money_core::wallet::types::VoucherDetails> for FrontendVoucherDe
             trust: super::wot::FrontendVoucherTrustDto::default(),
             reduced_guarantor_protection: false,
             manifest_revision: None,
+            anchor_manifest_json: None,
         }
     }
 }

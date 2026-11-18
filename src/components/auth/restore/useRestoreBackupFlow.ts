@@ -302,21 +302,28 @@ export function useRestoreBackupFlow({
         setIsBusy(true);
         try {
             const localInstanceId = await authService.getLocalInstanceId();
-            await profileService.createProfile({
-                profileName: effectiveProfileName,
-                mnemonic: seedState.mnemonic,
-                passphrase: seedState.passphrase || undefined,
-                userPrefix: seedState.userPrefix.trim() || undefined,
-                password: newPassword,
-                localInstanceId,
-                language: seedState.language,
-                retainMnemonic: true,
-                initialReachPreset: 'medium',
-                initialSyncTargets:
-                    resolvedSyncTargets.length > 0 ? resolvedSyncTargets : undefined,
-            });
+            const createdFolder =
+                (await profileService.createProfile({
+                    profileName: effectiveProfileName,
+                    mnemonic: seedState.mnemonic,
+                    passphrase: seedState.passphrase || undefined,
+                    userPrefix: seedState.userPrefix.trim() || undefined,
+                    password: newPassword,
+                    localInstanceId,
+                    language: seedState.language,
+                    retainMnemonic: true,
+                    initialReachPreset: 'medium',
+                    initialSyncTargets:
+                        resolvedSyncTargets.length > 0 ? resolvedSyncTargets : undefined,
+                })) || '';
+            let resolvedFolder = createdFolder;
+            if (!resolvedFolder && typeof authService.listProfiles === 'function') {
+                const profiles = await authService.listProfiles().catch(() => []);
+                const matched = profiles.find((p) => p.profileName === effectiveProfileName);
+                resolvedFolder = matched?.folderName || '';
+            }
             onRestoreSuccess({
-                folderName: '',
+                folderName: resolvedFolder,
                 profileName: effectiveProfileName,
                 activeVoucherQueriesCount: 0,
                 reconciledSpentCount: 0,

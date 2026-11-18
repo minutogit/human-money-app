@@ -390,4 +390,35 @@ describe('NavigationContext', () => {
     render(<OptionalConsumer />);
     expect(capturedContext).toBeNull();
   });
+
+  it('does not overwrite non-loading startup navigation when async checkProfile finishes later', async () => {
+    let resolveProfiles!: (val: unknown[]) => void;
+    (profileService.getProfile as Mock).mockRejectedValue(new Error('No active session'));
+    (authService.listProfiles as Mock).mockReturnValue(
+      new Promise((resolve) => {
+        resolveProfiles = resolve;
+      })
+    );
+
+    render(
+      <NavigationProvider>
+        <NavigationConsumer />
+      </NavigationProvider>
+    );
+
+    expect(screen.getByTestId('current-view')).toHaveTextContent('loading');
+
+    await act(async () => {
+      screen.getByText('Nav Wallet').click();
+    });
+    expect(screen.getByTestId('current-view')).toHaveTextContent('wallet');
+
+    await act(async () => {
+      resolveProfiles([]);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('current-view')).toHaveTextContent('wallet');
+    });
+  });
 });

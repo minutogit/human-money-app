@@ -203,13 +203,12 @@ export const VoucherCard = React.memo(({
                                     <span className="text-[9px] font-black text-theme-primary uppercase tracking-widest">{t('transfer.partialSend')}</span>
                                     <div className="flex items-center gap-2">
                                         <input 
-                                            type="number" 
+                                            type="text"
+                                            inputMode="decimal"
                                             value={selectedAmount} 
-                                            onChange={(e) => onAmountChange?.(voucher.localInstanceId, e.target.value, voucher.currentAmount)}
+                                            onChange={(e) => onAmountChange?.(voucher.localInstanceId, e.target.value.replace(',', '.'), voucher.currentAmount)}
                                             className="w-24 py-1.5 px-3 text-right font-black text-xs rounded-xl border border-theme-primary/30 focus:outline-none focus:ring-2 focus:ring-theme-primary/20"
-                                            max={voucher.currentAmount}
-                                            min="0"
-                                            step="any"
+                                            aria-label={t('transfer.partialSend')}
                                         />
                                     </div>
                                 </div>

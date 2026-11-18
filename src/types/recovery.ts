@@ -29,6 +29,7 @@ export interface ExportedMnemonicKitDto {
     phrase: string;
     languageCode: number;
     hasBip39Passphrase: boolean;
+    userPrefix: string;
     kitUri: string;
     qrSvg: string;
     syncUrls: string[];

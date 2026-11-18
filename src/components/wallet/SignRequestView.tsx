@@ -42,10 +42,11 @@ interface SignRequestViewProps {
     voucherData: VoucherDetails;
     requestMsgId?: string;
     senderDid?: string;
+    anchorManifestJson?: string;
     onBack: () => void;
 }
 
-export function SignRequestView({ voucherData, requestMsgId, senderDid, onBack }: SignRequestViewProps) {
+export function SignRequestView({ voucherData, requestMsgId, senderDid, anchorManifestJson, onBack }: SignRequestViewProps) {
     const { t } = useTranslation();
     const { protectAction } = useSession();
     const [allowedRoles, setAllowedRoles] = useState<string[]>([]);
@@ -68,6 +69,10 @@ export function SignRequestView({ voucherData, requestMsgId, senderDid, onBack }
     const [isSavingGender, setIsSavingGender] = useState(false);
     const [standardsLoaded, setStandardsLoaded] = useState(false);
     const [guarantorCheck, setGuarantorCheck] = useState<GuarantorAnchorCheckDto | null>(null);
+    const [discoveredManifestJson, setDiscoveredManifestJson] = useState<string | null>(null);
+
+    const effectiveManifestJson =
+        anchorManifestJson ?? voucherData.anchorManifestJson ?? discoveredManifestJson;
 
 
 
@@ -208,25 +213,39 @@ export function SignRequestView({ voucherData, requestMsgId, senderDid, onBack }
         fetchImpact();
 
         if (selectedRole.toLowerCase() === 'guarantor') {
-            voucherService
-                .evaluateGuarantorAnchorCheck({
-                    voucher: voucherData.voucher,
-                    standardTomlContent: standardContent,
-                })
-                .then((res) => {
-                    if (active && res && typeof res.required === 'boolean') {
-                        setGuarantorCheck(res);
+            const runAnchorCheck = async () => {
+                let manifestToUse = effectiveManifestJson ?? null;
+                if (!manifestToUse && voucherData.voucher.layer2Anchor && typeof settingsService?.discoverAnchorManifest === 'function') {
+                    const discovered = await settingsService
+                        .discoverAnchorManifest({
+                            anchorIdHex: voucherData.voucher.layer2Anchor,
+                            creatorDid: voucherData.voucher?.creator?.id ?? null,
+                            guarantorDids: [],
+                        })
+                        .catch(() => null);
+                    if (active && discovered?.manifestJson) {
+                        manifestToUse = discovered.manifestJson;
+                        setDiscoveredManifestJson(discovered.manifestJson);
                     }
-                })
-                .catch(() => {
-                    if (active) setGuarantorCheck(null);
+                }
+                const res = await voucherService.evaluateGuarantorAnchorCheck({
+                    voucher: voucherData.voucher,
+                    standardTomlContent: standardContent!,
+                    manifestJson: manifestToUse,
                 });
+                if (active && res && typeof res.required === 'boolean') {
+                    setGuarantorCheck(res);
+                }
+            };
+            runAnchorCheck().catch(() => {
+                if (active) setGuarantorCheck(null);
+            });
         } else {
             setGuarantorCheck(null);
         }
 
         return () => { active = false; };
-    }, [selectedRole, standardContent, voucherData]);
+    }, [selectedRole, standardContent, voucherData, effectiveManifestJson]);
 
     async function handleSign() {
         if (!selectedRole) {
@@ -243,8 +262,10 @@ export function SignRequestView({ voucherData, requestMsgId, senderDid, onBack }
             const bundleKey = `${voucherData.voucher.voucherId}:${selectedRole}:${includeDetails}`;
             let bundleBytes: number[] | undefined =
                 cachedSigBundle?.key === bundleKey ? cachedSigBundle.bytes : undefined;
+            let capturedPassword: string | undefined;
             if (!bundleBytes) {
                 const generatedBytes = await protectAction(async (password) => {
+                    capturedPassword = password || undefined;
                     return await voucherService.createDetachedSignatureResponseBundle({
                         voucher: voucherData.voucher,
                         role: selectedRole,
@@ -267,6 +288,9 @@ export function SignRequestView({ voucherData, requestMsgId, senderDid, onBack }
                     const recipient = senderDid || voucherData.voucher?.creator?.id;
                     if (recipient) {
                         const res = await protectAction(async (password) => {
+                            if (!capturedPassword && password) {
+                                capturedPassword = password;
+                            }
                             return await postService.replyDetachedSignatureViaPost(
                                 requestMsgId || undefined,
                                 recipient,
@@ -274,7 +298,8 @@ export function SignRequestView({ voucherData, requestMsgId, senderDid, onBack }
                                 password || undefined
                             );
                         });
-                        if (res && res.depositedTo > 0) {
+                        const deliveredCount = res?.recipientDepositedTo ?? res?.depositedTo ?? 0;
+                        if (deliveredCount > 0) {
                             postDeposited = true;
                             triggerAutoBackup();
                             setPostSentSuccess(true);
@@ -309,7 +334,19 @@ export function SignRequestView({ voucherData, requestMsgId, senderDid, onBack }
                         setFeedbackType('success');
                     }
                     if (requestMsgId) {
-                        await postService.dismissPendingPostItem('sign_request', requestMsgId).catch(() => {});
+                        if (capturedPassword !== undefined) {
+                            await postService
+                                .dismissPendingPostItem('sign_request', requestMsgId, capturedPassword)
+                                .catch(() => {});
+                        } else {
+                            await protectAction(async (pwd) => {
+                                await postService.dismissPendingPostItem(
+                                    'sign_request',
+                                    requestMsgId,
+                                    pwd || undefined
+                                );
+                            }).catch(() => {});
+                        }
                     }
                 }
             }

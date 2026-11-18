@@ -70,6 +70,7 @@ export interface CheckoutReleaseVerdict {
 export interface PurchaseCompletion {
     purchaseId: string;
     newlyCommitted: boolean;
+    isReplay?: boolean;
     verdict: CheckoutReleaseVerdict;
     receivePayload?: ReceiveSuccessPayload;
 }
@@ -92,6 +93,7 @@ export interface ReceiveSuccessPayload {
     verifiableConflicts?: Record<string, TransactionFingerprint[]>;
     conflictSummaries?: ProofOfDoubleSpendSummary[];
     l2Quorum?: L2QuorumInfo;
+    receiveKind?: 'transfer' | 'claim' | 'redeem';
     checkoutVerdict?: CheckoutReleaseVerdict;
     purchaseId?: string;
     newlyCommitted?: boolean;

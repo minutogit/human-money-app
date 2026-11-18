@@ -445,7 +445,7 @@ describe('HelpIcon and HelpModal', () => {
   });
 
   it('closes HelpModal on backdrop click but not on dialog click', () => {
-    render(<HelpIcon topic="exclusiveGateways" />);
+    render(<HelpIcon topic="connection" />);
 
     // Click to open
     fireEvent.click(screen.getByRole('button'));

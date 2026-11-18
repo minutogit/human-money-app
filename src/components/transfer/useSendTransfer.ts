@@ -54,7 +54,6 @@ export function useSendTransfer({
     const [isDataLoaded, setIsDataLoaded] = useState(false);
     const [isEditingSender, setIsEditingSender] = useState(false);
 
-    const navigationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const appliedInitialUriRef = useRef<string | null>(null);
     const preserveInitialVoucherRef = useRef<boolean>(Boolean(initialVoucherId));
 
@@ -96,9 +95,6 @@ export function useSendTransfer({
 
     useEffect(() => {
         void settingsService.prewarmL2Checkout?.().catch(() => undefined);
-        return () => {
-            if (navigationTimerRef.current) clearTimeout(navigationTimerRef.current);
-        };
     }, []);
 
     useEffect(() => {
@@ -347,8 +343,7 @@ export function useSendTransfer({
         dispatch({ type: 'SET_PROCESSING', value: true });
         try {
             const txOutcome = await commitAndDepositTransfer({
-                state, ownUserId, selectedMap, selectionStats, availableVouchers,
-                voucherStandards, standardIdToUuidMap, uuidToPrecisionMap,
+                state, selectedMap, voucherStandards, standardIdToUuidMap,
                 sendCardOverride, protectAction, checkAndTriggerCooldown, translate: t,
             });
             if (!txOutcome) return;
@@ -356,21 +351,17 @@ export function useSendTransfer({
                 .map(([currency, stat]) => `${formatAmount(stat.total.toString())} ${currency}`)
                 .join(', ');
             dispatch({ type: 'TOGGLE_CONFIRM', value: false });
-            dispatch({ type: 'SET_FEEDBACK', msg: t('transfer.transferSuccess') });
-            navigationTimerRef.current = setTimeout(
-                () =>
-                    navigate({
-                        view: 'transfer_success',
-                        bundleData: txOutcome.bundleResult.bundleData,
-                        recipientId: state.recipientId,
-                        summary: summaryString,
-                        l2Dispatch: txOutcome.bundleResult.l2Dispatch,
-                        bundleId: txOutcome.bundleResult.bundleId,
-                        depositedTo: txOutcome.depositedTo,
-                        depositError: txOutcome.depositError,
-                    }),
-                1500,
-            );
+            navigate({
+                view: 'transfer_success',
+                bundleData: txOutcome.bundleResult.bundleData,
+                recipientId: state.recipientId,
+                summary: summaryString,
+                l2Dispatch: txOutcome.bundleResult.l2Dispatch,
+                bundleId: txOutcome.bundleResult.bundleId,
+                depositedTo: txOutcome.depositedTo,
+                recipientDepositedTo: txOutcome.recipientDepositedTo,
+                depositError: txOutcome.depositError,
+            });
         } catch (e) {
             checkAndTriggerCooldown(e);
             logger.error(`Transfer failed: ${stringifyError(e)}`);

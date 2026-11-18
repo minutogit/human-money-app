@@ -7,6 +7,8 @@
  * - Market contact cards: humoco://card?env=...
  */
 
+import type { TFunction } from 'i18next';
+
 export interface ContactCardParams {
   did: string;
   name?: string;
@@ -45,8 +47,31 @@ const CONTACT_URI_REGEX = /humoco:\/\/contact\?([^\s<>"'`]+)/i;
 const PAY_URI_REGEX = /humoco:\/\/pay\?([^\s<>"'`]+)/i;
 const CARD_URI_REGEX = /humoco:\/\/card\?([^\s<>"'`]+)/i;
 
+const TRAILING_PUNCT_REGEX = /[.,;:!?)\]"'>]+$/;
+const CONTINUATION_LINE_REGEX = /^[A-Za-z0-9\-_=+&%.:/]+$/;
+
 function stripTrailingPunctuation(query: string): string {
-  return query.replace(/[.,;:!?)\]]+$/, '');
+  return query.replace(TRAILING_PUNCT_REGEX, '');
+}
+
+function unwrapHumocoUriLines(input: string, schemePrefix: string): string {
+  const lower = input.toLowerCase();
+  const idx = lower.indexOf(schemePrefix.toLowerCase());
+  if (idx === -1) return input;
+  const slice = input.slice(idx);
+  const lines = slice.split(/\r?\n/);
+  let joined = (lines[0] || '').trim();
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) break;
+    const stripped = line.replace(TRAILING_PUNCT_REGEX, '');
+    if (stripped.length > 0 && CONTINUATION_LINE_REGEX.test(stripped)) {
+      joined += line;
+    } else {
+      break;
+    }
+  }
+  return joined;
 }
 
 export interface ParsedCardUri {
@@ -84,14 +109,7 @@ export function buildContactUri({ did, name, syncUrls }: ContactCardParams): str
     }
   }
 
-  return `humoco://contact?${params.toString().replace(/\+/g, '%20')}`;
-}
-
-/**
- * Returns the compact humoco://contact URI directly for sharing/copying.
- */
-export function buildContactCardText(params: ContactCardParams): string {
-  return buildContactUri(params);
+  return `humoco://contact?${params.toString().replace(/\+/g, '%20').replace(/\(/g, '%28').replace(/\)/g, '%29')}`;
 }
 
 /**
@@ -104,7 +122,8 @@ export function buildContactCardText(params: ContactCardParams): string {
 export function parseContactCard(input: string): ParsedContactCard | null {
   if (!input || typeof input !== 'string') return null;
 
-  const match = input.match(CONTACT_URI_REGEX);
+  const unwrapped = unwrapHumocoUriLines(input, 'humoco://contact?');
+  const match = unwrapped.match(CONTACT_URI_REGEX);
   if (match && match[1]) {
     try {
       const searchParams = new URLSearchParams(stripTrailingPunctuation(match[1]));
@@ -171,13 +190,11 @@ export function buildPaymentRequestUri(params: PaymentRequestParams): string {
   if (cleanNote) searchParams.set('note', cleanNote);
   if (params.isTest) searchParams.set('test', 'true');
 
-  return `humoco://pay?${searchParams.toString().replace(/\+/g, '%20')}`;
+  return `humoco://pay?${searchParams.toString().replace(/\+/g, '%20').replace(/\(/g, '%28').replace(/\)/g, '%29')}`;
 }
 
-/**
- * Builds a human-readable payment request message for email/messenger containing a humoco://pay URI.
- */
-export function buildPaymentRequestText(params: PaymentRequestParams): string {
+export function buildPaymentRequestText(params: PaymentRequestParams, t?: TFunction): string {
+  const tr = (key: string, fallback: string) => (t ? t(key, { defaultValue: fallback }) : fallback);
   const cleanTo = (params.to || '').trim();
   const cleanName = params.name?.trim();
   const cleanUnit = params.unit?.trim();
@@ -188,25 +205,31 @@ export function buildPaymentRequestText(params: PaymentRequestParams): string {
 
   const uri = buildPaymentRequestUri(params);
 
-  const lines: string[] = ['Human Money Zahlungsanforderung:'];
+  const heading = tr('transfer.paymentRequestText.heading', 'Human Money Zahlungsanforderung:');
+  const recipientLabel = tr('transfer.paymentRequestText.recipient', 'Empfänger');
+  const amountLabel = tr('transfer.paymentRequestText.amount', 'Betrag');
+  const currencyLabel = tr('transfer.paymentRequestText.currency', 'Währung');
+  const noteLabel = tr('transfer.paymentRequestText.note', 'Verwendungszweck');
+
+  const lines: string[] = [heading];
   if (cleanName && cleanTo) {
-    lines.push(`Empfänger: ${cleanName} (${cleanTo})`);
+    lines.push(`${recipientLabel}: ${cleanName} (${cleanTo})`);
   } else if (cleanName) {
-    lines.push(`Empfänger: ${cleanName}`);
+    lines.push(`${recipientLabel}: ${cleanName}`);
   } else if (cleanTo) {
-    lines.push(`Empfänger: ${cleanTo}`);
+    lines.push(`${recipientLabel}: ${cleanTo}`);
   }
 
   if (amountStr && cleanUnit) {
-    lines.push(`Betrag: ${amountStr} ${cleanUnit}`);
+    lines.push(`${amountLabel}: ${amountStr} ${cleanUnit}`);
   } else if (amountStr) {
-    lines.push(`Betrag: ${amountStr}`);
+    lines.push(`${amountLabel}: ${amountStr}`);
   } else if (cleanUnit) {
-    lines.push(`Währung: ${cleanUnit}`);
+    lines.push(`${currencyLabel}: ${cleanUnit}`);
   }
 
   if (cleanNote) {
-    lines.push(`Verwendungszweck: ${cleanNote}`);
+    lines.push(`${noteLabel}: ${cleanNote}`);
   }
 
   lines.push('');
@@ -223,7 +246,8 @@ export function buildPaymentRequestText(params: PaymentRequestParams): string {
 export function parsePaymentRequest(input: string): ParsedPaymentRequest | null {
   if (!input || typeof input !== 'string') return null;
 
-  const match = input.match(PAY_URI_REGEX);
+  const unwrapped = unwrapHumocoUriLines(input, 'humoco://pay?');
+  const match = unwrapped.match(PAY_URI_REGEX);
   if (!match || !match[1]) return null;
 
   try {
@@ -261,13 +285,6 @@ export function parsePaymentRequest(input: string): ParsedPaymentRequest | null 
 }
 
 /**
- * Builds a humoco://card URI from a base64-encoded CardEnvelope JSON.
- */
-export function buildCardUri(envBase64: string): string {
-  return `humoco://card?env=${envBase64.trim()}`;
-}
-
-/**
  * Parses a humoco://card URI from arbitrary text.
  * 
  * Extracts humoco://card?env=... and decodes the CardEnvelope JSON if possible.
@@ -275,7 +292,8 @@ export function buildCardUri(envBase64: string): string {
 export function parseCardUri(input: string): ParsedCardUri | null {
   if (!input || typeof input !== 'string') return null;
 
-  const match = input.match(CARD_URI_REGEX);
+  const unwrapped = unwrapHumocoUriLines(input, 'humoco://card?');
+  const match = unwrapped.match(CARD_URI_REGEX);
   if (!match || !match[1]) return null;
 
   try {

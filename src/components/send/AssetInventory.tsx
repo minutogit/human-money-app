@@ -85,6 +85,7 @@ export function AssetInventory({
                   value={targetAmountStr}
                   onChange={(e) => onTargetAmountChange(e.target.value)}
                   type="number"
+                  step="any"
                   placeholder="0.00"
                   className="py-4 px-5 rounded-2xl font-black text-2xl tracking-tighter"
                 />

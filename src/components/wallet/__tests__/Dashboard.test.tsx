@@ -112,7 +112,6 @@ describe('Dashboard Component', () => {
             friendSyncs: 0,
             publicSyncs: 0,
             hasOwnSync: false,
-            ownSyncSoftWarning: false,
             lastSyncAt: null,
         });
         vi.mocked(profileService.getUserId).mockResolvedValue('did:key:own');

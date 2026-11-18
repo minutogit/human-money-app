@@ -6,6 +6,8 @@ use crate::models::FrontendSyncDescriptor;
 #[serde(rename_all = "camelCase")]
 pub struct FrontendPostDepositResult {
     pub deposited_to: usize,
+    #[serde(default)]
+    pub recipient_deposited_to: usize,
     pub msg_id: String,
     pub errors: Vec<String>,
 }
@@ -19,6 +21,8 @@ pub struct FrontendPendingSignRequest {
     pub created_at: u64,
     pub reply_syncs: Vec<FrontendSyncDescriptor>,
     pub container_bytes: Vec<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor_manifest_json: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]

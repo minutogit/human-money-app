@@ -31,6 +31,8 @@ type NavigateFn = ReturnType<typeof useNavigation>['navigate'];
 interface DashboardBannersProps {
     balances: AggregatedBalance[];
     activeVouchersCount: number;
+    incompleteCount?: number;
+    firstIncompleteVoucherId?: string | null;
     quarantinedCount: number;
     expiringSoonCount: number;
     pendingSignRequests: FrontendPendingSignRequest[];
@@ -54,6 +56,8 @@ interface DashboardBannersProps {
 export function DashboardBanners({
     balances,
     activeVouchersCount,
+    incompleteCount = 0,
+    firstIncompleteVoucherId = null,
     quarantinedCount,
     expiringSoonCount,
     pendingSignRequests,
@@ -120,6 +124,42 @@ export function DashboardBanners({
 
     return (
         <div className="space-y-3">
+            {incompleteCount > 0 && (
+                <Card
+                    variant="accent"
+                    className="py-3 px-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-l-4 border-l-theme-accent cursor-pointer"
+                    hover
+                    onClick={() =>
+                        onNavigate(
+                            incompleteCount === 1 && firstIncompleteVoucherId
+                                ? {
+                                      view: 'voucher_details',
+                                      voucherId: firstIncompleteVoucherId,
+                                      previousView: { view: 'logged_in' },
+                                  }
+                                : { view: 'wallet', initialStatusFilter: 'incomplete' },
+                        )
+                    }
+                    data-testid="incomplete-drafts-resume-banner"
+                >
+                    <div className="flex items-center gap-3 min-w-0">
+                        <div className="p-2 rounded-xl bg-theme-accent text-white shrink-0">
+                            <Clock size={20} />
+                        </div>
+                        <div className="min-w-0">
+                            <p className="font-black text-theme-secondary uppercase tracking-wider text-[10px]">
+                                {t('auth.actionRequired')}
+                            </p>
+                            <p className="text-sm font-bold text-theme-primary truncate">
+                                {t('dashboard.needSignatures', { count: incompleteCount })}
+                            </p>
+                        </div>
+                    </div>
+                    <Button variant="primary" size="xs" className="rounded-full px-4 shrink-0 self-end sm:self-center">
+                        {t('common.resume')}
+                    </Button>
+                </Card>
+            )}
             {pendingSignRequests.map((req) => {
                 const senderName =
                     req.senderName ||

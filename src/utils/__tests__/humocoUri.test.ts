@@ -1,11 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { Buffer } from 'node:buffer';
 import {
-  buildContactCardText,
+  buildContactUri,
   parseContactCard,
   buildPaymentRequestText,
   parsePaymentRequest,
-  buildCardUri,
   parseCardUri,
 } from '../humocoUri';
 
@@ -13,21 +12,23 @@ describe('humocoUri Utilities', () => {
   const sampleDid = 'did:key:z6MkuT52y5aBqB9R5e6v18c8P4h5M8Z7v';
   const sampleSai = 'alice:work@did:key:z6MkuT52y5aBqB9R5e6v18c8P4h5M8Z7v';
 
-  describe('buildContactCardText', () => {
-    it('outputs only the compact humoco://contact URI with name, did, and syncUrls', () => {
-      const text = buildContactCardText({
+  describe('buildContactUri', () => {
+    it('outputs a compact humoco://contact URI encoding parentheses safely', () => {
+      const text = buildContactUri({
         did: sampleDid,
-        name: 'Alice Müller',
+        name: 'Alice (Workshop)',
         syncUrls: ['https://sync1.example.org/sync.php', 'https://sync2.example.org/sync.php'],
       });
-      expect(text).not.toContain('Human Money Kontakt:');
       expect(text).not.toContain('\n');
-      expect(text).toBe(`humoco://contact?did=${encodeURIComponent(sampleDid)}&name=${encodeURIComponent('Alice Müller')}&sync=sync1.example.org&sync=sync2.example.org`);
+      expect(text).not.toContain('(');
+      expect(text).not.toContain(')');
+      expect(text).toBe(
+        `humoco://contact?did=${encodeURIComponent(sampleDid)}&name=Alice%20%28Workshop%29&sync=sync1.example.org&sync=sync2.example.org`
+      );
     });
 
-    it('outputs only the humoco://contact URI without name', () => {
-      const text = buildContactCardText({ did: sampleDid });
-      expect(text).not.toContain('Human Money Kontakt:');
+    it('outputs a compact humoco://contact URI without name', () => {
+      const text = buildContactUri({ did: sampleDid });
       expect(text).toBe(`humoco://contact?did=${encodeURIComponent(sampleDid)}`);
     });
   });
@@ -180,18 +181,13 @@ describe('humocoUri Utilities', () => {
     });
   });
 
-  describe('buildCardUri and parseCardUri', () => {
+  describe('parseCardUri', () => {
     const sampleEnvelopeJson = JSON.stringify({
-      card_jws: 'eyJhbGciOiJFZERTQSIsInR5cCI6ImhtYy1jYXJkK2p3dCJ9.payload.sig',
+      card_wire: 'eyJhbGciOiJFZERTQSIsInR5cCI6ImhtYy1jYXJkK2p3dCJ9.payload.sig',
       hops: 1,
     });
     // encode in base64
     const sampleB64 = Buffer.from(sampleEnvelopeJson, 'utf8').toString('base64');
-
-    it('builds a humoco://card URI with base64 envelope', () => {
-      const uri = buildCardUri(sampleB64);
-      expect(uri).toBe(`humoco://card?env=${sampleB64}`);
-    });
 
     it('parses a humoco://card URI and decodes envelope JSON', () => {
       const uri = `humoco://card?env=${sampleB64}`;
@@ -199,6 +195,17 @@ describe('humocoUri Utilities', () => {
       expect(result).not.toBeNull();
       expect(result?.envBase64).toBe(sampleB64);
       expect(result?.envelopeJson).toBe(sampleEnvelopeJson);
+    });
+
+    it('unwraps line-wrapped humoco:// URIs from email clients', () => {
+      const fullUri = `humoco://contact?did=${encodeURIComponent(sampleDid)}&name=Alice%20%28Shop%29`;
+      const wrapped = `${fullUri.slice(0, 32)}\n${fullUri.slice(32, 58)}\n  ${fullUri.slice(58)}`;
+      const result = parseContactCard(wrapped);
+      expect(result).toEqual({
+        did: sampleDid,
+        name: 'Alice (Shop)',
+        syncUrls: undefined,
+      });
     });
 
     it('parses humoco://card embedded in chat or email text', () => {

@@ -78,14 +78,14 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
             if (level > 0) {
                 const did = resultFeedback.did;
                 const existingContacts = await contactService.getContacts().catch(() => []);
-                const existing = existingContacts.find(c => c.did === did);
+                const existing = existingContacts.find(c => isExactSameUserId(c.did, did));
 
                 let profile = existing?.profile;
                 let syncs = existing?.syncs;
                 if (!profile) {
                     const snap = await marketService.getMarketView().catch(() => null);
                     const people = snap?.people ?? [];
-                    const p = people.find((x) => x.did === did);
+                    const p = people.find((x) => isExactSameUserId(x.did, did));
                     profile = p?.profile;
                     syncs = p?.cardSyncs;
                 }
@@ -153,7 +153,7 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
                             return;
                         }
                         const existingContacts = await contactService.getContacts().catch(() => []);
-                        const existing = existingContacts.find(c => c.did === parsedContact.did);
+                        const existing = existingContacts.find(c => isExactSameUserId(c.did, parsedContact.did));
                         let firstName = existing?.profile.firstName;
                         let lastName = existing?.profile.lastName;
                         if (!firstName && parsedContact.name) {
@@ -406,8 +406,9 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
                                     size="sm"
                                     onClick={() => handleSetTrustLevel(0)}
                                     disabled={isSavingTrust}
-                                    className="text-xs text-theme-light"
+                                    className="text-xs text-theme-light gap-1.5"
                                 >
+                                    {selectedTrustLevel === 0 && <Check size={13} />}
                                     <span>{t('marketplace.trustLevelNoneBtn', 'Nur im Marktplatz merken')}</span>
                                 </Button>
                             </div>

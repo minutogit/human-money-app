@@ -95,25 +95,44 @@ export const EmergencyKitModal: React.FC<EmergencyKitModalProps> = ({
         window.print();
     };
 
+    const escapeHtml = (val: string): string =>
+        val
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+
     const handleDownloadHtml = () => {
         if (!kitData) return;
         const words = kitData.phrase.split(' ');
         const wordsHtml = words
             .map(
                 (w, i) =>
-                    `<div style="display:inline-block;width:30%;margin:5px;padding:8px;border:1px solid #ccc;border-radius:6px;font-family:monospace;"><b>${i + 1}.</b> ${w}</div>`
+                    `<div style="display:inline-block;width:30%;margin:5px;padding:8px;border:1px solid #ccc;border-radius:6px;font-family:monospace;"><b>${i + 1}.</b> ${escapeHtml(w)}</div>`
             )
             .join('');
 
         const syncsHtml =
             kitData.syncUrls && kitData.syncUrls.length > 0
-                ? kitData.syncUrls.map((s) => `<li>${s}</li>`).join('')
+                ? kitData.syncUrls.map((s) => `<li>${escapeHtml(s)}</li>`).join('')
                 : '<li>(Keine externen Sync-Dienste)</li>';
 
         const guardiansHtml =
             kitData.guardianNames && kitData.guardianNames.length > 0
-                ? kitData.guardianNames.map((g) => `<li>${g}</li>`).join('')
+                ? kitData.guardianNames.map((g) => `<li>${escapeHtml(g)}</li>`).join('')
                 : '<li>(Keine Kontakte eingerichtet)</li>';
+
+        const prefixHtml = kitData.userPrefix
+            ? `<p><b>Profil-Kennung (Unterkonto-Präfix):</b> <code>${escapeHtml(kitData.userPrefix)}</code></p>`
+            : '';
+
+        const passphraseNote = kitData.hasBip39Passphrase
+            ? `<div class="warn"><b>Wichtig – 25. Passwort-Wort (BIP-39 Passphrase):</b> Dieses Profil nutzt ein zusätzliches 25. Passwort-Wort. Es ist nicht das lokale Geräte-Passwort und wird hier aus Sicherheitsgründen <u>nicht</u> abgedruckt!</div>`
+            : `<p style="font-size:13px;color:#444;">Dieses Profil nutzt kein separates 25. Passwort-Wort. (Das lokale App-Passwort schützt nur dieses Gerät.)</p>`;
+
+        const qrHtml = kitData.qrSvg
+            ? `<div class="section"><h3>Notfall-QR-Code zum direkten Scannen</h3><div style="width:200px;height:200px;padding:8px;border:1px solid #ccc;border-radius:8px;background:#fff;">${kitData.qrSvg}</div></div>`
+            : '';
 
         const fullHtml = `<!DOCTYPE html>
 <html lang="de">
@@ -123,20 +142,24 @@ export const EmergencyKitModal: React.FC<EmergencyKitModalProps> = ({
 <style>
 body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 40px; color: #111; line-height: 1.5; }
 .alert { background: #fee2e2; border: 2px solid #ef4444; color: #991b1b; padding: 16px; border-radius: 8px; font-weight: bold; text-align: center; margin-bottom: 24px; }
+.warn { background: #fef3c7; border: 1px solid #f59e0b; color: #92400e; padding: 12px; border-radius: 8px; margin-bottom: 16px; font-size: 13px; }
 .section { margin-bottom: 24px; }
 .words-grid { margin: 16px 0; }
-.footer { font-size: 12px; color: #666; margin-top: 40px; border-top: 1px solid #eee; padding-top: 10px; }
+.footer { font-size: 12px; color: #666; margin-top: 40px; border-top: 1px solid #eee; padding-top: 10px; word-break: break-all; }
 </style>
 </head>
 <body>
 <div class="alert">
-  ${t('backup.emergencyKitRedAlert')}
+  ${escapeHtml(t('backup.emergencyKitRedAlert'))}
 </div>
 <h2>HuMoCo Profil-Wiederherstellung (Notfall-Blatt)</h2>
+${prefixHtml}
+${passphraseNote}
 <div class="section">
   <h3>${words.length} Wiederherstellungswörter</h3>
   <div class="words-grid">${wordsHtml}</div>
 </div>
+${qrHtml}
 <div class="section">
   <h3>Zugehörige Sync-Dienste</h3>
   <ul>${syncsHtml}</ul>
@@ -148,12 +171,12 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
 <div class="section">
   <h3>Anleitung für den Ernstfall</h3>
   <ol>
-    <li>${t('backup.emergencyKitInstructions1').replace(/^\d+\.\s*/, '')}</li>
-    <li>${t('backup.emergencyKitInstructions2').replace(/^\d+\.\s*/, '')}</li>
-    <li>${t('backup.emergencyKitInstructions3').replace(/^\d+\.\s*/, '')}</li>
+    <li>${escapeHtml(t('backup.emergencyKitInstructions1').replace(/^\d+\.\s*/, ''))}</li>
+    <li>${escapeHtml(t('backup.emergencyKitInstructions2').replace(/^\d+\.\s*/, ''))}</li>
+    <li>${escapeHtml(t('backup.emergencyKitInstructions3').replace(/^\d+\.\s*/, ''))}</li>
   </ol>
 </div>
-<div class="footer">Erstellt mit HuMoCo Human Money &bull; URI: <code>${kitData.kitUri}</code> </div>
+<div class="footer">Erstellt mit HuMoCo Human Money &bull; URI: <code>${escapeHtml(kitData.kitUri)}</code> </div>
 </body>
 </html>`;
 
@@ -297,7 +320,10 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
                         </div>
 
                         {/* Main sheet preview */}
-                        <div className="p-5 bg-white text-slate-900 rounded-2xl border border-slate-200 shadow-sm space-y-5">
+                        <div
+                            id="emergency-sheet-printable"
+                            className="p-5 bg-white text-slate-900 rounded-2xl border border-slate-200 shadow-sm space-y-5"
+                        >
                             {/* QR and Title */}
                             <div className="flex flex-col sm:flex-row items-center gap-4 justify-between border-b border-slate-100 pb-4">
                                 <div>
@@ -333,6 +359,28 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
                                     ))}
                                 </div>
                             </div>
+
+                            {/* Optional Subaccount Prefix & Passphrase Note */}
+                            {(kitData.userPrefix || kitData.hasBip39Passphrase) && (
+                                <div className="p-3 bg-amber-50/70 border border-amber-200 rounded-xl text-[11px] text-amber-950 space-y-1">
+                                    {kitData.userPrefix && (
+                                        <p>
+                                            <span className="font-bold">
+                                                {t('backup.kitSubaccountPrefixLabel', 'Profil-Kennung (Unterkonto-Präfix)')}:
+                                            </span>{' '}
+                                            <code className="font-mono font-bold">{kitData.userPrefix}</code>
+                                        </p>
+                                    )}
+                                    {kitData.hasBip39Passphrase && (
+                                        <p className="font-medium">
+                                            {t(
+                                                'backup.kitPassphraseOmittedHint',
+                                                'Wichtig – 25. Passwort-Wort: Dieses Profil nutzt ein zusätzliches 25. Passwort-Wort. Es wird aus Sicherheitsgründen nicht abgedruckt.'
+                                            )}
+                                        </p>
+                                    )}
+                                </div>
+                            )}
 
                             {/* Sync URLs & Guardians */}
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs pt-2 border-t border-slate-100">
@@ -393,7 +441,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
                                 type="text"
                                 value={controlWordInput}
                                 onChange={(e) => setControlWordInput(e.target.value)}
-                                placeholder="z. B. apple"
+                                placeholder={t('backup.kitVerifyPlaceholder', 'z. B. Beispielwort')}
                                 data-testid="control-word-input"
                                 className="text-xs font-mono"
                                 autoFocus

@@ -17,6 +17,7 @@ import {
     PlusCircle
 } from "lucide-react";
 
+import type { VoucherDetails } from "../../types";
 import { useVoucherCreation, standardRequiresCreatorGender } from "../../hooks/useVoucherCreation";
 import { VoucherBasicsForm } from "../voucher/VoucherBasicsForm";
 import { CreatorIdentityForm } from "../voucher/CreatorIdentityForm";
@@ -134,11 +135,18 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
         const voucherData = prepareVoucherData();
         
         try {
+            let created: VoucherDetails | undefined;
             await protectAction(async (password) => {
-                await voucherService.create(selectedStandard.content, voucherData, password || undefined);
+                created = await voucherService.create(selectedStandard.content, voucherData, password || undefined);
             });
             setFeedback({type: 'success', msg: t('voucher.create.success')});
-            timerRef.current = setTimeout(onVoucherCreated, 2000);
+            timerRef.current = setTimeout(() => {
+                if (created && String(created.status).toLowerCase() === 'incomplete' && navigation) {
+                    navigation.navigate({ view: 'voucher_details', voucherId: created.localInstanceId });
+                } else {
+                    onVoucherCreated();
+                }
+            }, 800);
         } catch (e) {
             setFeedback({type: 'error', msg: t('voucher.create.failed', { error: translateError(e, t) })});
             setShowConfirm(false);

@@ -124,7 +124,11 @@ fn push_sync_slot_targets(
 type DirectSlotTarget = (String, String, Option<String>);
 type PollSlotTargets = (Vec<DirectSlotTarget>, Vec<String>);
 type AuthorizedSenderKey = (String, VerifyingKey);
-type AuthorizedSenderGroups = (Vec<AuthorizedSenderKey>, Vec<AuthorizedSenderKey>);
+struct AuthorizedSenders {
+    full: Vec<AuthorizedSenderKey>,
+    card_signers: Vec<AuthorizedSenderKey>,
+    inquiry: Vec<AuthorizedSenderKey>,
+}
 
 fn collect_candidate_slot_sources(
     state: &AppState,
@@ -212,9 +216,10 @@ fn collect_authorized_post_senders(
     post_state: &StoredPostState,
     now_secs: u64,
     password: Option<&str>,
-) -> AuthorizedSenderGroups {
+) -> AuthorizedSenders {
     let mut service = state.service.lock().unwrap();
     let mut auth = Vec::new();
+    let mut card_signers = Vec::new();
     let mut inquiry = Vec::new();
 
     if settings.post_accept_from_contacts {
@@ -257,11 +262,14 @@ fn collect_authorized_post_senders(
         })
         .unwrap_or(false);
 
-    if has_inquiry_listing {
-        if let Ok(bytes) = service.load_encrypted_data(MARKET_CARD_STORE_KEY, password) {
-            if let Ok(cs) = serde_json::from_slice::<humoco_market::CardStore>(&bytes) {
-                for sc in cs.cards.values() {
-                    if let Ok(vk) = get_pubkey_from_user_id(&sc.card.payload.did) {
+    if let Ok(bytes) = service.load_encrypted_data(MARKET_CARD_STORE_KEY, password) {
+        if let Ok(cs) = serde_json::from_slice::<humoco_market::CardStore>(&bytes) {
+            for sc in cs.cards.values() {
+                if let Ok(vk) = get_pubkey_from_user_id(&sc.card.payload.did) {
+                    if settings.post_accept_from_contacts && sc.hops <= 2 {
+                        card_signers.push((sc.card.payload.did.clone(), vk));
+                    }
+                    if has_inquiry_listing {
                         inquiry.push((sc.card.payload.did.clone(), vk));
                     }
                 }
@@ -272,10 +280,17 @@ fn collect_authorized_post_senders(
     auth.sort_by(|a, b| a.1.as_bytes().cmp(b.1.as_bytes()));
     auth.dedup_by(|a, b| a.1.as_bytes() == b.1.as_bytes());
 
+    card_signers.sort_by(|a, b| a.1.as_bytes().cmp(b.1.as_bytes()));
+    card_signers.dedup_by(|a, b| a.1.as_bytes() == b.1.as_bytes());
+
     inquiry.sort_by(|a, b| a.1.as_bytes().cmp(b.1.as_bytes()));
     inquiry.dedup_by(|a, b| a.1.as_bytes() == b.1.as_bytes());
 
-    (auth, inquiry)
+    AuthorizedSenders {
+        full: auth,
+        card_signers,
+        inquiry,
+    }
 }
 
 async fn download_post_slots(
@@ -546,14 +561,17 @@ pub async fn sync_post_channels_impl(
         password.as_deref(),
     );
 
-    // 3. Build authorized_senders and inquiry_only_senders
-    let (authorized_senders, inquiry_only_senders) = collect_authorized_post_senders(
+    // 3. Build authorized_senders, card_signers, and inquiry_only_senders
+    let authorized_groups = collect_authorized_post_senders(
         state,
         &settings,
         &post_state,
         now_secs,
         password.as_deref(),
     );
+    let authorized_senders = authorized_groups.full;
+    let card_signer_senders = authorized_groups.card_signers;
+    let inquiry_only_senders = authorized_groups.inquiry;
 
     // 4. Download slots (no mutex held across `.await`)
     let (fetched_slots, post_sync_health_updates, polled_syncs, download_errors) =
@@ -604,16 +622,39 @@ pub async fn sync_post_channels_impl(
                 &authorized_senders,
                 &box_entry,
             );
-            let (sender_did, envelope, is_inquiry_only) = match open_attempt {
-                Ok(Some((did, env))) => (did, env, false),
+            enum SenderPrivilege {
+                Full,
+                CardSignerAndMaybeInquiry(bool),
+                InquiryOnly,
+            }
+            let (sender_did, envelope, privilege) = match open_attempt {
+                Ok(Some((did, env))) => (did, env, SenderPrivilege::Full),
                 Ok(None) => {
-                    if !inquiry_only_senders.is_empty() {
+                    let card_attempt = if !card_signer_senders.is_empty() {
+                        try_open_post_box_any_sender(
+                            &signing_ctx.sync_ctx.my_ed_sk,
+                            &card_signer_senders,
+                            &box_entry,
+                        )
+                        .ok()
+                        .flatten()
+                    } else {
+                        None
+                    };
+                    if let Some((did, env)) = card_attempt {
+                        let also_inquiry = inquiry_only_senders.iter().any(|(d, _)| d == &did);
+                        (
+                            did,
+                            env,
+                            SenderPrivilege::CardSignerAndMaybeInquiry(also_inquiry),
+                        )
+                    } else if !inquiry_only_senders.is_empty() {
                         match try_open_post_box_any_sender(
                             &signing_ctx.sync_ctx.my_ed_sk,
                             &inquiry_only_senders,
                             &box_entry,
                         ) {
-                            Ok(Some((did, env))) => (did, env, true),
+                            Ok(Some((did, env))) => (did, env, SenderPrivilege::InquiryOnly),
                             _ => continue,
                         }
                     } else {
@@ -650,11 +691,19 @@ pub async fn sync_post_channels_impl(
                 continue;
             };
 
-            if is_inquiry_only
-                && container.c != PayloadType::Generic(PAYLOAD_MARKET_INQUIRY_V1.to_string())
-                && container.c
-                    != PayloadType::Generic(PAYLOAD_MARKET_INQUIRY_MESSAGE_V1.to_string())
-            {
+            let is_inquiry_payload = container.c
+                == PayloadType::Generic(PAYLOAD_MARKET_INQUIRY_V1.to_string())
+                || container.c
+                    == PayloadType::Generic(PAYLOAD_MARKET_INQUIRY_MESSAGE_V1.to_string());
+            let allowed_payload = match privilege {
+                SenderPrivilege::Full => true,
+                SenderPrivilege::CardSignerAndMaybeInquiry(also_inquiry) => {
+                    container.c == PayloadType::VoucherForSigning
+                        || (also_inquiry && is_inquiry_payload)
+                }
+                SenderPrivilege::InquiryOnly => is_inquiry_payload,
+            };
+            if !allowed_payload {
                 continue;
             }
 
@@ -689,15 +738,15 @@ pub async fn sync_post_channels_impl(
                 decrypted_bytes: &decrypted_bytes,
                 now_secs,
             };
-            dispatch_post_payload(&env_ctx, &container.c, &mut post_state, &mut stats);
-
-            post_state.processed_msg_ids.insert(envelope.msg_id.clone());
+            if dispatch_post_payload(&env_ctx, &container.c, &mut post_state, &mut stats) {
+                post_state.processed_msg_ids.insert(envelope.msg_id.clone());
+            }
         }
     }
 
     // 6. Flush pass
-    let (uploaded_to, flush_errors) =
-        flush_post_slots_impl(state, &mut post_state, password.as_deref()).await;
+    let (uploaded_to, _recipient_deposited_to, flush_errors) =
+        flush_post_slots_impl(state, &mut post_state, &[], password.as_deref()).await;
     stats.errors.extend(flush_errors);
 
     save_post_state(state, &post_state, password.as_deref())?;

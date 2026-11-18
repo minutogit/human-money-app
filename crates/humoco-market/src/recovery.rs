@@ -624,12 +624,8 @@ pub fn unseal_recovery_master_payload(
             .map_err(|e| MarketError::Crypto(format!("AEAD master unsealing failed: {}", e)))?,
     );
 
-    let payload: RecoveryMasterPayload = match bincode::deserialize(&plaintext) {
-        Ok(p) => p,
-        Err(_) => serde_json::from_slice(&plaintext).map_err(|e| {
-            MarketError::Serialization(format!("AEAD master unsealing failed: {}", e))
-        })?,
-    };
+    let payload: RecoveryMasterPayload = bincode::deserialize(&plaintext)
+        .map_err(|e| MarketError::Serialization(format!("AEAD master unsealing failed: {}", e)))?;
     Ok(payload)
 }
 
@@ -710,24 +706,11 @@ pub mod serde_sig64 {
         D: Deserializer<'de>,
     {
         if deserializer.is_human_readable() {
-            #[derive(Deserialize)]
-            #[serde(untagged)]
-            enum SigFormat {
-                Hex(String),
-                Bytes(Vec<u8>),
-            }
-
-            match SigFormat::deserialize(deserializer)? {
-                SigFormat::Hex(s) => {
-                    let bytes = hex::decode(s.trim()).map_err(D::Error::custom)?;
-                    bytes
-                        .try_into()
-                        .map_err(|_| D::Error::custom("owner_sig must be exactly 64 bytes"))
-                }
-                SigFormat::Bytes(b) => b
-                    .try_into()
-                    .map_err(|_| D::Error::custom("owner_sig must be exactly 64 bytes")),
-            }
+            let s = String::deserialize(deserializer)?;
+            let bytes = hex::decode(s.trim()).map_err(D::Error::custom)?;
+            bytes
+                .try_into()
+                .map_err(|_| D::Error::custom("owner_sig must be exactly 64 bytes"))
         } else {
             let bytes = Vec::<u8>::deserialize(deserializer)?;
             bytes
@@ -891,8 +874,22 @@ impl GuardianVaultStore {
         self.wards.is_empty()
     }
 
+    fn canonical_owner_key(owner_did: &str) -> String {
+        let trimmed = owner_did.trim();
+        if let Ok(pk) = get_pubkey_from_user_id(trimmed) {
+            if let Ok(root) = create_user_id(&pk, None) {
+                return root;
+            }
+        }
+        trimmed
+            .rsplit_once('@')
+            .map(|(_, bare)| bare.to_string())
+            .unwrap_or_else(|| trimmed.to_string())
+    }
+
     pub fn get_ward(&self, owner_did: &str) -> Option<&GuardianVaultEntry> {
-        self.wards.get(owner_did)
+        let key = Self::canonical_owner_key(owner_did);
+        self.wards.get(&key).or_else(|| self.wards.get(owner_did))
     }
 
     /// Stores or updates a ward's recovery entry.
@@ -925,7 +922,8 @@ impl GuardianVaultStore {
 
     /// Updates the backup sync descriptors for an existing ward if `update.rotation_epoch >= entry.rotation_epoch`.
     pub fn update_locator(&mut self, update: &GuardianLocatorUpdate) -> Result<bool, MarketError> {
-        if let Some(entry) = self.wards.get_mut(&update.owner_did) {
+        let key = Self::canonical_owner_key(&update.owner_did);
+        if let Some(entry) = self.wards.get_mut(&key) {
             if update.rotation_epoch < entry.rotation_epoch {
                 return Err(MarketError::Validation(format!(
                     "Stale locator update epoch {} < existing {}",
@@ -942,14 +940,15 @@ impl GuardianVaultStore {
 
     /// Removes a ward from the guardian vault if `revoke.rotation_epoch >= entry.rotation_epoch`.
     pub fn revoke_ward(&mut self, revoke: &GuardianRevoke) -> Result<bool, MarketError> {
-        if let Some(entry) = self.wards.get(&revoke.owner_did) {
+        let key = Self::canonical_owner_key(&revoke.owner_did);
+        if let Some(entry) = self.wards.get(&key) {
             if revoke.rotation_epoch < entry.rotation_epoch {
                 return Err(MarketError::Validation(format!(
                     "Stale revoke epoch {} < existing {}",
                     revoke.rotation_epoch, entry.rotation_epoch
                 )));
             }
-            self.wards.remove(&revoke.owner_did);
+            self.wards.remove(&key);
             Ok(true)
         } else {
             Ok(false)
@@ -1006,22 +1005,32 @@ pub fn build_recovery_request_uri(pk_temp: &[u8; 32], ts: u64, name_hint: Option
     format!("humoco://recovery-req?{}", query)
 }
 
+fn extract_query_from_uri_text<'a>(uri: &'a str, action: &str) -> Option<&'a str> {
+    let trimmed = uri.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    let full_prefix = format!("humoco://{}?", action);
+    let short_prefix = format!("{}?", action);
+    let raw_query = if let Some(idx) = lower.find(&full_prefix) {
+        &trimmed[idx + full_prefix.len()..]
+    } else if lower.starts_with(&short_prefix) {
+        &trimmed[short_prefix.len()..]
+    } else {
+        return None;
+    };
+    Some(
+        raw_query
+            .split(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '>' | ')'))
+            .next()
+            .unwrap_or("")
+            .trim_end_matches(&['.', ',', ';', ':', '!', '?', ')', ']'][..]),
+    )
+}
+
 /// Parses a `humoco://recovery-req` URI.
 pub fn parse_recovery_request_uri(uri: &str) -> Result<RecoveryRequestLink, MarketError> {
-    let trimmed = uri.trim();
-    let trimmed_lower = trimmed.to_ascii_lowercase();
-    let raw_query = if let Some(idx) = trimmed_lower.find("recovery-req?") {
-        &trimmed[idx + 13..]
-    } else {
-        return Err(MarketError::Validation(
-            "Invalid recovery request URI: missing 'recovery-req?'".to_string(),
-        ));
-    };
-    let query_str = raw_query
-        .split(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '>' | ')'))
-        .next()
-        .unwrap_or("")
-        .trim_end_matches(&['.', ',', ';', '!', ']'][..]);
+    let query_str = extract_query_from_uri_text(uri, "recovery-req").ok_or_else(|| {
+        MarketError::Validation("Invalid recovery request URI: missing 'recovery-req?'".to_string())
+    })?;
 
     let mut v: Option<u8> = None;
     let mut pk_opt: Option<[u8; 32]> = None;
@@ -1156,20 +1165,43 @@ pub fn open_and_verify_guardian_release_reply(
     sk_temp: &[u8; 32],
     uri: &str,
 ) -> Result<GuardianReleasePayload, MarketError> {
-    let trimmed = uri.trim();
-    let trimmed_lower = trimmed.to_ascii_lowercase();
-    let raw_query = if let Some(idx) = trimmed_lower.find("recovery-reply?") {
-        &trimmed[idx + 15..]
+    // Rejoin email hard-wrapped base64url continuation lines when the URI contains humoco://recovery-reply?
+    let unwrapped;
+    let candidate = if uri
+        .trim()
+        .to_ascii_lowercase()
+        .contains("humoco://recovery-reply?")
+    {
+        let trimmed = uri.trim();
+        let lower = trimmed.to_ascii_lowercase();
+        let idx = lower.find("humoco://recovery-reply?").unwrap_or(0);
+        let slice = &trimmed[idx..];
+        let mut lines = slice.lines();
+        let mut joined = lines.next().map(str::trim).unwrap_or("").to_string();
+        for line in lines {
+            let t = line.trim();
+            if t.is_empty() {
+                break;
+            }
+            let stripped = t.trim_end_matches(&['.', ',', ';', ':', '!', '?', ')', ']'][..]);
+            if !stripped.is_empty()
+                && stripped
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '='))
+            {
+                joined.push_str(t);
+            } else {
+                break;
+            }
+        }
+        unwrapped = joined;
+        unwrapped.as_str()
     } else {
-        return Err(MarketError::Validation(
-            "Invalid recovery reply URI: missing 'recovery-reply?'".to_string(),
-        ));
+        uri
     };
-    let query_str = raw_query
-        .split(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '>' | ')'))
-        .next()
-        .unwrap_or("")
-        .trim_end_matches(&['.', ',', ';', '!', ']'][..]);
+    let query_str = extract_query_from_uri_text(candidate, "recovery-reply").ok_or_else(|| {
+        MarketError::Validation("Invalid recovery reply URI: missing 'recovery-reply?'".to_string())
+    })?;
 
     let mut v: Option<u8> = None;
     let mut data_opt: Option<String> = None;
@@ -1250,12 +1282,9 @@ pub fn open_and_verify_guardian_release_reply(
         )
         .map_err(|e| MarketError::Crypto(format!("Failed to decrypt recovery reply: {}", e)))?;
 
-    let payload: GuardianReleasePayload = match bincode::deserialize(&plaintext) {
-        Ok(p) => p,
-        Err(_) => serde_json::from_slice(&plaintext).map_err(|e| {
-            MarketError::Serialization(format!("Failed to parse GuardianReleasePayload: {}", e))
-        })?,
-    };
+    let payload: GuardianReleasePayload = bincode::deserialize(&plaintext).map_err(|e| {
+        MarketError::Serialization(format!("Failed to parse GuardianReleasePayload: {}", e))
+    })?;
 
     verify_guardian_vault_entry(&payload.entry)?;
 
@@ -1491,23 +1520,9 @@ pub fn build_emergency_kit_uri(kit: &EmergencyKitData) -> Result<String, MarketE
 
 /// Parses a `humoco://kit` URI.
 pub fn parse_emergency_kit_uri(uri: &str) -> Result<EmergencyKitData, MarketError> {
-    let trimmed = uri.trim();
-    let raw_query = if let Some(stripped) = trimmed.strip_prefix("humoco://kit?") {
-        stripped
-    } else if let Some(stripped) = trimmed.strip_prefix("kit?") {
-        stripped
-    } else if let Some(idx) = trimmed.find("kit?") {
-        &trimmed[idx + 4..]
-    } else {
-        return Err(MarketError::Validation(
-            "Invalid emergency kit URI: missing 'kit?'".to_string(),
-        ));
-    };
-    let query_str = raw_query
-        .split(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '>' | ')'))
-        .next()
-        .unwrap_or("")
-        .trim_end_matches(&['.', ',', ';', '!', ']'][..]);
+    let query_str = extract_query_from_uri_text(uri, "kit").ok_or_else(|| {
+        MarketError::Validation("Invalid emergency kit URI: missing 'kit?'".to_string())
+    })?;
 
     let mut v: Option<u8> = None;
     let mut ent: Option<String> = None;

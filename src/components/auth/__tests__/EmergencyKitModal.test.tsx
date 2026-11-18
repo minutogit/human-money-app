@@ -17,6 +17,7 @@ describe('EmergencyKitModal Component', () => {
     const mockKitData = {
         phrase: 'apple banana cherry date elderberry fig grape honey iris jasmine kiwi lemon',
         languageCode: 0,
+        userPrefix: 'al1',
         hasBip39Passphrase: false,
         kitUri: 'humoco://kit?did=did:key:z6Mku&words=12',
         qrSvg: '<svg data-testid="qr-svg"></svg>',
@@ -102,6 +103,7 @@ describe('EmergencyKitModal Component', () => {
         vi.mocked(recoveryService.exportProfileMnemonic).mockResolvedValue({
             phrase: phrase24,
             languageCode: 0,
+            userPrefix: 'al1',
             hasBip39Passphrase: true,
             kitUri: 'humoco://kit?v=1&words=24',
             qrSvg: '<svg></svg>',

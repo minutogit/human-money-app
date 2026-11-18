@@ -83,14 +83,26 @@ export const Sidebar: React.FC<SidebarProps> = ({ openClaimsCount }) => {
   useEffect(() => {
     if (openClaimsCount !== undefined || !isLoggedIn) return;
     let isMounted = true;
-    integrityService
-      .getDoubleSpendConflicts()
-      .then((conflicts) => {
-        if (isMounted) setFetchedClaimsCount((conflicts || []).length);
-      })
-      .catch(() => {});
+    const loadClaimsCount = () => {
+      integrityService
+        .getDoubleSpendConflicts()
+        .then((conflicts) => {
+          if (!isMounted) return;
+          const unresolved = (conflicts || []).filter(
+            (c) => !c.isResolved && !c.localOverride && (!c.conflictRole || c.conflictRole === 'victim')
+          ).length;
+          setFetchedClaimsCount(unresolved);
+        })
+        .catch(() => {});
+    };
+    loadClaimsCount();
+    const onRefresh = () => loadClaimsCount();
+    window.addEventListener('humoco:conflicts-updated', onRefresh);
+    window.addEventListener('humoco:post-inbox-updated', onRefresh);
     return () => {
       isMounted = false;
+      window.removeEventListener('humoco:conflicts-updated', onRefresh);
+      window.removeEventListener('humoco:post-inbox-updated', onRefresh);
     };
   }, [openClaimsCount, isLoggedIn]);
 
@@ -466,7 +478,10 @@ export const Sidebar: React.FC<SidebarProps> = ({ openClaimsCount }) => {
           <button
             type="button"
             onClick={() => {
-              navigate({ view: 'help_center', previousView: appState });
+              navigate({
+                view: 'help_center',
+                previousView: appState.view === 'help_center' ? appState.previousView : appState,
+              });
               setSidebarOpen(false);
             }}
             className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl transition-all duration-200 cursor-pointer ${

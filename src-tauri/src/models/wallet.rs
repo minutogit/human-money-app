@@ -192,6 +192,18 @@ pub struct FrontendSourceTransfer {
     pub amount_to_send: String,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct FrontendL2QuorumDto {
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signer_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_nodes_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<String>,
+}
+
 #[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct ReceiveSuccessPayload {
@@ -206,6 +218,10 @@ pub struct ReceiveSuccessPayload {
         Vec<human_money_core::models::conflict::TransactionFingerprint>,
     >,
     pub conflict_summaries: Vec<crate::models::FrontendProofOfDoubleSpendSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub l2_quorum: Option<FrontendL2QuorumDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receive_kind: Option<String>,
     pub checkout_verdict: Option<crate::models::FrontendCheckoutReleaseVerdict>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub purchase_id: Option<String>,

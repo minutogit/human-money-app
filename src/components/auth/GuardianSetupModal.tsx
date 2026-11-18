@@ -50,26 +50,42 @@ export const GuardianSetupModal: React.FC<GuardianSetupModalProps> = ({
     const [isLoadingContacts, setIsLoadingContacts] = useState<boolean>(false);
     const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
     const [errorMsg, setErrorMsg] = useState<string>('');
+    const [deliveryWarning, setDeliveryWarning] = useState<string | null>(null);
     const initialPropsRef = useRef({ initialGuardianDids, initialThresholdM, initialQuestionIds });
     initialPropsRef.current = { initialGuardianDids, initialThresholdM, initialQuestionIds };
 
-    // Reset transient state when opened or closed
+    // Reset transient state (including plaintext answers) when opened or closed
     useEffect(() => {
         if (!isOpen) {
             setSelectedDids([]);
             setPassword('');
+            setA1('');
+            setA2('');
+            setA3('');
+            setQ1(1);
+            setQ2(2);
+            setQ3(3);
+            setThresholdM(2);
             setErrorMsg('');
+            setDeliveryWarning(null);
             setIsSubmitting(false);
             return;
         }
 
-        const { initialQuestionIds: initQs } = initialPropsRef.current;
+        const { initialQuestionIds: initQs, initialThresholdM: initM } = initialPropsRef.current;
         if (initQs && initQs.length === 3 && new Set(initQs).size === 3) {
             setQ1(initQs[0]);
             setQ2(initQs[1]);
             setQ3(initQs[2]);
+        } else {
+            setQ1(1);
+            setQ2(2);
+            setQ3(3);
         }
-
+        setThresholdM(typeof initM === 'number' && initM >= 1 ? initM : 2);
+        setA1('');
+        setA2('');
+        setA3('');
         setErrorMsg('');
         setPassword('');
         setIsSubmitting(false);
@@ -170,13 +186,35 @@ export const GuardianSetupModal: React.FC<GuardianSetupModalProps> = ({
         setErrorMsg('');
 
         try {
-            await recoveryService.setupSocialRecoveryGuardians({
+            const res = await recoveryService.setupSocialRecoveryGuardians({
                 password,
                 guardianDids: selectedDids,
                 thresholdM,
                 questionIds: [q1, q2, q3],
                 answers: [a1, a2, a3],
             });
+            const postResult = res?.postSyncResult as
+                | { uploadedTo?: number; errors?: string[] }
+                | null
+                | undefined;
+            const uploadedTo = postResult?.uploadedTo;
+            const postErrors = postResult?.errors ?? [];
+            if ((typeof uploadedTo === 'number' && uploadedTo === 0) || postErrors.length > 0) {
+                setDeliveryWarning(
+                    postErrors.length > 0 && typeof uploadedTo === 'number' && uploadedTo > 0
+                        ? t('backup.guardianSetupPartialSyncWarning', {
+                              errors: postErrors.join(', '),
+                              defaultValue:
+                                  'Die Vertrauenskontakte wurden gespeichert, aber nicht alle Vertrauenskontakte konnten erreicht werden ({{errors}}). Bitte synchronisiere bei Gelegenheit erneut.',
+                          })
+                        : t(
+                              'backup.guardianSetupSyncUnreachable',
+                              'Die Vertrauenskontakte wurden gespeichert, aber keiner ihrer Sync-Dienste war erreichbar. Bitte synchronisiere erneut oder stelle sicher, dass ein aktiver Sync-Dienst verbunden ist.'
+                          )
+                );
+                onSuccess?.();
+                return;
+            }
             onSuccess?.();
             onClose();
         } catch (err) {
@@ -203,6 +241,27 @@ export const GuardianSetupModal: React.FC<GuardianSetupModalProps> = ({
                         {errorMsg}
                     </AlertBanner>
                 )}
+
+                {deliveryWarning ? (
+                    <div className="space-y-4">
+                        <AlertBanner variant="warning" data-testid="guardian-setup-unreachable-warning">
+                            {deliveryWarning}
+                        </AlertBanner>
+                        <div className="flex justify-end">
+                            <Button
+                                type="button"
+                                variant="primary"
+                                onClick={() => {
+                                    setDeliveryWarning(null);
+                                    onClose();
+                                }}
+                            >
+                                {t('common.understoodAndClose', 'Verstanden & schließen')}
+                            </Button>
+                        </div>
+                    </div>
+                ) : (
+                    <>
 
                 {/* Household hint */}
                 <div className="p-4 bg-amber-500/10 border border-amber-500/20 rounded-2xl flex items-start gap-3">
@@ -420,6 +479,8 @@ export const GuardianSetupModal: React.FC<GuardianSetupModalProps> = ({
                         {isSubmitting ? t('common.saving') : t('backup.setupGuardiansButton')}
                     </Button>
                 </div>
+                    </>
+                )}
             </form>
         </ModalShell>
     );

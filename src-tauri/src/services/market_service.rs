@@ -20,13 +20,18 @@ pub struct ShareArtifacts {
 pub fn build_share_artifacts(
     card: &humoco_market::SdCard,
 ) -> Result<ShareArtifacts, FrontendError> {
-    let file_wire = humoco_market::render_wire(card, 1, humoco_market::WireFilter::Full)
+    let raw_file_wire = humoco_market::render_wire(card, 1, humoco_market::WireFilter::Full)
         .ok_or_else(|| FrontendError::from("Failed to render full wire".to_string()))?;
 
     let qr_wire = humoco_market::render_wire(card, 1, humoco_market::WireFilter::FitBytes(2100))
         .ok_or_else(|| FrontendError::from("Failed to render fit wire for QR".to_string()))?;
 
-    let qr_is_partial = qr_wire.len() < file_wire.len();
+    let qr_is_partial = qr_wire.len() < raw_file_wire.len();
+
+    let file_env = humoco_market::own_envelope(raw_file_wire);
+    let file_wire = serde_json::to_string_pretty(&file_env).map_err(|e| {
+        FrontendError::from(format!("Failed to serialize file CardEnvelope: {}", e))
+    })?;
 
     let qr_env = humoco_market::own_envelope(qr_wire);
     let qr_env_json = serde_json::to_string(&qr_env)
@@ -1437,12 +1442,21 @@ pub fn import_contact_card_impl(
     state: &AppState,
 ) -> Result<FrontendImportCardResult, FrontendError> {
     let mut service = state.service.lock().unwrap();
+    crate::services::common::ensure_access_mode(
+        &mut service,
+        human_money_core::AccessMode::DailyPay,
+        password.as_deref(),
+    )?;
 
-    let json_str = if let Some((_, query_part)) = payload.trim().split_once("?env=") {
-        let b64 = query_part
+    let trimmed_payload = payload.trim();
+    let lower_payload = trimmed_payload.to_ascii_lowercase();
+    let json_str = if let Some(pos) = lower_payload.find("?env=") {
+        let query_part = &trimmed_payload[pos + 5..];
+        let raw_b64 = query_part
             .split(|c: char| c == '&' || c.is_whitespace() || matches!(c, '"' | '\'' | '>' | '<'))
             .next()
             .unwrap_or(query_part);
+        let b64 = raw_b64.trim_end_matches(['.', ',', ';', ':', '!', '?', ')', ']']);
         let bytes = human_money_core::crypto::decode_base64(b64).map_err(|e| {
             FrontendError::from(format!("Failed to decode card share URI base64: {}", e))
         })?;
@@ -1596,7 +1610,7 @@ pub fn import_contact_card_impl(
                                 password.as_deref(),
                             );
                         }
-                    } else {
+                    } else if env.hops <= 1 {
                         let pub_profile = humoco_market::extract_public_profile(&stored.card);
                         let profile = crate::models::FrontendUserProfile::from(pub_profile);
                         let contact = crate::models::FrontendContact {
@@ -2152,9 +2166,7 @@ mod tests {
         assert_eq!(alice_view.board[0].ad.title, "Fresh Baguettes");
 
         // 2. Bob imports Alice's full card via file envelope (since QR share_uri is 100% ad-free & image-free)
-        let file_wire = alice_profile.file_wire.expect("file_wire must be present");
-        let file_env = humoco_market::own_envelope(file_wire);
-        let file_env_json = serde_json::to_string(&file_env).unwrap();
+        let file_env_json = alice_profile.file_wire.expect("file_wire must be present");
         let import_res_bob =
             import_contact_card_impl(file_env_json, Some(password.to_string()), &bob_state)
                 .unwrap();

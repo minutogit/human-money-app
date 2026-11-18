@@ -145,10 +145,16 @@ export function ExportSigningRequestModal({
             };
             const bundleBytes = await voucherService.createSigningRequest(voucherId, config);
             const res = await protectAction(async (pwd) => {
-                return await postService.sendSigningRequestViaPost(recipientId.trim(), bundleBytes, pwd || undefined);
+                return await postService.sendSigningRequestViaPost(
+                    recipientId.trim(),
+                    bundleBytes,
+                    pwd || undefined,
+                    voucherId,
+                );
             });
-            if (res && res.depositedTo > 0) {
-                setPostSuccessMsg(t('voucher.signRequest.sentViaPostSuccess', { count: res.depositedTo }));
+            const recipientDelivered = res?.recipientDepositedTo ?? 0;
+            if (recipientDelivered > 0) {
+                setPostSuccessMsg(t('voucher.signRequest.sentViaPostSuccess', { count: recipientDelivered }));
                 setTimeout(() => {
                     resetAndClose();
                 }, 1600);

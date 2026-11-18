@@ -1,5 +1,5 @@
 // src/components/FirstStepsChecklist.tsx
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { 
     CheckCircle2, 
@@ -21,6 +21,7 @@ export interface FirstStepsChecklistProps {
     hasSync: boolean;
     hasIdentityRecovery?: boolean;
     userId?: string;
+    profileScope?: string;
     onDismiss?: () => void;
 }
 
@@ -31,23 +32,30 @@ export const FirstStepsChecklist: React.FC<FirstStepsChecklistProps> = ({
     hasSync,
     hasIdentityRecovery,
     userId,
+    profileScope,
     onDismiss,
 }) => {
     const { t } = useTranslation();
     const { navigate } = useNavigation();
 
-    const storageKey = userId ? `humoco_first_steps_dismissed_${userId}` : "humoco_first_steps_dismissed";
+    const scope = userId || profileScope;
+    const storageKey = scope ? `humoco_first_steps_dismissed_${scope}` : "humoco_first_steps_dismissed";
 
     const [isDismissed, setIsDismissed] = useState<boolean>(() => {
         try {
-            return (
-                localStorage.getItem(storageKey) === "true" ||
-                localStorage.getItem("humoco_first_steps_dismissed") === "true"
-            );
+            return localStorage.getItem(storageKey) === "true";
         } catch {
             return false;
         }
     });
+
+    useEffect(() => {
+        try {
+            setIsDismissed(localStorage.getItem(storageKey) === "true");
+        } catch {
+            setIsDismissed(false);
+        }
+    }, [storageKey]);
 
     const isBackupComplete = hasBackup && (hasIdentityRecovery ?? true);
     const allCompleted = isBackupComplete && hasContact && hasVoucher && hasSync;
@@ -56,7 +64,6 @@ export const FirstStepsChecklist: React.FC<FirstStepsChecklistProps> = ({
         setIsDismissed(true);
         try {
             localStorage.setItem(storageKey, "true");
-            localStorage.setItem("humoco_first_steps_dismissed", "true");
         } catch {
             // ignore best-effort storage
         }

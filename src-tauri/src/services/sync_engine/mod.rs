@@ -340,7 +340,6 @@ pub fn get_sync_overview_status_impl(
         friend_syncs,
         public_syncs,
         has_own_sync,
-        own_sync_soft_warning: false,
         last_sync_at,
         pending_auth_count,
         failing_count,

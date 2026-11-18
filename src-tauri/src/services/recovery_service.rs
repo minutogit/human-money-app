@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use tauri::Manager;
 
 use chrono::Utc;
 use human_money_core::app_service::AppService;
@@ -64,7 +65,10 @@ pub fn load_recovery_owner_state(
             .map_err(|e| {
                 FrontendError::from(format!("Failed to parse recovery owner state: {}", e))
             }),
-        Err(_) => Ok(None),
+        Err(human_money_core::app_service::AppFacadeError::Storage(
+            human_money_core::StorageError::NotFound,
+        )) => Ok(None),
+        Err(e) => Err(FrontendError::from(e)),
     }
 }
 
@@ -88,7 +92,10 @@ pub fn load_guardian_vault(
     match service.load_encrypted_data(RECOVERY_GUARDIAN_VAULT_KEY, password) {
         Ok(bytes) => serde_json::from_slice::<GuardianVaultStore>(&bytes)
             .map_err(|e| FrontendError::from(format!("Failed to parse guardian vault: {}", e))),
-        Err(_) => Ok(GuardianVaultStore::new()),
+        Err(human_money_core::app_service::AppFacadeError::Storage(
+            human_money_core::StorageError::NotFound,
+        )) => Ok(GuardianVaultStore::new()),
+        Err(e) => Err(FrontendError::from(e)),
     }
 }
 
@@ -289,13 +296,17 @@ pub async fn enqueue_guardian_locator_updates_if_configured(
     .map(Into::into)
     .collect();
 
+    let root_did =
+        human_money_core::crypto::create_user_id(&my_identity.signing_key.verifying_key(), None)
+            .map_err(|e| FrontendError::from(format!("Failed to derive root DID: {}", e)))?;
+
     let now_secs = Utc::now().timestamp() as u64;
     let mut post_state = load_post_state(state, password.as_deref())?;
     let mut enqueued = 0;
 
     for g in guardians {
         let update = GuardianLocatorUpdate {
-            owner_did: my_identity.user_id.clone(),
+            owner_did: root_did.clone(),
             rotation_epoch: epoch,
             backup_sync_descriptors: candidate_descriptors.clone(),
             updated_at: now_secs,
@@ -324,7 +335,7 @@ pub async fn enqueue_guardian_locator_updates_if_configured(
     }
 
     if enqueued > 0 {
-        let _ = flush_post_slots_impl(state, &mut post_state, password.as_deref()).await;
+        let _ = flush_post_slots_impl(state, &mut post_state, &[], password.as_deref()).await;
         save_post_state(state, &post_state, password.as_deref())?;
     }
 
@@ -574,7 +585,7 @@ pub async fn export_profile_mnemonic_impl(
         version: 1,
         entropy_hex,
         language_code: mnemonic_language_to_code(lang),
-        user_prefix,
+        user_prefix: user_prefix.clone(),
         has_bip39_passphrase,
         sync_descriptors: active_descriptors.clone(),
     };
@@ -590,6 +601,7 @@ pub async fn export_profile_mnemonic_impl(
         phrase,
         language_code: kit.language_code,
         has_bip39_passphrase,
+        user_prefix,
         kit_uri,
         qr_svg,
         sync_urls,
@@ -937,6 +949,35 @@ pub async fn setup_social_recovery_guardians_with_params(
             }
         }
 
+        let local_fallback_name = {
+            let profiles = service.list_profiles().unwrap_or_default();
+            if let Some(app_handle) = app {
+                if let Ok(app_dir) = app_handle.path().app_data_dir() {
+                    let wallet_dir = app_dir.join("wallet_data");
+                    crate::commands::auth::resolve_active_profile_folder(
+                        &service,
+                        None,
+                        &wallet_dir,
+                    )
+                    .ok()
+                    .and_then(|folder| {
+                        profiles
+                            .into_iter()
+                            .find(|p| p.folder_name == folder)
+                            .map(|p| p.profile_name)
+                    })
+                } else {
+                    None
+                }
+            } else if profiles.len() == 1 {
+                Some(profiles[0].profile_name.clone())
+            } else {
+                None
+            }
+        }
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
         let (my_identity, my_prefix, my_profile_name) = service
             .with_wallet_and_identity(|w, id| {
                 let pfx = human_money_core::crypto::get_prefix_from_user_id(&id.user_id)
@@ -944,10 +985,12 @@ pub async fn setup_social_recovery_guardians_with_params(
                 let first = w.profile.first_name.as_deref().unwrap_or("").trim();
                 let last = w.profile.last_name.as_deref().unwrap_or("").trim();
                 let full = format!("{} {}", first, last).trim().to_string();
-                let name = if full.is_empty() {
-                    id.user_id.clone()
-                } else {
+                let name = if !full.is_empty() {
                     full
+                } else if let Some(ref local_name) = local_fallback_name {
+                    local_name.clone()
+                } else {
+                    id.user_id.clone()
                 };
                 (id.clone(), pfx, name)
             })
@@ -987,6 +1030,10 @@ pub async fn setup_social_recovery_guardians_with_params(
     .collect();
     let mut post_state = load_post_state(state, Some(&password))?;
 
+    let root_did =
+        human_money_core::crypto::create_user_id(&my_identity.signing_key.verifying_key(), None)
+            .map_err(|e| FrontendError::from(format!("Failed to derive root DID: {}", e)))?;
+
     // Send revoke to any old guardians being removed
     if let Some(ref old) = old_owner_state {
         let removed_dids: Vec<String> = old
@@ -1002,7 +1049,7 @@ pub async fn setup_social_recovery_guardians_with_params(
         enqueue_guardian_revocations(
             &mut post_state,
             &my_identity,
-            &my_identity.user_id,
+            &root_did,
             new_epoch,
             removed_dids,
             now_secs,
@@ -1011,10 +1058,6 @@ pub async fn setup_social_recovery_guardians_with_params(
     }
 
     let backup_descriptors = collect_candidate_backup_sync_descriptors(state, Some(&password))?;
-
-    let root_did =
-        human_money_core::crypto::create_user_id(&my_identity.signing_key.verifying_key(), None)
-            .map_err(|e| FrontendError::from(format!("Failed to derive root DID: {}", e)))?;
 
     let master_payload =
         RecoveryMasterPayload::new(&root_did, entropy, lang, my_prefix, has_bip39_passphrase);
@@ -1175,10 +1218,14 @@ pub async fn revoke_social_recovery_impl(
     let mut post_state = load_post_state(state, password.as_deref())?;
     let revoked_count = old_guardians.len();
 
+    let root_did =
+        human_money_core::crypto::create_user_id(&my_identity.signing_key.verifying_key(), None)
+            .map_err(|e| FrontendError::from(format!("Failed to derive root DID: {}", e)))?;
+
     enqueue_guardian_revocations(
         &mut post_state,
         &my_identity,
-        &my_identity.user_id,
+        &root_did,
         new_epoch,
         old_guardians.into_iter().map(|g| g.user_id),
         now_secs,
@@ -1274,6 +1321,7 @@ pub fn import_guardian_recovery_reply_impl(
     let payload = open_and_verify_guardian_release_reply(&session.sk_temp, &reply_uri)
         .map_err(FrontendError::from)?;
 
+    let mut superseded_epoch = false;
     if !session.replies.is_empty() {
         if !are_dids_equal(
             &session.replies[0].entry.owner_did,
@@ -1297,6 +1345,7 @@ pub fn import_guardian_recovery_reply_impl(
             )));
         }
         if payload.entry.rotation_epoch > max_epoch {
+            superseded_epoch = !session.replies.is_empty();
             session
                 .replies
                 .retain(|r| r.entry.rotation_epoch == payload.entry.rotation_epoch);
@@ -1316,7 +1365,9 @@ pub fn import_guardian_recovery_reply_impl(
     }
 
     let mut dto = build_active_session_dto(&session);
-    dto.last_import_status = Some(if already_present {
+    dto.last_import_status = Some(if superseded_epoch {
+        "superseded_epoch".to_string()
+    } else if already_present {
         "duplicate".to_string()
     } else {
         "added".to_string()
@@ -1384,6 +1435,11 @@ pub fn approve_guardian_recovery_request_impl(
 
     let (entry, extra_descriptors, resolved_owner_name) = {
         let mut service = state.lock_service()?;
+        crate::services::common::ensure_access_mode(
+            &mut service,
+            human_money_core::AccessMode::Full,
+            password,
+        )?;
         let vault = load_guardian_vault(&mut service, password)?;
         let entry = vault
             .wards
@@ -1539,6 +1595,11 @@ pub async fn complete_social_recovery_impl(
                 .ok();
             let _ = record_profile_metadata_in_dir(wallet_data_dir, &target_folder, user_id);
             let _ = state.initialize_profile_session(&mut service, &new_password);
+            if let Some(app) = app_opt {
+                if let Ok(config_dir) = app.path().app_config_dir() {
+                    let _ = crate::pin_keystore::remove_entry(&config_dir, &target_folder);
+                }
+            }
 
             if let Ok(Some(mut local_state)) =
                 load_recovery_owner_state(&mut service, Some(&new_password))

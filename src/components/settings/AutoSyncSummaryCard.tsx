@@ -6,9 +6,11 @@ import { openUrl } from '@tauri-apps/plugin-opener';
 import { AppSettings, FrontendDiscoveredSync, StoredPublicSync } from '../../types';
 import { marketService } from '../../services/marketService';
 import { settingsService } from '../../services/settingsService';
+import { useOptionalSession } from '../../context/SessionContext';
 import { notifySyncStatusUpdated, SYNC_STATUS_UPDATED_EVENT } from '../../utils/syncEvents';
 import { copyToClipboard } from '../../utils/clipboard';
 import { translateError } from '../../utils/errorHelper';
+import { collectRevokedNotices } from './sync/syncHelpers';
 import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
 
@@ -37,6 +39,7 @@ export const AutoSyncSummaryCard: React.FC<AutoSyncSummaryCardProps> = ({
     showQuickConnect = true,
 }) => {
     const { t } = useTranslation();
+    const session = useOptionalSession();
     const [discoveredSyncs, setDiscoveredSyncs] = useState<FrontendDiscoveredSync[]>([]);
     const [isConnecting, setIsConnecting] = useState(false);
     const [feedback, setFeedback] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
@@ -121,6 +124,54 @@ export const AutoSyncSummaryCard: React.FC<AutoSyncSummaryCardProps> = ({
                 (!pub.enabled || pub.status === 'pending_auth' || (pub.authorizedChannels?.length ?? 0) === 0)
         );
     }, [settings?.publicSyncs]);
+
+    const revokedNotices = useMemo(
+        () => collectRevokedNotices(discoveredSyncs, settings?.publicSyncs || []),
+        [discoveredSyncs, settings?.publicSyncs]
+    );
+
+    const handleAdoptReplacementUrl = async (url: string) => {
+        if (typeof marketService?.probePublicSync !== 'function') return;
+        setIsConnecting(true);
+        setFeedback(null);
+        try {
+            const runSave = async (pwd?: string | null) => {
+                const info = await marketService.probePublicSync(url, pwd || undefined);
+                if (!info) return null;
+                const hasAuth = (info.authorizedChannels || []).length > 0;
+                await marketService.savePublicSync(
+                    {
+                        writeUrl: info.writeUrl,
+                        readUrl: info.readUrl,
+                        dropPub: info.dropPub,
+                        registerUrl: info.registerUrl,
+                        enabled: hasAuth,
+                    },
+                    pwd || undefined
+                );
+                return hasAuth;
+            };
+            const hasAuth = session?.protectAction
+                ? await session.protectAction((pwd) => runSave(pwd))
+                : await runSave();
+            if (hasAuth !== null && hasAuth !== undefined) {
+                const fresh = await settingsService.getSettings().catch(() => null);
+                if (fresh) {
+                    onSettingsSynced?.(fresh);
+                }
+                await loadDiscovered();
+                notifySyncStatusUpdated();
+                setFeedback({
+                    type: hasAuth ? 'success' : 'info',
+                    message: hasAuth ? t('settings.syncProbeSuccess') : t('settings.syncProbeUnauthorized'),
+                });
+            }
+        } catch (err) {
+            setFeedback({ type: 'error', message: translateError(err, t) });
+        } finally {
+            setIsConnecting(false);
+        }
+    };
 
     const handleOpenPendingRegister = async (drop: StoredPublicSync) => {
         if (!drop.registerUrl || (!drop.registerUrl.startsWith('https://') && !drop.registerUrl.startsWith('http://'))) {
@@ -282,6 +333,50 @@ export const AutoSyncSummaryCard: React.FC<AutoSyncSummaryCardProps> = ({
                             <AlertTriangle size={15} className="shrink-0" />
                         )}
                         <span>{feedback.message}</span>
+                    </div>
+                )}
+
+                {revokedNotices.length > 0 && (
+                    <div
+                        data-testid="auto-sync-revocation-alert"
+                        className="p-3 rounded-xl border border-amber-300 bg-amber-50/90 dark:bg-amber-950/30 space-y-2 text-xs text-amber-950 dark:text-amber-200"
+                    >
+                        <div className="font-bold flex items-center gap-1.5">
+                            <AlertTriangle size={14} className="text-amber-600 shrink-0" />
+                            <span>{t('settings.syncRevocationBannerTitle')}</span>
+                        </div>
+                        {revokedNotices.map((item, idx) => (
+                            <div key={item.url + idx} className="pt-1 border-t border-amber-200/70 space-y-1">
+                                <div className="font-mono text-[11px] break-all font-semibold">{item.url}</div>
+                                <div>
+                                    {item.status === 'revoked'
+                                        ? t('settings.syncStatusRevoked')
+                                        : item.sunsetAt
+                                        ? t('settings.syncStatusDeprecatingDate', {
+                                              date: new Date(item.sunsetAt * 1000).toLocaleDateString(),
+                                          })
+                                        : t('settings.syncStatusDeprecating')}
+                                    {item.reason ? ` — ${item.reason}` : ''}
+                                </div>
+                                {item.replacement?.writeUrl && (
+                                    <div className="flex flex-wrap items-center gap-2 pt-1">
+                                        <span className="font-mono text-[11px] break-all">
+                                            → {item.replacement.writeUrl}
+                                        </span>
+                                        <Button
+                                            type="button"
+                                            size="xs"
+                                            variant="secondary"
+                                            disabled={isConnecting}
+                                            onClick={() => void handleAdoptReplacementUrl(item.replacement!.writeUrl)}
+                                            className="text-xs"
+                                        >
+                                            {t('settings.syncUseReplacement')}
+                                        </Button>
+                                    </div>
+                                )}
+                            </div>
+                        ))}
                     </div>
                 )}
 

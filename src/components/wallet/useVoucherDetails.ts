@@ -12,6 +12,7 @@ import { parseStandardInfo } from '../../hooks/useParsedStandards';
 import { openFileAsBytes } from '../../utils/fileIo';
 import { logger } from '../../utils/log';
 import { stringifyError, translateError } from '../../utils/errorHelper';
+import { APP_EVENTS, emitAppEvent } from '../../utils/appEvents';
 import type {
     AppSettings,
     VoucherDetails,
@@ -185,6 +186,9 @@ export function useVoucherDetails(voucherId: string) {
             });
             if (statusDto) {
                 setL2Status(statusDto);
+                if (statusDto.status === 'conflict') {
+                    emitAppEvent(APP_EVENTS.CONFLICTS_UPDATED);
+                }
                 if (statusDto.status === 'spent' || statusDto.status === 'conflict') {
                     await refreshDetails();
                 }

@@ -264,4 +264,49 @@ describe('Login Component', () => {
     );
     expect(mockOnSwitchToRestoreBackup).toHaveBeenCalled();
   });
+
+  it('retains password on deviceMismatch so handoverToThisDevice submits non-empty password', async () => {
+    (invoke as Mock).mockImplementation((cmd: string, args?: unknown) => {
+      if (cmd === 'list_profiles') return Promise.resolve(mockProfiles);
+      if (cmd === 'get_local_instance_id') return Promise.resolve('test-instance-id');
+      if (cmd === 'login') {
+        return Promise.reject({
+          code: 'error.auth.deviceMismatch',
+          message: 'Device Mismatch',
+        });
+      }
+      if (cmd === 'handover_to_this_device') return Promise.resolve(args);
+      if (cmd === 'get_user_id') return Promise.resolve('did:key:zAlice');
+      return Promise.resolve(undefined);
+    });
+
+    render(
+      <Login
+        onLoginSuccess={mockOnLoginSuccess}
+        onSwitchToCreate={mockOnSwitchToCreate}
+        onSwitchToRestoreBackup={mockOnSwitchToRestoreBackup}
+        onSwitchToReset={mockOnSwitchToReset}
+      />
+    );
+
+    const passwordInput = await screen.findByLabelText(/Password/i);
+    const loginButton = screen.getByRole('button', { name: /Login/i });
+
+    fireEvent.change(passwordInput, { target: { value: 'SecretPass-1' } });
+    await waitFor(() => expect(loginButton).not.toBeDisabled());
+    fireEvent.click(loginButton);
+
+    const handoverBtn = await screen.findByRole('button', { name: /Perform Device Handover|Geräteübergabe durchführen/i });
+    expect(handoverBtn).not.toBeDisabled();
+    fireEvent.click(handoverBtn);
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith(
+        'handover_to_this_device',
+        expect.objectContaining({
+          password: 'SecretPass-1',
+        })
+      );
+    });
+  });
 });

@@ -68,10 +68,12 @@ export const PostRestoreSummary: React.FC<PostRestoreSummaryProps> = ({
             <div className="p-3.5 rounded-xl bg-slate-100 text-xs text-theme-secondary max-w-md mx-auto leading-relaxed">
                 {outcome.l2ReconciliationStatus === 'no_servers'
                     ? t('profile.backupRestoreOfflineNotice')
-                    : t('profile.backupRestoreReconciledNotice', {
-                          active: outcome.activeVoucherQueriesCount,
-                          spent: outcome.reconciledSpentCount,
-                      })}
+                    : outcome.l2ReconciliationStatus === 'reconciled'
+                      ? t('profile.backupRestoreReconciledNotice', {
+                            active: outcome.activeVoucherQueriesCount,
+                            spent: outcome.reconciledSpentCount,
+                        })
+                      : t('profile.backupRestorePendingNotice')}
             </div>
 
             {outcome.l2ReconciliationStatus !== 'reconciled' &&

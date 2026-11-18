@@ -531,13 +531,39 @@ pub fn format_admin_request_message(
     nonce_hex: &str,
     body: &[u8],
 ) -> String {
-    format!(
-        "HUMOCO-DROP-ADMIN-V1\n{}\n{}\n{}\n{}\n{}",
+    if matches!(
         action,
-        channel,
-        timestamp,
-        nonce_hex,
-        sha256_hex(body)
+        "PUT_REVOKE" | "PUT_LOCK_DELEGATE" | "POST_LOCK_SELFTEST"
+    ) {
+        format!(
+            "HUMOCO-DROP-ADMIN-V1\n{}\n{}\n{}\n{}",
+            action,
+            timestamp,
+            nonce_hex,
+            sha256_hex(body)
+        )
+    } else {
+        format!(
+            "HUMOCO-DROP-ADMIN-V1\n{}\n{}\n{}\n{}\n{}",
+            action,
+            channel,
+            timestamp,
+            nonce_hex,
+            sha256_hex(body)
+        )
+    }
+}
+
+pub fn format_lock_delegate_signature_message(
+    admin_pub: &str,
+    lock_pub: &str,
+    issued_at: u64,
+) -> String {
+    format!(
+        "HUMOCO-LOCK-DELEGATE-V1\n{}\n{}\n{}",
+        admin_pub.trim().to_ascii_lowercase(),
+        lock_pub.trim().to_ascii_lowercase(),
+        issued_at
     )
 }
 

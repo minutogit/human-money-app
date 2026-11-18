@@ -214,16 +214,38 @@ export function DeadQuorumSwapPanel({
                         {t('voucher.adjudicateSwapBtn')}
                     </Button>
                     {swapAdjudication && (
-                        <div className="p-2.5 rounded-lg border border-emerald-200 bg-emerald-50/50 text-[11px] space-y-1">
+                        <div className="p-2.5 rounded-lg border border-emerald-200 dark:border-emerald-800/50 bg-emerald-50/50 dark:bg-emerald-950/20 text-[11px] space-y-1.5">
                             <div>
-                                <span className="font-bold">{t('voucher.swapWinnerLabel')}: </span>
-                                <span className="font-mono">
-                                    {swapAdjudication.winnerRecipientId || t('common.na')}
+                                <span className="font-bold">
+                                    {t('voucher.swapApprovedCount', { count: swapAdjudication.approved.length })}
                                 </span>
+                                {swapAdjudication.approved.length > 0 && (
+                                    <ul className="mt-0.5 space-y-0.5 font-mono text-[10px]">
+                                        {swapAdjudication.approved.map((claim, idx) => (
+                                            <li key={`${claim.voucherId}-${claim.tipTId}-${idx}`} className="break-all">
+                                                {claim.claimantDid} ({claim.approvedAmount})
+                                            </li>
+                                        ))}
+                                    </ul>
+                                )}
                             </div>
+                            {swapAdjudication.rejected.length > 0 && (
+                                <div className="text-rose-700 dark:text-rose-300">
+                                    <span className="font-bold">
+                                        {t('voucher.swapRejectedCount', { count: swapAdjudication.rejected.length })}
+                                    </span>
+                                    <ul className="mt-0.5 space-y-0.5 font-mono text-[10px]">
+                                        {swapAdjudication.rejected.map((claim, idx) => (
+                                            <li key={`${claim.voucherId}-${claim.tipTId}-${idx}`} className="break-all">
+                                                {claim.claimantDid}: {claim.reason}
+                                            </li>
+                                        ))}
+                                    </ul>
+                                </div>
+                            )}
                             <div>
-                                {t('voucher.swapOffendersExposed', {
-                                    count: swapAdjudication.exposedOffenderDids.length,
+                                {t('voucher.swapDoubleSpendProofs', {
+                                    count: swapAdjudication.doubleSpendProofsCount,
                                 })}
                             </div>
                         </div>

@@ -1,4 +1,5 @@
 // src/utils/humocoFileClassifier.ts
+import type { TFunction } from 'i18next';
 import type { FileDialogFilter } from './fileIo';
 
 export type HumocoFileKind =
@@ -47,7 +48,7 @@ export const RECEIVE_FILE_EXTENSIONS = [
     '.hmcs',
     '.hmcproof',
     '.hmcard',
-    '.hmccard',
+    '.humoco',
 ] as const;
 
 export const SUPPORTED_DROP_EXTENSIONS = [
@@ -58,7 +59,6 @@ export const SUPPORTED_DROP_EXTENSIONS = [
 const EXTENSION_KIND_MAP: ReadonlyArray<readonly [string, HumocoFileKind]> = [
     ['.hmcbackup', 'backup'],
     ['.hmcard', 'card'],
-    ['.hmccard', 'card'],
     ['.hmcproof', 'proof'],
     ['.wot', 'wot'],
     ['.hmcwot', 'wot'],
@@ -87,9 +87,10 @@ const CONTAINER_TYPE_MAP: Record<string, HumocoFileKind> = {
 const DEEPLINK_PATTERN =
     /humoco:\/\/(recovery-reply|kit|recovery-req|card|pay|contact)[^\s"'<>)]+/i;
 
-const TRAILING_PUNCTUATION_REGEX = /[.,;:!\]]+$/;
+const TRAILING_PUNCTUATION_REGEX = /[.,;:!?)\]"'>]+$/;
+const CONTINUATION_LINE_REGEX = /^[A-Za-z0-9\-_=+&%.:/]+$/;
 
-function decodeUtf8Text(bytes?: Uint8Array | number[], maxBytes: number = 1024 * 1024): string | null {
+function decodeUtf8Text(bytes?: Uint8Array | number[], maxBytes: number = 8 * 1024 * 1024): string | null {
     if (!bytes) return null;
     const len = bytes instanceof Uint8Array ? bytes.byteLength : bytes.length;
     if (len === 0 || len > maxBytes) return null;
@@ -102,21 +103,36 @@ function decodeUtf8Text(bytes?: Uint8Array | number[], maxBytes: number = 1024 *
 }
 
 /**
- * Extracts a supported `humoco://` deep link or `?env=` card payload from raw dropped text.
+ * Extracts a supported `humoco://` deep link from raw dropped/pasted text,
+ * unwrapping hard email line breaks and stripping trailing chat punctuation.
  */
 export function extractHumocoDeepLink(rawText?: string | null): string | null {
     if (!rawText || typeof rawText !== 'string') return null;
     const trimmed = rawText.trim();
     if (!trimmed) return null;
 
-    const match = trimmed.match(DEEPLINK_PATTERN);
-    if (match?.[0]) {
-        return match[0].replace(TRAILING_PUNCTUATION_REGEX, '');
+    const lower = trimmed.toLowerCase();
+    const startIdx = lower.search(/humoco:\/\/(recovery-reply|kit|recovery-req|card|pay|contact)\b/);
+    let candidate = trimmed;
+    if (startIdx >= 0) {
+        const lines = trimmed.slice(startIdx).split(/\r?\n/);
+        let joined = (lines[0] || '').trim();
+        for (let i = 1; i < lines.length; i++) {
+            const line = lines[i].trim();
+            if (!line) break;
+            const stripped = line.replace(TRAILING_PUNCTUATION_REGEX, '');
+            if (stripped.length > 0 && CONTINUATION_LINE_REGEX.test(stripped)) {
+                joined += line;
+            } else {
+                break;
+            }
+        }
+        candidate = joined;
     }
 
-    const lower = trimmed.toLowerCase();
-    if (lower.includes('?env=')) {
-        return trimmed;
+    const match = candidate.match(DEEPLINK_PATTERN);
+    if (match?.[0]) {
+        return match[0].replace(TRAILING_PUNCTUATION_REGEX, '');
     }
 
     return null;
@@ -161,8 +177,12 @@ function classifyJsonObject(obj: Record<string, unknown>): HumocoFileClassificat
         };
     }
 
-    if (typeof obj.card_wire === 'string' || typeof obj.card_jws === 'string') {
+    if (typeof obj.card_wire === 'string') {
         return { kind: 'card', source: 'magic', containerType: 'CardEnvelope' };
+    }
+
+    if (obj.typ === 'wot-provider-filter+v1') {
+        return { kind: 'wot', source: 'magic', containerType: 'wot-provider-filter+v1' };
     }
 
     if (
@@ -235,6 +255,9 @@ export function classifyHumocoFile(input: ClassifyHumocoFileInput): HumocoFileCl
     }
 
     if (extKind !== 'unknown') {
+        if (extKind === 'standard' && lowerName.endsWith('.toml') && rawText != null) {
+            return { kind: 'unknown', source: 'unknown' };
+        }
         return { kind: extKind, source: 'extension' };
     }
 
@@ -289,20 +312,19 @@ export function isReceiveImportKind(kind: HumocoFileKind): kind is ReceiveImport
 }
 
 /**
- * Builds canonical Tauri file dialog filters for the Receive / Import view.
+ * Builds canonical localized Tauri file dialog filters for the Receive / Import view.
  */
-export function getReceiveFileDialogFilters(labels: {
-    wotFilter: string;
-    cardFilter: string;
-}): FileDialogFilter[] {
+export function getReceiveFileDialogFilters(t: TFunction): FileDialogFilter[] {
     return [
         {
-            name: 'All Human Money Files',
+            name: t('transfer.importFile.allFilesFilter', { defaultValue: 'Alle Human-Money-Dateien' }),
             extensions: [
                 'transfer',
                 'hmcbundle',
                 'hmc',
                 'hmcpost',
+                'humoco',
+                'json',
                 'ask',
                 'sig',
                 'standard',
@@ -314,16 +336,52 @@ export function getReceiveFileDialogFilters(labels: {
                 'hmcwot',
                 'hmcproof',
                 'hmcard',
-                'hmccard',
             ],
         },
-        { name: 'Transfer File (.transfer)', extensions: ['transfer', 'hmcbundle', 'hmc', 'hmcpost'] },
-        { name: 'Signature Request (.ask)', extensions: ['ask', 'humocoreq'] },
-        { name: 'Signature Response (.sig)', extensions: ['sig', 'humocosig'] },
-        { name: 'Double Spend Proof (.hmcproof)', extensions: ['hmcproof'] },
-        { name: 'Voucher Standard (.standard, .toml)', extensions: ['standard', 'toml', 'hmcs'] },
-        { name: labels.wotFilter, extensions: ['wot', 'hmcwot'] },
-        { name: labels.cardFilter, extensions: ['hmcard', 'hmccard'] },
-        { name: 'All Files', extensions: ['*'] },
+        {
+            name: t('transfer.importFile.transferFilter', { defaultValue: 'Zahlungsdatei (.transfer)' }),
+            extensions: ['transfer', 'hmcbundle', 'hmc', 'hmcpost'],
+        },
+        {
+            name: t('transfer.importFile.askFilter', { defaultValue: 'Unterschrifts-Anfrage (.ask)' }),
+            extensions: ['ask', 'humocoreq'],
+        },
+        {
+            name: t('transfer.importFile.sigFilter', { defaultValue: 'Unterschrifts-Antwort (.sig)' }),
+            extensions: ['sig', 'humocosig'],
+        },
+        {
+            name: t('transfer.importFile.proofFilter', { defaultValue: 'Konfliktnachweis (.hmcproof)' }),
+            extensions: ['hmcproof'],
+        },
+        {
+            name: t('transfer.importFile.standardFilter', { defaultValue: 'Gutschein-Standard (.standard, .toml)' }),
+            extensions: ['standard', 'toml', 'hmcs'],
+        },
+        {
+            name: t('transfer.importFile.wotFilter', { defaultValue: 'Vertrauensnetz-Datei (.wot)' }),
+            extensions: ['wot', 'hmcwot'],
+        },
+        {
+            name: t('marketplace.cardFilterName', { defaultValue: 'Visitenkarte (.hmcard)' }),
+            extensions: ['hmcard'],
+        },
+        {
+            name: t('common.allFiles', { defaultValue: 'Alle Dateien' }),
+            extensions: ['*'],
+        },
     ];
+}
+
+/**
+ * Translates non-accepted CardImportResult status strings into user-facing feedback.
+ */
+export function formatCardImportStatusFeedback(status: string, t: TFunction): string {
+    const statusMap: Record<string, string> = {
+        ignored_stale: t('marketplace.importIgnoredDesc'),
+        rejected_expired: t('marketplace.importExpiredDesc'),
+        rejected_hops: t('marketplace.importHopsDesc'),
+        rejected_offender: t('marketplace.importOffenderDesc'),
+    };
+    return statusMap[status] || status;
 }

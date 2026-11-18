@@ -967,4 +967,84 @@ fn test_recovery_uris_tolerate_chat_punctuation_and_uppercase_scheme() {
     let chat_reply = format!("Hier deine Antwort: {}!", upper_scheme_reply);
     let opened = open_and_verify_guardian_release_reply(&sk_temp, &chat_reply).unwrap();
     assert_eq!(opened, reply_payload);
+
+    // Wrapped reply across email lines + trailing prose
+    let wrapped_reply = format!(
+        "Hallo Hans,\n{}\n{}\nViele Gruesse!",
+        &reply_uri[..reply_uri.len() / 2],
+        &reply_uri[reply_uri.len() / 2..],
+    );
+    let opened_wrapped = open_and_verify_guardian_release_reply(&sk_temp, &wrapped_reply).unwrap();
+    assert_eq!(opened_wrapped, reply_payload);
+}
+
+#[test]
+fn test_sloppy_kit_uri_and_prefixed_vault_lookup() {
+    let kit_uri = build_emergency_kit_uri(&EmergencyKitData {
+        version: 1,
+        entropy_hex: "11".repeat(16),
+        language_code: 2,
+        user_prefix: Some("laptop".to_string()),
+        has_bip39_passphrase: false,
+        sync_descriptors: vec![],
+    })
+    .unwrap();
+    let noisy = format!(
+        "Hast du das kit? Hier ist es: {}?",
+        kit_uri.replacen("humoco://kit?", "HUMOCO://KIT?", 1)
+    );
+    let parsed_kit = parse_emergency_kit_uri(&noisy).unwrap();
+    assert_eq!(parsed_kit.user_prefix.as_deref(), Some("laptop"));
+
+    let req_with_q = format!(
+        "Kannst du helfen: {}?",
+        build_recovery_request_uri(&[5u8; 32], 1700000500, None)
+    );
+    let parsed_req = parse_recovery_request_uri(&req_with_q).unwrap();
+    assert_eq!(parsed_req.ts, 1700000500);
+
+    // Prefixed owner_did in update_locator / revoke_ward canonicalizes to root_did
+    let sk = make_signing_key(7);
+    let root_did = create_user_id(&sk.verifying_key(), None).unwrap();
+    let prefixed_did = create_user_id(&sk.verifying_key(), Some("phone")).unwrap();
+    let master = RecoveryMasterPayload::new(
+        &root_did,
+        vec![0x22; 16],
+        MnemonicLanguage::German,
+        Some("phone".to_string()),
+        false,
+    );
+    let bundle = create_social_recovery_vault_bundle(
+        &sk,
+        &root_did,
+        "Hans",
+        1,
+        2,
+        3,
+        &[1, 2, 3],
+        &["Garten", "Lindenstrasse", "Kroatien"],
+        &RecoveryKdfParams::new_fast_test(),
+        &master,
+        &[],
+        1700000000,
+    )
+    .unwrap();
+    let mut store = GuardianVaultStore::new();
+    store.upsert_ward(bundle[0].clone()).unwrap();
+    assert!(store.get_ward(&prefixed_did).is_some());
+    assert!(store
+        .update_locator(&GuardianLocatorUpdate {
+            owner_did: prefixed_did.clone(),
+            rotation_epoch: 1,
+            backup_sync_descriptors: vec![sample_drop_descriptor("1")],
+            updated_at: 1700000050,
+        })
+        .unwrap());
+    assert!(store
+        .revoke_ward(&GuardianRevoke {
+            owner_did: prefixed_did,
+            rotation_epoch: 1,
+        })
+        .unwrap());
+    assert!(store.is_empty());
 }

@@ -43,6 +43,7 @@ vi.mock('../../../services/profileService', () => ({
 vi.mock('../../../services/authService', () => ({
     authService: {
         getLocalInstanceId: vi.fn(),
+        listProfiles: vi.fn().mockResolvedValue([]),
     },
 }));
 

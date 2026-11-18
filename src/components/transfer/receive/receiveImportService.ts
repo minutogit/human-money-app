@@ -7,6 +7,7 @@ import { marketService } from '../../../services/marketService';
 import { parseStandardInfo } from '../../../hooks/useParsedStandards';
 import { extractDetachedSignatureVoucherId, ReceiveImportKind } from '../../../utils/humocoFileClassifier';
 import { isBackendError, stringifyError } from '../../../utils/errorHelper';
+import { APP_EVENTS, emitAppEvent } from '../../../utils/appEvents';
 import type { ProtectActionFn } from '../../../utils/fileIo';
 import type {
     CheckoutReleaseVerdict,
@@ -30,7 +31,7 @@ export function buildStandardDefinitionsToml(
     return map;
 }
 
-function isAuthOrDecryptError(err: unknown): boolean {
+export function isAuthOrDecryptError(err: unknown): boolean {
     const errMsg = stringifyError(err);
     const errCode = isBackendError(err) ? err.code : '';
     return (
@@ -122,6 +123,7 @@ export interface ExecuteReceiveImportParams {
     onEnsurePurchaseId: (id: string) => void;
     ensureStandardsToml: () => Promise<Record<string, string>>;
     protectAction: ProtectActionFn;
+    accessMode?: 'full' | 'dailyPay' | 'receiveOnly';
 }
 
 /**
@@ -137,16 +139,30 @@ export async function executeReceiveImport({
     onEnsurePurchaseId,
     ensureStandardsToml,
     protectAction,
+    accessMode,
 }: ExecuteReceiveImportParams): Promise<ReceiveImportOutcome> {
     if (type === 'transfer') {
         const standardDefinitionsToml = await ensureStandardsToml();
+
+        const runReceiveCall = async <T,>(
+            fn: (walletPassword: string | null) => Promise<T>,
+        ): Promise<T | void> => {
+            if (accessMode === 'receiveOnly') {
+                try {
+                    return await fn(password || null);
+                } catch (err) {
+                    if (!isAuthOrDecryptError(err)) throw err;
+                }
+            }
+            return await protectAction(fn);
+        };
 
         if (usePosCheckout) {
             const activePurchaseId = purchaseId.trim() || `pos-${Date.now()}`;
             if (!purchaseId.trim()) {
                 onEnsurePurchaseId(activePurchaseId);
             }
-            const completion = await protectAction(async (walletPassword) => {
+            const completion = await runReceiveCall(async (walletPassword) => {
                 return await transferService.checkoutReceivedBundle({
                     purchaseId: activePurchaseId,
                     bundleData: fileData,
@@ -174,6 +190,19 @@ export async function executeReceiveImport({
                         purchaseId: completion.purchaseId,
                     };
                 }
+                if (
+                    completion.verdict.outcome.startsWith('Quarantined') ||
+                    (completion.receivePayload?.conflictSummaries?.some(
+                        (c) => !c.isResolved && !c.localOverride,
+                    ) ??
+                        false) ||
+                    Boolean(
+                        completion.receivePayload?.verifiableConflicts &&
+                            Object.keys(completion.receivePayload.verifiableConflicts).length > 0,
+                    )
+                ) {
+                    emitAppEvent(APP_EVENTS.CONFLICTS_UPDATED);
+                }
                 const basePayload: ReceiveSuccessPayload = completion.receivePayload ?? {
                     senderId: 'pos-terminal',
                     transferSummary: { summableAmounts: {}, countableItems: {} },
@@ -185,14 +214,14 @@ export async function executeReceiveImport({
                         ...basePayload,
                         purchaseId: completion.purchaseId,
                         newlyCommitted: completion.newlyCommitted,
-                        isReplay: !completion.newlyCommitted,
+                        isReplay: completion.isReplay === true,
                         checkoutVerdict: completion.verdict,
                     },
                 };
             }
         }
 
-        const payload = await protectAction(async (walletPassword) => {
+        const payload = await runReceiveCall(async (walletPassword) => {
             return await transferService.receiveBundle({
                 bundleData: fileData,
                 standardDefinitionsToml,
@@ -200,6 +229,14 @@ export async function executeReceiveImport({
                 forceAcceptToleranceBundle: false,
             });
         });
+
+        if (
+            payload &&
+            ((payload.verifiableConflicts && Object.keys(payload.verifiableConflicts).length > 0) ||
+                (payload.conflictSummaries?.some((c) => !c.isResolved && !c.localOverride) ?? false))
+        ) {
+            emitAppEvent(APP_EVENTS.CONFLICTS_UPDATED);
+        }
 
         return payload ? { kind: 'success', payload } : { kind: 'cancelled' };
     }

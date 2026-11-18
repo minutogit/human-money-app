@@ -195,6 +195,32 @@ pub(crate) fn open_wallet_archive(
     Some(FileVoucherArchive::with_key(archive_dir, key))
 }
 
+/// Ensures the active session satisfies `required` `AccessMode` (or unlocks with non-empty `password`).
+pub(crate) fn ensure_access_mode(
+    service: &mut AppService,
+    required: human_money_core::AccessMode,
+    password: Option<&str>,
+) -> Result<(), FrontendError> {
+    if let Some(pw) = password.filter(|p| !p.is_empty()) {
+        service
+            .unlock_session(pw, 300)
+            .map_err(FrontendError::from)?;
+        return Ok(());
+    }
+    let current = service.get_access_mode().map_err(FrontendError::from)?;
+    if !current.satisfies(required) {
+        return Err(FrontendError::from(
+            human_money_core::app_service::AppFacadeError::App(
+                human_money_core::error::AppError::InsufficientAccessMode {
+                    required: required.as_str().to_string(),
+                    current: current.as_str().to_string(),
+                },
+            ),
+        ));
+    }
+    Ok(())
+}
+
 /// Spawns asynchronous static-lock L2 reconciliation if a restored wallet still has pending checks.
 pub(crate) fn spawn_pending_l2_reconciliation(app: &tauri::AppHandle, secret: &str) {
     let app_handle = app.clone();

@@ -368,11 +368,6 @@ pub fn validate_ad_media(media_bytes: &[u8]) -> Result<(u16, u16), MarketError> 
     Ok((w, h))
 }
 
-/// Alias for `validate_ad_media` to preserve existing callers.
-pub fn validate_ad_webp(media_bytes: &[u8]) -> Result<(u16, u16), MarketError> {
-    validate_ad_media(media_bytes)
-}
-
 /// Checks whether a given string is a valid image token (exactly 32 lowercase hex characters).
 pub fn is_valid_image_token(token: &str) -> bool {
     token.len() == 32 && token.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f'))
@@ -385,7 +380,7 @@ pub fn compute_image_token(owner_did: &str, webp_bytes: &[u8]) -> Result<String,
     let root_did = create_user_id(&pk, None)
         .map_err(|e| MarketError::Identity(format!("Failed to recreate root DID: {}", e)))?;
 
-    validate_ad_webp(webp_bytes)?;
+    validate_ad_media(webp_bytes)?;
 
     let mut material = Vec::with_capacity(root_did.len() + 1 + webp_bytes.len());
     material.extend_from_slice(root_did.as_bytes());
@@ -469,7 +464,7 @@ pub fn open_media_blob(image_token: &str, ciphertext: &[u8]) -> Result<Vec<u8>, 
         .decrypt(xnonce, payload)
         .map_err(|e| MarketError::Crypto(format!("Decryption failed: {}", e)))?;
 
-    validate_ad_webp(&plaintext)?;
+    validate_ad_media(&plaintext)?;
 
     Ok(plaintext)
 }

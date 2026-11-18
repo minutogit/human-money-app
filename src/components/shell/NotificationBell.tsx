@@ -22,6 +22,7 @@ import {
     notifyAppNoticesUpdated,
     showTransientSyncToast,
 } from "../../utils/syncEvents";
+import { APP_EVENTS, useAppEvent } from "../../utils/appEvents";
 import { describeAppNotice, formatLastSyncLabel } from "../../utils/appNotices";
 
 export const NotificationBell: React.FC = () => {
@@ -64,6 +65,14 @@ export const NotificationBell: React.FC = () => {
             window.removeEventListener(APP_NOTICES_UPDATED_EVENT, onUpdated);
         };
     }, [isSessionActive, loadNotices]);
+
+    useAppEvent(APP_EVENTS.POST_INBOX_UPDATED, () => {
+        void loadNotices();
+    }, isSessionActive);
+
+    useAppEvent(APP_EVENTS.SYNC_COMPLETED, () => {
+        void loadNotices();
+    }, isSessionActive);
 
     useEffect(() => {
         if (!isOpen) return;
@@ -110,8 +119,22 @@ export const NotificationBell: React.FC = () => {
                 (post?.newWotHandshakes ?? 0) > 0 ||
                 (post?.newSignRequests ?? 0) > 0 ||
                 (post?.importedSignatures ?? 0) > 0;
+            const allFailed = mktRes.status === "rejected" && postRes.status === "rejected";
+            const hasPartialErrors =
+                mktRes.status === "rejected" ||
+                postRes.status === "rejected" ||
+                (mkt?.errors?.length ?? 0) > 0 ||
+                (post?.errors?.length ?? 0) > 0;
 
-            if (!hasUpdates) {
+            if (allFailed || (!hasUpdates && hasPartialErrors)) {
+                showTransientSyncToast({
+                    message: t(
+                        "common.syncErrorToast",
+                        "Abruf fehlgeschlagen – offline oder Sync-Dienst nicht erreichbar."
+                    ),
+                    variant: "error",
+                });
+            } else if (!hasUpdates) {
                 showTransientSyncToast({
                     message: t("common.syncUpToDateToast", "Alles aktuell – keine neuen Einträge."),
                     variant: "info",

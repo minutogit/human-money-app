@@ -126,7 +126,7 @@ export const FileUnlockCredentialsCard: React.FC<FileUnlockCredentialsCardProps>
                     </div>
                 ) : (
                     <SeedPhraseInput
-                        allowKitUri={false}
+                        allowKitUri={true}
                         showUserPrefix
                         idPrefix="restore-file"
                         onChange={onFileSeedChange}

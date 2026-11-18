@@ -307,77 +307,189 @@ pub fn import_key_successor_attestation_cmd(
 }
 
 #[tauri::command]
-pub fn create_guarantor_claim_bundle(
+pub async fn create_guarantor_claim_bundle(
     local_instance_id: String,
     guarantor_id: String,
     amount: String,
     standard_toml: String,
     notes: Option<String>,
     password: Option<String>,
-    state: tauri::State<AppState>,
+    state: tauri::State<'_, AppState>,
 ) -> Result<FrontendClaimBundleDto, FrontendError> {
-    let mut service = state
-        .service
-        .lock()
-        .map_err(|_| lifecycle_err("Wallet service unavailable"))?;
+    let normalized_amount = amount.trim().replace(',', ".");
+    let (res, l2_requests) = {
+        let mut service = state
+            .service
+            .lock()
+            .map_err(|_| lifecycle_err("Wallet service unavailable"))?;
 
-    if let Some(ref pwd) = password {
-        let _ = service.unlock_session(pwd, 300);
-    }
+        if let Some(ref pwd) = password {
+            let _ = service.unlock_session(pwd, 300);
+        }
 
-    let sender_id = service
-        .with_wallet(|w| w.get_user_id().to_string())
-        .map_err(FrontendError::from)?;
+        let (sender_id, source_voucher_id) = service
+            .with_wallet(|w| {
+                let vid = w
+                    .get_voucher_instance(&local_instance_id)
+                    .map(|inst| inst.voucher.voucher_id.clone());
+                (w.get_user_id().to_string(), vid)
+            })
+            .map_err(FrontendError::from)?;
 
-    let res = service
-        .create_guarantor_claim_bundle(
-            &local_instance_id,
-            guarantor_id.trim(),
-            amount.trim(),
-            &standard_toml,
-            None,
-            notes.clone(),
-            password.as_deref(),
-        )
-        .map_err(FrontendError::from)?;
+        let res = service
+            .create_guarantor_claim_bundle(
+                &local_instance_id,
+                guarantor_id.trim(),
+                &normalized_amount,
+                &standard_toml,
+                None,
+                notes.clone(),
+                password.as_deref(),
+            )
+            .map_err(FrontendError::from)?;
 
-    let mut summable_amounts = std::collections::HashMap::new();
-    let mut countable_items = std::collections::HashMap::new();
-    if let Some(first) = res.involved_sources_details.first() {
-        summable_amounts.insert(first.display_currency.clone(), first.amount.clone());
-    } else {
-        countable_items.insert("Claim".to_string(), 1);
-    }
+        let mut summable_amounts = std::collections::HashMap::new();
+        let mut countable_items = std::collections::HashMap::new();
+        if let Some(first) = res.involved_sources_details.first() {
+            summable_amounts.insert(first.display_currency.clone(), first.amount.clone());
+        } else {
+            countable_items.insert("Claim".to_string(), 1);
+        }
 
-    let record = TransactionRecord {
-        id: Uuid::new_v4().to_string(),
-        direction: "sent".to_string(),
-        recipient_id: guarantor_id.trim().to_string(),
-        sender_id,
-        timestamp: Utc::now().to_rfc3339(),
-        summable_amounts,
-        countable_items,
-        involved_vouchers: vec![local_instance_id],
-        involved_sources_details: Some(
-            res.involved_sources_details
-                .iter()
-                .cloned()
-                .map(Into::into)
-                .collect(),
-        ),
-        bundle_data: res.bundle_bytes.clone(),
-        bundle_id: res.bundle_id.clone(),
-        notes,
-        sender_profile_name: None,
+        let record = TransactionRecord {
+            id: Uuid::new_v4().to_string(),
+            direction: "sent".to_string(),
+            recipient_id: guarantor_id.trim().to_string(),
+            sender_id,
+            timestamp: Utc::now().to_rfc3339(),
+            summable_amounts,
+            countable_items,
+            involved_vouchers: vec![local_instance_id.clone()],
+            involved_sources_details: Some(
+                res.involved_sources_details
+                    .iter()
+                    .cloned()
+                    .map(Into::into)
+                    .collect(),
+            ),
+            bundle_data: res.bundle_bytes.clone(),
+            bundle_id: res.bundle_id.clone(),
+            notes,
+            sender_profile_name: None,
+        };
+        let _ = state.append_to_history(&mut service, record, password.as_deref());
+        let _ = state.refresh_events_cache(&mut service, password.as_deref());
+
+        let settings = state.get_cached_settings().unwrap_or_default();
+        let l2_requests = source_voucher_id
+            .and_then(|vid| {
+                service
+                    .with_wallet(|w| {
+                        let claimed = w
+                            .voucher_store
+                            .vouchers
+                            .values()
+                            .filter(|inst| {
+                                inst.voucher.voucher_id == vid
+                                    && inst
+                                        .voucher
+                                        .transactions
+                                        .last()
+                                        .is_some_and(|t| t.t_type == "claim")
+                            })
+                            .max_by_key(|inst| inst.voucher.transactions.len())
+                            .or_else(|| w.get_voucher_instance(&local_instance_id))?;
+                        let aid = claimed.voucher.layer2_anchor?;
+                        let anchor_hex = hex::encode(aid);
+                        let manifest = w.profile.l2_anchor_manifests.get(&anchor_hex)?;
+                        let genesis_tickets = w
+                            .profile
+                            .l2_genesis_tickets
+                            .get(&anchor_hex)
+                            .map(|v| v.as_slice())
+                            .unwrap_or(&[]);
+                        let root_tid = claimed
+                            .voucher
+                            .transactions
+                            .first()
+                            .map(|t| t.t_id.as_str())
+                            .unwrap_or("");
+                        let qcs = w
+                            .profile
+                            .l2_quorum_certificates
+                            .get(root_tid)
+                            .map(|v| v.as_slice())
+                            .unwrap_or(&[]);
+                        let root_mig_sig = w
+                            .profile
+                            .l2_root_mig_sigs
+                            .get(root_tid)
+                            .and_then(|h| decode_hex_fixed::<64>(h).ok());
+                        let first_unconfirmed =
+                            human_money_core::services::l2_gateway::first_unconfirmed_hop_index(
+                                &claimed.voucher,
+                                manifest,
+                                qcs,
+                            )
+                            .ok()?;
+                        let pow_bits = crate::services::common::max_pow_base_bits_for_servers(
+                            &settings,
+                            manifest.servers.iter().map(|s| s.write_url.as_str()),
+                        );
+                        let entries =
+                            human_money_core::services::l2_gateway::build_voucher_lock_batch(
+                                &claimed.voucher,
+                                first_unconfirmed,
+                                &w.profile.l2_causal_outputs,
+                                root_mig_sig,
+                                pow_bits,
+                            )
+                            .ok()?;
+                        let mut nonce = [0u8; 32];
+                        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut nonce);
+                        if nonce == [0u8; 32] {
+                            nonce[0] = 1;
+                        }
+                        human_money_core::services::l2_gateway::build_committee_batch_requests(
+                            &aid,
+                            manifest,
+                            genesis_tickets,
+                            &entries,
+                            &nonce,
+                            &std::collections::HashMap::new(),
+                        )
+                        .ok()
+                    })
+                    .ok()
+                    .flatten()
+            })
+            .unwrap_or_default();
+
+        (res, l2_requests)
     };
-    let _ = state.append_to_history(&mut service, record, password.as_deref());
-    let _ = state.refresh_events_cache(&mut service, password.as_deref());
+
+    if !l2_requests.is_empty() {
+        let client = sync_client::create_sync_http_client();
+        let dispatch = crate::gateway_resolver::dispatch_lock_committee_batches(
+            &client,
+            &l2_requests,
+            std::time::Duration::from_secs(4),
+        )
+        .await;
+        if !dispatch.transport_errors.is_empty() || !dispatch.rejected_errors.is_empty() {
+            log::warn!(
+                "Best-effort guarantor claim L2 lock dispatch incomplete: transport_errors={}, rejected_errors={}",
+                dispatch.transport_errors.len(),
+                dispatch.rejected_errors.len()
+            );
+        }
+    }
 
     Ok(FrontendClaimBundleDto {
         bundle_data: res.bundle_bytes,
         bundle_id: res.bundle_id,
         guarantor_id: guarantor_id.trim().to_string(),
-        claimed_amount: amount.trim().to_string(),
+        claimed_amount: normalized_amount,
     })
 }
 
@@ -418,47 +530,49 @@ pub fn create_dead_quorum_swap_offer_cmd(
 }
 
 #[tauri::command]
-pub fn create_dead_quorum_swap_claim_cmd(
+pub async fn create_dead_quorum_swap_claim_cmd(
     offer_json: String,
     local_instance_id: String,
     password: Option<String>,
-    state: tauri::State<AppState>,
+    state: tauri::State<'_, AppState>,
 ) -> Result<String, FrontendError> {
     let offer: DeadQuorumSwapOffer = serde_json::from_str(offer_json.trim())
         .map_err(|e| lifecycle_err(format!("Invalid DeadQuorumSwapOffer JSON: {}", e)))?;
     let offer_digest = offer.verify().map_err(FrontendError::from)?;
 
-    let service = state
-        .service
-        .lock()
-        .map_err(|_| lifecycle_err("Wallet service unavailable"))?;
-    let _ = password;
+    let (voucher, claimant_did, qcs): (Voucher, String, Vec<QuorumCertificate>) = {
+        let service = state
+            .service
+            .lock()
+            .map_err(|_| lifecycle_err("Wallet service unavailable"))?;
+        let _ = password;
 
-    let (voucher, claimant_did, qcs): (Voucher, String, Vec<QuorumCertificate>) = service
-        .with_wallet(|w| {
-            let inst = w.get_voucher_instance(&local_instance_id).ok_or_else(|| {
-                human_money_core::Error::VoucherNotFound(local_instance_id.clone())
-            })?;
-            let init_t_id = inst
-                .voucher
-                .transactions
-                .first()
-                .map(|t| t.t_id.as_str())
-                .unwrap_or("");
-            let qcs = w
-                .profile
-                .l2_quorum_certificates
-                .get(init_t_id)
-                .cloned()
-                .unwrap_or_default();
-            Ok::<_, human_money_core::Error>((
-                inst.voucher.clone(),
-                w.get_user_id().to_string(),
-                qcs,
-            ))
-        })
-        .map_err(FrontendError::from)?
-        .map_err(FrontendError::from)?;
+        service
+            .with_wallet(|w| {
+                let inst = w.get_voucher_instance(&local_instance_id).ok_or_else(|| {
+                    human_money_core::Error::VoucherNotFound(local_instance_id.clone())
+                })?;
+                let init_t_id = inst
+                    .voucher
+                    .transactions
+                    .first()
+                    .map(|t| t.t_id.as_str())
+                    .unwrap_or("");
+                let qcs = w
+                    .profile
+                    .l2_quorum_certificates
+                    .get(init_t_id)
+                    .cloned()
+                    .unwrap_or_default();
+                Ok::<_, human_money_core::Error>((
+                    inst.voucher.clone(),
+                    w.get_user_id().to_string(),
+                    qcs,
+                ))
+            })
+            .map_err(FrontendError::from)?
+            .map_err(FrontendError::from)?
+    };
 
     if voucher.layer2_anchor != Some(offer.dead_anchor_id) {
         return Err(lifecycle_err(
@@ -470,16 +584,23 @@ pub fn create_dead_quorum_swap_claim_cmd(
         .last()
         .map(|t| t.t_id.clone())
         .unwrap_or_default();
+    let voucher_id_for_pow = voucher.voucher_id.clone();
+    let claimant_for_pow = claimant_did.clone();
+    let pow_bits = offer.swap_ticket_pow_bits;
 
-    let pow_nonce = solve_swap_ticket_pow(
-        &offer_digest,
-        &voucher.voucher_id,
-        &tip_t_id,
-        &claimant_did,
-        offer.swap_ticket_pow_bits,
-        0,
-        5_000_000,
-    )
+    let pow_nonce = tokio::task::spawn_blocking(move || {
+        solve_swap_ticket_pow(
+            &offer_digest,
+            &voucher_id_for_pow,
+            &tip_t_id,
+            &claimant_for_pow,
+            pow_bits,
+            0,
+            5_000_000,
+        )
+    })
+    .await
+    .map_err(|e| lifecycle_err(format!("Swap PoW task failed: {}", e)))?
     .map_err(FrontendError::from)?;
 
     let submission = DeadQuorumClaimSubmission {

@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { FullProofDetails, ProofOfDoubleSpendSummary, IntegrityReport } from "../types";
+import { APP_EVENTS, emitAppEvent } from "../utils/appEvents";
 
 export interface ConflictOverrideArgs {
     proofId: string;
@@ -14,12 +15,14 @@ export const integrityService = {
     },
 
     setConflictLocalOverride: async (args: ConflictOverrideArgs) => {
-        return await invoke<void>("set_conflict_local_override", {
+        const res = await invoke<void>("set_conflict_local_override", {
             proofId: args.proofId,
             value: args.isOverridden,
             note: args.resolutionNote,
             password: args.password
         });
+        emitAppEvent(APP_EVENTS.CONFLICTS_UPDATED);
+        return res;
     },
 
     checkIntegrity: async () => {
@@ -31,7 +34,9 @@ export const integrityService = {
     },
 
     repairWalletIntegrity: async (password: string | undefined) => {
-        return await invoke<void>("repair_wallet_integrity", { password });
+        const res = await invoke<void>("repair_wallet_integrity", { password });
+        emitAppEvent(APP_EVENTS.CONFLICTS_UPDATED);
+        return res;
     },
 
     exportDoubleSpendProof: async (proofId: string) => {
@@ -39,7 +44,9 @@ export const integrityService = {
     },
 
     importDoubleSpendProof: async (proofBytes: number[], password?: string) => {
-        return await invoke<string>("import_double_spend_proof", { proofBytes, password: password || null });
+        const res = await invoke<string>("import_double_spend_proof", { proofBytes, password: password || null });
+        emitAppEvent(APP_EVENTS.CONFLICTS_UPDATED);
+        return res;
     }
 };
 

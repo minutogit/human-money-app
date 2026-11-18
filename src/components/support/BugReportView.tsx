@@ -50,14 +50,15 @@ export const BugReportView: React.FC<BugReportViewProps> = ({ onBack }) => {
         try {
             const success = await copyToClipboard(logs);
             if (!success) {
-                setError(t('common.copyError'));
+                setActionError(t('common.copyError'));
                 return;
             }
+            setActionError('');
             setCopied(true);
             setTimeout(() => setCopied(false), 2000);
         } catch (err) {
             logger.error(`Failed to copy logs to clipboard: ${stringifyError(err)}`);
-            setError(t('common.copyError'));
+            setActionError(t('common.copyError'));
         }
     };
 

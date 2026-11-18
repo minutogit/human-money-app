@@ -38,7 +38,16 @@ interface BackupSettingsCardProps {
 
 export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings, onSettingsUpdated }) => {
     const { t } = useTranslation();
-    const { protectAction } = useSession();
+    const { protectAction, accessMode = 'full', requireFullAccess } = useSession();
+
+    const ensureFullAccess = async (): Promise<boolean> => {
+        if (accessMode === 'full') return true;
+        if (requireFullAccess) {
+            const ok = await requireFullAccess(async () => true);
+            return ok === true;
+        }
+        return false;
+    };
 
     const [protectionMode, setProtectionMode] = useState<'mnemonic_only' | 'custom_password'>(
         settings?.backupProtectionMode === 'custom_password' ? 'custom_password' : 'mnemonic_only'
@@ -92,6 +101,10 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
     };
 
     const handleToggleAutoBackup = async (enabled: boolean) => {
+        if (accessMode !== 'full') {
+            const ok = await ensureFullAccess();
+            if (!ok) return;
+        }
         const prev = autoBackupEnabled;
         setAutoBackupEnabled(enabled);
         if (settings) {
@@ -100,7 +113,9 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
                 autoBackupEnabled: enabled,
             };
             try {
-                await settingsService.saveSettings(updated);
+                await protectAction(async (walletPassword) => {
+                    await settingsService.saveSettings(updated, walletPassword || undefined);
+                });
                 if (onSettingsUpdated) onSettingsUpdated(updated);
             } catch (err) {
                 setAutoBackupEnabled(prev);
@@ -110,6 +125,10 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
     };
 
     const handleToggleSyncBackup = async (enabled: boolean) => {
+        if (accessMode !== 'full') {
+            const ok = await ensureFullAccess();
+            if (!ok) return;
+        }
         const prev = syncBackupEnabled;
         setSyncBackupEnabled(enabled);
         if (settings) {
@@ -118,7 +137,9 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
                 syncBackupEnabled: enabled,
             };
             try {
-                await settingsService.saveSettings(updated);
+                await protectAction(async (walletPassword) => {
+                    await settingsService.saveSettings(updated, walletPassword || undefined);
+                });
                 if (onSettingsUpdated) onSettingsUpdated(updated);
             } catch (err) {
                 setSyncBackupEnabled(prev);
@@ -128,6 +149,7 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
     };
 
     const handleManualSyncBackup = async () => {
+        if (!(await ensureFullAccess())) return;
         setIsSyncingBackup(true);
         setFeedback(null);
         try {
@@ -169,6 +191,7 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
     };
 
     const handleClearFolder = async () => {
+        if (!(await ensureFullAccess())) return;
         setFeedback(null);
         setSyncFolder('');
         if (settings) {
@@ -189,6 +212,7 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
 
     const handleExportFile = async () => {
         setFeedback(null);
+        if (!(await ensureFullAccess())) return;
         if (!validateCustomPassword()) return;
 
         try {
@@ -242,6 +266,7 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
 
     const handleChooseFolder = async () => {
         setFeedback(null);
+        if (!(await ensureFullAccess())) return;
         try {
             const selected = await pickDirectoryPath(syncFolder || undefined);
 
@@ -272,6 +297,7 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
 
     const handleSyncFolder = async () => {
         setFeedback(null);
+        if (!(await ensureFullAccess())) return;
         if (!syncFolder) {
             setFeedback({ type: 'error', message: t('settings.noFolderSelected') });
             return;

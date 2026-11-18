@@ -1,6 +1,7 @@
 // src/components/Header.tsx
-import React from "react";
+import React, { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { ClipboardPaste } from "lucide-react";
 import logo from "../../assets/logo.png";
 import { useNavigation } from "../../context/NavigationContext";
 import { useSession } from "../../context/SessionContext";
@@ -8,6 +9,15 @@ import { StatusChip } from "./StatusChip";
 import { NotificationBell } from "./NotificationBell";
 import { INTERNAL_VIEWS } from "./Sidebar";
 import { UiModeToggle } from "../ui/UiModeToggle";
+import { ModalShell } from "../ui/ModalShell";
+import { Button } from "../ui/Button";
+import { Textarea } from "../ui/Textarea";
+import { AlertBanner } from "../ui/AlertBanner";
+import { readFromClipboard } from "../../utils/clipboard";
+import { extractHumocoDeepLink, classifyHumocoFile, formatCardImportStatusFeedback } from "../../utils/humocoFileClassifier";
+import { parseContactCard } from "../../utils/humocoUri";
+import { marketService } from "../../services/marketService";
+import { translateError } from "../../utils/errorHelper";
 
 const VIEW_TITLE_KEYS: Record<string, string> = {
     logged_in: "dashboard.title",
@@ -32,15 +42,95 @@ const VIEW_TITLE_KEYS: Record<string, string> = {
 
 export const Header: React.FC = () => {
     const { t } = useTranslation();
-    const { appState, setSidebarOpen } = useNavigation();
-    const { isSessionActive, isAuthenticated } = useSession();
+    const { appState, navigate, setSidebarOpen } = useNavigation();
+    const { isSessionActive, isAuthenticated, protectAction } = useSession();
     const isLoggedIn = isAuthenticated ?? isSessionActive;
+
+    const [isPasteModalOpen, setIsPasteModalOpen] = useState(false);
+    const [pasteInput, setPasteInput] = useState("");
+    const [pasteError, setPasteError] = useState<string | null>(null);
+    const [isProcessingPaste, setIsProcessingPaste] = useState(false);
 
     if (!INTERNAL_VIEWS.includes(appState.view) || !isLoggedIn) {
         return null;
     }
 
     const titleKey = VIEW_TITLE_KEYS[appState.view] ?? "common.appName";
+
+    const handleReadClipboard = async () => {
+        setPasteError(null);
+        const res = await readFromClipboard();
+        if (res.error || !res.text.trim()) {
+            setPasteError(t("common.pasteClipboardEmpty", "Zwischenablage ist leer oder nicht lesbar."));
+            return;
+        }
+        setPasteInput(res.text);
+    };
+
+    const handleProcessPastedContent = async () => {
+        const raw = pasteInput.trim();
+        if (!raw) {
+            setPasteError(t("common.pasteEmptyInput", "Bitte zuerst einen Link, Code oder Inhalt einfügen."));
+            return;
+        }
+        setPasteError(null);
+        setIsProcessingPaste(true);
+        try {
+            const deepLink = extractHumocoDeepLink(raw);
+            if (deepLink) {
+                setIsPasteModalOpen(false);
+                setPasteInput("");
+                window.dispatchEvent(new CustomEvent("humoco:deeplink", { detail: deepLink }));
+                return;
+            }
+
+            const classification = classifyHumocoFile({ text: raw });
+            if (classification.kind === "card") {
+                const res = await protectAction(async (pwd) => {
+                    return await marketService.importContactCard(raw, pwd || undefined);
+                });
+                if (res && res.status === "accepted" && res.did) {
+                    setIsPasteModalOpen(false);
+                    setPasteInput("");
+                    navigate({ view: "marketplace", selectedDid: res.did });
+                    return;
+                }
+                if (res) {
+                    setPasteError(formatCardImportStatusFeedback(res.status, t));
+                    return;
+                }
+            }
+            if (classification.kind !== "unknown" && classification.kind !== "backup") {
+                const bytes = Array.from(new TextEncoder().encode(raw));
+                setIsPasteModalOpen(false);
+                setPasteInput("");
+                navigate({
+                    view: "receive_bundle",
+                    droppedFile: { name: "eingefuegt.humoco", bytes },
+                });
+                return;
+            }
+
+            const contact = parseContactCard(raw);
+            if (contact) {
+                setIsPasteModalOpen(false);
+                setPasteInput("");
+                navigate({ view: "address_book", initialContactPayload: raw });
+                return;
+            }
+
+            setPasteError(
+                t(
+                    "common.pasteUnrecognized",
+                    "Kein gültiger Link (humoco://…), Kontakt-Code oder Zahlungs-Inhalt erkannt."
+                )
+            );
+        } catch (err) {
+            setPasteError(translateError(err, t));
+        } finally {
+            setIsProcessingPaste(false);
+        }
+    };
 
     return (
         <header className="relative shrink-0 z-30 flex h-16 items-center justify-between border-b border-theme-subtle bg-white dark:bg-gray-900 px-4 md:px-6 shadow-xs">
@@ -63,10 +153,83 @@ export const Header: React.FC = () => {
             </div>
 
             <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+                <button
+                    type="button"
+                    onClick={() => {
+                        setPasteError(null);
+                        setIsPasteModalOpen(true);
+                    }}
+                    data-testid="header-paste-link-btn"
+                    title={t("common.pasteLinkTooltip", "Link, Kontakt-Code oder Zahlungsdaten einfügen")}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-full border border-theme-subtle bg-white dark:bg-gray-800 text-xs font-semibold text-theme-secondary hover:text-theme-primary hover:border-theme-primary/40 transition-colors cursor-pointer shadow-xs"
+                >
+                    <ClipboardPaste size={14} />
+                    <span className="hidden lg:inline">{t("common.pasteLinkBtn", "Link / Code einfügen")}</span>
+                </button>
                 <UiModeToggle variant="compact" />
                 <NotificationBell />
                 <StatusChip />
             </div>
+
+            <ModalShell
+                isOpen={isPasteModalOpen}
+                onClose={() => setIsPasteModalOpen(false)}
+                maxWidth="md"
+                title={t("common.pasteModalTitle", "Link oder Code einfügen")}
+                description={t(
+                    "common.pasteModalDesc",
+                    "Füge eine erhaltene Nachricht mit einem humoco://-Link, eine Kontakt-ID oder einen kopierten Inhalt direkt hier ein."
+                )}
+                footer={
+                    <div className="flex justify-end gap-2">
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setIsPasteModalOpen(false)}
+                        >
+                            {t("common.cancel", "Abbrechen")}
+                        </Button>
+                        <Button
+                            size="sm"
+                            onClick={() => void handleProcessPastedContent()}
+                            disabled={isProcessingPaste || !pasteInput.trim()}
+                            data-testid="header-paste-submit-btn"
+                        >
+                            {t("common.pasteOpenBtn", "Öffnen")}
+                        </Button>
+                    </div>
+                }
+            >
+                <div className="space-y-3">
+                    <div className="flex justify-end">
+                        <Button
+                            variant="outline"
+                            size="xs"
+                            onClick={() => void handleReadClipboard()}
+                            data-testid="header-paste-from-clipboard-btn"
+                        >
+                            <ClipboardPaste size={13} className="mr-1" />
+                            {t("common.pasteFromClipboard", "Aus Zwischenablage einfügen")}
+                        </Button>
+                    </div>
+                    <Textarea
+                        rows={5}
+                        value={pasteInput}
+                        onChange={(e) => {
+                            setPasteInput(e.target.value);
+                            if (pasteError) setPasteError(null);
+                        }}
+                        placeholder={t(
+                            "common.pastePlaceholder",
+                            "z. B. humoco://pay?… oder ganze Chat-/E-Mail-Nachricht"
+                        )}
+                        data-testid="header-paste-textarea"
+                    />
+                    {pasteError && (
+                        <AlertBanner variant="error">{pasteError}</AlertBanner>
+                    )}
+                </div>
+            </ModalShell>
         </header>
     );
 };

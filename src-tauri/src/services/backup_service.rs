@@ -164,6 +164,11 @@ pub(crate) fn export_wallet_backup_file_impl(
     let (_expected_mode, protection) = parse_protection_mode(protection_mode, backup_password)?;
     let custom_standards = collect_custom_standards(app);
     let mut service = state.lock_service()?;
+    crate::services::common::ensure_access_mode(
+        &mut service,
+        human_money_core::AccessMode::Full,
+        password,
+    )?;
     let summary = export_backup_file_impl(
         Path::new(destination_path),
         protection,
@@ -265,6 +270,11 @@ pub(crate) fn sync_wallet_backup_folder_impl(
     let (expected_mode, protection) = parse_protection_mode(protection_mode, backup_password)?;
     let custom_standards = collect_custom_standards(app);
     let mut service = state.lock_service()?;
+    crate::services::common::ensure_access_mode(
+        &mut service,
+        human_money_core::AccessMode::Full,
+        password,
+    )?;
     let summary = sync_backup_folder_impl(
         Path::new(&folder_path),
         expected_mode,
@@ -818,6 +828,12 @@ pub(crate) async fn finalize_restored_wallet_and_reconcile_l2(
             .map_err(FrontendError::from)?;
 
         let resolved_name = if let Some(old_folder) = replace_folder_name {
+            if let Some(app) = app_opt {
+                if let Ok(config_dir) = app.path().app_config_dir() {
+                    let _ = crate::pin_keystore::remove_entry(&config_dir, old_folder);
+                    let _ = crate::pin_keystore::remove_entry(&config_dir, &outcome.folder_name);
+                }
+            }
             replace_local_profile_with_restored(
                 wallet_data_dir,
                 old_folder,
@@ -960,6 +976,7 @@ fn recover_local_profile_with_mnemonic(
     local_instance_id: String,
     wallet_data_dir: &Path,
     state: &AppState,
+    app_opt: Option<&tauri::AppHandle>,
 ) -> Result<(), FrontendError> {
     let mut service = state.lock_service()?;
     service
@@ -972,6 +989,11 @@ fn recover_local_profile_with_mnemonic(
             local_instance_id,
         )
         .map_err(FrontendError::from)?;
+    if let Some(app) = app_opt {
+        if let Ok(config_dir) = app.path().app_config_dir() {
+            let _ = crate::pin_keystore::remove_entry(&config_dir, target_folder_name);
+        }
+    }
     let user_id = service
         .with_wallet_and_identity(|_, id| id.user_id.clone())
         .ok();
@@ -1031,6 +1053,7 @@ pub(crate) fn reset_local_password_via_backup_impl(
             local_instance_id,
             wallet_data_dir,
             state,
+            app_opt,
         )?;
     } else if credential_mode == "password" {
         let pwd = backup_password
@@ -1071,6 +1094,7 @@ pub(crate) fn reset_local_password_via_backup_impl(
                 local_instance_id,
                 wallet_data_dir,
                 state,
+                app_opt,
             )?;
         } else {
             let local_dir = wallet_data_dir.join(target_folder_name);
@@ -1703,8 +1727,18 @@ pub(crate) async fn sync_backup_with_standards_impl(
         base_manifest_sha256,
         base_padded_bytes,
         delta_padded_opt,
+        pending_seal_hash,
     ) = {
         let mut service = state.lock_service()?;
+
+        let pending_seal_hash = service
+            .get_seal_for_upload()
+            .ok()
+            .flatten()
+            .and_then(|bytes| {
+                serde_json::from_slice::<human_money_core::models::seal::WalletSeal>(&bytes).ok()
+            })
+            .and_then(|seal| seal.compute_hash().ok());
 
         let stored_state: crate::state::StoredBackupSyncState = service
             .load_encrypted_data(crate::state::BACKUP_SYNC_STATE_KEY, password.as_deref())
@@ -1783,6 +1817,7 @@ pub(crate) async fn sync_backup_with_standards_impl(
             base_m_sha,
             base_padded,
             delta_attempt,
+            pending_seal_hash,
         )
     };
 
@@ -1959,6 +1994,11 @@ pub(crate) async fn sync_backup_with_standards_impl(
     if settings_updated {
         let mut service = state.lock_service()?;
         let _ = state.save_settings(&mut service, current_settings, password.as_deref());
+        if let Some(ref seal_hash) = pending_seal_hash {
+            if let Err(err) = service.acknowledge_seal_sync(seal_hash, password.as_deref()) {
+                log::warn!("Post-sync seal acknowledgement deferred: {}", err);
+            }
+        }
     }
 
     let mut retry_after_secs: Option<u64> = None;

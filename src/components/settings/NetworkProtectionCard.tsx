@@ -23,6 +23,7 @@ import { L2LifecycleSection } from './network/L2LifecycleSection';
 export interface NetworkProtectionCardProps {
     settings: AppSettings | null;
     onSettingsUpdated: (updater: AppSettings | ((prev: AppSettings | null) => AppSettings | null)) => void;
+    onSettingsSynced?: (updater: AppSettings | ((prev: AppSettings | null) => AppSettings | null)) => void;
     isDevUnlocked: boolean;
     initialOpen?: boolean;
 }
@@ -33,6 +34,7 @@ export interface NetworkProtectionCardProps {
 export const NetworkProtectionCard: React.FC<NetworkProtectionCardProps> = ({
     settings,
     onSettingsUpdated,
+    onSettingsSynced,
     isDevUnlocked,
     initialOpen = false,
 }) => {
@@ -60,12 +62,12 @@ export const NetworkProtectionCard: React.FC<NetworkProtectionCardProps> = ({
         try {
             const fresh = await settingsService.getSettings();
             if (fresh) {
-                onSettingsUpdated(fresh);
+                (onSettingsSynced ?? onSettingsUpdated)(fresh);
             }
         } catch (e) {
             logger.warn(`Failed to reload settings after lock update: ${stringifyError(e)}`);
         }
-    }, [onSettingsUpdated]);
+    }, [onSettingsSynced, onSettingsUpdated]);
 
     const probeList = Object.values(settings?.l2ProbeCache || {}).sort(
         (a, b) => (b.probedAtSecs || 0) - (a.probedAtSecs || 0)
@@ -193,7 +195,6 @@ export const NetworkProtectionCard: React.FC<NetworkProtectionCardProps> = ({
                             settings={settings}
                             probeList={probeList}
                             passingProbes={passingProbes}
-                            onSettingsUpdated={onSettingsUpdated}
                             onSuccess={handleSuccess}
                             onError={handleError}
                             onClearFeedback={clearFeedback}

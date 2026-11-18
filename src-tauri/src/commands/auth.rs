@@ -78,13 +78,17 @@ pub async fn create_profile(
     initial_sync_targets: Option<Vec<crate::models::ResolvedSyncTargetDto>>,
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
-) -> Result<(), FrontendError> {
+) -> Result<String, FrontendError> {
     info!(
         "Attempting to create profile '{}' with language {:?}...",
         profile_name, language
     );
-    {
+    let created_folder_name = {
         let mut service = state.service.lock().unwrap();
+        let existing_folders: std::collections::HashSet<String> = service
+            .list_profiles()
+            .map(|list| list.into_iter().map(|p| p.folder_name).collect())
+            .unwrap_or_default();
         let core_language = language.into();
         let retain = retain_mnemonic.unwrap_or(true);
         let cleaned_prefix = user_prefix
@@ -104,15 +108,13 @@ pub async fn create_profile(
             Ok(()) => {
                 info!("Profile created successfully!");
 
-                let folder_name = service
-                    .list_profiles()
-                    .ok()
-                    .and_then(|profiles| {
-                        profiles
-                            .into_iter()
-                            .find(|p| p.profile_name == profile_name)
-                    })
-                    .map(|p| p.folder_name);
+                let folder_name = service.list_profiles().ok().and_then(|profiles| {
+                    profiles
+                        .iter()
+                        .find(|p| !existing_folders.contains(&p.folder_name))
+                        .or_else(|| profiles.iter().find(|p| p.profile_name == profile_name))
+                        .map(|p| p.folder_name.clone())
+                });
                 let user_id = service
                     .with_wallet_and_identity(|_, id| id.user_id.clone())
                     .ok();
@@ -138,13 +140,14 @@ pub async fn create_profile(
                 state
                     .initialize_profile_session(&mut service, &password)
                     .map_err(FrontendError::from)?;
+                folder_name.unwrap_or_default()
             }
             Err(e) => {
                 error!("Profile creation failed: {}", e);
                 return Err(FrontendError::from(e));
             }
         }
-    }
+    };
 
     if let Some(preset) = initial_reach_preset {
         if matches!(preset.as_str(), "near" | "medium" | "far") {
@@ -171,7 +174,7 @@ pub async fn create_profile(
         }
     }
 
-    Ok(())
+    Ok(created_folder_name)
 }
 
 #[tauri::command]
@@ -416,7 +419,7 @@ fn resolve_pin_keystore_dir_and_device_id(
     Ok((keystore_dir, device_id))
 }
 
-fn resolve_active_profile_folder(
+pub(crate) fn resolve_active_profile_folder(
     service: &human_money_core::app_service::AppService,
     explicit_folder: Option<&str>,
     wallet_data_dir: &Path,
@@ -492,7 +495,7 @@ pub fn get_profile_pin_status_impl(
 
 #[tauri::command]
 pub fn get_profile_pin_status(
-    folder_name: String,
+    folder_name: Option<String>,
     state: tauri::State<AppState>,
     app: tauri::AppHandle,
 ) -> Result<ProfilePinStatusDto, FrontendError> {
@@ -500,7 +503,19 @@ pub fn get_profile_pin_status(
         .path()
         .app_config_dir()
         .map_err(|e| FrontendError::from(e.to_string()))?;
-    get_profile_pin_status_impl(&folder_name, &keystore_dir, &state)
+    let wallet_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| FrontendError::from(e.to_string()))?
+        .join("wallet_data");
+    let resolved_folder = {
+        let service = state
+            .service
+            .lock()
+            .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+        resolve_active_profile_folder(&service, folder_name.as_deref(), &wallet_data_dir)?
+    };
+    get_profile_pin_status_impl(&resolved_folder, &keystore_dir, &state)
 }
 
 pub fn get_session_access_mode_impl(state: &AppState) -> Result<String, FrontendError> {
@@ -843,6 +858,7 @@ mod tests {
             settings: Mutex::new(Some(AppSettings::default())),
             wot: Mutex::new(None),
             media_negative_cache: Mutex::new(std::collections::HashMap::new()),
+            startup_launch_items: Mutex::new(Vec::new()),
         };
 
         // We can't call the command directly easily because of tauri::State,
@@ -909,6 +925,7 @@ mod tests {
             settings: Mutex::new(None),
             wot: Mutex::new(None),
             media_negative_cache: Mutex::new(HashMap::new()),
+            startup_launch_items: Mutex::new(Vec::new()),
         };
 
         // 1. Short / non-digit PIN rejected
@@ -964,7 +981,7 @@ mod tests {
         );
         assert_eq!(get_session_access_mode_impl(&app_state).unwrap(), "full");
 
-        // Switch to ReceiveOnly PIN and test 5-strike auto-wipe
+        // Switch to ReceiveOnly PIN and verify Full-access ops fail cleanly
         let r_status = enable_profile_pin_impl(
             master_pw,
             "13579024",
@@ -978,6 +995,40 @@ mod tests {
         assert_eq!(r_status.scope.as_deref(), Some("receiveOnly"));
 
         app_state.service.lock().unwrap().logout();
+        let ro_mode = login_with_pin_impl(
+            &folder,
+            "13579024",
+            false,
+            "dev-pin-1".into(),
+            &keystore_dir,
+            "dev-pin-1",
+            &app_state,
+            None,
+        )
+        .unwrap();
+        assert_eq!(ro_mode, "receiveOnly");
+
+        let req_uri = humoco_market::build_recovery_request_uri(&[7u8; 32], 1_760_000_000, None);
+        let release_err =
+            crate::services::recovery_service::approve_guardian_recovery_request_impl(
+                req_uri,
+                "did:key:zOwnerDummy".to_string(),
+                Some("13579024"),
+                &app_state,
+            )
+            .unwrap_err();
+        assert_eq!(release_err.code, "error.auth.insufficientAccessMode");
+
+        let mut svc_guard = app_state.service.lock().unwrap();
+        let access_err = crate::services::common::ensure_access_mode(
+            &mut svc_guard,
+            human_money_core::AccessMode::Full,
+            Some("13579024"),
+        )
+        .unwrap_err();
+        assert_eq!(access_err.code, "error.auth.insufficientAccessMode");
+        svc_guard.logout();
+        drop(svc_guard);
 
         for expected_rem in [4, 3, 2, 1] {
             let err = login_with_pin_impl(

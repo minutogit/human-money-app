@@ -121,6 +121,7 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                         onTogglePublicDrop={admin.handleTogglePublicDrop}
                         onRemovePublicSync={admin.handleRemovePublicSync}
                         onCheckPublicDropAuth={admin.handleCheckPublicDropAuth}
+                        onAdoptReplacementUrl={admin.handleAdoptReplacementUrl}
                         onFeedback={admin.setFeedback}
                         checkingPublicUrl={admin.checkingPublicUrl}
                         isDeletingPublicDrop={admin.isDeletingPublicDrop}

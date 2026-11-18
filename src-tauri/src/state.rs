@@ -151,6 +151,7 @@ pub struct AppState {
     pub settings: Mutex<Option<AppSettings>>,
     pub wot: Mutex<Option<humoco_wot::TrustRegister>>,
     pub media_negative_cache: Mutex<std::collections::HashMap<String, u64>>,
+    pub startup_launch_items: Mutex<Vec<String>>,
 }
 
 /// Loads and deserializes an encrypted JSON block, returning `Ok(None)` only on `StorageError::NotFound`.
@@ -212,6 +213,7 @@ impl AppState {
             settings: Mutex::new(None),
             wot: Mutex::new(None),
             media_negative_cache: Mutex::new(std::collections::HashMap::new()),
+            startup_launch_items: Mutex::new(Vec::new()),
         }
     }
 
@@ -676,6 +678,13 @@ impl AppState {
         password: Option<&str>,
     ) -> Result<(), AppFacadeError> {
         let mut history = self.load_history_from_disk(service, password)?;
+        if !record.bundle_id.is_empty()
+            && history
+                .iter()
+                .any(|r| r.bundle_id == record.bundle_id && r.direction == record.direction)
+        {
+            return Ok(());
+        }
         history.push(record);
         self.save_history(service, history, password)
     }

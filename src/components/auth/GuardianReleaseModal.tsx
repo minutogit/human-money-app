@@ -1,8 +1,9 @@
 // src/components/GuardianReleaseModal.tsx
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ModalShell } from '../ui/ModalShell';
 import { QrScannerModal } from '../ui/QrScannerModal';
+import { CopyButton } from '../ui/CopyButton';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
 import { AlertBanner } from '../ui/AlertBanner';
@@ -12,6 +13,7 @@ import { postService } from '../../services/postService';
 import { GuardianRecoveryRequestInspectionDto, ApproveGuardianRecoveryResultDto } from '../../types';
 import { copyToClipboard } from '../../utils/clipboard';
 import { translateError } from '../../utils/errorHelper';
+import { isSameRootIdentity } from '../../utils/userIdHelper';
 import {
     CheckCircle2,
     Copy,
@@ -72,8 +74,11 @@ export const GuardianReleaseModal: React.FC<GuardianReleaseModalProps> = ({
             if (wards.length === 1) {
                 setSelectedOwnerDid(wards[0].ownerDid);
             } else if (wards.length > 1) {
-                if (initialOwnerDid && wards.some((w) => w.ownerDid === initialOwnerDid)) {
-                    setSelectedOwnerDid(initialOwnerDid);
+                const matchedWard = initialOwnerDid
+                    ? wards.find((w) => isSameRootIdentity(w.ownerDid, initialOwnerDid))
+                    : undefined;
+                if (matchedWard) {
+                    setSelectedOwnerDid(matchedWard.ownerDid);
                 } else if (dto.nameHint && dto.nameHint.trim().length >= 2) {
                     const hint = dto.nameHint.trim().toLowerCase();
                     const matches = wards.filter((w) =>
@@ -92,6 +97,9 @@ export const GuardianReleaseModal: React.FC<GuardianReleaseModalProps> = ({
             setIsInspecting(false);
         }
     }, [initialOwnerDid, session, t]);
+
+    const inspectUriRef = useRef(inspectUri);
+    inspectUriRef.current = inspectUri;
 
     useEffect(() => {
         if (!isOpen) {
@@ -117,13 +125,17 @@ export const GuardianReleaseModal: React.FC<GuardianReleaseModalProps> = ({
         setCopiedReplyChat(false);
 
         if (uri.includes('recovery-req?')) {
-            inspectUri(uri);
+            inspectUriRef.current(uri, true);
         }
-    }, [isOpen, initialRequestUri, initialOwnerDid, inspectUri]);
+    }, [isOpen, initialRequestUri, initialOwnerDid]);
 
     const handleApprove = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!requestUri || !selectedOwnerDid || !password || isApproving) return;
+        if (session?.accessMode && session.accessMode !== 'full' && session.requireFullAccess) {
+            const unlocked = await session.requireFullAccess(async () => true);
+            if (!unlocked) return;
+        }
 
         setIsApproving(true);
         setErrorMsg('');
@@ -218,9 +230,16 @@ export const GuardianReleaseModal: React.FC<GuardianReleaseModalProps> = ({
                                 <span className="text-[11px] font-bold text-theme-light uppercase tracking-wider block">
                                     {t('backup.releaseSasCodeLabel')}
                                 </span>
-                                <p className="text-2xl font-black tracking-widest text-theme-primary font-mono">
-                                    {approvalResult.sasCode}
-                                </p>
+                                <div className="flex items-center justify-center gap-2">
+                                    <p className="text-2xl font-black tracking-widest text-theme-primary font-mono">
+                                        {approvalResult.sasCode}
+                                    </p>
+                                    <CopyButton
+                                        value={approvalResult.sasCode}
+                                        size="xs"
+                                        title={t('common.copy', 'Kopieren')}
+                                    />
+                                </div>
                             </div>
                         )}
 
@@ -262,6 +281,15 @@ export const GuardianReleaseModal: React.FC<GuardianReleaseModalProps> = ({
                                     {copied ? t('backup.replyLinkCopied') : t('backup.copyReplyLink')}
                                 </Button>
                             </div>
+                        </div>
+
+                        <div className="p-3 bg-bg-app/60 border border-theme-subtle rounded-xl space-y-1 text-xs text-theme-secondary">
+                            <p className="font-bold">{t('backup.releaseNextStepsTitle', 'So gibst du die Freigabe zurück:')}</p>
+                            <ol className="list-decimal list-inside space-y-0.5 text-[11px] text-theme-light">
+                                <li>{t('backup.releaseNextStep1', 'Gleiche am besten telefonisch oder persönlich den 6-stelligen Prüfcode ab.')}</li>
+                                <li>{t('backup.releaseNextStep2', 'Klicke auf „Chat-Nachricht kopieren“ oder lasse den QR-Code direkt scannen.')}</li>
+                                <li>{t('backup.releaseNextStep3', 'Sende die Nachricht zurück – der Schutz gilt, sobald genügend Vertrauenskontakte geantwortet haben.')}</li>
+                            </ol>
                         </div>
 
                         <div className="flex justify-end pt-2">
@@ -317,14 +345,21 @@ export const GuardianReleaseModal: React.FC<GuardianReleaseModalProps> = ({
 
                         {inspection && (
                             <div className="space-y-4">
-                                {/* SAS Check Code display */}
+                                {/* 6-Digit Verification Code display */}
                                 <div className="p-4 bg-theme-primary/10 border border-theme-primary/20 rounded-2xl text-center space-y-1">
                                     <span className="text-xs font-bold text-theme-light uppercase tracking-wider block">
                                         {t('backup.releaseSasCodeLabel')}
                                     </span>
-                                    <p className="text-3xl font-black tracking-widest text-theme-primary font-mono">
-                                        {inspection.sasCode}
-                                    </p>
+                                    <div className="flex items-center justify-center gap-2">
+                                        <p className="text-3xl font-black tracking-widest text-theme-primary font-mono">
+                                            {inspection.sasCode}
+                                        </p>
+                                        <CopyButton
+                                            value={inspection.sasCode}
+                                            size="xs"
+                                            title={t('common.copy', 'Kopieren')}
+                                        />
+                                    </div>
                                 </div>
 
                                 {/* Warning */}
@@ -429,6 +464,14 @@ export const GuardianReleaseModal: React.FC<GuardianReleaseModalProps> = ({
                                 )}
 
                                 {/* Password Input */}
+                                {session?.accessMode === 'receiveOnly' && (
+                                    <AlertBanner variant="warning">
+                                        {t(
+                                            'backup.releaseCashierRequiresFullHint',
+                                            'Im Kassen-Modus ist eine Wiederherstellungs-Freigabe gesperrt. Beim Bestätigen wirst du gebeten, dein volles Profil-Passwort einzugeben.'
+                                        )}
+                                    </AlertBanner>
+                                )}
                                 <div className="space-y-1.5">
                                     <label className="text-xs font-bold text-theme-secondary uppercase tracking-wider flex items-center gap-1.5">
                                         <KeyRound size={15} className="text-theme-primary" />
@@ -477,7 +520,7 @@ export const GuardianReleaseModal: React.FC<GuardianReleaseModalProps> = ({
                 onClose={() => setIsQrScannerOpen(false)}
                 onScan={(decoded) => {
                     setRequestUri(decoded);
-                    void inspectUri(decoded);
+                    void inspectUri(decoded, true);
                 }}
             />
         </ModalShell>

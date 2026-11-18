@@ -14,7 +14,7 @@ import { FrontendMyMarketProfile } from '../../types/market';
 import { profileService } from '../../services/profileService';
 import { marketService } from '../../services/marketService';
 import { useOptionalSession } from '../../context/SessionContext';
-import { buildContactCardText } from '../../utils/humocoUri';
+import { buildContactUri } from '../../utils/humocoUri';
 import { logger } from '../../utils/log';
 import { stringifyError } from '../../utils/errorHelper';
 
@@ -108,7 +108,7 @@ export const QuickContactModal: React.FC<QuickContactModalProps> = ({
     ];
 
     const quickContactCopyText = quickContact
-        ? buildContactCardText({
+        ? buildContactUri({
               did: quickContact.did,
               name: quickContact.name || undefined,
               syncUrls: quickContact.syncUrls.length > 0 ? quickContact.syncUrls : undefined,

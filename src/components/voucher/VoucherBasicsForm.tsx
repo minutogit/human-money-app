@@ -78,6 +78,85 @@ export function VoucherBasicsForm({
               ? t("voucher.basics.months")
               : t("voucher.basics.days");
 
+    const validitySection = (
+        <Disclosure
+            title={
+                <span className="text-xs font-bold text-theme-secondary">
+                    {t('voucher.basics.validityDuration')}
+                </span>
+            }
+            subtitle={`${validityValue} ${validityUnitLabel}`}
+            icon={<Clock size={14} className="text-theme-primary" />}
+            toggleTestId="voucher-validity-toggle"
+            contentTestId="voucher-validity-content"
+            className="border border-theme-subtle rounded-2xl overflow-hidden bg-white/50 dark:bg-slate-900/50"
+            buttonClassName="w-full flex items-center justify-between gap-3 p-3.5 bg-slate-50/70 dark:bg-slate-800/40 hover:bg-slate-100/70 transition-colors text-left cursor-pointer"
+            contentClassName="p-3.5 border-t border-theme-subtle bg-white dark:bg-slate-900"
+        >
+            <div className="flex gap-2">
+                <Input 
+                    type="number" 
+                    value={validityValue} 
+                    onChange={(e) => onValidityValueChange(parseInt(e.target.value, 10) || 0)}
+                    className="w-1/2 font-bold text-sm"
+                />
+                <select 
+                    value={validityUnit} 
+                    onChange={(e) => onValidityUnitChange(e.target.value as "Y" | "M" | "D")}
+                    className="w-1/2 bg-white border border-theme-subtle rounded-xl px-4 py-3 text-sm font-bold text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft appearance-none transition-all"
+                >
+                    <option value="Y">{t('voucher.basics.years')}</option>
+                    <option value="M">{t('voucher.basics.months')}</option>
+                    <option value="D">{t('voucher.basics.days')}</option>
+                </select>
+            </div>
+        </Disclosure>
+    );
+
+    const anchorSelectorSection = onSelectedAnchorChange ? (
+        <div className="space-y-2 p-4 rounded-3xl border border-theme-subtle bg-white/70">
+            <div className="flex items-center justify-between gap-2">
+                <label
+                    htmlFor="voucher-l2-anchor"
+                    className="text-[10px] font-black text-theme-light uppercase tracking-widest"
+                >
+                    {t('voucher.basics.l2AnchorLabel', 'Online Lock Protection')}
+                </label>
+                <HelpIcon topic="l2Protection" size={14} />
+            </div>
+            <select
+                id="voucher-l2-anchor"
+                value={selectedAnchorId || ''}
+                onChange={(e) => onSelectedAnchorChange(e.target.value || null)}
+                className="w-full bg-white border border-theme-subtle rounded-xl px-3 py-2 text-xs font-bold text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none"
+            >
+                <option value="">
+                    {t('voucher.basics.l2AnchorOfflineOnly', 'Offline-only (N = 0, trust-based)')}
+                </option>
+                {anchorTemplates.map((tpl) => (
+                    <option key={tpl.anchorId} value={tpl.anchorId}>
+                        {tpl.label} ({tpl.threshold}/{tpl.servers.length} · ≥ {formatQuarter(tpl.retainUntilQuarter)})
+                    </option>
+                ))}
+            </select>
+
+            {!selectedAnchorId && (
+                <p
+                    data-testid="voucher-offline-only-notice"
+                    className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-xl p-2 flex items-start gap-2"
+                >
+                    <WifiOff size={14} className="shrink-0 mt-0.5 text-amber-600" />
+                    <span>
+                        {t(
+                            'voucher.basics.l2AnchorOfflineOnlyWarning',
+                            'No lock servers selected (N = 0). Protected offline via SST V4 signatures, without live double-spend locks.'
+                        )}
+                    </span>
+                </p>
+            )}
+        </div>
+    ) : null;
+
     return (
         <Card header={
             <div className="flex items-center gap-2">
@@ -150,47 +229,15 @@ export function VoucherBasicsForm({
                             <Input 
                                 id="voucher-amount"
                                 ref={amountRef}
-                                type="number" 
+                                type="number"
+                                step="any"
                                 value={amount} 
-                                onChange={(e) => onAmountChange(e.target.value)} 
+                                onChange={(e) => onAmountChange(e.target.value.replace(',', '.'))} 
                                 placeholder="0.00"
                                 className={`font-bold text-sm ${errors.amount ? 'border-rose-500' : ''}`}
                             />
                         </div>
-                        <Advanced>
-                            <Disclosure
-                                title={
-                                    <span className="text-xs font-bold text-theme-secondary">
-                                        {t('voucher.basics.validityDuration')}
-                                    </span>
-                                }
-                                subtitle={`${validityValue} ${validityUnitLabel}`}
-                                icon={<Clock size={14} className="text-theme-primary" />}
-                                toggleTestId="voucher-validity-toggle"
-                                contentTestId="voucher-validity-content"
-                                className="border border-theme-subtle rounded-2xl overflow-hidden bg-white/50 dark:bg-slate-900/50"
-                                buttonClassName="w-full flex items-center justify-between gap-3 p-3.5 bg-slate-50/70 dark:bg-slate-800/40 hover:bg-slate-100/70 transition-colors text-left cursor-pointer"
-                                contentClassName="p-3.5 border-t border-theme-subtle bg-white dark:bg-slate-900"
-                            >
-                                <div className="flex gap-2">
-                                    <Input 
-                                        type="number" 
-                                        value={validityValue} 
-                                        onChange={(e) => onValidityValueChange(parseInt(e.target.value, 10) || 0)}
-                                        className="w-1/2 font-bold text-sm"
-                                    />
-                                    <select 
-                                        value={validityUnit} 
-                                        onChange={(e) => onValidityUnitChange(e.target.value as "Y" | "M" | "D")}
-                                        className="w-1/2 bg-white border border-theme-subtle rounded-xl px-4 py-3 text-sm font-bold text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft appearance-none transition-all"
-                                    >
-                                        <option value="Y">{t('voucher.basics.years')}</option>
-                                        <option value="M">{t('voucher.basics.months')}</option>
-                                        <option value="D">{t('voucher.basics.days')}</option>
-                                    </select>
-                                </div>
-                            </Disclosure>
-                        </Advanced>
+                        {retentionInsufficient ? validitySection : <Advanced>{validitySection}</Advanced>}
                     </div>
                 </div>
                 
@@ -259,45 +306,11 @@ export function VoucherBasicsForm({
                     </div>
 
                     {onSelectedAnchorChange && (
-                        <div className="space-y-2 p-4 rounded-3xl border border-theme-subtle bg-white/70">
-                            <div className="flex items-center justify-between gap-2">
-                                <label
-                                    htmlFor="voucher-l2-anchor"
-                                    className="text-[10px] font-black text-theme-light uppercase tracking-widest"
-                                >
-                                    {t('voucher.basics.l2AnchorLabel', 'Online Lock Protection')}
-                                </label>
-                                <HelpIcon topic="l2Protection" size={14} />
-                            </div>
-                            <select
-                                id="voucher-l2-anchor"
-                                value={selectedAnchorId || ''}
-                                onChange={(e) => onSelectedAnchorChange(e.target.value || null)}
-                                className="w-full bg-white border border-theme-subtle rounded-xl px-3 py-2 text-xs font-bold text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none"
-                            >
-                                <option value="">
-                                    {t('voucher.basics.l2AnchorOfflineOnly', 'Offline-only (N = 0, trust-based)')}
-                                </option>
-                                {anchorTemplates.map((tpl) => (
-                                    <option key={tpl.anchorId} value={tpl.anchorId}>
-                                        {tpl.label} ({tpl.threshold}/{tpl.servers.length} · ≥ {formatQuarter(tpl.retainUntilQuarter)})
-                                    </option>
-                                ))}
-                            </select>
-
-                            {!selectedAnchorId && (
-                                <p
-                                    data-testid="voucher-offline-only-notice"
-                                    className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-xl p-2 flex items-start gap-2"
-                                >
-                                    <WifiOff size={14} className="shrink-0 mt-0.5 text-amber-600" />
-                                    <span>
-                                        {t(
-                                            'voucher.basics.l2AnchorOfflineOnlyWarning',
-                                            'No lock servers selected (N = 0). Protected offline via SST V4 signatures, without live double-spend locks.'
-                                        )}
-                                    </span>
-                                </p>
+                        <>
+                            {retentionInsufficient ? (
+                                anchorSelectorSection
+                            ) : (
+                                <Advanced>{anchorSelectorSection}</Advanced>
                             )}
 
                             {selectedAnchorId && retentionInsufficient && (
@@ -314,7 +327,7 @@ export function VoucherBasicsForm({
                                     </span>
                                 </p>
                             )}
-                        </div>
+                        </>
                     )}
                 </div>
             </div>

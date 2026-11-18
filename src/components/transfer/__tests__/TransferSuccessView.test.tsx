@@ -102,6 +102,7 @@ describe('TransferSuccessView Component (Dual-Delivery & SST-V4 Retry)', () => {
     const depositMock = vi.mocked(postService.depositTransferToPost).mockResolvedValue({
       msgId: 'msg-deposit-123',
       depositedTo: 1,
+      recipientDepositedTo: 1,
       errors: [],
     });
 

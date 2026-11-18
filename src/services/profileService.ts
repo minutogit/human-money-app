@@ -59,8 +59,8 @@ export const profileService = {
         return await invoke<string>("generate_mnemonic", { wordCount, language });
     },
 
-    createProfile: async (args: CreateProfileArgs) => {
-        return await invoke<void>("create_profile", {
+    createProfile: async (args: CreateProfileArgs): Promise<string | void> => {
+        return await invoke<string>("create_profile", {
             profileName: args.profileName,
             mnemonic: args.mnemonic,
             passphrase: args.passphrase,

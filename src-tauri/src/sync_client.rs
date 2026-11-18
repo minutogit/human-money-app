@@ -362,6 +362,44 @@ pub async fn push_revocation_notice(
     Ok(())
 }
 
+pub async fn push_lock_delegation(
+    client: &reqwest::Client,
+    write_url: &str,
+    admin_sk: &SigningKey,
+    lock_pub_hex: &str,
+    issued_at: u64,
+) -> Result<SyncLockDelegationDto, String> {
+    let url = append_sync_query(write_url, "lock_delegate")?;
+    let admin_pub = hex::encode(admin_sk.verifying_key().as_bytes());
+    let lock_pub = lock_pub_hex.trim().to_ascii_lowercase();
+    let msg =
+        humoco_market::format_lock_delegate_signature_message(&admin_pub, &lock_pub, issued_at);
+    let sig = hex::encode(admin_sk.sign(msg.as_bytes()).to_bytes());
+    let payload = SyncLockDelegationDto {
+        admin_pub,
+        lock_pub,
+        issued_at,
+        sig,
+    };
+    let body_json = serde_json::to_string(&payload)
+        .map_err(|e| format!("Failed to serialize lock delegation payload: {}", e))?;
+
+    let req = apply_admin_headers(
+        client.put(&url),
+        admin_sk,
+        "PUT_LOCK_DELEGATE",
+        "",
+        body_json.as_bytes(),
+    )
+    .header("Content-Type", "application/json")
+    .body(body_json);
+
+    let resp = send_sync_request(req, "pushing lock delegation").await?;
+    resp.json()
+        .await
+        .map_err(|e| format!("Failed to parse lock delegation response JSON: {}", e))
+}
+
 fn loopback_sync_allowed() -> bool {
     cfg!(test) || std::env::var("HUMOCO_ALLOW_LOOPBACK_SYNC").ok().as_deref() == Some("1")
 }
@@ -2252,6 +2290,97 @@ mod tests {
                 etag: Some("saved-v3".to_string())
             }
         );
+
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_push_lock_delegation_signs_put_lock_delegate() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let admin_sk = SigningKey::from_bytes(&[44u8; 32]);
+        let admin_pub = hex::encode(admin_sk.verifying_key().as_bytes());
+        let lock_sk = SigningKey::from_bytes(&[55u8; 32]);
+        let lock_pub = hex::encode(lock_sk.verifying_key().as_bytes());
+        let issued_at = 1_760_123_456u64;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let admin_pub_expected = admin_pub.clone();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 8192];
+            let n = stream.read(&mut buf).await.unwrap();
+            let raw = String::from_utf8_lossy(&buf[..n]);
+            let (head, body) = raw.split_once("\r\n\r\n").unwrap();
+            let mut lines = head.lines();
+            let req_line = lines.next().unwrap();
+            assert!(
+                req_line.starts_with("PUT /sync.php?lock_delegate"),
+                "Unexpected request line: {}",
+                req_line
+            );
+
+            let mut hdr_pub = String::new();
+            let mut hdr_sig = String::new();
+            let mut hdr_ts = 0u64;
+            let mut hdr_nonce = String::new();
+            for line in lines {
+                if let Some((k, v)) = line.split_once(':') {
+                    match k.trim().to_ascii_lowercase().as_str() {
+                        "x-drop-pubkey" => hdr_pub = v.trim().to_string(),
+                        "x-drop-signature" => hdr_sig = v.trim().to_string(),
+                        "x-drop-timestamp" => hdr_ts = v.trim().parse().unwrap(),
+                        "x-drop-nonce" => hdr_nonce = v.trim().to_string(),
+                        _ => {}
+                    }
+                }
+            }
+
+            assert_eq!(hdr_pub, admin_pub_expected);
+            let canonical = humoco_market::format_admin_request_message(
+                "PUT_LOCK_DELEGATE",
+                "",
+                hdr_ts,
+                &hdr_nonce,
+                body.as_bytes(),
+            );
+            assert!(verify_ed25519_hex_strict(
+                &admin_pub_expected,
+                &hdr_sig,
+                canonical.as_bytes()
+            ));
+
+            let dto: SyncLockDelegationDto = serde_json::from_str(body).unwrap();
+            assert!(verify_lock_delegation(
+                &dto.lock_pub,
+                &dto,
+                Some(&admin_pub_expected)
+            ));
+
+            let resp_body = serde_json::to_string(&dto).unwrap();
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                resp_body.len(),
+                resp_body
+            );
+            stream.write_all(resp.as_bytes()).await.unwrap();
+        });
+
+        let client = create_sync_http_client();
+        let write_url = format!("http://127.0.0.1:{}/sync.php", addr.port());
+        let returned = push_lock_delegation(&client, &write_url, &admin_sk, &lock_pub, issued_at)
+            .await
+            .unwrap();
+        assert_eq!(returned.admin_pub, admin_pub);
+        assert_eq!(returned.lock_pub, lock_pub);
+        assert_eq!(returned.issued_at, issued_at);
+        assert!(verify_lock_delegation(
+            &lock_pub,
+            &returned,
+            Some(&admin_pub)
+        ));
 
         server.await.unwrap();
     }

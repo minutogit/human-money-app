@@ -3,6 +3,7 @@ import React from "react";
 import { useTranslation } from "react-i18next";
 import { UserPlus, IdCard } from "lucide-react";
 import { Contact } from "../../types";
+import { isExactSameUserId } from "../../utils/userIdHelper";
 import { UserAvatar } from "./UserAvatar";
 
 interface ContactBadgeProps {
@@ -41,7 +42,7 @@ export const ContactBadge: React.FC<ContactBadgeProps> = ({
         );
     }
 
-    const contact = contacts.find((c) => c.did === did);
+    const contact = contacts.find((c) => isExactSameUserId(c.did, did));
 
     const sizeConfig = {
         sm: {

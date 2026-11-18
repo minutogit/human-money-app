@@ -19,7 +19,7 @@ interface GlobalFileDropZoneProps {
 
 export function GlobalFileDropZone({ children }: GlobalFileDropZoneProps) {
   const { t } = useTranslation();
-  const { appState, navigate } = useNavigation();
+  const { appState, navigate, setPendingDroppedFile } = useNavigation();
   const { isAuthenticated, isSessionActive, protectAction } = useSession();
   const [isDraggingOver, setIsDraggingOver] = useState(false);
   const dragCounterRef = useRef(0);
@@ -53,7 +53,8 @@ export function GlobalFileDropZone({ children }: GlobalFileDropZoneProps) {
     if (!isDropZoneActive) return;
 
     dragCounterRef.current += 1;
-    if (e.dataTransfer?.types?.includes('Files')) {
+    const types = e.dataTransfer?.types;
+    if (types?.includes('Files') || types?.includes('text/plain') || types?.includes('text/uri-list')) {
       setIsDraggingOver(true);
     }
   };
@@ -135,7 +136,7 @@ export function GlobalFileDropZone({ children }: GlobalFileDropZoneProps) {
     setIsDraggingOver(false);
     if (!isDropZoneActive) return;
 
-    const rawText = e.dataTransfer?.getData('text/plain');
+    const rawText = e.dataTransfer?.getData('text/plain') || e.dataTransfer?.getData('text/uri-list');
     const droppedDeepLink = extractHumocoDeepLink(rawText);
     if (droppedDeepLink) {
       window.dispatchEvent(new CustomEvent('humoco:deeplink', { detail: droppedDeepLink }));
@@ -173,10 +174,19 @@ export function GlobalFileDropZone({ children }: GlobalFileDropZoneProps) {
       return;
     }
 
-    if (!isLoggedIn) {
+    if (classification.kind === 'unknown') {
       setDropFeedback({
         status: 'error',
-        message: t('auth.loginRequiredForImport'),
+        message: t('common.unsupportedFileDrop'),
+      });
+      return;
+    }
+
+    if (!isLoggedIn) {
+      setPendingDroppedFile({ name: file.name, bytes });
+      setDropFeedback({
+        status: 'info',
+        message: t('auth.pendingFileNotice', 'Datei vorgemerkt – wird direkt nach dem Anmelden geöffnet.'),
       });
       return;
     }
@@ -187,20 +197,12 @@ export function GlobalFileDropZone({ children }: GlobalFileDropZoneProps) {
       return;
     }
 
-    if (classification.kind !== 'unknown') {
-      navigate({
-        view: 'receive_bundle',
-        droppedFile: {
-          name: file.name,
-          bytes,
-        },
-      });
-      return;
-    }
-
-    setDropFeedback({
-      status: 'error',
-      message: t('common.unsupportedFileDrop'),
+    navigate({
+      view: 'receive_bundle',
+      droppedFile: {
+        name: file.name,
+        bytes,
+      },
     });
   };
 
@@ -216,18 +218,22 @@ export function GlobalFileDropZone({ children }: GlobalFileDropZoneProps) {
 
       {/* Drop Feedback Toast */}
       {dropFeedback && (
-        <div className="fixed top-4 right-4 z-[9999] max-w-sm p-4 bg-white border border-theme-subtle rounded-2xl shadow-xl space-y-1 animate-in fade-in slide-in-from-top-2">
+        <div className="fixed top-4 right-4 z-[9999] max-w-sm p-4 bg-white dark:bg-gray-900 border border-theme-subtle rounded-2xl shadow-xl space-y-1 animate-in fade-in slide-in-from-top-2">
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-2">
               {dropFeedback.status === 'accepted' ? (
                 <CheckCircle2 size={16} className="text-emerald-600" />
-              ) : dropFeedback.status === 'ignored_stale' ? (
+              ) : dropFeedback.status === 'ignored_stale' || dropFeedback.status === 'info' ? (
                 <Info size={16} className="text-amber-600" />
               ) : (
                 <AlertCircle size={16} className="text-rose-600" />
               )}
               <span className="text-xs font-bold text-theme-secondary">
-                {dropFeedback.status === 'accepted' ? t('marketplace.importSuccessTitle') : t('marketplace.importStatusTitle')}
+                {dropFeedback.status === 'accepted'
+                  ? t('marketplace.importSuccessTitle')
+                  : dropFeedback.status === 'info'
+                    ? t('common.info', 'Hinweis')
+                    : t('marketplace.importStatusTitle')}
               </span>
             </div>
             <button
@@ -244,7 +250,7 @@ export function GlobalFileDropZone({ children }: GlobalFileDropZoneProps) {
       {/* Global Drag Overlay */}
       {isDraggingOver && (
         <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-theme-primary/10 backdrop-blur-xs border-4 border-dashed border-theme-primary transition-all duration-200 pointer-events-none">
-          <div className="bg-white px-8 py-6 rounded-3xl shadow-xl flex flex-col items-center max-w-sm text-center">
+          <div className="bg-white dark:bg-gray-900 px-8 py-6 rounded-3xl shadow-xl flex flex-col items-center max-w-sm text-center">
             <div className="w-16 h-16 rounded-full bg-theme-primary/10 flex items-center justify-center text-theme-primary mb-4 animate-bounce">
               <UploadCloud size={32} />
             </div>

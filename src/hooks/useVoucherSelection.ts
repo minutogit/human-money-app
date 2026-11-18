@@ -35,10 +35,11 @@ export function useVoucherSelection(vouchers: VoucherSummary[]) {
 
   const setVoucherAmount = useCallback((localInstanceId: string, amount: string) => {
     setCurrentPlan(null);
+    const normalized = amount.replace(',', '.');
     setSelectedMap(prev => {
       if (!prev.has(localInstanceId)) return prev;
       const next = new Map(prev);
-      next.set(localInstanceId, amount);
+      next.set(localInstanceId, normalized);
       return next;
     });
   }, []);
@@ -191,7 +192,7 @@ export function useVoucherSelection(vouchers: VoucherSummary[]) {
         if (!stats[key]) {
           stats[key] = { total: 0, count: 0 };
         }
-        stats[key].total += parseFloat(amount);
+        stats[key].total += parseFloat(String(amount).replace(',', '.')) || 0;
         stats[key].count += 1;
       }
     });

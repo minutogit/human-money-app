@@ -100,16 +100,29 @@ export const HostSyncAdminPanel: React.FC<HostSyncAdminPanelProps> = ({
 
     return (
         <div className="space-y-6">
+            {adminStatus.softWarning && (
+                <div className="p-3.5 bg-amber-50 border border-amber-300 rounded-2xl text-xs text-amber-900 flex items-start gap-2.5">
+                    <AlertTriangle size={16} className="text-amber-600 shrink-0 mt-0.5" />
+                    <span>{t('settings.syncHostSoftWarning')}</span>
+                </div>
+            )}
+
             <div className="p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-2xl flex items-start justify-between gap-3 text-xs">
-                <div className="flex items-start gap-2.5">
+                <div className="flex items-start gap-2.5 min-w-0">
                     <CheckCircle2 size={18} className="text-emerald-600 mt-0.5 shrink-0" />
-                    <div>
+                    <div className="min-w-0 space-y-1">
                         <h4 className="font-bold text-emerald-950 text-sm">
                             {t('settings.syncHostActiveTitle')}
                         </h4>
-                        <p className="font-mono text-[11px] text-emerald-800 break-all mt-0.5">
+                        <p className="font-mono text-[11px] text-emerald-800 break-all">
                             {adminStatus.descriptor.readUrl}
                         </p>
+                        {adminStatus.descriptor.writeUrl &&
+                            adminStatus.descriptor.writeUrl !== adminStatus.descriptor.readUrl && (
+                                <p className="font-mono text-[10px] text-emerald-700/90 break-all">
+                                    {t('settings.syncHostWriteUrlLabel')}: {adminStatus.descriptor.writeUrl}
+                                </p>
+                            )}
                     </div>
                 </div>
 

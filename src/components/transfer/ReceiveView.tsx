@@ -46,6 +46,10 @@ export function ReceiveView({ onBack, onReceiveSuccess, droppedFile }: ReceiveVi
                     onAcceptPosFallback={flow.handleAcceptPosTrustFallback}
                     onCancelPosFallback={flow.handleCancelPosFallback}
                     isProcessing={flow.isProcessing}
+                    isCheckingPost={flow.isCheckingPost}
+                    postCheckStatus={flow.postCheckStatus}
+                    onCheckPostNow={() => void flow.handleCheckPostNow()}
+                    onPasteRawInput={flow.handlePasteRawInput}
                     isDragOver={flow.isDragOver}
                     bundleName={flow.bundleName}
                     onDragOver={(e) => {

@@ -1,6 +1,6 @@
 // src/sync/sealSync.ts
 import { settingsService } from '../services/settingsService';
-import { backupService } from '../services/backupService';
+import { runAutoBackupPass, runSyncBackupPass } from './autoBackup';
 import { logger } from '../utils/log';
 import { isBackendError, stringifyError } from '../utils/errorHelper';
 
@@ -33,8 +33,8 @@ async function performSync() {
     try {
         const status = await settingsService.getSealSyncStatus();
         if (status === "PendingUpload") {
-            logger.info("Pending WalletSeal upload detected. Triggering auto-backup sync...");
-            await backupService.runAutoBackupSync();
+            logger.info("Pending WalletSeal upload detected. Triggering auto-backup & sync pass...");
+            await Promise.allSettled([runAutoBackupPass(), runSyncBackupPass(true)]);
         }
     } catch (e) {
         const msg = stringifyError(e);

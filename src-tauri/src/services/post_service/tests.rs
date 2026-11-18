@@ -738,8 +738,8 @@ async fn test_multi_device_if_match_412_merge() {
     save_post_state(&alice_state, &post_state, Some(password)).unwrap();
 
     // Flush post slots: PUT with stale ETag -> 412 Precondition Failed -> fetch remote -> merge -> retry with "etag_device_2" -> saved!
-    let (uploaded, errors) =
-        flush_post_slots_impl(&alice_state, &mut post_state, Some(password)).await;
+    let (uploaded, _recipient_uploaded, errors) =
+        flush_post_slots_impl(&alice_state, &mut post_state, &[], Some(password)).await;
     assert_eq!(
         uploaded, 1,
         "Must successfully merge and upload on 412: {:?}",
@@ -898,6 +898,7 @@ async fn test_async_co_signing_voucher_for_signing_to_detached_signature() {
     send_signing_request_via_post_impl(
         bob_did.clone(),
         signing_req_bytes,
+        Some(local_id.clone()),
         Some(password.to_string()),
         &alice_state,
     )
@@ -1757,6 +1758,7 @@ async fn test_deposit_transfer_to_post_persists_outbox_when_sync_server_unreacha
     .await
     .expect("deposit_transfer_to_post_impl must degrade gracefully without Err");
     assert_eq!(dep.deposited_to, 0);
+    assert_eq!(dep.recipient_deposited_to, 0);
     assert!(!dep.errors.is_empty());
 
     let persisted_post_state = load_post_state(&alice_state, Some(password)).unwrap();
@@ -1788,6 +1790,77 @@ async fn test_deposit_transfer_to_post_persists_outbox_when_sync_server_unreacha
         &bob_state,
     )
     .expect("Manual offline receive_bundle_impl must succeed while sync is down");
+
+    let _ = std::fs::remove_dir_all(&base_dir);
+}
+
+#[tokio::test]
+async fn test_unreachable_recipient_returns_error_and_locked_dispatch_defers_msg_id() {
+    let base_dir = temp_test_dir("post_recipient_unreachable_and_locked_dispatch");
+    let password = "TestPassword123!";
+
+    let alice_state = create_test_state(setup_test_app(
+        &base_dir.join("alice"),
+        "Alice",
+        ALICE_PHRASE,
+        password,
+    ));
+    let bob_svc = setup_test_app(&base_dir.join("bob"), "Bob", BOB_PHRASE, password);
+    let (bob_did, my_identity) = bob_svc
+        .with_wallet_and_identity(|w, id| (w.get_user_id().to_string(), id.clone()))
+        .unwrap();
+
+    // 1. Alice gives Bob NO reachable syncs -> send_market_inquiry_via_post_impl must fail loudly with error.post.recipientUnreachable
+    let server = MockSyncServer::start(DROP_PUB_A.to_string(), ADMIN_A.to_string()).await;
+    let _ = setup_test_sync(&server, DROP_PUB_A, password, &alice_state).await;
+
+    let inq_err = send_market_inquiry_via_post_impl(
+        bob_did.clone(),
+        InquiryTarget::Person { skill_title: None },
+        "Hallo Bob".to_string(),
+        vec![],
+        Some(password.to_string()),
+        &alice_state,
+    )
+    .await
+    .expect_err("Sending market inquiry with zero reachable recipient syncs must return Err");
+    assert_eq!(inq_err.code, "error.post.recipientUnreachable");
+
+    // 2. Dispatching a DetachedSignature while wallet is locked must return false so msg_id is NOT marked processed
+    let locked_dir = base_dir.join("locked");
+    std::fs::create_dir_all(&locked_dir).unwrap();
+    let locked_svc = human_money_core::app_service::AppService::new(&locked_dir).unwrap();
+    let locked_state = create_test_state(locked_svc);
+    let my_ed_sk = ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]);
+    let envelope = PostEnvelope::new("msg-locked-retry-1", 1_760_000_000, vec![], vec![1, 2, 3]);
+    let tag16 = [0u8; 16];
+    let ctx = super::handlers::PostEnvelopeContext {
+        state: &locked_state,
+        app: None,
+        extra_standards: None,
+        password: None,
+        my_identity: &my_identity,
+        my_ed_sk: &my_ed_sk,
+        own_reply_syncs: &[],
+        sender_did: &bob_did,
+        envelope: &envelope,
+        tag16: &tag16,
+        decrypted_bytes: &[],
+        now_secs: 1_760_000_000,
+    };
+    let mut post_state = StoredPostState::default();
+    let mut stats = super::handlers::PostDispatchStats::default();
+    let may_mark_processed = super::handlers::dispatch_post_payload(
+        &ctx,
+        &PayloadType::DetachedSignature,
+        &mut post_state,
+        &mut stats,
+    );
+    assert!(
+        !may_mark_processed,
+        "Locked wallet must defer DetachedSignature processing instead of marking msg_id processed"
+    );
+    assert!(!stats.errors.is_empty());
 
     let _ = std::fs::remove_dir_all(&base_dir);
 }

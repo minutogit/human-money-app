@@ -149,6 +149,12 @@ vi.mock('../../../context/SessionContext', () => ({
     notifyLogout: vi.fn(),
     clearLocks: vi.fn(),
   })),
+  useOptionalSession: vi.fn(() => ({
+    protectAction: vi.fn((callback) => callback('test-password')),
+    profileName: 'Alice',
+    notifyLogout: vi.fn(),
+    clearLocks: vi.fn(),
+  })),
 }));
 
 vi.mock('../../standards/StandardsManager', () => ({

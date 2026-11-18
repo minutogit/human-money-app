@@ -41,7 +41,7 @@ export interface UseSyncServiceAdminOptions {
  */
 export function useSyncServiceAdmin({ settings, onSettingsUpdated }: UseSyncServiceAdminOptions) {
     const { t } = useTranslation();
-    const { protectAction } = useSession();
+    const { protectAction, accessMode = 'full', requireFullAccess } = useSession();
 
     const [isLoading, setIsLoading] = useState(false);
     const [feedback, setFeedback] = useState<SyncFeedback | null>(null);
@@ -203,17 +203,24 @@ export function useSyncServiceAdmin({ settings, onSettingsUpdated }: UseSyncServ
         notifySyncStatusUpdated();
     };
 
-    const probeAndSavePublicSync = async (targetUrl: string, fallbackRegisterUrl?: string | null) => {
-        const info = await marketService.probePublicSync(targetUrl);
+    const probeAndSavePublicSync = async (
+        targetUrl: string,
+        fallbackRegisterUrl?: string | null,
+        password?: string
+    ) => {
+        const info = await marketService.probePublicSync(targetUrl, password);
         if (!info) return null;
         const hasAuth = (info.authorizedChannels || []).length > 0;
-        await marketService.savePublicSync({
-            writeUrl: info.writeUrl,
-            readUrl: info.readUrl,
-            dropPub: info.dropPub,
-            registerUrl: info.registerUrl ?? fallbackRegisterUrl,
-            enabled: hasAuth,
-        });
+        await marketService.savePublicSync(
+            {
+                writeUrl: info.writeUrl,
+                readUrl: info.readUrl,
+                dropPub: info.dropPub,
+                registerUrl: info.registerUrl ?? fallbackRegisterUrl,
+                enabled: hasAuth,
+            },
+            password
+        );
         await refreshPublicSyncSettings();
         return { info, hasAuth };
     };
@@ -224,7 +231,9 @@ export function useSyncServiceAdmin({ settings, onSettingsUpdated }: UseSyncServ
         setIsProbing(true);
         setProbeResult(null);
         try {
-            const res = await probeAndSavePublicSync(targetUrl);
+            const res = await protectAction(async (pwd) => {
+                return await probeAndSavePublicSync(targetUrl, undefined, pwd || undefined);
+            });
             if (res) {
                 setInputUrl('');
                 if (res.hasAuth) {
@@ -250,29 +259,65 @@ export function useSyncServiceAdmin({ settings, onSettingsUpdated }: UseSyncServ
     };
 
     const handleTogglePublicDrop = (drop: StoredPublicSync) =>
-        runAction(null, async () => {
-            await marketService.savePublicSync({
-                writeUrl: drop.writeUrl,
-                readUrl: drop.readUrl,
-                dropPub: drop.dropPub,
-                registerUrl: drop.registerUrl,
-                enabled: !drop.enabled,
-            });
+        runProtected(null, async (pwd) => {
+            await marketService.savePublicSync(
+                {
+                    writeUrl: drop.writeUrl,
+                    readUrl: drop.readUrl,
+                    dropPub: drop.dropPub,
+                    registerUrl: drop.registerUrl,
+                    enabled: !drop.enabled,
+                },
+                pwd
+            );
             await refreshPublicSyncSettings();
         });
 
-    const handleRemovePublicSync = (writeUrl: string, deleteRemoteSlots: boolean) =>
-        runAction(setIsDeletingPublicDrop, async () => {
-            await marketService.removePublicSync(writeUrl, deleteRemoteSlots);
+    const handleRemovePublicSync = async (writeUrl: string, deleteRemoteSlots: boolean) => {
+        if (accessMode !== 'full' && requireFullAccess) {
+            const ok = await requireFullAccess(async () => true);
+            if (!ok) return false;
+        }
+        return await runProtected(setIsDeletingPublicDrop, async (pwd) => {
+            await marketService.removePublicSync(writeUrl, deleteRemoteSlots, pwd);
             await refreshPublicSyncSettings();
             setFeedback({ type: 'success', message: t('settings.syncPublicRemovedSuccess') });
         });
+    };
+
+    const handleAdoptReplacementUrl = async (targetUrl: string) => {
+        const normalized = resolveNormalizedSyncUrl(targetUrl, () => {});
+        if (!normalized) return;
+        setIsProbing(true);
+        setFeedback(null);
+        try {
+            const res = await protectAction(async (pwd) => {
+                return await probeAndSavePublicSync(normalized, undefined, pwd || undefined);
+            });
+            if (res) {
+                setFeedback({
+                    type: res.hasAuth ? 'success' : 'info',
+                    message: res.hasAuth ? t('settings.syncProbeSuccess') : t('settings.syncProbeUnauthorized'),
+                });
+            }
+        } catch (err) {
+            checkAndTriggerCooldown(err);
+            setFeedback({
+                type: 'error',
+                message: `${t('settings.syncProbeError')}: ${translateError(err, t)}`,
+            });
+        } finally {
+            setIsProbing(false);
+        }
+    };
 
     const handleCheckPublicDropAuth = async (drop: StoredPublicSync) => {
         setCheckingPublicUrl(drop.writeUrl);
         setFeedback(null);
         try {
-            const res = await probeAndSavePublicSync(drop.writeUrl, drop.registerUrl);
+            const res = await protectAction(async (pwd) => {
+                return await probeAndSavePublicSync(drop.writeUrl, drop.registerUrl, pwd || undefined);
+            });
             if (res) {
                 setFeedback({
                     type: res.hasAuth ? 'success' : 'info',
@@ -331,7 +376,9 @@ export function useSyncServiceAdmin({ settings, onSettingsUpdated }: UseSyncServ
                 ? currentSelected.filter((d) => !isSameSyncEndpoint(d, discovered.descriptor))
                 : [...currentSelected.filter((d) => !isSameSyncEndpoint(d, descriptorToActivate)), descriptorToActivate];
 
-            await marketService.setSelectedUploadSyncs(updatedList);
+            await protectAction(async (pwd) => {
+                await marketService.setSelectedUploadSyncs(updatedList, pwd || undefined);
+            });
             await refreshDiscoveredDrops();
             if (!isCurrentlySelected) {
                 setTimeout(() => {
@@ -419,7 +466,7 @@ export function useSyncServiceAdmin({ settings, onSettingsUpdated }: UseSyncServ
         hostPolicy, setHostPolicy, hostQuotas, setHostQuotas,
         hostWebspaceUrl, setHostWebspaceUrl,
         isCopyingRustConfig, isUpdatingPolicy, isDeletingAdmin, isRevokingServer,
-        handleProbeAndAdd, handleTogglePublicDrop, handleRemovePublicSync,
+        handleProbeAndAdd, handleTogglePublicDrop, handleRemovePublicSync, handleAdoptReplacementUrl,
         handleCheckPublicDropAuth, handleProbeContactSyncs, handleToggleDiscoveredDrop,
         handleCopyRustConfig, handleUpdateHostPolicy, handleDeleteHost, handleRevokeServer,
     };

@@ -37,6 +37,62 @@
     ],
     "resources": [
       "../voucher_standards"
+    ],
+    "fileAssociations": [
+      {
+        "ext": ["transfer"],
+        "name": "HuMoCo Transfer",
+        "description": "HuMoCo voucher transfer file",
+        "mimeType": "application/vnd.humoco.transfer"
+      },
+      {
+        "ext": ["ask"],
+        "name": "HuMoCo Signature Request",
+        "description": "HuMoCo voucher signing request file",
+        "mimeType": "application/vnd.humoco.ask"
+      },
+      {
+        "ext": ["sig"],
+        "name": "HuMoCo Signature",
+        "description": "HuMoCo detached signature file",
+        "mimeType": "application/vnd.humoco.sig"
+      },
+      {
+        "ext": ["wot"],
+        "name": "HuMoCo Trust Package",
+        "description": "HuMoCo trust exchange file",
+        "mimeType": "application/vnd.humoco.wot"
+      },
+      {
+        "ext": ["standard"],
+        "name": "HuMoCo Voucher Standard",
+        "description": "HuMoCo voucher standard definition",
+        "mimeType": "application/vnd.humoco.standard"
+      },
+      {
+        "ext": ["hmcproof"],
+        "name": "HuMoCo Conflict Proof",
+        "description": "HuMoCo cryptographic conflict proof",
+        "mimeType": "application/vnd.humoco.proof"
+      },
+      {
+        "ext": ["hmcard"],
+        "name": "HuMoCo Contact Card",
+        "description": "HuMoCo contact card file",
+        "mimeType": "application/vnd.humoco.card"
+      },
+      {
+        "ext": ["hmcbackup"],
+        "name": "HuMoCo Wallet Backup",
+        "description": "HuMoCo encrypted backup archive",
+        "mimeType": "application/vnd.humoco.backup"
+      },
+      {
+        "ext": ["humoco"],
+        "name": "HuMoCo Package",
+        "description": "HuMoCo data file",
+        "mimeType": "application/vnd.humoco.package"
+      }
     ]
   }
 }

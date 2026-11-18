@@ -31,6 +31,7 @@ export function useDashboardData() {
     const { navigate } = useNavigation();
     const {
         profileName,
+        folderName,
         integrityReport,
         protectAction,
         accessMode = 'full',
@@ -44,6 +45,7 @@ export function useDashboardData() {
     const [feedbackMsg, setFeedbackMsg] = useState('');
     const [activeVouchersCount, setActiveVouchersCount] = useState(0);
     const [incompleteCount, setIncompleteCount] = useState(0);
+    const [firstIncompleteVoucherId, setFirstIncompleteVoucherId] = useState<string | null>(null);
     const [quarantinedCount, setQuarantinedCount] = useState(0);
 
     const [pendingSignRequests, setPendingSignRequests] = useState<FrontendPendingSignRequest[]>([]);
@@ -122,8 +124,12 @@ export function useDashboardData() {
                 });
                 setVoucherCountsByStandard(countsByStandard);
                 setActiveVouchersCount(activeVoucherList.length);
-                setIncompleteCount(
-                    allSummaries.filter((v: VoucherSummary) => v.status === 'incomplete').length,
+                const incompleteList = allSummaries.filter(
+                    (v: VoucherSummary) => v.status === 'incomplete',
+                );
+                setIncompleteCount(incompleteList.length);
+                setFirstIncompleteVoucherId(
+                    incompleteList.length === 1 ? incompleteList[0].localInstanceId : null,
                 );
                 setQuarantinedCount(
                     allSummaries.filter((v: VoucherSummary) => v.status === 'quarantined').length,
@@ -217,6 +223,7 @@ export function useDashboardData() {
                         voucherData,
                         requestMsgId: req.msgId,
                         senderDid: req.senderDid,
+                        anchorManifestJson: req.anchorManifestJson ?? undefined,
                     });
                 }
             } catch (e) {
@@ -276,6 +283,7 @@ export function useDashboardData() {
 
     return {
         profileName,
+        profileScope: folderName || profileName,
         integrityReport,
         accessMode,
         userId,
@@ -285,6 +293,7 @@ export function useDashboardData() {
         feedbackMsg,
         activeVouchersCount,
         incompleteCount,
+        firstIncompleteVoucherId,
         quarantinedCount,
         pendingSignRequests,
         pendingWotHandshakes,

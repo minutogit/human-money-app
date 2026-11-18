@@ -220,6 +220,7 @@ export interface VoucherDetails {
     trust?: VoucherTrustDto;
     reducedGuarantorProtection?: boolean;
     manifestRevision?: number | null;
+    anchorManifestJson?: string;
 }
 
 export interface SignatureImpact {

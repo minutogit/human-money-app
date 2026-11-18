@@ -80,7 +80,15 @@ export function ReceiveSuccessView({ payload, onDone }: ReceiveSuccessViewProps)
         return () => { active = false; };
     }, [payload, summaryString]);
 
-    const [manualApprovalGranted, setManualApprovalGranted] = useState(false);
+    const [manualApprovalGranted, setManualApprovalGranted] = useState(
+        () => Boolean(payload.checkoutVerdict?.isGoodsReleaseAuthorized)
+    );
+
+    useEffect(() => {
+        if (payload.checkoutVerdict?.isGoodsReleaseAuthorized) {
+            setManualApprovalGranted(true);
+        }
+    }, [payload.checkoutVerdict?.isGoodsReleaseAuthorized]);
 
     const isVictim = payload.conflictSummaries 
         ? payload.conflictSummaries.some(c => c.conflictRole === 'victim' && !c.isResolved && !c.localOverride) 
@@ -92,13 +100,33 @@ export function ReceiveSuccessView({ payload, onDone }: ReceiveSuccessViewProps)
 
     const checkoutVerdict = payload.checkoutVerdict;
     const outcome = checkoutVerdict?.outcome;
-    const isReplay = payload.newlyCommitted === false || payload.isReplay === true;
+    const isQuarantined = isVictim || Boolean(outcome && outcome.startsWith('Quarantined'));
+    const isReplay = !isQuarantined && (payload.isReplay === true || payload.newlyCommitted === false);
     const isLiveConfirmed = checkoutVerdict?.canReleaseGoodsAutomatically === true && outcome === 'Confirmed';
-    const isConfirmed = isLiveConfirmed && !isReplay;
-    const isQuarantined = isVictim || (checkoutVerdict ? checkoutVerdict.outcome.startsWith('Quarantined') : false);
-    const isProvisional = outcome === 'Provisional' && checkoutVerdict?.canReleaseGoodsAutomatically === true && !isReplay;
+    const isConfirmed = isLiveConfirmed && !isReplay && !isQuarantined;
+    const isProvisional = outcome === 'Provisional' && checkoutVerdict?.canReleaseGoodsAutomatically === true && !isReplay && !isQuarantined;
     const isOfflineOnly = outcome === 'OfflineOnly';
     const isYellow = Boolean(outcome && outcome.startsWith('Yellow'));
+    const isMultiVoucherYellow = outcome === 'Yellow:MultiVoucherManualApproval';
+    const receiveKind = payload.receiveKind;
+
+    const heroTitle = isQuarantined
+        ? t('transfer.receiveSuccess.securityWarning')
+        : receiveKind === 'claim'
+          ? t('transfer.receiveSuccess.claimComplete', 'Bürgschafts-Ersatz erhalten')
+          : receiveKind === 'redeem'
+            ? t('transfer.receiveSuccess.redeemComplete', 'Gutschein eingelöst')
+            : t('transfer.receiveSuccess.transferComplete');
+
+    const heroDesc = isQuarantined
+        ? t('transfer.receiveSuccess.securityIssueAffects')
+        : isWitnessOnly
+          ? t('transfer.receiveSuccess.witnessOnlyDesc')
+          : receiveKind === 'claim'
+            ? t('transfer.receiveSuccess.claimDesc', 'Der übertragene Ersatz-Gutschein wurde in deiner Gutscheinliste gutgeschrieben.')
+            : receiveKind === 'redeem'
+              ? t('transfer.receiveSuccess.redeemDesc', 'Die Einlösung wurde geprüft und im Guthaben berücksichtigt.')
+              : t('transfer.receiveSuccess.normalSuccessDesc');
 
     // Unverified bundle import or raw response DTOs must never confirm payment or release goods automatically.
     const l2Quorum: L2QuorumInfo = isQuarantined
@@ -124,23 +152,19 @@ export function ReceiveSuccessView({ payload, onDone }: ReceiveSuccessViewProps)
                 {/* Status Hero */}
                 <div className="text-center space-y-4">
                     <div className="relative inline-block">
-                        <div className={`p-6 rounded-[32px] ${isVictim ? 'bg-rose-500 text-white' : isWitnessOnly ? 'bg-amber-500 text-white' : 'bg-emerald-500 text-white'} shadow-premium-lg animate-bounce-subtle`}>
-                            {isVictim ? <ShieldAlert size={64} /> : isWitnessOnly ? <AlertTriangle size={64} /> : <CheckCircle2 size={64} />}
+                        <div className={`p-6 rounded-[32px] ${isQuarantined ? 'bg-rose-500 text-white' : isWitnessOnly ? 'bg-amber-500 text-white' : 'bg-emerald-500 text-white'} shadow-premium-lg animate-bounce-subtle`}>
+                            {isQuarantined ? <ShieldAlert size={64} /> : isWitnessOnly ? <AlertTriangle size={64} /> : <CheckCircle2 size={64} />}
                         </div>
                         <div className="absolute -bottom-2 -right-2 bg-white p-1.5 rounded-full shadow-md">
-                            <div className={`${isVictim ? 'bg-rose-500' : isWitnessOnly ? 'bg-amber-500' : 'bg-emerald-500'} w-4 h-4 rounded-full border-2 border-white`}></div>
+                            <div className={`${isQuarantined ? 'bg-rose-500' : isWitnessOnly ? 'bg-amber-500' : 'bg-emerald-500'} w-4 h-4 rounded-full border-2 border-white`}></div>
                         </div>
                     </div>
                     <div className="space-y-1">
                         <h1 className="text-3xl font-black text-theme-primary tracking-tight">
-                            {isVictim ? t('transfer.receiveSuccess.securityWarning') : t('transfer.receiveSuccess.transferComplete')}
+                            {heroTitle}
                         </h1>
                         <p className="text-theme-light font-medium">
-                            {isVictim 
-                                ? t('transfer.receiveSuccess.securityIssueAffects') 
-                                : isWitnessOnly
-                                    ? t('transfer.receiveSuccess.witnessOnlyDesc')
-                                    : t('transfer.receiveSuccess.normalSuccessDesc')}
+                            {heroDesc}
                         </p>
                     </div>
                 </div>
@@ -210,24 +234,32 @@ export function ReceiveSuccessView({ payload, onDone }: ReceiveSuccessViewProps)
                     />
                 </div>
 
-                {/* Checkout & Goods Release (Warenfreigabe) Status */}
+                {/* Checkout & Goods Release (Warenfreigabe) Status: isQuarantined MUST precede isReplay! */}
                 {checkoutVerdict && (
                     <div data-testid="goods-release-section" className="space-y-3">
-                    {isReplay ? (
+                    {isQuarantined ? (
+                        <div data-testid="goods-release-card" className="p-5 bg-rose-50 border-2 border-rose-200 rounded-[28px] flex items-center gap-3 shadow-sm">
+                            <ShieldAlert className="text-rose-600 shrink-0" size={28} />
+                            <div>
+                                <h3 className="text-sm font-black text-rose-950 uppercase tracking-wider">{t('transfer.checkout.goodsBlocked', 'WARE NICHT HERAUSGEBEN!')}</h3>
+                                <p className="text-xs text-rose-800 font-medium">{checkoutVerdict?.merchantWarning || t('transfer.checkout.goodsBlockedDesc', 'Doppelausgabe erkannt! Dieser Gutschein wurde bereits anderweitig ausgegeben.')}</p>
+                            </div>
+                        </div>
+                    ) : isReplay ? (
                         <div data-testid="goods-release-card" className="p-5 bg-blue-50 border-2 border-blue-200 rounded-[28px] flex items-center justify-between shadow-sm">
                             <div className="flex items-center gap-3">
                                 <Info className="text-blue-600 shrink-0" size={28} />
                                 <div>
                                     <h3 className="text-sm font-black text-blue-950 uppercase tracking-wider">
-                                        {t('transfer.checkout.replayTitle', 'Already Processed (Idempotent Replay)')}
+                                        {t('transfer.checkout.replayTitle', 'Bereits verbucht (Wiederholung)')}
                                     </h3>
                                     <p className="text-xs text-blue-800 font-medium">
-                                        {t('transfer.checkout.replayDesc', 'This payment was already processed. Do not dispense goods again!')}
+                                        {t('transfer.checkout.replayDesc', 'Diese Zahlung wurde zuvor bereits verbucht. Bitte Ware nicht doppelt ausgeben!')}
                                     </p>
                                 </div>
                             </div>
                             <span className="text-[11px] font-mono font-bold bg-blue-200/70 text-blue-900 px-3 py-1.5 rounded-full uppercase tracking-wider shrink-0 flex items-center gap-1.5">
-                                REPLAY
+                                {t('transfer.checkout.replayBadge', 'WIEDERHOLUNG')}
                             </span>
                         </div>
                     ) : isConfirmed ? (
@@ -266,13 +298,44 @@ export function ReceiveSuccessView({ payload, onDone }: ReceiveSuccessViewProps)
                                 {t('transfer.checkout.level1Tag', 'Stufe 1')}
                             </span>
                         </div>
-                    ) : isQuarantined ? (
-                        <div data-testid="goods-release-card" className="p-5 bg-rose-50 border-2 border-rose-200 rounded-[28px] flex items-center gap-3 shadow-sm">
-                            <ShieldAlert className="text-rose-600 shrink-0" size={28} />
-                            <div>
-                                <h3 className="text-sm font-black text-rose-950 uppercase tracking-wider">{t('transfer.checkout.goodsBlocked', 'WARE NICHT HERAUSGEBEN!')}</h3>
-                                <p className="text-xs text-rose-800 font-medium">{t('transfer.checkout.goodsBlockedDesc', 'Doppelausgabe erkannt! Dieser Gutschein wurde bereits anderweitig ausgegeben.')}</p>
+                    ) : isYellow ? (
+                        <div data-testid="goods-release-card" className="p-5 bg-amber-50 border-2 border-amber-200 rounded-[28px] space-y-3 shadow-sm">
+                            <div className="flex items-start gap-3">
+                                <AlertTriangle className="text-amber-600 shrink-0 mt-0.5" size={24} />
+                                <div className="flex-1">
+                                    <div className="flex items-center justify-between gap-2">
+                                        <h3 className="text-sm font-black text-amber-950 uppercase tracking-wider">
+                                            {manualApprovalGranted
+                                                ? t('transfer.checkout.acceptedOnTrust', 'Auf Vertrauensbasis angenommen')
+                                                : t('transfer.checkout.yellowManualTitle', 'Manuelle Kassen-Prüfung nötig')}
+                                        </h3>
+                                        <span className="text-[11px] font-mono font-bold bg-amber-200/70 text-amber-900 px-2.5 py-1 rounded-full uppercase tracking-wider shrink-0">
+                                            {t('transfer.l2.yellowShort', 'Prüfen')}
+                                        </span>
+                                    </div>
+                                    <p className="text-xs text-amber-900 font-medium mt-1">
+                                        {isMultiVoucherYellow
+                                            ? t('transfer.checkout.multiVoucherWarning', 'Dieses Bündel enthält mehrere Gutscheine. Bitte prüfe vor Warenherausgabe jeden Schein kurz manuell auf Vertrauen.')
+                                            : (checkoutVerdict?.merchantWarning || t('transfer.l2.yellowHint', 'Server-Netzwerk eingeschränkt erreichbar.'))}
+                                    </p>
+                                </div>
                             </div>
+                            {!manualApprovalGranted ? (
+                                <Button
+                                    data-testid="merchant-approve-btn"
+                                    variant="secondary"
+                                    size="sm"
+                                    onClick={() => setManualApprovalGranted(true)}
+                                    className="w-full py-2.5 rounded-2xl text-xs font-bold bg-amber-700 hover:bg-amber-800 text-white border-none shadow-sm cursor-pointer"
+                                >
+                                    {t('transfer.checkout.acceptOnTrustBtn', 'Zahlung auf Vertrauensbasis annehmen')}
+                                </Button>
+                            ) : (
+                                <div data-testid="merchant-approved-badge" className="text-xs font-bold text-emerald-700 bg-emerald-100/70 px-3 py-1.5 rounded-xl flex items-center gap-2">
+                                    <CheckCircle2 size={16} />
+                                    {t('transfer.checkout.acceptedOnTrust', 'Auf Vertrauensbasis angenommen')}
+                                </div>
+                            )}
                         </div>
                     ) : (
                         <div data-testid="goods-release-card" className="p-5 bg-slate-50 border-2 border-slate-200 rounded-[28px] space-y-3 shadow-sm">

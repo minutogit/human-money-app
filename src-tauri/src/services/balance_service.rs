@@ -292,6 +292,11 @@ pub fn get_voucher_summaries_impl(
             let mut enriched = Vec::with_capacity(raw_summaries.len());
             for s in raw_summaries {
                 let mut summary: crate::models::FrontendVoucherSummary = s.into();
+                if summary.status == "active"
+                    && parse_fixed_point(&summary.current_amount) == Some(0)
+                {
+                    summary.status = "archived".to_string();
+                }
                 if let Some(instance) = w.voucher_store.vouchers.get(&summary.local_instance_id) {
                     summary.description = instance
                         .voucher
@@ -331,6 +336,11 @@ pub fn get_voucher_details_impl(
                     .find(|s| s.local_instance_id == local_id)
                 {
                     frontend_details.current_amount = summary.current_amount;
+                }
+                if frontend_details.status == "active"
+                    && parse_fixed_point(&frontend_details.current_amount) == Some(0)
+                {
+                    frontend_details.status = "archived".to_string();
                 }
                 let creator_id = raw_details
                     .voucher
@@ -475,6 +485,7 @@ mod tests {
             settings: Mutex::new(None),
             wot: Mutex::new(None),
             media_negative_cache: Mutex::new(std::collections::HashMap::new()),
+            startup_launch_items: Mutex::new(Vec::new()),
         };
 
         let events = state_raw.events.lock().unwrap();

@@ -4,8 +4,6 @@ import { useTranslation } from 'react-i18next';
 import { Building2, QrCode, Search, UserPlus, Users, X } from 'lucide-react';
 import { PageLayout } from '../ui/PageLayout';
 import { Button } from '../ui/Button';
-import { Advanced } from '../ui/Advanced';
-import { ExpertTabsLayout } from '../ui/ExpertTabsLayout';
 import { ConfirmationModal } from '../ui/ConfirmationModal';
 import { AlertBanner } from '../ui/AlertBanner';
 import { PageEmptyState, PageLoadingState } from '../ui/PageState';
@@ -255,36 +253,29 @@ const AddressBook: React.FC<AddressBookProps> = ({
                 />
 
                 {state.providers.length > 0 && (
-                    <Advanced>
-                        <div className="flex justify-start">
-                            <SegmentedTabs
-                                tabs={[
-                                    {
-                                        id: 'contacts',
-                                        label: `${t('contacts.tabPersonalContacts')} (${state.contacts.length})`,
-                                        icon: <Users size={16} />,
-                                    },
-                                    {
-                                        id: 'providers',
-                                        label: `${t('contacts.tabProviders')} (${state.providers.length})`,
-                                        icon: <Building2 size={16} />,
-                                    },
-                                ]}
-                                activeTab={state.activeTab}
-                                onChange={(id) => state.setActiveTab(id as 'contacts' | 'providers')}
-                            />
-                        </div>
-                    </Advanced>
+                    <div className="flex justify-start">
+                        <SegmentedTabs
+                            tabs={[
+                                {
+                                    id: 'contacts',
+                                    label: `${t('contacts.tabPersonalContacts')} (${state.contacts.length})`,
+                                    icon: <Users size={16} />,
+                                },
+                                {
+                                    id: 'providers',
+                                    label: `${t('contacts.tabProviders')} (${state.providers.length})`,
+                                    icon: <Building2 size={16} />,
+                                },
+                            ]}
+                            activeTab={state.activeTab}
+                            onChange={(id) => state.setActiveTab(id as 'contacts' | 'providers')}
+                        />
+                    </div>
                 )}
 
-                <ExpertTabsLayout
-                    simpleContent={contactsSection}
-                    expertContent={
-                        state.activeTab === 'providers' && state.providers.length > 0
-                            ? providersSection
-                            : contactsSection
-                    }
-                />
+                {state.activeTab === 'providers' && state.providers.length > 0
+                    ? providersSection
+                    : contactsSection}
             </div>
 
             <AddContactModal

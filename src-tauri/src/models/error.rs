@@ -14,6 +14,16 @@ pub struct FrontendError {
     pub details: HashMap<String, String>,
 }
 
+impl FrontendError {
+    pub fn with_code(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            code: code.into(),
+            message: message.into(),
+            details: HashMap::new(),
+        }
+    }
+}
+
 impl From<String> for FrontendError {
     fn from(error_string: String) -> Self {
         let (code, details) = classify_error(&error_string);
@@ -27,7 +37,18 @@ impl From<String> for FrontendError {
 
 impl From<humoco_market::MarketError> for FrontendError {
     fn from(error: humoco_market::MarketError) -> Self {
-        FrontendError::from(error.to_string())
+        let message = error.to_string();
+        let code = match &error {
+            humoco_market::MarketError::Validation(_) => "error.market.validation",
+            humoco_market::MarketError::Identity(_) => "error.market.identity",
+            humoco_market::MarketError::Serialization(_) => "error.market.serialization",
+            humoco_market::MarketError::ParseDate(_) => "error.market.parseDate",
+            humoco_market::MarketError::Crypto(_) => "error.market.crypto",
+            humoco_market::MarketError::InvalidJws(_) => "error.market.invalidCard",
+            humoco_market::MarketError::Slot(_) => "error.market.slot",
+            humoco_market::MarketError::PayloadTooLarge(_) => "error.market.payloadTooLarge",
+        };
+        FrontendError::with_code(code, message)
     }
 }
 
@@ -39,7 +60,22 @@ impl From<human_money_core::crypto::GetPubkeyError> for FrontendError {
 
 impl From<humoco_wot::WotError> for FrontendError {
     fn from(error: humoco_wot::WotError) -> Self {
-        FrontendError::from(error.to_string())
+        let message = error.to_string();
+        let code = match &error {
+            humoco_wot::WotError::InvalidDid(_) => "error.wot.invalidDid",
+            humoco_wot::WotError::WeakPublicKey
+            | humoco_wot::WotError::InvalidSignature
+            | humoco_wot::WotError::SignerMismatch { .. } => "error.wot.invalidSignature",
+            humoco_wot::WotError::MalformedSdJwt(_) => "error.wot.malformedPackage",
+            humoco_wot::WotError::InvalidTrustLevel(_) => "error.wot.invalidTrustLevel",
+            humoco_wot::WotError::InvalidHopLimit(_) => "error.wot.invalidHopLimit",
+            humoco_wot::WotError::SelfTrustForbidden => "error.wot.selfTrustForbidden",
+            humoco_wot::WotError::FutureTimestamp { .. } => "error.wot.futureTimestamp",
+            humoco_wot::WotError::EquivocationDetected { .. } => "error.wot.equivocation",
+            humoco_wot::WotError::LimitExceeded(_) => "error.wot.limitExceeded",
+            humoco_wot::WotError::Serialization(_) => "error.wot.serialization",
+        };
+        FrontendError::with_code(code, message)
     }
 }
 
@@ -218,6 +254,26 @@ fn classify_error(msg: &str) -> (String, HashMap<String, String>) {
     }
     if msg.starts_with("Warning: This transaction occurred shortly") {
         return ("error.transfer.bundleToleranceZone".into(), details);
+    }
+
+    // --- Post & Social Recovery Errors ---
+    if msg.contains("Recipient sync inbox unreachable") {
+        return ("error.post.recipientUnreachable".into(), details);
+    }
+    if msg.contains("Keine aktive Wiederherstellungssitzung") {
+        return ("error.recovery.noActiveSession".into(), details);
+    }
+    if msg.contains("gehört zu einem anderen Profil") {
+        return ("error.recovery.wrongProfile".into(), details);
+    }
+    if msg.contains("veralteten Wiederherstellungs-Stand") {
+        return ("error.recovery.staleEpoch".into(), details);
+    }
+    if msg.contains("Noch nicht genügend Sicherheitskontakte") {
+        return ("error.recovery.insufficientReplies".into(), details);
+    }
+    if msg.contains("Sicherheitsfrage stimmt nicht") {
+        return ("error.recovery.wrongSecurityAnswer".into(), details);
     }
 
     // --- Fallback: Unknown error ---

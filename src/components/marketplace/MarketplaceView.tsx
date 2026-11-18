@@ -26,6 +26,7 @@ import { useNavigation } from '../../context/NavigationContext';
 import { useSession } from '../../context/SessionContext';
 import { marketService } from '../../services/marketService';
 import { postService, POST_INBOX_UPDATED_EVENT } from '../../services/postService';
+import { APP_EVENTS } from '../../utils/appEvents';
 import { settingsService } from '../../services/settingsService';
 import { contactService } from '../../services/contactService';
 import ContactDialog from '../contacts/ContactDialog';
@@ -44,6 +45,7 @@ import { ShareCardModal } from './ShareCardModal';
 import { ImportCardModal } from './ImportCardModal';
 import { MarketplaceOptionsPanel } from './MarketplaceOptionsPanel';
 import { translateError, stringifyError } from '../../utils/errorHelper';
+import { isExactSameUserId } from '../../utils/userIdHelper';
 import {
     SYNC_STATUS_UPDATED_EVENT,
     MY_PROFILE_UPDATED_EVENT,
@@ -124,8 +126,15 @@ export function MarketplaceView({
 
     const refreshSyncStatus = useCallback(async () => {
         try {
-            const settings = await settingsService.getSettings();
-            const count = (settings.marketSelectedSyncs || []).length;
+            const [settings, overview] = await Promise.all([
+                settingsService.getSettings(),
+                typeof marketService?.getSyncOverviewStatus === 'function'
+                    ? marketService.getSyncOverviewStatus().catch(() => null)
+                    : Promise.resolve(null),
+            ]);
+            const count = overview
+                ? overview.connectedCount
+                : (settings.marketSelectedSyncs || []).length;
             setConnectedSyncCount(count);
             setMediaAutoLoadMaxHops(settings.mediaAutoLoadMaxHops ?? 2);
             setMarketPollWifiOnly(Boolean(settings.marketPollWifiOnly));
@@ -196,17 +205,22 @@ export function MarketplaceView({
                 marketService.getAppNotices().then((res) => setLastSyncAt(res?.lastSyncAt ?? null)).catch(() => {});
             }
         };
+        const handleMarketCardUpdate = () => {
+            refreshData(false);
+        };
 
         window.addEventListener(POST_INBOX_UPDATED_EVENT, handleInboxUpdate);
         window.addEventListener(SYNC_STATUS_UPDATED_EVENT, handleSyncUpdate);
         window.addEventListener(MY_PROFILE_UPDATED_EVENT, handleProfileUpdate);
         window.addEventListener(APP_NOTICES_UPDATED_EVENT, handleNoticesUpdate);
+        window.addEventListener(APP_EVENTS.MARKET_CARD_UPDATED, handleMarketCardUpdate);
 
         return () => {
             window.removeEventListener(POST_INBOX_UPDATED_EVENT, handleInboxUpdate);
             window.removeEventListener(SYNC_STATUS_UPDATED_EVENT, handleSyncUpdate);
             window.removeEventListener(MY_PROFILE_UPDATED_EVENT, handleProfileUpdate);
             window.removeEventListener(APP_NOTICES_UPDATED_EVENT, handleNoticesUpdate);
+            window.removeEventListener(APP_EVENTS.MARKET_CARD_UPDATED, handleMarketCardUpdate);
         };
     }, [refreshInbox, refreshSyncStatus, refreshData]);
 
@@ -319,6 +333,7 @@ export function MarketplaceView({
                 maxHops: patch.maxHops ?? currentProfile.maxHops,
                 validityYears: patch.validityYears ?? currentProfile.validityYears ?? 2,
                 allowInquiries: patch.allowInquiries ?? currentProfile.allowInquiries,
+                published: currentProfile.published,
             };
             const updated = await protectAction(async (pwd) => {
                 return await marketService.saveMyMarketProfile(req, pwd || undefined);
@@ -353,6 +368,7 @@ export function MarketplaceView({
         } catch (err) {
             logger.error('Failed to send inquiry message: ' + stringifyError(err));
             setError(translateError(err, t));
+            throw err;
         }
     };
 
@@ -462,7 +478,7 @@ export function MarketplaceView({
     // If person detail view is active
     const selectedPerson = useMemo(() => {
         if (!selectedPersonDid || !snapshot) return null;
-        return snapshot.people.find((p) => p.did === selectedPersonDid) || null;
+        return snapshot.people.find((p) => isExactSameUserId(p.did, selectedPersonDid)) || null;
     }, [selectedPersonDid, snapshot]);
 
     if (isLoading) {
@@ -525,6 +541,7 @@ export function MarketplaceView({
     const currentProfile = myProfile || defaultEmptyProfile;
 
     const activeMyAdsCount = currentProfile.ads.filter((a) => a.status === 'active').length;
+    const unreadInquiriesCount = (inboxSummary?.inquiries || []).filter((i) => i.unread).length;
 
     return (
         <PageLayout
@@ -557,6 +574,7 @@ export function MarketplaceView({
                         className="flex items-center gap-1.5"
                     >
                         <RefreshCw size={15} className={isSyncing ? 'animate-spin' : ''} />
+                        <span className="hidden sm:inline text-xs font-bold">{t('marketplace.refresh')}</span>
                     </Button>
                     <Button
                         size="sm"
@@ -671,7 +689,15 @@ export function MarketplaceView({
                         >
                             <User size={15} />
                             <span>{t('marketplace.tabMine', 'Meins')}</span>
-                            {activeMyAdsCount > 0 && (
+                            {unreadInquiriesCount > 0 && (
+                                <span
+                                    data-testid="marketplace-unread-inquiries-badge"
+                                    className="px-1.5 py-0.2 rounded-full text-[10px] bg-rose-600 text-white font-bold"
+                                >
+                                    {unreadInquiriesCount}
+                                </span>
+                            )}
+                            {unreadInquiriesCount === 0 && activeMyAdsCount > 0 && (
                                 <span
                                     className={`px-1.5 py-0.2 rounded-full text-[10px] ${
                                         activeTab === 'mine'
@@ -709,7 +735,7 @@ export function MarketplaceView({
                             onInquire={handleBoardInquire}
                             onPay={handleBoardPay}
                             onOwnerClick={(ownerDid, isOwn) => {
-                                if (isOwn || (currentProfile?.profile?.id && ownerDid === currentProfile.profile.id)) {
+                                if (isOwn || (currentProfile?.profile?.id && isExactSameUserId(ownerDid, currentProfile.profile.id))) {
                                     setActiveTab('mine');
                                 } else {
                                     setSelectedPersonDid(ownerDid);
@@ -755,8 +781,9 @@ export function MarketplaceView({
                             onDismissInquiry={handleDismissInquiry}
                             onAddContact={(did, suggestedName) => setAddContactTarget({ did, suggestedName })}
                             onViewCard={(did) => {
-                                if (snapshot?.people.some((p) => p.did === did)) {
-                                    setSelectedPersonDid(did);
+                                const match = snapshot?.people.find((p) => isExactSameUserId(p.did, did));
+                                if (match) {
+                                    setSelectedPersonDid(match.did);
                                 }
                             }}
                         />

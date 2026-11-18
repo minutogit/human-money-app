@@ -9,6 +9,7 @@ import {
     ChevronDown,
     X,
     Tag,
+    RefreshCw,
 } from "lucide-react";
 import { backupService } from "../../services/backupService";
 import { marketService } from "../../services/marketService";
@@ -19,6 +20,7 @@ import { useSession } from "../../context/SessionContext";
 import { FrontendAutoBackupStatusDto, FrontendSyncOverviewStatus } from "../../types";
 import { APP_EVENTS, useAppEvent } from "../../utils/appEvents";
 import { notifySyncStatusUpdated, SYNC_STATUS_UPDATED_EVENT } from "../../utils/syncEvents";
+import { formatLastSyncLabel } from "../../utils/appNotices";
 import { useRateLimitCooldown } from "../../hooks/useRateLimitCooldown";
 import { rateLimitManager } from "../../sync/rateLimitManager";
 import { Button } from "../ui/Button";
@@ -32,7 +34,7 @@ export type StatusLevel = "healthy" | "warning" | "critical";
 export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
     const { t } = useTranslation();
     const { navigateToSettingsSection, navigate } = useNavigation();
-    const { isSessionActive } = useSession();
+    const { isSessionActive, accessMode } = useSession();
 
     // 1. Backup state
     const [backupStatus, setBackupStatus] = useState<FrontendAutoBackupStatusDto>({
@@ -53,9 +55,9 @@ export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
         friendSyncs: 0,
         publicSyncs: 0,
         hasOwnSync: false,
-        ownSyncSoftWarning: false,
         lastSyncAt: null,
     });
+    const [isManualSyncing, setIsManualSyncing] = useState(false);
 
     // 3. Voucher conflicts state
     const [conflictsCount, setConflictsCount] = useState<number>(0);
@@ -138,7 +140,7 @@ export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
         }
     }, [isSessionActive, maybeTriggerGentleDailySync]);
 
-    // Fetch voucher conflicts count
+    // Fetch voucher conflicts count (unresolved victim conflicts requiring action)
     const refreshConflicts = useCallback(async () => {
         if (!isSessionActive || typeof integrityService?.getDoubleSpendConflicts !== "function") {
             setConflictsCount(0);
@@ -146,7 +148,12 @@ export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
         }
         try {
             const conflicts = await integrityService.getDoubleSpendConflicts();
-            setConflictsCount(Array.isArray(conflicts) ? conflicts.length : 0);
+            const unresolved = Array.isArray(conflicts)
+                ? conflicts.filter(
+                      (c) => !c.isResolved && !c.localOverride && (!c.conflictRole || c.conflictRole === "victim")
+                  ).length
+                : 0;
+            setConflictsCount(unresolved);
         } catch {
             // Retain last known count
         }
@@ -154,7 +161,10 @@ export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
 
     // Fetch expiring ads
     const refreshAds = useCallback(async () => {
-        if (!isSessionActive) return;
+        if (!isSessionActive || accessMode === "receiveOnly") {
+            if (accessMode === "receiveOnly") setExpiringAdsCount(0);
+            return;
+        }
         try {
             const profile = await marketService.getMyMarketProfile();
             if (!profile?.ads) return;
@@ -168,7 +178,7 @@ export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
         } catch {
             // Silently retain last known status
         }
-    }, [isSessionActive]);
+    }, [isSessionActive, accessMode]);
 
     const refreshAll = useCallback(() => {
         if (!isSessionActive) return;
@@ -197,7 +207,6 @@ export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
                 friendSyncs: 0,
                 publicSyncs: 0,
                 hasOwnSync: false,
-                ownSyncSoftWarning: false,
                 lastSyncAt: null,
             });
             setConflictsCount(0);
@@ -252,6 +261,22 @@ export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
         () => {
             void refreshBackup();
             void refreshSync();
+            void refreshAds();
+        },
+        isSessionActive,
+    );
+
+    useAppEvent(
+        APP_EVENTS.CONFLICTS_UPDATED,
+        () => {
+            void refreshConflicts();
+        },
+        isSessionActive,
+    );
+
+    useAppEvent(
+        APP_EVENTS.MARKET_CARD_UPDATED,
+        () => {
             void refreshAds();
         },
         isSessionActive,
@@ -327,11 +352,24 @@ export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
 
     // Row 2: Sync-Dienst (unconfigured local mode is neutral info, not a warning)
     const syncHasIssue =
-        syncOverview.ownSyncSoftWarning ||
         (syncOverview.failingCount ?? 0) > 0 ||
         (syncOverview.connectedCount === 0 && (syncOverview.pendingAuthCount ?? 0) > 0);
     const syncIsOptional = syncOverview.connectedCount === 0 && !syncHasIssue;
     const syncLevel: StatusLevel = syncHasIssue ? "warning" : "healthy";
+
+    const handlePullSyncNow = async () => {
+        if (isManualSyncing || !isSessionActive) return;
+        setIsManualSyncing(true);
+        try {
+            await Promise.allSettled([
+                marketService.syncMarketChannels(),
+                postService.syncPostChannels(),
+            ]);
+            await refreshSync();
+        } finally {
+            setIsManualSyncing(false);
+        }
+    };
 
     const getSyncSummary = (): string => {
         if (syncOverview.connectedCount === 0) {
@@ -342,9 +380,6 @@ export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
         }
         if ((syncOverview.failingCount ?? 0) > 0) {
             return t("statusChip.syncFailing", "Mindestens ein Sync-Dienst ist derzeit nicht erreichbar.");
-        }
-        if (syncOverview.ownSyncSoftWarning) {
-            return t("statusChip.syncWarning", "Sync-Dienst benötigt Aufmerksamkeit.");
         }
         return t("statusChip.syncOk", "Verbunden mit {{count}} Sync-Dienst(en).", {
             count: syncOverview.connectedCount,
@@ -512,21 +547,40 @@ export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
                                     <p className="text-xs text-theme-light mt-0.5 leading-tight">
                                         {getSyncSummary()}
                                     </p>
+                                    {(syncOverview.connectedCount > 0 || syncOverview.lastSyncAt) && (
+                                        <p className="text-[11px] text-theme-light/80 mt-0.5">
+                                            {t("common.lastUpdatedPrefix", "Zuletzt aktualisiert:")}{" "}
+                                            {formatLastSyncLabel(syncOverview.lastSyncAt, t)}
+                                        </p>
+                                    )}
                                 </div>
                             </div>
-                            <Button
-                                size="xs"
-                                variant="outline"
-                                onClick={() => {
-                                    setIsOpen(false);
-                                    navigateToSettingsSection("sync");
-                                }}
-                                className="shrink-0"
-                            >
-                                {syncOverview.connectedCount === 0
-                                    ? t("statusChip.setup", "Einrichten")
-                                    : t("statusChip.open", "Öffnen")}
-                            </Button>
+                            <div className="flex flex-col items-end gap-1.5 shrink-0">
+                                {syncOverview.connectedCount > 0 && (
+                                    <Button
+                                        size="xs"
+                                        variant="outline"
+                                        onClick={() => void handlePullSyncNow()}
+                                        disabled={isManualSyncing}
+                                        data-testid="status-chip-sync-now-btn"
+                                    >
+                                        <RefreshCw size={11} className={isManualSyncing ? "animate-spin mr-1" : "mr-1"} />
+                                        {t("statusChip.pullNowBtn", "Jetzt abrufen")}
+                                    </Button>
+                                )}
+                                <Button
+                                    size="xs"
+                                    variant="outline"
+                                    onClick={() => {
+                                        setIsOpen(false);
+                                        navigateToSettingsSection("sync");
+                                    }}
+                                >
+                                    {syncOverview.connectedCount === 0
+                                        ? t("statusChip.setup", "Einrichten")
+                                        : t("statusChip.open", "Öffnen")}
+                                </Button>
+                            </div>
                         </div>
 
                         {/* Row 3: Voucher Protection & Conflicts */}

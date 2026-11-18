@@ -55,6 +55,8 @@ pub struct ExportedMnemonicKitDto {
     pub phrase: String,
     pub language_code: u8,
     pub has_bip39_passphrase: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_prefix: Option<String>,
     pub kit_uri: String,
     pub qr_svg: String,
     pub sync_urls: Vec<String>,

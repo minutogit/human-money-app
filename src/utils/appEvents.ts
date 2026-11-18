@@ -11,6 +11,7 @@ export const APP_EVENTS = {
     WOT_UPDATED: 'humoco:wot-updated',
     STANDARDS_UPDATED: 'humoco:standards-updated',
     SESSION_LOCKED: 'humoco:session-locked',
+    CONFLICTS_UPDATED: 'humoco:conflicts-updated',
 } as const;
 
 export const POST_INBOX_UPDATED_EVENT = APP_EVENTS.POST_INBOX_UPDATED;
@@ -27,6 +28,7 @@ export interface AppEventDetailMap {
     [APP_EVENTS.WOT_UPDATED]: undefined;
     [APP_EVENTS.STANDARDS_UPDATED]: undefined;
     [APP_EVENTS.SESSION_LOCKED]: undefined;
+    [APP_EVENTS.CONFLICTS_UPDATED]: undefined;
 }
 
 /**

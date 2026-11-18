@@ -56,7 +56,8 @@ export async function loadSendInitialData(): Promise<LoadedSendData> {
 
     const activeVouchers = summaries.filter((v: VoucherSummary) => {
         const statusName = typeof v.status === 'string' ? v.status : Object.keys(v.status)[0];
-        return statusName.toLowerCase() === 'active';
+        const amt = parseFloat(String(v.currentAmount ?? '0').replace(',', '.'));
+        return statusName.toLowerCase() === 'active' && !Number.isNaN(amt) && amt > 0;
     });
 
     const newIdMap = new Map<string, string>();

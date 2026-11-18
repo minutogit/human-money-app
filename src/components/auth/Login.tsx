@@ -109,7 +109,9 @@ export function Login({
                     const loggedInProfile = flow.profiles.find(
                         (p) => p.folderName === flow.selectedProfile
                     );
-                    if (loggedInProfile) onLoginSuccess(loggedInProfile.profileName);
+                    if (loggedInProfile) {
+                        onLoginSuccess(loggedInProfile.profileName, loggedInProfile.folderName);
+                    }
                 }}
             />
 

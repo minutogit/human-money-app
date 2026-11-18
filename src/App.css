@@ -59,3 +59,21 @@ body {
     @apply bg-gradient-to-br from-blue-50 to-indigo-50;
   }
 }
+
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  #emergency-sheet-printable,
+  #emergency-sheet-printable * {
+    visibility: visible;
+  }
+  #emergency-sheet-printable {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    border: none !important;
+    box-shadow: none !important;
+    background: #ffffff !important;
+  }
+}

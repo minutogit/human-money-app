@@ -10,6 +10,11 @@ import { error } from "@tauri-apps/plugin-log";
 import { stringifyError } from '../utils/errorHelper';
 import { tourBridge } from '../utils/tourBridge';
 
+export interface PendingDroppedFile {
+    name: string;
+    bytes: number[];
+}
+
 export interface NavigationContextType {
     appState: AppState;
     navigate: (newState: AppState) => void;
@@ -19,6 +24,8 @@ export interface NavigationContextType {
     setSidebarOpen: (open: boolean) => void;
     appVersion: string;
     checkProfile: () => Promise<void>;
+    pendingDroppedFile: PendingDroppedFile | null;
+    setPendingDroppedFile: (file: PendingDroppedFile | null) => void;
 }
 
 const NavigationContext = createContext<NavigationContextType | null>(null);
@@ -37,6 +44,7 @@ export function NavigationProvider({ children }: { children: ReactNode }) {
     const [appState, setAppState] = useState<AppState>({ view: "loading" });
     const [isSidebarOpen, setSidebarOpen] = useState(false);
     const [appVersion, setAppVersion] = useState<string>("");
+    const [pendingDroppedFile, setPendingDroppedFile] = useState<PendingDroppedFile | null>(null);
     const { notifyLogin } = useSession();
 
     // Store state in ref for checkProfile to avoid stale closures
@@ -101,23 +109,29 @@ export function NavigationProvider({ children }: { children: ReactNode }) {
                 } else {
                     notifyLoginRef.current(resolvedName);
                 }
-                if (tourBridge.getState().appState) return;
+                if (tourBridge.getState().appState || appStateRef.current.view !== 'loading') return;
                 historyRef.current = [];
-                setAppState({ view: "logged_in" });
+                const nextState: AppState = { view: "logged_in" };
+                appStateRef.current = nextState;
+                setAppState(nextState);
                 return;
             } catch {
                 logger.info("No active session found, checking available profiles.");
             }
 
             await authService.listProfiles();
-            if (tourBridge.getState().appState) return;
+            if (tourBridge.getState().appState || appStateRef.current.view !== 'loading') return;
             historyRef.current = [];
-            setAppState({ view: "needs_login" });
+            const nextState: AppState = { view: "needs_login" };
+            appStateRef.current = nextState;
+            setAppState(nextState);
         } catch (e) {
             error(`Failed to check if profile exists: ${stringifyError(e)}`);
-            if (tourBridge.getState().appState) return;
+            if (tourBridge.getState().appState || appStateRef.current.view !== 'loading') return;
             historyRef.current = [];
-            setAppState({ view: "needs_login" });
+            const nextState: AppState = { view: "needs_login" };
+            appStateRef.current = nextState;
+            setAppState(nextState);
         }
     }, []);
 
@@ -151,7 +165,9 @@ export function NavigationProvider({ children }: { children: ReactNode }) {
             isSidebarOpen, 
             setSidebarOpen, 
             appVersion,
-            checkProfile
+            checkProfile,
+            pendingDroppedFile,
+            setPendingDroppedFile
         }}>
             {children}
         </NavigationContext.Provider>

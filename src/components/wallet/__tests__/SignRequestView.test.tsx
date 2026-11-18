@@ -245,6 +245,7 @@ uuid = "minuto-uuid-123"`,
     const replyMock = vi.mocked(postService.replyDetachedSignatureViaPost).mockResolvedValue({
       msgId: 'msg-reply-123',
       depositedTo: 1,
+      recipientDepositedTo: 1,
       errors: [],
     });
 
@@ -281,6 +282,7 @@ uuid = "minuto-uuid-123"`,
     vi.mocked(postService.replyDetachedSignatureViaPost).mockResolvedValue({
       msgId: 'msg-reply-123',
       depositedTo: 0,
+      recipientDepositedTo: 0,
       errors: ['No reachable sync endpoints'],
     });
 

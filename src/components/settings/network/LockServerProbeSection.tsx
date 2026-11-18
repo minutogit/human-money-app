@@ -10,6 +10,7 @@ import { Input } from '../../ui/Input';
 import { TechId } from '../../ui/TechId';
 import { translateError } from '../../../utils/errorHelper';
 import { formatQuarter } from '../../../utils/retentionQuarter';
+import { normalizeSyncUrlInput } from '../../../utils/humocoUri';
 
 /**
  * Formats a Unix timestamp (seconds) into a compact relative age label.
@@ -30,7 +31,6 @@ export interface LockServerProbeSectionProps {
     settings: AppSettings | null;
     probeList: LockServerProbeResult[];
     passingProbes: LockServerProbeResult[];
-    onSettingsUpdated: (updater: AppSettings | ((prev: AppSettings | null) => AppSettings | null)) => void;
     onSuccess: (message: string) => void;
     onError: (message: string) => void;
     onClearFeedback: () => void;
@@ -44,7 +44,6 @@ export const LockServerProbeSection: React.FC<LockServerProbeSectionProps> = ({
     settings,
     probeList,
     passingProbes,
-    onSettingsUpdated,
     onSuccess,
     onError,
     onClearFeedback,
@@ -68,8 +67,9 @@ export const LockServerProbeSection: React.FC<LockServerProbeSectionProps> = ({
     }, [settings?.ownNominatedLockServer]);
 
     const handleProbe = async () => {
-        const trimmed = probeUrl.trim();
+        const trimmed = normalizeSyncUrlInput(probeUrl.trim()) || probeUrl.trim();
         if (!trimmed) return;
+        if (trimmed !== probeUrl) setProbeUrl(trimmed);
         setIsProbing(true);
         onClearFeedback();
         try {
@@ -100,18 +100,24 @@ export const LockServerProbeSection: React.FC<LockServerProbeSectionProps> = ({
         setIsSavingOwn(true);
         onClearFeedback();
         try {
-            const targetUrl = clear ? null : ownServerUrl.trim() || null;
+            const trimmedOwn = ownServerUrl.trim();
+            const normalizedOwn = trimmedOwn ? (normalizeSyncUrlInput(trimmedOwn) || trimmedOwn) : null;
+            if (!clear && normalizedOwn && normalizedOwn !== ownServerUrl) {
+                setOwnServerUrl(normalizedOwn);
+            }
+            const targetUrl = clear ? null : normalizedOwn;
             const targetAsn = clear ? null : ownServerAsn.trim() || null;
             const res = await protectAction(async (pwd) => {
                 return await settingsService.setOwnNominatedLockServer(targetUrl, targetAsn, pwd || null);
             });
-            onSettingsUpdated((s) => (s ? { ...s, ownNominatedLockServer: res ?? null } : s));
-            onSuccess(
-                clear
-                    ? t('settings.ownLockClearedMsg', 'Own nominated lock server removed.')
-                    : t('settings.ownLockSavedMsg', 'Own nominated lock server saved.')
-            );
-            await onRefreshSettings();
+            if (res !== undefined) {
+                onSuccess(
+                    clear
+                        ? t('settings.ownLockClearedMsg', 'Own nominated lock server removed.')
+                        : t('settings.ownLockSavedMsg', 'Own nominated lock server saved.')
+                );
+                await onRefreshSettings();
+            }
         } catch (e) {
             onError(translateError(e, t));
         } finally {

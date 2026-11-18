@@ -29,7 +29,7 @@ import {
 } from 'lucide-react';
 
 interface WalletRecoveryProps {
-    onRecoverySuccess: (folderName?: string) => void;
+    onRecoverySuccess: (folderName?: string, profileName?: string) => void;
     onSwitchToLogin: () => void;
     initialPayload?: string;
     defaultMethod?: 'choose' | 'social' | 'words';
@@ -171,7 +171,8 @@ export function WalletRecovery({
                 localInstanceId,
                 language: seedState.language,
             });
-            onRecoverySuccess(selectedProfile);
+            const matchedProfile = profiles.find((p) => p.folderName === selectedProfile);
+            onRecoverySuccess(selectedProfile, matchedProfile?.profileName);
         } catch (err) {
             setFeedbackMsg(`${t('auth.errorRecoveringWallet')}: ${translateError(err, t)}`);
             setFeedbackType('error');
@@ -376,7 +377,13 @@ export function WalletRecovery({
                         }
                         initialPayload={initialPayload}
                         onBack={() => setMethod('choose')}
-                        onSuccess={() => onRecoverySuccess(selectedProfile)}
+                        onSuccess={(res) =>
+                            onRecoverySuccess(
+                                res.folderName || selectedProfile,
+                                res.profileName ||
+                                    profiles.find((p) => p.folderName === selectedProfile)?.profileName
+                            )
+                        }
                     />
                     <div className="flex justify-center pt-1">
                         <Button type="button" variant="outline" size="sm" onClick={onSwitchToLogin}>

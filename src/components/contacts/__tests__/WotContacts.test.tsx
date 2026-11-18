@@ -493,7 +493,7 @@ describe('WoT Contacts & Trust Ratings', () => {
       });
     });
 
-    it('progressive disclosure: providers tab is hidden in Simple mode, and in Expert mode appears only when provider exists', async () => {
+    it('progressive disclosure: shows providers tab in both Simple and Expert mode when provider exists', async () => {
       const mockProvider: WotProviderDto = {
         issuerDid: 'did:key:zProvider123',
         name: 'Regional Alliance',
@@ -506,7 +506,7 @@ describe('WoT Contacts & Trust Ratings', () => {
         isStale: false,
       };
 
-      // Simple mode: providers tab remains hidden even when provider exists
+      // Simple mode: providers tab IS accessible when provider exists
       (invoke as unknown as Mock).mockImplementation((cmd: string) => {
         if (cmd === 'get_contacts') return Promise.resolve(mockContacts);
         if (cmd === 'get_wot_summary') return Promise.resolve(mockSummary);
@@ -517,7 +517,7 @@ describe('WoT Contacts & Trust Ratings', () => {
       await waitFor(() => {
         expect(screen.getByText('Alice')).toBeInTheDocument();
       });
-      expect(screen.queryByRole('tab', { name: /contacts\.tabProviders|Community Seals & Providers/i })).not.toBeInTheDocument();
+      expect(screen.getByRole('tab', { name: /contacts\.tabProviders|Community Seals & Providers/i })).toBeInTheDocument();
       unmountSimple();
 
       // Test 1 (Expert mode): Empty providers -> Tab switcher is NOT rendered

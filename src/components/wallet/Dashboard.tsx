@@ -50,7 +50,6 @@ export function Dashboard() {
                 <DashboardActionsGrid
                     balances={data.balances}
                     feedbackMsg={data.feedbackMsg}
-                    activeVouchersCount={data.activeVouchersCount}
                     onProtectedNavigate={data.handleProtectedNavigate}
                     onNavigate={data.navigate}
                 />
@@ -58,6 +57,8 @@ export function Dashboard() {
                 <DashboardBanners
                     balances={data.balances}
                     activeVouchersCount={data.activeVouchersCount}
+                    incompleteCount={data.incompleteCount}
+                    firstIncompleteVoucherId={data.firstIncompleteVoucherId}
                     quarantinedCount={data.quarantinedCount}
                     expiringSoonCount={data.expiringSoonCount}
                     pendingSignRequests={data.pendingSignRequests}
@@ -85,10 +86,15 @@ export function Dashboard() {
                             data.protectionStatus?.hasVoucherBackup,
                     )}
                     hasContact={data.contactsCount > 0}
-                    hasVoucher={data.activeVouchersCount > 0 || data.balances.length > 0}
+                    hasVoucher={
+                        data.activeVouchersCount > 0 ||
+                        data.incompleteCount > 0 ||
+                        data.balances.length > 0
+                    }
                     hasSync={data.syncConnectedCount > 0}
                     hasIdentityRecovery={Boolean(data.protectionStatus?.hasIdentityRecovery)}
                     userId={data.userId}
+                    profileScope={data.profileScope}
                 />
 
                 <BalanceSummaryCards
@@ -110,7 +116,6 @@ export function Dashboard() {
                 )}
 
                 <RecentActivitySection
-                    incompleteCount={data.incompleteCount}
                     recentEvents={data.recentEvents}
                     resolveIdentity={resolveIdentity}
                     onNavigate={data.navigate}

@@ -28,12 +28,14 @@ use super::{
 struct FlushContext {
     id_ctx: SyncIdentityContext,
     upload_targets: Vec<DropDescriptor>,
+    recipient_write_urls: std::collections::HashSet<String>,
     now_secs: u64,
 }
 
 fn collect_flush_context(
     state: &AppState,
     post_state: &StoredPostState,
+    extra_recipient_syncs: &[FrontendSyncDescriptor],
     password: Option<&str>,
 ) -> Result<FlushContext, String> {
     let mut service = state.service.lock().unwrap();
@@ -44,8 +46,17 @@ fn collect_flush_context(
         .or_else(|_| state.load_settings(&mut service, password))
         .unwrap_or_default();
     let mut targets = collect_post_upload_targets(&settings);
+    let mut recipient_write_urls = std::collections::HashSet::new();
 
-    // Include recipient Sync endpoints from the address book and active inquiry threads.
+    for d in extra_recipient_syncs {
+        let norm = normalize_sync_url(&d.write_url);
+        if !norm.is_empty() {
+            recipient_write_urls.insert(norm);
+            targets.push(d.clone().into());
+        }
+    }
+
+    // Include recipient Sync endpoints from contacts, inquiries, pending sign requests, and known cards.
     let recipient_dids: std::collections::HashSet<String> = post_state
         .outbox_entries
         .iter()
@@ -61,7 +72,9 @@ fn collect_flush_context(
                 crate::state::canonicalize_did(&c.did).unwrap_or_else(|_| c.did.clone());
             if recipient_dids.contains(&can_c_did) {
                 for d in c.syncs {
-                    if !d.write_url.is_empty() {
+                    let norm = normalize_sync_url(&d.write_url);
+                    if !norm.is_empty() {
+                        recipient_write_urls.insert(norm);
                         targets.push(d.into());
                     }
                 }
@@ -74,8 +87,42 @@ fn collect_flush_context(
             .unwrap_or_else(|_| inq.counterparty_did.clone());
         if recipient_dids.contains(&can_inq_did) {
             for d in &inq.reply_syncs {
-                if !d.write_url.is_empty() {
+                let norm = normalize_sync_url(&d.write_url);
+                if !norm.is_empty() {
+                    recipient_write_urls.insert(norm);
                     targets.push(d.clone().into());
+                }
+            }
+        }
+    }
+
+    for req in &post_state.pending_sign_requests {
+        let can_req_did = crate::state::canonicalize_did(&req.sender_did)
+            .unwrap_or_else(|_| req.sender_did.clone());
+        if recipient_dids.contains(&can_req_did) {
+            for d in &req.reply_syncs {
+                let norm = normalize_sync_url(&d.write_url);
+                if !norm.is_empty() {
+                    recipient_write_urls.insert(norm);
+                    targets.push(d.clone().into());
+                }
+            }
+        }
+    }
+
+    if let Ok(bytes) = service.load_encrypted_data(crate::state::MARKET_CARD_STORE_KEY, password) {
+        if let Ok(card_store) = serde_json::from_slice::<humoco_market::CardStore>(&bytes) {
+            for sc in card_store.cards.values() {
+                let can_card_did = crate::state::canonicalize_did(&sc.card.payload.did)
+                    .unwrap_or_else(|_| sc.card.payload.did.clone());
+                if recipient_dids.contains(&can_card_did) {
+                    for d in &sc.card.payload.drops {
+                        let norm = normalize_sync_url(&d.write_url);
+                        if !norm.is_empty() {
+                            recipient_write_urls.insert(norm);
+                            targets.push(d.clone());
+                        }
+                    }
                 }
             }
         }
@@ -94,6 +141,7 @@ fn collect_flush_context(
     Ok(FlushContext {
         id_ctx,
         upload_targets: deduped_targets,
+        recipient_write_urls,
         now_secs: sync_client::current_unix_timestamp(),
     })
 }
@@ -206,18 +254,21 @@ async fn upload_single_post_target(
 
 /// Encodes local outbox entries and uploads them across own and recipient Post slots,
 /// performing an automatic 412 read-merge-retry on multi-device ETag conflicts.
+/// Returns `(total_deposited_to, recipient_deposited_to, errors)`.
 pub(crate) async fn flush_post_slots_impl(
     state: &AppState,
     post_state: &mut StoredPostState,
+    extra_recipient_syncs: &[FrontendSyncDescriptor],
     password: Option<&str>,
-) -> (usize, Vec<String>) {
-    let flush_ctx = match collect_flush_context(state, post_state, password) {
+) -> (usize, usize, Vec<String>) {
+    let flush_ctx = match collect_flush_context(state, post_state, extra_recipient_syncs, password)
+    {
         Ok(ctx) => ctx,
-        Err(err) => return (0, vec![err]),
+        Err(err) => return (0, 0, vec![err]),
     };
 
     if flush_ctx.upload_targets.is_empty() {
-        return (0, Vec::new());
+        return (0, 0, Vec::new());
     }
 
     let local_entries: Vec<PostBoxEntry> = post_state
@@ -232,11 +283,12 @@ pub(crate) async fn flush_post_slots_impl(
         DROP_POST_MAX_BYTES,
     ) {
         Ok(b) => b,
-        Err(e) => return (0, vec![format!("Failed to encode post slot: {}", e)]),
+        Err(e) => return (0, 0, vec![format!("Failed to encode post slot: {}", e)]),
     };
 
     let client = sync_client::create_sync_http_client();
     let mut deposited_to = 0;
+    let mut recipient_deposited_to = 0;
     let mut errors = Vec::new();
     let mut health_updates: Vec<(String, bool)> = Vec::new();
 
@@ -245,6 +297,8 @@ pub(crate) async fn flush_post_slots_impl(
             .slot_etags_by_write_url
             .get(&sync_desc.write_url)
             .cloned();
+        let norm_url = normalize_sync_url(&sync_desc.write_url);
+        let is_recipient_target = flush_ctx.recipient_write_urls.contains(&norm_url);
         match upload_single_post_target(
             &client,
             &flush_ctx.id_ctx,
@@ -258,6 +312,9 @@ pub(crate) async fn flush_post_slots_impl(
         {
             Ok(etag) => {
                 deposited_to += 1;
+                if is_recipient_target {
+                    recipient_deposited_to += 1;
+                }
                 health_updates.push((sync_desc.write_url.clone(), true));
                 if let Some(et) = etag {
                     post_state
@@ -282,7 +339,7 @@ pub(crate) async fn flush_post_slots_impl(
         );
     }
 
-    (deposited_to, errors)
+    (deposited_to, recipient_deposited_to, errors)
 }
 
 async fn persist_and_flush_post_box(
@@ -295,11 +352,13 @@ async fn persist_and_flush_post_box(
     // sync servers never lose an outgoing transfer box if the app closes.
     save_post_state(state, post_state, password)?;
 
-    let (deposited_to, errors) = flush_post_slots_impl(state, post_state, password).await;
+    let (deposited_to, recipient_deposited_to, errors) =
+        flush_post_slots_impl(state, post_state, &[], password).await;
     if !errors.is_empty() {
         warn!(
-            "Post deposit degraded: deposited={}, failed={}",
+            "Post deposit degraded: deposited={}, recipient_deposited={}, failed={}",
             deposited_to,
+            recipient_deposited_to,
             errors.len()
         );
     }
@@ -307,6 +366,7 @@ async fn persist_and_flush_post_box(
 
     Ok(FrontendPostDepositResult {
         deposited_to,
+        recipient_deposited_to,
         msg_id,
         errors,
     })
@@ -364,6 +424,7 @@ pub async fn deposit_transfer_to_post_impl(
             &signing_ctx.own_reply_syncs,
             record.bundle_data, // EXACT bytes! Never call create_transfer_bundle!
             now_secs,
+            None,
         )?;
         fresh_msg_id
     };
@@ -371,15 +432,54 @@ pub async fn deposit_transfer_to_post_impl(
     persist_and_flush_post_box(state, &mut post_state, msg_id, password.as_deref()).await
 }
 
+fn resolve_signing_request_anchor_manifest(
+    state: &AppState,
+    local_instance_id: Option<&str>,
+) -> Option<String> {
+    let service = state.service.lock().ok()?;
+    service
+        .with_wallet(|w| {
+            let aid_hex =
+                if let Some(lid) = local_instance_id.map(str::trim).filter(|s| !s.is_empty()) {
+                    w.get_voucher_instance(lid)
+                        .and_then(|inst| inst.voucher.layer2_anchor)
+                        .map(hex::encode)
+                } else {
+                    let mut candidates = std::collections::BTreeSet::new();
+                    for inst in w.voucher_store.vouchers.values() {
+                        if let Some(aid) = inst.voucher.layer2_anchor {
+                            let hx = hex::encode(aid);
+                            if w.profile.l2_anchor_manifests.contains_key(&hx) {
+                                candidates.insert(hx);
+                            }
+                        }
+                    }
+                    if candidates.len() == 1 {
+                        candidates.into_iter().next()
+                    } else {
+                        None
+                    }
+                };
+            aid_hex
+                .and_then(|hx| w.profile.l2_anchor_manifests.get(&hx))
+                .and_then(|m| serde_json::to_string(m).ok())
+        })
+        .ok()
+        .flatten()
+}
+
 /// Sends a voucher co-signing request container to a guarantor via Post.
 pub async fn send_signing_request_via_post_impl(
     recipient_did: String,
     container_bytes: Vec<u8>,
+    local_instance_id: Option<String>,
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendPostDepositResult, FrontendError> {
     let recipient_ed_pk = get_pubkey_from_user_id(&recipient_did).map_err(FrontendError::from)?;
     let signing_ctx = load_post_signing_context(state, password.as_deref())?;
+    let anchor_manifest_json =
+        resolve_signing_request_anchor_manifest(state, local_instance_id.as_deref());
     let now_secs = sync_client::current_unix_timestamp();
 
     let msg_id = uuid::Uuid::new_v4().to_string();
@@ -394,6 +494,7 @@ pub async fn send_signing_request_via_post_impl(
         &signing_ctx.own_reply_syncs,
         container_bytes,
         now_secs,
+        anchor_manifest_json,
     )?;
 
     persist_and_flush_post_box(state, &mut post_state, msg_id, password.as_deref()).await
@@ -423,12 +524,13 @@ pub async fn reply_detached_signature_via_post_impl(
         &signing_ctx.own_reply_syncs,
         container_bytes,
         now_secs,
+        None,
     )?;
 
-    let (deposited_to, errors) =
-        flush_post_slots_impl(state, &mut post_state, password.as_deref()).await;
+    let (deposited_to, recipient_deposited_to, errors) =
+        flush_post_slots_impl(state, &mut post_state, &[], password.as_deref()).await;
 
-    if deposited_to > 0 {
+    if recipient_deposited_to > 0 {
         if let Some(ref req_id) = request_msg_id {
             if let Some(idx) = post_state
                 .pending_sign_requests
@@ -454,6 +556,7 @@ pub async fn reply_detached_signature_via_post_impl(
 
     Ok(FrontendPostDepositResult {
         deposited_to,
+        recipient_deposited_to,
         msg_id,
         errors,
     })
@@ -553,6 +656,7 @@ pub async fn send_wot_handshake_via_post_impl(
         &own_reply_syncs,
         container_bytes,
         now_secs,
+        None,
     )?;
 
     persist_and_flush_post_box(state, &mut post_state, msg_id, password.as_deref()).await
@@ -637,6 +741,7 @@ pub async fn accept_wot_handshake_impl(
     } else {
         Ok(FrontendPostDepositResult {
             deposited_to: 0,
+            recipient_deposited_to: 0,
             msg_id,
             errors: Vec::new(),
         })
@@ -697,15 +802,24 @@ pub async fn send_market_inquiry_via_post_impl(
         &signing_ctx.own_reply_syncs,
         container_bytes,
         now_secs,
+        None,
     )?;
 
-    let (deposited_to, errors) =
-        flush_post_slots_impl(state, &mut post_state, password.as_deref()).await;
-    if deposited_to == 0 {
-        return Err(FrontendError::from(format!(
-            "An active connected sync service is required to deposit marketplace inquiries. Errors: {:?}",
-            errors
-        )));
+    let (_deposited_to, recipient_deposited_to, errors) = flush_post_slots_impl(
+        state,
+        &mut post_state,
+        &recipient_syncs,
+        password.as_deref(),
+    )
+    .await;
+    if recipient_deposited_to == 0 {
+        return Err(FrontendError::with_code(
+            "error.post.recipientUnreachable",
+            format!(
+                "Recipient sync inbox unreachable for marketplace inquiry. Errors: {:?}",
+                errors
+            ),
+        ));
     }
 
     let (counterparty_name, counterparty_picture_url, is_contact) =
@@ -866,9 +980,20 @@ pub async fn send_market_inquiry_message_via_post_impl(
         &signing_ctx.own_reply_syncs,
         container_bytes,
         now_secs,
+        None,
     )?;
 
-    let _ = flush_post_slots_impl(state, &mut post_state, password.as_deref()).await;
+    let (_deposited_to, recipient_deposited_to, errors) =
+        flush_post_slots_impl(state, &mut post_state, &[], password.as_deref()).await;
+    if recipient_deposited_to == 0 {
+        return Err(FrontendError::with_code(
+            "error.post.recipientUnreachable",
+            format!(
+                "Recipient sync inbox unreachable for inquiry message. Errors: {:?}",
+                errors
+            ),
+        ));
+    }
 
     let dec_str = dec.map(|d| match d {
         MarketInquiryDecision::Confirm => "confirm".to_string(),

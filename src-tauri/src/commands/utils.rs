@@ -1,7 +1,8 @@
 use crate::models::{FrontendError, MnemonicLanguage, VoucherStandardInfo};
+use crate::state::AppState;
 use fs_extra::dir::{copy as copy_dir, CopyOptions};
 use human_money_core::app_service::AppService;
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use std::fs;
 use tauri::Manager;
 
@@ -29,11 +30,16 @@ pub fn validate_mnemonic(
 }
 
 #[tauri::command]
-pub fn get_voucher_standards(app: tauri::AppHandle) -> Result<Vec<VoucherStandardInfo>, String> {
+pub fn get_voucher_standards(
+    app: tauri::AppHandle,
+) -> Result<Vec<VoucherStandardInfo>, FrontendError> {
     info!("Ensuring voucher standards are available in app data directory...");
 
     // 1. Define paths.
-    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| FrontendError::from(e.to_string()))?;
     let standards_dir_in_data = app_data_dir.join("voucher_standards");
     info!(
         "App data standards directory is set to: {}",
@@ -67,8 +73,12 @@ pub fn get_voucher_standards(app: tauri::AppHandle) -> Result<Vec<VoucherStandar
         }
     };
     if needs_copy {
-        fs::create_dir_all(&standards_dir_in_data)
-            .map_err(|e| format!("Failed to create standards directory in app data: {}", e))?;
+        fs::create_dir_all(&standards_dir_in_data).map_err(|e| {
+            FrontendError::from(format!(
+                "Failed to create standards directory in app data: {}",
+                e
+            ))
+        })?;
 
         #[cfg(debug_assertions)]
         {
@@ -78,22 +88,20 @@ pub fn get_voucher_standards(app: tauri::AppHandle) -> Result<Vec<VoucherStandar
                 "Attempting to copy standards from DEV source: {}",
                 standards_source_path.display()
             );
-            // KORREKTUR: Die Logik wird an die des Release-Builds angeglichen, um Konsistenz zu gewährleisten.
-            // Es wird nur der Inhalt in das Zielverzeichnis kopiert.
             let options = CopyOptions {
                 overwrite: true,
                 content_only: true,
                 ..Default::default()
             };
-            copy_dir(&standards_source_path, &standards_dir_in_data, &options)
-                .map_err(|e| format!("Failed to copy standards from DEV source: {}", e))?;
+            copy_dir(&standards_source_path, &standards_dir_in_data, &options).map_err(|e| {
+                FrontendError::from(format!("Failed to copy standards from DEV source: {}", e))
+            })?;
         }
         #[cfg(not(debug_assertions))]
         {
-            let resource_dir = app
-                .path()
-                .resource_dir()
-                .map_err(|e| format!("Failed to get resource directory: {}", e))?;
+            let resource_dir = app.path().resource_dir().map_err(|e| {
+                FrontendError::from(format!("Failed to get resource directory: {}", e))
+            })?;
             // The tauri bundler can create a nested `_up_/voucher_standards` dir from `../` paths.
             // We need to specifically target this path as our source.
             let standards_source_path = resource_dir.join("_up_").join("voucher_standards");
@@ -107,7 +115,10 @@ pub fn get_voucher_standards(app: tauri::AppHandle) -> Result<Vec<VoucherStandar
                 ..Default::default()
             };
             copy_dir(&standards_source_path, &standards_dir_in_data, &options).map_err(|e| {
-                format!("Failed to copy standards from resources to app data: {}", e)
+                FrontendError::from(format!(
+                    "Failed to copy standards from resources to app data: {}",
+                    e
+                ))
             })?;
         }
         info!("Default standards copied successfully.");
@@ -123,31 +134,29 @@ pub fn get_voucher_standards(app: tauri::AppHandle) -> Result<Vec<VoucherStandar
         Ok(entries) => {
             for entry in entries.flatten() {
                 let path = entry.path();
-                info!(
-                    "[Debug] Found entry in standards directory: {}",
-                    path.display()
-                );
+                debug!("Found entry in standards directory: {}", path.display());
                 if path.is_dir() {
                     let standard_id = path
                         .file_name()
                         .unwrap_or_default()
                         .to_string_lossy()
                         .to_string();
-                    info!(
-                        "[Debug] Found potential standard directory with ID: '{}'",
+                    debug!(
+                        "Found potential standard directory with ID: '{}'",
                         standard_id
                     );
                     let toml_path = path.join("standard.toml");
-                    info!(
-                        "[Debug] Checking for standard file at: {}",
-                        toml_path.display()
-                    );
+                    debug!("Checking for standard file at: {}", toml_path.display());
                     if toml_path.exists() {
                         let content = fs::read_to_string(&toml_path).map_err(|e| {
-                            format!("Failed to read {}: {}", toml_path.display(), e)
+                            FrontendError::from(format!(
+                                "Failed to read {}: {}",
+                                toml_path.display(),
+                                e
+                            ))
                         })?;
-                        info!(
-                            "[Debug] Successfully read '{}', parsing for display name.",
+                        debug!(
+                            "Successfully read '{}', parsing for display name.",
                             toml_path.display()
                         );
 
@@ -169,16 +178,16 @@ pub fn get_voucher_standards(app: tauri::AppHandle) -> Result<Vec<VoucherStandar
             }
         }
         Err(e) => {
-            return Err(format!(
+            return Err(FrontendError::from(format!(
                 "Failed to read standards directory '{}': {}",
                 standards_dir_in_data.display(),
                 e
-            ));
+            )));
         }
     };
 
-    info!(
-        "[Debug] Final standards loaded: {:?}",
+    debug!(
+        "Final standards loaded: {:?}",
         standards.iter().map(|s| &s.id).collect::<Vec<_>>()
     );
     info!("Found {} voucher standards.", standards.len());
@@ -196,7 +205,7 @@ pub fn get_bip39_wordlist(language: MnemonicLanguage) -> Vec<&'static str> {
 }
 
 #[tauri::command]
-pub async fn log_to_backend(level: String, message: String) -> Result<(), String> {
+pub async fn log_to_backend(level: String, message: String) -> Result<(), FrontendError> {
     match level.as_str() {
         "info" => info!("[Frontend]: {}", message),
         "warn" => warn!("[Frontend]: {}", message),
@@ -205,17 +214,34 @@ pub async fn log_to_backend(level: String, message: String) -> Result<(), String
     }
     Ok(())
 }
+
 #[tauri::command]
-pub fn get_local_instance_id(app: tauri::AppHandle) -> Result<String, String> {
+pub fn get_local_instance_id(app: tauri::AppHandle) -> Result<String, FrontendError> {
     crate::services::fs_helpers::resolve_or_create_local_instance_id(&app)
+        .map_err(FrontendError::from)
 }
 
 #[tauri::command]
-pub fn get_latest_logs(app: tauri::AppHandle) -> Result<String, String> {
-    let log_dir = app.path().app_log_dir().map_err(|e| e.to_string())?;
+pub fn get_latest_logs(app: tauri::AppHandle) -> Result<String, FrontendError> {
+    let log_dir = app
+        .path()
+        .app_log_dir()
+        .map_err(|e| FrontendError::from(e.to_string()))?;
     let log_file_path = log_dir.join("human_money_app.log");
     if !log_file_path.exists() {
         return Ok(String::new());
     }
-    fs::read_to_string(&log_file_path).map_err(|e| format!("Failed to read log file: {}", e))
+    fs::read_to_string(&log_file_path)
+        .map_err(|e| FrontendError::from(format!("Failed to read log file: {}", e)))
+}
+
+#[tauri::command]
+pub fn take_startup_launch_items(
+    state: tauri::State<AppState>,
+) -> Result<Vec<String>, FrontendError> {
+    let mut guard = state
+        .startup_launch_items
+        .lock()
+        .map_err(|_| FrontendError::from("Startup launch items unavailable".to_string()))?;
+    Ok(std::mem::take(&mut *guard))
 }

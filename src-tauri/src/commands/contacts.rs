@@ -18,27 +18,42 @@ pub async fn save_contact(
     contact.did = contact.did.trim().to_string();
     let contact_did = contact.did.clone();
     let trust_level = contact.trust_level;
+    let needs_sync_probe = contact
+        .syncs
+        .iter()
+        .any(|d| d.drop_pub.trim().is_empty() || d.read_url.trim().is_empty());
     info!("Saving contact for DID: {}", contact_did);
     let is_own_root = {
-        let service = state.service.lock().unwrap();
+        let mut service = state.service.lock().unwrap();
+        crate::services::common::ensure_access_mode(
+            &mut service,
+            human_money_core::AccessMode::DailyPay,
+            password.as_deref(),
+        )?;
         let own_can = service
             .with_wallet(|w| crate::state::canonicalize_did(w.get_user_id()).ok())
             .ok()
             .flatten();
         let contact_can = crate::state::canonicalize_did(&contact.did).ok();
-        own_can.is_some() && own_can == contact_can
-    };
-    {
-        let mut service = state.service.lock().unwrap();
+        let same_root = own_can.is_some() && own_can == contact_can;
         state
             .save_contact(&mut service, contact, password.as_deref())
             .map_err(FrontendError::from)?;
-    }
+        same_root
+    };
 
-    // Automatically send / sync WoT trust package in the background if trust level >= 1 (never to own root)
+    // Probe unverified contact syncs if needed, then send initial WoT handshake (never to own root).
     if !is_own_root {
+        if needs_sync_probe {
+            let _ = crate::services::sync_engine::probe_contact_syncs_impl(
+                false,
+                password.clone(),
+                &state,
+            )
+            .await;
+        }
         if let Some(lvl) = trust_level {
-            if lvl >= 1 {
+            if lvl <= 3 {
                 let _ = crate::services::post_service::send_wot_handshake_via_post_impl(
                     contact_did,
                     lvl.min(1),
@@ -63,6 +78,11 @@ pub fn delete_contact(
     let did = did.trim().to_string();
     info!("Deleting contact for DID: {}", did);
     let mut service = state.service.lock().unwrap();
+    crate::services::common::ensure_access_mode(
+        &mut service,
+        human_money_core::AccessMode::DailyPay,
+        password.as_deref(),
+    )?;
     state
         .delete_contact(&mut service, &did, password.as_deref())
         .map_err(FrontendError::from)
@@ -234,6 +254,7 @@ mod tests {
             settings: Mutex::new(None),
             wot: Mutex::new(None),
             media_negative_cache: Mutex::new(std::collections::HashMap::new()),
+            startup_launch_items: Mutex::new(Vec::new()),
         };
 
         let cache = state_raw.contacts.lock().unwrap();

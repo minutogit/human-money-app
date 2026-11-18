@@ -10,7 +10,6 @@ type NavigateFn = ReturnType<typeof useNavigation>['navigate'];
 interface DashboardActionsGridProps {
     balances: AggregatedBalance[];
     feedbackMsg: string;
-    activeVouchersCount: number;
     onProtectedNavigate: (target: Parameters<NavigateFn>[0]) => void;
     onNavigate: NavigateFn;
 }
@@ -18,7 +17,6 @@ interface DashboardActionsGridProps {
 export function DashboardActionsGrid({
     balances,
     feedbackMsg,
-    activeVouchersCount,
     onProtectedNavigate,
     onNavigate,
 }: DashboardActionsGridProps) {
@@ -34,7 +32,6 @@ export function DashboardActionsGrid({
                     onClick={() => onProtectedNavigate({ view: 'send_vouchers' })}
                     className="flex-1 md:flex-initial min-w-[130px] sm:min-w-[150px] gap-2 shadow-sm"
                     size="md"
-                    disabled={activeVouchersCount === 0}
                     data-testid="dashboard-action-send"
                 >
                     <ArrowUpRight size={18} />

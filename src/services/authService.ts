@@ -88,8 +88,10 @@ export const authService = {
         return await invoke<void>("lock_session");
     },
 
-    getProfilePinStatus: async (folderName: string): Promise<ProfilePinStatusDto> => {
-        return await invoke<ProfilePinStatusDto>("get_profile_pin_status", { folderName });
+    getProfilePinStatus: async (folderName?: string): Promise<ProfilePinStatusDto> => {
+        return await invoke<ProfilePinStatusDto>("get_profile_pin_status", {
+            folderName: folderName || undefined,
+        });
     },
 
     getSessionAccessMode: async (): Promise<SessionAccessMode | 'locked'> => {

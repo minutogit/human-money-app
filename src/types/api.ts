@@ -141,11 +141,23 @@ export interface ClaimBundleDto {
     claimedAmount: string;
 }
 
+export interface ApprovedSwapClaimDto {
+    claimantDid: string;
+    voucherId: string;
+    tipTId: string;
+    approvedAmount: string;
+}
+
+export interface RejectedSwapClaimDto {
+    claimantDid: string;
+    voucherId: string;
+    tipTId: string;
+    reason: string;
+}
+
 export interface DeadQuorumAdjudicationDto {
-    winnerRecipientId?: string | null;
-    winnerDepth?: number | null;
-    replacementBundleData?: number[] | null;
-    exposedOffenderDids: string[];
+    approved: ApprovedSwapClaimDto[];
+    rejected: RejectedSwapClaimDto[];
     doubleSpendProofsCount: number;
 }
 
@@ -244,10 +256,10 @@ export type AppState =
     | { view: "send_vouchers"; initialRecipientId?: string; initialVoucherId?: string; initialNote?: string; initialPaymentUri?: string }
     | { view: "receive_bundle"; droppedFile?: { name: string; bytes: number[] } }
     | { view: "transaction_history" }
-    | { view: "transfer_success"; bundleData: number[]; recipientId: string; summary: string; l2Dispatch?: IntentDispatchObservation[]; bundleId?: string; depositedTo?: number; depositError?: string }
+    | { view: "transfer_success"; bundleData: number[]; recipientId: string; summary: string; l2Dispatch?: IntentDispatchObservation[]; bundleId?: string; depositedTo?: number; recipientDepositedTo?: number; depositError?: string }
     | { view: "receive_success"; payload: ReceiveSuccessPayload }
     | { view: "address_book"; initialSearchQuery?: string; initialOpenAddModal?: boolean; initialContactPayload?: string; previousView?: AppState }
-    | { view: "sign_request"; voucherData: VoucherDetails; requestMsgId?: string; senderDid?: string }
+    | { view: "sign_request"; voucherData: VoucherDetails; requestMsgId?: string; senderDid?: string; anchorManifestJson?: string }
     | { view: "conflict_details"; proofId: string; previousView?: AppState }
     | { view: "conflict_list" }
     | { view: "wallet"; initialStatusFilter?: string; initialStandardFilter?: string; initialFilter?: 'all' | 'received' | 'own' | 'expiringSoon' }

@@ -101,7 +101,20 @@ pub fn run() {
             info!("Using wallet data path: {}", wallet_path.display());
 
             let service = AppService::new(&wallet_path).expect("Failed to create AppService");
-            app.manage(AppState::new(service));
+            let app_state = AppState::new(service);
+            let startup_items: Vec<String> = std::env::args()
+                .skip(1)
+                .map(|arg| arg.trim().to_string())
+                .filter(|arg| !arg.is_empty())
+                .filter(|arg| {
+                    arg.to_ascii_lowercase().starts_with("humoco://")
+                        || std::path::Path::new(arg).is_file()
+                })
+                .collect();
+            if let Ok(mut guard) = app_state.startup_launch_items.lock() {
+                *guard = startup_items;
+            }
+            app.manage(app_state);
             crate::intent_reconciliation::spawn_intent_reconciliation_worker(app.handle().clone());
 
             Ok(())
@@ -161,6 +174,7 @@ pub fn run() {
             validate_mnemonic,
             get_local_instance_id,
             get_latest_logs,
+            take_startup_launch_items,
             get_user_id,
             get_user_profile,
             get_total_balance_by_currency,
@@ -174,7 +188,6 @@ pub fn run() {
             get_transaction_history,
             prepare_transfer_plan,
             checkout_received_bundle,
-            evaluate_checkout_release,
             get_app_settings,
             save_app_settings,
             get_reach_preset,

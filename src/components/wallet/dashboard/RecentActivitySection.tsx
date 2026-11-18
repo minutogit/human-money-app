@@ -32,7 +32,6 @@ const ICON_BY_KIND: Record<WalletEventKind, React.ElementType> = {
 };
 
 interface RecentActivitySectionProps {
-    incompleteCount: number;
     recentEvents: WalletEvent[];
     resolveIdentity: (did?: string | null, providedName?: string | null) => string;
     onNavigate: NavigateFn;
@@ -46,7 +45,6 @@ function formatEventMonthDay(isoString: string): string {
 }
 
 export function RecentActivitySection({
-    incompleteCount,
     recentEvents,
     resolveIdentity,
     onNavigate,
@@ -55,36 +53,6 @@ export function RecentActivitySection({
 
     return (
         <>
-            {incompleteCount > 0 && (
-                <section>
-                    <Card
-                        variant="accent"
-                        className="p-5 flex items-center justify-between border-l-4 border-l-theme-accent"
-                        hover
-                        onClick={() =>
-                            onNavigate({ view: 'wallet', initialStatusFilter: 'incomplete' })
-                        }
-                    >
-                        <div className="flex items-center gap-4">
-                            <div className="p-3 rounded-2xl bg-theme-accent text-white shadow-md">
-                                <Clock size={24} />
-                            </div>
-                            <div>
-                                <p className="font-black text-theme-secondary uppercase tracking-wider text-xs">
-                                    {t('auth.actionRequired')}
-                                </p>
-                                <p className="text-lg font-bold text-theme-primary">
-                                    {t('dashboard.needSignatures', { count: incompleteCount })}
-                                </p>
-                            </div>
-                        </div>
-                        <Button variant="primary" size="sm" className="rounded-full px-6">
-                            {t('common.view')}
-                        </Button>
-                    </Card>
-                </section>
-            )}
-
             <section>
                 <div className="flex items-center justify-between mb-6 px-2">
                     <h2 className="text-xs font-black text-theme-light uppercase tracking-[0.2em]">

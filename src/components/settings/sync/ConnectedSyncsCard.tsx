@@ -53,6 +53,7 @@ export interface ConnectedSyncsCardProps {
     onTogglePublicDrop: (drop: StoredPublicSync) => void;
     onRemovePublicSync: (writeUrl: string, deleteRemote: boolean) => Promise<boolean>;
     onCheckPublicDropAuth: (drop: StoredPublicSync) => void;
+    onAdoptReplacementUrl?: (url: string) => void;
     onFeedback: (feedback: SyncFeedback | null) => void;
     checkingPublicUrl: string | null;
     isDeletingPublicDrop: boolean;
@@ -79,6 +80,7 @@ export const ConnectedSyncsCard: React.FC<ConnectedSyncsCardProps> = ({
     onTogglePublicDrop,
     onRemovePublicSync,
     onCheckPublicDropAuth,
+    onAdoptReplacementUrl,
     onFeedback,
     checkingPublicUrl,
     isDeletingPublicDrop,
@@ -128,7 +130,7 @@ export const ConnectedSyncsCard: React.FC<ConnectedSyncsCardProps> = ({
                 revokedList={revokedList}
                 channelSettings={channelSettings}
                 onChannelSettingChange={onChannelSettingChange}
-                onUseReplacementUrl={onInputUrlChange}
+                onUseReplacementUrl={onAdoptReplacementUrl || onInputUrlChange}
             />
 
             {/* Manual Sync URL Input */}

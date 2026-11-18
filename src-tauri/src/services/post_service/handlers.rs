@@ -57,39 +57,54 @@ pub(crate) struct PostEnvelopeContext<'a> {
 }
 
 /// Dispatches a verified and decrypted Post container payload to its domain handler.
+/// Returns `true` if `msg_id` may be marked processed, or `false` when a transient/locked-state
+/// error occurred so the message stays eligible for retry after unlock.
 pub(crate) fn dispatch_post_payload(
     ctx: &PostEnvelopeContext<'_>,
     payload_type: &PayloadType,
     post_state: &mut StoredPostState,
     stats: &mut PostDispatchStats,
-) {
+) -> bool {
     match payload_type {
         PayloadType::TransactionBundle => handle_transaction_bundle(ctx, post_state, stats),
-        PayloadType::VoucherForSigning => handle_voucher_for_signing(ctx, post_state, stats),
+        PayloadType::VoucherForSigning => {
+            handle_voucher_for_signing(ctx, post_state, stats);
+            true
+        }
         PayloadType::DetachedSignature => handle_detached_signature(ctx, post_state, stats),
-        PayloadType::TrustAssertion => handle_trust_assertion(ctx, post_state, stats),
+        PayloadType::TrustAssertion => {
+            handle_trust_assertion(ctx, post_state, stats);
+            true
+        }
         PayloadType::Generic(ref s) if s == PAYLOAD_POST_RECEIPT_V1 => {
             handle_post_receipt(ctx, post_state, stats);
+            true
         }
         PayloadType::Generic(ref s) if s == PAYLOAD_MARKET_INQUIRY_V1 => {
             handle_market_inquiry(ctx, post_state, stats);
+            true
         }
         PayloadType::Generic(ref s) if s == PAYLOAD_MARKET_INQUIRY_MESSAGE_V1 => {
             handle_market_inquiry_message(ctx, post_state, stats);
+            true
         }
         PayloadType::Generic(ref s) if s == humoco_market::PAYLOAD_GUARDIAN_ASSIGN_V1 => {
             handle_guardian_assign(ctx, post_state, stats);
+            true
         }
         PayloadType::Generic(ref s) if s == humoco_market::PAYLOAD_GUARDIAN_ACK_V1 => {
             handle_guardian_ack(ctx, post_state, stats);
+            true
         }
         PayloadType::Generic(ref s) if s == humoco_market::PAYLOAD_GUARDIAN_LOCATOR_V1 => {
             handle_guardian_locator(ctx, post_state, stats);
+            true
         }
         PayloadType::Generic(ref s) if s == humoco_market::PAYLOAD_GUARDIAN_REVOKE_V1 => {
             handle_guardian_revoke(ctx, post_state, stats);
+            true
         }
-        _ => {}
+        _ => true,
     }
 }
 
@@ -115,7 +130,7 @@ fn handle_transaction_bundle(
     ctx: &PostEnvelopeContext<'_>,
     post_state: &mut StoredPostState,
     stats: &mut PostDispatchStats,
-) {
+) -> bool {
     let all_standards = load_all_standard_tomls(ctx.app, ctx.extra_standards);
     let archive = ctx.app.and_then(|a| {
         let service = ctx.state.service.lock().unwrap();
@@ -133,34 +148,17 @@ fn handle_transaction_bundle(
         )
     };
 
-    let bundle_id = match receive_outcome {
+    let (bundle_id, should_mark_processed) = match receive_outcome {
         Ok(result) => {
             stats.imported_payments += 1;
             let mut service = ctx.state.service.lock().unwrap();
-            let conflict_count = result.check_result.verifiable_conflicts.len();
-            let warning_count = result.check_result.unverifiable_warnings.len();
-            let conflict_summary = if conflict_count > 0 || warning_count > 0 {
-                Some(format!(
-                    "Conflicts: {}, Warnings: {}",
-                    conflict_count, warning_count
-                ))
-            } else {
-                None
-            };
-            let notes = match (
-                result
-                    .header
-                    .notes
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty()),
-                conflict_summary,
-            ) {
-                (Some(n), Some(cs)) => Some(format!("{} ({})", n, cs)),
-                (Some(n), None) => Some(n.to_string()),
-                (None, Some(cs)) => Some(cs),
-                (None, None) => None,
-            };
+            let notes = result
+                .header
+                .notes
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string);
             let record = TransactionRecord {
                 id: uuid::Uuid::new_v4().to_string(),
                 direction: "received".to_string(),
@@ -203,7 +201,7 @@ fn handle_transaction_bundle(
                     ctx.password,
                 );
             }
-            Some(result.header.bundle_id)
+            (Some(result.header.bundle_id), true)
         }
         Err(e) => {
             let is_sibling_subaccount = matches!(
@@ -213,14 +211,16 @@ fn handle_transaction_bundle(
                         .ok()
                         .is_some_and(|ce| crate::state::canonicalize_did(found).ok().as_ref() == Some(&ce))
             );
-            let err_str = e.to_string();
-            if is_sibling_subaccount || err_str.to_ascii_lowercase().contains("already processed") {
-                None
+            let err_lower = e.to_string().to_ascii_lowercase();
+            let is_duplicate =
+                err_lower.contains("already processed") || err_lower.contains("duplicate");
+            if is_sibling_subaccount || is_duplicate {
+                (None, true)
             } else {
                 stats
                     .errors
                     .push(format!("Receive payment bundle failed: {}", e));
-                None
+                (None, false)
             }
         }
     };
@@ -228,6 +228,7 @@ fn handle_transaction_bundle(
     if let Some(ref bid) = bundle_id {
         queue_ack_receipt(ctx, post_state, Some(bid));
     }
+    should_mark_processed
 }
 
 fn handle_voucher_for_signing(
@@ -251,32 +252,60 @@ fn handle_voucher_for_signing(
                 .map(Into::into)
                 .collect(),
             container_bytes: ctx.envelope.container_bytes.clone(),
+            anchor_manifest_json: ctx.envelope.anchor_manifest_json.clone(),
         });
     stats.new_sign_requests += 1;
     queue_ack_receipt(ctx, post_state, None);
+}
+
+fn is_retryable_post_attach_error(err: &human_money_core::app_service::AppFacadeError) -> bool {
+    matches!(
+        err,
+        human_money_core::app_service::AppFacadeError::WalletLocked
+            | human_money_core::app_service::AppFacadeError::SessionExpired(_)
+            | human_money_core::app_service::AppFacadeError::SessionNotActive(_)
+            | human_money_core::app_service::AppFacadeError::Storage(_)
+            | human_money_core::app_service::AppFacadeError::Io(_)
+            | human_money_core::app_service::AppFacadeError::App(
+                human_money_core::error::AppError::InsufficientAccessMode { .. }
+            )
+    )
 }
 
 fn handle_detached_signature(
     ctx: &PostEnvelopeContext<'_>,
     post_state: &mut StoredPostState,
     stats: &mut PostDispatchStats,
-) {
+) -> bool {
     let all_standards = load_all_standard_tomls(ctx.app, ctx.extra_standards);
     let mut attached = false;
+    let mut retryable_error: Option<String> = None;
     {
         let mut service = ctx.state.service.lock().unwrap();
+        if !service.is_wallet_unlocked() {
+            stats.errors.push(
+                "Detached signature attachment deferred: wallet session is locked".to_string(),
+            );
+            return false;
+        }
         for toml in all_standards.values() {
-            if service
-                .process_and_attach_signature(
-                    &ctx.envelope.container_bytes,
-                    toml,
-                    None,
-                    ctx.password,
-                )
-                .is_ok()
-            {
-                attached = true;
-                break;
+            match service.process_and_attach_signature(
+                &ctx.envelope.container_bytes,
+                toml,
+                None,
+                ctx.password,
+            ) {
+                Ok(_) => {
+                    attached = true;
+                    retryable_error = None;
+                    break;
+                }
+                Err(e) => {
+                    if is_retryable_post_attach_error(&e) {
+                        retryable_error = Some(e.to_string());
+                        break;
+                    }
+                }
             }
         }
     }
@@ -287,7 +316,15 @@ fn handle_detached_signature(
             let _ = ctx.state.refresh_events_cache(&mut service, ctx.password);
         }
         queue_ack_receipt(ctx, post_state, None);
+        return true;
     }
+    if let Some(err) = retryable_error {
+        stats
+            .errors
+            .push(format!("Detached signature attachment deferred: {}", err));
+        return false;
+    }
+    true
 }
 
 fn handle_trust_assertion(

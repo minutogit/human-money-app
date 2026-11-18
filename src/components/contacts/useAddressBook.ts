@@ -31,7 +31,7 @@ import {
     showTransientSyncToast,
     SYNC_STATUS_UPDATED_EVENT,
 } from '../../utils/syncEvents';
-import { truncateUserId } from '../../utils/userIdHelper';
+import { isExactSameUserId, truncateUserId } from '../../utils/userIdHelper';
 
 export interface AddressBookFeedback {
     type: 'success' | 'error' | 'warning' | 'info';
@@ -185,6 +185,7 @@ export function useAddressBook({
     }, [loadContacts]);
 
     useAppEvent(APP_EVENTS.POST_INBOX_UPDATED, loadContacts);
+    useAppEvent(APP_EVENTS.WOT_UPDATED, loadContacts);
 
     useEffect(() => {
         if (initialSearchQuery) {
@@ -214,11 +215,26 @@ export function useAddressBook({
 
     const handleSaveContact = async (contact: Contact) => {
         try {
+            const wasNew = !contacts.some((c) => isExactSameUserId(c.did, contact.did));
             await protectAction(async (pwd) => {
                 await contactService.saveContact(contact, pwd || undefined);
             });
             channelMembersSyncManager.trigger({ delayMs: 1500, resetQuota: true });
             await loadContacts();
+            if (wasNew) {
+                const displayName =
+                    [contact.profile.firstName, contact.profile.lastName].filter(Boolean).join(' ') ||
+                    contact.profile.organization ||
+                    truncateUserId(contact.did);
+                setFeedbackMsg({
+                    type: 'success',
+                    message: t('contacts.contactAddedReciprocalHint', { name: displayName }),
+                    action: {
+                        label: t('contacts.shareMyProfileBtn'),
+                        onClick: () => setIsQuickContactModalOpen(true),
+                    },
+                });
+            }
             logger.info('Contact saved successfully');
         } catch (err) {
             logger.error('Failed to save contact: ' + stringifyError(err));

@@ -319,4 +319,36 @@ describe('SocialRecoveryFlow Component', () => {
             expect(recoveryService.cancelSocialRecoverySession).toHaveBeenCalledTimes(1);
         });
     });
+
+    it('treats superseded_epoch as informational newer-epoch replacement instead of an error', async () => {
+        const activeSession: ActiveRecoverySessionDto = {
+            ...SESSION_WITH_SHARES,
+            thresholdM: 2,
+            totalN: 3,
+            collectedCount: 1,
+            collectedShareIndices: [1],
+            hasEnoughShares: false,
+            questionIds: null,
+        };
+        vi.mocked(recoveryService.getActiveRecoverySession).mockResolvedValue(activeSession);
+        vi.mocked(recoveryService.importGuardianRecoveryReply).mockResolvedValue({
+            ...activeSession,
+            lastImportStatus: 'superseded_epoch',
+        });
+
+        render(<SocialRecoveryFlow mode="restore_new_device" onSuccess={onSuccess} onBack={onBack} />);
+
+        await waitFor(() => {
+            expect(screen.getByTestId('social-reply-input')).toBeInTheDocument();
+        });
+
+        fireEvent.change(screen.getByTestId('social-reply-input'), {
+            target: { value: 'humoco://recovery-reply?v=1&data=newerEpoch' },
+        });
+        fireEvent.click(screen.getByTestId('social-add-reply-btn'));
+
+        await waitFor(() => {
+            expect(screen.getByText(/newer recovery contact epoch|neuerer Vertrauenskontakt-Stand/i)).toBeInTheDocument();
+        });
+    });
 });

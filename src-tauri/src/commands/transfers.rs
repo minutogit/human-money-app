@@ -1,13 +1,12 @@
 // src-tauri/src/commands/transfers.rs
 use crate::{
     models::{
-        CreateBundleResult, FrontendCheckoutReleaseVerdict, FrontendError, FrontendSourceTransfer,
-        FrontendTransferPlan, ReceiveSuccessPayload, TransactionRecord,
+        CreateBundleResult, FrontendError, FrontendSourceTransfer, FrontendTransferPlan,
+        ReceiveSuccessPayload, TransactionRecord,
     },
     services::transfer_service::{
-        checkout_received_bundle_impl, create_transfer_bundle_impl, evaluate_checkout_release_impl,
-        get_transaction_history_impl, prepare_transfer_plan_impl, receive_bundle_impl,
-        save_transaction_record_impl,
+        checkout_received_bundle_impl, create_transfer_bundle_impl, get_transaction_history_impl,
+        prepare_transfer_plan_impl, receive_bundle_impl, save_transaction_record_impl,
     },
     AppState,
 };
@@ -92,17 +91,6 @@ pub fn prepare_transfer_plan(
         is_test_voucher,
         &state,
     )
-}
-
-/// Evaluates an untrusted IPC checkout outcome string (Z01 fail-closed boundary):
-/// caller-supplied strings can NEVER mint `Confirmed` or authorize automatic release.
-#[tauri::command]
-pub fn evaluate_checkout_release(
-    outcome: String,
-    explicit_merchant_approval: bool,
-    _state: tauri::State<AppState>,
-) -> Result<FrontendCheckoutReleaseVerdict, FrontendError> {
-    evaluate_checkout_release_impl(outcome, explicit_merchant_approval)
 }
 
 /// Productive purchase path: Sync Lock committee fan-out + atomic wallet/history commit.

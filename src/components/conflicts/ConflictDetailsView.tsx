@@ -500,7 +500,6 @@ export function ConflictDetailsView({ proofId, onBack }: ConflictDetailsViewProp
 
             {/* Password Modal */}
             {showPasswordModal && (
-                <Advanced>
                     <ModalShell
                         isOpen={showPasswordModal}
                         onClose={() => { setShowPasswordModal(false); setOverrideError(""); setPassword(""); }}
@@ -546,7 +545,6 @@ export function ConflictDetailsView({ proofId, onBack }: ConflictDetailsViewProp
                             )}
                         </div>
                     </ModalShell>
-                </Advanced>
             )}
             </div>
         </PageLayout>

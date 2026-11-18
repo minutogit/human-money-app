@@ -12,6 +12,7 @@ import { copyToClipboard } from '../../utils/clipboard';
 export interface AdvancedTabProps {
     settings: AppSettings | null;
     onSettingsUpdated: (updater: AppSettings | ((prev: AppSettings | null) => AppSettings | null)) => void;
+    onSettingsSynced?: (updater: AppSettings | ((prev: AppSettings | null) => AppSettings | null)) => void;
     localInstanceId: string;
     appVersion: string;
     isDevUnlocked: boolean;
@@ -23,6 +24,7 @@ export interface AdvancedTabProps {
 export const AdvancedTab: React.FC<AdvancedTabProps> = ({
     settings,
     onSettingsUpdated,
+    onSettingsSynced,
     localInstanceId,
     appVersion,
     isDevUnlocked,
@@ -39,6 +41,7 @@ export const AdvancedTab: React.FC<AdvancedTabProps> = ({
             <NetworkProtectionCard
                 settings={settings}
                 onSettingsUpdated={onSettingsUpdated}
+                onSettingsSynced={onSettingsSynced}
                 isDevUnlocked={isDevUnlocked}
                 initialOpen={initialOpenSection === 'network'}
             />

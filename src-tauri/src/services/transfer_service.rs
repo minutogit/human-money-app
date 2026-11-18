@@ -1,14 +1,13 @@
 use crate::{
     models::{
-        CreateBundleResult, FrontendCheckoutReleaseVerdict, FrontendError, FrontendSourceTransfer,
-        FrontendTransferPlan, ReceiveSuccessPayload, TransactionRecord,
+        CreateBundleResult, FrontendError, FrontendSourceTransfer, FrontendTransferPlan,
+        ReceiveSuccessPayload, TransactionRecord,
     },
     AppState,
 };
 use chrono::Utc;
 use human_money_core::{
     humoco_proto::crypto::DEFAULT_LOCK_POW_BASE_BITS,
-    models::layer2_api::{CheckoutReleaseVerdict, L2ProcessingOutcome},
     wallet::{MultiTransferRequest, SourceTransfer},
 };
 use log::{error, info};
@@ -54,7 +53,7 @@ pub async fn create_transfer_bundle_impl(
         .into_iter()
         .map(|s| SourceTransfer {
             local_instance_id: s.local_instance_id,
-            amount_to_send: s.amount_to_send,
+            amount_to_send: s.amount_to_send.trim().replace(',', "."),
         })
         .collect();
 
@@ -196,6 +195,9 @@ pub async fn create_transfer_bundle_impl(
             })
             .unwrap_or((!source_transfers.is_empty(), DEFAULT_LOCK_POW_BASE_BITS));
         let source_count = source_transfers.len();
+        let record_recipient_id = recipient_id.clone();
+        let record_notes = notes.clone();
+        let record_sender_profile_name = sender_profile_name.clone();
         let request = MultiTransferRequest {
             recipient_id,
             sources: source_transfers,
@@ -283,6 +285,73 @@ pub async fn create_transfer_bundle_impl(
         if let Err(error) = state.refresh_events_cache(&mut service, password.as_deref()) {
             error!("Failed to refresh events after transfer commit: {}", error);
         }
+
+        // Persist the outgoing TransactionRecord with full bundle_data immediately after L1 commit
+        // and BEFORE the L2 network fan-out so closing/interruption never loses the receipt or `.transfer`.
+        if let Ok(sender_id) = service.with_wallet(|w| w.get_user_id().to_string()) {
+            use crate::services::balance_service::{format_fixed_point, parse_fixed_point};
+            let summable_by_name: HashMap<String, bool> = standard_definitions_toml
+                .values()
+                .filter_map(|toml| {
+                    human_money_core::models::voucher_standard_definition::VoucherStandardDefinition::from_toml(toml).ok()
+                })
+                .map(|(def, _)| (def.immutable.identity.name, def.immutable.features.balances_are_summable))
+                .collect();
+            let mut summable_sums: HashMap<String, i128> = HashMap::new();
+            let mut countable_items: HashMap<String, u32> = HashMap::new();
+            let involved_vouchers: Vec<String> = result
+                .involved_sources_details
+                .iter()
+                .map(|d| d.local_instance_id.clone())
+                .collect();
+            for detail in &result.involved_sources_details {
+                let summable = summable_by_name
+                    .get(&detail.standard_name)
+                    .copied()
+                    .unwrap_or(true);
+                if summable {
+                    if let Some(amt) = parse_fixed_point(&detail.amount) {
+                        *summable_sums
+                            .entry(detail.display_currency.clone())
+                            .or_default() += amt;
+                    }
+                } else {
+                    *countable_items
+                        .entry(detail.display_currency.clone())
+                        .or_default() += 1;
+                }
+            }
+            let summable_amounts = summable_sums
+                .into_iter()
+                .map(|(k, v)| (k, format_fixed_point(v)))
+                .collect();
+            let record = TransactionRecord {
+                id: Uuid::new_v4().to_string(),
+                direction: "sent".to_string(),
+                recipient_id: record_recipient_id,
+                sender_id,
+                timestamp: Utc::now().to_rfc3339(),
+                summable_amounts,
+                countable_items,
+                involved_vouchers,
+                involved_sources_details: Some(
+                    result
+                        .involved_sources_details
+                        .iter()
+                        .cloned()
+                        .map(Into::into)
+                        .collect(),
+                ),
+                bundle_data: result.bundle_bytes.clone(),
+                bundle_id: result.bundle_id.clone(),
+                notes: record_notes,
+                sender_profile_name: record_sender_profile_name,
+            };
+            if let Err(err) = state.append_to_history(&mut service, record, password.as_deref()) {
+                log::warn!("Persisting sent TransactionRecord failed: {}", err);
+            }
+        }
+
         (result, intents, all_anchored, pow_bits)
     };
 
@@ -468,6 +537,29 @@ pub fn receive_bundle_impl(
                 );
             }
 
+            let receive_kind = service
+                .with_wallet(|w| {
+                    let mut types = involved_vouchers_ids
+                        .iter()
+                        .filter_map(|id| w.get_voucher_instance(id))
+                        .filter_map(|inst| {
+                            inst.voucher.transactions.last().map(|t| t.t_type.clone())
+                        })
+                        .collect::<Vec<_>>();
+                    if types.is_empty() {
+                        return Some("transfer".to_string());
+                    }
+                    types.sort();
+                    types.dedup();
+                    if types.len() == 1 && (types[0] == "claim" || types[0] == "redeem") {
+                        Some(types[0].clone())
+                    } else {
+                        Some("transfer".to_string())
+                    }
+                })
+                .ok()
+                .flatten();
+
             Ok(ReceiveSuccessPayload {
                 sender_id: result.header.sender_id,
                 sender_profile_name,
@@ -485,6 +577,8 @@ pub fn receive_bundle_impl(
                     .into_iter()
                     .map(|s| s.into())
                     .collect(),
+                l2_quorum: None,
+                receive_kind,
                 checkout_verdict: None,
                 purchase_id: None,
                 newly_committed: None,
@@ -633,35 +727,6 @@ pub fn prepare_transfer_plan_impl(
     Ok(frontend_plan)
 }
 
-/// Evaluates an untrusted IPC checkout outcome string (Z01 fail-closed boundary):
-/// caller-supplied strings can NEVER mint `Confirmed` or authorize automatic release.
-pub fn evaluate_checkout_release_impl(
-    outcome: String,
-    explicit_merchant_approval: bool,
-) -> Result<FrontendCheckoutReleaseVerdict, FrontendError> {
-    let l2_outcome = match outcome.as_str() {
-        "OfflineOnly" => L2ProcessingOutcome::OfflineOnly,
-        s if s.starts_with("Quarantined:") => L2ProcessingOutcome::Quarantined {
-            reason: s
-                .strip_prefix("Quarantined:")
-                .unwrap_or("Conflict")
-                .to_string(),
-        },
-        s if s.starts_with("Yellow:") => L2ProcessingOutcome::Yellow {
-            reason: s
-                .strip_prefix("Yellow:")
-                .unwrap_or("Unverified")
-                .to_string(),
-        },
-        _ => L2ProcessingOutcome::Yellow {
-            reason: "Untrusted IPC outcome observation".to_string(),
-        },
-    };
-    let mut verdict = CheckoutReleaseVerdict::new(l2_outcome, explicit_merchant_approval);
-    verdict.can_release_goods_automatically = false;
-    Ok(verdict.into())
-}
-
 pub async fn checkout_received_bundle_impl(
     purchase_id: String,
     bundle_data: Vec<u8>,
@@ -752,26 +817,6 @@ mod offline_and_degraded_transfer_tests {
             .find(|v| v.status == VoucherStatus::Active)
             .unwrap()
             .local_instance_id
-    }
-
-    #[test]
-    fn test_evaluate_checkout_release_ipc_fail_closed() {
-        let confirmed_str = CheckoutReleaseVerdict::new(
-            L2ProcessingOutcome::Yellow {
-                reason: "Untrusted IPC outcome observation".into(),
-            },
-            true,
-        );
-        assert!(!confirmed_str.can_release_goods_automatically);
-        assert!(confirmed_str.requires_merchant_approval);
-
-        for untrusted in ["Confirmed", "OfflineOnly", "Yellow:ok", "Quarantined:split"] {
-            let verdict = evaluate_checkout_release_impl(untrusted.to_string(), true).unwrap();
-            assert!(!verdict.can_release_goods_automatically);
-        }
-        let forged = evaluate_checkout_release_impl("Confirmed".to_string(), false).unwrap();
-        assert!(!forged.can_release_goods_automatically);
-        assert!(forged.requires_merchant_approval);
     }
 
     #[tokio::test]

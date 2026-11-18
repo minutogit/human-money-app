@@ -643,7 +643,6 @@ pub struct FrontendSyncOverviewStatus {
     pub friend_syncs: usize,
     pub public_syncs: usize,
     pub has_own_sync: bool,
-    pub own_sync_soft_warning: bool,
     pub last_sync_at: Option<u64>,
     #[serde(default)]
     pub pending_auth_count: usize,

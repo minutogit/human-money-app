@@ -131,6 +131,27 @@ export const SocialRecoveryFlow: React.FC<SocialRecoveryFlowProps> = ({
             setSuccessMsg('');
             setInfoMsg('');
 
+            if (/humoco:\/\/recovery-req\b/i.test(uri)) {
+                setErrorMsg(
+                    t(
+                        'backup.replyWrongLinkReq',
+                        'Das ist dein eigener Anfrage-Link (recovery-req), keine Antwort eines Vertrauenskontakts. Bitte füge den erhaltenen Antwort-Link (recovery-reply) ein.'
+                    )
+                );
+                setIsSubmitting(false);
+                return;
+            }
+            if (/humoco:\/\/kit\b/i.test(uri)) {
+                setErrorMsg(
+                    t(
+                        'backup.replyWrongLinkKit',
+                        'Das ist ein Notfall-Blatt-Link (humoco://kit). Nutze zur Wiederherstellung per Notfall-Blatt die Option „Mit 12/24 Wörtern oder Notfall-Blatt“.'
+                    )
+                );
+                setIsSubmitting(false);
+                return;
+            }
+
             try {
                 const updated = await recoveryService.importGuardianRecoveryReply(uri);
                 setSession(updated);
@@ -138,7 +159,14 @@ export const SocialRecoveryFlow: React.FC<SocialRecoveryFlowProps> = ({
                 if (updated.ownerDisplayName) {
                     setProfileName((prev) => prev || updated.ownerDisplayName || '');
                 }
-                if (updated.lastImportStatus === 'duplicate') {
+                if (updated.lastImportStatus === 'superseded_epoch') {
+                    setInfoMsg(
+                        t(
+                            'backup.importReplySupersededEpoch',
+                            'Ein neuerer Vertrauenskontakt-Stand wurde erkannt: Ältere bisher gesammelte Anteile wurden durch diesen aktuellen Anteil ersetzt.'
+                        )
+                    );
+                } else if (updated.lastImportStatus === 'duplicate') {
                     setInfoMsg(t('backup.importReplyDuplicate'));
                 } else {
                     setSuccessMsg(
@@ -158,15 +186,34 @@ export const SocialRecoveryFlow: React.FC<SocialRecoveryFlowProps> = ({
 
     useEffect(() => {
         if (
-            initialPayload?.includes('humoco://recovery-reply') &&
-            session &&
-            !session.hasEnoughShares &&
-            autoImportedRef.current !== initialPayload
+            !initialPayload?.includes('humoco://recovery-reply') ||
+            autoImportedRef.current === initialPayload
         ) {
-            autoImportedRef.current = initialPayload;
-            void handleImportReply(initialPayload);
+            return;
         }
-    }, [initialPayload, session, handleImportReply]);
+        if (!session) {
+            autoImportedRef.current = initialPayload;
+            setInfoMsg(
+                t(
+                    'backup.importReplyNeedsSessionFirst',
+                    'Antwort-Link erkannt: Bitte starte zuerst unten einen Wiederherstellungs-Durchgang (oder setze den begonnenen fort), damit der Link zu deinem temporären Schlüssel passt.'
+                )
+            );
+            return;
+        }
+        if (session.hasEnoughShares) {
+            autoImportedRef.current = initialPayload;
+            setInfoMsg(
+                t(
+                    'backup.importReplyAlreadyEnoughShares',
+                    'Du hast bereits genügend Anteile gesammelt. Du kannst den Wiederherstellungs-Vorgang jetzt abschließen.'
+                )
+            );
+            return;
+        }
+        autoImportedRef.current = initialPayload;
+        void handleImportReply(initialPayload);
+    }, [initialPayload, session, handleImportReply, t]);
 
     const handleStartSession = async () => {
         setIsSubmitting(true);
@@ -478,17 +525,36 @@ export const SocialRecoveryFlow: React.FC<SocialRecoveryFlowProps> = ({
                                 <span className="text-[10px] font-bold uppercase tracking-wider text-theme-light block">
                                     {t('backup.releaseSasCodeLabel')}
                                 </span>
-                                <span
-                                    data-testid="social-sas-code"
-                                    className="text-2xl font-black tracking-widest text-theme-primary font-mono"
-                                >
-                                    {session.sasCode}
-                                </span>
+                                <div className="flex items-center gap-2">
+                                    <span
+                                        data-testid="social-sas-code"
+                                        className="text-2xl font-black tracking-widest text-theme-primary font-mono"
+                                    >
+                                        {session.sasCode}
+                                    </span>
+                                    <button
+                                        type="button"
+                                        onClick={() => void copyToClipboard(session.sasCode)}
+                                        className="p-1.5 rounded-lg border border-theme-subtle bg-white text-theme-light hover:text-theme-primary cursor-pointer"
+                                        title={t('common.copy', 'Kopieren')}
+                                    >
+                                        <Copy size={14} />
+                                    </button>
+                                </div>
                             </div>
                             <p className="text-xs text-theme-light leading-relaxed max-w-md">
                                 {t('backup.socialSasExplanation')}
                             </p>
                         </div>
+
+                        {session.createdAt > 0 && Math.floor(Date.now() / 1000) - session.createdAt > 48 * 3600 && (
+                            <AlertBanner variant="warning" data-testid="social-stale-48h-warning">
+                                {t(
+                                    'backup.socialSessionStale48h',
+                                    'Diese Wiederherstellungs-Anfrage ist älter als 48 Stunden. Wenn ein Kontakt eine Warnung sieht oder du einen frischen Link senden möchtest, kannst du den Ablauf abbrechen und neu starten.'
+                                )}
+                            </AlertBanner>
+                        )}
 
                         <div className="p-3 bg-blue-50/70 dark:bg-blue-950/30 border border-blue-200/70 dark:border-blue-800/40 rounded-xl space-y-2.5">
                             <div className="flex items-start gap-2 text-xs text-blue-900 dark:text-blue-200 leading-relaxed">

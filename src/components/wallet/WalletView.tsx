@@ -160,7 +160,6 @@ export function WalletView() {
                         size="sm"
                         variant="secondary"
                         className="gap-1.5"
-                        disabled={vouchers.filter(v => v.status === 'active').length === 0}
                         data-testid="wallet-action-send"
                     >
                         <ArrowUpRight size={16} />

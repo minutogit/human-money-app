@@ -138,7 +138,8 @@ describe('BackupSettingsCard', () => {
 
         await waitFor(() => {
             expect(settingsService.saveSettings).toHaveBeenCalledWith(
-                expect.objectContaining({ autoBackupEnabled: false })
+                expect.objectContaining({ autoBackupEnabled: false }),
+                'mock-wallet-pw'
             );
             expect(onSettingsUpdated).toHaveBeenCalledWith(
                 expect.objectContaining({ autoBackupEnabled: false })
@@ -159,7 +160,8 @@ describe('BackupSettingsCard', () => {
 
         await waitFor(() => {
             expect(settingsService.saveSettings).toHaveBeenCalledWith(
-                expect.objectContaining({ syncBackupEnabled: false })
+                expect.objectContaining({ syncBackupEnabled: false }),
+                'mock-wallet-pw'
             );
             expect(onSettingsUpdated).toHaveBeenCalledWith(
                 expect.objectContaining({ syncBackupEnabled: false })

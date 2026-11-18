@@ -5,15 +5,19 @@ import { settingsService } from '../../../services/settingsService';
 import { voucherService } from '../../../services/voucherService';
 import { standardsService } from '../../../services/standardsService';
 import { profileService } from '../../../services/profileService';
+import { postService } from '../../../services/postService';
+import { backupService } from '../../../services/backupService';
 import { useSession } from '../../../context/SessionContext';
 import { useOptionalNavigation } from '../../../context/NavigationContext';
 import { openFileAsBytes } from '../../../utils/fileIo';
 import {
     classifyHumocoFile,
+    extractHumocoDeepLink,
     getReceiveFileDialogFilters,
     isReceiveImportKind,
     ReceiveImportKind,
 } from '../../../utils/humocoFileClassifier';
+import { parseContactCard } from '../../../utils/humocoUri';
 import { logger } from '../../../utils/log';
 import { translateError, isBackendError, stringifyError } from '../../../utils/errorHelper';
 import { buildStandardDefinitionsToml, executeReceiveImport } from './receiveImportService';
@@ -43,7 +47,7 @@ export interface UseReceiveFlowOptions {
 
 export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseReceiveFlowOptions) {
     const { t } = useTranslation();
-    const { protectAction } = useSession();
+    const { protectAction, accessMode } = useSession();
     const nav = useOptionalNavigation();
     const navigate = nav?.navigate;
 
@@ -59,6 +63,8 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseRec
     const [isSettingsLoaded, setIsSettingsLoaded] = useState(false);
     const [purchaseId, setPurchaseId] = useState('');
     const [settings, setSettings] = useState<AppSettings | null>(null);
+    const [isCheckingPost, setIsCheckingPost] = useState(false);
+    const [postCheckStatus, setPostCheckStatus] = useState<{ variant: 'info' | 'success' | 'error'; message: string } | null>(null);
     const processedDroppedFileRef = useRef<{ name: string; bytes: number[] } | null>(null);
 
     const modalsRef = useRef<ReturnType<typeof useReceiveModals> | null>(null);
@@ -108,6 +114,7 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseRec
                     onEnsurePurchaseId: setPurchaseId,
                     ensureStandardsToml,
                     protectAction,
+                    accessMode,
                 });
 
                 if (outcome.kind === 'success') {
@@ -214,6 +221,7 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseRec
             }
         },
         [
+            accessMode,
             clearSelection,
             ensureStandardsToml,
             isPosMode,
@@ -230,6 +238,7 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseRec
         onReceiveSuccess,
         navigate,
         protectAction,
+        accessMode,
         ensureStandardsToml,
         droppedFileContent,
         setFeedbackMsg,
@@ -309,6 +318,21 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseRec
             setBundleName(fileName);
             setDroppedFileContent(bytes);
             const classification = classifyHumocoFile({ fileName, bytes });
+            if (classification.kind === 'deeplink' && classification.deepLink) {
+                clearSelection();
+                window.dispatchEvent(new CustomEvent('humoco:deeplink', { detail: classification.deepLink }));
+                return true;
+            }
+            if (classification.kind === 'backup') {
+                clearSelection();
+                const stagedPath = await backupService.stageDroppedBackupBytes(bytes);
+                navigate?.({
+                    view: 'restore_backup',
+                    initialMethod: 'file_or_folder',
+                    initialBackupPath: stagedPath,
+                });
+                return true;
+            }
             if (classification.kind === 'standard') {
                 await processStandardFile(bytes);
                 return true;
@@ -319,7 +343,7 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseRec
             }
             return false;
         },
-        [executeReceiveDirectly, processStandardFile],
+        [clearSelection, executeReceiveDirectly, navigate, processStandardFile],
     );
 
     useEffect(() => {
@@ -355,10 +379,7 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseRec
             const opened = await openFileAsBytes({
                 settings,
                 protectAction,
-                filters: getReceiveFileDialogFilters({
-                    wotFilter: t('transfer.importFile.wotFilter'),
-                    cardFilter: t('marketplace.cardFilterName'),
-                }),
+                filters: getReceiveFileDialogFilters(t),
             });
             if (!opened) return;
             logger.info(`File selected via dialog: ${opened.path}`);
@@ -396,6 +417,71 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseRec
         }
     };
 
+    const handleCheckPostNow = async () => {
+        if (isCheckingPost) return;
+        setIsCheckingPost(true);
+        setPostCheckStatus(null);
+        setFeedbackMsg('');
+        try {
+            const res = await postService.syncPostChannels();
+            const incomingCount =
+                (res.importedPayments ?? 0) +
+                (res.newSignRequests ?? 0) +
+                (res.importedSignatures ?? 0);
+            if (incomingCount > 0) {
+                setPostCheckStatus({
+                    variant: 'success',
+                    message: t('transfer.receivePostFound', '{{count}} neue Eingänge im Postfach abgerufen.', {
+                        count: incomingCount,
+                    }),
+                });
+            } else if ((res.errors?.length ?? 0) > 0) {
+                setPostCheckStatus({
+                    variant: 'error',
+                    message: res.errors[0],
+                });
+            } else {
+                setPostCheckStatus({
+                    variant: 'info',
+                    message: t('transfer.receivePostEmpty', 'Postfach geprüft – keine neuen Zahlungen oder Anfragen gefunden.'),
+                });
+            }
+        } catch (err) {
+            setPostCheckStatus({
+                variant: 'error',
+                message: translateError(err, t),
+            });
+        } finally {
+            setIsCheckingPost(false);
+        }
+    };
+
+    const handlePasteRawInput = async (rawText: string): Promise<boolean> => {
+        const trimmed = rawText.trim();
+        if (!trimmed) {
+            setFeedbackMsg(t('common.pasteEmptyInput', 'Bitte zuerst einen Link, Code oder Inhalt einfügen.'));
+            return false;
+        }
+        setFeedbackMsg('');
+        const deepLink = extractHumocoDeepLink(trimmed);
+        if (deepLink) {
+            window.dispatchEvent(new CustomEvent('humoco:deeplink', { detail: deepLink }));
+            return true;
+        }
+        const bytes = Array.from(new TextEncoder().encode(trimmed));
+        const handled = await processIncomingFile('eingefuegt.humoco', bytes);
+        if (handled) {
+            return true;
+        }
+        const contact = parseContactCard(trimmed);
+        if (contact && navigate) {
+            navigate({ view: 'address_book', initialContactPayload: trimmed });
+            return true;
+        }
+        setFeedbackMsg(t('transfer.importFile.invalidFileType'));
+        return false;
+    };
+
     return {
         ownUserId,
         ownProfile,
@@ -404,6 +490,8 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseRec
         feedbackMsg,
         setFeedbackMsg,
         isProcessing,
+        isCheckingPost,
+        postCheckStatus,
         isDragOver,
         setIsDragOver,
         settings,
@@ -413,6 +501,8 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseRec
         handlePosModeToggle,
         handleFileSelect,
         handleDrop,
+        handleCheckPostNow,
+        handlePasteRawInput,
         clearSelection: resetAllSelections,
         closeImportStandardModal: () => modals.setImportStandardModalData(null),
         refreshStandards: () => {

@@ -175,12 +175,13 @@ describe('SyncServiceSettingsCard Component', () => {
         fireEvent.click(probeBtn);
 
         await waitFor(() => {
-            expect(marketService.probePublicSync).toHaveBeenCalledWith('https://test-drop.org/sync.php');
+            expect(marketService.probePublicSync).toHaveBeenCalledWith('https://test-drop.org/sync.php', 'mock-wallet-pw');
             expect(marketService.savePublicSync).toHaveBeenCalledWith(
                 expect.objectContaining({
                     writeUrl: 'https://test-drop.org/sync.php',
                     enabled: true,
-                })
+                }),
+                'mock-wallet-pw'
             );
         });
     });
@@ -542,12 +543,13 @@ describe('SyncServiceSettingsCard Component', () => {
         const checkAuthBtn = screen.getByRole('button', { name: /Check activation/i });
         fireEvent.click(checkAuthBtn);
         await waitFor(() => {
-            expect(marketService.probePublicSync).toHaveBeenCalledWith('https://community.example.org/sync.php');
+            expect(marketService.probePublicSync).toHaveBeenCalledWith('https://community.example.org/sync.php', 'mock-wallet-pw');
             expect(marketService.savePublicSync).toHaveBeenCalledWith(
                 expect.objectContaining({
                     writeUrl: 'https://community.example.org/sync.php',
                     enabled: true,
-                })
+                }),
+                'mock-wallet-pw'
             );
         });
     });
@@ -602,7 +604,8 @@ describe('SyncServiceSettingsCard Component', () => {
         await waitFor(() => {
             expect(marketService.removePublicSync).toHaveBeenCalledWith(
                 'https://community.example.org/sync.php',
-                false
+                false,
+                'mock-wallet-pw'
             );
         });
     });

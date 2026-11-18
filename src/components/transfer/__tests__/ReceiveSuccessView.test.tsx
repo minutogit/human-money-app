@@ -191,4 +191,48 @@ describe('ReceiveSuccessView payment evidence', () => {
     expect(screen.getByTestId('l2-status-pill')).toHaveTextContent(/Eingeschränkt|Restricted|yellow/i);
     expect(screen.getByTestId('merchant-approve-btn')).toBeInTheDocument();
   });
+
+  it('gives isQuarantined red hero visual priority over isReplay when both flags are set', () => {
+    render(
+      <ReceiveSuccessView
+        payload={{
+          ...payload,
+          verifiableConflicts: { conflict: [] },
+          isReplay: true,
+          checkoutVerdict: {
+            outcome: 'Quarantined:DoubleSpend',
+            canReleaseGoodsAutomatically: false,
+            requiresMerchantApproval: false,
+            isGoodsReleaseAuthorized: false,
+          },
+        }}
+        onDone={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('heading', { level: 1, name: /Sicherheitswarnung|Security Warning/i })).toBeInTheDocument();
+    expect(screen.getByTestId('goods-release-card')).toHaveTextContent(/WARE NICHT HERAUSGEBEN|DO NOT HAND OVER GOODS/i);
+    expect(screen.queryByText(/Bereits verbucht|Already Processed/i)).not.toBeInTheDocument();
+  });
+
+  it('renders Yellow:MultiVoucherManualApproval warning and manual merchant approval control', () => {
+    render(
+      <ReceiveSuccessView
+        payload={{
+          ...payload,
+          checkoutVerdict: {
+            outcome: 'Yellow:MultiVoucherManualApproval',
+            canReleaseGoodsAutomatically: false,
+            requiresMerchantApproval: true,
+            isGoodsReleaseAuthorized: false,
+            merchantWarning: 'Multi-voucher bundle requires manual inspection.',
+          },
+        }}
+        onDone={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText(/mehrere Gutscheine|multiple vouchers/i)).toBeInTheDocument();
+    expect(screen.getByTestId('merchant-approve-btn')).toBeInTheDocument();
+  });
 });

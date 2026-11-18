@@ -15,6 +15,8 @@ import { ExpertTabsLayout } from '../ui/ExpertTabsLayout';
 import { SegmentedTabs } from '../ui/SegmentedTabs';
 import { AlertBanner } from '../ui/AlertBanner';
 import { Card } from '../ui/Card';
+import { Button } from '../ui/Button';
+import { Disclosure } from '../ui/Disclosure';
 import { LanguageSelector } from '../ui/LanguageSelector';
 import { MyProfileCard } from '../profile/MyProfileCard';
 import { InfoHint } from '../ui/InfoHint';
@@ -25,14 +27,17 @@ import { SecurityBackupTab } from './SecurityBackupTab';
 import { ConnectionTab } from './ConnectionTab';
 import { AdvancedTab } from './AdvancedTab';
 import { IdentityRecoveryCard } from './IdentityRecoveryCard';
+import { QuickPinCard } from './QuickPinCard';
 import { AutoSyncSummaryCard } from './AutoSyncSummaryCard';
+import { SyncServiceSettingsCard } from './SyncServiceSettingsCard';
+import { StandardsManager } from '../standards/StandardsManager';
 import { ViewAndLockCard } from './ViewAndLockCard';
 import { DangerZoneCard } from './DangerZoneCard';
 import { NetworkProtectionCard } from './NetworkProtectionCard';
 import { profileService } from '../../services/profileService';
 import { AppSettings } from '../../types';
 
-import { User, Shield, Cloud, Settings as SettingsIcon, Radio } from 'lucide-react';
+import { User, Shield, ShieldCheck, Cloud, Settings as SettingsIcon, Radio } from 'lucide-react';
 
 export type SettingsActiveTab = 'profile' | 'security' | 'connection' | 'advanced';
 
@@ -42,7 +47,7 @@ interface SettingsViewProps {
 
 export function SettingsView({ onBack }: SettingsViewProps) {
     const { t } = useTranslation();
-    const { protectAction } = useSession();
+    const { protectAction, accessMode = 'full', requireFullAccess } = useSession();
     const nav = useOptionalNavigation();
     const appVersion = nav?.appVersion || '0.3.0';
 
@@ -73,6 +78,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
 
     const persistSettingsUpdate = useCallback(
         (updater: AppSettings | ((prev: AppSettings | null) => AppSettings | null)) => {
+            const prevSettings = settingsRef.current;
             const next = updateSettingsState(updater);
             if (!next) return;
             setError('');
@@ -82,6 +88,8 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                         await settingsService.saveSettings(next, password || undefined);
                     });
                 } catch (e) {
+                    settingsRef.current = prevSettings;
+                    setSettings(prevSettings);
                     const msg = t('settings.saveFailed', { error: translateError(e, t) });
                     logger.error(`Failed to save settings: ${stringifyError(e)}`);
                     setError(msg);
@@ -242,6 +250,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                     />
                 </div>
                 <IdentityRecoveryCard />
+                <QuickPinCard />
             </div>
 
             {/* Block 3: Sichtbarkeit (3 Stufen) */}
@@ -267,7 +276,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
             </div>
 
             {/* Block 4: Abgleich (SyncSummaryCard) */}
-            <div id="settings-sync-section">
+            <div id="settings-sync-section" className="space-y-4">
                 <div id="settings-connection-section">
                     <AutoSyncSummaryCard
                         settings={settings}
@@ -275,6 +284,16 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                         onSettingsSynced={updateSettingsState}
                     />
                 </div>
+                <Disclosure
+                    title={t('settings.manageSyncEndpointsToggle')}
+                    defaultOpen={false}
+                    toggleTestId="simple-manage-syncs-toggle"
+                >
+                    <SyncServiceSettingsCard
+                        settings={settings}
+                        onSettingsUpdated={updateSettingsState}
+                    />
+                </Disclosure>
             </div>
 
             {/* Block 5: Ansicht & Automatische Sperre */}
@@ -288,10 +307,28 @@ export function SettingsView({ onBack }: SettingsViewProps) {
             {initialOpenSection === 'network' && (
                 <NetworkProtectionCard
                     settings={settings}
-                    onSettingsUpdated={updateSettingsState}
+                    onSettingsUpdated={persistSettingsUpdate}
+                    onSettingsSynced={updateSettingsState}
                     isDevUnlocked={isDevUnlocked}
                     initialOpen={true}
                 />
+            )}
+
+            {initialOpenSection === 'standards' && (
+                <div id="settings-standards-section">
+                    <Card
+                        header={
+                            <div className="flex items-center gap-2">
+                                <ShieldCheck size={18} className="text-theme-primary" />
+                                <span className="font-black text-xs uppercase tracking-widest">
+                                    {t('standards.title')}
+                                </span>
+                            </div>
+                        }
+                    >
+                        <StandardsManager />
+                    </Card>
+                </div>
             )}
 
             {/* Block 6: Gefahrenzone */}
@@ -344,6 +381,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                 <AdvancedTab
                     settings={settings}
                     onSettingsUpdated={persistSettingsUpdate}
+                    onSettingsSynced={updateSettingsState}
                     localInstanceId={localInstanceId}
                     appVersion={appVersion}
                     isDevUnlocked={isDevUnlocked}
@@ -382,6 +420,25 @@ export function SettingsView({ onBack }: SettingsViewProps) {
             onBack={onBack}
         >
             <div className="max-w-4xl mx-auto space-y-6">
+                {accessMode === 'receiveOnly' && (
+                    <AlertBanner
+                        variant="info"
+                        data-testid="settings-receive-only-banner"
+                        action={
+                            requireFullAccess ? (
+                                <Button
+                                    size="xs"
+                                    variant="primary"
+                                    onClick={() => void requireFullAccess(async () => undefined).catch(() => undefined)}
+                                >
+                                    {t('settings.unlockFullAccessBtn')}
+                                </Button>
+                            ) : undefined
+                        }
+                    >
+                        {t('settings.receiveOnlyBanner')}
+                    </AlertBanner>
+                )}
                 {error && <AlertBanner variant="error">{error}</AlertBanner>}
                 {devFeedback && <AlertBanner variant="success">{devFeedback}</AlertBanner>}
 

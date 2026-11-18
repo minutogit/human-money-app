@@ -35,7 +35,7 @@ export const voucherService = {
     },
 
     create: async (standardTomlContent: string, data: NewVoucherData, password?: string) => {
-        const result = await invoke<Voucher>("create_new_voucher", { standardTomlContent, data, password });
+        const result = await invoke<VoucherDetails>("create_new_voucher", { standardTomlContent, data, password });
         afterWalletMutation(password);
         return result;
     },

@@ -11,6 +11,7 @@ import {
     AlertCircle,
 } from "lucide-react";
 import { Contact, FrontendMarketInquiryItem } from "../../types";
+import { translateError } from "../../utils/errorHelper";
 import { Button } from "../ui/Button";
 import { ContactBadge } from "../ui/ContactBadge";
 
@@ -45,6 +46,7 @@ export const InquiryThreadCard: React.FC<InquiryThreadCardProps> = ({
     const [draftText, setDraftText] = useState("");
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [isDismissing, setIsDismissing] = useState(false);
+    const [sendError, setSendError] = useState<string | null>(null);
 
     const isSeller = item.role === "seller";
     const targetLabel =
@@ -68,6 +70,7 @@ export const InquiryThreadCard: React.FC<InquiryThreadCardProps> = ({
         const trimmed = draftText.trim();
         if (!decision && !trimmed) return;
         setIsSubmitting(true);
+        setSendError(null);
         try {
             await onSendMessage(item.inquiryId, {
                 text: trimmed || undefined,
@@ -75,6 +78,8 @@ export const InquiryThreadCard: React.FC<InquiryThreadCardProps> = ({
             });
             setDraftText("");
             markReadIfNeeded();
+        } catch (err) {
+            setSendError(translateError(err, t));
         } finally {
             setIsSubmitting(false);
         }
@@ -297,6 +302,10 @@ export const InquiryThreadCard: React.FC<InquiryThreadCardProps> = ({
                                     <span>{t("marketplace.sendMessageBtn", "Senden")}</span>
                                 </Button>
                             </div>
+
+                            {sendError && (
+                                <p className="text-[11px] text-rose-600 font-medium">{sendError}</p>
+                            )}
 
                             {isSeller && item.status === "open" && (
                                 <div className="flex items-center justify-end gap-2">

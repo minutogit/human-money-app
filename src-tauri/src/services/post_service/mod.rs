@@ -332,13 +332,15 @@ pub(crate) fn enqueue_post_envelope(
     own_reply_syncs: &[FrontendSyncDescriptor],
     container_bytes: Vec<u8>,
     now_secs: u64,
+    anchor_manifest_json: Option<String>,
 ) -> Result<(), FrontendError> {
     let envelope = PostEnvelope::new(
         msg_id.clone(),
         now_secs,
         own_reply_syncs.iter().cloned().map(Into::into).collect(),
         container_bytes,
-    );
+    )
+    .with_anchor_manifest_json(anchor_manifest_json);
     let entry = seal_post_box(my_ed_sk, recipient_ed_pk, &envelope).map_err(FrontendError::from)?;
     post_state.processed_msg_ids.insert(msg_id.clone());
     post_state.outbox_entries.push(PostOutboxEntry {
@@ -384,6 +386,7 @@ pub(crate) fn queue_sealed_reply<T: serde::Serialize>(
         own_reply_syncs,
         container_bytes,
         now_secs,
+        None,
     );
 }
 
@@ -436,6 +439,7 @@ pub(crate) fn queue_receipt(
         own_reply_syncs,
         container_bytes,
         now_secs,
+        None,
     ) {
         warn!(
             "Failed to seal post box for delivery receipt: {}",

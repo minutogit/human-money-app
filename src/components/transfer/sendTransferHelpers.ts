@@ -8,11 +8,8 @@ import { logger } from '../../utils/log';
 import { stringifyError, translateError } from '../../utils/errorHelper';
 import type { ProtectActionFn } from '../../utils/fileIo';
 import type {
-    InvolvedVoucherInfo,
     SourceTransfer,
-    TransactionRecord,
     VoucherStandardInfo,
-    VoucherSummary,
 } from '../../types';
 
 export type SendState = {
@@ -205,13 +202,9 @@ export function extractRecipientDidFromRawCode(trimmed: string): string | null {
 
 export interface CommitTransferParams {
     state: SendState;
-    ownUserId: string;
     selectedMap: Map<string, string>;
-    selectionStats: Record<string, { total: number; count: number }>;
-    availableVouchers: VoucherSummary[];
     voucherStandards: VoucherStandardInfo[];
     standardIdToUuidMap: Map<string, string>;
-    uuidToPrecisionMap: Map<string, number>;
     sendCardOverride: boolean | null;
     protectAction: ProtectActionFn;
     checkAndTriggerCooldown: (errOrResult: unknown) => boolean;
@@ -220,13 +213,9 @@ export interface CommitTransferParams {
 
 export async function commitAndDepositTransfer({
     state,
-    ownUserId,
     selectedMap,
-    selectionStats,
-    availableVouchers,
     voucherStandards,
     standardIdToUuidMap,
-    uuidToPrecisionMap,
     sendCardOverride,
     protectAction,
     checkAndTriggerCooldown,
@@ -234,25 +223,19 @@ export async function commitAndDepositTransfer({
 }: CommitTransferParams): Promise<{
     bundleResult: CreateBundleResult;
     depositedTo: number;
+    recipientDepositedTo: number;
     depositError?: string;
 } | null> {
     const trimmedName = state.customSenderName.trim();
     const senderName = state.sendProfileName && trimmedName.length > 0 ? trimmedName : null;
     const sources: SourceTransfer[] = Array.from(selectedMap.entries()).map(([id, amount]) => ({
         localInstanceId: id,
-        amountToSend: amount,
+        amountToSend: amount.trim().replace(',', '.'),
     }));
 
     const standardDefinitionsToml: Record<string, string> = {};
     voucherStandards.forEach((s) => {
         standardDefinitionsToml[standardIdToUuidMap.get(s.id) || s.id] = s.content;
-    });
-
-    const summableAmounts: Record<string, string> = {};
-    Object.entries(selectionStats).forEach(([displayCurrency, stat]) => {
-        const voucher = availableVouchers.find((v) => v.displayCurrency === displayCurrency);
-        const precision = voucher ? (uuidToPrecisionMap.get(voucher.voucherStandardUuid) ?? 2) : 2;
-        summableAmounts[displayCurrency] = stat.total.toFixed(precision);
     });
 
     const outcome = await protectAction(async (password) => {
@@ -267,33 +250,8 @@ export async function commitAndDepositTransfer({
             password,
         });
 
-        const record: TransactionRecord = {
-            id: crypto.randomUUID(),
-            direction: 'sent',
-            recipientId: state.recipientId,
-            senderId: ownUserId,
-            timestamp: new Date().toISOString(),
-            summableAmounts,
-            countableItems: {},
-            involvedVouchers: (bundleResult.involvedSourcesDetails as InvolvedVoucherInfo[]).map(
-                (d) => d.localInstanceId,
-            ),
-            involvedSourcesDetails: bundleResult.involvedSourcesDetails as InvolvedVoucherInfo[],
-            bundleData: bundleResult.bundleData,
-            bundleId: bundleResult.bundleId,
-            notes: state.notes || undefined,
-            senderProfileName: senderName || undefined,
-        };
-
-        try {
-            await transferService.saveTransactionRecord(record, password || undefined);
-        } catch (saveErr) {
-            logger.error(
-                `Failed to persist transaction record after transfer commit: ${stringifyError(saveErr)}`,
-            );
-        }
-
         let depositedTo = 0;
+        let recipientDepositedTo = 0;
         let depositError: string | undefined;
         try {
             const depositRes = await postService.depositTransferToPost(
@@ -301,6 +259,7 @@ export async function commitAndDepositTransfer({
                 password || undefined,
             );
             depositedTo = depositRes.depositedTo;
+            recipientDepositedTo = depositRes.recipientDepositedTo;
             if (depositRes.errors?.length) {
                 depositError = depositRes.errors.join('; ');
                 logger.warn(`Post deposit completed with ${depositRes.errors.length} error(s)`);
@@ -312,7 +271,7 @@ export async function commitAndDepositTransfer({
             logger.warn(`Post deposit failed after transfer commit: ${stringifyError(err)}`);
         }
 
-        return { bundleResult, depositedTo, depositError };
+        return { bundleResult, depositedTo, recipientDepositedTo, depositError };
     });
 
     return outcome ?? null;

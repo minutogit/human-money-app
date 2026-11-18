@@ -1225,6 +1225,14 @@ pub async fn remove_public_sync_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<(), FrontendError> {
+    {
+        let mut service = state.lock_service()?;
+        crate::services::common::ensure_access_mode(
+            &mut service,
+            human_money_core::AccessMode::Full,
+            password.as_deref(),
+        )?;
+    }
     let canonical_url = humoco_market::canonicalize_write_url(&write_url)
         .map_err(|e| FrontendError::from(e.to_string()))?;
 

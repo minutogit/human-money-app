@@ -46,7 +46,7 @@ import ContactDialog from '../contacts/ContactDialog';
 import { ShareCardModal } from './ShareCardModal';
 import { AdCard, resolveAuthorHops } from './AdCard';
 import { copyToClipboard } from '../../utils/clipboard';
-import { truncateUserId } from '../../utils/userIdHelper';
+import { truncateUserId, isExactSameUserId } from '../../utils/userIdHelper';
 import { translateError, stringifyError } from '../../utils/errorHelper';
 import { logger } from '../../utils/log';
 import { Card } from '../ui/Card';
@@ -116,7 +116,7 @@ export const MarketPersonView: React.FC<MarketPersonViewProps> = ({
                 checkAndTriggerCooldown(res);
             }
             const snapshot = await marketService.getMarketView();
-            const updated = (snapshot.people || []).find((p) => p.did === currentPerson.did);
+            const updated = (snapshot.people || []).find((p) => isExactSameUserId(p.did, currentPerson.did));
             if (updated) {
                 setCurrentPerson(updated);
             }
@@ -142,8 +142,10 @@ export const MarketPersonView: React.FC<MarketPersonViewProps> = ({
     }, [loadContacts]);
 
     const existingContact = Array.isArray(contacts)
-        ? contacts.find((c) => c.did === currentPerson.did)
+        ? contacts.find((c) => isExactSameUserId(c.did, currentPerson.did))
         : undefined;
+    const hasReachableInquirySync =
+        (currentPerson.cardSyncs?.length ?? 0) > 0 || (existingContact?.syncs?.length ?? 0) > 0;
 
     const handleCopyDid = async () => {
         const success = await copyToClipboard(currentPerson.did);
@@ -739,6 +741,22 @@ export const MarketPersonView: React.FC<MarketPersonViewProps> = ({
                 }
             >
                 <form onSubmit={handleSendInquiry} className="space-y-4 pt-2">
+                    {!hasReachableInquirySync && (
+                        <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 space-y-2">
+                            <p>{t('marketplace.inquiryNoSyncHint')}</p>
+                            <Button
+                                type="button"
+                                size="xs"
+                                variant="secondary"
+                                onClick={() => {
+                                    setInquiryModalOpen(false);
+                                    setIsContactDialogOpen(true);
+                                }}
+                            >
+                                {t('marketplace.addToContacts', 'Ins Adressbuch')}
+                            </Button>
+                        </div>
+                    )}
                     {inquiryFeedback && (
                         <div
                             className={`p-3 rounded-xl text-xs border ${

@@ -81,7 +81,6 @@ describe('StatusChip Component', () => {
             friendSyncs: 1,
             publicSyncs: 1,
             hasOwnSync: true,
-            ownSyncSoftWarning: false,
             lastSyncAt: Math.floor(Date.now() / 1000),
         });
 
@@ -102,7 +101,6 @@ describe('StatusChip Component', () => {
             friendSyncs: 0,
             publicSyncs: 0,
             hasOwnSync: false,
-            ownSyncSoftWarning: false,
             lastSyncAt: null,
         });
 
@@ -122,7 +120,6 @@ describe('StatusChip Component', () => {
             friendSyncs: 1,
             publicSyncs: 0,
             hasOwnSync: true,
-            ownSyncSoftWarning: false,
             lastSyncAt: Math.floor(Date.now() / 1000),
         });
 
@@ -150,7 +147,6 @@ describe('StatusChip Component', () => {
             friendSyncs: 1,
             publicSyncs: 0,
             hasOwnSync: true,
-            ownSyncSoftWarning: false,
             lastSyncAt: Math.floor(Date.now() / 1000),
         });
 
@@ -178,7 +174,6 @@ describe('StatusChip Component', () => {
             friendSyncs: 0,
             publicSyncs: 0,
             hasOwnSync: false,
-            ownSyncSoftWarning: false,
             lastSyncAt: null,
         });
 
@@ -215,7 +210,6 @@ describe('StatusChip Component', () => {
             friendSyncs: 1,
             publicSyncs: 0,
             hasOwnSync: true,
-            ownSyncSoftWarning: false,
             lastSyncAt: Math.floor(Date.now() / 1000),
         });
         vi.mocked(integrityService.getDoubleSpendConflicts).mockResolvedValue([
@@ -246,7 +240,6 @@ describe('StatusChip Component', () => {
             friendSyncs: 1,
             publicSyncs: 0,
             hasOwnSync: true,
-            ownSyncSoftWarning: false,
             lastSyncAt: Math.floor(Date.now() / 1000),
         });
         vi.mocked(marketService.getMyMarketProfile).mockResolvedValue({
@@ -290,7 +283,6 @@ describe('StatusChip Component', () => {
             friendSyncs: 1,
             publicSyncs: 0,
             hasOwnSync: true,
-            ownSyncSoftWarning: false,
             lastSyncAt: null,
         });
         vi.mocked(marketService.syncMarketChannels).mockResolvedValue({

@@ -552,3 +552,50 @@ fn test_sign_delete_account_request_matches_spec() {
     .unwrap();
     assert_eq!(headers.prefix, None);
 }
+
+#[test]
+fn test_channelless_admin_actions_omit_channel_line() {
+    let body = b"{\"test\":true}";
+    for action in ["PUT_REVOKE", "PUT_LOCK_DELEGATE", "POST_LOCK_SELFTEST"] {
+        let msg = format_admin_request_message(
+            action,
+            "",
+            1700000000,
+            "0123456789abcdef0123456789abcdef",
+            body,
+        );
+        let lines: Vec<&str> = msg.lines().collect();
+        assert_eq!(
+            lines.len(),
+            5,
+            "{} must sign 5 lines without empty channel line",
+            action
+        );
+        assert_eq!(lines[0], "HUMOCO-DROP-ADMIN-V1");
+        assert_eq!(lines[1], action);
+        assert_eq!(lines[2], "1700000000");
+    }
+
+    let status_msg = format_admin_request_message(
+        "STATUS",
+        "",
+        1700000000,
+        "0123456789abcdef0123456789abcdef",
+        b"",
+    );
+    assert_eq!(status_msg.lines().count(), 6);
+
+    let del_msg = humoco_market::format_lock_delegate_signature_message(
+        &"aa".repeat(32),
+        &"bb".repeat(32),
+        1700000000,
+    );
+    assert_eq!(
+        del_msg,
+        format!(
+            "HUMOCO-LOCK-DELEGATE-V1\n{}\n{}\n1700000000",
+            "aa".repeat(32),
+            "bb".repeat(32)
+        )
+    );
+}

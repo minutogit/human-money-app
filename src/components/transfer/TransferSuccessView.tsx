@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { revealItemInDir } from '@tauri-apps/plugin-opener';
 import { logger } from '../../utils/log';
 import { Button } from '../ui/Button';
+import { ConfirmationModal } from '../ui/ConfirmationModal';
 import { Advanced } from '../ui/Advanced';
 import { AdvancedDisclosure } from '../ui/AdvancedDisclosure';
 import { TechId, formatShortFingerprint } from '../ui/TechId';
@@ -35,6 +36,7 @@ interface TransferSuccessViewProps {
     l2Dispatch?: IntentDispatchObservation[];
     bundleId?: string;
     initialDepositedTo?: number;
+    initialRecipientDepositedTo?: number;
     depositError?: string;
     onDone: () => void;
 }
@@ -46,6 +48,7 @@ export function TransferSuccessView({
     l2Dispatch,
     bundleId,
     initialDepositedTo = 0,
+    initialRecipientDepositedTo,
     depositError,
     onDone
 }: TransferSuccessViewProps) {
@@ -54,10 +57,15 @@ export function TransferSuccessView({
     const [feedback, setFeedback] = useState('');
     const [isSaving, setIsSaving] = useState(false);
     const [savedFilePath, setSavedFilePath] = useState<string | null>(null);
+    const [hasExportedFile, setHasExportedFile] = useState(false);
+    const [confirmUnsavedClose, setConfirmUnsavedClose] = useState(false);
     const [settings, setSettings] = useState<AppSettings | null>(null);
 
-    // Dual-Delivery post state (§6.3)
+    // Dual-Delivery post state (§6.3): only recipientDepositedTo > 0 means recipient inbox actually received it
     const [depositedTo, setDepositedTo] = useState<number>(initialDepositedTo);
+    const [recipientDeliveredTo, setRecipientDeliveredTo] = useState<number>(
+        initialRecipientDepositedTo !== undefined ? initialRecipientDepositedTo : initialDepositedTo
+    );
     const [isRedepositing, setIsRedepositing] = useState(false);
     const [redepositError, setRedepositError] = useState<string | null>(depositError || null);
 
@@ -93,7 +101,10 @@ export function TransferSuccessView({
             });
             if (res) {
                 setDepositedTo(res.depositedTo);
-                if (res.depositedTo > 0) {
+                const nextRecipientDelivered =
+                    res.recipientDepositedTo !== undefined ? res.recipientDepositedTo : res.depositedTo;
+                setRecipientDeliveredTo(nextRecipientDelivered);
+                if (nextRecipientDelivered > 0) {
                     setFeedback(t('transfer.depositedInPostSuccess'));
                 } else if (res.errors && res.errors.length > 0) {
                     setRedepositError(res.errors.join('; '));
@@ -127,6 +138,7 @@ export function TransferSuccessView({
             });
 
             if (saved) {
+                setHasExportedFile(true);
                 if (saved.path) {
                     setSavedFilePath(saved.path);
                     logger.info(`Successfully saved transfer bundle to ${saved.path}`);
@@ -199,7 +211,7 @@ export function TransferSuccessView({
                         </div>
                     </div>
                     <div className="space-y-1">
-                        {depositedTo > 0 ? (
+                        {recipientDeliveredTo > 0 ? (
                             <h1 data-testid="delivered-to-heading" className="text-3xl font-black text-theme-primary tracking-tight">
                                 {t('transfer.success.deliveredTo', { name: safeRecipientDisplayName })}
                             </h1>
@@ -242,7 +254,7 @@ export function TransferSuccessView({
                         </div>
 
                         {/* Dual-Delivery Post Sync Status (§6.3) */}
-                        {depositedTo > 0 ? (
+                        {recipientDeliveredTo > 0 ? (
                             <div data-testid="post-deposit-success-card" className="p-5 bg-emerald-50/80 border border-emerald-200 rounded-3xl space-y-2">
                                 <div className="flex items-center gap-2 text-emerald-800 font-bold text-sm">
                                     <CheckCircle2 size={18} className="text-emerald-600 shrink-0" />
@@ -348,7 +360,7 @@ export function TransferSuccessView({
 
                 {/* 100% Offline & Direct Sharing Action Controls */}
                 <div className="flex flex-col items-center gap-3">
-                    {depositedTo > 0 ? (
+                    {recipientDeliveredTo > 0 ? (
                         <div className="w-full">
                             <AdvancedDisclosure
                                 title={t('transfer.directHandoverTitle')}
@@ -363,7 +375,13 @@ export function TransferSuccessView({
 
                     <Button
                         variant="secondary"
-                        onClick={onDone}
+                        onClick={() => {
+                            if (recipientDeliveredTo === 0 && !hasExportedFile && !savedFilePath) {
+                                setConfirmUnsavedClose(true);
+                                return;
+                            }
+                            onDone();
+                        }}
                         className="w-full max-w-sm py-3 rounded-2xl text-xs font-black uppercase tracking-widest mt-2"
                     >
                         {t('transfer.success.finish')}
@@ -377,6 +395,22 @@ export function TransferSuccessView({
                     )}
                 </div>
             </div>
+
+            <ConfirmationModal
+                isOpen={confirmUnsavedClose}
+                onCancel={() => setConfirmUnsavedClose(false)}
+                onConfirm={() => {
+                    setConfirmUnsavedClose(false);
+                    onDone();
+                }}
+                title={t('transfer.success.unsavedCloseTitle', 'Zahlungsdatei noch nicht gespeichert')}
+                description={t(
+                    'transfer.success.unsavedCloseDesc',
+                    'Das Empfänger-Postfach wurde nicht automatisch erreicht und du hast die .transfer-Datei noch nicht gespeichert. Du findest den Vorgang zwar jederzeit wieder in der Transaktionshistorie, solltest die Datei aber an den Empfänger weitergeben. Trotzdem schließen?'
+                )}
+                confirmText={t('transfer.success.unsavedCloseConfirm', 'Verstanden & schließen')}
+                confirmVariant="danger"
+            />
         </div>
     );
 }

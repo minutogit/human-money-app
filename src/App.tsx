@@ -20,19 +20,25 @@ import { GuardianReleaseModal } from "./components/auth/GuardianReleaseModal";
 import { GlobalProfileEditorModal } from "./components/profile/GlobalProfileEditorModal";
 import { EventToastStack } from "./components/shell/EventToastStack";
 import { parseCardUri } from "./utils/humocoUri";
+import { classifyExtension, classifyHumocoFile, extractHumocoDeepLink, formatCardImportStatusFeedback } from "./utils/humocoFileClassifier";
 import { marketService } from "./services/marketService";
 import { recoveryService } from "./services/recoveryService";
+import { backupService } from "./services/backupService";
+import { translateError } from "./utils/errorHelper";
+import { invoke } from "@tauri-apps/api/core";
+import { readFile } from "@tauri-apps/plugin-fs";
 import { isPublicView } from "./types";
 import type { HelpTopicId } from "./help/helpTopics";
 
 function AppContent() {
     const { t } = useTranslation();
-    const { appState, navigate } = useNavigation();
+    const { appState, navigate, pendingDroppedFile, setPendingDroppedFile } = useNavigation();
     const { isForkLocked, isRecoveryRequired, clearLocks, isSessionActive, isAuthenticated, protectAction } = useSession();
     const isLoggedIn = isAuthenticated ?? isSessionActive;
 
     const appStateViewRef = useRef(appState.view);
     appStateViewRef.current = appState.view;
+    const hasCheckedStartupItemsRef = useRef(false);
 
     const [releaseModalOpen, setReleaseModalOpen] = useState(false);
     const [releaseRequestUri, setReleaseRequestUri] = useState<string | undefined>(undefined);
@@ -43,6 +49,7 @@ function AppContent() {
     const handleDeepLink = useCallback((uri: string) => {
         if (!uri) return;
         setDeepLinkFeedback(null);
+        const normalizedUri = extractHumocoDeepLink(uri) || uri;
 
         const handleUriImport = async (targetUri: string) => {
             const parsed = parseCardUri(targetUri);
@@ -54,82 +61,135 @@ function AppContent() {
                     if (res && res.status === 'accepted' && res.did) {
                         navigate({ view: 'marketplace', selectedDid: res.did });
                     } else if (res) {
-                        const statusMap: Record<string, string> = {
-                            ignored_stale: t('marketplace.importIgnoredDesc'),
-                            rejected_expired: t('marketplace.importExpiredDesc'),
-                            rejected_hops: t('marketplace.importHopsDesc'),
-                            rejected_offender: t('marketplace.importOffenderDesc'),
-                        };
-                        setDeepLinkFeedback(statusMap[res.status] || res.status);
+                        setDeepLinkFeedback(formatCardImportStatusFeedback(res.status, t));
                     }
                 } catch (err) {
                     logger.error("Failed to import card from URI: " + String(err));
-                    setDeepLinkFeedback(String(err));
+                    setDeepLinkFeedback(translateError(err, t));
                 }
             }
         };
 
-        const lowerUri = uri.toLowerCase();
-        if (lowerUri.includes('humoco://card') || lowerUri.includes('?env=')) {
-            if (isLoggedIn) {
-                handleUriImport(uri);
+        const lowerUri = normalizedUri.toLowerCase();
+        if (lowerUri.includes('humoco://card')) {
+            if (isLoggedIn && appStateViewRef.current !== 'needs_profile') {
+                handleUriImport(normalizedUri);
             } else {
-                setPendingDeepLink(uri);
+                setPendingDeepLink(normalizedUri);
             }
         } else if (lowerUri.includes('humoco://pay')) {
-            if (isLoggedIn) {
-                navigate({ view: 'send_vouchers', initialPaymentUri: uri });
+            if (isLoggedIn && appStateViewRef.current !== 'needs_profile') {
+                navigate({ view: 'send_vouchers', initialPaymentUri: normalizedUri });
             } else {
-                setPendingDeepLink(uri);
+                setPendingDeepLink(normalizedUri);
             }
         } else if (lowerUri.includes('humoco://contact')) {
-            if (isLoggedIn) {
-                navigate({ view: 'address_book', initialContactPayload: uri });
+            if (isLoggedIn && appStateViewRef.current !== 'needs_profile') {
+                navigate({ view: 'address_book', initialContactPayload: normalizedUri });
             } else {
-                setPendingDeepLink(uri);
+                setPendingDeepLink(normalizedUri);
             }
         } else if (lowerUri.includes('humoco://recovery-reply')) {
             recoveryService
                 .getActiveRecoverySession()
                 .then((session) => {
                     if (session?.sessionMode === 'reset_local_password') {
-                        navigate({ view: 'needs_recovery', initialPayload: uri });
+                        navigate({ view: 'needs_recovery', initialPayload: normalizedUri });
                     } else {
-                        navigate({ view: 'restore_backup', initialMethod: 'social', initialPayload: uri });
+                        navigate({ view: 'restore_backup', initialMethod: 'social', initialPayload: normalizedUri });
                     }
                 })
                 .catch(() => {
-                    navigate({ view: 'restore_backup', initialMethod: 'social', initialPayload: uri });
+                    navigate({ view: 'restore_backup', initialMethod: 'social', initialPayload: normalizedUri });
                 });
         } else if (lowerUri.includes('humoco://kit')) {
             if (appStateViewRef.current === 'needs_recovery') {
-                navigate({ view: 'needs_recovery', initialPayload: uri });
+                navigate({ view: 'needs_recovery', initialPayload: normalizedUri });
             } else {
-                navigate({ view: 'restore_backup', initialMethod: 'words_or_sheet', initialPayload: uri });
+                navigate({ view: 'restore_backup', initialMethod: 'words_or_sheet', initialPayload: normalizedUri });
             }
         } else if (lowerUri.includes('humoco://recovery-req')) {
-            if (isLoggedIn) {
-                setReleaseRequestUri(uri);
+            if (isLoggedIn && appStateViewRef.current !== 'needs_profile') {
+                setReleaseRequestUri(normalizedUri);
                 setReleaseModalOpen(true);
             } else {
-                setPendingDeepLink(uri);
+                setPendingDeepLink(normalizedUri);
             }
         }
-    }, [isLoggedIn, navigate, protectAction]);
+    }, [isLoggedIn, navigate, protectAction, t]);
 
     useEffect(() => {
-        if (isLoggedIn && pendingDeepLink) {
+        if (isLoggedIn && appState.view !== 'needs_profile' && pendingDeepLink) {
             const linkToRun = pendingDeepLink;
             setPendingDeepLink(null);
             handleDeepLink(linkToRun);
         }
-    }, [isLoggedIn, pendingDeepLink, handleDeepLink]);
+    }, [isLoggedIn, appState.view, pendingDeepLink, handleDeepLink]);
+
+    useEffect(() => {
+        if (!isLoggedIn || appState.view === 'needs_profile' || !pendingDroppedFile) return;
+        const queued = pendingDroppedFile;
+        setPendingDroppedFile(null);
+        const classification = classifyHumocoFile({ fileName: queued.name, bytes: queued.bytes });
+        if (classification.kind === 'card') {
+            const text = new TextDecoder().decode(new Uint8Array(queued.bytes));
+            protectAction(async (pwd) => {
+                return await marketService.importContactCard(text, pwd || undefined);
+            })
+                .then((res) => {
+                    if (res && res.status === 'accepted' && res.did) {
+                        navigate({ view: 'marketplace', selectedDid: res.did });
+                    } else if (res) {
+                        setDeepLinkFeedback(formatCardImportStatusFeedback(res.status, t));
+                    }
+                })
+                .catch((err) => setDeepLinkFeedback(translateError(err, t)));
+        } else if (classification.kind !== 'unknown') {
+            navigate({ view: 'receive_bundle', droppedFile: queued });
+        }
+    }, [isLoggedIn, appState.view, pendingDroppedFile, setPendingDroppedFile, protectAction, navigate, t]);
 
     useEffect(() => {
         if (typeof window !== 'undefined') {
             const currentUrl = window.location.href;
-            if (currentUrl.toLowerCase().includes('humoco://') || currentUrl.toLowerCase().includes('?env=')) {
+            if (currentUrl.toLowerCase().includes('humoco://')) {
                 handleDeepLink(currentUrl);
+            }
+
+            if (!hasCheckedStartupItemsRef.current) {
+                hasCheckedStartupItemsRef.current = true;
+                Promise.resolve(invoke<string[]>("take_startup_launch_items"))
+                    .then(async (items) => {
+                        if (!Array.isArray(items) || items.length === 0) return;
+                        for (const item of items) {
+                            if (!item) continue;
+                            if (item.toLowerCase().includes('humoco://')) {
+                                handleDeepLink(item);
+                                continue;
+                            }
+                            try {
+                                const rawBytes = await readFile(item);
+                                const bytes = Array.from(rawBytes);
+                                const fileName = item.split(/[/\\]/).pop() || 'launch.humoco';
+                                const classification = classifyHumocoFile({ fileName, bytes });
+                                if (classification.kind === 'deeplink' && classification.deepLink) {
+                                    handleDeepLink(classification.deepLink);
+                                } else if (classification.kind === 'backup' || classifyExtension(fileName) === 'backup') {
+                                    const stagedPath = await backupService.stageDroppedBackupBytes(bytes);
+                                    navigate({
+                                        view: 'restore_backup',
+                                        initialMethod: 'file_or_folder',
+                                        initialBackupPath: stagedPath,
+                                    });
+                                } else if (classification.kind !== 'unknown') {
+                                    setPendingDroppedFile({ name: fileName, bytes });
+                                }
+                            } catch (err) {
+                                logger.warn("Failed to open startup launch item: " + String(err));
+                            }
+                        }
+                    })
+                    .catch(() => {});
             }
 
             const onDeepLink = (e: Event) => {
@@ -143,7 +203,7 @@ function AppContent() {
                 window.removeEventListener('humoco:deeplink', onDeepLink);
             };
         }
-    }, [handleDeepLink]);
+    }, [handleDeepLink, navigate, setPendingDroppedFile]);
 
     useEffect(() => {
         const onOpenRelease = (e: Event) => {
@@ -172,7 +232,11 @@ function AppContent() {
     useEffect(() => {
         const handleHelpCenterNav = (e: Event) => {
             const customEvent = e as CustomEvent<{ topic?: HelpTopicId }>;
-            navigate({ view: 'help_center', topic: customEvent.detail?.topic, previousView: appState });
+            navigate({
+                view: 'help_center',
+                topic: customEvent.detail?.topic,
+                previousView: appState.view === 'help_center' ? appState.previousView : appState,
+            });
         };
         window.addEventListener('humoco:navigate-help-center', handleHelpCenterNav);
         return () => window.removeEventListener('humoco:navigate-help-center', handleHelpCenterNav);
@@ -180,28 +244,38 @@ function AppContent() {
 
     return (
         <div className="flex h-screen w-full bg-bg-app font-sans text-theme-secondary overflow-hidden">
-                <Sidebar />
-
                 <GlobalFileDropZone>
-                    <div className="flex flex-1 flex-col min-w-0 h-full overflow-hidden">
-                        <Header />
-                        <main className="w-full flex-1 min-h-0 overflow-y-auto px-3 sm:px-5 lg:px-8 pb-6">
-                            {!isLoggedIn && pendingDeepLink && (
-                                <div className="max-w-xl mx-auto mt-3 mb-2" data-testid="pending-deeplink-banner">
-                                    <AlertBanner variant="info" onDismiss={() => setPendingDeepLink(null)}>
-                                        {t('auth.pendingLinkNotice')}
-                                    </AlertBanner>
-                                </div>
-                            )}
-                            {deepLinkFeedback && (
-                                <div className="max-w-xl mx-auto mt-3 mb-2" data-testid="deeplink-feedback-banner">
-                                    <AlertBanner variant="warning" onDismiss={() => setDeepLinkFeedback(null)}>
-                                        {deepLinkFeedback}
-                                    </AlertBanner>
-                                </div>
-                            )}
-                            <AppRouter />
-                        </main>
+                    <div className="flex flex-1 min-h-0 w-full overflow-hidden">
+                        <Sidebar />
+
+                        <div className="flex flex-1 flex-col min-w-0 h-full overflow-hidden">
+                            <Header />
+                            <main className="w-full flex-1 min-h-0 overflow-y-auto px-3 sm:px-5 lg:px-8 pb-6">
+                                {!isLoggedIn && (pendingDeepLink || pendingDroppedFile) && (
+                                    <div className="max-w-xl mx-auto mt-3 mb-2" data-testid="pending-deeplink-banner">
+                                        <AlertBanner
+                                            variant="info"
+                                            onDismiss={() => {
+                                                setPendingDeepLink(null);
+                                                setPendingDroppedFile(null);
+                                            }}
+                                        >
+                                            {pendingDroppedFile
+                                                ? t('auth.pendingFileNotice', 'Datei vorgemerkt – wird direkt nach dem Anmelden geöffnet.')
+                                                : t('auth.pendingLinkNotice')}
+                                        </AlertBanner>
+                                    </div>
+                                )}
+                                {deepLinkFeedback && (
+                                    <div className="max-w-xl mx-auto mt-3 mb-2" data-testid="deeplink-feedback-banner">
+                                        <AlertBanner variant="warning" onDismiss={() => setDeepLinkFeedback(null)}>
+                                            {deepLinkFeedback}
+                                        </AlertBanner>
+                                    </div>
+                                )}
+                                <AppRouter />
+                            </main>
+                        </div>
                     </div>
                 </GlobalFileDropZone>
 

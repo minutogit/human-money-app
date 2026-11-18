@@ -17,6 +17,7 @@ import {
 } from "../types";
 import { normalizeCoordinates } from "../utils/geoUtils";
 import { estimateIsoDurationMs, quarterEndUtcMs, formatQuarter } from "../utils/retentionQuarter";
+import { APP_EVENTS, useAppEvent } from "../utils/appEvents";
 
 /**
  * Checks whether a voucher standard's immutable custom CEL rules require the creator's own gender.
@@ -120,7 +121,13 @@ export function useVoucherCreation() {
     const [errors, setErrors] = useState<Record<string, boolean>>({});
     const [anchorTemplates, setAnchorTemplates] = useState<StoredAnchorTemplateMeta[]>([]);
     const [selectedAnchorId, setSelectedAnchorId] = useState<string | null>(null);
+    const hasUserSelectedAnchorRef = useRef(false);
     const isMountedRef = useRef(true);
+
+    const handleSelectAnchor = useCallback((anchorId: string | null) => {
+        hasUserSelectedAnchorRef.current = true;
+        setSelectedAnchorId(anchorId);
+    }, []);
 
     useEffect(() => {
         isMountedRef.current = true;
@@ -137,9 +144,6 @@ export function useVoucherCreation() {
                 if (!active || !s?.l2AnchorTemplatesMeta) return;
                 const templates = s.l2AnchorTemplatesMeta;
                 setAnchorTemplates(templates);
-                if (templates.length > 0) {
-                    setSelectedAnchorId((prev) => prev ?? templates[0].anchorId);
-                }
             })
             .catch(() => {
                 // Keep offline-only default if settings are unavailable in isolated tests
@@ -147,23 +151,26 @@ export function useVoucherCreation() {
         return () => { active = false; };
     }, []);
 
-    useEffect(() => {
-        let active = true;
-        async function fetchStandards() {
-            try {
-                const fetchedStandards = await standardsService.getStandards();
-                if (!active) return;
-                setStandards(fetchedStandards);
-            } catch (e) {
-                if (!active) return;
-                logger.error(`Failed to fetch standards: ${stringifyError(e)}`);
-            } finally {
-                if (active) setIsLoading(false);
-            }
+    const refreshStandards = useCallback(async () => {
+        try {
+            const fetchedStandards = await standardsService.getStandards();
+            if (!isMountedRef.current) return;
+            setStandards(fetchedStandards);
+        } catch (e) {
+            if (!isMountedRef.current) return;
+            logger.error(`Failed to fetch standards: ${stringifyError(e)}`);
+        } finally {
+            if (isMountedRef.current) setIsLoading(false);
         }
-        fetchStandards();
-        return () => { active = false; };
     }, []);
+
+    useEffect(() => {
+        void refreshStandards();
+    }, [refreshStandards]);
+
+    useAppEvent(APP_EVENTS.STANDARDS_UPDATED, () => {
+        void refreshStandards();
+    });
 
     const handleStandardChange = useCallback(async (newId: string) => {
         setSelectedStandardId(newId);
@@ -287,6 +294,19 @@ export function useVoucherCreation() {
         Date.now() +
         estimateIsoDurationMs(validityDurationStr) +
         estimateIsoDurationMs(historyRetentionIso);
+
+    useEffect(() => {
+        if (hasUserSelectedAnchorRef.current) return;
+        if (anchorTemplates.length === 0) {
+            setSelectedAnchorId(null);
+            return;
+        }
+        const compatible = anchorTemplates.find(
+            (tpl) => (quarterEndUtcMs(tpl.retainUntilQuarter) ?? 0) >= estimatedDeletableAtMs
+        );
+        setSelectedAnchorId(compatible ? compatible.anchorId : null);
+    }, [anchorTemplates, estimatedDeletableAtMs]);
+
     const selectedAnchorTemplate =
         anchorTemplates.find((tpl) => tpl.anchorId === selectedAnchorId) || null;
     const retentionInsufficient = Boolean(
@@ -302,12 +322,14 @@ export function useVoucherCreation() {
         const { street, houseNumber, zipCode, city, country } = identity.address;
         const fullAddress = `${street} ${houseNumber}, ${zipCode} ${city}, ${country}`.trim();
         const creatorGender = standardRequiresCreatorGender(parsedStandard) ? identity.gender : "0";
+        const normalizedAmount = amount.trim().replace(',', '.');
+        const normalizedCollateral = collateral.amount.trim().replace(',', '.');
         
         return {
             validityDuration,
             nonRedeemableTestVoucher: nonRedeemable,
-            nominalValue: { amount, unit: parsedStandard?.immutable.blueprint.unit || "Units" },
-            collateral,
+            nominalValue: { amount: normalizedAmount, unit: parsedStandard?.immutable.blueprint.unit || "Units" },
+            collateral: { ...collateral, amount: normalizedCollateral },
             creator: {
                 ...identity,
                 gender: creatorGender,
@@ -342,7 +364,7 @@ export function useVoucherCreation() {
         setIdentity,
         setCollateral,
         setErrors,
-        setSelectedAnchorId,
+        setSelectedAnchorId: handleSelectAnchor,
         handleStandardChange,
         handleLoadProfile,
         handleCoordBlur,

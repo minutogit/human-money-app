@@ -270,8 +270,16 @@ export function useLoginFlow({ onLoginSuccess, onSwitchToCreate }: UseLoginFlowP
                 }
             } catch (e) {
                 handleSharedLoginError(e);
-                setPassword('');
-                passwordInputRef.current?.focus();
+                const errStr = stringifyError(e);
+                const errCode = isBackendError(e) ? e.code : '';
+                const isDeviceMismatch =
+                    errCode === 'error.auth.deviceMismatch' ||
+                    errStr.includes('Device Mismatch') ||
+                    errStr.includes('different device');
+                if (!isDeviceMismatch) {
+                    setPassword('');
+                    passwordInputRef.current?.focus();
+                }
             } finally {
                 setIsLoggingIn(false);
             }
