@@ -117,6 +117,98 @@ pub(crate) fn get_own_card_max_hops_inner(service: &mut AppService, password: Op
     stored.max_hops.clamp(1, 3)
 }
 
+fn update_shrink_window(stored: &mut StoredOwnMarketProfile, new_max_hops: u8, now: u64) {
+    const SHRINK_PROPAGATION_SECS: u64 = 30 * 86_400;
+    let prev_signed = stored
+        .last_card
+        .as_ref()
+        .map(|c| c.payload.max_hops.clamp(1, 3))
+        .unwrap_or(0);
+    let active_prev = if now < stored.shrink_until {
+        prev_signed.max(stored.shrink_hops)
+    } else {
+        prev_signed
+    };
+    if active_prev > new_max_hops {
+        stored.shrink_hops = active_prev;
+        stored.shrink_until = now.saturating_add(SHRINK_PROPAGATION_SECS);
+    } else {
+        stored.shrink_hops = 0;
+        stored.shrink_until = 0;
+    }
+}
+
+pub(crate) fn sign_unpublish_tombstone_card(
+    service: &mut AppService,
+    stored: &mut StoredOwnMarketProfile,
+    now: u64,
+) -> Result<(), FrontendError> {
+    let Some(ref prev) = stored.last_card else {
+        return Ok(());
+    };
+    let my_signing_key = service
+        .with_wallet_and_identity(|_w, id| id.signing_key.clone())
+        .map_err(FrontendError::from)?;
+    let root_did = human_money_core::crypto::create_user_id(&my_signing_key.verifying_key(), None)
+        .map_err(|e| FrontendError::from(format!("Failed to create user ID: {}", e)))?;
+
+    let prev_hops = prev.payload.max_hops.clamp(1, 3);
+    let active_hops = if now < stored.shrink_until {
+        prev_hops.max(stored.shrink_hops).clamp(1, 3)
+    } else {
+        prev_hops
+    };
+    stored.shrink_hops = active_hops;
+    stored.shrink_until = now.saturating_add(30 * 86_400);
+
+    let v = humoco_market::next_card_version(Some(prev.payload.v), now);
+    let valid_until = now.saturating_add(30 * 86_400);
+    let payload_input = humoco_market::CardPayloadInput {
+        did: root_did,
+        v,
+        valid_until,
+        max_hops: active_hops,
+        ad_count: 0,
+        allow_inquiries: false,
+        drops: Vec::new(),
+    };
+    let tombstone = humoco_market::sign_sd_card(payload_input, Vec::new(), &my_signing_key)
+        .map_err(|e| FrontendError::from(format!("Failed to sign tombstone SD card: {}", e)))?;
+    stored.last_card = Some(tombstone);
+    Ok(())
+}
+
+/// Re-signs `last_card` with a strictly higher version `v` so evicted contacts
+/// accept and apply the `<jws>~` empty-shell tombstone over cached disclosures.
+pub(crate) fn bump_own_card_version_for_eviction(
+    service: &mut AppService,
+    password: Option<&str>,
+) {
+    let mut stored: StoredOwnMarketProfile = match service
+        .load_encrypted_data(MARKET_OWN_PROFILE_KEY, password)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+    {
+        Some(s) => s,
+        None => return,
+    };
+    if stored.last_card.is_none() {
+        return;
+    }
+    let now = chrono::Utc::now().timestamp().max(0) as u64;
+    let res = if stored.published {
+        let drops_opt = load_drops_from_settings(service, None, password);
+        rebuild_and_sign_own_card_with_drops(service, &mut stored, now, drops_opt)
+    } else {
+        sign_unpublish_tombstone_card(service, &mut stored, now)
+    };
+    if res.is_ok() {
+        if let Ok(bytes) = serde_json::to_vec(&stored) {
+            let _ = service.save_encrypted_data(MARKET_OWN_PROFILE_KEY, &bytes, password);
+        }
+    }
+}
+
 pub(crate) fn set_own_card_max_hops_inner(
     service: &mut AppService,
     max_hops: u8,
@@ -129,8 +221,9 @@ pub(crate) fn set_own_card_max_hops_inner(
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
         .unwrap_or_default();
 
-    stored.max_hops = clamped;
     let now = chrono::Utc::now().timestamp().max(0) as u64;
+    update_shrink_window(&mut stored, clamped, now);
+    stored.max_hops = clamped;
     if stored.published {
         let drops_opt = load_drops_from_settings(service, None, password);
         rebuild_and_sign_own_card_with_drops(service, &mut stored, now, drops_opt)?;
@@ -206,6 +299,11 @@ pub fn rebuild_and_sign_own_card_with_drops(
         .map_err(FrontendError::from)?;
 
     let max_hops = stored.max_hops.clamp(1, 3);
+    let envelope_max_hops = if now < stored.shrink_until {
+        max_hops.max(stored.shrink_hops).clamp(1, 3)
+    } else {
+        max_hops
+    };
     let audience_dist = |aud: FieldAudience| -> Option<u8> {
         match aud {
             FieldAudience::Everyone => Some(max_hops),
@@ -413,7 +511,7 @@ pub fn rebuild_and_sign_own_card_with_drops(
         did: root_did,
         v,
         valid_until,
-        max_hops,
+        max_hops: envelope_max_hops,
         ad_count: active_ad_count,
         allow_inquiries: stored.allow_inquiries,
         drops,
@@ -699,9 +797,12 @@ pub fn save_my_market_profile_impl(
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
         .unwrap_or_default();
 
+    let now = chrono::Utc::now().timestamp().max(0) as u64;
+    let new_max_hops = request.max_hops.clamp(1, 3);
+    update_shrink_window(&mut stored, new_max_hops, now);
     stored.visibility = sanitized_visibility;
     stored.skills = request.skills;
-    stored.max_hops = request.max_hops.clamp(1, 3);
+    stored.max_hops = new_max_hops;
     stored.validity_years = request.validity_years.clamp(1, 3);
     stored.allow_inquiries = request.allow_inquiries;
     for ad in &mut stored.ads {
@@ -713,11 +814,10 @@ pub fn save_my_market_profile_impl(
             stored.published = true;
         } else {
             stored.published = false;
-            stored.last_card = None;
+            sign_unpublish_tombstone_card(&mut service, &mut stored, now)?;
         }
     }
 
-    let now = chrono::Utc::now().timestamp().max(0) as u64;
     if stored.published {
         let drops_opt = load_drops_from_settings(&mut service, None, password.as_deref());
         rebuild_and_sign_own_card_with_drops(&mut service, &mut stored, now, drops_opt)?;
@@ -764,7 +864,13 @@ pub async fn set_card_published_impl(
             rebuild_and_sign_own_card_with_drops(&mut service, &mut stored, now, drops_opt)?;
         } else {
             stored.published = false;
-            stored.last_card = None;
+            if delete_remote {
+                stored.last_card = None;
+                stored.shrink_hops = 0;
+                stored.shrink_until = 0;
+            } else {
+                sign_unpublish_tombstone_card(&mut service, &mut stored, now)?;
+            }
         }
 
         let bytes = serde_json::to_vec(&stored).map_err(|e| {

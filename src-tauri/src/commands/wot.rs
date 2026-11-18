@@ -137,6 +137,7 @@ pub fn set_wot_max_hops_impl(
     let now_secs = Utc::now().timestamp() as u64;
     reg.set_own_list_max_hops(max_hops, now_secs)
         .map_err(|e| FrontendError::from(e.to_string()))?;
+    reg.clear_drop_sent_log(None);
 
     let _ = state.ensure_wot_list_signed(&mut service, &mut reg);
     state

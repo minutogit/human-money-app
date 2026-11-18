@@ -67,8 +67,8 @@ pub struct StoredSyncAdmin {
     pub sync_index: u32,
     pub data_dir: String,
     pub max_members: usize,
-    #[serde(default = "default_max_total_storage_mb")]
     pub max_total_storage_mb: usize,
+    pub max_user_storage_mb: usize,
     #[serde(default)]
     pub register_url: Option<String>,
     pub policies: std::collections::BTreeMap<String, humoco_market::MemberPolicy>,
@@ -78,10 +78,6 @@ pub struct StoredSyncAdmin {
     pub last_members_hash: std::collections::BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revocation: Option<crate::sync_client::SyncRevocationNotice>,
-}
-
-fn default_max_total_storage_mb() -> usize {
-    256
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Default, PartialEq, Eq)]
@@ -116,6 +112,7 @@ pub struct StoredSyncState {
     pub sync_sources_by_did: std::collections::BTreeMap<String, String>,
     #[serde(default)]
     pub uploaded_media_blobs: std::collections::HashSet<String>,
+    pub wot_tombstone_fp_by_write_url: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Default, PartialEq, Eq)]
@@ -205,10 +202,25 @@ impl AppState {
         settings: AppSettings,
         password: Option<&str>,
     ) -> Result<(), AppFacadeError> {
+        let prev_min = {
+            let guard = self.settings.lock().unwrap();
+            guard.as_ref().map(|s| s.share_min_level)
+        }
+        .or_else(|| {
+            service
+                .load_encrypted_data(SETTINGS_KEY, password)
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<AppSettings>(&bytes).ok())
+                .map(|s| s.share_min_level)
+        });
+        let new_min = settings.share_min_level;
         let bytes =
             serde_json::to_vec(&settings).map_err(|e| AppFacadeError::Json(e.to_string()))?;
         service.save_encrypted_data(SETTINGS_KEY, &bytes, password)?;
         *self.settings.lock().unwrap() = Some(settings);
+        if prev_min.is_some_and(|prev| new_min > prev) {
+            crate::commands::market::bump_own_card_version_for_eviction(service, password);
+        }
         Ok(())
     }
 
@@ -432,6 +444,8 @@ impl AppState {
         } else if service.with_wallet(|_| ()).is_ok() {
             let mut reg = self.get_or_load_wot_register(service, password)?;
             let now_secs = Utc::now().timestamp() as u64;
+            let prev_level = reg.own_contacts.get(&can_did).map(|e| e.level).unwrap_or(0);
+            let new_eff_level = contact.trust_level.unwrap_or(0);
 
             if let Some(level) = contact.trust_level {
                 if level > 3 {
@@ -447,7 +461,16 @@ impl AppState {
                 };
                 reg.set_contact_trust(&can_did, level, hops, now_secs)
                     .map_err(|e| AppFacadeError::Generic(e.to_string()))?;
-                reg.prune_unreachable_lists();
+                if level == 0 {
+                    self.prune_local_data_on_trust_withdrawal(
+                        service,
+                        &mut reg,
+                        Some(&can_did),
+                        password,
+                    );
+                } else {
+                    reg.prune_unreachable_lists();
+                }
                 self.ensure_wot_list_signed(service, &mut reg)?;
                 self.save_wot_register(service, &reg, password)?;
                 contact.trust_level = Some(level);
@@ -457,12 +480,21 @@ impl AppState {
                     .remove_contact_trust(&can_did)
                     .map_err(|e| AppFacadeError::Generic(e.to_string()))?;
                 if removed {
-                    reg.prune_unreachable_lists();
+                    self.prune_local_data_on_trust_withdrawal(
+                        service,
+                        &mut reg,
+                        Some(&can_did),
+                        password,
+                    );
                     if reg.own_list_dirty {
                         self.ensure_wot_list_signed(service, &mut reg)?;
                     }
                     self.save_wot_register(service, &reg, password)?;
                 }
+            }
+
+            if new_eff_level < prev_level {
+                crate::commands::market::bump_own_card_version_for_eviction(service, password);
             }
         }
 
@@ -576,7 +608,12 @@ impl AppState {
                 let target_key = can_target.as_deref().unwrap_or(did);
                 if let Ok(removed) = reg.remove_contact_trust(target_key) {
                     if removed {
-                        reg.prune_unreachable_lists();
+                        self.prune_local_data_on_trust_withdrawal(
+                            service,
+                            &mut reg,
+                            Some(target_key),
+                            password,
+                        );
                         if reg.own_list_dirty {
                             self.ensure_wot_list_signed(service, &mut reg)?;
                         }
@@ -756,6 +793,46 @@ impl AppState {
     }
 
     // 7. Web of Trust (WoT) Helpers
+    pub fn prune_local_data_on_trust_withdrawal(
+        &self,
+        service: &mut AppService,
+        reg: &mut humoco_wot::TrustRegister,
+        revoked_did: Option<&str>,
+        password: Option<&str>,
+    ) {
+        let can_revoked = revoked_did.and_then(|d| canonicalize_did(d).ok());
+        if let Some(ref can) = can_revoked {
+            reg.raw_list_store.remove(can);
+            reg.invalidate_graph_cache();
+        }
+        reg.prune_unreachable_lists();
+        reg.clear_drop_sent_log(None);
+
+        if let Ok(bytes) = service.load_encrypted_data(MARKET_CARD_STORE_KEY, password) {
+            if let Ok(mut store) = serde_json::from_slice::<humoco_market::CardStore>(&bytes) {
+                let before = store.cards.len();
+                if let Some(ref can) = can_revoked {
+                    if let Ok(pk) = human_money_core::crypto::get_pubkey_from_user_id(can) {
+                        store.cards.remove(pk.as_bytes());
+                    }
+                }
+                store.cards.retain(|_, sc| {
+                    if sc.hops < 2 {
+                        return true;
+                    }
+                    reg.evaluate_did(&sc.card.payload.did, None)
+                        .is_ok_and(|ev| ev.shortest_hops.is_some())
+                });
+                if store.cards.len() != before {
+                    if let Ok(new_bytes) = serde_json::to_vec(&store) {
+                        let _ =
+                            service.save_encrypted_data(MARKET_CARD_STORE_KEY, &new_bytes, password);
+                    }
+                }
+            }
+        }
+    }
+
     pub fn ensure_wot_list_signed(
         &self,
         service: &mut AppService,

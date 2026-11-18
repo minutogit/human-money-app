@@ -352,6 +352,10 @@ pub fn open_slot_payload(
         return Err(MarketError::Slot("SlotBlob too short".to_string()));
     }
 
+    if &blob[0..8] == SLOT_MULTI_MAGIC {
+        return open_multi_class_slot_blob(blob, my_x25519_secret);
+    }
+
     if &blob[0..8] != SLOT_MAGIC {
         return Err(MarketError::Slot(
             "Invalid SlotBlob magic header".to_string(),
@@ -441,7 +445,7 @@ pub fn open_slot_blob(
     }
 }
 
-/// Seals up to 3 distance-class payloads into a single multi-class `SlotBlob`.
+/// Seals up to 4 distance-class payloads into a single multi-class `SlotBlob`.
 ///
 /// Multi-class slot format:
 /// `[b"HMSLOTM2" (8B) || count: u8 || for each class: (blob_len: u32_be || sub_blob_bytes)]`
@@ -451,9 +455,9 @@ pub fn seal_multi_class_slot_blob(
     classes: &[(&[u8], &[VerifyingKey])],
     max_total_bytes: usize,
 ) -> Result<Vec<u8>, MarketError> {
-    if classes.is_empty() || classes.len() > 3 {
+    if classes.is_empty() || classes.len() > 4 {
         return Err(MarketError::Validation(format!(
-            "Classes count must be between 1 and 3, got {}",
+            "Classes count must be between 1 and 4, got {}",
             classes.len()
         )));
     }
@@ -513,7 +517,7 @@ pub fn open_multi_class_slot_blob(
     }
 
     let count = blob[8] as usize;
-    if !(1..=3).contains(&count) {
+    if !(1..=4).contains(&count) {
         return Err(MarketError::Slot(format!(
             "Invalid multi-class count: {}",
             count

@@ -99,13 +99,19 @@ export const marketService = {
     // --- Sync Service Management ---
 
     prepareSyncSetup: async (
-        args?: { policy?: FrontendMemberPolicyDto; maxMembers?: number; maxTotalStorageMb?: number },
+        args?: {
+            policy?: FrontendMemberPolicyDto;
+            maxMembers?: number;
+            maxTotalStorageMb?: number;
+            maxUserStorageMb?: number;
+        },
         password?: string
     ): Promise<FrontendSyncSetupDraft> => {
         return await invoke<FrontendSyncSetupDraft>("prepare_sync_setup", {
             policy: args?.policy,
             maxMembers: args?.maxMembers,
             maxTotalStorageMb: args?.maxTotalStorageMb,
+            maxUserStorageMb: args?.maxUserStorageMb,
             password: password || undefined,
         });
     },

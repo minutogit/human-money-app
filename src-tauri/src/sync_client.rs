@@ -178,6 +178,8 @@ pub struct SyncServerAdminStatus {
     #[serde(default)]
     pub channel_counts: std::collections::BTreeMap<String, usize>,
     pub admin_pubkey: String,
+    pub max_members: usize,
+    pub max_user_bytes: u64,
 }
 
 pub fn canonical_revocation_message(
@@ -1020,6 +1022,73 @@ pub async fn fetch_admin_status(
         .json()
         .await
         .map_err(|e| format!("Failed to parse admin status JSON: {}", e))?;
+
+    Ok(status_data)
+}
+
+pub async fn put_admin_config(
+    client: &reqwest::Client,
+    write_url: &str,
+    admin_sk: &SigningKey,
+    max_total_storage_mb: usize,
+    max_members: usize,
+    max_user_storage_mb: usize,
+) -> Result<SyncServerAdminStatus, String> {
+    validate_sync_url(write_url)?;
+    let sep = if write_url.contains('?') { "&" } else { "?" };
+    let url = format!("{}{}admin_config", write_url, sep);
+
+    let body_json = serde_json::to_string(&serde_json::json!({
+        "max_total_storage_mb": max_total_storage_mb,
+        "max_members": max_members,
+        "max_user_storage_mb": max_user_storage_mb,
+    }))
+    .map_err(|e| format!("Failed to serialize admin_config payload: {}", e))?;
+
+    let timestamp = current_unix_timestamp();
+    let nonce = generate_sync_nonce();
+    let signed = humoco_market::sign_admin_request(
+        admin_sk,
+        "PUT_ADMIN_CONFIG",
+        "",
+        timestamp,
+        &nonce,
+        body_json.as_bytes(),
+    );
+
+    let resp = client
+        .put(&url)
+        .header("X-Drop-Pubkey", &signed.pubkey_hex)
+        .header("X-Drop-Timestamp", signed.timestamp.to_string())
+        .header("X-Drop-Nonce", &signed.nonce_hex)
+        .header("X-Drop-Signature", &signed.signature_hex)
+        .header("Content-Type", "application/json")
+        .body(body_json)
+        .send()
+        .await
+        .map_err(|e| format!("Network error pushing admin_config: {}", e))?;
+
+    let status = resp.status();
+    if status.as_u16() == 429 {
+        let secs = parse_retry_after(resp.headers());
+        return Err(format!(
+            "Rate limited pushing admin_config (HTTP 429). Retry-After: {}s",
+            secs
+        ));
+    }
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!(
+            "Server returned HTTP {} pushing admin_config: {}",
+            status,
+            text.trim()
+        ));
+    }
+
+    let status_data: SyncServerAdminStatus = resp
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse admin_config response JSON: {}", e))?;
 
     Ok(status_data)
 }

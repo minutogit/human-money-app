@@ -142,6 +142,92 @@ export const isSameSyncEndpoint = (
     );
 };
 
+interface QuotaEditorProps {
+    maxTotalStorageMb: number;
+    maxMembers: number;
+    maxUserStorageMb: number;
+    onChangeTotalStorage: (val: number) => void;
+    onChangeMembers: (val: number) => void;
+    onChangeUserStorage: (val: number) => void;
+    idPrefix: string;
+}
+
+const QuotaEditor: React.FC<QuotaEditorProps> = ({
+    maxTotalStorageMb,
+    maxMembers,
+    maxUserStorageMb,
+    onChangeTotalStorage,
+    onChangeMembers,
+    onChangeUserStorage,
+    idPrefix,
+}) => {
+    const { t } = useTranslation();
+
+    return (
+        <div className="pt-2 border-t border-theme-subtle/50 space-y-2 text-xs">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                <div className="space-y-1">
+                    <label
+                        htmlFor={`${idPrefix}-maxTotalStorageMb`}
+                        className="font-bold text-theme-secondary block"
+                    >
+                        {t('settings.syncHostMaxStorageLabel')}
+                    </label>
+                    <input
+                        id={`${idPrefix}-maxTotalStorageMb`}
+                        aria-label={t('settings.syncHostMaxStorageLabel')}
+                        type="number"
+                        min={10}
+                        max={10485760}
+                        value={maxTotalStorageMb}
+                        onChange={(e) => onChangeTotalStorage(Math.max(10, Number(e.target.value) || 10))}
+                        className="w-full rounded-xl border border-theme-subtle bg-bg-app px-2.5 py-1.5 text-xs text-theme-secondary focus:outline-none focus:ring-1 focus:ring-theme-primary"
+                    />
+                </div>
+                <div className="space-y-1">
+                    <label
+                        htmlFor={`${idPrefix}-maxMembers`}
+                        className="font-bold text-theme-secondary block"
+                    >
+                        {t('settings.syncHostMaxMembersLabel')}
+                    </label>
+                    <input
+                        id={`${idPrefix}-maxMembers`}
+                        aria-label={t('settings.syncHostMaxMembersLabel')}
+                        type="number"
+                        min={1}
+                        max={100000}
+                        value={maxMembers}
+                        onChange={(e) => onChangeMembers(Math.max(1, Math.min(100000, Number(e.target.value) || 1)))}
+                        className="w-full rounded-xl border border-theme-subtle bg-bg-app px-2.5 py-1.5 text-xs text-theme-secondary focus:outline-none focus:ring-1 focus:ring-theme-primary"
+                    />
+                </div>
+                <div className="space-y-1">
+                    <label
+                        htmlFor={`${idPrefix}-maxUserStorageMb`}
+                        className="font-bold text-theme-secondary block"
+                    >
+                        {t('settings.syncHostMaxUserStorageLabel')}
+                    </label>
+                    <input
+                        id={`${idPrefix}-maxUserStorageMb`}
+                        aria-label={t('settings.syncHostMaxUserStorageLabel')}
+                        type="number"
+                        min={10}
+                        max={10485760}
+                        value={maxUserStorageMb}
+                        onChange={(e) => onChangeUserStorage(Math.max(10, Number(e.target.value) || 10))}
+                        className="w-full rounded-xl border border-theme-subtle bg-bg-app px-2.5 py-1.5 text-xs text-theme-secondary focus:outline-none focus:ring-1 focus:ring-theme-primary"
+                    />
+                </div>
+            </div>
+            <p className="text-[11px] text-theme-secondary/80">
+                {t('settings.syncHostQuotasHint')}
+            </p>
+        </div>
+    );
+};
+
 interface PolicyEditorProps {
     policy: FrontendMemberPolicyDto;
     onChange: (updater: (prev: FrontendMemberPolicyDto) => FrontendMemberPolicyDto) => void;
@@ -293,8 +379,9 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
         bridgeMin: 2,
         hop2Min: 2,
     });
-    const hostMaxMembers = 300;
-    const hostMaxStorageMb = 50;
+    const [hostMaxMembers, setHostMaxMembers] = useState(300);
+    const [hostMaxStorageMb, setHostMaxStorageMb] = useState(2048);
+    const [hostMaxUserStorageMb, setHostMaxUserStorageMb] = useState(25);
     const [hostWebspaceUrl, setHostWebspaceUrlState] = useState(() => getSessionDraft(HOST_SYNC_DRAFT_KEY));
     const setHostWebspaceUrl = (val: string) => {
         setHostWebspaceUrlState(val);
@@ -345,6 +432,11 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
             setAdminStatus(admin || null);
             if (admin?.cardPolicy) {
                 setHostPolicy(admin.cardPolicy);
+            }
+            if (admin) {
+                setHostMaxMembers(admin.maxMembers || 300);
+                setHostMaxStorageMb(admin.maxTotalStorageMb || 2048);
+                setHostMaxUserStorageMb(admin.maxUserStorageMb || 25);
             }
             if (Array.isArray(s?.publicSyncs)) {
                 setConfiguredPublicDrops(s.publicSyncs);
@@ -673,6 +765,13 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
 
     // --- Tab 2 Actions (Host / Admin) ---
 
+    const normalizedHostQuotas = () => {
+        const maxUserStorageMb = Math.max(10, hostMaxUserStorageMb);
+        const maxTotalStorageMb = Math.max(maxUserStorageMb, hostMaxStorageMb);
+        const maxMembers = Math.max(1, Math.min(100000, hostMaxMembers));
+        return { maxMembers, maxTotalStorageMb, maxUserStorageMb };
+    };
+
     const handleDownloadZip = async () => {
         setIsDownloadingZip(true);
         setFeedback(null);
@@ -683,10 +782,10 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
             });
             if (filePath) {
                 await protectAction(async (pwd) => {
+                    const quotas = normalizedHostQuotas();
                     await marketService.prepareSyncSetup({
                         policy: hostPolicy,
-                        maxMembers: hostMaxMembers,
-                        maxTotalStorageMb: hostMaxStorageMb,
+                        ...quotas,
                     }, pwd || undefined);
                     await marketService.saveSyncSetupZip(filePath, pwd || undefined);
                 });
@@ -709,10 +808,10 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
             await protectAction(async (pwd) => {
                 let toml = '';
                 if (useWizardPolicy) {
+                    const quotas = normalizedHostQuotas();
                     const draft = await marketService.prepareSyncSetup({
                         policy: hostPolicy,
-                        maxMembers: hostMaxMembers,
-                        maxTotalStorageMb: hostMaxStorageMb,
+                        ...quotas,
                     }, pwd || undefined);
                     toml = draft?.rustConfigToml || '';
                 }
@@ -773,12 +872,15 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
         setFeedback(null);
         try {
             await protectAction(async (pwd) => {
+                const quotas = normalizedHostQuotas();
                 const updated = await marketService.updateSyncAdminConfig({
                     cardPolicy: hostPolicy,
-                    maxMembers: hostMaxMembers,
-                    maxTotalStorageMb: hostMaxStorageMb,
+                    ...quotas,
                 }, true, pwd || undefined);
                 setAdminStatus(updated);
+                setHostMaxMembers(updated.maxMembers);
+                setHostMaxStorageMb(updated.maxTotalStorageMb);
+                setHostMaxUserStorageMb(updated.maxUserStorageMb);
                 setFeedback({
                     type: 'success',
                     message: t('settings.syncHostPolicyUpdated'),
@@ -1454,6 +1556,16 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                                         idPrefix="setup"
                                     />
 
+                                    <QuotaEditor
+                                        maxTotalStorageMb={hostMaxStorageMb}
+                                        maxMembers={hostMaxMembers}
+                                        maxUserStorageMb={hostMaxUserStorageMb}
+                                        onChangeTotalStorage={setHostMaxStorageMb}
+                                        onChangeMembers={setHostMaxMembers}
+                                        onChangeUserStorage={setHostMaxUserStorageMb}
+                                        idPrefix="setup"
+                                    />
+
                                     <div className="pt-2 flex flex-wrap items-center gap-2">
                                         <Button
                                             type="button"
@@ -1636,6 +1748,16 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                                     <PolicyEditor
                                         policy={hostPolicy}
                                         onChange={setHostPolicy}
+                                        idPrefix="admin"
+                                    />
+
+                                    <QuotaEditor
+                                        maxTotalStorageMb={hostMaxStorageMb}
+                                        maxMembers={hostMaxMembers}
+                                        maxUserStorageMb={hostMaxUserStorageMb}
+                                        onChangeTotalStorage={setHostMaxStorageMb}
+                                        onChangeMembers={setHostMaxMembers}
+                                        onChangeUserStorage={setHostMaxUserStorageMb}
                                         idPrefix="admin"
                                     />
 

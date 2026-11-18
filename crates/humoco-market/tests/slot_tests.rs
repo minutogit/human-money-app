@@ -413,15 +413,16 @@ fn test_multi_class_slot_blob_validation_and_errors() {
     let err_empty = seal_multi_class_slot_blob(&[], 65536);
     assert!(matches!(err_empty, Err(MarketError::Validation(_))));
 
-    // 4 classes -> Err(Validation)
-    let four_classes: Vec<(&[u8], &[VerifyingKey])> = vec![
+    // 5 classes -> Err(Validation) (1..=4 supported)
+    let five_classes: Vec<(&[u8], &[VerifyingKey])> = vec![
+        (payload, std::slice::from_ref(&reader_vk)),
         (payload, std::slice::from_ref(&reader_vk)),
         (payload, std::slice::from_ref(&reader_vk)),
         (payload, std::slice::from_ref(&reader_vk)),
         (payload, std::slice::from_ref(&reader_vk)),
     ];
-    let err_four = seal_multi_class_slot_blob(&four_classes, 131_072);
-    assert!(matches!(err_four, Err(MarketError::Validation(_))));
+    let err_five = seal_multi_class_slot_blob(&five_classes, 131_072);
+    assert!(matches!(err_five, Err(MarketError::Validation(_))));
 
     // Class with empty readers -> Err(Validation)
     let empty_readers: Vec<(&[u8], &[VerifyingKey])> = vec![(payload, &[])];
@@ -453,10 +454,10 @@ fn test_multi_class_slot_blob_validation_and_errors() {
     bad_count[8] = 0;
     assert!(open_multi_class_slot_blob(&bad_count, &reader_x_sk).is_err());
 
-    // Count is 4
-    let mut bad_count4 = valid_blob.clone();
-    bad_count4[8] = 4;
-    assert!(open_multi_class_slot_blob(&bad_count4, &reader_x_sk).is_err());
+    // Count is 5 (max is 4)
+    let mut bad_count5 = valid_blob.clone();
+    bad_count5[8] = 5;
+    assert!(open_multi_class_slot_blob(&bad_count5, &reader_x_sk).is_err());
 
     // Truncated during length header or sub-blob
     for len in 9..valid_blob.len() - 1 {
@@ -558,4 +559,69 @@ fn test_backup_slot_padding_rejections_and_limits() {
     let mut bad_huge_len = valid_padded.clone();
     bad_huge_len[8..12].copy_from_slice(&1_000_000u32.to_be_bytes());
     assert!(unpad_backup_slot_bytes(&bad_huge_len).is_err());
+}
+
+#[test]
+fn test_open_slot_blob_supports_multi_class_tombstone_separation() {
+    let active_sk = SigningKey::from_bytes(&[11u8; 32]);
+    let active_vk = active_sk.verifying_key();
+    let active_x_sk = ed25519_sk_to_x25519_sk(&active_sk);
+
+    let evicted_sk = SigningKey::from_bytes(&[22u8; 32]);
+    let evicted_vk = evicted_sk.verifying_key();
+    let evicted_x_sk = ed25519_sk_to_x25519_sk(&evicted_sk);
+
+    let author_sk = SigningKey::from_bytes(&[33u8; 32]);
+    let author_did = create_user_id(&author_sk.verifying_key(), None).unwrap();
+    let card = sign_sd_card(
+        CardPayloadInput {
+            did: author_did,
+            v: 200,
+            valid_until: 1_900_000_000,
+            max_hops: 2,
+            ad_count: 0,
+            allow_inquiries: false,
+            drops: vec![],
+        },
+        vec![(
+            CardItem::Name {
+                first_name: Some("Alice".to_string()),
+                last_name: None,
+            },
+            2,
+        )],
+        &author_sk,
+    )
+    .unwrap();
+
+    let full_bundle = CardBundle {
+        envelopes: vec![CardEnvelope {
+            hops: 1,
+            card_wire: humoco_market::render_wire(&card, 1, humoco_market::WireFilter::Full)
+                .unwrap(),
+        }],
+    };
+    let tomb_bundle = CardBundle {
+        envelopes: vec![CardEnvelope {
+            hops: 1,
+            card_wire: format!("{}~", card.jws),
+        }],
+    };
+    let full_bytes = serde_json::to_vec(&full_bundle).unwrap();
+    let tomb_bytes = serde_json::to_vec(&tomb_bundle).unwrap();
+
+    let blob = seal_multi_class_slot_blob(
+        &[
+            (&full_bytes, std::slice::from_ref(&active_vk)),
+            (&tomb_bytes, std::slice::from_ref(&evicted_vk)),
+        ],
+        131_072,
+    )
+    .unwrap();
+
+    let active_opened = open_slot_blob(&blob, &active_x_sk).unwrap().unwrap();
+    assert_eq!(active_opened, full_bundle);
+
+    let evicted_opened = open_slot_blob(&blob, &evicted_x_sk).unwrap().unwrap();
+    assert_eq!(evicted_opened, tomb_bundle);
 }

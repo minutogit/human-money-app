@@ -679,3 +679,170 @@ proptest! {
         }
     }
 }
+
+#[test]
+fn test_empty_redacted_card_hides_person_and_ads_and_blocks_stale_zombie() {
+    use humoco_market::{
+        accept_envelope, forward_envelope, verify_sd_card, AcceptOutcome, CardEnvelope, CardStore,
+    };
+
+    let now = 1_700_000_000;
+    let alice_sk = create_keypair();
+    let alice_did = create_user_id(&alice_sk.verifying_key(), None).unwrap();
+
+    // v1 published at max_hops = 3 with Name + Ad
+    let card_v1 = sign_sd_card(
+        CardPayloadInput {
+            did: alice_did.clone(),
+            v: 100,
+            valid_until: now + 30 * 86_400,
+            max_hops: 3,
+            ad_count: 1,
+            allow_inquiries: true,
+            drops: vec![],
+        },
+        vec![
+            (
+                CardItem::Name {
+                    first_name: Some("Alice".to_string()),
+                    last_name: None,
+                },
+                3,
+            ),
+            (
+                CardItem::Ad(Ad {
+                    id: "0000000000000011".to_string(),
+                    kind: AdKind::Offer,
+                    title: "Fresh Honey".to_string(),
+                    text: None,
+                    pricing: None,
+                    published_at: now - 10,
+                    renewed_at: None,
+                    expires_at: now + 86_400,
+                    allow_inquiries: true,
+                    is_remote: false,
+                    image_token: None,
+                }),
+                3,
+            ),
+        ],
+        &alice_sk,
+    )
+    .unwrap();
+
+    // Bob (Hop 1) and Carol (Hop 2) receive v1
+    let mut carol_store = CardStore::default();
+    let v1_hop2_wire = render_wire(&card_v1, 2, WireFilter::Full).unwrap();
+    assert!(matches!(
+        accept_envelope(
+            &mut carol_store,
+            &CardEnvelope {
+                hops: 2,
+                card_wire: v1_hop2_wire.clone(),
+            },
+            now,
+            500,
+            None,
+            &|_| false
+        ),
+        AcceptOutcome::Accepted { .. }
+    ));
+
+    let carol_cards_v1: Vec<StoredCard> = carol_store.cards.values().cloned().collect();
+    let carol_view_v1 =
+        build_market_view(&[], &carol_cards_v1, "did:key:carol", &|_| TrustTier::Trusted, now);
+    assert_eq!(carol_view_v1.len(), 1);
+    assert_eq!(build_ad_board(&carol_view_v1).len(), 1);
+
+    // v2 shrinks items to Hop 1 while keeping envelope max_hops = 3 (shrink_hops)
+    let card_v2 = sign_sd_card(
+        CardPayloadInput {
+            did: alice_did.clone(),
+            v: 200,
+            valid_until: now + 30 * 86_400,
+            max_hops: 3,
+            ad_count: 1,
+            allow_inquiries: true,
+            drops: vec![],
+        },
+        vec![
+            (
+                CardItem::Name {
+                    first_name: Some("Alice".to_string()),
+                    last_name: None,
+                },
+                1,
+            ),
+            (
+                CardItem::Ad(Ad {
+                    id: "0000000000000011".to_string(),
+                    kind: AdKind::Offer,
+                    title: "Fresh Honey".to_string(),
+                    text: None,
+                    pricing: None,
+                    published_at: now - 10,
+                    renewed_at: None,
+                    expires_at: now + 86_400,
+                    allow_inquiries: true,
+                    is_remote: false,
+                    image_token: None,
+                }),
+                1,
+            ),
+        ],
+        &alice_sk,
+    )
+    .unwrap();
+
+    // Hop 1 forwards v2 to Hop 2 -> produces bare `<jws>~`
+    let hop1_stored = StoredCard {
+        card_wire: render_wire(&card_v2, 1, WireFilter::Full).unwrap(),
+        card: verify_sd_card(&render_wire(&card_v2, 1, WireFilter::Full).unwrap()).unwrap(),
+        hops: 1,
+        received_at: now,
+    };
+    let fwd_to_carol = forward_envelope(&hop1_stored).unwrap();
+    assert!(fwd_to_carol.card_wire.ends_with('~'));
+
+    assert!(matches!(
+        accept_envelope(
+            &mut carol_store,
+            &fwd_to_carol,
+            now + 5,
+            500,
+            None,
+            &|_| false
+        ),
+        AcceptOutcome::Accepted { replaced: true, .. }
+    ));
+
+    // Carol still stores the empty shell (to forward to Dave & block v1 zombies),
+    // but MarketView & AdBoard show NOTHING!
+    assert_eq!(carol_store.cards.len(), 1);
+    let carol_cards_v2: Vec<StoredCard> = carol_store.cards.values().cloned().collect();
+    let carol_view_v2 = build_market_view(
+        &[],
+        &carol_cards_v2,
+        "did:key:carol",
+        &|_| TrustTier::Trusted,
+        now + 5,
+    );
+    assert!(carol_view_v2.is_empty());
+    assert!(build_ad_board(&carol_view_v2).is_empty());
+
+    // Delayed v1 replay MUST be ignored as stale!
+    assert!(matches!(
+        accept_envelope(
+            &mut carol_store,
+            &CardEnvelope {
+                hops: 2,
+                card_wire: v1_hop2_wire,
+            },
+            now + 10,
+            500,
+            None,
+            &|_| false
+        ),
+        AcceptOutcome::IgnoredStale
+    ));
+}

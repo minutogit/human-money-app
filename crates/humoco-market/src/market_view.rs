@@ -208,6 +208,10 @@ pub fn build_market_view<'a>(
 
     // 2. Process stored cards
     for stored in cards {
+        // Ignore empty `<jws>~` redacted/tombstone cards for UI rendering while keeping them in CardStore.
+        if stored.card.disclosures.is_empty() {
+            continue;
+        }
         let card_pk = match get_pubkey_from_user_id(&stored.card.payload.did) {
             Ok(pk) => pk,
             Err(_) => continue,

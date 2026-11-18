@@ -204,12 +204,23 @@ describe('SyncServiceSettingsCard Component', () => {
             expect(screen.getByRole('button', { name: /humoco-sync-setup\.zip herunterladen|Download humoco-sync-setup\.zip/i })).toBeInTheDocument();
         });
 
+        expect(screen.getByLabelText(/Gesamtspeicher \(MB\)|Total Storage \(MB\)/i)).toHaveValue(2048);
+        expect(screen.getByLabelText(/Max\. Mitglieder|Max Members/i)).toHaveValue(300);
+        expect(screen.getByLabelText(/Limit pro Nutzer \(MB\)|Limit per User \(MB\)/i)).toHaveValue(25);
+
         const downloadBtn = screen.getByRole('button', { name: /humoco-sync-setup\.zip herunterladen|Download humoco-sync-setup\.zip/i });
         fireEvent.click(downloadBtn);
 
         await waitFor(() => {
             expect(save).toHaveBeenCalled();
-            expect(marketService.prepareSyncSetup).toHaveBeenCalled();
+            expect(marketService.prepareSyncSetup).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    maxMembers: 300,
+                    maxTotalStorageMb: 2048,
+                    maxUserStorageMb: 25,
+                }),
+                'mock-wallet-pw'
+            );
             expect(marketService.saveSyncSetupZip).toHaveBeenCalledWith('/tmp/humoco-sync-setup.zip', 'mock-wallet-pw');
         });
     });
@@ -225,6 +236,7 @@ describe('SyncServiceSettingsCard Component', () => {
             dataDir: 'data',
             maxMembers: 300,
             maxTotalStorageMb: 50,
+            maxUserStorageMb: 25,
             usedBytes: 10 * 1024 * 1024,
             softWarning: false,
             cardPolicy: {
@@ -274,6 +286,7 @@ describe('SyncServiceSettingsCard Component', () => {
             dataDir: 'data',
             maxMembers: 300,
             maxTotalStorageMb: 50,
+            maxUserStorageMb: 25,
             usedBytes: 10 * 1024 * 1024,
             softWarning: false,
             cardPolicy: {
@@ -316,10 +329,17 @@ describe('SyncServiceSettingsCard Component', () => {
             expect(screen.getByText(/Zugriffsregeln|Access Rules/i)).toBeInTheDocument();
         });
 
-        // Select level 3
+        // Select level 3 and update storage/member quotas
         const directMinSelect = screen.getByRole('combobox', { name: /Welche deiner Kontakte|Which contacts/i });
         fireEvent.change(directMinSelect, { target: { value: '3' } });
         expect(directMinSelect).toHaveValue('3');
+
+        const totalStorageInput = screen.getByLabelText(/Gesamtspeicher \(MB\)|Total Storage \(MB\)/i);
+        fireEvent.change(totalStorageInput, { target: { value: '4096' } });
+        const maxMembersInput = screen.getByLabelText(/Max\. Mitglieder|Max Members/i);
+        fireEvent.change(maxMembersInput, { target: { value: '500' } });
+        const maxUserInput = screen.getByLabelText(/Limit pro Nutzer \(MB\)|Limit per User \(MB\)/i);
+        fireEvent.change(maxUserInput, { target: { value: '30' } });
 
         // Click update rules
         const updateBtn = screen.getByRole('button', { name: /Zugriffsregeln.*aktualisieren|Update Access Rules on Server/i });
@@ -331,6 +351,9 @@ describe('SyncServiceSettingsCard Component', () => {
                     cardPolicy: expect.objectContaining({
                         directMin: 3,
                     }),
+                    maxMembers: 500,
+                    maxTotalStorageMb: 4096,
+                    maxUserStorageMb: 30,
                 }),
                 true,
                 'mock-wallet-pw'
@@ -593,7 +616,8 @@ describe('SyncServiceSettingsCard Component', () => {
             dataDir: 'd-1234',
             adminPubkey: 'abcd',
             maxMembers: 300,
-            maxTotalStorageMb: 50,
+            maxTotalStorageMb: 2048,
+            maxUserStorageMb: 25,
             policy: {
                 directMin: 2,
                 hop2Enabled: true,

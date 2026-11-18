@@ -14,12 +14,14 @@ pub fn generate_sync_config_php(
     data_dir: &str,
     max_members: usize,
     max_total_storage_mb: usize,
+    max_user_storage_mb: usize,
     register_url: Option<&str>,
 ) -> String {
     let register_url_val = match register_url {
         Some(url) => format!("'{}'", url.replace('\'', "\\'")),
         None => "null".to_string(),
     };
+    let max_media_user_bytes: u64 = 6_291_456u64.min((max_user_storage_mb as u64).saturating_mul(1024 * 1024));
     format!(
         r#"<?php // config.php – adjust to your needs
 return [
@@ -38,6 +40,9 @@ return [
     // Total storage quota in megabytes across all channels
     'max_total_storage_mb' => {},
 
+    // Per-member storage quota in megabytes across all channels (min 10 MB)
+    'max_user_storage_mb'  => {},
+
     // Set to true (or export HUMOCO_DISABLE_RATE_LIMIT=1 in env) to disable the IP rate limiter
     // for local multi-wallet development and testing. Keep false in production.
     'disable_rate_limit'   => false,
@@ -49,11 +54,11 @@ return [
         'backup' => ['max_bytes' => 5242880, 'ttl_days' => 180],
         'post'   => ['max_bytes' => 524288,  'ttl_days' => 21],
         'media'  => [
-            'max_bytes'      => 102400,
-            'max_user_count' => 5,
-            'max_user_bytes' => 409600,
-            'max_channel_mb' => 100,
-            'ttl_days'       => 180,
+            'max_bytes'      => 524288,
+            'max_user_count' => 12,
+            'max_user_bytes' => {},
+            'max_channel_mb' => 512,
+            'ttl_days'       => 90,
         ],
     ],
 
@@ -68,7 +73,13 @@ return [
     ],
 ];
 "#,
-        admin_pubkey, data_dir, register_url_val, max_members, max_total_storage_mb
+        admin_pubkey,
+        data_dir,
+        register_url_val,
+        max_members,
+        max_total_storage_mb,
+        max_user_storage_mb,
+        max_media_user_bytes
     )
 }
 
@@ -92,11 +103,14 @@ pub fn generate_rust_sync_config_toml(
     data_dir: &str,
     max_members: usize,
     max_total_storage_mb: usize,
+    max_user_storage_mb: usize,
     register_url: Option<&str>,
 ) -> String {
     let esc_admin = escape_toml_basic_string(admin_pubkey);
     let esc_dir = escape_toml_basic_string(data_dir);
     let max_free_pool_mb = (max_total_storage_mb / 4).max(1);
+    let max_user_bytes: u64 = (max_user_storage_mb as u64).saturating_mul(1024 * 1024);
+    let max_friends_media_user_bytes: u64 = 6_291_456u64.min(max_user_bytes);
     let public_base_url = register_url
         .and_then(|u| {
             let trimmed = u.trim();
@@ -131,6 +145,7 @@ trusted_proxy_hops = 1
 enable_admin_app = true
 admin_app_profile = "friends"
 max_admin_members = {max_members}
+max_admin_user_storage_mb = {max_user_storage_mb}
 
 # Toggle to true to also allow public/community self-registration on the same server
 enable_public_registration = false
@@ -217,7 +232,7 @@ max_user_bytes = 1048576
 
 [profiles.friends]
 display_name = "Friends & Host Circle"
-max_total_bytes = 20971520
+max_total_bytes = {max_user_bytes}
 is_free_pool = false
 store_contact_email = false
 
@@ -241,7 +256,7 @@ ttl_days = 90
 max_bytes = 524288
 ttl_days = 90
 max_user_count = 16
-max_user_bytes = 6291456
+max_user_bytes = {max_friends_media_user_bytes}
 
 [profiles.pro]
 display_name = "Supporter Pro"
@@ -284,6 +299,7 @@ pub fn build_sync_zip_bytes(
     data_dir: &str,
     max_members: usize,
     max_total_storage_mb: usize,
+    max_user_storage_mb: usize,
     register_url: Option<&str>,
 ) -> Vec<u8> {
     let config_php = generate_sync_config_php(
@@ -291,6 +307,7 @@ pub fn build_sync_zip_bytes(
         data_dir,
         max_members,
         max_total_storage_mb,
+        max_user_storage_mb,
         register_url,
     );
     let config_bytes = config_php.as_bytes();
@@ -413,7 +430,8 @@ mod tests {
         let admin_pubkey = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
         let data_dir = "d-test1234";
         let max_members = 250;
-        let max_total_storage_mb = 256;
+        let max_total_storage_mb = 2048;
+        let max_user_storage_mb = 25;
         let register_url = Some("https://example.com/register");
 
         let zip_bytes = build_sync_zip_bytes(
@@ -421,6 +439,7 @@ mod tests {
             data_dir,
             max_members,
             max_total_storage_mb,
+            max_user_storage_mb,
             register_url,
         );
         assert!(!zip_bytes.is_empty());
@@ -496,7 +515,8 @@ mod tests {
         assert!(cfg_str.contains(admin_pubkey));
         assert!(cfg_str.contains(data_dir));
         assert!(cfg_str.contains("250"));
-        assert!(cfg_str.contains("256"));
+        assert!(cfg_str.contains("2048"));
+        assert!(cfg_str.contains("'max_user_storage_mb'  => 25"));
         assert!(cfg_str.contains("'disable_rate_limit'"));
         assert!(cfg_str.contains("https://example.com/register"));
         assert!(cfg_str.contains("'card'"));
@@ -516,15 +536,17 @@ mod tests {
             admin_pubkey,
             "d-test1234",
             300,
-            512,
+            2048,
+            25,
             Some("https://sync.example.org/register"),
         );
         assert!(toml_cfg.contains(&format!("admin_pubkey = \"{}\"", admin_pubkey)));
         assert!(toml_cfg.contains("data_dir = \"d-test1234\""));
         assert!(toml_cfg.contains("public_base_url = \"https://sync.example.org\""));
         assert!(toml_cfg.contains("max_admin_members = 300"));
-        assert!(toml_cfg.contains("max_total_storage_mb = 512"));
-        assert!(toml_cfg.contains("max_free_pool_mb = 128"));
+        assert!(toml_cfg.contains("max_admin_user_storage_mb = 25"));
+        assert!(toml_cfg.contains("max_total_storage_mb = 2048"));
+        assert!(toml_cfg.contains("max_free_pool_mb = 512"));
         assert!(toml_cfg.contains("[lock]"));
         assert!(toml_cfg.contains("[profiles.free]"));
         assert!(toml_cfg.contains("[profiles.friends]"));

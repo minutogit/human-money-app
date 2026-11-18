@@ -248,10 +248,35 @@ pub async fn sync_channel_members_impl(
     push_all_channel_members(&client, state, &mut admin, &admin_sk, password).await
 }
 
+fn validate_admin_quotas(
+    max_total_storage_mb: usize,
+    max_members: usize,
+    max_user_storage_mb: usize,
+) -> Result<(), FrontendError> {
+    if max_members == 0 || max_members > 100_000 {
+        return Err(FrontendError::from(
+            "max_members must be between 1 and 100000".to_string(),
+        ));
+    }
+    if max_user_storage_mb < 10 {
+        return Err(FrontendError::from(
+            "max_user_storage_mb must be at least 10 MB".to_string(),
+        ));
+    }
+    if max_total_storage_mb < max_user_storage_mb || max_total_storage_mb > 10_485_760 {
+        return Err(FrontendError::from(
+            "max_total_storage_mb must be between max_user_storage_mb and 10485760 MB"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
 pub fn prepare_sync_setup_impl(
     policy: Option<FrontendMemberPolicyDto>,
     max_members: Option<usize>,
     max_total_storage_mb: Option<usize>,
+    max_user_storage_mb: Option<usize>,
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendSyncSetupDraft, FrontendError> {
@@ -265,7 +290,9 @@ pub fn prepare_sync_setup_impl(
 
     let card_policy = policy.unwrap_or_default();
     let max_mem = max_members.unwrap_or(300);
-    let max_storage_mb = max_total_storage_mb.unwrap_or(256);
+    let max_storage_mb = max_total_storage_mb.unwrap_or(2048);
+    let max_user_mb = max_user_storage_mb.unwrap_or(25);
+    validate_admin_quotas(max_storage_mb, max_mem, max_user_mb)?;
 
     let mut policies = BTreeMap::new();
     policies.insert("card".to_string(), card_policy.clone().into());
@@ -308,6 +335,7 @@ pub fn prepare_sync_setup_impl(
         data_dir: data_dir.clone(),
         max_members: max_mem,
         max_total_storage_mb: max_storage_mb,
+        max_user_storage_mb: max_user_mb,
         register_url: None,
         policies,
         allow: Vec::new(),
@@ -328,6 +356,7 @@ pub fn prepare_sync_setup_impl(
         &data_dir,
         max_mem,
         max_storage_mb,
+        max_user_mb,
         None,
     );
     let zip_base64 = base64::engine::general_purpose::STANDARD.encode(&zip_bytes);
@@ -336,6 +365,7 @@ pub fn prepare_sync_setup_impl(
         &data_dir,
         max_mem,
         max_storage_mb,
+        max_user_mb,
         None,
     );
 
@@ -345,6 +375,7 @@ pub fn prepare_sync_setup_impl(
         admin_pubkey,
         max_members: max_mem,
         max_total_storage_mb: max_storage_mb,
+        max_user_storage_mb: max_user_mb,
         policy: card_policy,
         zip_base64,
         rust_config_toml,
@@ -356,10 +387,18 @@ pub fn prepare_sync_setup(
     policy: Option<FrontendMemberPolicyDto>,
     max_members: Option<usize>,
     max_total_storage_mb: Option<usize>,
+    max_user_storage_mb: Option<usize>,
     password: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<FrontendSyncSetupDraft, FrontendError> {
-    prepare_sync_setup_impl(policy, max_members, max_total_storage_mb, password, &state)
+    prepare_sync_setup_impl(
+        policy,
+        max_members,
+        max_total_storage_mb,
+        max_user_storage_mb,
+        password,
+        &state,
+    )
 }
 
 pub fn get_rust_sync_config_impl(
@@ -378,6 +417,7 @@ pub fn get_rust_sync_config_impl(
             &admin.data_dir,
             admin.max_members,
             admin.max_total_storage_mb,
+            admin.max_user_storage_mb,
             admin.register_url.as_deref(),
         ));
     }
@@ -391,7 +431,8 @@ pub fn get_rust_sync_config_impl(
         &admin_pubkey,
         &data_dir,
         300,
-        256,
+        2048,
+        25,
         None,
     ))
 }
@@ -423,6 +464,7 @@ pub fn save_sync_setup_zip_impl(
         &admin.data_dir,
         admin.max_members,
         admin.max_total_storage_mb,
+        admin.max_user_storage_mb,
         admin.register_url.as_deref(),
     );
 
@@ -503,7 +545,7 @@ pub async fn finalize_sync_setup_impl(
             ))
         })?;
 
-    let remote_status = sync_client::fetch_admin_status(&client, &write_url, &admin_sk)
+    sync_client::fetch_admin_status(&client, &write_url, &admin_sk)
         .await
         .map_err(|e| {
             FrontendError::from(format!(
@@ -515,7 +557,29 @@ pub async fn finalize_sync_setup_impl(
     admin.descriptor.write_url = write_url.clone();
     admin.descriptor.read_url = server_read_url;
 
-    // Push members to all 4 channels; roll back MARKET_SYNC_ADMIN_KEY if any channel fails.
+    // Push configured admin quotas & members; roll back MARKET_SYNC_ADMIN_KEY on failure.
+    let remote_status = match sync_client::put_admin_config(
+        &client,
+        &write_url,
+        &admin_sk,
+        admin.max_total_storage_mb,
+        admin.max_members,
+        admin.max_user_storage_mb,
+    )
+    .await
+    {
+        Ok(st) => st,
+        Err(err) => {
+            let mut service = state.service.lock().unwrap();
+            let _ = service.save_encrypted_data(
+                MARKET_SYNC_ADMIN_KEY,
+                &original_admin_bytes,
+                password.as_deref(),
+            );
+            return Err(FrontendError::from(err));
+        }
+    };
+
     if let Err(err) =
         push_all_channel_members(&client, state, &mut admin, &admin_sk, password.as_deref()).await
     {
@@ -572,8 +636,9 @@ pub async fn finalize_sync_setup_impl(
         descriptor: admin.descriptor.clone().into(),
         admin_pubkey: admin.descriptor.drop_pub.clone(),
         data_dir: admin.data_dir,
-        max_members: admin.max_members,
-        max_total_storage_mb: admin.max_total_storage_mb,
+        max_members: remote_status.max_members,
+        max_total_storage_mb: (remote_status.max_bytes / (1024 * 1024)) as usize,
+        max_user_storage_mb: (remote_status.max_user_bytes / (1024 * 1024)) as usize,
         used_bytes: Some(remote_status.used_bytes),
         max_bytes: Some(remote_status.max_bytes),
         soft_warning: remote_status.soft_warning,
@@ -811,18 +876,32 @@ pub async fn get_sync_admin_status_impl(
         None
     };
 
-    let (used_bytes, max_bytes, soft_warning, channel_counts) = match remote_status {
+    let (
+        used_bytes,
+        max_bytes,
+        soft_warning,
+        channel_counts,
+        eff_max_members,
+        eff_total_mb,
+        eff_user_mb,
+    ) = match remote_status {
         Some(s) => (
             Some(s.used_bytes),
             Some(s.max_bytes),
             s.soft_warning,
             s.channel_counts,
+            s.max_members,
+            (s.max_bytes / (1024 * 1024)) as usize,
+            (s.max_user_bytes / (1024 * 1024)) as usize,
         ),
         None => (
             None,
             Some((admin.max_total_storage_mb as u64) * 1024 * 1024),
             false,
             BTreeMap::new(),
+            admin.max_members,
+            admin.max_total_storage_mb,
+            admin.max_user_storage_mb,
         ),
     };
 
@@ -830,8 +909,9 @@ pub async fn get_sync_admin_status_impl(
         descriptor: admin.descriptor.clone().into(),
         admin_pubkey: admin.descriptor.drop_pub.clone(),
         data_dir: admin.data_dir,
-        max_members: admin.max_members,
-        max_total_storage_mb: admin.max_total_storage_mb,
+        max_members: eff_max_members,
+        max_total_storage_mb: eff_total_mb,
+        max_user_storage_mb: eff_user_mb,
         used_bytes,
         max_bytes,
         soft_warning,
@@ -893,12 +973,33 @@ pub async fn update_sync_admin_config_impl(
     if let Some(mb) = update.max_total_storage_mb {
         admin.max_total_storage_mb = mb;
     }
+    if let Some(umb) = update.max_user_storage_mb {
+        admin.max_user_storage_mb = umb;
+    }
+    validate_admin_quotas(
+        admin.max_total_storage_mb,
+        admin.max_members,
+        admin.max_user_storage_mb,
+    )?;
 
-    if push_now && !admin.descriptor.write_url.is_empty() {
+    let pushed_status = if push_now && !admin.descriptor.write_url.is_empty() {
         let client = sync_client::create_sync_http_client();
+        let st = sync_client::put_admin_config(
+            &client,
+            &admin.descriptor.write_url,
+            &admin_sk,
+            admin.max_total_storage_mb,
+            admin.max_members,
+            admin.max_user_storage_mb,
+        )
+        .await
+        .map_err(FrontendError::from)?;
         push_all_channel_members(&client, state, &mut admin, &admin_sk, password.as_deref())
             .await?;
-    }
+        Some(st)
+    } else {
+        None
+    };
 
     {
         let mut service = state.service.lock().unwrap();
@@ -922,16 +1023,45 @@ pub async fn update_sync_admin_config_impl(
     };
 
     let card_policy = admin.policies.get("card").cloned().unwrap_or_default();
+    let (
+        used_bytes,
+        max_bytes,
+        soft_warning,
+        channel_counts,
+        eff_max_members,
+        eff_total_mb,
+        eff_user_mb,
+    ) = match pushed_status {
+        Some(s) => (
+            Some(s.used_bytes),
+            Some(s.max_bytes),
+            s.soft_warning,
+            s.channel_counts,
+            s.max_members,
+            (s.max_bytes / (1024 * 1024)) as usize,
+            (s.max_user_bytes / (1024 * 1024)) as usize,
+        ),
+        None => (
+            None,
+            Some((admin.max_total_storage_mb as u64) * 1024 * 1024),
+            false,
+            BTreeMap::new(),
+            admin.max_members,
+            admin.max_total_storage_mb,
+            admin.max_user_storage_mb,
+        ),
+    };
 
     Ok(FrontendSyncAdminStatus {
         descriptor: admin.descriptor.clone().into(),
         admin_pubkey: admin.descriptor.drop_pub.clone(),
         data_dir: admin.data_dir,
-        max_members: admin.max_members,
-        max_total_storage_mb: admin.max_total_storage_mb,
-        used_bytes: None,
-        max_bytes: Some((admin.max_total_storage_mb as u64) * 1024 * 1024),
-        soft_warning: false,
+        max_members: eff_max_members,
+        max_total_storage_mb: eff_total_mb,
+        max_user_storage_mb: eff_user_mb,
+        used_bytes,
+        max_bytes,
+        soft_warning,
         card_policy: card_policy.into(),
         allow: admin.allow,
         deny: admin.deny,
@@ -940,7 +1070,7 @@ pub async fn update_sync_admin_config_impl(
         hop2_member_count: stats.hop2_count,
         total_member_count: stats.total_count,
         active_slot_ids,
-        channel_counts: BTreeMap::new(),
+        channel_counts,
         revocation: admin.revocation.clone(),
     })
 }
@@ -2176,13 +2306,23 @@ pub async fn sync_market_channels_with_options(
     }
 
     // 2. Upload check
-    let (my_ed_sk, master_seed, my_prefix, own_card_opt, own_profile_opt, readers, readers_hash) = {
+    let (
+        my_ed_sk,
+        master_seed,
+        my_prefix,
+        own_card_opt,
+        own_profile_opt,
+        readers,
+        evicted_reader_keys,
+        readers_hash,
+    ) = {
         let mut service = state.service.lock().unwrap();
-        let (my_ed_sk, my_prefix) = service
+        let (my_ed_sk, my_prefix, my_can_did) = service
             .with_wallet_and_identity(|_w, id| {
                 let pfx = human_money_core::crypto::get_prefix_from_user_id(&id.user_id)
                     .map(|s| s.to_string());
-                (id.signing_key.clone(), pfx)
+                let can = canonicalize_did(&id.user_id).ok();
+                (id.signing_key.clone(), pfx, can)
             })
             .map_err(FrontendError::from)?;
         let master_seed = my_ed_sk.to_bytes();
@@ -2191,33 +2331,65 @@ pub async fn sync_market_channels_with_options(
             .load_encrypted_data(crate::state::MARKET_OWN_PROFILE_KEY, password.as_deref())
             .ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok());
-        let own_card = own_profile.as_ref().and_then(|p| {
-            if p.published {
-                p.last_card.clone()
-            } else {
-                None
-            }
-        });
+        // Include unexpired <jws>~ tombstone cards even when `published == false`.
+        let own_card = own_profile.as_ref().and_then(|p| p.last_card.clone());
 
         let reg = state
             .get_or_load_wot_register(&mut service, password.as_deref())
             .ok();
+        let address_book: crate::models::FrontendAddressBook = service
+            .load_encrypted_data(CONTACTS_DATA_NAME, password.as_deref())
+            .ok()
+            .and_then(|data| serde_json::from_slice(&data).ok())
+            .unwrap_or_default();
+
+        let check_offender = |service: &mut AppService, did: &str| -> bool {
+            use human_money_core::models::conflict::TrustStatus;
+            service
+                .with_wallet(|wallet| {
+                    matches!(wallet.check_reputation(did), TrustStatus::KnownOffender(_))
+                })
+                .unwrap_or(false)
+        };
 
         let mut reader_keys = Vec::new();
+        let mut evicted_keys = Vec::new();
         if let Some(r) = reg {
             for (did, entry) in &r.own_contacts {
-                if entry.level >= settings.share_min_level {
-                    if let Ok(pk) = human_money_core::crypto::get_pubkey_from_user_id(did) {
+                if let Ok(pk) = human_money_core::crypto::get_pubkey_from_user_id(did) {
+                    if entry.level >= settings.share_min_level {
                         reader_keys.push(pk);
+                    } else if !check_offender(&mut service, did) {
+                        evicted_keys.push(pk);
                     }
+                }
+            }
+        }
+        let reader_set: HashSet<[u8; 32]> = reader_keys.iter().map(|k| *k.as_bytes()).collect();
+        for contact in address_book.contacts.values() {
+            let can = canonicalize_did(&contact.did).unwrap_or_else(|_| contact.did.clone());
+            if my_can_did.as_deref() == Some(can.as_str()) {
+                continue;
+            }
+            if let Ok(pk) = human_money_core::crypto::get_pubkey_from_user_id(&can) {
+                if !reader_set.contains(pk.as_bytes()) && !check_offender(&mut service, &can) {
+                    evicted_keys.push(pk);
                 }
             }
         }
         reader_keys.sort_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
         reader_keys.dedup();
+        evicted_keys.sort_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
+        evicted_keys.dedup();
+        evicted_keys.truncate(humoco_market::MAX_SLOT_RECIPIENTS);
 
         let mut hasher = sha2::Sha256::new();
+        hasher.update(b"active");
         for k in &reader_keys {
+            hasher.update(k.as_bytes());
+        }
+        hasher.update(b"evicted");
+        for k in &evicted_keys {
             hasher.update(k.as_bytes());
         }
         let readers_hash = hex::encode(hasher.finalize());
@@ -2229,6 +2401,7 @@ pub async fn sync_market_channels_with_options(
             own_card,
             own_profile,
             reader_keys,
+            evicted_keys,
             readers_hash,
         )
     };
@@ -2265,16 +2438,28 @@ pub async fn sync_market_channels_with_options(
         }
     }
 
-    if settings.market_sync_enabled && !upload_targets.is_empty() && !readers.is_empty() {
-        let active_own_card = own_card_opt
-            .as_ref()
-            .filter(|c| now_secs < c.payload.valid_until);
+    let active_own_card = own_card_opt
+        .as_ref()
+        .filter(|c| now_secs < c.payload.valid_until);
+    let mut active_media_blob_ids: HashSet<String> = HashSet::new();
+
+    if settings.market_sync_enabled
+        && !upload_targets.is_empty()
+        && (!readers.is_empty() || (active_own_card.is_some() && !evicted_reader_keys.is_empty()))
+    {
         let own_wire_info: Option<(String, String, u64)> = active_own_card.and_then(|own_card| {
             let can_did = canonicalize_did(&own_card.payload.did)
                 .unwrap_or_else(|_| own_card.payload.did.clone());
             humoco_market::render_wire(own_card, 1, humoco_market::WireFilter::Full)
                 .map(|wire| (can_did, wire, own_card.payload.v))
         });
+        let own_tombstone_bundle: Option<humoco_market::CardBundle> =
+            active_own_card.map(|own_card| humoco_market::CardBundle {
+                envelopes: vec![humoco_market::CardEnvelope {
+                    hops: 1,
+                    card_wire: format!("{}~", own_card.jws),
+                }],
+            });
 
         let (store, own_coords, trust_by_did, offenders, active_media_blobs) = {
             let mut service = state.service.lock().unwrap();
@@ -2324,27 +2509,31 @@ pub async fn sync_market_channels_with_options(
 
             let media_blobs: Vec<(String, Vec<u8>)> =
                 if let (Some(own_card), Some(prof)) = (active_own_card, own_profile_opt.as_ref()) {
-                    let mut blobs = Vec::new();
-                    for ad in &prof.ads {
-                        if ad.expires_at > now_secs {
-                            if let Some(ref token) = ad.image_token {
-                                let storage_key = crate::state::own_media_storage_key(token);
-                                if let Ok(webp_bytes) =
-                                    service.load_encrypted_data(&storage_key, password.as_deref())
-                                {
-                                    if let Ok((_tok, blob_id, ciphertext)) =
-                                        humoco_market::seal_media_blob(
-                                            &own_card.payload.did,
-                                            &webp_bytes,
-                                        )
+                    if !prof.published {
+                        Vec::new()
+                    } else {
+                        let mut blobs = Vec::new();
+                        for ad in &prof.ads {
+                            if ad.expires_at > now_secs {
+                                if let Some(ref token) = ad.image_token {
+                                    let storage_key = crate::state::own_media_storage_key(token);
+                                    if let Ok(webp_bytes) =
+                                        service.load_encrypted_data(&storage_key, password.as_deref())
                                     {
-                                        blobs.push((blob_id, ciphertext));
+                                        if let Ok((_tok, blob_id, ciphertext)) =
+                                            humoco_market::seal_media_blob(
+                                                &own_card.payload.did,
+                                                &webp_bytes,
+                                            )
+                                        {
+                                            blobs.push((blob_id, ciphertext));
+                                        }
                                     }
                                 }
                             }
                         }
+                        blobs
                     }
-                    blobs
                 } else {
                     Vec::new()
                 };
@@ -2384,7 +2573,11 @@ pub async fn sync_market_channels_with_options(
             }
         }
 
-        if own_wire_info.is_some() || !forward_candidates.is_empty() {
+        for (blob_id, _) in &active_media_blobs {
+            active_media_blob_ids.insert(blob_id.clone());
+        }
+
+        if own_wire_info.is_some() || (!forward_candidates.is_empty() && !readers.is_empty()) {
             let readers_changed = sync_state.last_readers_hash.as_deref() != Some(&readers_hash);
             let heartbeat_due = now_secs.saturating_sub(sync_state.last_upload_at.unwrap_or(0))
                 >= SYNC_HEARTBEAT_SECS;
@@ -2410,21 +2603,56 @@ pub async fn sync_market_channels_with_options(
                 )
                 .await;
 
-                let full_bundle = humoco_market::build_card_bundle(
-                    own_wire_info.as_ref().map(|(_, w, _)| w.as_str()),
-                    &forward_candidates,
-                    own_coords,
-                    now_secs,
-                    &trust_level_of,
-                    readers.len(),
-                    effective_card_max_bytes,
-                );
+                let tomb_bytes_opt: Option<Vec<u8>> = if !evicted_reader_keys.is_empty() {
+                    own_tombstone_bundle
+                        .as_ref()
+                        .and_then(|tb| serde_json::to_vec(tb).ok())
+                } else {
+                    None
+                };
 
-                if !full_bundle.envelopes.is_empty() {
+                let (full_bundle, use_tomb_only) = if readers.is_empty() {
+                    (
+                        own_tombstone_bundle.clone().unwrap_or(humoco_market::CardBundle {
+                            envelopes: Vec::new(),
+                        }),
+                        true,
+                    )
+                } else {
+                    let tomb_overhead = if let Some(ref tb) = tomb_bytes_opt {
+                        humoco_market::slot_overhead_bytes(evicted_reader_keys.len())
+                            .unwrap_or(8_250)
+                            .saturating_add(tb.len())
+                            .saturating_add(64)
+                    } else {
+                        0
+                    };
+                    let active_budget = effective_card_max_bytes.saturating_sub(tomb_overhead);
+                    (
+                        humoco_market::build_card_bundle(
+                            own_wire_info.as_ref().map(|(_, w, _)| w.as_str()),
+                            &forward_candidates,
+                            own_coords,
+                            now_secs,
+                            &trust_level_of,
+                            readers.len(),
+                            active_budget,
+                        ),
+                        false,
+                    )
+                };
+
+                if !full_bundle.envelopes.is_empty() || tomb_bytes_opt.is_some() {
                     let mut desired_versions: BTreeMap<String, u64> = BTreeMap::new();
-                    for env in &full_bundle.envelopes {
-                        if let Some((did, v)) = wire_meta.get(&env.card_wire) {
-                            desired_versions.insert(did.clone(), *v);
+                    if use_tomb_only {
+                        if let Some((ref own_did, _, own_v)) = own_wire_info {
+                            desired_versions.insert(own_did.clone(), own_v);
+                        }
+                    } else {
+                        for env in &full_bundle.envelopes {
+                            if let Some((did, v)) = wire_meta.get(&env.card_wire) {
+                                desired_versions.insert(did.clone(), *v);
+                            }
                         }
                     }
 
@@ -2477,7 +2705,11 @@ pub async fn sync_market_channels_with_options(
                     }
 
                     if !skip_card_put {
-                        let maybe_delta_blob: Option<Vec<u8>> = if !readers_changed && base_fresh {
+                        let maybe_delta_blob: Option<Vec<u8>> = if !readers_changed
+                            && base_fresh
+                            && tomb_bytes_opt.is_none()
+                            && !use_tomb_only
+                        {
                             if let Some(ref base_vers) = prev_base_versions {
                                 let any_removed = base_vers
                                     .keys()
@@ -2585,11 +2817,38 @@ pub async fn sync_market_channels_with_options(
                                 }
                             }
                         } else {
-                            match humoco_market::seal_slot_blob(
-                                &full_bundle,
-                                &readers,
-                                effective_card_max_bytes,
-                            ) {
+                            let base_blob_res = match (use_tomb_only, tomb_bytes_opt.as_ref()) {
+                                (true, Some(tb)) => humoco_market::seal_slot_payload(
+                                    tb,
+                                    &evicted_reader_keys,
+                                    effective_card_max_bytes,
+                                ),
+                                (false, Some(tb)) if !full_bundle.envelopes.is_empty() => {
+                                    match serde_json::to_vec(&full_bundle) {
+                                        Ok(fb) => humoco_market::seal_multi_class_slot_blob(
+                                            &[
+                                                (fb.as_slice(), &readers),
+                                                (tb.as_slice(), &evicted_reader_keys),
+                                            ],
+                                            effective_card_max_bytes,
+                                        ),
+                                        Err(e) => Err(humoco_market::MarketError::Serialization(
+                                            e.to_string(),
+                                        )),
+                                    }
+                                }
+                                (false, Some(tb)) => humoco_market::seal_slot_payload(
+                                    tb,
+                                    &evicted_reader_keys,
+                                    effective_card_max_bytes,
+                                ),
+                                (_, None) => humoco_market::seal_slot_blob(
+                                    &full_bundle,
+                                    &readers,
+                                    effective_card_max_bytes,
+                                ),
+                            };
+                            match base_blob_res {
                                 Ok(base_blob) => {
                                     let base_len = base_blob.len();
                                     match sign_drop_channel_request(
@@ -2754,7 +3013,8 @@ pub async fn sync_market_channels_with_options(
         }
     } else if settings.market_sync_enabled
         && !upload_targets.is_empty()
-        && sync_state.last_readers_hash.is_some()
+        && (sync_state.last_readers_hash.is_some()
+            || !sync_state.card_base_uploaded_at_by_write_url.is_empty())
     {
         let delta_prefix = humoco_market::derive_delta_prefix(my_prefix.as_deref());
         for drop_desc in &upload_targets {
@@ -2786,33 +3046,133 @@ pub async fn sync_market_channels_with_options(
         sync_state.card_last_uploaded_versions_by_write_url.clear();
     }
 
+    // 2a-GC. Delete orphaned media blobs no longer referenced by active published ads
+    if !sync_state.uploaded_media_blobs.is_empty() && !upload_targets.is_empty() {
+        let mut stale_media_deletes: Vec<(humoco_market::DropDescriptor, String, String)> =
+            Vec::new();
+        for drop_desc in &upload_targets {
+            if drop_desc.write_url.is_empty() {
+                continue;
+            }
+            let prefix = format!("{}::", drop_desc.write_url);
+            for key in &sync_state.uploaded_media_blobs {
+                if let Some(blob_id) = key.strip_prefix(&prefix) {
+                    if !active_media_blob_ids.contains(blob_id) {
+                        stale_media_deletes.push((
+                            drop_desc.clone(),
+                            blob_id.to_string(),
+                            key.clone(),
+                        ));
+                    }
+                }
+            }
+        }
+        for (drop_desc, blob_id, key) in stale_media_deletes {
+            let media_ch = format!("media:{}", blob_id);
+            if let Ok(signed) = sign_drop_channel_request(
+                &master_seed,
+                &my_ed_sk,
+                &drop_desc,
+                "DELETE",
+                &media_ch,
+                None,
+                now_secs,
+                b"",
+            ) {
+                if sync_client::delete_media_blob(
+                    &client,
+                    &drop_desc.write_url,
+                    &signed,
+                    Some(&blob_id),
+                )
+                .await
+                .is_ok()
+                {
+                    sync_state.uploaded_media_blobs.remove(&key);
+                }
+            }
+        }
+    }
+
     // 2b. Upload Channel "wot"
-    if settings.wot_share_via_sync {
-        let (reg_opt, is_offender_set) = {
+    let mut wot_upload_targets: Vec<humoco_market::DropDescriptor> = settings
+        .market_selected_syncs
+        .iter()
+        .cloned()
+        .map(Into::into)
+        .collect();
+    for pd in &settings.public_syncs {
+        if pd.enabled
+            && !pd.write_url.is_empty()
+            && (pd.authorized_channels.is_empty()
+                || pd.authorized_channels.iter().any(|c| c == "wot"))
+        {
+            wot_upload_targets.push(humoco_market::DropDescriptor {
+                write_url: pd.write_url.clone(),
+                read_url: pd.read_url.clone(),
+                slot_id: Some(pd.access_pubkey.clone()),
+                drop_pub: pd.drop_pub.clone(),
+            });
+        }
+    }
+
+    let (reg_opt, zero_book_dids, is_offender_set) =
+        if settings.wot_share_via_sync || !wot_upload_targets.is_empty() {
             let mut service = state.service.lock().unwrap();
             let reg = state
                 .get_or_load_wot_register(&mut service, password.as_deref())
                 .ok();
-            let offenders: HashSet<String> = if let Some(ref r) = reg {
-                r.own_contacts
-                    .keys()
-                    .filter(|did| {
-                        use human_money_core::models::conflict::TrustStatus;
-                        service
-                            .with_wallet(|w| {
-                                matches!(w.check_reputation(did), TrustStatus::KnownOffender(_))
-                            })
-                            .unwrap_or(false)
-                    })
-                    .cloned()
-                    .collect()
+            let address_book: crate::models::FrontendAddressBook = service
+                .load_encrypted_data(CONTACTS_DATA_NAME, password.as_deref())
+                .ok()
+                .and_then(|data| serde_json::from_slice(&data).ok())
+                .unwrap_or_default();
+            let zero_dids: Vec<String> = address_book
+                .contacts
+                .values()
+                .filter(|c| c.trust_level.unwrap_or(0) == 0)
+                .filter_map(|c| canonicalize_did(&c.did).ok())
+                .collect();
+            let offenders: HashSet<String> = if settings.wot_share_via_sync {
+                if let Some(ref r) = reg {
+                    let mut candidate_dids: HashSet<String> =
+                        r.own_contacts.keys().cloned().collect();
+                    for d in &zero_dids {
+                        candidate_dids.insert(d.clone());
+                    }
+                    for did in r.get_or_build_graph_cache().did_to_id.keys() {
+                        candidate_dids.insert(did.clone());
+                    }
+                    candidate_dids
+                        .into_iter()
+                        .filter(|did| {
+                            use human_money_core::models::conflict::TrustStatus;
+                            service
+                                .with_wallet(|w| {
+                                    matches!(
+                                        w.check_reputation(did),
+                                        TrustStatus::KnownOffender(_)
+                                    )
+                                })
+                                .unwrap_or(false)
+                        })
+                        .collect()
+                } else {
+                    HashSet::new()
+                }
             } else {
                 HashSet::new()
             };
-            (reg, offenders)
+            (reg, zero_dids, offenders)
+        } else {
+            (None, Vec::new(), HashSet::new())
         };
 
-        if let Some(mut reg) = reg_opt {
+    if let Some(mut reg) = reg_opt {
+        let mut reg_modified = false;
+        let mut delete_unshared_wot_targets = !settings.wot_share_via_sync;
+
+        if settings.wot_share_via_sync {
             let needs_signing = reg.own_list_dirty
                 || (reg.own_signed_list.is_none() && !reg.own_contacts.is_empty());
             if needs_signing {
@@ -2826,34 +3186,94 @@ pub async fn sync_market_channels_with_options(
                 .into_iter()
                 .filter(|(did, _)| !is_offender_set.contains(did))
                 .collect();
+            let filtered_dids: HashSet<&str> =
+                filtered_readers.iter().map(|(did, _)| did.as_str()).collect();
+
+            let mut tombstone_dids_set: std::collections::BTreeSet<String> =
+                std::collections::BTreeSet::new();
+            for (did, entry) in &reg.own_contacts {
+                if entry.level == 0
+                    && !filtered_dids.contains(did.as_str())
+                    && !is_offender_set.contains(did)
+                {
+                    tombstone_dids_set.insert(did.clone());
+                }
+            }
+            for did in &zero_book_dids {
+                if did != &reg.self_did
+                    && !filtered_dids.contains(did.as_str())
+                    && !is_offender_set.contains(did)
+                {
+                    tombstone_dids_set.insert(did.clone());
+                }
+            }
+            if let Some(ref own_list) = reg.own_signed_list {
+                let eff_shrink = if reg.shrink_until > now_secs {
+                    reg.shrink_hops.min(3)
+                } else {
+                    0
+                };
+                let tomb_max_hops = eff_shrink.max(own_list.max_hops.min(3));
+                if tomb_max_hops >= 1 {
+                    let graph = reg.get_or_build_graph_cache();
+                    let distances = graph.shortest_distances_from_self();
+                    for (did, &id) in &graph.did_to_id {
+                        if did == &reg.self_did
+                            || filtered_dids.contains(did.as_str())
+                            || is_offender_set.contains(did)
+                        {
+                            continue;
+                        }
+                        if distances
+                            .get(&id)
+                            .is_some_and(|&dist| (1..=tomb_max_hops).contains(&dist))
+                        {
+                            tombstone_dids_set.insert(did.clone());
+                        }
+                    }
+                }
+            }
+
+            let tombstone_dids: Vec<String> = tombstone_dids_set.into_iter().collect();
+            let mut tombstone_reader_vks: Vec<ed25519_dalek::VerifyingKey> =
+                Vec::with_capacity(tombstone_dids.len());
+            for did in &tombstone_dids {
+                if let Ok(vk) = human_money_core::crypto::get_pubkey_from_user_id(did) {
+                    tombstone_reader_vks.push(vk);
+                }
+            }
+            let (own_tomb_pkg_bytes, current_tomb_fp): (Option<Vec<u8>>, Option<String>) =
+                if !tombstone_reader_vks.is_empty() {
+                    if let Some(ref own_list) = reg.own_signed_list {
+                        let pkg = humoco_wot::WotSyncPackage {
+                            format_version: 1,
+                            lists: vec![format!("{}~", own_list.jws_compact)],
+                        };
+                        match serde_json::to_vec(&pkg) {
+                            Ok(bytes) => {
+                                use sha2::{Digest, Sha256};
+                                let mut hasher = Sha256::new();
+                                hasher.update(own_list.jws_compact.as_bytes());
+                                for d in &tombstone_dids {
+                                    hasher.update(b"\0");
+                                    hasher.update(d.as_bytes());
+                                }
+                                (Some(bytes), Some(hex::encode(hasher.finalize())))
+                            }
+                            Err(_) => (None, None),
+                        }
+                    } else {
+                        (None, None)
+                    }
+                } else {
+                    (None, None)
+                };
 
             if !filtered_readers.is_empty() {
                 let readers_refs: Vec<(&str, u8)> = filtered_readers
                     .iter()
                     .map(|(did, class)| (did.as_str(), *class))
                     .collect();
-
-                let mut wot_upload_targets: Vec<humoco_market::DropDescriptor> = settings
-                    .market_selected_syncs
-                    .iter()
-                    .cloned()
-                    .map(Into::into)
-                    .collect();
-
-                for pd in &settings.public_syncs {
-                    if pd.enabled
-                        && !pd.write_url.is_empty()
-                        && (pd.authorized_channels.is_empty()
-                            || pd.authorized_channels.iter().any(|c| c == "wot"))
-                    {
-                        wot_upload_targets.push(humoco_market::DropDescriptor {
-                            write_url: pd.write_url.clone(),
-                            read_url: pd.read_url.clone(),
-                            slot_id: Some(pd.access_pubkey.clone()),
-                            drop_pub: pd.drop_pub.clone(),
-                        });
-                    }
-                }
 
                 let active_classes = (1u8..=3)
                     .filter(|&d| filtered_readers.iter().any(|(_, cls)| *cls == d))
@@ -2866,8 +3286,14 @@ pub async fn sync_market_channels_with_options(
                         total_overhead += humoco_market::slot_overhead_bytes(cnt).unwrap_or(8_250);
                     }
                 }
-
-                let mut reg_modified = false;
+                let tomb_overhead = if let Some(ref tb) = own_tomb_pkg_bytes {
+                    humoco_market::slot_overhead_bytes(tombstone_reader_vks.len())
+                        .unwrap_or(8_250)
+                        .saturating_add(tb.len())
+                        .saturating_add(32)
+                } else {
+                    0
+                };
 
                 for drop_desc in &mut wot_upload_targets {
                     if drop_desc.write_url.is_empty() {
@@ -2885,8 +3311,14 @@ pub async fn sync_market_channels_with_options(
                         SYNC_WOT_MAX_BYTES,
                     )
                     .await;
-                    let initial_class_budget =
-                        effective_wot_max_bytes.saturating_sub(total_overhead) / active_classes;
+                    let initial_class_budget = effective_wot_max_bytes
+                        .saturating_sub(total_overhead)
+                        .saturating_sub(tomb_overhead)
+                        / active_classes;
+                    let tomb_changed =
+                        sync_state.wot_tombstone_fp_by_write_url.get(&drop_desc.write_url)
+                            != current_tomb_fp.as_ref();
+                    let force_wot = force_upload.unwrap_or(false) || tomb_changed;
 
                     for attempt in 0..2 {
                         let class_budget = if attempt == 0 {
@@ -2899,14 +3331,14 @@ pub async fn sync_market_channels_with_options(
                             &drop_desc.write_url,
                             Some(&readers_refs),
                             Some(class_budget),
-                            force_upload.unwrap_or(false),
+                            force_wot,
                         ) {
                             Ok(Some((subpackages, receipt))) => {
-                                if subpackages.is_empty() {
+                                if subpackages.is_empty() && own_tomb_pkg_bytes.is_none() {
                                     break;
                                 }
 
-                                let mut class_payloads = Vec::with_capacity(subpackages.len());
+                                let mut class_payloads = Vec::with_capacity(subpackages.len() + 1);
                                 for sub in &subpackages {
                                     match serde_json::to_vec(&sub.package) {
                                         Ok(pkg_bytes) => {
@@ -2925,6 +3357,12 @@ pub async fn sync_market_channels_with_options(
                                                 e
                                             ));
                                         }
+                                    }
+                                }
+                                if !tombstone_reader_vks.is_empty() {
+                                    if let Some(ref tomb_bytes) = own_tomb_pkg_bytes {
+                                        class_payloads
+                                            .push((tomb_bytes.clone(), tombstone_reader_vks.clone()));
                                     }
                                 }
 
@@ -2972,6 +3410,21 @@ pub async fn sync_market_channels_with_options(
                                                             receipt, now_secs,
                                                         );
                                                         reg_modified = true;
+                                                        match current_tomb_fp {
+                                                            Some(ref fp) => {
+                                                                sync_state
+                                                                    .wot_tombstone_fp_by_write_url
+                                                                    .insert(
+                                                                        drop_desc.write_url.clone(),
+                                                                        fp.clone(),
+                                                                    );
+                                                            }
+                                                            None => {
+                                                                sync_state
+                                                                    .wot_tombstone_fp_by_write_url
+                                                                    .remove(&drop_desc.write_url);
+                                                            }
+                                                        }
                                                     }
                                                     Ok(PutSlotOutcome::PreconditionFailed {
                                                         ..
@@ -3026,12 +3479,125 @@ pub async fn sync_market_channels_with_options(
                         }
                     }
                 }
+            } else if !tombstone_reader_vks.is_empty()
+                && own_tomb_pkg_bytes.is_some()
+                && current_tomb_fp.is_some()
+            {
+                let tomb_bytes = own_tomb_pkg_bytes.as_ref().unwrap();
+                let tomb_fp = current_tomb_fp.as_ref().unwrap();
+                for drop_desc in &mut wot_upload_targets {
+                    if drop_desc.write_url.is_empty() {
+                        continue;
+                    }
+                    let tomb_changed = sync_state
+                        .wot_tombstone_fp_by_write_url
+                        .get(&drop_desc.write_url)
+                        != Some(tomb_fp);
+                    if force_upload != Some(true)
+                        && !tomb_changed
+                        && !reg.drop_sent_log.contains_key(&drop_desc.write_url)
+                    {
+                        continue;
+                    }
+                    let effective_wot_max_bytes = ensure_cached_channel_max_bytes(
+                        &client,
+                        &mut sync_state,
+                        &master_seed,
+                        &my_ed_sk,
+                        drop_desc,
+                        None,
+                        "wot",
+                        SYNC_WOT_MAX_BYTES,
+                    )
+                    .await;
+                    match humoco_market::seal_slot_payload(
+                        tomb_bytes,
+                        &tombstone_reader_vks,
+                        effective_wot_max_bytes,
+                    ) {
+                        Ok(blob) => {
+                            if let Ok(signed) = sign_drop_channel_request(
+                                &master_seed,
+                                &my_ed_sk,
+                                drop_desc,
+                                "PUT",
+                                "wot",
+                                None,
+                                now_secs,
+                                &blob,
+                            ) {
+                                if let Ok(PutSlotOutcome::Saved { .. }) = sync_client::put_slot(
+                                    &client,
+                                    &drop_desc.write_url,
+                                    &signed,
+                                    "wot",
+                                    &blob,
+                                    None,
+                                )
+                                .await
+                                {
+                                    uploaded_to += 1;
+                                    sync_state.last_upload_at = Some(now_secs);
+                                    if reg.drop_sent_log.remove(&drop_desc.write_url).is_some() {
+                                        reg_modified = true;
+                                    }
+                                    sync_state
+                                        .wot_tombstone_fp_by_write_url
+                                        .insert(drop_desc.write_url.clone(), tomb_fp.clone());
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            errors.push(format!("Failed to seal wot tombstone blob: {}", e));
+                        }
+                    }
+                }
+            } else {
+                delete_unshared_wot_targets = true;
+            }
+        }
 
-                if reg_modified {
-                    let mut service = state.service.lock().unwrap();
-                    let _ = state.save_wot_register(&mut service, &reg, password.as_deref());
+        if delete_unshared_wot_targets {
+            for drop_desc in &wot_upload_targets {
+                if drop_desc.write_url.is_empty() {
+                    continue;
+                }
+                if force_upload != Some(true)
+                    && !reg.drop_sent_log.contains_key(&drop_desc.write_url)
+                    && !sync_state
+                        .wot_tombstone_fp_by_write_url
+                        .contains_key(&drop_desc.write_url)
+                {
+                    continue;
+                }
+                if let Ok(signed) = sign_drop_channel_request(
+                    &master_seed,
+                    &my_ed_sk,
+                    drop_desc,
+                    "DELETE",
+                    "wot",
+                    None,
+                    now_secs,
+                    b"",
+                ) {
+                    if sync_client::delete_slot(&client, &drop_desc.write_url, &signed, "wot")
+                        .await
+                        .is_ok()
+                    {
+                        if reg.drop_sent_log.remove(&drop_desc.write_url).is_some() {
+                            reg_modified = true;
+                        }
+                        sync_state
+                            .wot_tombstone_fp_by_write_url
+                            .remove(&drop_desc.write_url);
+                    }
                 }
             }
+        }
+
+        if reg_modified {
+            let mut service = state.service.lock().unwrap();
+            let _ = state.save_wot_register(&mut service, &reg, password.as_deref());
         }
     }
 
@@ -3488,7 +4054,7 @@ pub async fn sync_market_channels_with_options(
                     if let Some(et) = etag {
                         sync_state.slot_etags.insert(wot_etag_key, et);
                     }
-                    match humoco_market::open_multi_class_slot_blob(&blob, &my_x25519_sk) {
+                    match humoco_market::open_slot_payload(&blob, &my_x25519_sk) {
                         Ok(Some(bytes)) => {
                             decrypted_slots += 1;
                             match serde_json::from_slice::<humoco_wot::WotSyncPackage>(&bytes) {
@@ -3677,7 +4243,7 @@ pub async fn sync_market_channels_with_options(
                                         }
                                     }
                                 } else {
-                                    match humoco_market::open_multi_class_slot_blob(
+                                    match humoco_market::open_slot_payload(
                                         &blob,
                                         &my_x25519_sk,
                                     ) {
@@ -4653,6 +5219,7 @@ pub(crate) mod tests {
         pub etags: Arc<Mutex<HashMap<String, String>>>,
         pub rotation_cert: Arc<Mutex<Option<String>>>,
         pub put_members_count: Arc<Mutex<usize>>,
+        pub admin_config: Arc<Mutex<(u64, usize, u64)>>,
         pub _shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
     }
 
@@ -4669,6 +5236,7 @@ pub(crate) mod tests {
             let etags = Arc::new(Mutex::new(HashMap::<String, String>::new()));
             let rotation_cert = Arc::new(Mutex::new(None));
             let put_members_count = Arc::new(Mutex::new(0));
+            let admin_config = Arc::new(Mutex::new((2048u64, 300usize, 25u64)));
             let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
 
             let s_data_dir = data_dir.clone();
@@ -4680,6 +5248,7 @@ pub(crate) mod tests {
             let s_etags = Arc::clone(&etags);
             let s_rotation = Arc::clone(&rotation_cert);
             let s_put_members = Arc::clone(&put_members_count);
+            let s_admin_config = Arc::clone(&admin_config);
 
             tokio::spawn(async move {
                 loop {
@@ -4697,6 +5266,7 @@ pub(crate) mod tests {
                             let etags = Arc::clone(&s_etags);
                             let rotation = Arc::clone(&s_rotation);
                             let put_members = Arc::clone(&s_put_members);
+                            let admin_config = Arc::clone(&s_admin_config);
 
                             tokio::spawn(async move {
                                 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -4839,11 +5409,15 @@ pub(crate) mod tests {
                                 } else if method == "GET" && path.starts_with("/sync.php") && path.contains("status") {
                                     let cur_admin = admin_pub.lock().unwrap().clone();
                                     let s_map = slots.lock().unwrap();
+                                    let (max_total_mb, max_mem, max_user_mb) = *admin_config.lock().unwrap();
+                                    let max_bytes = max_total_mb * 1024 * 1024;
                                     let status_json = serde_json::json!({
                                         "used_bytes": s_map.values().map(|v| v.len()).sum::<usize>(),
-                                        "max_bytes": 268435456,
-                                        "soft_limit_bytes": 214748364,
+                                        "max_bytes": max_bytes,
+                                        "soft_limit_bytes": max_bytes * 4 / 5,
                                         "soft_warning": false,
+                                        "max_members": max_mem,
+                                        "max_user_bytes": max_user_mb * 1024 * 1024,
                                         "slot_count": s_map.len(),
                                         "channel_counts": {"card": s_map.len()},
                                         "admin_pubkey": cur_admin,
@@ -4854,15 +5428,64 @@ pub(crate) mod tests {
                                         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n{}Content-Length: {}\r\n\r\n{}",
                                         rot_hdr_line, body_str.len(), body_str
                                     ).into_bytes()
+                                } else if method == "PUT" && path.starts_with("/sync.php") && path.contains("admin_config") {
+                                    #[derive(serde::Deserialize)]
+                                    struct AdminCfgJson {
+                                        max_total_storage_mb: u64,
+                                        max_members: usize,
+                                        max_user_storage_mb: u64,
+                                    }
+                                    match serde_json::from_slice::<AdminCfgJson>(&body) {
+                                        Ok(cfg_in)
+                                            if (1..=100_000).contains(&cfg_in.max_members)
+                                                && cfg_in.max_user_storage_mb >= 10
+                                                && cfg_in.max_total_storage_mb >= cfg_in.max_user_storage_mb =>
+                                        {
+                                            *admin_config.lock().unwrap() = (
+                                                cfg_in.max_total_storage_mb,
+                                                cfg_in.max_members,
+                                                cfg_in.max_user_storage_mb,
+                                            );
+                                            let cur_admin = admin_pub.lock().unwrap().clone();
+                                            let s_map = slots.lock().unwrap();
+                                            let max_bytes = cfg_in.max_total_storage_mb * 1024 * 1024;
+                                            let status_json = serde_json::json!({
+                                                "used_bytes": s_map.values().map(|v| v.len()).sum::<usize>(),
+                                                "max_bytes": max_bytes,
+                                                "soft_limit_bytes": max_bytes * 4 / 5,
+                                                "soft_warning": false,
+                                                "max_members": cfg_in.max_members,
+                                                "max_user_bytes": cfg_in.max_user_storage_mb * 1024 * 1024,
+                                                "slot_count": s_map.len(),
+                                                "channel_counts": {"card": s_map.len()},
+                                                "admin_pubkey": cur_admin,
+                                                "rotation": null
+                                            });
+                                            let body_str = serde_json::to_string(&status_json).unwrap();
+                                            format!(
+                                                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n{}Content-Length: {}\r\n\r\n{}",
+                                                rot_hdr_line, body_str.len(), body_str
+                                            ).into_bytes()
+                                        }
+                                        _ => b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n".to_vec(),
+                                    }
                                 } else if method == "PUT" && path.starts_with("/sync.php") {
                                     let pubkey = headers.get("x-drop-pubkey").cloned().unwrap_or_default();
                                     let channel = headers.get("x-channel").cloned().unwrap_or_else(|| "card".to_string());
                                     let prefix_opt = headers.get("x-drop-prefix").map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+                                    let media_id_opt = headers.get("x-media-id").map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
                                     let is_member = members.lock().unwrap().contains(&pubkey);
                                     if is_member {
-                                        let key = match prefix_opt {
-                                            Some(ref pfx) => format!("{}_{}.{}", pubkey, pfx, channel),
-                                            None => format!("{}.{}", pubkey, channel),
+                                        let key = if channel == "media" {
+                                            match media_id_opt {
+                                                Some(ref mid) => format!("{}_{}.media", pubkey, mid),
+                                                None => format!("{}.media", pubkey),
+                                            }
+                                        } else {
+                                            match prefix_opt {
+                                                Some(ref pfx) => format!("{}_{}.{}", pubkey, pfx, channel),
+                                                None => format!("{}.{}", pubkey, channel),
+                                            }
                                         };
                                         let if_match_hdr = headers.get("if-match").cloned();
                                         let cur_etag = etags.lock().unwrap().get(&key).cloned().unwrap_or_else(|| "\"etag123\"".to_string());
@@ -4899,12 +5522,24 @@ pub(crate) mod tests {
                                     } else {
                                         let channel = headers.get("x-channel").cloned().unwrap_or_else(|| "card".to_string());
                                         let prefix_opt = headers.get("x-drop-prefix").map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
-                                        let key = match prefix_opt {
-                                            Some(ref pfx) => format!("{}_{}.{}", pubkey, pfx, channel),
-                                            None => format!("{}.{}", pubkey, channel),
-                                        };
-                                        slots.lock().unwrap().remove(&key);
-                                        etags.lock().unwrap().remove(&key);
+                                        let media_id_opt = headers.get("x-media-id").map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+                                        if channel == "media" && media_id_opt.is_none() {
+                                            let media_dot = format!("{}.media", pubkey);
+                                            let media_under = format!("{}_", pubkey);
+                                            slots.lock().unwrap().retain(|k, _| k != &media_dot && !(k.starts_with(&media_under) && k.ends_with(".media")));
+                                            etags.lock().unwrap().retain(|k, _| k != &media_dot && !(k.starts_with(&media_under) && k.ends_with(".media")));
+                                        } else {
+                                            let key = if channel == "media" {
+                                                format!("{}_{}.media", pubkey, media_id_opt.unwrap())
+                                            } else {
+                                                match prefix_opt {
+                                                    Some(ref pfx) => format!("{}_{}.{}", pubkey, pfx, channel),
+                                                    None => format!("{}.{}", pubkey, channel),
+                                                }
+                                            };
+                                            slots.lock().unwrap().remove(&key);
+                                            etags.lock().unwrap().remove(&key);
+                                        }
                                     }
                                     format!("HTTP/1.1 204 No Content\r\n{}Content-Length: 0\r\n\r\n", rot_hdr_line).into_bytes()
                                 } else if method == "GET" && path.contains("index.json") {
@@ -4913,6 +5548,9 @@ pub(crate) mod tests {
                                     let mut entries = Vec::new();
                                     for (k, v) in s_map.iter() {
                                         if let Some((id_part, ch)) = k.split_once('.') {
+                                            if ch == "media" {
+                                                continue;
+                                            }
                                             let (id, prefix) = match id_part.split_once('_') {
                                                 Some((pk, pfx)) => (pk, Some(pfx)),
                                                 None => (id_part, None),
@@ -5007,6 +5645,7 @@ pub(crate) mod tests {
                 etags,
                 rotation_cert,
                 put_members_count,
+                admin_config,
                 _shutdown_tx: Some(shutdown_tx),
             }
         }
@@ -5063,6 +5702,7 @@ pub(crate) mod tests {
             }),
             Some(300),
             Some(256),
+            None,
             Some(password.to_string()),
             &alice_state,
         )
@@ -5839,6 +6479,7 @@ pub(crate) mod tests {
             }),
             Some(300),
             Some(256),
+            None,
             Some(password.to_string()),
             &alice_state,
         )
@@ -5942,6 +6583,7 @@ pub(crate) mod tests {
             }),
             Some(300),
             Some(256),
+            None,
             Some(password.to_string()),
             &alice_state,
         )
@@ -6363,6 +7005,7 @@ pub(crate) mod tests {
             }),
             Some(300),
             Some(256),
+            None,
             Some(password.to_string()),
             &alice_state,
         )
@@ -6562,7 +7205,7 @@ pub(crate) mod tests {
             .unwrap();
 
         let draft =
-            prepare_sync_setup_impl(None, None, None, Some(password.to_string()), &bob_state)
+            prepare_sync_setup_impl(None, None, None, None, Some(password.to_string()), &bob_state)
                 .unwrap();
         let server =
             MockSyncServer::start(draft.data_dir.clone(), draft.admin_pubkey.clone()).await;
@@ -6838,7 +7481,7 @@ pub(crate) mod tests {
             .unwrap();
 
         let draft =
-            prepare_sync_setup_impl(None, None, None, Some(password.to_string()), &alice_state)
+            prepare_sync_setup_impl(None, None, None, None, Some(password.to_string()), &alice_state)
                 .unwrap();
         let server =
             MockSyncServer::start(draft.data_dir.clone(), draft.admin_pubkey.clone()).await;
@@ -6968,7 +7611,7 @@ pub(crate) mod tests {
 
         // Preparing setup (copying config.toml / saving ZIP) must NOT mark service as active
         let draft =
-            prepare_sync_setup_impl(None, None, None, Some(password.to_string()), &state).unwrap();
+            prepare_sync_setup_impl(None, None, None, None, Some(password.to_string()), &state).unwrap();
         let _toml = get_rust_sync_config_impl(Some(password.to_string()), &state).unwrap();
         let zip_path = base_dir.join("humoco-sync-setup.zip");
         save_sync_setup_zip_impl(
@@ -7039,7 +7682,7 @@ pub(crate) mod tests {
             setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
         let alice_state = create_test_state(alice_service);
         let draft =
-            prepare_sync_setup_impl(None, None, None, Some(password.to_string()), &alice_state)
+            prepare_sync_setup_impl(None, None, None, None, Some(password.to_string()), &alice_state)
                 .unwrap();
         let admin_pub = draft.admin_pubkey.clone();
         let valid_local_read = format!("http://127.0.0.1:{}/{}", port, draft.data_dir);
@@ -7174,5 +7817,561 @@ pub(crate) mod tests {
         assert_eq!(probed[0].fail_count, 0);
         assert_eq!(probed[0].read_url, valid_local_read);
         assert!(probed[0].last_seen_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_sync_admin_quotas_setup_status_and_remote_update() {
+        let base_dir = temp_test_dir("sync_admin_quotas");
+        let password = "TestPassword123!";
+
+        let alice_service =
+            setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
+        let alice_state = create_test_state(alice_service);
+
+        // 1. User quota < 10 MB must be rejected
+        let too_small_err = prepare_sync_setup_impl(
+            None,
+            Some(300),
+            Some(2048),
+            Some(9),
+            Some(password.to_string()),
+            &alice_state,
+        )
+        .unwrap_err();
+        assert!(too_small_err.message.contains("10 MB"));
+
+        // 2. Defaults match 2048 MB total / 300 members / 25 MB per user
+        let draft =
+            prepare_sync_setup_impl(None, None, None, None, Some(password.to_string()), &alice_state)
+                .unwrap();
+        assert_eq!(draft.max_members, 300);
+        assert_eq!(draft.max_total_storage_mb, 2048);
+        assert_eq!(draft.max_user_storage_mb, 25);
+        let toml = &draft.rust_config_toml;
+        assert!(toml.contains("max_total_storage_mb = 2048"));
+        assert!(toml.contains("max_admin_members = 300"));
+        assert!(toml.contains("max_admin_user_storage_mb = 25"));
+
+        let server =
+            MockSyncServer::start(draft.data_dir.clone(), draft.admin_pubkey.clone()).await;
+        let fin = finalize_sync_setup_impl(
+            server.base_url.clone(),
+            Some(password.to_string()),
+            &alice_state,
+        )
+        .await
+        .unwrap();
+        assert_eq!(fin.max_members, 300);
+        assert_eq!(fin.max_total_storage_mb, 2048);
+        assert_eq!(fin.max_user_storage_mb, 25);
+
+        // 3. Push live admin quota update via PUT ?admin_config
+        let updated = update_sync_admin_config_impl(
+            FrontendSyncAdminUpdateRequest {
+                max_members: Some(450),
+                max_total_storage_mb: Some(4096),
+                max_user_storage_mb: Some(40),
+                ..Default::default()
+            },
+            true,
+            Some(password.to_string()),
+            &alice_state,
+        )
+        .await
+        .unwrap();
+        assert_eq!(updated.max_members, 450);
+        assert_eq!(updated.max_total_storage_mb, 4096);
+        assert_eq!(updated.max_user_storage_mb, 40);
+        assert_eq!(*server.admin_config.lock().unwrap(), (4096, 450, 40));
+
+        // 4. Subsequent GET ?status syncs live limits back into local state
+        *server.admin_config.lock().unwrap() = (8192, 600, 50);
+        let synced = get_sync_admin_status_impl(Some(password.to_string()), &alice_state)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(synced.max_total_storage_mb, 8192);
+        assert_eq!(synced.max_members, 600);
+        assert_eq!(synced.max_user_storage_mb, 50);
+    }
+
+    #[tokio::test]
+    async fn test_reach_shrink_unpublish_trust_withdrawal_and_media_gc() {
+        use crate::commands::market::{
+            get_market_view_impl, save_my_market_profile_impl, set_card_published_impl,
+            upsert_ad_impl,
+        };
+        use crate::commands::settings_cmd::apply_reach_preset_impl;
+        use crate::models::{
+            CardFieldVisibility, FrontendAdInput, FrontendSaveMyMarketProfileRequest,
+        };
+        use base64::Engine;
+
+        let base_dir = temp_test_dir("reach_shrink_tombstone_flow");
+        let password = "TestPassword123!";
+
+        let alice_state = create_test_state(setup_test_app(
+            &base_dir.join("alice"),
+            "Alice",
+            ALICE_PHRASE,
+            password,
+        ));
+        let eve_state = create_test_state(setup_test_app(
+            &base_dir.join("eve"),
+            "Eve",
+            READER1_PHRASE,
+            password,
+        ));
+        let bob_state = create_test_state(setup_test_app(
+            &base_dir.join("bob"),
+            "Bob",
+            BOB_PHRASE,
+            password,
+        ));
+        let carol_state = create_test_state(setup_test_app(
+            &base_dir.join("carol"),
+            "Carol",
+            CHARLIE_PHRASE,
+            password,
+        ));
+
+        let get_did = |st: &AppState| -> String {
+            let s = st.service.lock().unwrap();
+            s.with_wallet(|w| w.get_user_id().to_string()).unwrap()
+        };
+        let alice_did = get_did(&alice_state);
+        let eve_did = get_did(&eve_state);
+        let bob_did = get_did(&bob_state);
+        let carol_did = get_did(&carol_state);
+        let can_alice = canonicalize_did(&alice_did).unwrap();
+
+        let draft = prepare_sync_setup_impl(
+            Some(FrontendMemberPolicyDto {
+                direct_min: 1,
+                hop2_enabled: true,
+                bridge_min: 1,
+                hop2_min: 1,
+            }),
+            Some(300),
+            None,
+            None,
+            Some(password.to_string()),
+            &alice_state,
+        )
+        .unwrap();
+        let server =
+            MockSyncServer::start(draft.data_dir.clone(), draft.admin_pubkey.clone()).await;
+        let fin = finalize_sync_setup_impl(
+            server.base_url.clone(),
+            Some(password.to_string()),
+            &alice_state,
+        )
+        .await
+        .unwrap();
+
+        for st in [&alice_state, &eve_state, &bob_state, &carol_state] {
+            let mut s = st.service.lock().unwrap();
+            let mut set = st.load_settings(&mut s, Some(password)).unwrap();
+            set.market_selected_syncs = vec![fin.descriptor.clone()];
+            set.wot_share_via_sync = true;
+            st.save_settings(&mut s, set, Some(password)).unwrap();
+        }
+
+        let mk_contact = |did: String, name: &str, level: u8| FrontendContact {
+            did,
+            profile: FrontendUserProfile {
+                first_name: Some(name.to_string()),
+                ..Default::default()
+            },
+            tags: vec![],
+            added_at: "2026-01-01T00:00:00Z".to_string(),
+            notes: None,
+            trust_level: Some(level),
+            desired_hops: Some(3),
+            has_peer_list: false,
+            peer_list_updated_at: None,
+            syncs: vec![],
+        };
+
+        // Set "far" reach preset (max_hops=3) before signing initial lists
+        apply_reach_preset_impl("far".to_string(), Some(password.to_string()), &alice_state)
+            .unwrap();
+        apply_reach_preset_impl("far".to_string(), Some(password.to_string()), &bob_state)
+            .unwrap();
+        apply_reach_preset_impl("far".to_string(), Some(password.to_string()), &carol_state)
+            .unwrap();
+
+        // Bob trusts Carol (2) and Carol trusts Bob (2); Bob exports his initial package BEFORE
+        // Alice/Bob mutually lock at unreciprocated_hops=1, mirroring direct handshake flow.
+        {
+            let mut s = bob_state.service.lock().unwrap();
+            bob_state
+                .save_contact(&mut s, mk_contact(carol_did.clone(), "Carol", 2), Some(password))
+                .unwrap();
+        }
+        {
+            let mut s = carol_state.service.lock().unwrap();
+            carol_state
+                .save_contact(&mut s, mk_contact(bob_did.clone(), "Bob", 2), Some(password))
+                .unwrap();
+        }
+        let can_bob = canonicalize_did(&bob_did).unwrap();
+        let bob_init_pkg = {
+            let mut bs = bob_state.service.lock().unwrap();
+            let mut bob_reg = bob_state
+                .get_or_load_wot_register(&mut bs, Some(password))
+                .unwrap();
+            bob_state
+                .ensure_wot_list_signed(&mut bs, &mut bob_reg)
+                .unwrap();
+            bob_reg
+                .prepare_sync_package(Some(&can_alice), None, true)
+                .unwrap()
+                .0
+        };
+
+        // Alice trusts Eve (Level 1) first, then imports Bob's package immediately before trusting Bob (Level 2),
+        // then exports her package so Bob sees Bob@3 before adding Alice (same handshake as test_04).
+        let alice_init_pkg = {
+            let mut s = alice_state.service.lock().unwrap();
+            alice_state
+                .save_contact(&mut s, mk_contact(eve_did.clone(), "Eve", 1), Some(password))
+                .unwrap();
+
+            let mut alice_reg = alice_state
+                .get_or_load_wot_register(&mut s, Some(password))
+                .unwrap();
+            let now = sync_client::current_unix_timestamp();
+            alice_reg
+                .import_sync_package(&bob_init_pkg, Some(&can_bob), now)
+                .unwrap();
+            alice_state
+                .save_wot_register(&mut s, &alice_reg, Some(password))
+                .unwrap();
+
+            alice_state
+                .save_contact(&mut s, mk_contact(bob_did.clone(), "Bob", 2), Some(password))
+                .unwrap();
+
+            let mut reg_after = alice_state
+                .get_or_load_wot_register(&mut s, Some(password))
+                .unwrap();
+            alice_state
+                .ensure_wot_list_signed(&mut s, &mut reg_after)
+                .unwrap();
+            alice_state
+                .save_wot_register(&mut s, &reg_after, Some(password))
+                .unwrap();
+            reg_after
+                .prepare_sync_package(Some(&can_bob), None, true)
+                .unwrap()
+                .0
+        };
+        {
+            let mut s = eve_state.service.lock().unwrap();
+            eve_state
+                .save_contact(&mut s, mk_contact(alice_did.clone(), "Alice", 1), Some(password))
+                .unwrap();
+        }
+        {
+            let mut s = bob_state.service.lock().unwrap();
+            let mut bob_reg = bob_state
+                .get_or_load_wot_register(&mut s, Some(password))
+                .unwrap();
+            let now = sync_client::current_unix_timestamp();
+            bob_reg
+                .import_sync_package(&alice_init_pkg, Some(&can_alice), now)
+                .unwrap();
+            bob_state
+                .save_wot_register(&mut s, &bob_reg, Some(password))
+                .unwrap();
+            bob_state
+                .save_contact(&mut s, mk_contact(alice_did.clone(), "Alice", 2), Some(password))
+                .unwrap();
+        }
+
+        // Alice publishes profile + ad with WEBP media
+        save_my_market_profile_impl(
+            FrontendSaveMyMarketProfileRequest {
+                profile: FrontendUserProfile {
+                    first_name: Some("Alice".to_string()),
+                    ..Default::default()
+                },
+                visibility: CardFieldVisibility::default(),
+                skills: vec![],
+                max_hops: 3,
+                validity_years: 1,
+                allow_inquiries: true,
+                published: Some(true),
+            },
+            Some(password.to_string()),
+            &alice_state,
+        )
+        .unwrap();
+
+        let mut webp_bytes = Vec::with_capacity(30);
+        webp_bytes.extend_from_slice(b"RIFF");
+        webp_bytes.extend_from_slice(&(22u32).to_le_bytes());
+        webp_bytes.extend_from_slice(b"WEBP");
+        webp_bytes.extend_from_slice(b"VP8 ");
+        webp_bytes.extend_from_slice(&(10u32).to_le_bytes());
+        webp_bytes.extend_from_slice(&[0x00, 0x00, 0x00, 0x9d, 0x01, 0x2a]);
+        webp_bytes.extend_from_slice(&120u16.to_le_bytes());
+        webp_bytes.extend_from_slice(&120u16.to_le_bytes());
+        let webp_uri = format!(
+            "data:image/webp;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(&webp_bytes)
+        );
+        upsert_ad_impl(
+            FrontendAdInput {
+                id: None,
+                kind: humoco_market::AdKind::Offer,
+                title: "Wildflower Honey".to_string(),
+                text: Some("Fresh harvest".to_string()),
+                pricing: Some("5 M".to_string()),
+                duration_days: 90,
+                allow_inquiries: true,
+                is_remote: false,
+                image_webp_data_uri: Some(webp_uri),
+            },
+            Some(password.to_string()),
+            &alice_state,
+        )
+        .unwrap();
+
+        // Bob also publishes a card so Bob forwards Hop-2 Alice card & WoT list to Carol
+        apply_reach_preset_impl("far".to_string(), Some(password.to_string()), &bob_state)
+            .unwrap();
+        save_my_market_profile_impl(
+            FrontendSaveMyMarketProfileRequest {
+                profile: FrontendUserProfile {
+                    first_name: Some("Bob".to_string()),
+                    ..Default::default()
+                },
+                visibility: CardFieldVisibility::default(),
+                skills: vec![],
+                max_hops: 3,
+                validity_years: 1,
+                allow_inquiries: true,
+                published: Some(true),
+            },
+            Some(password.to_string()),
+            &bob_state,
+        )
+        .unwrap();
+
+        // Sync round (a): Alice uploads -> Bob syncs & forwards -> Alice learns Bob's list & authorizes Carol -> Eve & Carol sync
+        let _ = sync_market_channels_impl(
+            Some(true),
+            Some(true),
+            Some(password.to_string()),
+            &alice_state,
+        )
+        .await
+        .unwrap();
+        assert!(
+            server
+                .slots
+                .lock()
+                .unwrap()
+                .keys()
+                .any(|k| k.ends_with(".media")),
+            "Published ad image blob must be uploaded to server"
+        );
+
+        let _ = sync_market_channels_impl(
+            Some(true),
+            Some(false),
+            Some(password.to_string()),
+            &bob_state,
+        )
+        .await
+        .unwrap();
+        let _ = sync_market_channels_impl(
+            Some(true),
+            Some(true),
+            Some(password.to_string()),
+            &bob_state,
+        )
+        .await
+        .unwrap();
+        // Alice downloads Bob's WoT list so Carol is known at Hop 2 for WoT tombstones
+        let _ = sync_market_channels_impl(
+            Some(true),
+            Some(false),
+            Some(password.to_string()),
+            &alice_state,
+        )
+        .await
+        .unwrap();
+        // Second sync for Alice to push member authorization for Carol if needed
+        let _ = sync_market_channels_impl(
+            Some(true),
+            Some(false),
+            Some(password.to_string()),
+            &alice_state,
+        )
+        .await
+        .unwrap();
+        let _ = sync_market_channels_impl(
+            Some(true),
+            Some(false),
+            Some(password.to_string()),
+            &eve_state,
+        )
+        .await
+        .unwrap();
+        let _ = sync_market_channels_impl(
+            Some(true),
+            Some(false),
+            Some(password.to_string()),
+            &carol_state,
+        )
+        .await
+        .unwrap();
+
+        let eve_view_far = get_market_view_impl(Some(password.to_string()), &eve_state).unwrap();
+        assert!(eve_view_far.people.iter().any(|p| p.did == can_alice));
+        assert!(eve_view_far.board.iter().any(|b| b.ad.title == "Wildflower Honey"));
+
+        let bob_view_far = get_market_view_impl(Some(password.to_string()), &bob_state).unwrap();
+        assert!(bob_view_far.people.iter().any(|p| p.did == can_alice));
+
+        let carol_view_far =
+            get_market_view_impl(Some(password.to_string()), &carol_state).unwrap();
+        assert!(
+            carol_view_far.people.iter().any(|p| p.did == can_alice),
+            "Hop-2 Carol must initially see Alice at preset 'far'"
+        );
+        {
+            let mut cs = carol_state.service.lock().unwrap();
+            let carol_reg = carol_state
+                .get_or_load_wot_register(&mut cs, Some(password))
+                .unwrap();
+            let alice_list = carol_reg.raw_list_store.get(&can_alice).unwrap();
+            assert!(!alice_list.disclosures.is_empty());
+        }
+
+        // (b) Alice lowers reach to "near" (max_hops=1, share_min_level=2, own_list_max_hops=1)
+        apply_reach_preset_impl("near".to_string(), Some(password.to_string()), &alice_state)
+            .unwrap();
+        let _ = sync_market_channels_impl(
+            Some(true),
+            Some(false),
+            Some(password.to_string()),
+            &alice_state,
+        )
+        .await
+        .unwrap();
+
+        // Eve (Level 1 < share_min_level=2) receives Class-2 <jws>~ tombstone -> hides Alice
+        let _ = sync_market_channels_impl(
+            Some(true),
+            Some(false),
+            Some(password.to_string()),
+            &eve_state,
+        )
+        .await
+        .unwrap();
+        let eve_view_near = get_market_view_impl(Some(password.to_string()), &eve_state).unwrap();
+        assert!(!eve_view_near.people.iter().any(|p| p.did == can_alice));
+        assert!(!eve_view_near.board.iter().any(|b| b.owner_did == can_alice));
+
+        // Bob syncs (gets Alice's shrunk max_hops=1 card & WoT), forwards <jws>~ on next upload, Carol downloads
+        let _ = sync_market_channels_impl(
+            Some(true),
+            Some(false),
+            Some(password.to_string()),
+            &bob_state,
+        )
+        .await
+        .unwrap();
+        let _ = sync_market_channels_impl(
+            Some(true),
+            Some(true),
+            Some(password.to_string()),
+            &bob_state,
+        )
+        .await
+        .unwrap();
+        let _ = sync_market_channels_impl(
+            Some(true),
+            Some(false),
+            Some(password.to_string()),
+            &carol_state,
+        )
+        .await
+        .unwrap();
+
+        let carol_view_near =
+            get_market_view_impl(Some(password.to_string()), &carol_state).unwrap();
+        assert!(
+            !carol_view_near.people.iter().any(|p| p.did == can_alice),
+            "Hop-2 Carol must hide Alice after receiving shrunk <jws>~ card tombstone"
+        );
+        {
+            let mut cs = carol_state.service.lock().unwrap();
+            let carol_reg = carol_state
+                .get_or_load_wot_register(&mut cs, Some(password))
+                .unwrap();
+            let alice_list = carol_reg.raw_list_store.get(&can_alice).unwrap();
+            assert!(
+                alice_list.disclosures.is_empty(),
+                "Hop-2 Carol must receive empty <jws>~ WoT tombstone from Alice"
+            );
+        }
+
+        // (c) Alice unpublishes her card -> orphaned media blob GC deletes .media slot & Bob hides Alice
+        set_card_published_impl(false, false, Some(password.to_string()), &alice_state)
+            .await
+            .unwrap();
+        let _ = sync_market_channels_impl(
+            Some(true),
+            Some(false),
+            Some(password.to_string()),
+            &alice_state,
+        )
+        .await
+        .unwrap();
+        assert!(
+            !server
+                .slots
+                .lock()
+                .unwrap()
+                .keys()
+                .any(|k| k.ends_with(".media")),
+            "Orphaned media blob must be deleted from server when unpublished"
+        );
+
+        let _ = sync_market_channels_impl(
+            Some(true),
+            Some(false),
+            Some(password.to_string()),
+            &bob_state,
+        )
+        .await
+        .unwrap();
+        let bob_view_unpub = get_market_view_impl(Some(password.to_string()), &bob_state).unwrap();
+        assert!(!bob_view_unpub.people.iter().any(|p| p.did == can_alice));
+
+        // (d) Bob withdraws trust from Alice (level=0) -> immediate local CardStore & raw_list_store prune
+        {
+            let alice_pk_bytes = human_money_core::crypto::get_pubkey_from_user_id(&alice_did)
+                .unwrap()
+                .to_bytes();
+            let mut bs = bob_state.service.lock().unwrap();
+            bob_state
+                .save_contact(&mut bs, mk_contact(alice_did.clone(), "Alice", 0), Some(password))
+                .unwrap();
+            let store_bytes = bs
+                .load_encrypted_data(MARKET_CARD_STORE_KEY, Some(password))
+                .unwrap();
+            let store: humoco_market::CardStore = serde_json::from_slice(&store_bytes).unwrap();
+            assert!(!store.cards.contains_key(&alice_pk_bytes));
+            let bob_reg = bob_state
+                .get_or_load_wot_register(&mut bs, Some(password))
+                .unwrap();
+            assert!(!bob_reg.raw_list_store.contains_key(&can_alice));
+        }
     }
 }

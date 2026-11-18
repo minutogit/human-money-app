@@ -212,6 +212,7 @@ export interface FrontendSyncSetupDraft {
     adminPubkey: string;
     maxMembers: number;
     maxTotalStorageMb: number;
+    maxUserStorageMb: number;
     policy: FrontendMemberPolicyDto;
     zipBase64: string;
     rustConfigToml?: string;
@@ -223,6 +224,7 @@ export interface FrontendSyncAdminStatus {
     dataDir: string;
     maxMembers: number;
     maxTotalStorageMb: number;
+    maxUserStorageMb: number;
     usedBytes?: number | null;
     maxBytes?: number | null;
     softWarning: boolean;
@@ -245,6 +247,7 @@ export interface FrontendSyncAdminUpdateRequest {
     blockedPubkeys?: string[] | null;
     maxMembers?: number | null;
     maxTotalStorageMb?: number | null;
+    maxUserStorageMb?: number | null;
 }
 
 export interface FrontendPublicSyncInfo {

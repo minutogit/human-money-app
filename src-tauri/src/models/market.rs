@@ -65,6 +65,8 @@ pub struct StoredOwnMarketProfile {
     pub ads: Vec<humoco_market::Ad>,
     #[serde(default = "default_max_hops")]
     pub max_hops: u8,
+    pub shrink_hops: u8,
+    pub shrink_until: u64,
     #[serde(default = "default_validity_years")]
     pub validity_years: u8,
     #[serde(default = "default_true")]
@@ -82,6 +84,8 @@ impl Default for StoredOwnMarketProfile {
             skills: Vec::new(),
             ads: Vec::new(),
             max_hops: humoco_market::DEFAULT_MAX_HOPS,
+            shrink_hops: 0,
+            shrink_until: 0,
             validity_years: 2,
             allow_inquiries: true,
             published: false,
@@ -550,6 +554,7 @@ pub struct FrontendSyncSetupDraft {
     pub admin_pubkey: String,
     pub max_members: usize,
     pub max_total_storage_mb: usize,
+    pub max_user_storage_mb: usize,
     pub policy: FrontendMemberPolicyDto,
     pub zip_base64: String,
     #[serde(default)]
@@ -564,6 +569,7 @@ pub struct FrontendSyncAdminStatus {
     pub data_dir: String,
     pub max_members: usize,
     pub max_total_storage_mb: usize,
+    pub max_user_storage_mb: usize,
     pub used_bytes: Option<u64>,
     pub max_bytes: Option<u64>,
     pub soft_warning: bool,
@@ -590,6 +596,7 @@ pub struct FrontendSyncAdminUpdateRequest {
     pub blocked_pubkeys: Option<Vec<String>>,
     pub max_members: Option<usize>,
     pub max_total_storage_mb: Option<usize>,
+    pub max_user_storage_mb: Option<usize>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
