@@ -22,7 +22,7 @@ use crate::sync_client::{self as sync_client, PutSlotOutcome};
 use super::{
     collect_own_reply_syncs, collect_post_upload_targets, enqueue_post_envelope,
     load_post_signing_context, load_post_state, lookup_counterparty_syncs,
-    resolve_counterparty_info, save_post_state, seal_post_container_bytes,
+    merge_and_save_post_state, resolve_counterparty_info, seal_post_container_bytes,
 };
 
 struct FlushContext {
@@ -344,13 +344,15 @@ pub(crate) async fn flush_post_slots_impl(
 
 async fn persist_and_flush_post_box(
     state: &AppState,
+    baseline: &StoredPostState,
     post_state: &mut StoredPostState,
     msg_id: String,
     password: Option<&str>,
 ) -> Result<FrontendPostDepositResult, FrontendError> {
     // Persist the sealed outbox entry BEFORE network flush so slow or unreachable
     // sync servers never lose an outgoing transfer box if the app closes.
-    save_post_state(state, post_state, password)?;
+    merge_and_save_post_state(state, baseline, post_state, password)?;
+    let mid_baseline = post_state.clone();
 
     let (deposited_to, recipient_deposited_to, errors) =
         flush_post_slots_impl(state, post_state, &[], password).await;
@@ -362,7 +364,7 @@ async fn persist_and_flush_post_box(
             errors.len()
         );
     }
-    save_post_state(state, post_state, password)?;
+    merge_and_save_post_state(state, &mid_baseline, post_state, password)?;
 
     Ok(FrontendPostDepositResult {
         deposited_to,
@@ -400,7 +402,9 @@ pub async fn deposit_transfer_to_post_impl(
         ));
     }
 
+    let _post_guard = state.post_op_lock.lock().await;
     let mut post_state = load_post_state(state, password.as_deref())?;
+    let baseline = post_state.clone();
 
     let msg_id = if let Some(existing) = post_state.outbox_entries.iter().find(|e| {
         e.bundle_id.as_deref() == Some(&bundle_id)
@@ -429,7 +433,7 @@ pub async fn deposit_transfer_to_post_impl(
         fresh_msg_id
     };
 
-    persist_and_flush_post_box(state, &mut post_state, msg_id, password.as_deref()).await
+    persist_and_flush_post_box(state, &baseline, &mut post_state, msg_id, password.as_deref()).await
 }
 
 fn resolve_signing_request_anchor_manifest(
@@ -482,8 +486,10 @@ pub async fn send_signing_request_via_post_impl(
         resolve_signing_request_anchor_manifest(state, local_instance_id.as_deref());
     let now_secs = sync_client::current_unix_timestamp();
 
+    let _post_guard = state.post_op_lock.lock().await;
     let msg_id = uuid::Uuid::new_v4().to_string();
     let mut post_state = load_post_state(state, password.as_deref())?;
+    let baseline = post_state.clone();
     enqueue_post_envelope(
         &mut post_state,
         &signing_ctx.sync_ctx.my_ed_sk,
@@ -497,7 +503,7 @@ pub async fn send_signing_request_via_post_impl(
         anchor_manifest_json,
     )?;
 
-    persist_and_flush_post_box(state, &mut post_state, msg_id, password.as_deref()).await
+    persist_and_flush_post_box(state, &baseline, &mut post_state, msg_id, password.as_deref()).await
 }
 
 /// Replies with a detached voucher signature container via Post and clears any matching request.
@@ -512,8 +518,10 @@ pub async fn reply_detached_signature_via_post_impl(
     let signing_ctx = load_post_signing_context(state, password.as_deref())?;
     let now_secs = sync_client::current_unix_timestamp();
 
+    let _post_guard = state.post_op_lock.lock().await;
     let msg_id = uuid::Uuid::new_v4().to_string();
     let mut post_state = load_post_state(state, password.as_deref())?;
+    let baseline = post_state.clone();
     enqueue_post_envelope(
         &mut post_state,
         &signing_ctx.sync_ctx.my_ed_sk,
@@ -526,6 +534,9 @@ pub async fn reply_detached_signature_via_post_impl(
         now_secs,
         None,
     )?;
+
+    merge_and_save_post_state(state, &baseline, &mut post_state, password.as_deref())?;
+    let mid_baseline = post_state.clone();
 
     let (deposited_to, recipient_deposited_to, errors) =
         flush_post_slots_impl(state, &mut post_state, &[], password.as_deref()).await;
@@ -552,7 +563,7 @@ pub async fn reply_detached_signature_via_post_impl(
         }
     }
 
-    save_post_state(state, &post_state, password.as_deref())?;
+    merge_and_save_post_state(state, &mid_baseline, &mut post_state, password.as_deref())?;
 
     Ok(FrontendPostDepositResult {
         deposited_to,
@@ -644,8 +655,10 @@ pub async fn send_wot_handshake_via_post_impl(
         "assertion",
     )?;
 
+    let _post_guard = state.post_op_lock.lock().await;
     let msg_id = uuid::Uuid::new_v4().to_string();
     let mut post_state = load_post_state(state, password.as_deref())?;
+    let baseline = post_state.clone();
     enqueue_post_envelope(
         &mut post_state,
         &my_ed_sk,
@@ -659,7 +672,7 @@ pub async fn send_wot_handshake_via_post_impl(
         None,
     )?;
 
-    persist_and_flush_post_box(state, &mut post_state, msg_id, password.as_deref()).await
+    persist_and_flush_post_box(state, &baseline, &mut post_state, msg_id, password.as_deref()).await
 }
 
 /// Accepts a pending incoming WoT handshake, updates contact trust, imports the peer's
@@ -678,62 +691,67 @@ pub async fn accept_wot_handshake_impl(
         )));
     }
 
-    let mut post_state = load_post_state(state, password.as_deref())?;
-    let idx = post_state
-        .pending_wot_handshakes
-        .iter()
-        .position(|h| h.msg_id == msg_id)
-        .ok_or_else(|| {
-            FrontendError::from(format!("Pending WoT handshake msg_id {} not found", msg_id))
-        })?;
-    let handshake = post_state.pending_wot_handshakes.remove(idx);
-    let sender_did = handshake.sender_did.clone();
-    let now_secs = sync_client::current_unix_timestamp();
+    let sender_did = {
+        let _post_guard = state.post_op_lock.lock().await;
+        let mut post_state = load_post_state(state, password.as_deref())?;
+        let baseline = post_state.clone();
+        let idx = post_state
+            .pending_wot_handshakes
+            .iter()
+            .position(|h| h.msg_id == msg_id)
+            .ok_or_else(|| {
+                FrontendError::from(format!("Pending WoT handshake msg_id {} not found", msg_id))
+            })?;
+        let handshake = post_state.pending_wot_handshakes.remove(idx);
+        let sender_did = handshake.sender_did.clone();
+        let now_secs = sync_client::current_unix_timestamp();
 
-    {
-        let mut service = state.service.lock().unwrap();
-        let mut contact = state
-            .load_contacts(&mut service, password.as_deref())
-            .ok()
-            .and_then(|list| {
-                list.into_iter()
-                    .find(|c| are_dids_equal(&c.did, &sender_did))
-            })
-            .unwrap_or_else(|| FrontendContact {
-                did: sender_did.clone(),
-                profile: FrontendUserProfile {
-                    first_name: handshake.sender_name.clone(),
-                    ..Default::default()
-                },
-                tags: vec![],
-                added_at: Utc::now().to_rfc3339(),
-                notes: None,
-                trust_level: Some(trust_level),
-                desired_hops: Some(3),
-                has_peer_list: false,
-                peer_list_updated_at: None,
-                syncs: vec![],
-            });
-        contact.trust_level = Some(trust_level);
-        state
-            .save_contact(&mut service, contact, password.as_deref())
-            .map_err(FrontendError::from)?;
-    }
-
-    if let Some(json_str) = post_state.pending_wot_packages_by_msg_id.remove(&msg_id) {
-        if let Ok(pkg) = serde_json::from_str::<humoco_wot::WotSyncPackage>(&json_str) {
+        {
             let mut service = state.service.lock().unwrap();
-            if let Ok(mut reg) = state.get_or_load_wot_register(&mut service, password.as_deref()) {
-                let can_sender_did = crate::state::canonicalize_did(&sender_did)
-                    .unwrap_or_else(|_| sender_did.clone());
-                let _ = reg.import_sync_package(&pkg, Some(&can_sender_did), now_secs);
-                let _ = state.ensure_wot_list_signed(&mut service, &mut reg);
-                let _ = state.save_wot_register(&mut service, &reg, password.as_deref());
+            let mut contact = state
+                .load_contacts(&mut service, password.as_deref())
+                .ok()
+                .and_then(|list| {
+                    list.into_iter()
+                        .find(|c| are_dids_equal(&c.did, &sender_did))
+                })
+                .unwrap_or_else(|| FrontendContact {
+                    did: sender_did.clone(),
+                    profile: FrontendUserProfile {
+                        first_name: handshake.sender_name.clone(),
+                        ..Default::default()
+                    },
+                    tags: vec![],
+                    added_at: Utc::now().to_rfc3339(),
+                    notes: None,
+                    trust_level: Some(trust_level),
+                    desired_hops: Some(3),
+                    has_peer_list: false,
+                    peer_list_updated_at: None,
+                    syncs: vec![],
+                });
+            contact.trust_level = Some(trust_level);
+            state
+                .save_contact(&mut service, contact, password.as_deref())
+                .map_err(FrontendError::from)?;
+        }
+
+        if let Some(json_str) = post_state.pending_wot_packages_by_msg_id.remove(&msg_id) {
+            if let Ok(pkg) = serde_json::from_str::<humoco_wot::WotSyncPackage>(&json_str) {
+                let mut service = state.service.lock().unwrap();
+                if let Ok(mut reg) = state.get_or_load_wot_register(&mut service, password.as_deref()) {
+                    let can_sender_did = crate::state::canonicalize_did(&sender_did)
+                        .unwrap_or_else(|_| sender_did.clone());
+                    let _ = reg.import_sync_package(&pkg, Some(&can_sender_did), now_secs);
+                    let _ = state.ensure_wot_list_signed(&mut service, &mut reg);
+                    let _ = state.save_wot_register(&mut service, &reg, password.as_deref());
+                }
             }
         }
-    }
 
-    save_post_state(state, &post_state, password.as_deref())?;
+        merge_and_save_post_state(state, &baseline, &mut post_state, password.as_deref())?;
+        sender_did
+    };
 
     if send_return_handshake {
         send_wot_handshake_via_post_impl(sender_did, trust_level.min(1), false, password, state)
@@ -790,8 +808,10 @@ pub async fn send_market_inquiry_via_post_impl(
         "inquiry",
     )?;
 
+    let _post_guard = state.post_op_lock.lock().await;
     let msg_id = uuid::Uuid::new_v4().to_string();
     let mut post_state = load_post_state(state, password.as_deref())?;
+    let baseline = post_state.clone();
     enqueue_post_envelope(
         &mut post_state,
         &signing_ctx.sync_ctx.my_ed_sk,
@@ -850,7 +870,7 @@ pub async fn send_market_inquiry_via_post_impl(
         }],
     };
     post_state.inquiries.push(item.clone());
-    save_post_state(state, &post_state, password.as_deref())?;
+    merge_and_save_post_state(state, &baseline, &mut post_state, password.as_deref())?;
 
     Ok(item)
 }
@@ -889,8 +909,10 @@ pub async fn send_market_inquiry_message_via_post_impl(
         }
     });
 
+    let _post_guard = state.post_op_lock.lock().await;
     let now_secs = sync_client::current_unix_timestamp();
     let mut post_state = load_post_state(state, password.as_deref())?;
+    let baseline = post_state.clone();
 
     let (item_idx, counterparty_did, target, has_reply_syncs) = {
         let (idx, item) = post_state
@@ -1028,7 +1050,7 @@ pub async fn send_market_inquiry_message_via_post_impl(
     item.unread = false;
 
     let mut updated_item = item.clone();
-    save_post_state(state, &post_state, password.as_deref())?;
+    merge_and_save_post_state(state, &baseline, &mut post_state, password.as_deref())?;
 
     let (name, pic, is_contact) =
         resolve_counterparty_info(state, &updated_item.counterparty_did, password.as_deref());

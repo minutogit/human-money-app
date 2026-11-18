@@ -20,17 +20,24 @@ use crate::sync_client;
 
 use super::handlers::{dispatch_post_payload, PostDispatchStats, PostEnvelopeContext};
 use super::{
-    load_post_signing_context, load_post_state, resolve_counterparty_info, save_post_state,
+    load_post_signing_context, load_post_state, merge_and_save_post_state,
+    resolve_counterparty_info,
 };
 use crate::services::post_service::outbox::flush_post_slots_impl;
 
-/// Marks a marketplace inquiry thread as read.
+/// Marks a marketplace inquiry thread as read atomically under `state.service`.
 pub fn mark_inquiry_read_impl(
     inquiry_id: String,
     password: Option<String>,
     state: &AppState,
 ) -> Result<(), FrontendError> {
-    let mut post_state = load_post_state(state, password.as_deref())?;
+    let mut service = state.service.lock().unwrap();
+    let mut post_state: StoredPostState = crate::state::load_encrypted_json_or_default(
+        &mut service,
+        crate::state::MARKET_POST_STATE_KEY,
+        password.as_deref(),
+    )
+    .map_err(FrontendError::from)?;
     let mut changed = false;
     for inq in &mut post_state.inquiries {
         if inq.inquiry_id == inquiry_id && inq.unread {
@@ -39,19 +46,31 @@ pub fn mark_inquiry_read_impl(
         }
     }
     if changed {
-        save_post_state(state, &post_state, password.as_deref())?;
+        crate::state::save_encrypted_json(
+            &mut service,
+            crate::state::MARKET_POST_STATE_KEY,
+            &post_state,
+            password.as_deref(),
+        )
+        .map_err(FrontendError::from)?;
     }
     Ok(())
 }
 
-/// Dismisses a pending sign request, WoT handshake, or inquiry item from the local Post inbox.
+/// Dismisses a pending sign request, WoT handshake, inquiry, or staged PoS payment atomically under `state.service`.
 pub fn dismiss_pending_post_item_impl(
     item_kind: String,
     id: String,
     password: Option<String>,
     state: &AppState,
 ) -> Result<(), FrontendError> {
-    let mut post_state = load_post_state(state, password.as_deref())?;
+    let mut service = state.service.lock().unwrap();
+    let mut post_state: StoredPostState = crate::state::load_encrypted_json_or_default(
+        &mut service,
+        crate::state::MARKET_POST_STATE_KEY,
+        password.as_deref(),
+    )
+    .map_err(FrontendError::from)?;
     match item_kind.as_str() {
         "sign_request" => {
             post_state.pending_sign_requests.retain(|r| r.msg_id != id);
@@ -63,6 +82,9 @@ pub fn dismiss_pending_post_item_impl(
         "inquiry" => {
             post_state.inquiries.retain(|i| i.inquiry_id != id);
         }
+        "pos_payment" => {
+            post_state.pending_pos_payments.retain(|p| p.id != id);
+        }
         other => {
             return Err(FrontendError::from(format!(
                 "Unknown pending post item kind: {}",
@@ -70,7 +92,13 @@ pub fn dismiss_pending_post_item_impl(
             )));
         }
     }
-    save_post_state(state, &post_state, password.as_deref())
+    crate::state::save_encrypted_json(
+        &mut service,
+        crate::state::MARKET_POST_STATE_KEY,
+        &post_state,
+        password.as_deref(),
+    )
+    .map_err(FrontendError::from)
 }
 
 /// Returns the current Post inbox summary enriched with counterparty contact metadata.
@@ -99,6 +127,7 @@ pub fn get_post_inbox_summary_impl(
     Ok(FrontendPostInboxSummary {
         pending_sign_requests: post_state.pending_sign_requests,
         pending_wot_handshakes: post_state.pending_wot_handshakes,
+        pending_pos_payments: post_state.pending_pos_payments,
         inquiries: post_state.inquiries,
         unacknowledged_payments,
     })
@@ -530,13 +559,16 @@ pub async fn sync_post_channels_impl(
             new_inquiries: 0,
             new_inquiry_messages: 0,
             pruned_boxes: 0,
+            pending_pos_payments: Vec::new(),
             errors: Vec::new(),
             retry_after_secs: None,
         });
     }
 
+    let _post_guard = state.post_op_lock.lock().await;
     let client = sync_client::create_sync_http_client();
     let mut post_state = load_post_state(state, password.as_deref())?;
+    let mut baseline_post_state = post_state.clone();
     let now_secs = sync_client::current_unix_timestamp();
 
     let signing_ctx = load_post_signing_context(state, password.as_deref())?;
@@ -744,12 +776,25 @@ pub async fn sync_post_channels_impl(
         }
     }
 
-    // 6. Flush pass
+    // 6. Merge any concurrent local writes before flushing, then flush and persist atomically.
+    merge_and_save_post_state(
+        state,
+        &baseline_post_state,
+        &mut post_state,
+        password.as_deref(),
+    )?;
+    baseline_post_state = post_state.clone();
+
     let (uploaded_to, _recipient_deposited_to, flush_errors) =
         flush_post_slots_impl(state, &mut post_state, &[], password.as_deref()).await;
     stats.errors.extend(flush_errors);
 
-    save_post_state(state, &post_state, password.as_deref())?;
+    merge_and_save_post_state(
+        state,
+        &baseline_post_state,
+        &mut post_state,
+        password.as_deref(),
+    )?;
 
     if polled_syncs > 0 || uploaded_to > 0 {
         let post_notices = build_post_notices(&stats, now_secs);
@@ -782,6 +827,7 @@ pub async fn sync_post_channels_impl(
         new_inquiries: stats.new_inquiries,
         new_inquiry_messages: stats.new_inquiry_messages,
         pruned_boxes: stats.pruned_boxes,
+        pending_pos_payments: post_state.pending_pos_payments,
         errors: stats.errors,
         retry_after_secs,
     })

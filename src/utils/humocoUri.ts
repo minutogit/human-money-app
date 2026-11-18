@@ -49,6 +49,40 @@ const CARD_URI_REGEX = /humoco:\/\/card\?([^\s<>"'`]+)/i;
 
 const TRAILING_PUNCT_REGEX = /[.,;:!?)\]"'>]+$/;
 const CONTINUATION_LINE_REGEX = /^[A-Za-z0-9\-_=+&%.:/]+$/;
+const GREETING_WORDS = new Set([
+  'danke',
+  'hallo',
+  'bitte',
+  'ciao',
+  'ok',
+  'lg',
+  'mfg',
+  'cheers',
+  'thanks',
+  'regards',
+  'gruesse',
+  'grüße',
+]);
+
+export function isWrappedUriContinuationLine(line: string, prevLineLength: number): boolean {
+  if (!line || /[!?]$/.test(line)) return false;
+  const stripped = line.replace(TRAILING_PUNCT_REGEX, '');
+  if (!stripped || !CONTINUATION_LINE_REGEX.test(stripped)) return false;
+  if (/^[A-Za-z]+$/.test(stripped)) {
+    const lower = stripped.toLowerCase();
+    if (GREETING_WORDS.has(lower)) return false;
+    if (
+      /^[A-Z][a-z]+$/.test(stripped) &&
+      stripped.length >= 3 &&
+      stripped.length < 24 &&
+      (/[.,:;]$/.test(line) || prevLineLength < 48)
+    ) {
+      return false;
+    }
+    if (stripped.length < 16 && prevLineLength < 45) return false;
+  }
+  return true;
+}
 
 function stripTrailingPunctuation(query: string): string {
   return query.replace(TRAILING_PUNCT_REGEX, '');
@@ -61,12 +95,12 @@ function unwrapHumocoUriLines(input: string, schemePrefix: string): string {
   const slice = input.slice(idx);
   const lines = slice.split(/\r?\n/);
   let joined = (lines[0] || '').trim();
+  let prevLineLen = joined.length;
   for (let i = 1; i < lines.length; i++) {
     const line = lines[i].trim();
-    if (!line) break;
-    const stripped = line.replace(TRAILING_PUNCT_REGEX, '');
-    if (stripped.length > 0 && CONTINUATION_LINE_REGEX.test(stripped)) {
+    if (isWrappedUriContinuationLine(line, prevLineLen)) {
       joined += line;
+      prevLineLen = line.length;
     } else {
       break;
     }

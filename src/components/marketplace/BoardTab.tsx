@@ -221,7 +221,7 @@ export const BoardTab: React.FC<BoardTabProps> = ({
                             wifiOnly={wifiOnly}
                             onEditOwnAd={onEditOwnAd}
                             onInquire={onInquire}
-                            onPay={onPay}
+                            onPay={onPay ? () => onPay(item.recipientDid || item.ownerDid) : undefined}
                             onOwnerClick={onOwnerClick}
                         />
                     ))}

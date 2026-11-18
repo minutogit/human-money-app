@@ -257,6 +257,7 @@ pub struct FrontendAdInput {
 #[serde(rename_all = "camelCase")]
 pub struct FrontendBoardItem {
     pub owner_did: String,
+    pub recipient_did: String,
     pub owner_name: String,
     pub trust: FrontendTrustTier,
     pub ad: humoco_market::Ad,
@@ -273,6 +274,7 @@ impl FrontendBoardItem {
         };
         Self {
             owner_did: bi.owner_did,
+            recipient_did: bi.recipient_did,
             owner_name: bi.owner_name,
             trust: bi.trust.into(),
             ad: bi.ad,
@@ -492,6 +494,7 @@ pub struct FrontendImportCardResult {
 #[serde(rename_all = "camelCase")]
 pub struct FrontendMarketPerson {
     pub did: String,
+    pub recipient_did: String,
     pub profile: crate::models::FrontendUserProfile,
     pub skills: Vec<FrontendMarketSkill>,
     pub active_ads: Vec<humoco_market::Ad>,
@@ -509,6 +512,7 @@ impl From<humoco_market::MarketPerson> for FrontendMarketPerson {
     fn from(p: humoco_market::MarketPerson) -> Self {
         Self {
             did: p.did,
+            recipient_did: p.recipient_did,
             profile: p.profile.into(),
             skills: p.skills.into_iter().map(Into::into).collect(),
             active_ads: p.active_ads,

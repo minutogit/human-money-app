@@ -13,6 +13,7 @@ vi.mock('../../../context/SessionContext', () => ({
         accessMode: 'full',
         elevateSession: mockElevateSession,
     }),
+    useOptionalSession: () => null,
 }));
 
 vi.mock('../../../services/authService', () => ({

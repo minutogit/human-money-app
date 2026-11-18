@@ -1864,3 +1864,272 @@ async fn test_unreachable_recipient_returns_error_and_locked_dispatch_defers_msg
 
     let _ = std::fs::remove_dir_all(&base_dir);
 }
+
+#[tokio::test]
+async fn test_merge_and_save_post_state_preserves_concurrent_outbox_and_pos_cashier_staging() {
+    let base_dir = temp_test_dir("post_concurrency_and_pos_staging");
+    let password = "TestPassword123!";
+
+    let alice_state = create_test_state(setup_test_app(
+        &base_dir.join("alice"),
+        "Alice",
+        ALICE_PHRASE,
+        password,
+    ));
+    let bob_state = create_test_state(setup_test_app(
+        &base_dir.join("bob"),
+        "Bob",
+        BOB_PHRASE,
+        password,
+    ));
+
+    let bob_did = bob_state
+        .service
+        .lock()
+        .unwrap()
+        .with_wallet(|w| w.get_user_id().to_string())
+        .unwrap();
+
+    // Finding 2: merge_and_save_post_state preserves concurrent outbox entries written while poll ran
+    let baseline = load_post_state(&alice_state, Some(password)).unwrap();
+    let mut stale_poll_state = baseline.clone();
+    stale_poll_state
+        .processed_msg_ids
+        .insert("polled-msg-1".to_string());
+
+    {
+        let mut concurrent_state = load_post_state(&alice_state, Some(password)).unwrap();
+        concurrent_state
+            .processed_msg_ids
+            .insert("concurrent-outbox-1".to_string());
+        let dummy_box = humoco_market::PostBoxEntry {
+            msg_nonce: [8u8; 24],
+            tag16: [9u8; 16],
+            ciphertext: vec![1, 2, 3, 4],
+        };
+        concurrent_state
+            .outbox_entries
+            .push(crate::state::PostOutboxEntry {
+                msg_id: "concurrent-outbox-1".to_string(),
+                recipient_did: bob_did.clone(),
+                tag16_hex: "09090909090909090909090909090909".to_string(),
+                bundle_id: None,
+                entry: dummy_box,
+                created_at: 1_760_000_000,
+            });
+        save_post_state(&alice_state, &concurrent_state, Some(password)).unwrap();
+    }
+
+    merge_and_save_post_state(&alice_state, &baseline, &mut stale_poll_state, Some(password))
+        .unwrap();
+    let merged = load_post_state(&alice_state, Some(password)).unwrap();
+    assert!(merged
+        .processed_msg_ids
+        .contains("concurrent-outbox-1"));
+    assert!(merged.processed_msg_ids.contains("polled-msg-1"));
+    assert_eq!(merged.outbox_entries.len(), 1);
+    assert_eq!(merged.outbox_entries[0].msg_id, "concurrent-outbox-1");
+    save_post_state(&alice_state, &StoredPostState::default(), Some(password)).unwrap();
+
+    // Finding 9: Active PoS cashier stages online PoST payment instead of auto-importing
+    let server_a = MockSyncServer::start("d-alice".to_string(), ADMIN_A.to_string()).await;
+    let server_b = MockSyncServer::start("d-bob".to_string(), ADMIN_B.to_string()).await;
+    let (server_a_url, alice_drop) =
+        setup_test_sync(&server_a, DROP_PUB_A, password, &alice_state).await;
+    let (server_b_url, bob_drop) =
+        setup_test_sync(&server_b, DROP_PUB_B, password, &bob_state).await;
+
+    {
+        let mut s_alice = alice_state.service.lock().unwrap();
+        let alice_did = s_alice.with_wallet(|w| w.get_user_id().to_string()).unwrap();
+        alice_state
+            .save_contact(
+                &mut s_alice,
+                FrontendContact {
+                    did: bob_did.clone(),
+                    profile: FrontendUserProfile {
+                        first_name: Some("Bob".to_string()),
+                        ..Default::default()
+                    },
+                    tags: vec![],
+                    added_at: Utc::now().to_rfc3339(),
+                    notes: None,
+                    trust_level: Some(2),
+                    desired_hops: Some(3),
+                    has_peer_list: false,
+                    peer_list_updated_at: None,
+                    syncs: vec![FrontendSyncDescriptor {
+                        read_url: bob_drop.read_url.clone(),
+                        write_url: server_b_url.clone(),
+                        slot_id: Some(
+                            humoco_market::format_slot_id(&bob_drop.access_pubkey, Some("pc"))
+                                .unwrap(),
+                        ),
+                        drop_pub: DROP_PUB_B.to_string(),
+                        status: "active".to_string(),
+                        fail_count: 0,
+                        ..Default::default()
+                    }],
+                },
+                Some(password),
+            )
+            .unwrap();
+
+        let mut s_bob = bob_state.service.lock().unwrap();
+        bob_state
+            .save_contact(
+                &mut s_bob,
+                FrontendContact {
+                    did: alice_did.clone(),
+                    profile: FrontendUserProfile {
+                        first_name: Some("Alice".to_string()),
+                        ..Default::default()
+                    },
+                    tags: vec![],
+                    added_at: Utc::now().to_rfc3339(),
+                    notes: None,
+                    trust_level: Some(2),
+                    desired_hops: Some(3),
+                    has_peer_list: false,
+                    peer_list_updated_at: None,
+                    syncs: vec![FrontendSyncDescriptor {
+                        write_url: server_a_url,
+                        read_url: alice_drop.read_url,
+                        slot_id: Some(
+                            humoco_market::format_slot_id(&alice_drop.access_pubkey, Some("pc"))
+                                .unwrap(),
+                        ),
+                        drop_pub: DROP_PUB_A.to_string(),
+                        status: "active".to_string(),
+                        fail_count: 0,
+                        ..Default::default()
+                    }],
+                },
+                Some(password),
+            )
+            .unwrap();
+        drop(s_bob);
+
+        let std_toml =
+            test_utils::generate_signed_standard_toml("voucher_standards/freetaler_v1/standard.toml");
+        s_alice
+            .create_new_voucher(
+                &std_toml,
+                human_money_core::NewVoucherData {
+                    creator_profile: human_money_core::models::profile::PublicProfile {
+                        id: Some(alice_did),
+                        ..Default::default()
+                    },
+                    nominal_value: human_money_core::models::voucher::ValueDefinition {
+                        amount: "50".to_string(),
+                        unit: "Taler".to_string(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                Some(password),
+            )
+            .unwrap();
+    }
+
+    let alice_voucher_id = {
+        let s = alice_state.service.lock().unwrap();
+        s.with_wallet_and_identity(|w, id| w.list_vouchers(Some(id), None, None, None))
+            .unwrap()[0]
+            .local_instance_id
+            .clone()
+    };
+
+    let standard_toml =
+        test_utils::generate_signed_standard_toml("voucher_standards/freetaler_v1/standard.toml");
+    let mut std_map = HashMap::new();
+    std_map.insert(
+        "a1b2c3d4-e5f6-4789-8012-3456789abcde".to_string(),
+        standard_toml,
+    );
+
+    let bundle_res = crate::services::transfer_service::create_transfer_bundle_impl(
+        None,
+        bob_did.clone(),
+        vec![crate::models::FrontendSourceTransfer {
+            local_instance_id: alice_voucher_id,
+            amount_to_send: "20".to_string(),
+        }],
+        Some("Ladeneinkauf".to_string()),
+        Some("Alice".to_string()),
+        std_map.clone(),
+        Some(false),
+        Some(false),
+        Some(password.to_string()),
+        &alice_state,
+    )
+    .await
+    .unwrap();
+
+    let dep_res = deposit_transfer_to_post_impl(
+        bundle_res.bundle_id,
+        Some(password.to_string()),
+        &alice_state,
+    )
+    .await
+    .unwrap();
+    assert!(
+        dep_res.recipient_deposited_to >= 1 || dep_res.deposited_to >= 1,
+        "Deposit failed: {:?}",
+        dep_res
+    );
+
+    {
+        let mut s_bob = bob_state.service.lock().unwrap();
+        let mut bob_settings = bob_state.load_settings(&mut s_bob, Some(password)).unwrap();
+        bob_settings.enable_pos_mode = true;
+        bob_settings.pos_cashier_active = true;
+        bob_state
+            .save_settings(&mut s_bob, bob_settings, Some(password))
+            .unwrap();
+    }
+
+    let bob_sync = sync_post_channels_impl(
+        None,
+        None,
+        Some(&std_map),
+        Some(password.to_string()),
+        &bob_state,
+    )
+    .await
+    .unwrap();
+    assert_eq!(bob_sync.imported_payments, 1, "bob_sync: {:?}", bob_sync);
+    assert_eq!(bob_sync.pending_pos_payments.len(), 1);
+    // Voucher must still NOT be auto-committed into Bob's wallet while PoS cashier is active
+    {
+        let s_bob = bob_state.service.lock().unwrap();
+        let bob_vouchers = s_bob
+            .with_wallet_and_identity(|w, id| w.list_vouchers(Some(id), None, None, None))
+            .unwrap();
+        assert!(bob_vouchers.is_empty());
+    }
+
+    // Committing the staged payment credits Bob's wallet and removes it from pending_pos_payments
+    let staged_bytes = bob_sync.pending_pos_payments[0].bundle_bytes.clone();
+    crate::services::transfer_service::receive_bundle_impl(
+        None,
+        staged_bytes,
+        std_map,
+        Some(password.to_string()),
+        false,
+        &bob_state,
+    )
+    .unwrap();
+
+    let post_after = load_post_state(&bob_state, Some(password)).unwrap();
+    assert!(post_after.pending_pos_payments.is_empty());
+    {
+        let s_bob = bob_state.service.lock().unwrap();
+        let bob_vouchers = s_bob
+            .with_wallet_and_identity(|w, id| w.list_vouchers(Some(id), None, None, None))
+            .unwrap();
+        assert_eq!(bob_vouchers.len(), 1);
+    }
+
+    let _ = std::fs::remove_dir_all(&base_dir);
+}

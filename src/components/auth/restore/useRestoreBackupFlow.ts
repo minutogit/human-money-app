@@ -92,7 +92,7 @@ export function useRestoreBackupFlow({
     const [feedback, setFeedback] = useState<RestoreFeedback | null>(null);
 
     useEffect(() => {
-        if (method !== 'choose') return;
+        if (method !== 'choose' && method !== 'social') return;
         let active = true;
         recoveryService
             .getActiveRecoverySession()

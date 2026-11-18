@@ -134,6 +134,17 @@ uuid = "minuto-uuid-123"`,
       if (cmd === 'evaluate_signature_suitability') {
         return Promise.resolve(mockSignatureImpact);
       }
+      if (cmd === 'evaluate_guarantor_anchor_check') {
+        return Promise.resolve({
+          required: false,
+          passed: true,
+          hasLayer2Anchor: false,
+          sybilIndependentCount: 0,
+          threshold: 0,
+          serverCount: 0,
+          issues: [],
+        });
+      }
       if (cmd === 'create_detached_signature_response_bundle') {
         return Promise.resolve([1, 2, 3, 4]);
       }
@@ -223,7 +234,7 @@ uuid = "minuto-uuid-123"`,
     render(<SignRequestView voucherData={mockVoucherDetails} onBack={mockOnBack} />);
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /Sign Now/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Sign Now/i })).toBeEnabled();
     });
 
     const signButton = screen.getByRole('button', { name: /Sign Now/i });
@@ -259,7 +270,7 @@ uuid = "minuto-uuid-123"`,
     );
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /Sign Now/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Sign Now/i })).toBeEnabled();
     });
 
     const signButton = screen.getByRole('button', { name: /Sign Now/i });
@@ -298,7 +309,7 @@ uuid = "minuto-uuid-123"`,
     );
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /Sign Now/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Sign Now/i })).toBeEnabled();
     });
 
     const signButton = screen.getByRole('button', { name: /Sign Now/i });
@@ -335,6 +346,42 @@ uuid = "minuto-uuid-123"`,
 
     const anchorCard = await screen.findByTestId('guarantor-anchor-check');
     expect(anchorCard).toHaveTextContent(/Sybil: 1\/2/);
+    expect(screen.getByRole('button', { name: /Sign Now/i })).toBeDisabled();
+  });
+
+  it('blocks guarantor signing while anchor check is pending or when anchor check rejects', async () => {
+    const baseImpl = (invoke as Mock).getMockImplementation();
+    (invoke as Mock).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === 'evaluate_guarantor_anchor_check') {
+        return new Promise(() => {});
+      }
+      return baseImpl ? baseImpl(cmd, args) : Promise.resolve(undefined);
+    });
+
+    const { rerender } = render(<SignRequestView voucherData={mockVoucherDetails} onBack={mockOnBack} />);
+
+    await screen.findByTestId('guarantor-anchor-check-loading');
+    expect(screen.getByRole('button', { name: /Sign Now/i })).toBeDisabled();
+
+    // Now test technical failure path
+    (invoke as Mock).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === 'evaluate_guarantor_anchor_check') {
+        return Promise.reject(new Error('Anchor check offline error'));
+      }
+      return baseImpl ? baseImpl(cmd, args) : Promise.resolve(undefined);
+    });
+
+    rerender(
+      <SignRequestView
+        voucherData={{
+          ...mockVoucherDetails,
+          voucher: { ...mockVoucherDetails.voucher, voucherId: 'voucher-id-err' },
+        }}
+        onBack={mockOnBack}
+      />
+    );
+
+    await screen.findByTestId('guarantor-anchor-check-error');
     expect(screen.getByRole('button', { name: /Sign Now/i })).toBeDisabled();
   });
 });

@@ -340,19 +340,50 @@ pub fn open_voucher_signing_request(
     open_voucher_signing_request_impl(&container_bytes, password.as_deref(), &service)
 }
 
-#[tauri::command]
-pub fn create_detached_signature_response_bundle(
+pub(crate) fn create_detached_signature_response_bundle_impl(
     voucher: crate::models::FrontendVoucher,
     role: String,
     include_details: bool,
     config: ContainerConfig,
     password: Option<String>,
-    state: tauri::State<AppState>,
+    anchor_manifest_json: Option<String>,
+    app_opt: Option<&tauri::AppHandle>,
+    state: &AppState,
 ) -> Result<Vec<u8>, FrontendError> {
     info!(
         "Creating detached signature response for role {} with config {:?}",
         role, config
     );
+
+    let core_voucher_preview = human_money_core::models::voucher::Voucher::from(voucher.clone());
+    if role.trim().eq_ignore_ascii_case("guarantor") && core_voucher_preview.layer2_anchor.is_some()
+    {
+        let all_standards = crate::services::common::load_all_standard_tomls(app_opt, None);
+        let std_toml = all_standards
+            .get(&core_voucher_preview.voucher_standard.uuid)
+            .ok_or_else(|| {
+                FrontendError::with_code(
+                    "error.voucher.guarantorAnchorCheckFailed",
+                    "Guarantor anchor verification failed (missing standard definition for anchored voucher)",
+                )
+            })?;
+        let check = evaluate_guarantor_anchor_check_impl(
+            voucher,
+            std_toml.clone(),
+            anchor_manifest_json,
+            state,
+        )?;
+        if check.required && !check.passed {
+            return Err(FrontendError::with_code(
+                "error.voucher.guarantorAnchorCheckFailed",
+                format!(
+                    "Guarantor anchor verification failed ({})",
+                    check.issues.join(", ")
+                ),
+            ));
+        }
+    }
+
     let mut service = state.service.lock().unwrap();
 
     if !service.is_wallet_unlocked() {
@@ -371,16 +402,39 @@ pub fn create_detached_signature_response_bundle(
         }
     }
 
-    let core_voucher = human_money_core::models::voucher::Voucher::from(voucher);
     service
         .create_detached_signature_response_bundle(
-            &core_voucher,
+            &core_voucher_preview,
             &role,
             include_details,
             config,
             password.as_deref(),
         )
         .map_err(FrontendError::from)
+}
+
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+pub fn create_detached_signature_response_bundle(
+    app: tauri::AppHandle,
+    voucher: crate::models::FrontendVoucher,
+    role: String,
+    include_details: bool,
+    config: ContainerConfig,
+    password: Option<String>,
+    anchor_manifest_json: Option<String>,
+    state: tauri::State<AppState>,
+) -> Result<Vec<u8>, FrontendError> {
+    create_detached_signature_response_bundle_impl(
+        voucher,
+        role,
+        include_details,
+        config,
+        password,
+        anchor_manifest_json,
+        Some(&app),
+        &state,
+    )
 }
 
 #[tauri::command]
@@ -645,8 +699,6 @@ mod tests {
         test_utils::{self, ACTORS},
         wallet::Wallet,
     };
-    use std::collections::HashMap;
-    use std::sync::Mutex;
     use uuid::Uuid;
 
     #[test]
@@ -748,16 +800,23 @@ mod tests {
             }),
             ..Default::default()
         };
-        let guar_state = AppState {
-            service: Mutex::new(svc_guarantor),
-            history: Mutex::new(None),
-            events: Mutex::new(None),
-            contacts: Mutex::new(None),
-            settings: Mutex::new(Some(guar_settings)),
-            wot: Mutex::new(None),
-            media_negative_cache: Mutex::new(HashMap::new()),
-            startup_launch_items: Mutex::new(Vec::new()),
-        };
+        let guar_state = AppState::new(svc_guarantor);
+        *guar_state.settings.lock().unwrap() = Some(guar_settings);
+
+        // Backend signing command MUST reject guarantor signing without valid anchor verification
+        let creator_id_for_cfg = creator_id.clone();
+        let reject_err = create_detached_signature_response_bundle_impl(
+            details.voucher.clone(),
+            "guarantor".to_string(),
+            false,
+            ContainerConfig::TargetDid(creator_id_for_cfg, PrivacyMode::TrialDecryption),
+            Some(pw.to_string()),
+            None,
+            None,
+            &guar_state,
+        )
+        .unwrap_err();
+        assert_eq!(reject_err.code, "error.voucher.guarantorAnchorCheckFailed");
 
         let check = evaluate_guarantor_anchor_check_impl(
             details.voucher,

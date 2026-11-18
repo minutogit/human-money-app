@@ -55,6 +55,8 @@ pub struct StoredPostState {
     #[serde(default)]
     pub pending_wot_packages_by_msg_id: std::collections::BTreeMap<String, String>,
     #[serde(default)]
+    pub pending_pos_payments: Vec<crate::models::FrontendPendingPosPayment>,
+    #[serde(default)]
     pub inquiries: Vec<crate::models::FrontendMarketInquiryItem>,
     #[serde(default)]
     pub inquiry_rate_tracker: humoco_market::InquiryRateTracker,
@@ -150,6 +152,9 @@ pub struct AppState {
     pub contacts: Mutex<Option<crate::models::FrontendAddressBook>>,
     pub settings: Mutex<Option<AppSettings>>,
     pub wot: Mutex<Option<humoco_wot::TrustRegister>>,
+    pub recovery_owner: Mutex<Option<Option<crate::models::recovery::RecoveryOwnerState>>>,
+    pub guardian_vault: Mutex<Option<humoco_market::GuardianVaultStore>>,
+    pub post_op_lock: tokio::sync::Mutex<()>,
     pub media_negative_cache: Mutex<std::collections::HashMap<String, u64>>,
     pub startup_launch_items: Mutex<Vec<String>>,
 }
@@ -212,6 +217,9 @@ impl AppState {
             contacts: Mutex::new(None),
             settings: Mutex::new(None),
             wot: Mutex::new(None),
+            recovery_owner: Mutex::new(None),
+            guardian_vault: Mutex::new(None),
+            post_op_lock: tokio::sync::Mutex::new(()),
             media_negative_cache: Mutex::new(std::collections::HashMap::new()),
             startup_launch_items: Mutex::new(Vec::new()),
         }
@@ -407,9 +415,22 @@ impl AppState {
             .map(|c| c.syncs.clone())
             .unwrap_or_default();
 
+        let mut existing_profile: Option<crate::models::FrontendUserProfile> = address_book
+            .contacts
+            .get(&contact.did)
+            .map(|c| c.profile.clone());
+
         if let Some(old) = address_book.contacts.get(&contact.did) {
             if contact.added_at.is_empty() {
                 contact.added_at = old.added_at.clone();
+            }
+            if contact.tags.is_empty() && !old.tags.is_empty() {
+                contact.tags = old.tags.clone();
+            }
+            if !contact.has_peer_list && old.has_peer_list {
+                contact.has_peer_list = true;
+                contact.peer_list_updated_at =
+                    contact.peer_list_updated_at.or(old.peer_list_updated_at);
             }
         }
 
@@ -421,6 +442,56 @@ impl AppState {
                 if contact.added_at.is_empty() {
                     contact.added_at = old.added_at;
                 }
+                if contact.tags.is_empty() && !old.tags.is_empty() {
+                    contact.tags = old.tags;
+                }
+                if !contact.has_peer_list && old.has_peer_list {
+                    contact.has_peer_list = true;
+                    contact.peer_list_updated_at =
+                        contact.peer_list_updated_at.or(old.peer_list_updated_at);
+                }
+                if existing_profile.is_none() {
+                    existing_profile = Some(old.profile);
+                }
+            }
+        }
+
+        if let Some(ref old_prof) = existing_profile {
+            if contact.profile.protocol_version.is_none() {
+                contact.profile.protocol_version = old_prof.protocol_version.clone();
+            }
+            if contact.profile.id.is_none() {
+                contact.profile.id = old_prof.id.clone();
+            }
+            if contact.profile.community.is_none() {
+                contact.profile.community = old_prof.community.clone();
+            }
+            if contact.profile.address.is_none() {
+                contact.profile.address = old_prof.address.clone();
+            }
+            if contact.profile.gender.is_none() {
+                contact.profile.gender = old_prof.gender.clone();
+            }
+            if contact.profile.email.is_none() {
+                contact.profile.email = old_prof.email.clone();
+            }
+            if contact.profile.phone.is_none() {
+                contact.profile.phone = old_prof.phone.clone();
+            }
+            if contact.profile.coordinates.is_none() {
+                contact.profile.coordinates = old_prof.coordinates.clone();
+            }
+            if contact.profile.url.is_none() {
+                contact.profile.url = old_prof.url.clone();
+            }
+            if contact.profile.service_offer.is_none() {
+                contact.profile.service_offer = old_prof.service_offer.clone();
+            }
+            if contact.profile.needs.is_none() {
+                contact.profile.needs = old_prof.needs.clone();
+            }
+            if contact.profile.picture_url.is_none() {
+                contact.profile.picture_url = old_prof.picture_url.clone();
             }
         }
 
@@ -709,6 +780,8 @@ impl AppState {
         *self.contacts.lock().unwrap() = None;
         *self.settings.lock().unwrap() = None;
         *self.wot.lock().unwrap() = None;
+        *self.recovery_owner.lock().unwrap() = None;
+        *self.guardian_vault.lock().unwrap() = None;
     }
 
     /// Central session initializer — called after Login, Create Profile, Recovery, and Handover.
@@ -783,6 +856,32 @@ impl AppState {
 
         // 6. Load the Web of Trust register
         self.load_wot_register(service, Some(credential))?;
+
+        // 7. Pre-cache Social Recovery owner state and guardian vault (supports timeout = 0)
+        match load_encrypted_json_opt::<crate::models::recovery::RecoveryOwnerState>(
+            service,
+            RECOVERY_OWNER_STATE_KEY,
+            Some(credential),
+        ) {
+            Ok(owner_opt) => {
+                *self.recovery_owner.lock().unwrap() = Some(owner_opt);
+            }
+            Err(e) => {
+                log::warn!("Failed to pre-load recovery owner state: {}", e);
+            }
+        }
+        match load_encrypted_json_or_default::<humoco_market::GuardianVaultStore>(
+            service,
+            RECOVERY_GUARDIAN_VAULT_KEY,
+            Some(credential),
+        ) {
+            Ok(vault) => {
+                *self.guardian_vault.lock().unwrap() = Some(vault);
+            }
+            Err(e) => {
+                log::warn!("Failed to pre-load guardian vault: {}", e);
+            }
+        }
 
         Ok(())
     }

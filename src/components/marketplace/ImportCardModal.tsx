@@ -44,6 +44,8 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
     const [isQrOpen, setIsQrOpen] = useState(false);
 
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const hadExistingContactRef = useRef<boolean>(false);
+    const lastImportedPayloadRef = useRef<string | null>(null);
 
     useEffect(() => {
         let active = true;
@@ -64,6 +66,8 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
         setSelectedTrustLevel(null);
         setIsSavingTrust(false);
         setPartnerName(null);
+        hadExistingContactRef.current = false;
+        lastImportedPayloadRef.current = null;
     };
 
     const handleClose = () => {
@@ -75,11 +79,11 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
         if (!resultFeedback?.did) return;
         setIsSavingTrust(true);
         try {
-            if (level > 0) {
-                const did = resultFeedback.did;
-                const existingContacts = await contactService.getContacts().catch(() => []);
-                const existing = existingContacts.find(c => isExactSameUserId(c.did, did));
+            const did = resultFeedback.did;
+            const existingContacts = (await contactService.getContacts().catch(() => [])) || [];
+            const existing = existingContacts.find(c => isExactSameUserId(c.did, did));
 
+            if (level > 0) {
                 let profile = existing?.profile;
                 let syncs = existing?.syncs;
                 if (!profile) {
@@ -96,12 +100,14 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
                 };
 
                 const contactToSave: Contact = {
+                    ...(existing || {}),
                     did,
-                    profile: profile || defaultProfile,
+                    profile: existing?.profile ? { ...existing.profile, ...(profile || {}), id: did } : (profile || defaultProfile),
                     tags: existing?.tags || [],
+                    notes: existing?.notes,
                     addedAt: existing?.addedAt || new Date().toISOString(),
                     trustLevel: level,
-                    syncs: syncs || [],
+                    syncs: (existing?.syncs && existing.syncs.length > 0 ? existing.syncs : syncs) || [],
                 };
 
                 await protectAction(async (pwd) => {
@@ -109,6 +115,27 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
                 });
 
                 marketService.syncMarketChannels().catch(() => {});
+            } else if (existing) {
+                if (!hadExistingContactRef.current) {
+                    await protectAction(async (pwd) => {
+                        await contactService.deleteContact(did, pwd || undefined);
+                        if (lastImportedPayloadRef.current) {
+                            await marketService.importContactCard(lastImportedPayloadRef.current, pwd || undefined);
+                        }
+                    });
+                } else {
+                    const contactToSave: Contact = {
+                        ...existing,
+                        trustLevel: null,
+                        desiredHops: null,
+                    };
+                    await protectAction(async (pwd) => {
+                        await contactService.saveContact(contactToSave, pwd || undefined);
+                        if (lastImportedPayloadRef.current) {
+                            await marketService.importContactCard(lastImportedPayloadRef.current, pwd || undefined);
+                        }
+                    });
+                }
             }
             setSelectedTrustLevel(level);
         } catch (err) {
@@ -152,8 +179,10 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
                             });
                             return;
                         }
-                        const existingContacts = await contactService.getContacts().catch(() => []);
+                        const existingContacts = (await contactService.getContacts().catch(() => [])) || [];
                         const existing = existingContacts.find(c => isExactSameUserId(c.did, parsedContact.did));
+                        hadExistingContactRef.current = Boolean(existing);
+                        lastImportedPayloadRef.current = null;
                         let firstName = existing?.profile.firstName;
                         let lastName = existing?.profile.lastName;
                         if (!firstName && parsedContact.name) {
@@ -174,6 +203,7 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
                         }));
                         const mergedSyncs = existing?.syncs && existing.syncs.length > 0 ? existing.syncs : mappedSyncs;
                         const contactToSave: Contact = {
+                            ...(existing || {}),
                             did: parsedContact.did,
                             profile: {
                                 ...(existing?.profile || {}),
@@ -182,6 +212,7 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
                                 lastName,
                             },
                             tags: existing?.tags || [],
+                            notes: existing?.notes,
                             addedAt: existing?.addedAt || new Date().toISOString(),
                             trustLevel: existing?.trustLevel,
                             syncs: mergedSyncs,
@@ -203,6 +234,7 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
                 }
             }
 
+            lastImportedPayloadRef.current = effectivePayload;
             const res = await protectAction(async (pwd) => {
                 return await marketService.importContactCard(effectivePayload, pwd || undefined);
             });
@@ -212,6 +244,12 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
             }
 
             if (res.status === 'accepted') {
+                if (res.did) {
+                    const existingContacts = (await contactService.getContacts().catch(() => [])) || [];
+                    hadExistingContactRef.current = existingContacts.some((c) => isExactSameUserId(c.did, res.did!));
+                } else {
+                    hadExistingContactRef.current = false;
+                }
                 setResultFeedback({
                     type: 'success',
                     title: res.replaced

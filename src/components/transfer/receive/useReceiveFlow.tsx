@@ -5,7 +5,7 @@ import { settingsService } from '../../../services/settingsService';
 import { voucherService } from '../../../services/voucherService';
 import { standardsService } from '../../../services/standardsService';
 import { profileService } from '../../../services/profileService';
-import { postService } from '../../../services/postService';
+import { postService, POST_INBOX_UPDATED_EVENT } from '../../../services/postService';
 import { backupService } from '../../../services/backupService';
 import { useSession } from '../../../context/SessionContext';
 import { useOptionalNavigation } from '../../../context/NavigationContext';
@@ -66,6 +66,7 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseRec
     const [isCheckingPost, setIsCheckingPost] = useState(false);
     const [postCheckStatus, setPostCheckStatus] = useState<{ variant: 'info' | 'success' | 'error'; message: string } | null>(null);
     const processedDroppedFileRef = useRef<{ name: string; bytes: number[] } | null>(null);
+    const autoStagedPosMsgIdRef = useRef<string | null>(null);
 
     const modalsRef = useRef<ReturnType<typeof useReceiveModals> | null>(null);
     const wotRef = useRef<ReturnType<typeof useReceiveWotImport> | null>(null);
@@ -277,12 +278,21 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseRec
                 if (!active) return;
                 setVoucherStandards(standards);
                 setSettings(currentSettings);
-                if (
-                    currentSettings?.enablePosMode &&
+                const storedLocalPos =
                     typeof localStorage !== 'undefined' &&
-                    localStorage.getItem(POS_ACTIVE_STORAGE_KEY) === 'true'
-                ) {
+                    localStorage.getItem(POS_ACTIVE_STORAGE_KEY) === 'true';
+                const initialPosActive = Boolean(
+                    currentSettings?.enablePosMode &&
+                        (currentSettings?.posCashierActive ?? storedLocalPos)
+                );
+                if (initialPosActive) {
                     setIsPosMode(true);
+                }
+                if (typeof localStorage !== 'undefined' && typeof currentSettings?.posCashierActive === 'boolean') {
+                    localStorage.setItem(
+                        POS_ACTIVE_STORAGE_KEY,
+                        currentSettings.posCashierActive ? 'true' : 'false'
+                    );
                 }
                 setOwnUserId(userId);
                 setOwnProfile(profile);
@@ -300,6 +310,39 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseRec
             active = false;
         };
     }, [t]);
+
+    useEffect(() => {
+        if (!isSettingsLoaded || !isPosMode || droppedFile || isProcessing) {
+            return;
+        }
+        const checkStagedPosPayments = () => {
+            if (typeof postService?.getPostInboxSummary !== 'function') return;
+            postService
+                .getPostInboxSummary()
+                .then((summary) => {
+                    const next = summary?.pendingPosPayments?.[0];
+                    if (
+                        next &&
+                        next.id !== autoStagedPosMsgIdRef.current &&
+                        Array.isArray(next.bundleBytes) &&
+                        next.bundleBytes.length > 0
+                    ) {
+                        autoStagedPosMsgIdRef.current = next.id;
+                        void executeReceiveDirectly(
+                            next.bundleBytes,
+                            'transfer',
+                            `post-${next.id}.transfer`,
+                            undefined,
+                            true,
+                        );
+                    }
+                })
+                .catch(() => {});
+        };
+        checkStagedPosPayments();
+        window.addEventListener(POST_INBOX_UPDATED_EVENT, checkStagedPosPayments);
+        return () => window.removeEventListener(POST_INBOX_UPDATED_EVENT, checkStagedPosPayments);
+    }, [isSettingsLoaded, isPosMode, droppedFile, isProcessing, executeReceiveDirectly]);
 
     const processStandardFile = useCallback(async (fileData: number[]) => {
         setIsProcessing(true);
@@ -352,12 +395,13 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseRec
             const forcePos = Boolean(
                 settings?.enablePosMode &&
                     (isPosMode ||
-                        (typeof localStorage !== 'undefined' &&
-                            localStorage.getItem(POS_ACTIVE_STORAGE_KEY) === 'true')),
+                        (settings.posCashierActive ??
+                            (typeof localStorage !== 'undefined' &&
+                                localStorage.getItem(POS_ACTIVE_STORAGE_KEY) === 'true'))),
             );
             void processIncomingFile(droppedFile.name, droppedFile.bytes, forcePos);
         }
-    }, [droppedFile, isSettingsLoaded, isPosMode, processIncomingFile, settings?.enablePosMode]);
+    }, [droppedFile, isSettingsLoaded, isPosMode, processIncomingFile, settings?.enablePosMode, settings?.posCashierActive]);
 
     useEffect(() => {
         const preventGlobalDefaults = (e: Event) => e.preventDefault();
@@ -415,6 +459,15 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseRec
         if (typeof localStorage !== 'undefined') {
             localStorage.setItem(POS_ACTIVE_STORAGE_KEY, checked ? 'true' : 'false');
         }
+        if (settings) {
+            const nextSettings: AppSettings = { ...settings, posCashierActive: checked };
+            setSettings(nextSettings);
+            void protectAction(async (pwd) => {
+                await settingsService.saveSettings(nextSettings, pwd || undefined);
+            }).catch((err) => {
+                logger.warn(`Failed to persist PoS cashier mode: ${stringifyError(err)}`);
+            });
+        }
     };
 
     const handleCheckPostNow = async () => {
@@ -424,6 +477,22 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseRec
         setFeedbackMsg('');
         try {
             const res = await postService.syncPostChannels();
+            let stagedPosPayments = res.pendingPosPayments ?? [];
+            if (isPosMode && stagedPosPayments.length === 0 && typeof postService.getPostInboxSummary === 'function') {
+                const summary = await postService.getPostInboxSummary().catch(() => null);
+                stagedPosPayments = summary?.pendingPosPayments ?? [];
+            }
+            if (isPosMode && stagedPosPayments.length > 0) {
+                const nextPayment = stagedPosPayments[0];
+                await executeReceiveDirectly(
+                    nextPayment.bundleBytes,
+                    'transfer',
+                    `post-${nextPayment.id}.transfer`,
+                    undefined,
+                    true,
+                );
+                return;
+            }
             const incomingCount =
                 (res.importedPayments ?? 0) +
                 (res.newSignRequests ?? 0) +

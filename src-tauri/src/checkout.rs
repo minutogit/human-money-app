@@ -384,12 +384,11 @@ fn build_receive_payload_and_record(
         });
     }
 
-    let conflict_summaries = service
-        .list_conflicts()
-        .map_err(FrontendError::from)?
-        .into_iter()
-        .map(|s| s.into())
-        .collect();
+    let (conflict_summaries, unrelated_open_conflicts_count) =
+        crate::services::transfer_service::filter_conflicts_for_received_vouchers(
+            service,
+            &opened_bundle.vouchers,
+        )?;
 
     let record = crate::models::TransactionRecord {
         id: uuid::Uuid::new_v4().to_string(),
@@ -465,6 +464,7 @@ fn build_receive_payload_and_record(
         newly_committed: Some(newly_committed),
         is_replay: Some(is_replay),
         wot_imported_lists,
+        unrelated_open_conflicts_count,
     };
 
     Ok((payload, Some(record)))
@@ -939,6 +939,11 @@ pub(crate) async fn checkout_bundle(
                     .await;
                 });
             }
+
+            drop(service);
+            crate::services::post_service::remove_pending_pos_payment_by_bytes(
+                state, bundle, password,
+            );
 
             Ok(PurchaseCompletion {
                 purchase_id: completion.purchase_id,

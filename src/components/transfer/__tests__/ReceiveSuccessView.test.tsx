@@ -235,4 +235,27 @@ describe('ReceiveSuccessView payment evidence', () => {
     expect(screen.getByText(/mehrere Gutscheine|multiple vouchers/i)).toBeInTheDocument();
     expect(screen.getByTestId('merchant-approve-btn')).toBeInTheDocument();
   });
+
+  it('keeps clean payments released while showing a separate non-blocking notice for unrelated open conflicts', () => {
+    render(
+      <ReceiveSuccessView
+        payload={{
+          ...payload,
+          conflictSummaries: [],
+          unrelatedOpenConflictsCount: 1,
+          checkoutVerdict: {
+            outcome: 'Confirmed',
+            canReleaseGoodsAutomatically: true,
+            requiresMerchantApproval: false,
+            isGoodsReleaseAuthorized: true,
+          },
+        }}
+        onDone={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId('goods-release-card')).toHaveTextContent(/Ware sicher herausgeben|Safely hand over goods/i);
+    expect(screen.getByTestId('unrelated-conflicts-notice')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { level: 1, name: /Sicherheitswarnung|Security Warning/i })).not.toBeInTheDocument();
+  });
 });

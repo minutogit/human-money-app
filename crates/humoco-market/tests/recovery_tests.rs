@@ -1003,48 +1003,77 @@ fn test_sloppy_kit_uri_and_prefixed_vault_lookup() {
     let parsed_req = parse_recovery_request_uri(&req_with_q).unwrap();
     assert_eq!(parsed_req.ts, 1700000500);
 
-    // Prefixed owner_did in update_locator / revoke_ward canonicalizes to root_did
+    // Prefixed subaccounts on the same root key store and manage independent guardian vault entries
     let sk = make_signing_key(7);
-    let root_did = create_user_id(&sk.verifying_key(), None).unwrap();
-    let prefixed_did = create_user_id(&sk.verifying_key(), Some("phone")).unwrap();
-    let master = RecoveryMasterPayload::new(
-        &root_did,
+    let shop_did = create_user_id(&sk.verifying_key(), Some("laden")).unwrap();
+    let phone_did = create_user_id(&sk.verifying_key(), Some("phone")).unwrap();
+    let shop_master = RecoveryMasterPayload::new(
+        &shop_did,
         vec![0x22; 16],
+        MnemonicLanguage::German,
+        Some("laden".to_string()),
+        false,
+    );
+    let phone_master = RecoveryMasterPayload::new(
+        &phone_did,
+        vec![0x33; 16],
         MnemonicLanguage::German,
         Some("phone".to_string()),
         false,
     );
-    let bundle = create_social_recovery_vault_bundle(
+    let shop_bundle = create_social_recovery_vault_bundle(
         &sk,
-        &root_did,
-        "Hans",
+        &shop_did,
+        "Laden",
         1,
         2,
         3,
         &[1, 2, 3],
         &["Garten", "Lindenstrasse", "Kroatien"],
         &RecoveryKdfParams::new_fast_test(),
-        &master,
+        &shop_master,
         &[],
         1700000000,
     )
     .unwrap();
+    let phone_bundle = create_social_recovery_vault_bundle(
+        &sk,
+        &phone_did,
+        "Privat",
+        1,
+        2,
+        3,
+        &[1, 2, 3],
+        &["Garten", "Lindenstrasse", "Kroatien"],
+        &RecoveryKdfParams::new_fast_test(),
+        &phone_master,
+        &[],
+        1700000010,
+    )
+    .unwrap();
     let mut store = GuardianVaultStore::new();
-    store.upsert_ward(bundle[0].clone()).unwrap();
-    assert!(store.get_ward(&prefixed_did).is_some());
+    store.upsert_ward(shop_bundle[0].clone()).unwrap();
+    store.upsert_ward(phone_bundle[0].clone()).unwrap();
+    assert_eq!(store.len(), 2);
+    assert_eq!(store.get_ward(&shop_did).unwrap().owner_display_name, "Laden");
+    assert_eq!(store.get_ward(&phone_did).unwrap().owner_display_name, "Privat");
     assert!(store
         .update_locator(&GuardianLocatorUpdate {
-            owner_did: prefixed_did.clone(),
+            owner_did: phone_did.clone(),
             rotation_epoch: 1,
             backup_sync_descriptors: vec![sample_drop_descriptor("1")],
             updated_at: 1700000050,
         })
         .unwrap());
+    assert!(store.get_ward(&shop_did).unwrap().backup_sync_descriptors.is_empty());
+    assert_eq!(store.get_ward(&phone_did).unwrap().backup_sync_descriptors.len(), 1);
     assert!(store
         .revoke_ward(&GuardianRevoke {
-            owner_did: prefixed_did,
+            owner_did: phone_did.clone(),
             rotation_epoch: 1,
         })
         .unwrap());
-    assert!(store.is_empty());
+    assert_eq!(store.len(), 1);
+    assert!(store.get_ward(&shop_did).is_some());
+    assert!(store.get_ward(&phone_did).is_none());
 }

@@ -15,6 +15,7 @@ fn dummy_sd_card(did: &str, v: u64) -> SdCard {
         jws: format!("header.{}.signature", did),
         payload: CardPayload {
             did: did.to_string(),
+            recipient_did: None,
             v,
             valid_until: 1800000000,
             max_hops: 2,

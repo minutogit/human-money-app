@@ -141,14 +141,15 @@ export const MarketPersonView: React.FC<MarketPersonViewProps> = ({
         loadContacts();
     }, [loadContacts]);
 
+    const paymentRecipientId = currentPerson.recipientDid || currentPerson.did;
     const existingContact = Array.isArray(contacts)
-        ? contacts.find((c) => isExactSameUserId(c.did, currentPerson.did))
+        ? contacts.find((c) => isExactSameUserId(c.did, currentPerson.did) || isExactSameUserId(c.did, paymentRecipientId))
         : undefined;
     const hasReachableInquirySync =
         (currentPerson.cardSyncs?.length ?? 0) > 0 || (existingContact?.syncs?.length ?? 0) > 0;
 
     const handleCopyDid = async () => {
-        const success = await copyToClipboard(currentPerson.did);
+        const success = await copyToClipboard(paymentRecipientId);
         if (success) {
             setCopiedDid(true);
             if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
@@ -157,7 +158,7 @@ export const MarketPersonView: React.FC<MarketPersonViewProps> = ({
     };
 
     const handlePay = () => {
-        navigate({ view: 'send_vouchers', initialRecipientId: currentPerson.did });
+        navigate({ view: 'send_vouchers', initialRecipientId: paymentRecipientId });
     };
 
     const hasCardSource = currentPerson.sources.some((s) => s.kind === 'card');
@@ -219,7 +220,7 @@ export const MarketPersonView: React.FC<MarketPersonViewProps> = ({
         try {
             await protectAction(async (pwd) => {
                 return await postService.sendMarketInquiryViaPost(
-                    currentPerson.did,
+                    paymentRecipientId,
                     inquiryTarget,
                     inquiryMessage.trim(),
                     currentPerson.cardSyncs,
@@ -398,10 +399,10 @@ export const MarketPersonView: React.FC<MarketPersonViewProps> = ({
                             <button
                                 type="button"
                                 onClick={handleCopyDid}
-                                title={currentPerson.did}
+                                title={paymentRecipientId}
                                 className="inline-flex items-center gap-1.5 font-mono bg-bg-app hover:bg-theme-subtle/30 px-2.5 py-1 rounded-lg border border-theme-subtle/50 transition-colors cursor-pointer"
                             >
-                                <span>{truncateUserId(currentPerson.did)}</span>
+                                <span>{truncateUserId(paymentRecipientId)}</span>
                                 {copiedDid ? <Check size={12} className="text-theme-success" /> : <Copy size={12} />}
                             </button>
 

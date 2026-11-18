@@ -23,6 +23,7 @@ export interface DetachedSignatureResponseArgs {
     includeDetails: boolean;
     config: SigningRequestConfig;
     password?: string | null;
+    anchorManifestJson?: string | null;
 }
 
 export const voucherService = {
@@ -74,7 +75,8 @@ export const voucherService = {
             role: args.role,
             includeDetails: args.includeDetails,
             config: args.config,
-            password: args.password
+            password: args.password,
+            anchorManifestJson: args.anchorManifestJson ?? null,
         });
     },
 

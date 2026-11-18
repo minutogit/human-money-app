@@ -24,6 +24,13 @@
       "csp": null
     }
   },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["humoco"]
+      }
+    }
+  },
   "bundle": {
     "active": true,
     "targets": ["nsis", "deb", "appimage", "dmg"],

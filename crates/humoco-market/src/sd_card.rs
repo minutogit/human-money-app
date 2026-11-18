@@ -4,7 +4,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use ed25519_dalek::{Signature, SigningKey};
 use human_money_core::crypto::{
-    create_user_id, get_pubkey_from_user_id, sign_ed25519, verify_ed25519,
+    create_user_id, get_prefix_from_user_id, get_pubkey_from_user_id, sign_ed25519, verify_ed25519,
 };
 use human_money_core::models::profile::PublicProfile;
 use human_money_core::models::voucher::Address;
@@ -39,6 +39,8 @@ pub struct CardJwsHeader {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CardPayload {
     pub did: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recipient_did: Option<String>,
     pub v: u64,
     pub valid_until: u64,
     pub max_hops: u8,
@@ -48,6 +50,14 @@ pub struct CardPayload {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub drops: Vec<DropDescriptor>,
     pub _sd: Vec<Digest128>,
+}
+
+impl CardPayload {
+    /// Returns the exact account ID to address payments and PoST transfers to
+    /// (preserving any subaccount prefix, or falling back to the root `did`).
+    pub fn recipient_id(&self) -> &str {
+        self.recipient_did.as_deref().unwrap_or(&self.did)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -591,13 +601,26 @@ pub fn sign_sd_card(
     let root_did = create_user_id(&vk, None)
         .map_err(|e| MarketError::Identity(format!("Failed to create root did: {}", e)))?;
 
+    let mut recipient_did: Option<String> = None;
     if !payload_base.did.trim().is_empty() {
-        let pk = get_pubkey_from_user_id(&payload_base.did)
+        let trimmed_did = payload_base.did.trim();
+        let pk = get_pubkey_from_user_id(trimmed_did)
             .map_err(|e| MarketError::Identity(format!("Invalid card did: {}", e)))?;
         if pk.as_bytes() != vk.as_bytes() {
             return Err(MarketError::Identity(
                 "Signing key does not match card DID public key".to_string(),
             ));
+        }
+        if let Some(prefix) = get_prefix_from_user_id(trimmed_did) {
+            let full_id = create_user_id(&pk, Some(prefix))
+                .map_err(|e| MarketError::Identity(format!("Invalid prefixed card did: {}", e)))?;
+            if trimmed_did != full_id {
+                return Err(MarketError::Identity(format!(
+                    "Card recipient DID must be canonical (expected {}, got {})",
+                    full_id, trimmed_did
+                )));
+            }
+            recipient_did = Some(full_id);
         }
     }
 
@@ -663,6 +686,7 @@ pub fn sign_sd_card(
 
     let payload = CardPayload {
         did: root_did,
+        recipient_did,
         v: payload_base.v,
         valid_until: payload_base.valid_until,
         max_hops: payload_base.max_hops,
@@ -768,6 +792,28 @@ pub fn verify_sd_card(wire: &str) -> Result<SdCard, MarketError> {
             "Card DID must be canonical root prefix-free did:key, got {}",
             payload.did
         )));
+    }
+    if let Some(ref rec_did) = payload.recipient_did {
+        let rec_pk = get_pubkey_from_user_id(rec_did)
+            .map_err(|e| MarketError::Identity(format!("Invalid card recipient_did: {}", e)))?;
+        if rec_pk != pk {
+            return Err(MarketError::Identity(
+                "Card recipient_did public key does not match payload.did".to_string(),
+            ));
+        }
+        let rec_prefix = get_prefix_from_user_id(rec_did).ok_or_else(|| {
+            MarketError::Identity(
+                "Card recipient_did must only be set for prefixed subaccount IDs".to_string(),
+            )
+        })?;
+        let canonical_rec = create_user_id(&rec_pk, Some(rec_prefix))
+            .map_err(|e| MarketError::Identity(format!("Invalid card recipient_did: {}", e)))?;
+        if rec_did != &canonical_rec {
+            return Err(MarketError::Identity(format!(
+                "Card recipient_did must be canonical (expected {}, got {})",
+                canonical_rec, rec_did
+            )));
+        }
     }
 
     let sig_bytes = URL_SAFE_NO_PAD

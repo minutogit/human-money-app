@@ -113,7 +113,7 @@ export function ReceiveSuccessView({ payload, onDone }: ReceiveSuccessViewProps)
     const heroTitle = isQuarantined
         ? t('transfer.receiveSuccess.securityWarning')
         : receiveKind === 'claim'
-          ? t('transfer.receiveSuccess.claimComplete', 'Bürgschafts-Ersatz erhalten')
+          ? t('transfer.receiveSuccess.claimComplete', 'Bürgschafts-Anspruch erhalten')
           : receiveKind === 'redeem'
             ? t('transfer.receiveSuccess.redeemComplete', 'Gutschein eingelöst')
             : t('transfer.receiveSuccess.transferComplete');
@@ -123,7 +123,7 @@ export function ReceiveSuccessView({ payload, onDone }: ReceiveSuccessViewProps)
         : isWitnessOnly
           ? t('transfer.receiveSuccess.witnessOnlyDesc')
           : receiveKind === 'claim'
-            ? t('transfer.receiveSuccess.claimDesc', 'Der übertragene Ersatz-Gutschein wurde in deiner Gutscheinliste gutgeschrieben.')
+            ? t('transfer.receiveSuccess.claimDesc', 'Der eingereichte Bürgschafts-Anspruch wurde geprüft und in deiner Gutscheinliste erfasst.')
             : receiveKind === 'redeem'
               ? t('transfer.receiveSuccess.redeemDesc', 'Die Einlösung wurde geprüft und im Guthaben berücksichtigt.')
               : t('transfer.receiveSuccess.normalSuccessDesc');
@@ -377,6 +377,24 @@ export function ReceiveSuccessView({ payload, onDone }: ReceiveSuccessViewProps)
                         </div>
                     )}
                 </div>
+                )}
+
+                {!isQuarantined && (payload.unrelatedOpenConflictsCount ?? 0) > 0 && (
+                    <div
+                        data-testid="unrelated-conflicts-notice"
+                        className="p-4 bg-amber-50 border border-amber-200 rounded-2xl flex items-start gap-3 shadow-sm"
+                    >
+                        <AlertTriangle className="text-amber-600 shrink-0 mt-0.5" size={18} />
+                        <p className="text-xs font-medium text-amber-900">
+                            {t('transfer.receiveSuccess.unrelatedConflictsNotice', {
+                                count: payload.unrelatedOpenConflictsCount,
+                                defaultValue:
+                                    payload.unrelatedOpenConflictsCount === 1
+                                        ? 'Hinweis: Im Profil gibt es unabhängig von dieser Zahlung 1 ungelösten Doppelausgabe-Konflikt.'
+                                        : `Hinweis: Im Profil gibt es unabhängig von dieser Zahlung ${payload.unrelatedOpenConflictsCount} ungelöste Doppelausgabe-Konflikte.`,
+                            })}
+                        </p>
+                    </div>
                 )}
 
                 {/* Transfer Details Card */}

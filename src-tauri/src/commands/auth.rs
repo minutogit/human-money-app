@@ -857,6 +857,9 @@ mod tests {
             contacts: Mutex::new(Some(Default::default())),
             settings: Mutex::new(Some(AppSettings::default())),
             wot: Mutex::new(None),
+            recovery_owner: Mutex::new(None),
+            guardian_vault: Mutex::new(None),
+            post_op_lock: tokio::sync::Mutex::new(()),
             media_negative_cache: Mutex::new(std::collections::HashMap::new()),
             startup_launch_items: Mutex::new(Vec::new()),
         };
@@ -924,6 +927,9 @@ mod tests {
             contacts: Mutex::new(None),
             settings: Mutex::new(None),
             wot: Mutex::new(None),
+            recovery_owner: Mutex::new(None),
+            guardian_vault: Mutex::new(None),
+            post_op_lock: tokio::sync::Mutex::new(()),
             media_negative_cache: Mutex::new(HashMap::new()),
             startup_launch_items: Mutex::new(Vec::new()),
         };

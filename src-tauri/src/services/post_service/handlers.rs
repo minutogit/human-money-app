@@ -19,7 +19,8 @@ use crate::models::{
 };
 use crate::services::common::{are_dids_equal, load_all_standard_tomls};
 use crate::services::recovery_service::{
-    load_guardian_vault, load_recovery_owner_state, save_guardian_vault, save_recovery_owner_state,
+    load_guardian_vault_with_cache, load_recovery_owner_state_with_cache,
+    save_guardian_vault_with_cache, save_recovery_owner_state_with_cache,
 };
 use crate::state::{AppState, StoredPostState};
 
@@ -131,6 +132,80 @@ fn handle_transaction_bundle(
     post_state: &mut StoredPostState,
     stats: &mut PostDispatchStats,
 ) -> bool {
+    let pos_cashier_active = ctx
+        .state
+        .get_cached_settings()
+        .or_else(|_| {
+            let mut s = ctx.state.service.lock().unwrap();
+            ctx.state.load_settings(&mut s, ctx.password)
+        })
+        .map(|s| s.pos_cashier_active)
+        .unwrap_or(false);
+
+    if pos_cashier_active {
+        let open_outcome = {
+            let service = ctx.state.service.lock().unwrap();
+            service.with_wallet_and_identity(|_, id| {
+                human_money_core::services::bundle_processor::open_and_verify_bundle(
+                    id,
+                    &ctx.envelope.container_bytes,
+                )
+            })
+        };
+
+        return match open_outcome {
+            Ok(Ok(opened)) => {
+                if !post_state
+                    .pending_pos_payments
+                    .iter()
+                    .any(|p| p.id == ctx.envelope.msg_id)
+                {
+                    let note = opened
+                        .notes
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string);
+                    post_state.pending_pos_payments.push(
+                        crate::models::FrontendPendingPosPayment {
+                            id: ctx.envelope.msg_id.clone(),
+                            sender_did: opened.sender_id.clone(),
+                            received_at: ctx.now_secs,
+                            bundle_bytes: ctx.envelope.container_bytes.clone(),
+                            note,
+                        },
+                    );
+                }
+                stats.imported_payments += 1;
+                queue_ack_receipt(ctx, post_state, Some(&opened.bundle_id));
+                true
+            }
+            Ok(Err(e)) => {
+                let is_sibling_subaccount = matches!(
+                    &e,
+                    human_money_core::VoucherCoreError::BundleRecipientMismatch { expected, found }
+                        if crate::state::canonicalize_did(expected)
+                            .ok()
+                            .is_some_and(|ce| crate::state::canonicalize_did(found).ok().as_ref() == Some(&ce))
+                );
+                if is_sibling_subaccount {
+                    true
+                } else {
+                    stats
+                        .errors
+                        .push(format!("Stage PoS payment bundle failed: {}", e));
+                    false
+                }
+            }
+            Err(e) => {
+                stats
+                    .errors
+                    .push(format!("Stage PoS payment bundle failed: {}", e));
+                false
+            }
+        };
+    }
+
     let all_standards = load_all_standard_tomls(ctx.app, ctx.extra_standards);
     let archive = ctx.app.and_then(|a| {
         let service = ctx.state.service.lock().unwrap();
@@ -764,11 +839,13 @@ fn handle_guardian_assign(
 
     let save_res = {
         let mut service = ctx.state.service.lock().unwrap();
-        let mut vault = load_guardian_vault(&mut service, ctx.password)
+        let mut vault = load_guardian_vault_with_cache(ctx.state, &mut service, ctx.password)
             .unwrap_or_else(|_| humoco_market::GuardianVaultStore::new());
         match vault.upsert_ward(entry.clone()) {
-            Ok(()) => save_guardian_vault(&mut service, &vault, ctx.password)
-                .map_err(|e| format!("Failed to save guardian vault: {:?}", e)),
+            Ok(()) => {
+                save_guardian_vault_with_cache(ctx.state, &mut service, &vault, ctx.password)
+                    .map_err(|e| format!("Failed to save guardian vault: {:?}", e))
+            }
             Err(e) => Err(format!("Failed to upsert guardian ward: {}", e)),
         }
     };
@@ -814,10 +891,17 @@ fn handle_guardian_ack(
     };
     {
         let mut service = ctx.state.service.lock().unwrap();
-        if let Ok(Some(mut owner_state)) = load_recovery_owner_state(&mut service, ctx.password) {
-            if ack.rotation_epoch == owner_state.rotation_epoch
-                && are_dids_equal(&ack.owner_did, &ctx.my_identity.user_id)
-            {
+        if let Ok(Some(mut owner_state)) =
+            load_recovery_owner_state_with_cache(ctx.state, &mut service, ctx.password)
+        {
+            let same_account = matches!(
+                (
+                    humoco_market::canonicalize_owner_account_id(&ack.owner_did),
+                    humoco_market::canonicalize_owner_account_id(&ctx.my_identity.user_id),
+                ),
+                (Ok(a), Ok(b)) if a == b
+            );
+            if ack.rotation_epoch == owner_state.rotation_epoch && same_account {
                 let mut modified = false;
                 for g in &mut owner_state.guardians {
                     if are_dids_equal(&g.user_id, ctx.sender_did) {
@@ -828,7 +912,12 @@ fn handle_guardian_ack(
                     }
                 }
                 if modified {
-                    let _ = save_recovery_owner_state(&mut service, &owner_state, ctx.password);
+                    let _ = save_recovery_owner_state_with_cache(
+                        ctx.state,
+                        &mut service,
+                        &owner_state,
+                        ctx.password,
+                    );
                 }
             }
         }
@@ -861,12 +950,17 @@ fn handle_guardian_locator(
 
     let update_res = {
         let mut service = ctx.state.service.lock().unwrap();
-        let mut vault = load_guardian_vault(&mut service, ctx.password)
+        let mut vault = load_guardian_vault_with_cache(ctx.state, &mut service, ctx.password)
             .unwrap_or_else(|_| humoco_market::GuardianVaultStore::new());
         match vault.update_locator(&update) {
             Ok(updated) => {
                 if updated {
-                    let _ = save_guardian_vault(&mut service, &vault, ctx.password);
+                    let _ = save_guardian_vault_with_cache(
+                        ctx.state,
+                        &mut service,
+                        &vault,
+                        ctx.password,
+                    );
                 }
                 Ok(())
             }
@@ -905,12 +999,17 @@ fn handle_guardian_revoke(
 
     let revoke_res = {
         let mut service = ctx.state.service.lock().unwrap();
-        let mut vault = load_guardian_vault(&mut service, ctx.password)
+        let mut vault = load_guardian_vault_with_cache(ctx.state, &mut service, ctx.password)
             .unwrap_or_else(|_| humoco_market::GuardianVaultStore::new());
         match vault.revoke_ward(&revoke) {
             Ok(revoked) => {
                 if revoked {
-                    let _ = save_guardian_vault(&mut service, &vault, ctx.password);
+                    let _ = save_guardian_vault_with_cache(
+                        ctx.state,
+                        &mut service,
+                        &vault,
+                        ctx.password,
+                    );
                 }
                 Ok(())
             }

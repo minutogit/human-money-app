@@ -846,3 +846,81 @@ fn test_empty_redacted_card_hides_person_and_ads_and_blocks_stale_zombie() {
         AcceptOutcome::IgnoredStale
     ));
 }
+
+#[test]
+fn test_subaccount_card_preserves_recipient_did_for_market_and_board() {
+    let now = 1_700_000_000;
+    let anna_sk = create_keypair();
+    let anna_root_did = create_user_id(&anna_sk.verifying_key(), None).unwrap();
+    let anna_shop_did = create_user_id(&anna_sk.verifying_key(), Some("laden")).unwrap();
+
+    let card = sign_sd_card(
+        CardPayloadInput {
+            did: anna_shop_did.clone(),
+            v: 100,
+            valid_until: now + 30 * 86_400,
+            max_hops: 2,
+            ad_count: 1,
+            allow_inquiries: true,
+            drops: vec![],
+        },
+        vec![
+            (
+                CardItem::Name {
+                    first_name: Some("Anna Laden".to_string()),
+                    last_name: None,
+                },
+                2,
+            ),
+            (
+                CardItem::Ad(Ad {
+                    id: "0000000000000099".to_string(),
+                    kind: AdKind::Offer,
+                    title: "Bio Brot".to_string(),
+                    text: None,
+                    pricing: None,
+                    published_at: now - 5,
+                    renewed_at: None,
+                    expires_at: now + 86_400,
+                    allow_inquiries: true,
+                    is_remote: false,
+                    image_token: None,
+                }),
+                2,
+            ),
+        ],
+        &anna_sk,
+    )
+    .unwrap();
+
+    assert_eq!(card.payload.did, anna_root_did);
+    assert_eq!(card.payload.recipient_did.as_deref(), Some(anna_shop_did.as_str()));
+    assert_eq!(card.payload.recipient_id(), anna_shop_did);
+
+    let wire = render_wire(&card, 1, WireFilter::Full).unwrap();
+    let verified = humoco_market::verify_sd_card(&wire).unwrap();
+    assert_eq!(verified.payload.did, anna_root_did);
+    assert_eq!(verified.payload.recipient_id(), anna_shop_did);
+
+    let stored = StoredCard {
+        card_wire: wire,
+        card: verified,
+        hops: 1,
+        received_at: now,
+    };
+    let persons = build_market_view(
+        &[],
+        &[stored],
+        "did:key:bernd",
+        &|_| TrustTier::Trusted,
+        now,
+    );
+    assert_eq!(persons.len(), 1);
+    assert_eq!(persons[0].did, anna_root_did);
+    assert_eq!(persons[0].recipient_did, anna_shop_did);
+
+    let board = build_ad_board(&persons);
+    assert_eq!(board.len(), 1);
+    assert_eq!(board[0].owner_did, anna_root_did);
+    assert_eq!(board[0].recipient_did, anna_shop_did);
+}

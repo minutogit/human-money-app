@@ -2618,36 +2618,6 @@
       "en": "ai-translated"
     }
   },
-  "contacts.copiedContactCard": {
-    "source_text": "Copied!",
-    "status": {
-      "de": "ai-translated",
-      "es": "ai-translated",
-      "fr": "ai-translated",
-      "it": "ai-translated",
-      "en": "ai-translated"
-    }
-  },
-  "contacts.copyContactCard": {
-    "source_text": "Copy Contact Card",
-    "status": {
-      "de": "ai-translated",
-      "es": "ai-translated",
-      "fr": "ai-translated",
-      "it": "ai-translated",
-      "en": "ai-translated"
-    }
-  },
-  "contacts.copyContactCardFailed": {
-    "source_text": "Could not copy contact card.",
-    "status": {
-      "de": "ai-translated",
-      "es": "ai-translated",
-      "fr": "ai-translated",
-      "it": "ai-translated",
-      "en": "ai-translated"
-    }
-  },
   "contacts.deleteConfirmButton": {
     "source_text": "Delete Contact",
     "status": {

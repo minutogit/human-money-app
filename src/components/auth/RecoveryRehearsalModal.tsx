@@ -8,7 +8,8 @@ import { AlertBanner } from '../ui/AlertBanner';
 import { RECOVERY_QUESTION_MAP } from '../../constants/recoveryQuestions';
 import { recoveryService } from '../../services/recoveryService';
 import { RehearsalCheckResultDto } from '../../types/recovery';
-import { translateError } from '../../utils/errorHelper';
+import { translateError, isBackendError, stringifyError } from '../../utils/errorHelper';
+import { useOptionalSession } from '../../context/SessionContext';
 
 export interface RecoveryRehearsalModalProps {
     isOpen: boolean;
@@ -26,6 +27,7 @@ export const RecoveryRehearsalModal: React.FC<RecoveryRehearsalModalProps> = ({
     onResetQuestions,
 }) => {
     const { t } = useTranslation();
+    const session = useOptionalSession();
     const [answers, setAnswers] = useState<[string, string, string]>(['', '', '']);
     const [result, setResult] = useState<RehearsalCheckResultDto | null>(null);
     const [isChecking, setIsChecking] = useState(false);
@@ -43,13 +45,38 @@ export const RecoveryRehearsalModal: React.FC<RecoveryRehearsalModalProps> = ({
 
     const allFilled = answers.every((a) => a.trim().length > 0);
 
+    const isLockedWalletError = (err: unknown): boolean => {
+        const code = isBackendError(err) ? err.code : '';
+        const msg = stringifyError(err).toLowerCase();
+        return (
+            code === 'error.auth.walletLocked' ||
+            code === 'error.auth.sessionLocked' ||
+            msg.includes('locked') ||
+            msg.includes('password required') ||
+            msg.includes('passwort erforderlich')
+        );
+    };
+
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!allFilled || isChecking) return;
         setIsChecking(true);
         setErrorMsg('');
         try {
-            const res = await recoveryService.verifyRecoveryRehearsal(answers);
+            let res: RehearsalCheckResultDto;
+            try {
+                res = await recoveryService.verifyRecoveryRehearsal(answers);
+            } catch (firstErr) {
+                if (isLockedWalletError(firstErr) && session?.protectAction) {
+                    const protectedRes = await session.protectAction(async (pwd) => {
+                        return await recoveryService.verifyRecoveryRehearsal(answers, pwd || undefined);
+                    });
+                    if (!protectedRes) return;
+                    res = protectedRes;
+                } else {
+                    throw firstErr;
+                }
+            }
             setResult(res);
             if (res.allCorrect) {
                 onVerified();
@@ -63,7 +90,17 @@ export const RecoveryRehearsalModal: React.FC<RecoveryRehearsalModalProps> = ({
 
     const handleSnooze = async () => {
         try {
-            await recoveryService.snoozeRecoveryRehearsal(24);
+            try {
+                await recoveryService.snoozeRecoveryRehearsal(24);
+            } catch (firstErr) {
+                if (isLockedWalletError(firstErr) && session?.protectAction) {
+                    await session.protectAction(async (pwd) => {
+                        return await recoveryService.snoozeRecoveryRehearsal(24, pwd || undefined);
+                    });
+                } else {
+                    throw firstErr;
+                }
+            }
             onVerified();
         } catch {
             // ignore

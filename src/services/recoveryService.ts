@@ -61,13 +61,20 @@ export const recoveryService = {
     },
 
     verifyRecoveryRehearsal: async (
-        answers: [string, string, string]
+        answers: [string, string, string],
+        password?: string
     ): Promise<RehearsalCheckResultDto> => {
-        return await invoke<RehearsalCheckResultDto>('verify_recovery_rehearsal', { answers });
+        return await invoke<RehearsalCheckResultDto>('verify_recovery_rehearsal', {
+            answers,
+            password,
+        });
     },
 
-    snoozeRecoveryRehearsal: async (hours = 24): Promise<number> => {
-        return await invoke<number>('snooze_recovery_rehearsal', { hours });
+    snoozeRecoveryRehearsal: async (hours = 24, password?: string): Promise<number> => {
+        return await invoke<number>('snooze_recovery_rehearsal', {
+            hours,
+            password,
+        });
     },
 
     setupSocialRecoveryGuardians: async (

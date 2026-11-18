@@ -511,6 +511,7 @@ export function MarketplaceView({
     const defaultEmptyInbox: FrontendPostInboxSummary = {
         pendingSignRequests: [],
         pendingWotHandshakes: [],
+        pendingPosPayments: [],
         inquiries: [],
         unacknowledgedPayments: [],
     };

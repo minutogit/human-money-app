@@ -329,11 +329,11 @@ pub fn rebuild_and_sign_own_card_with_drops(
     now: u64,
     override_drops: Option<Vec<humoco_market::DropDescriptor>>,
 ) -> Result<(), FrontendError> {
-    let (_my_identity, my_signing_key) = service
+    let (my_identity, my_signing_key) = service
         .with_wallet_and_identity(|_w, id| (id.clone(), id.signing_key.clone()))
         .map_err(FrontendError::from)?;
-    let root_did = human_money_core::crypto::create_user_id(&my_signing_key.verifying_key(), None)
-        .map_err(|e| FrontendError::from(format!("Failed to create user ID: {}", e)))?;
+    let my_account_id = humoco_market::canonicalize_owner_account_id(&my_identity.user_id)
+        .map_err(FrontendError::from)?;
 
     let profile = service
         .with_wallet(|w| w.profile.to_public_profile())
@@ -549,7 +549,7 @@ pub fn rebuild_and_sign_own_card_with_drops(
     });
 
     let payload_input = humoco_market::CardPayloadInput {
-        did: root_did,
+        did: my_account_id,
         v,
         valid_until,
         max_hops: envelope_max_hops,
@@ -1192,12 +1192,19 @@ pub fn get_market_view_impl(
 
     if let Some(ref mut stored) = stored_opt {
         if stored.published {
+            let active_user_id = service
+                .with_wallet(|w| w.get_user_id().to_string())
+                .ok()
+                .unwrap_or_default();
             if let Some(ref last_card) = stored.last_card {
                 let active_ads_count =
                     stored.ads.iter().filter(|a| a.expires_at > now).count() as u8;
                 let time_left = last_card.payload.valid_until.saturating_sub(now);
+                let recipient_changed = !active_user_id.trim().is_empty()
+                    && last_card.payload.recipient_id() != active_user_id.trim();
                 if time_left < humoco_market::CARD_AUTO_RENEW_THRESHOLD_SECS
                     || last_card.payload.ad_count != active_ads_count
+                    || recipient_changed
                 {
                     if let Ok(()) = rebuild_and_sign_own_card(&mut service, stored, now) {
                         let _ = save_own_market_profile_state(
@@ -1316,7 +1323,7 @@ pub fn get_market_view_impl(
         })
         .map_err(FrontendError::from)?;
 
-    let canonical_own_did = crate::state::canonicalize_did(&own_did).unwrap_or(own_did);
+    let canonical_own_did = crate::state::canonicalize_did(&own_did).unwrap_or_else(|_| own_did.clone());
 
     let raw_board = humoco_market::build_ad_board(&raw_persons);
 
@@ -1333,6 +1340,7 @@ pub fn get_market_view_impl(
                     let days_left = ad.expires_at.saturating_sub(now).div_ceil(86_400);
                     board.push(FrontendBoardItem {
                         owner_did: canonical_own_did.clone(),
+                        recipient_did: own_did.clone(),
                         owner_name: wallet_owner_name.clone(),
                         trust: FrontendTrustTier::Trusted,
                         ad: ad.clone(),
@@ -1610,30 +1618,6 @@ pub fn import_contact_card_impl(
                                 password.as_deref(),
                             );
                         }
-                    } else if env.hops <= 1 {
-                        let pub_profile = humoco_market::extract_public_profile(&stored.card);
-                        let profile = crate::models::FrontendUserProfile::from(pub_profile);
-                        let contact = crate::models::FrontendContact {
-                            did: did.clone(),
-                            profile,
-                            tags: vec![],
-                            added_at: chrono::Utc::now().to_rfc3339(),
-                            notes: None,
-                            trust_level: None,
-                            desired_hops: None,
-                            has_peer_list: false,
-                            peer_list_updated_at: None,
-                            syncs: crate::state::merge_contact_syncs(&[], &card_syncs),
-                        };
-                        address_book.contacts.insert(did.clone(), contact);
-                        if let Ok(bytes) = serde_json::to_vec(&address_book) {
-                            let _ = service.save_encrypted_data(
-                                CONTACTS_DATA_NAME,
-                                &bytes,
-                                password.as_deref(),
-                            );
-                        }
-                        *state.contacts.lock().unwrap() = Some(address_book);
                     }
                 }
             }

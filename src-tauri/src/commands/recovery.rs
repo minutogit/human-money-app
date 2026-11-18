@@ -45,26 +45,39 @@ pub async fn confirm_emergency_sheet_saved(
 #[tauri::command]
 pub fn verify_recovery_rehearsal(
     answers: [String; 3],
+    password: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<RehearsalCheckResultDto, FrontendError> {
     let now_secs = Utc::now().timestamp() as u64;
-    recovery_service::verify_recovery_rehearsal_impl(answers, now_secs, &state)
+    recovery_service::verify_recovery_rehearsal_with_password_impl(
+        answers,
+        now_secs,
+        password.as_deref(),
+        &state,
+    )
 }
 
 #[tauri::command]
 pub fn snooze_recovery_rehearsal(
     hours: Option<u64>,
+    password: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<u64, FrontendError> {
     let now_secs = Utc::now().timestamp() as u64;
-    recovery_service::snooze_recovery_rehearsal_impl(hours, now_secs, &state)
+    recovery_service::snooze_recovery_rehearsal_with_password_impl(
+        hours,
+        now_secs,
+        password.as_deref(),
+        &state,
+    )
 }
 
 #[tauri::command]
 pub fn get_recovery_protection_status(
+    password: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<RecoveryProtectionStatusDto, FrontendError> {
-    recovery_service::get_recovery_protection_status_impl(None::<&str>, &state)
+    recovery_service::get_recovery_protection_status_impl(password.as_deref(), &state)
 }
 
 #[tauri::command]

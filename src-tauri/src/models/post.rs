@@ -76,9 +76,22 @@ pub struct FrontendMarketInquiryItem {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct FrontendPendingPosPayment {
+    pub id: String,
+    pub sender_did: String,
+    pub received_at: u64,
+    pub bundle_bytes: Vec<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct FrontendPostInboxSummary {
     pub pending_sign_requests: Vec<FrontendPendingSignRequest>,
     pub pending_wot_handshakes: Vec<FrontendPendingWotHandshake>,
+    #[serde(default)]
+    pub pending_pos_payments: Vec<FrontendPendingPosPayment>,
     pub inquiries: Vec<FrontendMarketInquiryItem>,
     pub unacknowledged_payments: Vec<String>,
 }
@@ -96,6 +109,8 @@ pub struct FrontendPostSyncResult {
     pub new_inquiries: usize,
     pub new_inquiry_messages: usize,
     pub pruned_boxes: usize,
+    #[serde(default)]
+    pub pending_pos_payments: Vec<FrontendPendingPosPayment>,
     pub errors: Vec<String>,
     pub retry_after_secs: Option<u64>,
 }

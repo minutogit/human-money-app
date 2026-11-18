@@ -7,7 +7,9 @@ use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
 use ed25519_dalek::{Signature, Signer, SigningKey};
 use hkdf::Hkdf;
-use human_money_core::crypto::{create_user_id, get_pubkey_from_user_id, verify_ed25519};
+use human_money_core::crypto::{
+    create_user_id, get_prefix_from_user_id, get_pubkey_from_user_id, verify_ed25519,
+};
 use human_money_core::services::mnemonic::MnemonicLanguage;
 use rand::rngs::OsRng;
 use rand::RngCore;
@@ -738,24 +740,33 @@ pub struct GuardianVaultEntry {
     pub updated_at: u64,
 }
 
+/// Validates and canonicalizes an account owner ID while preserving an optional subaccount prefix.
+pub fn canonicalize_owner_account_id(owner_did: &str) -> Result<String, MarketError> {
+    let trimmed = owner_did.trim();
+    let pk = get_pubkey_from_user_id(trimmed)
+        .map_err(|e| MarketError::Identity(format!("Invalid owner DID: {}", e)))?;
+    let prefix = get_prefix_from_user_id(trimmed);
+    let canonical = create_user_id(&pk, prefix)
+        .map_err(|e| MarketError::Identity(format!("Failed to canonicalize owner DID: {}", e)))?;
+    if trimmed != canonical {
+        return Err(MarketError::Identity(format!(
+            "owner_did must be canonical (expected {}, got {})",
+            canonical, trimmed
+        )));
+    }
+    Ok(canonical)
+}
+
 /// Verifies all cryptographic and structural invariants of a `GuardianVaultEntry`:
-/// 1. Verifying key extraction & canonical root DID verification.
+/// 1. Verifying key extraction & canonical account ID verification (root or prefixed subaccount).
 /// 2. Threshold bounds (`2 <= threshold_m <= total_n <= 16`), distinct `question_ids` in `1..=12`, `share.index` in `1..=total_n`.
 /// 3. `kdf_params` bounds check against DoS/OOM bombs.
 /// 4. Ed25519 `owner_sig` verification.
 /// 5. Share commitment check against `entry.share_commitments[share.index - 1]`.
 pub fn verify_guardian_vault_entry(entry: &GuardianVaultEntry) -> Result<(), MarketError> {
-    let pk = get_pubkey_from_user_id(&entry.owner_did)
+    let canonical_owner = canonicalize_owner_account_id(&entry.owner_did)?;
+    let pk = get_pubkey_from_user_id(&canonical_owner)
         .map_err(|e| MarketError::Identity(format!("Invalid owner DID: {}", e)))?;
-    let root_did = create_user_id(&pk, None)
-        .map_err(|e| MarketError::Identity(format!("Failed to recreate root DID: {}", e)))?;
-
-    if entry.owner_did != root_did {
-        return Err(MarketError::Identity(format!(
-            "owner_did must be canonical root prefix-free did:key, got {}",
-            entry.owner_did
-        )));
-    }
 
     if entry.threshold_m < 2 || entry.threshold_m > entry.total_n || entry.total_n > 16 {
         return Err(MarketError::Validation(format!(
@@ -876,15 +887,7 @@ impl GuardianVaultStore {
 
     fn canonical_owner_key(owner_did: &str) -> String {
         let trimmed = owner_did.trim();
-        if let Ok(pk) = get_pubkey_from_user_id(trimmed) {
-            if let Ok(root) = create_user_id(&pk, None) {
-                return root;
-            }
-        }
-        trimmed
-            .rsplit_once('@')
-            .map(|(_, bare)| bare.to_string())
-            .unwrap_or_else(|| trimmed.to_string())
+        canonicalize_owner_account_id(trimmed).unwrap_or_else(|_| trimmed.to_string())
     }
 
     pub fn get_ward(&self, owner_did: &str) -> Option<&GuardianVaultEntry> {
@@ -1184,7 +1187,11 @@ pub fn open_and_verify_guardian_release_reply(
                 break;
             }
             let stripped = t.trim_end_matches(&['.', ',', ';', ':', '!', '?', ')', ']'][..]);
+            let is_short_prose_word = t != stripped
+                && stripped.len() < 24
+                && stripped.chars().all(|c| c.is_ascii_alphabetic());
             if !stripped.is_empty()
+                && !is_short_prose_word
                 && stripped
                     .chars()
                     .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '='))
@@ -1313,18 +1320,19 @@ pub fn create_social_recovery_vault_bundle(
     backup_sync_descriptors: &[DropDescriptor],
     now_unix: u64,
 ) -> Result<Vec<GuardianVaultEntry>, MarketError> {
-    let expected_did = create_user_id(&owner_signing_key.verifying_key(), None)
-        .map_err(|e| MarketError::Identity(format!("Failed to derive root DID: {}", e)))?;
-    if owner_did != expected_did {
+    let canonical_owner = canonicalize_owner_account_id(owner_did)?;
+    let owner_pk = get_pubkey_from_user_id(&canonical_owner)
+        .map_err(|e| MarketError::Identity(format!("Invalid owner DID: {}", e)))?;
+    if owner_pk != owner_signing_key.verifying_key() {
         return Err(MarketError::Identity(format!(
-            "owner_did {} does not match signing key DID {}",
-            owner_did, expected_did
+            "owner_did {} does not match signing key public key",
+            canonical_owner
         )));
     }
-    if master_payload.target_did != owner_did {
+    if master_payload.target_did != canonical_owner {
         return Err(MarketError::Validation(format!(
             "master_payload target_did {} does not match owner_did {}",
-            master_payload.target_did, owner_did
+            master_payload.target_did, canonical_owner
         )));
     }
 
@@ -1354,12 +1362,16 @@ pub fn create_social_recovery_vault_bundle(
     // Compute share commitments
     let mut commitments = Vec::with_capacity(total_n as usize);
     for share in &shares {
-        commitments.push(compute_share_commitment(owner_did, rotation_epoch, share));
+        commitments.push(compute_share_commitment(
+            &canonical_owner,
+            rotation_epoch,
+            share,
+        ));
     }
 
     // Sign header
     let signing_bytes = guardian_entry_signing_bytes(
-        owner_did,
+        &canonical_owner,
         rotation_epoch,
         threshold_m,
         total_n,
@@ -1374,7 +1386,7 @@ pub fn create_social_recovery_vault_bundle(
     let mut entries = Vec::with_capacity(total_n as usize);
     for share in shares {
         entries.push(GuardianVaultEntry {
-            owner_did: owner_did.to_string(),
+            owner_did: canonical_owner.clone(),
             owner_display_name: owner_display_name.to_string(),
             rotation_epoch,
             threshold_m,

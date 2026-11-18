@@ -69,6 +69,8 @@ export function SignRequestView({ voucherData, requestMsgId, senderDid, anchorMa
     const [isSavingGender, setIsSavingGender] = useState(false);
     const [standardsLoaded, setStandardsLoaded] = useState(false);
     const [guarantorCheck, setGuarantorCheck] = useState<GuarantorAnchorCheckDto | null>(null);
+    const [isGuarantorCheckLoading, setIsGuarantorCheckLoading] = useState(false);
+    const [guarantorCheckError, setGuarantorCheckError] = useState<string | null>(null);
     const [discoveredManifestJson, setDiscoveredManifestJson] = useState<string | null>(null);
 
     const effectiveManifestJson =
@@ -188,6 +190,8 @@ export function SignRequestView({ voucherData, requestMsgId, senderDid, anchorMa
         if (!selectedRole || !standardContent) {
             setImpact(null);
             setGuarantorCheck(null);
+            setIsGuarantorCheckLoading(false);
+            setGuarantorCheckError(null);
             return;
         }
 
@@ -213,6 +217,9 @@ export function SignRequestView({ voucherData, requestMsgId, senderDid, anchorMa
         fetchImpact();
 
         if (selectedRole.toLowerCase() === 'guarantor') {
+            setGuarantorCheck(null);
+            setGuarantorCheckError(null);
+            setIsGuarantorCheckLoading(true);
             const runAnchorCheck = async () => {
                 let manifestToUse = effectiveManifestJson ?? null;
                 if (!manifestToUse && voucherData.voucher.layer2Anchor && typeof settingsService?.discoverAnchorManifest === 'function') {
@@ -233,19 +240,43 @@ export function SignRequestView({ voucherData, requestMsgId, senderDid, anchorMa
                     standardTomlContent: standardContent!,
                     manifestJson: manifestToUse,
                 });
-                if (active && res && typeof res.required === 'boolean') {
+                if (!active) return;
+                if (res && typeof res.required === 'boolean') {
                     setGuarantorCheck(res);
+                } else {
+                    setGuarantorCheck(null);
+                    setGuarantorCheckError(t('voucher.signRequest.guarantorAnchorCheckFailed', 'L2-Anker-Prüfung konnte nicht ausgewertet werden.'));
                 }
             };
-            runAnchorCheck().catch(() => {
-                if (active) setGuarantorCheck(null);
-            });
+            runAnchorCheck()
+                .catch((err) => {
+                    if (active) {
+                        setGuarantorCheck(null);
+                        setGuarantorCheckError(
+                            translateError(err, t) ||
+                            t('voucher.signRequest.guarantorAnchorCheckFailed', 'L2-Anker-Prüfung fehlgeschlagen.')
+                        );
+                    }
+                })
+                .finally(() => {
+                    if (active) setIsGuarantorCheckLoading(false);
+                });
         } else {
             setGuarantorCheck(null);
+            setIsGuarantorCheckLoading(false);
+            setGuarantorCheckError(null);
         }
 
         return () => { active = false; };
-    }, [selectedRole, standardContent, voucherData, effectiveManifestJson]);
+    }, [selectedRole, standardContent, voucherData, effectiveManifestJson, t]);
+
+    const isGuarantorAnchorBlocked =
+        selectedRole.toLowerCase() === 'guarantor' &&
+        (isGuarantorCheckLoading ||
+            Boolean(guarantorCheckError) ||
+            (Boolean(standardContent) && !guarantorCheck) ||
+            (!standardContent && Boolean(voucherData.voucher.layer2Anchor)) ||
+            Boolean(guarantorCheck?.required && !guarantorCheck.passed));
 
     async function handleSign() {
         if (!selectedRole) {
@@ -271,7 +302,8 @@ export function SignRequestView({ voucherData, requestMsgId, senderDid, anchorMa
                         role: selectedRole,
                         includeDetails: includeDetails,
                         config: { type: "TargetDid", value: [targetCreatorDid!, "TrialDecryption"] },
-                        password: password || undefined
+                        password: password || undefined,
+                        anchorManifestJson: effectiveManifestJson ?? null,
                     });
                 });
                 if (Array.isArray(generatedBytes)) {
@@ -603,6 +635,26 @@ export function SignRequestView({ voucherData, requestMsgId, senderDid, anchorMa
                                 </div>
                             )}
 
+                            {selectedRole.toLowerCase() === 'guarantor' && isGuarantorCheckLoading && (
+                                <div
+                                    data-testid="guarantor-anchor-check-loading"
+                                    className="p-4 rounded-2xl border border-theme-subtle bg-theme-subtle/10 flex items-center gap-2.5 text-xs font-semibold text-theme-secondary"
+                                >
+                                    <ShieldCheck size={16} className="text-theme-primary animate-pulse shrink-0" />
+                                    <span>{t('voucher.signRequest.guarantorAnchorChecking', 'L2-Anker-Prüfung läuft…')}</span>
+                                </div>
+                            )}
+
+                            {selectedRole.toLowerCase() === 'guarantor' && !isGuarantorCheckLoading && guarantorCheckError && (
+                                <div
+                                    data-testid="guarantor-anchor-check-error"
+                                    className="p-4 rounded-2xl border border-rose-200 bg-rose-50 text-rose-900 flex items-start gap-2.5 text-xs font-semibold"
+                                >
+                                    <ShieldAlert size={16} className="text-rose-600 shrink-0 mt-0.5" />
+                                    <span>{guarantorCheckError}</span>
+                                </div>
+                            )}
+
                             {selectedRole.toLowerCase() === 'guarantor' && guarantorCheck?.required && (
                                 <div
                                     data-testid="guarantor-anchor-check"
@@ -740,7 +792,7 @@ export function SignRequestView({ voucherData, requestMsgId, senderDid, anchorMa
                         disabled={
                             !selectedRole ||
                             isSigning ||
-                            (selectedRole.toLowerCase() === 'guarantor' && Boolean(guarantorCheck?.required && !guarantorCheck.passed)) ||
+                            isGuarantorAnchorBlocked ||
                             (impact !== null && (!impact.isAllowedRole || impact.fatalConflicts.length > 0))
                         }
                         className="w-full py-5 rounded-3xl shadow-premium-lg text-lg gap-3 disabled:opacity-30 disabled:grayscale transition-all"

@@ -270,8 +270,10 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
         try {
             const effectiveTrustLevel = isOwnSubaccount ? null : trustLevel;
             const contact: Contact = {
+                ...(existingContact || {}),
                 did: did.trim(),
                 profile: {
+                    ...(existingContact?.profile || initialProfile || {}),
                     id: did.trim(),
                     firstName: firstName.trim() || undefined,
                     lastName: lastName.trim() || undefined,

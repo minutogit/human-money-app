@@ -13,7 +13,6 @@ import { postService } from '../../services/postService';
 import { GuardianRecoveryRequestInspectionDto, ApproveGuardianRecoveryResultDto } from '../../types';
 import { copyToClipboard } from '../../utils/clipboard';
 import { translateError } from '../../utils/errorHelper';
-import { isSameRootIdentity } from '../../utils/userIdHelper';
 import {
     CheckCircle2,
     Copy,
@@ -75,7 +74,7 @@ export const GuardianReleaseModal: React.FC<GuardianReleaseModalProps> = ({
                 setSelectedOwnerDid(wards[0].ownerDid);
             } else if (wards.length > 1) {
                 const matchedWard = initialOwnerDid
-                    ? wards.find((w) => isSameRootIdentity(w.ownerDid, initialOwnerDid))
+                    ? wards.find((w) => w.ownerDid.trim() === initialOwnerDid.trim())
                     : undefined;
                 if (matchedWard) {
                     setSelectedOwnerDid(matchedWard.ownerDid);

@@ -1,6 +1,7 @@
 // src/utils/humocoFileClassifier.ts
 import type { TFunction } from 'i18next';
 import type { FileDialogFilter } from './fileIo';
+import { isWrappedUriContinuationLine } from './humocoUri';
 
 export type HumocoFileKind =
     | 'transfer'
@@ -88,7 +89,6 @@ const DEEPLINK_PATTERN =
     /humoco:\/\/(recovery-reply|kit|recovery-req|card|pay|contact)[^\s"'<>)]+/i;
 
 const TRAILING_PUNCTUATION_REGEX = /[.,;:!?)\]"'>]+$/;
-const CONTINUATION_LINE_REGEX = /^[A-Za-z0-9\-_=+&%.:/]+$/;
 
 function decodeUtf8Text(bytes?: Uint8Array | number[], maxBytes: number = 8 * 1024 * 1024): string | null {
     if (!bytes) return null;
@@ -117,12 +117,12 @@ export function extractHumocoDeepLink(rawText?: string | null): string | null {
     if (startIdx >= 0) {
         const lines = trimmed.slice(startIdx).split(/\r?\n/);
         let joined = (lines[0] || '').trim();
+        let prevLineLen = joined.length;
         for (let i = 1; i < lines.length; i++) {
             const line = lines[i].trim();
-            if (!line) break;
-            const stripped = line.replace(TRAILING_PUNCTUATION_REGEX, '');
-            if (stripped.length > 0 && CONTINUATION_LINE_REGEX.test(stripped)) {
+            if (isWrappedUriContinuationLine(line, prevLineLen)) {
                 joined += line;
+                prevLineLen = line.length;
             } else {
                 break;
             }

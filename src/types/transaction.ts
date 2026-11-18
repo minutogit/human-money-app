@@ -92,6 +92,7 @@ export interface ReceiveSuccessPayload {
     voucherId?: string;
     verifiableConflicts?: Record<string, TransactionFingerprint[]>;
     conflictSummaries?: ProofOfDoubleSpendSummary[];
+    unrelatedOpenConflictsCount?: number;
     l2Quorum?: L2QuorumInfo;
     receiveKind?: 'transfer' | 'claim' | 'redeem';
     checkoutVerdict?: CheckoutReleaseVerdict;

@@ -442,6 +442,84 @@ pub async fn create_transfer_bundle_impl(
     })
 }
 
+struct ReceivedVoucherMarkers {
+    prev_hashes: std::collections::HashSet<String>,
+    tx_ids: std::collections::HashSet<String>,
+    trap_tags: std::collections::HashSet<String>,
+}
+
+fn collect_received_voucher_markers(
+    received_vouchers: &[human_money_core::Voucher],
+) -> ReceivedVoucherMarkers {
+    let mut prev_hashes = std::collections::HashSet::<String>::new();
+    let mut tx_ids = std::collections::HashSet::<String>::new();
+    let mut trap_tags = std::collections::HashSet::<String>::new();
+    for voucher in received_vouchers {
+        for tx in &voucher.transactions {
+            if !tx.prev_hash.is_empty() {
+                prev_hashes.insert(tx.prev_hash.clone());
+            }
+            if !tx.t_id.is_empty() {
+                tx_ids.insert(tx.t_id.clone());
+            }
+            if let Some(ref trap) = tx.trap_data {
+                if !trap.ds_tag.is_empty() {
+                    trap_tags.insert(trap.ds_tag.clone());
+                }
+            }
+        }
+    }
+    ReceivedVoucherMarkers {
+        prev_hashes,
+        tx_ids,
+        trap_tags,
+    }
+}
+
+/// Filters wallet-wide double-spend conflicts down to conflicts belonging to the received
+/// vouchers, while counting unrelated unresolved conflicts separately so clean payments
+/// are never falsely flagged.
+pub(crate) fn filter_conflicts_for_received_vouchers(
+    service: &human_money_core::app_service::AppService,
+    received_vouchers: &[human_money_core::Voucher],
+) -> Result<(Vec<crate::models::FrontendProofOfDoubleSpendSummary>, Option<usize>), FrontendError> {
+    let all_conflicts = service.list_conflicts().map_err(FrontendError::from)?;
+    if all_conflicts.is_empty() {
+        return Ok((Vec::new(), None));
+    }
+
+    let markers = collect_received_voucher_markers(received_vouchers);
+    let mut matching = Vec::new();
+    let mut unrelated_open = 0usize;
+
+    for summary in all_conflicts {
+        let mut is_match = markers.prev_hashes.contains(&summary.fork_point_prev_hash);
+
+        if !is_match {
+            if let Ok(full) = service.get_proof_of_double_spend(&summary.proof_id) {
+                is_match = full.conflicting_transactions.iter().any(|ct| {
+                    markers.tx_ids.contains(&ct.t_id)
+                        || markers.prev_hashes.contains(&ct.prev_hash)
+                        || ct
+                            .trap_data
+                            .as_ref()
+                            .is_some_and(|t| markers.trap_tags.contains(&t.ds_tag))
+                }) || full.fingerprints.iter().any(|fp| {
+                    markers.tx_ids.contains(&fp.t_id) || markers.trap_tags.contains(&fp.ds_tag)
+                });
+            }
+        }
+
+        if is_match {
+            matching.push(summary.into());
+        } else if !summary.is_resolved && !summary.local_override {
+            unrelated_open += 1;
+        }
+    }
+
+    Ok((matching, (unrelated_open > 0).then_some(unrelated_open)))
+}
+
 pub fn receive_bundle_impl(
     app: Option<&tauri::AppHandle>,
     bundle_data: Vec<u8>,
@@ -560,6 +638,40 @@ pub fn receive_bundle_impl(
                 .ok()
                 .flatten();
 
+            let opened_vouchers: Vec<human_money_core::Voucher> = service
+                .with_wallet_and_identity(|_, id| {
+                    human_money_core::services::bundle_processor::open_and_verify_bundle(
+                        id,
+                        &bundle_data,
+                    )
+                    .map(|b| b.vouchers)
+                    .unwrap_or_default()
+                })
+                .unwrap_or_default();
+            let (conflict_summaries, unrelated_open_conflicts_count) =
+                filter_conflicts_for_received_vouchers(&service, &opened_vouchers)?;
+            let markers = collect_received_voucher_markers(&opened_vouchers);
+            let verifiable_conflicts: HashMap<String, Vec<human_money_core::models::conflict::TransactionFingerprint>> =
+                result
+                    .check_result
+                    .verifiable_conflicts
+                    .into_iter()
+                    .filter(|(k, fps)| {
+                        markers.prev_hashes.contains(k)
+                            || fps.iter().any(|fp| {
+                                markers.tx_ids.contains(&fp.t_id)
+                                    || markers.trap_tags.contains(&fp.ds_tag)
+                            })
+                    })
+                    .collect();
+
+            drop(service);
+            crate::services::post_service::remove_pending_pos_payment_by_bytes(
+                state,
+                &bundle_data,
+                password.as_deref(),
+            );
+
             Ok(ReceiveSuccessPayload {
                 sender_id: result.header.sender_id,
                 sender_profile_name,
@@ -570,13 +682,8 @@ pub fn receive_bundle_impl(
                     .into_iter()
                     .map(|d| d.into())
                     .collect(),
-                verifiable_conflicts: result.check_result.verifiable_conflicts,
-                conflict_summaries: service
-                    .list_conflicts()
-                    .map_err(FrontendError::from)?
-                    .into_iter()
-                    .map(|s| s.into())
-                    .collect(),
+                verifiable_conflicts,
+                conflict_summaries,
                 l2_quorum: None,
                 receive_kind,
                 checkout_verdict: None,
@@ -584,6 +691,7 @@ pub fn receive_bundle_impl(
                 newly_committed: None,
                 is_replay: None,
                 wot_imported_lists,
+                unrelated_open_conflicts_count,
             })
         }
         Err(e) => {
@@ -1119,6 +1227,172 @@ mod offline_and_degraded_transfer_tests {
         );
 
         srv.abort();
+        let _ = std::fs::remove_dir_all(base_dir);
+    }
+
+    #[tokio::test]
+    async fn test_unrelated_conflict_does_not_flag_clean_transfer() {
+        let base_dir = temp_test_dir("unrelated_conflict_clean_transfer");
+        let password = "TestPassword123!";
+        let alice_state = create_test_state(setup_test_app(
+            &base_dir.join("alice"),
+            "Alice",
+            ALICE_PHRASE,
+            password,
+        ));
+        let carol_dir = base_dir.join("carol");
+        let carol_clone_dir = base_dir.join("carol_clone");
+        let carol_state = create_test_state(setup_test_app(
+            &carol_dir,
+            "Carol",
+            crate::test_support::CHARLIE_PHRASE,
+            password,
+        ));
+        let bob_state = create_test_state(setup_test_app(
+            &base_dir.join("bob"),
+            "Bob",
+            BOB_PHRASE,
+            password,
+        ));
+        let (std_map, standard_toml) = std_map();
+
+        // Innocent Alice issues a clean voucher v2; unrelated Carol issues v1 and double-spends it.
+        let v1_id = issue_100_voucher(&carol_state, &standard_toml, password);
+        let v2_id = issue_100_voucher(&alice_state, &standard_toml, password);
+
+        // Snapshot Carol's wallet directory BEFORE spending v1 so clone spends the exact same v1 state
+        fn copy_dir(src: &std::path::Path, dst: &std::path::Path) {
+            std::fs::create_dir_all(dst).unwrap();
+            for entry in std::fs::read_dir(src).unwrap() {
+                let entry = entry.unwrap();
+                let ty = entry.file_type().unwrap();
+                let target = dst.join(entry.file_name());
+                if ty.is_dir() {
+                    copy_dir(&entry.path(), &target);
+                } else {
+                    std::fs::copy(entry.path(), &target).unwrap();
+                }
+            }
+        }
+        copy_dir(&carol_dir, &carol_clone_dir);
+        let mut clone_svc = human_money_core::app_service::AppService::new(&carol_clone_dir).unwrap();
+        let clone_folder = clone_svc.list_profiles().unwrap()[0].folder_name.clone();
+        clone_svc
+            .login(&clone_folder, password, false, "device-drops-test".to_string())
+            .unwrap();
+        clone_svc.unlock_session(password, 300).unwrap();
+        let carol_clone_state = create_test_state(clone_svc);
+        {
+            let mut s = carol_clone_state.service.lock().unwrap();
+            carol_clone_state
+                .load_settings(&mut s, Some(password))
+                .unwrap();
+        }
+
+        let bob_did = bob_state
+            .service
+            .lock()
+            .unwrap()
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
+
+        let b1_first = create_transfer_bundle_impl(
+            None,
+            bob_did.clone(),
+            vec![FrontendSourceTransfer {
+                local_instance_id: v1_id.clone(),
+                amount_to_send: "20".into(),
+            }],
+            None,
+            None,
+            std_map.clone(),
+            Some(false),
+            Some(false),
+            Some(password.into()),
+            &carol_state,
+        )
+        .await
+        .unwrap();
+
+        let b1_double = create_transfer_bundle_impl(
+            None,
+            bob_did.clone(),
+            vec![FrontendSourceTransfer {
+                local_instance_id: v1_id,
+                amount_to_send: "25".into(),
+            }],
+            None,
+            None,
+            std_map.clone(),
+            Some(false),
+            Some(false),
+            Some(password.into()),
+            &carol_clone_state,
+        )
+        .await
+        .unwrap();
+
+        receive_bundle_impl(
+            None,
+            b1_first.bundle_data,
+            std_map.clone(),
+            Some(password.into()),
+            false,
+            &bob_state,
+        )
+        .unwrap();
+        let ds_recv = receive_bundle_impl(
+            None,
+            b1_double.bundle_data,
+            std_map.clone(),
+            Some(password.into()),
+            false,
+            &bob_state,
+        )
+        .unwrap();
+        assert!(
+            !ds_recv.conflict_summaries.is_empty(),
+            "Double-spend on v1 must populate conflict_summaries on the conflicting receive"
+        );
+
+        // Now innocent Alice sends a completely unrelated, clean voucher v2 to Bob
+        let b2_clean = create_transfer_bundle_impl(
+            None,
+            bob_did,
+            vec![FrontendSourceTransfer {
+                local_instance_id: v2_id,
+                amount_to_send: "30".into(),
+            }],
+            None,
+            None,
+            std_map.clone(),
+            Some(false),
+            Some(false),
+            Some(password.into()),
+            &alice_state,
+        )
+        .await
+        .unwrap();
+
+        let clean_recv = receive_bundle_impl(
+            None,
+            b2_clean.bundle_data,
+            std_map,
+            Some(password.into()),
+            false,
+            &bob_state,
+        )
+        .unwrap();
+        assert!(
+            clean_recv.conflict_summaries.is_empty(),
+            "Clean payment on v2 must NOT inherit unrelated v1 conflicts"
+        );
+        assert_eq!(
+            clean_recv.unrelated_open_conflicts_count,
+            Some(1),
+            "Clean payment must report unrelated unresolved conflict separately"
+        );
+
         let _ = std::fs::remove_dir_all(base_dir);
     }
 }

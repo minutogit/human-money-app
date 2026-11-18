@@ -240,5 +240,22 @@ describe('humocoUri Utilities', () => {
       const cardRes = parseCardUri(`Meine Karte: humoco://card?env=${sampleB64}!`);
       expect(cardRes?.envBase64).toBe(sampleB64);
     });
+
+    it('does not append trailing prose greetings like Danke! to multiline humoco URIs', () => {
+      const chatText = [
+        `humoco://pay?to=${encodeURIComponent(sampleDid)}&amount=25`,
+        'Danke!',
+      ].join('\n');
+      const parsed = parsePaymentRequest(chatText);
+      expect(parsed?.to).toBe(sampleDid);
+      expect(parsed?.amount).toBe('25');
+
+      const cardText = [
+        `humoco://card?env=${sampleB64}`,
+        'Danke!',
+      ].join('\n');
+      const parsedCard = parseCardUri(cardText);
+      expect(parsedCard?.envBase64).toBe(sampleB64);
+    });
   });
 });

@@ -26,6 +26,7 @@ import { recoveryService } from "./services/recoveryService";
 import { backupService } from "./services/backupService";
 import { translateError } from "./utils/errorHelper";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { readFile } from "@tauri-apps/plugin-fs";
 import { isPublicView } from "./types";
 import type { HelpTopicId } from "./help/helpTopics";
@@ -149,6 +150,37 @@ function AppContent() {
         }
     }, [isLoggedIn, appState.view, pendingDroppedFile, setPendingDroppedFile, protectAction, navigate, t]);
 
+    const processLaunchItems = useCallback(async (items: string[]) => {
+        if (!Array.isArray(items) || items.length === 0) return;
+        for (const item of items) {
+            if (!item) continue;
+            if (item.toLowerCase().includes('humoco://')) {
+                handleDeepLink(item);
+                continue;
+            }
+            try {
+                const rawBytes = await readFile(item);
+                const bytes = Array.from(rawBytes);
+                const fileName = item.split(/[/\\]/).pop() || 'launch.humoco';
+                const classification = classifyHumocoFile({ fileName, bytes });
+                if (classification.kind === 'deeplink' && classification.deepLink) {
+                    handleDeepLink(classification.deepLink);
+                } else if (classification.kind === 'backup' || classifyExtension(fileName) === 'backup') {
+                    const stagedPath = await backupService.stageDroppedBackupBytes(bytes);
+                    navigate({
+                        view: 'restore_backup',
+                        initialMethod: 'file_or_folder',
+                        initialBackupPath: stagedPath,
+                    });
+                } else if (classification.kind !== 'unknown') {
+                    setPendingDroppedFile({ name: fileName, bytes });
+                }
+            } catch (err) {
+                logger.warn("Failed to open launch item: " + String(err));
+            }
+        }
+    }, [handleDeepLink, navigate, setPendingDroppedFile]);
+
     useEffect(() => {
         if (typeof window !== 'undefined') {
             const currentUrl = window.location.href;
@@ -159,38 +191,25 @@ function AppContent() {
             if (!hasCheckedStartupItemsRef.current) {
                 hasCheckedStartupItemsRef.current = true;
                 Promise.resolve(invoke<string[]>("take_startup_launch_items"))
-                    .then(async (items) => {
-                        if (!Array.isArray(items) || items.length === 0) return;
-                        for (const item of items) {
-                            if (!item) continue;
-                            if (item.toLowerCase().includes('humoco://')) {
-                                handleDeepLink(item);
-                                continue;
-                            }
-                            try {
-                                const rawBytes = await readFile(item);
-                                const bytes = Array.from(rawBytes);
-                                const fileName = item.split(/[/\\]/).pop() || 'launch.humoco';
-                                const classification = classifyHumocoFile({ fileName, bytes });
-                                if (classification.kind === 'deeplink' && classification.deepLink) {
-                                    handleDeepLink(classification.deepLink);
-                                } else if (classification.kind === 'backup' || classifyExtension(fileName) === 'backup') {
-                                    const stagedPath = await backupService.stageDroppedBackupBytes(bytes);
-                                    navigate({
-                                        view: 'restore_backup',
-                                        initialMethod: 'file_or_folder',
-                                        initialBackupPath: stagedPath,
-                                    });
-                                } else if (classification.kind !== 'unknown') {
-                                    setPendingDroppedFile({ name: fileName, bytes });
-                                }
-                            } catch (err) {
-                                logger.warn("Failed to open startup launch item: " + String(err));
-                            }
-                        }
-                    })
+                    .then((items) => processLaunchItems(items))
                     .catch(() => {});
             }
+
+            let cancelled = false;
+            let unlistenLaunchItems: (() => void) | undefined;
+            Promise.resolve(
+                listen<string[]>("humoco://launch-items", (event) => {
+                    void processLaunchItems(event.payload);
+                })
+            )
+                .then((unlisten) => {
+                    if (cancelled) {
+                        unlisten();
+                    } else {
+                        unlistenLaunchItems = unlisten;
+                    }
+                })
+                .catch(() => {});
 
             const onDeepLink = (e: Event) => {
                 const customEv = e as CustomEvent<string>;
@@ -200,10 +219,14 @@ function AppContent() {
             };
             window.addEventListener('humoco:deeplink', onDeepLink);
             return () => {
+                cancelled = true;
+                if (typeof unlistenLaunchItems === 'function') {
+                    unlistenLaunchItems();
+                }
                 window.removeEventListener('humoco:deeplink', onDeepLink);
             };
         }
-    }, [handleDeepLink, navigate, setPendingDroppedFile]);
+    }, [handleDeepLink, processLaunchItems]);
 
     useEffect(() => {
         const onOpenRelease = (e: Event) => {

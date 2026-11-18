@@ -40,20 +40,229 @@ pub(crate) struct PostSigningContext {
     pub own_reply_syncs: Vec<FrontendSyncDescriptor>,
 }
 
-/// Loads the encrypted Post outbox/inbox state, returning an empty default if not yet initialized.
+/// Loads the encrypted Post outbox/inbox state, falling back to default only on `StorageError::NotFound`.
 pub(crate) fn load_post_state(
     state: &AppState,
     password: Option<&str>,
 ) -> Result<StoredPostState, FrontendError> {
     let mut service = state.service.lock().unwrap();
-    match service.load_encrypted_data(MARKET_POST_STATE_KEY, password) {
-        Ok(bytes) => serde_json::from_slice::<StoredPostState>(&bytes)
-            .map_err(|e| FrontendError::from(format!("Failed to parse post state: {}", e))),
-        Err(_) => Ok(StoredPostState::default()),
+    crate::state::load_encrypted_json_or_default(&mut service, MARKET_POST_STATE_KEY, password)
+        .map_err(FrontendError::from)
+}
+
+fn merge_vec_by_id<T: Clone, F: Fn(&T) -> &str>(
+    baseline: &[T],
+    working: &mut Vec<T>,
+    latest: &[T],
+    id_fn: F,
+) {
+    let base_ids: std::collections::HashSet<String> =
+        baseline.iter().map(|item| id_fn(item).to_string()).collect();
+    let latest_ids: std::collections::HashSet<String> =
+        latest.iter().map(|item| id_fn(item).to_string()).collect();
+
+    // Respect concurrent removals of items that existed in the baseline snapshot.
+    working.retain(|item| {
+        let id = id_fn(item);
+        !base_ids.contains(id) || latest_ids.contains(id)
+    });
+
+    let working_ids: std::collections::HashSet<String> =
+        working.iter().map(|item| id_fn(item).to_string()).collect();
+
+    for item in latest {
+        let id = id_fn(item);
+        if !base_ids.contains(id) && !working_ids.contains(id) {
+            working.push(item.clone());
+        }
     }
 }
 
-/// Persists the encrypted Post outbox/inbox state.
+fn merge_btree_map_3way<K: Ord + Clone, V: Eq + Clone>(
+    baseline: &std::collections::BTreeMap<K, V>,
+    working: &mut std::collections::BTreeMap<K, V>,
+    latest: &std::collections::BTreeMap<K, V>,
+) {
+    let all_keys: std::collections::BTreeSet<K> = baseline
+        .keys()
+        .chain(working.keys())
+        .chain(latest.keys())
+        .cloned()
+        .collect();
+    for key in all_keys {
+        let b = baseline.get(&key);
+        let w = working.get(&key);
+        if w == b {
+            match latest.get(&key) {
+                Some(v) => {
+                    working.insert(key, v.clone());
+                }
+                None => {
+                    working.remove(&key);
+                }
+            }
+        }
+    }
+}
+
+fn merge_inquiries_3way(
+    baseline: &[crate::models::FrontendMarketInquiryItem],
+    working: &mut Vec<crate::models::FrontendMarketInquiryItem>,
+    latest: &[crate::models::FrontendMarketInquiryItem],
+) {
+    let base_ids: std::collections::HashSet<&str> =
+        baseline.iter().map(|i| i.inquiry_id.as_str()).collect();
+    let latest_ids: std::collections::HashSet<&str> =
+        latest.iter().map(|i| i.inquiry_id.as_str()).collect();
+
+    working.retain(|item| {
+        !base_ids.contains(item.inquiry_id.as_str())
+            || latest_ids.contains(item.inquiry_id.as_str())
+    });
+
+    for latest_item in latest {
+        if let Some(w_item) = working
+            .iter_mut()
+            .find(|i| i.inquiry_id == latest_item.inquiry_id)
+        {
+            let base_opt = baseline
+                .iter()
+                .find(|i| i.inquiry_id == latest_item.inquiry_id);
+            let mut existing_msg_ids: std::collections::HashSet<String> =
+                w_item.messages.iter().map(|m| m.msg_id.clone()).collect();
+            let mut added_msg = false;
+            for msg in &latest_item.messages {
+                if existing_msg_ids.insert(msg.msg_id.clone()) {
+                    w_item.messages.push(msg.clone());
+                    added_msg = true;
+                }
+            }
+            if added_msg {
+                w_item.messages.sort_by_key(|m| m.created_at);
+            }
+            w_item.updated_at = w_item.updated_at.max(latest_item.updated_at);
+            if w_item.status == "open" && latest_item.status != "open" {
+                w_item.status = latest_item.status.clone();
+            }
+            if w_item.payment_uri.is_none() && latest_item.payment_uri.is_some() {
+                w_item.payment_uri = latest_item.payment_uri.clone();
+            }
+            if added_msg && latest_item.unread {
+                w_item.unread = true;
+            } else if base_opt.is_some_and(|b| b.unread == w_item.unread) {
+                w_item.unread = latest_item.unread;
+            }
+        } else if !base_ids.contains(latest_item.inquiry_id.as_str()) {
+            working.push(latest_item.clone());
+        }
+    }
+}
+
+/// Atomically loads the latest on-disk `StoredPostState`, 3-way merges any concurrent
+/// modifications relative to `baseline` into `working`, and persists `working`.
+pub(crate) fn merge_and_save_post_state(
+    state: &AppState,
+    baseline: &StoredPostState,
+    working: &mut StoredPostState,
+    password: Option<&str>,
+) -> Result<(), FrontendError> {
+    let mut service = state.service.lock().unwrap();
+    let latest: StoredPostState = crate::state::load_encrypted_json_or_default(
+        &mut service,
+        MARKET_POST_STATE_KEY,
+        password,
+    )
+    .map_err(FrontendError::from)?;
+
+    if &latest != baseline {
+        merge_vec_by_id(
+            &baseline.outbox_entries,
+            &mut working.outbox_entries,
+            &latest.outbox_entries,
+            |e| e.msg_id.as_str(),
+        );
+        merge_btree_map_3way(
+            &baseline.slot_etags_by_write_url,
+            &mut working.slot_etags_by_write_url,
+            &latest.slot_etags_by_write_url,
+        );
+        for id in &latest.processed_msg_ids {
+            working.processed_msg_ids.insert(id.clone());
+        }
+        merge_vec_by_id(
+            &baseline.pending_sign_requests,
+            &mut working.pending_sign_requests,
+            &latest.pending_sign_requests,
+            |r| r.msg_id.as_str(),
+        );
+        merge_vec_by_id(
+            &baseline.pending_wot_handshakes,
+            &mut working.pending_wot_handshakes,
+            &latest.pending_wot_handshakes,
+            |h| h.msg_id.as_str(),
+        );
+        merge_btree_map_3way(
+            &baseline.pending_wot_packages_by_msg_id,
+            &mut working.pending_wot_packages_by_msg_id,
+            &latest.pending_wot_packages_by_msg_id,
+        );
+        merge_vec_by_id(
+            &baseline.pending_pos_payments,
+            &mut working.pending_pos_payments,
+            &latest.pending_pos_payments,
+            |p| p.id.as_str(),
+        );
+        merge_inquiries_3way(&baseline.inquiries, &mut working.inquiries, &latest.inquiries);
+        if working.inquiry_rate_tracker == baseline.inquiry_rate_tracker
+            && latest.inquiry_rate_tracker != baseline.inquiry_rate_tracker
+        {
+            working.inquiry_rate_tracker = latest.inquiry_rate_tracker.clone();
+        } else {
+            for (target, senders) in &latest.inquiry_rate_tracker.inquiries {
+                working
+                    .inquiry_rate_tracker
+                    .inquiries
+                    .entry(target.clone())
+                    .or_default()
+                    .extend(senders.iter().cloned());
+            }
+        }
+    }
+
+    let bytes = serde_json::to_vec(working)
+        .map_err(|e| FrontendError::from(format!("Failed to serialize post state: {}", e)))?;
+    service
+        .save_encrypted_data(MARKET_POST_STATE_KEY, &bytes, password)
+        .map_err(FrontendError::from)
+}
+
+/// Removes any staged PoS payment matching `bundle_bytes` once committed.
+pub(crate) fn remove_pending_pos_payment_by_bytes(
+    state: &AppState,
+    bundle_bytes: &[u8],
+    password: Option<&str>,
+) {
+    let mut service = state.service.lock().unwrap();
+    let Ok(mut post_state) = crate::state::load_encrypted_json_or_default::<StoredPostState>(
+        &mut service,
+        MARKET_POST_STATE_KEY,
+        password,
+    ) else {
+        return;
+    };
+    let before = post_state.pending_pos_payments.len();
+    post_state
+        .pending_pos_payments
+        .retain(|p| p.bundle_bytes != bundle_bytes);
+    if post_state.pending_pos_payments.len() != before {
+        if let Ok(bytes) = serde_json::to_vec(&post_state) {
+            let _ = service.save_encrypted_data(MARKET_POST_STATE_KEY, &bytes, password);
+        }
+    }
+}
+
+/// Persists the encrypted Post outbox/inbox state directly (test helper).
+#[cfg(test)]
 pub(crate) fn save_post_state(
     state: &AppState,
     post_state: &StoredPostState,

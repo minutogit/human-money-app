@@ -275,6 +275,20 @@ fn classify_error(msg: &str) -> (String, HashMap<String, String>) {
     if msg.contains("Sicherheitsfrage stimmt nicht") {
         return ("error.recovery.wrongSecurityAnswer".into(), details);
     }
+    if msg.contains("Antworten auf die Sicherheitsfragen sind nicht korrekt")
+        || msg.contains("answers to the security questions")
+    {
+        return ("error.recovery.wrongAnswers".into(), details);
+    }
+    if msg.contains("BIP39_PASSPHRASE_REQUIRED") {
+        return ("error.recovery.bip39PassphraseRequired".into(), details);
+    }
+    if msg.contains("SYNC_UNREACHABLE") {
+        return ("error.recovery.syncUnreachable".into(), details);
+    }
+    if msg.contains("Guarantor anchor verification failed") {
+        return ("error.voucher.guarantorAnchorCheckFailed".into(), details);
+    }
 
     // --- Fallback: Unknown error ---
     ("error.internal.unknown".into(), details)

@@ -35,6 +35,7 @@ pub struct MarketSkill {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MarketPerson {
     pub did: String,
+    pub recipient_did: String,
     pub profile: PublicProfile,
     pub skills: Vec<MarketSkill>,
     pub active_ads: Vec<Ad>,
@@ -51,6 +52,7 @@ pub struct MarketPerson {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BoardItem {
     pub owner_did: String,
+    pub recipient_did: String,
     pub owner_name: String,
     pub trust: TrustTier,
     pub ad: Ad,
@@ -338,8 +340,21 @@ pub fn build_market_view<'a>(
             (None, None) => continue,
         };
 
+        let recipient_did = if let Some(ref c) = entry.card_data {
+            c.card.payload.recipient_id().to_string()
+        } else if let Some(ref v) = entry.voucher_data {
+            v.newest_profile
+                .id
+                .as_deref()
+                .and_then(|id| crate::recovery::canonicalize_owner_account_id(id).ok())
+                .unwrap_or_else(|| entry.canonical_did.clone())
+        } else {
+            entry.canonical_did.clone()
+        };
+
         persons.push(MarketPerson {
             did: entry.canonical_did,
+            recipient_did,
             profile,
             skills,
             active_ads: ads,
@@ -406,6 +421,7 @@ pub fn build_ad_board(people: &[MarketPerson]) -> Vec<BoardItem> {
         for ad in &person.active_ads {
             board.push(BoardItem {
                 owner_did: person.did.clone(),
+                recipient_did: person.recipient_did.clone(),
                 owner_name: owner_name.clone(),
                 trust: person.trust,
                 ad: ad.clone(),

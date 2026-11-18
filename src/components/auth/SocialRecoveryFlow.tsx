@@ -10,7 +10,7 @@ import { authService } from '../../services/authService';
 import { profileService } from '../../services/profileService';
 import { ActiveRecoverySessionDto, RecoveryCompletionResultDto } from '../../types';
 import { copyToClipboard } from '../../utils/clipboard';
-import { translateError } from '../../utils/errorHelper';
+import { translateError, isBackendError, stringifyError } from '../../utils/errorHelper';
 import { RECOVERY_QUESTION_MAP } from '../../constants/recoveryQuestions';
 import {
     Users,
@@ -71,7 +71,7 @@ export const SocialRecoveryFlow: React.FC<SocialRecoveryFlowProps> = ({
         useState<RecoveryCompletionResultDto | null>(null);
     const [unreachableSyncError, setUnreachableSyncError] = useState<boolean>(false);
 
-    const [isLoadingSession, setIsLoadingSession] = useState<boolean>(false);
+    const [isLoadingSession, setIsLoadingSession] = useState<boolean>(() => !existingSession);
     const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
     const [errorMsg, setErrorMsg] = useState<string>('');
     const [successMsg, setSuccessMsg] = useState<string>('');
@@ -83,11 +83,14 @@ export const SocialRecoveryFlow: React.FC<SocialRecoveryFlowProps> = ({
     const [showRequestQr, setShowRequestQr] = useState<boolean>(false);
     const [isReplyQrOpen, setIsReplyQrOpen] = useState<boolean>(false);
     const autoImportedRef = useRef<string | null>(null);
+    const profileNameRef = useRef<string>(profileName);
+    profileNameRef.current = profileName;
 
     useEffect(() => {
         if (existingSession) {
             setSession(existingSession);
-            if (existingSession.ownerDisplayName && !profileName) {
+            setIsLoadingSession(false);
+            if (existingSession.ownerDisplayName && !profileNameRef.current) {
                 setProfileName(existingSession.ownerDisplayName);
             }
             return;
@@ -119,7 +122,7 @@ export const SocialRecoveryFlow: React.FC<SocialRecoveryFlowProps> = ({
         return () => {
             active = false;
         };
-    }, [existingSession, mode, profileName]);
+    }, [existingSession, mode]);
 
     const handleImportReply = useCallback(
         async (uriToImport?: string) => {
@@ -187,12 +190,13 @@ export const SocialRecoveryFlow: React.FC<SocialRecoveryFlowProps> = ({
     useEffect(() => {
         if (
             !initialPayload?.includes('humoco://recovery-reply') ||
+            isLoadingSession ||
             autoImportedRef.current === initialPayload
         ) {
             return;
         }
         if (!session) {
-            autoImportedRef.current = initialPayload;
+            setReplyInput((prev) => prev || initialPayload);
             setInfoMsg(
                 t(
                     'backup.importReplyNeedsSessionFirst',
@@ -213,7 +217,7 @@ export const SocialRecoveryFlow: React.FC<SocialRecoveryFlowProps> = ({
         }
         autoImportedRef.current = initialPayload;
         void handleImportReply(initialPayload);
-    }, [initialPayload, session, handleImportReply, t]);
+    }, [initialPayload, isLoadingSession, session, handleImportReply, t]);
 
     const handleStartSession = async () => {
         setIsSubmitting(true);
@@ -331,16 +335,25 @@ export const SocialRecoveryFlow: React.FC<SocialRecoveryFlowProps> = ({
 
             onSuccess(result);
         } catch (err) {
-            const msg = String(err);
-            if (msg.includes('BIP39_PASSPHRASE_REQUIRED') || msg.includes('Passphrase erforderlich')) {
+            const code = isBackendError(err) ? err.code : '';
+            const msg = stringifyError(err);
+            if (
+                code === 'error.recovery.bip39PassphraseRequired' ||
+                msg.includes('BIP39_PASSPHRASE_REQUIRED') ||
+                msg.includes('Passphrase erforderlich')
+            ) {
                 setShowPassphraseInput(true);
                 setErrorMsg(t('backup.bip39PassphraseRequired'));
             } else if (
+                code === 'error.recovery.wrongAnswers' ||
                 msg.includes('Antworten stimmen noch nicht') ||
                 msg.includes('Decryption failed')
             ) {
                 setErrorMsg(t('backup.wrongAnswersRetry'));
-            } else if (msg.includes('Sync-Dienst nicht erreichbar')) {
+            } else if (
+                code === 'error.recovery.syncUnreachable' ||
+                msg.includes('Sync-Dienst nicht erreichbar')
+            ) {
                 setUnreachableSyncError(true);
                 setErrorMsg(translateError(err, t));
             } else {
