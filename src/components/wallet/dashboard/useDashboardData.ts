@@ -1,0 +1,311 @@
+// src/components/wallet/dashboard/useDashboardData.ts
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
+import { voucherService } from '../../../services/voucherService';
+import { transferService } from '../../../services/transferService';
+import { profileService } from '../../../services/profileService';
+import { contactService } from '../../../services/contactService';
+import { settingsService } from '../../../services/settingsService';
+import { marketService } from '../../../services/marketService';
+import { recoveryService } from '../../../services/recoveryService';
+import { postService, POST_INBOX_UPDATED_EVENT } from '../../../services/postService';
+import { useNavigation } from '../../../context/NavigationContext';
+import { useSession } from '../../../context/SessionContext';
+import { logger } from '../../../utils/log';
+import { stringifyError, translateError } from '../../../utils/errorHelper';
+import type {
+    AggregatedBalance,
+    VoucherSummary,
+    WalletEvent,
+    AppSettings,
+    FrontendPendingSignRequest,
+    FrontendPendingWotHandshake,
+    RecoveryProtectionStatusDto,
+} from '../../../types';
+
+export function useDashboardData() {
+    const { t } = useTranslation();
+    const tRef = useRef(t);
+    tRef.current = t;
+
+    const { navigate } = useNavigation();
+    const {
+        profileName,
+        integrityReport,
+        protectAction,
+        accessMode = 'full',
+        requireFullAccess,
+    } = useSession();
+
+    const [userId, setUserId] = useState('');
+    const [balances, setBalances] = useState<AggregatedBalance[]>([]);
+    const [activeVouchers, setActiveVouchers] = useState<VoucherSummary[]>([]);
+    const [recentEvents, setRecentEvents] = useState<WalletEvent[]>([]);
+    const [feedbackMsg, setFeedbackMsg] = useState('');
+    const [activeVouchersCount, setActiveVouchersCount] = useState(0);
+    const [incompleteCount, setIncompleteCount] = useState(0);
+    const [quarantinedCount, setQuarantinedCount] = useState(0);
+
+    const [pendingSignRequests, setPendingSignRequests] = useState<FrontendPendingSignRequest[]>([]);
+    const [pendingWotHandshakes, setPendingWotHandshakes] = useState<FrontendPendingWotHandshake[]>([]);
+    const [openSellerInquiriesCount, setOpenSellerInquiriesCount] = useState(0);
+    const [isOpeningSignRequest, setIsOpeningSignRequest] = useState<string | null>(null);
+    const [expiringSoonCount, setExpiringSoonCount] = useState(0);
+    const [isLoading, setIsLoading] = useState(true);
+    const [voucherCountsByStandard, setVoucherCountsByStandard] = useState<Record<string, number>>({});
+    const [showBackupReminder, setShowBackupReminder] = useState(false);
+    const [rehearsalSnoozed, setRehearsalSnoozed] = useState(false);
+    const [appSettings, setAppSettings] = useState<AppSettings | null>(null);
+    const [protectionStatus, setProtectionStatus] = useState<RecoveryProtectionStatusDto | null>(null);
+    const [contactsCount, setContactsCount] = useState(0);
+    const [syncConnectedCount, setSyncConnectedCount] = useState(0);
+    const [balanceViewMode, setBalanceViewMode] = useState<'spendable' | 'net'>('spendable');
+
+    useEffect(() => {
+        let active = true;
+        logger.info('Dashboard component displayed');
+
+        async function fetchData() {
+            try {
+                const [
+                    id,
+                    balanceList,
+                    ,
+                    voucherSummaries,
+                    ,
+                    contacts,
+                    eventHistory,
+                    userSettings,
+                    syncOverview,
+                    recoveryProtection,
+                ] = await Promise.all([
+                    profileService.getUserId(),
+                    voucherService.getTotalBalanceByCurrency(),
+                    transferService.getHistory().catch(() => []),
+                    voucherService.getSummaries().catch(() => []),
+                    profileService.getProfile().catch(() => null),
+                    contactService.getContacts().catch(() => []),
+                    transferService.getEventHistory(0, 5).catch(() => []),
+                    settingsService.getSettings().catch(() => null),
+                    marketService.getSyncOverviewStatus().catch(() => null),
+                    recoveryService.getRecoveryProtectionStatus().catch(() => null),
+                ]);
+                if (!active) return;
+
+                setUserId(id);
+                setBalances(balanceList || []);
+                setRecentEvents(eventHistory || []);
+                setContactsCount((contacts || []).length);
+                setProtectionStatus(recoveryProtection);
+                setSyncConnectedCount(syncOverview?.connectedCount || 0);
+
+                const allSummaries = voucherSummaries || [];
+                const activeVoucherList = allSummaries
+                    .filter((v: VoucherSummary) => v.status === 'active')
+                    .sort((a: VoucherSummary, b: VoucherSummary) => {
+                        const aTime = a.validUntil
+                            ? new Date(a.validUntil).getTime()
+                            : Number.MAX_SAFE_INTEGER;
+                        const bTime = b.validUntil
+                            ? new Date(b.validUntil).getTime()
+                            : Number.MAX_SAFE_INTEGER;
+                        return aTime - bTime;
+                    });
+                setActiveVouchers(activeVoucherList);
+
+                const countsByStandard: Record<string, number> = {};
+                activeVoucherList.forEach((v: VoucherSummary) => {
+                    if (v.voucherStandardUuid) {
+                        countsByStandard[v.voucherStandardUuid] =
+                            (countsByStandard[v.voucherStandardUuid] || 0) + 1;
+                    }
+                });
+                setVoucherCountsByStandard(countsByStandard);
+                setActiveVouchersCount(activeVoucherList.length);
+                setIncompleteCount(
+                    allSummaries.filter((v: VoucherSummary) => v.status === 'incomplete').length,
+                );
+                setQuarantinedCount(
+                    allSummaries.filter((v: VoucherSummary) => v.status === 'quarantined').length,
+                );
+
+                const now = new Date();
+                const thirtyDays = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+                setExpiringSoonCount(
+                    allSummaries.filter((v: VoucherSummary) => {
+                        if (v.status !== 'active' || !v.validUntil) return false;
+                        const exp = new Date(v.validUntil);
+                        return exp > now && exp <= thirtyDays;
+                    }).length,
+                );
+
+                setAppSettings(userSettings);
+                const initialMode =
+                    (userSettings?.balanceViewMode as 'spendable' | 'net') ||
+                    (localStorage.getItem('hmc_balance_view_mode') as 'spendable' | 'net') ||
+                    'spendable';
+                setBalanceViewMode(initialMode);
+
+                const hasRealActiveVouchers = allSummaries.some(
+                    (v: VoucherSummary) => v.status === 'active' && !v.isTestVoucher,
+                );
+                const effectiveBackupAt =
+                    [userSettings?.lastBackupAt, userSettings?.lastSyncBackupAt]
+                        .filter((d): d is string => Boolean(d) && !isNaN(new Date(d as string).getTime()))
+                        .sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0] ?? null;
+                const isBackupOutdatedOrMissing =
+                    !effectiveBackupAt ||
+                    (() => {
+                        const backupDate = new Date(effectiveBackupAt);
+                        if (isNaN(backupDate.getTime())) return true;
+                        const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
+                        return backupDate < fourteenDaysAgo;
+                    })();
+                setShowBackupReminder(
+                    hasRealActiveVouchers &&
+                        !userSettings?.backupSyncFolder &&
+                        isBackupOutdatedOrMissing,
+                );
+            } catch (e) {
+                if (!active) return;
+                console.error(`Failed to fetch dashboard data: ${stringifyError(e)}`);
+                setFeedbackMsg(translateError(e, tRef.current));
+            } finally {
+                if (active) setIsLoading(false);
+            }
+        }
+        fetchData();
+
+        const loadPostInbox = () => {
+            postService
+                .getPostInboxSummary()
+                .then((summary) => {
+                    if (!active) return;
+                    setPendingSignRequests(summary.pendingSignRequests || []);
+                    setPendingWotHandshakes(summary.pendingWotHandshakes || []);
+                    setOpenSellerInquiriesCount(
+                        (summary.inquiries || []).filter(
+                            (inq) => inq.unread || (inq.role === 'seller' && inq.status === 'open'),
+                        ).length,
+                    );
+                })
+                .catch(() => {});
+        };
+
+        const handlePostInboxUpdated = () => {
+            loadPostInbox();
+            void fetchData();
+        };
+
+        loadPostInbox();
+        postService.syncPostChannels().catch(() => {});
+        window.addEventListener(POST_INBOX_UPDATED_EVENT, handlePostInboxUpdated);
+        return () => {
+            active = false;
+            window.removeEventListener(POST_INBOX_UPDATED_EVENT, handlePostInboxUpdated);
+        };
+    }, []);
+
+    const handleOpenSignRequest = useCallback(
+        async (req: FrontendPendingSignRequest) => {
+            setIsOpeningSignRequest(req.msgId);
+            try {
+                const voucherData = await voucherService.openSigningRequest(req.containerBytes);
+                if (voucherData) {
+                    navigate({
+                        view: 'sign_request',
+                        voucherData,
+                        requestMsgId: req.msgId,
+                        senderDid: req.senderDid,
+                    });
+                }
+            } catch (e) {
+                logger.error(`Failed to open signing request: ${stringifyError(e)}`);
+                setFeedbackMsg(translateError(e, t));
+            } finally {
+                setIsOpeningSignRequest(null);
+            }
+        },
+        [navigate, t],
+    );
+
+    const handleDismissSignRequest = useCallback(
+        async (msgId: string) => {
+            try {
+                await protectAction(async (pwd) => {
+                    await postService.dismissPendingPostItem('sign_request', msgId, pwd || undefined);
+                });
+                setPendingSignRequests((prev) => prev.filter((r) => r.msgId !== msgId));
+            } catch (e) {
+                logger.error(`Failed to dismiss sign request: ${stringifyError(e)}`);
+                setFeedbackMsg(translateError(e, t));
+            }
+        },
+        [protectAction, t],
+    );
+
+    const handleViewModeChange = useCallback(
+        async (mode: 'spendable' | 'net') => {
+            setBalanceViewMode(mode);
+            try {
+                localStorage.setItem('hmc_balance_view_mode', mode);
+                if (appSettings) {
+                    const updated = { ...appSettings, balanceViewMode: mode };
+                    setAppSettings(updated);
+                    await settingsService.saveSettings(updated).catch(() => {});
+                }
+            } catch {
+                // Ignore best-effort persistence errors
+            }
+        },
+        [appSettings],
+    );
+
+    const handleProtectedNavigate = useCallback(
+        (target: Parameters<typeof navigate>[0]) => {
+            if (accessMode === 'receiveOnly' && requireFullAccess) {
+                void requireFullAccess(async () => {
+                    navigate(target);
+                }).catch(() => undefined);
+                return;
+            }
+            navigate(target);
+        },
+        [accessMode, navigate, requireFullAccess],
+    );
+
+    return {
+        profileName,
+        integrityReport,
+        accessMode,
+        userId,
+        balances,
+        activeVouchers,
+        recentEvents,
+        feedbackMsg,
+        activeVouchersCount,
+        incompleteCount,
+        quarantinedCount,
+        pendingSignRequests,
+        pendingWotHandshakes,
+        openSellerInquiriesCount,
+        isOpeningSignRequest,
+        expiringSoonCount,
+        isLoading,
+        voucherCountsByStandard,
+        showBackupReminder,
+        rehearsalSnoozed,
+        setRehearsalSnoozed,
+        appSettings,
+        protectionStatus,
+        setProtectionStatus,
+        contactsCount,
+        syncConnectedCount,
+        balanceViewMode,
+        handleViewModeChange,
+        handleOpenSignRequest,
+        handleDismissSignRequest,
+        handleProtectedNavigate,
+        navigate,
+    };
+}

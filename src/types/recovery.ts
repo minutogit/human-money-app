@@ -1,3 +1,9 @@
+import type {
+    LocalProfileCollisionDto,
+    ResolvedSyncTargetDto,
+    MnemonicLanguage,
+} from './backup';
+
 export type GuardianAssignmentStatus =
     | { status: 'pending' }
     | { status: 'confirmed'; ackedAt: number };
@@ -93,8 +99,6 @@ export interface RevokeSocialRecoveryResultDto {
     postSyncResult: unknown;
     backupSyncResult: unknown | null;
 }
-
-import { LocalProfileCollisionDto, ResolvedSyncTargetDto, MnemonicLanguage } from '../types';
 
 export interface ActiveRecoverySessionDto {
     sasCode: string;

@@ -150,10 +150,10 @@ mod tests {
             uuid::Uuid::new_v4()
         ));
         let password = "test-password-123";
-        let mut alice_service = crate::commands::sync::tests::setup_test_app(
+        let mut alice_service = crate::test_support::setup_test_app(
             &temp_dir,
             "Alice Schnell",
-            crate::commands::sync::tests::ALICE_PHRASE,
+            crate::test_support::ALICE_PHRASE,
             password,
         );
 
@@ -168,7 +168,7 @@ mod tests {
             )
             .unwrap();
 
-        let state = crate::commands::sync::tests::create_test_state(alice_service);
+        let state = crate::test_support::create_test_state(alice_service);
 
         // Add both a selected friend/own sync and a public sync with distinct read_url vs write_url
         {
@@ -246,7 +246,7 @@ mod tests {
         service
             .create_profile(
                 "Alice Laden",
-                crate::commands::sync::tests::ALICE_PHRASE,
+                crate::test_support::ALICE_PHRASE,
                 None,
                 Some("laden"),
                 password,
@@ -257,7 +257,7 @@ mod tests {
             .unwrap();
         service.unlock_session(password, 3600).unwrap();
 
-        let state = crate::commands::sync::tests::create_test_state(service);
+        let state = crate::test_support::create_test_state(service);
         let quick =
             get_my_quick_contact_impl(&state).expect("subaccount quick contact should succeed");
         assert!(
@@ -280,7 +280,7 @@ mod tests {
         root_service
             .create_profile(
                 "Alice Pure Root",
-                crate::commands::sync::tests::ALICE_PHRASE,
+                crate::test_support::ALICE_PHRASE,
                 None,
                 None,
                 password,
@@ -290,7 +290,7 @@ mod tests {
             )
             .unwrap();
         root_service.unlock_session(password, 3600).unwrap();
-        let root_state = crate::commands::sync::tests::create_test_state(root_service);
+        let root_state = crate::test_support::create_test_state(root_service);
         let root_quick =
             get_my_quick_contact_impl(&root_state).expect("root quick contact should succeed");
         assert!(

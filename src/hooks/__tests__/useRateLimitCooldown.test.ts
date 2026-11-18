@@ -2,7 +2,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useRateLimitCooldown } from '../useRateLimitCooldown';
-import { rateLimitManager } from '../../utils/rateLimitManager';
+import { rateLimitManager } from '../../sync/rateLimitManager';
 
 describe('useRateLimitCooldown & rateLimitManager', () => {
     beforeEach(() => {
@@ -16,9 +16,8 @@ describe('useRateLimitCooldown & rateLimitManager', () => {
     });
 
     it('extracts Retry-After integer seconds from DTO and string errors', () => {
-        // DTO with retryAfterSecs
+        // DTO with canonical camelCase retryAfterSecs
         expect(rateLimitManager.extractRetryAfter({ retryAfterSecs: 45 })).toBe(45);
-        expect(rateLimitManager.extractRetryAfter({ retry_after_secs: 30 })).toBe(30);
 
         // Errors array on DTO
         expect(rateLimitManager.extractRetryAfter({
@@ -64,6 +63,62 @@ describe('useRateLimitCooldown & rateLimitManager', () => {
         expect(result.current.cooldownSeconds).toBe(0);
         expect(result.current.isCoolingDown).toBe(false);
         expect(onEnd).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not re-subscribe on inline options changes and invokes the latest onCooldownEnd callback', () => {
+        const subscribeSpy = vi.spyOn(rateLimitManager, 'subscribe');
+        const firstCb = vi.fn();
+        const secondCb = vi.fn();
+
+        const { result, rerender } = renderHook(
+            ({ cb }: { cb: () => void }) => useRateLimitCooldown({ onCooldownEnd: cb }),
+            { initialProps: { cb: firstCb } }
+        );
+
+        expect(subscribeSpy).toHaveBeenCalledTimes(1);
+
+        rerender({ cb: secondCb });
+        expect(subscribeSpy).toHaveBeenCalledTimes(1);
+
+        act(() => {
+            result.current.triggerCooldown(2);
+        });
+        act(() => {
+            vi.advanceTimersByTime(2000);
+        });
+
+        expect(firstCb).not.toHaveBeenCalled();
+        expect(secondCb).toHaveBeenCalledTimes(1);
+        subscribeSpy.mockRestore();
+    });
+
+    it('avoids 1-second re-renders when trackCountdown is false while still updating isCoolingDown', () => {
+        let renderCount = 0;
+        const { result } = renderHook(() => {
+            renderCount++;
+            return useRateLimitCooldown({ trackCountdown: false });
+        });
+
+        expect(renderCount).toBe(1);
+        expect(result.current.isCoolingDown).toBe(false);
+
+        act(() => {
+            result.current.triggerCooldown(4);
+        });
+        expect(result.current.isCoolingDown).toBe(true);
+        const countOnStart = renderCount;
+
+        act(() => {
+            vi.advanceTimersByTime(3000);
+        });
+        expect(result.current.isCoolingDown).toBe(true);
+        expect(renderCount).toBe(countOnStart);
+
+        act(() => {
+            vi.advanceTimersByTime(1000);
+        });
+        expect(result.current.isCoolingDown).toBe(false);
+        expect(renderCount).toBe(countOnStart + 1);
     });
 
     it('checkAndTriggerCooldown automatically starts cooldown on 429 error and returns true', () => {

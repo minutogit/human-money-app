@@ -10,17 +10,11 @@ import {
     NominatedLockServerMeta,
     ReachPresetDto,
     ReachPresetId,
-    RollbackReport,
     StoredAnchorTemplateMeta,
     VoucherL2StatusDto,
 } from "../types";
 
-export type { RollbackReport, VoucherL2StatusDto, L2LockStatusDto };
-
-export interface SealForUpload {
-    sealHash: string;
-    sealBytes: number[];
-}
+export type { VoucherL2StatusDto, L2LockStatusDto };
 
 export interface AssembleAnchorTemplateArgs {
     label: string;
@@ -52,16 +46,8 @@ export const settingsService = {
         return await invoke<string>("get_seal_sync_status");
     },
 
-    getSealForUpload: async () => {
-        return await invoke<SealForUpload>("get_seal_for_upload");
-    },
-
-    acknowledgeSealSync: async (uploadedSealHash: string, password?: string) => {
-        return await invoke<void>("acknowledge_seal_sync", { uploadedSealHash, password });
-    },
-
-    reconcileRollback: async (password?: string) => {
-        return await invoke<RollbackReport>("reconcile_rollback", { password });
+    getLatestLogs: async (): Promise<string> => {
+        return await invoke<string>("get_latest_logs");
     },
 
     probeLockServer: async (writeUrl: string, expectedAdminPub?: string | null, password?: string | null) => {

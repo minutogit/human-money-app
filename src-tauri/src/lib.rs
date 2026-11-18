@@ -8,10 +8,13 @@ pub(crate) mod intent_reconciliation;
 pub mod l2_lifecycle;
 pub mod models;
 pub mod pin_keystore;
+pub mod services;
 pub mod settings;
 pub mod state;
 pub mod sync_client;
 pub mod sync_zip;
+#[cfg(test)]
+pub(crate) mod test_support;
 
 pub use state::AppState;
 
@@ -28,15 +31,9 @@ use tauri_plugin_log::{
 };
 
 use crate::commands::{
-    auth::*, backup::*, contacts::*, integrity::*, market::*, post::*, profile::*, queries::*,
-    recovery::*, settings_cmd::*, standards::*, sync::*, transfers::*, utils::*, vouchers::*,
-    wot::*,
-};
-use crate::l2_lifecycle::{
-    adjudicate_dead_quorum_swap_cmd, create_dead_quorum_swap_claim_cmd,
-    create_dead_quorum_swap_offer_cmd, create_guarantor_claim_bundle,
-    create_key_successor_attestation_cmd, discover_anchor_manifest_cmd, get_l2_lifecycle_status,
-    import_key_successor_attestation_cmd, register_guarantor_anchor_role, run_l2_lifecycle_tick,
+    auth::*, backup::*, contacts::*, integrity::*, l2::*, market::*, post::*, profile::*,
+    queries::*, recovery::*, settings_cmd::*, standards::*, sync::*, transfers::*, utils::*,
+    vouchers::*, wot::*,
 };
 
 const LOG_TARGET_NAME: &str = "human_money_app.log";
@@ -140,7 +137,6 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
-            profile_exists,
             list_profiles,
             create_profile,
             login,
@@ -177,9 +173,7 @@ pub fn run() {
             save_transaction_record,
             get_transaction_history,
             prepare_transfer_plan,
-            rank_vouchers_for_recipient,
             checkout_received_bundle,
-            submit_l2_send_intent,
             evaluate_checkout_release,
             get_app_settings,
             save_app_settings,
@@ -191,14 +185,12 @@ pub fn run() {
             open_voucher_signing_request,
             create_detached_signature_response_bundle,
             process_and_attach_signature,
-            get_allowed_signature_roles_from_standard,
             evaluate_signature_suitability,
             evaluate_guarantor_anchor_check,
             remove_voucher_signature,
             get_double_spend_conflicts,
             get_proof_of_double_spend,
             get_proof_id_for_voucher,
-            get_voucher_source_sender,
             check_reputation,
             set_conflict_local_override,
             get_event_history,
@@ -215,9 +207,6 @@ pub fn run() {
             encode_text_qr_svg,
             // WalletSeal / Sync Locks
             get_seal_sync_status,
-            get_seal_for_upload,
-            acknowledge_seal_sync,
-            reconcile_rollback,
             check_voucher_l2_status,
             probe_lock_server_cmd,
             set_own_nominated_lock_server,

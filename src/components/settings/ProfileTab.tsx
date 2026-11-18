@@ -7,7 +7,7 @@ import { LanguageSelector } from '../ui/LanguageSelector';
 import { UiModeToggle } from '../ui/UiModeToggle';
 import { InfoHint } from '../ui/InfoHint';
 import { TechId } from '../ui/TechId';
-import { ReachPresetSelector } from '../ReachPresetSelector';
+import { ReachPresetSelector } from './ReachPresetSelector';
 import { MyProfileCard } from '../profile/MyProfileCard';
 import { useSession } from '../../context/SessionContext';
 import { AppSettings } from '../../types';

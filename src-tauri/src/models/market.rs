@@ -393,6 +393,31 @@ pub struct FrontendSyncDescriptor {
     pub replacement: Option<FrontendSyncReplacementTarget>,
 }
 
+pub trait SyncRevocationFields {
+    fn status_mut(&mut self) -> &mut String;
+    fn sunset_at_mut(&mut self) -> &mut Option<u64>;
+    fn revocation_reason_mut(&mut self) -> &mut Option<String>;
+    fn replacement_mut(&mut self) -> &mut Option<FrontendSyncReplacementTarget>;
+}
+
+impl SyncRevocationFields for FrontendSyncDescriptor {
+    fn status_mut(&mut self) -> &mut String {
+        &mut self.status
+    }
+
+    fn sunset_at_mut(&mut self) -> &mut Option<u64> {
+        &mut self.sunset_at
+    }
+
+    fn revocation_reason_mut(&mut self) -> &mut Option<String> {
+        &mut self.revocation_reason
+    }
+
+    fn replacement_mut(&mut self) -> &mut Option<FrontendSyncReplacementTarget> {
+        &mut self.replacement
+    }
+}
+
 pub fn default_sync_status() -> String {
     "unverified".to_string()
 }

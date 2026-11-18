@@ -20,7 +20,7 @@ export const TOUR_STEPS = [
         id: '1.1',
         chapter: 1,
         title: 'Login & Profilauswahl',
-        file: 'src/components/Login.tsx',
+        file: 'src/components/auth/Login.tsx',
         description: 'Auswahl eines lokalen Profils, Passworteingabe und Schnellzugriff auf Wiederherstellung.',
         auth: false,
         appState: { view: 'needs_login' }
@@ -29,7 +29,7 @@ export const TOUR_STEPS = [
         id: '1.2',
         chapter: 1,
         title: 'Neues Profil erstellen',
-        file: 'src/components/CreateNewProfile.tsx',
+        file: 'src/components/auth/CreateNewProfile.tsx',
         description: 'Erstellung einer neuen Identität mit Mnemonic BIP-39 Seed-Phrase, Passwort und Profildaten.',
         auth: false,
         appState: { view: 'needs_profile' }
@@ -38,7 +38,7 @@ export const TOUR_STEPS = [
         id: '1.3',
         chapter: 1,
         title: 'Profil öffnen oder wiederherstellen (Wörter / Notfall-Blatt)',
-        file: 'src/components/RestoreBackupView.tsx',
+        file: 'src/components/auth/RestoreBackupView.tsx',
         description: 'Öffnen eines bestehenden Profils oder Unterkontos über 12/24 Wiederherstellungswörter, Notfall-Blatt oder Sync-Dienst.',
         auth: false,
         appState: { view: 'restore_backup', initialMethod: 'words_or_sheet' }
@@ -47,7 +47,7 @@ export const TOUR_STEPS = [
         id: '1.4',
         chapter: 1,
         title: 'Bestehendes Profil öffnen / wiederherstellen (Übersicht)',
-        file: 'src/components/RestoreBackupView.tsx',
+        file: 'src/components/auth/RestoreBackupView.tsx',
         description: '3 gleichberechtigte Wege: Vertrauenskontakte, Wiederherstellungswörter/Notfall-Blatt oder Sicherungsdatei/-ordner.',
         auth: false,
         appState: { view: 'restore_backup' }
@@ -56,7 +56,7 @@ export const TOUR_STEPS = [
         id: '1.5',
         chapter: 1,
         title: 'Passwort vergessen / Wallet-Recovery',
-        file: 'src/components/WalletRecovery.tsx',
+        file: 'src/components/auth/WalletRecovery.tsx',
         description: 'Notfall-Rettung eines Profils mit Mnemonic bei vergessenem Passwort.',
         auth: false,
         appState: { view: 'needs_recovery' }
@@ -67,7 +67,7 @@ export const TOUR_STEPS = [
         id: '2.1',
         chapter: 2,
         title: 'Dashboard & Startübersicht',
-        file: 'src/components/Dashboard.tsx',
+        file: 'src/components/wallet/Dashboard.tsx',
         description: 'Aggregierte Guthaben nach Standards, Schnellaktionen und Status-Badges.',
         auth: true,
         appState: { view: 'logged_in' }
@@ -76,7 +76,7 @@ export const TOUR_STEPS = [
         id: '2.2',
         chapter: 2,
         title: 'Wallet & Gutscheinliste',
-        file: 'src/components/WalletView.tsx',
+        file: 'src/components/wallet/WalletView.tsx',
         description: 'Vollständige Liste aller Gutscheine mit Filterung, Status und Standards.',
         auth: true,
         appState: { view: 'wallet' }
@@ -85,7 +85,7 @@ export const TOUR_STEPS = [
         id: '2.3',
         chapter: 2,
         title: 'Gutschein-Details & Timeline',
-        file: 'src/components/VoucherDetailsView.tsx',
+        file: 'src/components/wallet/VoucherDetailsView.tsx',
         description: 'Audit-Trail, kryptographische ProofChain, Bürgenliste und L2 Quorum Status.',
         auth: true,
         appState: { view: 'voucher_details', voucherId: MOCK_VOUCHER_ID }
@@ -94,7 +94,7 @@ export const TOUR_STEPS = [
         id: '2.4',
         chapter: 2,
         title: 'Neuen Gutschein ausstellen',
-        file: 'src/components/CreateVoucher.tsx',
+        file: 'src/components/wallet/CreateVoucher.tsx',
         description: 'Erstellung eines werthaltigen L1 Gutscheins basierend auf Standard, Wert und Frist.',
         auth: true,
         appState: { view: 'create_voucher' }
@@ -103,7 +103,7 @@ export const TOUR_STEPS = [
         id: '2.5',
         chapter: 2,
         title: 'Gutschein senden',
-        file: 'src/components/SendView.tsx',
+        file: 'src/components/transfer/SendView.tsx',
         description: 'Multi-Transfer, Empfängerauswahl aus Adressbuch und SST V4 Trap-Vorbereitung.',
         auth: true,
         appState: { view: 'send_vouchers' }
@@ -112,7 +112,7 @@ export const TOUR_STEPS = [
         id: '2.6',
         chapter: 2,
         title: 'Gutschein-Versand erfolgreich',
-        file: 'src/components/TransferSuccessView.tsx',
+        file: 'src/components/transfer/TransferSuccessView.tsx',
         description: 'Erfolgsmeldung nach Transfer mit L2 Shard-Quorum Bestätigung und Export-Option.',
         auth: true,
         appState: {
@@ -128,7 +128,7 @@ export const TOUR_STEPS = [
         id: '2.7',
         chapter: 2,
         title: 'Gutschein / Bundle empfangen',
-        file: 'src/components/ReceiveView.tsx',
+        file: 'src/components/transfer/ReceiveView.tsx',
         description: 'Import von Gutschein-Dateien, QR-Codes oder BLE/NFC Payloads.',
         auth: true,
         appState: { view: 'receive_bundle' }
@@ -137,7 +137,7 @@ export const TOUR_STEPS = [
         id: '2.8',
         chapter: 2,
         title: 'Empfang erfolgreich',
-        file: 'src/components/ReceiveSuccessView.tsx',
+        file: 'src/components/transfer/ReceiveSuccessView.tsx',
         description: 'Bestätigung des importierten Gutscheins und Verbuchung im L1 Speicher.',
         auth: true,
         appState: {
@@ -171,7 +171,7 @@ export const TOUR_STEPS = [
         id: '2.9',
         chapter: 2,
         title: 'Bürgschafts- / Signaturanfrage',
-        file: 'src/components/SignRequestView.tsx',
+        file: 'src/components/wallet/SignRequestView.tsx',
         description: 'Prüfung und Unterzeichnung einer Bürgschaftsanfrage für einen Mitmenschen.',
         auth: true,
         appState: {
@@ -215,7 +215,7 @@ export const TOUR_STEPS = [
         id: '2.11',
         chapter: 2,
         title: 'Transaktionshistorie',
-        file: 'src/components/TransactionHistoryView.tsx',
+        file: 'src/components/transfer/TransactionHistoryView.tsx',
         description: 'Detaillierter Zahlungsverlauf mit Filter, CSV-Export und integriertem Ereignis-Protokoll im Expertenmodus.',
         auth: true,
         appState: { view: 'transaction_history' }
@@ -226,7 +226,7 @@ export const TOUR_STEPS = [
         id: '3.1',
         chapter: 3,
         title: 'Kontakte & Vertrauen (Übersicht)',
-        file: 'src/components/AddressBook.tsx',
+        file: 'src/components/contacts/AddressBook.tsx',
         description: 'Subjektives Vertrauensnetzwerk mit 4 Stufen (Als Mensch bestätigt, Bekannt, Freund, Enger Vertrauter), Reichweite und Visitenkarten-Teilen.',
         auth: true,
         appState: { view: 'address_book' }
@@ -235,7 +235,7 @@ export const TOUR_STEPS = [
         id: '3.2',
         chapter: 3,
         title: 'Kontakt hinzufügen (Einstieg)',
-        file: 'src/components/AddContactModal.tsx',
+        file: 'src/components/contacts/AddContactModal.tsx',
         description: 'Zentrales Einstiegsmodal mit 4 Wegen: QR scannen, Zwischenablage, Datei (.hmcard) und Benutzer-ID.',
         auth: true,
         appState: { view: 'address_book', initialOpenAddModal: true }
@@ -324,7 +324,7 @@ export const TOUR_STEPS = [
         id: '5.1',
         chapter: 5,
         title: 'Konflikt-Übersicht',
-        file: 'src/components/ConflictListView.tsx',
+        file: 'src/components/conflicts/ConflictListView.tsx',
         description: 'Erkannte Double-Spend Versuche und Shared-Signature Trap (SST V4) Meldungen.',
         auth: true,
         appState: { view: 'conflict_list' }
@@ -333,7 +333,7 @@ export const TOUR_STEPS = [
         id: '5.2',
         chapter: 5,
         title: 'Konflikt-Details',
-        file: 'src/components/ConflictDetailsView.tsx',
+        file: 'src/components/conflicts/ConflictDetailsView.tsx',
         description: 'Kryptographischer Beweis des Double-Spend Betrugs mit Offender-Enttarnung.',
         auth: true,
         appState: { view: 'conflict_details', proofId: MOCK_PROOF_ID }
@@ -342,7 +342,7 @@ export const TOUR_STEPS = [
         id: '5.3',
         chapter: 5,
         title: 'Fork-Lock Sicherheits-Sperre',
-        file: 'src/components/ForkLockOverlay.tsx',
+        file: 'src/components/auth/ForkLockOverlay.tsx',
         description: 'Sofortige Profil-Sperre bei gleichzeitiger Fork-/Klon-Nutzung auf mehreren Geräten.',
         auth: true,
         appState: { view: 'logged_in' },
@@ -352,7 +352,7 @@ export const TOUR_STEPS = [
         id: '5.4',
         chapter: 5,
         title: 'Hilfe-Center',
-        file: 'src/components/HelpCenterView.tsx',
+        file: 'src/components/support/HelpCenterView.tsx',
         description: 'Zentrales Hilfe-Center mit thematischen Erklärungen, Suchfunktion, Kategorien und Verwandten Themen.',
         auth: false,
         appState: { view: 'help_center' }
@@ -361,7 +361,7 @@ export const TOUR_STEPS = [
         id: '5.5',
         chapter: 5,
         title: 'Support & Spenden',
-        file: 'src/components/SupportView.tsx',
+        file: 'src/components/support/SupportView.tsx',
         description: 'Hilfskanäle, Projektbeitrag, Feedback und Spendenmöglichkeiten für die Entwickler.',
         auth: true,
         appState: { view: 'support' }
@@ -370,7 +370,7 @@ export const TOUR_STEPS = [
         id: '5.6',
         chapter: 5,
         title: 'Bug-Report & Diagnose',
-        file: 'src/components/BugReportView.tsx',
+        file: 'src/components/support/BugReportView.tsx',
         description: 'Systemdiagnose, anonymisierte Fehler-Logs und GitHub-Issue Vorbereitung.',
         auth: true,
         appState: { view: 'bug_report' }

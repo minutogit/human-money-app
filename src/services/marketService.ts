@@ -21,6 +21,7 @@ import {
     FrontendSyncOverviewStatus,
     FrontendAppNoticesResponse,
 } from "../types";
+import { APP_EVENTS, emitAppEvent } from "../utils/appEvents";
 import { notifyAppNoticesUpdated, notifyMyProfileUpdated } from "../utils/syncEvents";
 
 export const marketService = {
@@ -37,6 +38,7 @@ export const marketService = {
             password: password || undefined,
         });
         notifyMyProfileUpdated(res);
+        emitAppEvent(APP_EVENTS.MARKET_CARD_UPDATED);
         return res;
     },
 
@@ -51,29 +53,36 @@ export const marketService = {
             password: password || undefined,
         });
         notifyMyProfileUpdated(res);
+        emitAppEvent(APP_EVENTS.MARKET_CARD_UPDATED);
         return res;
     },
 
     upsertAd: async (ad: FrontendAdInput, password?: string): Promise<FrontendMyMarketProfile> => {
-        return await invoke<FrontendMyMarketProfile>("upsert_ad", {
+        const res = await invoke<FrontendMyMarketProfile>("upsert_ad", {
             ad,
             password: password || undefined,
         });
+        emitAppEvent(APP_EVENTS.MARKET_CARD_UPDATED);
+        return res;
     },
 
     renewAd: async (id: string, durationDays: number, password?: string): Promise<FrontendMyMarketProfile> => {
-        return await invoke<FrontendMyMarketProfile>("renew_ad", {
+        const res = await invoke<FrontendMyMarketProfile>("renew_ad", {
             id,
             durationDays,
             password: password || undefined,
         });
+        emitAppEvent(APP_EVENTS.MARKET_CARD_UPDATED);
+        return res;
     },
 
     deleteAd: async (id: string, password?: string): Promise<FrontendMyMarketProfile> => {
-        return await invoke<FrontendMyMarketProfile>("delete_ad", {
+        const res = await invoke<FrontendMyMarketProfile>("delete_ad", {
             id,
             password: password || undefined,
         });
+        emitAppEvent(APP_EVENTS.MARKET_CARD_UPDATED);
+        return res;
     },
 
     getMarketView: async (password?: string): Promise<FrontendMarketSnapshot> => {
@@ -85,11 +94,17 @@ export const marketService = {
     },
 
     importContactCard: async (payload: string, password?: string): Promise<FrontendImportCardResult> => {
-        return await invoke<FrontendImportCardResult>("import_contact_card", { payload, password: password || undefined });
+        const res = await invoke<FrontendImportCardResult>("import_contact_card", { payload, password: password || undefined });
+        if (res?.status === 'accepted') {
+            emitAppEvent(APP_EVENTS.MARKET_CARD_UPDATED);
+            emitAppEvent(APP_EVENTS.CONTACTS_UPDATED);
+        }
+        return res;
     },
 
     deleteForeignContactCard: async (did: string, password?: string): Promise<void> => {
-        return await invoke<void>("delete_foreign_contact_card", { did, password: password || undefined });
+        await invoke<void>("delete_foreign_contact_card", { did, password: password || undefined });
+        emitAppEvent(APP_EVENTS.MARKET_CARD_UPDATED);
     },
 
     getAdImage: async (ownerDid: string, imageToken: string, password?: string): Promise<string | null> => {
@@ -259,6 +274,20 @@ export const marketService = {
         if (password) payload.password = password;
         const res = await invoke<FrontendMarketSyncResult>("sync_market_channels", payload);
         notifyAppNoticesUpdated();
+        if (res) {
+            if (res.importedCards > 0 || (res.newAds ?? 0) > 0) {
+                emitAppEvent(APP_EVENTS.MARKET_CARD_UPDATED);
+            }
+            if (res.importedCards > 0) {
+                emitAppEvent(APP_EVENTS.CONTACTS_UPDATED);
+            }
+            if (res.importedWotLists > 0) {
+                emitAppEvent(APP_EVENTS.WOT_UPDATED);
+            }
+            if (res.uploadedTo > 0 || res.polledSyncs > 0 || res.importedCards > 0 || res.importedWotLists > 0) {
+                emitAppEvent(APP_EVENTS.SYNC_COMPLETED, { source: 'market' });
+            }
+        }
         return res;
     },
 
@@ -300,15 +329,3 @@ export const marketService = {
         return await invoke<number>("sync_channel_members", password ? { password } : {});
     },
 };
-
-export { channelMembersSyncManager } from './channelMembersSyncManager';
-import { channelMembersSyncManager } from './channelMembersSyncManager';
-
-/**
- * Triggers a debounced call to sync_channel_members with retry and quota handling.
- * Rapid consecutive edits to contacts/trust levels coalesce into a single upload.
- * Defaults to 1500ms when called via legacy signature, or custom delayMs (e.g. 250ms for snappy single edits).
- */
-export function triggerDebouncedChannelMembersSync(delayMs: number = 1500): void {
-    channelMembersSyncManager.trigger({ delayMs, resetQuota: true });
-}

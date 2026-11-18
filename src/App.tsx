@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import "./App.css";
-import { ForkLockOverlay } from './components/ForkLockOverlay';
+import { ForkLockOverlay } from './components/auth/ForkLockOverlay';
 import { Button } from './components/ui/Button';
 import { AlertBanner } from './components/ui/AlertBanner';
 import { logger } from "./utils/log";
@@ -12,16 +12,17 @@ import { UiModeProvider } from './context/UiModeContext';
 import { NavigationProvider, useNavigation } from './context/NavigationContext';
 
 // Components
-import { Sidebar } from './components/Sidebar';
-import { Header } from './components/Header';
-import { AppRouter } from "./components/AppRouter";
-import { GlobalFileDropZone } from "./components/GlobalFileDropZone";
-import { GuardianReleaseModal } from "./components/GuardianReleaseModal";
+import { Sidebar } from './components/shell/Sidebar';
+import { Header } from './components/shell/Header';
+import { AppRouter } from "./components/shell/AppRouter";
+import { GlobalFileDropZone } from "./components/shell/GlobalFileDropZone";
+import { GuardianReleaseModal } from "./components/auth/GuardianReleaseModal";
 import { GlobalProfileEditorModal } from "./components/profile/GlobalProfileEditorModal";
-import { EventToastStack } from "./components/EventToastStack";
+import { EventToastStack } from "./components/shell/EventToastStack";
 import { parseCardUri } from "./utils/humocoUri";
 import { marketService } from "./services/marketService";
 import { recoveryService } from "./services/recoveryService";
+import { isPublicView } from "./types";
 import type { HelpTopicId } from "./help/helpTopics";
 
 function AppContent() {
@@ -162,8 +163,7 @@ function AppContent() {
     }, [isForkLocked, isRecoveryRequired]);
 
     useEffect(() => {
-        const PUBLIC_VIEWS = ['loading', 'needs_profile', 'needs_login', 'restore_backup', 'needs_recovery', 'help_center'];
-        if (!isLoggedIn && !PUBLIC_VIEWS.includes(appState.view)) {
+        if (!isLoggedIn && !isPublicView(appState.view)) {
             logger.warn(`Session is inactive but view is "${appState.view}". Redirecting to "needs_login".`);
             navigate({ view: 'needs_login' });
         }

@@ -70,24 +70,6 @@ pub struct FrontendAggregatedBalance {
     pub net_balance: String,
 }
 
-impl From<human_money_core::wallet::types::AggregatedBalance> for FrontendAggregatedBalance {
-    fn from(b: human_money_core::wallet::types::AggregatedBalance) -> Self {
-        Self {
-            standard_name: b.standard_name,
-            standard_uuid: b.standard_uuid,
-            unit: b.unit,
-            total_amount: b.total_amount.clone(),
-            display_currency: b.display_currency,
-            display_standard_name: b.display_standard_name,
-            is_test_voucher: b.is_test_voucher,
-            received_amount: b.total_amount.clone(),
-            own_available_amount: "0".to_string(),
-            own_circulating_amount: "0".to_string(),
-            net_balance: b.total_amount,
-        }
-    }
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct FrontendTransferSummary {
@@ -184,23 +166,6 @@ impl From<human_money_core::models::storage_integrity::IntegrityReport> for Inte
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
-pub struct FrontendTransactionRecord {
-    pub id: String,
-    pub direction: String, // "sent" or "received"
-    pub recipient_id: String,
-    pub sender_id: String,
-    pub timestamp: String, // ISO 8601
-    pub summable_amounts: std::collections::HashMap<String, String>,
-    pub countable_items: std::collections::HashMap<String, u32>,
-    pub involved_vouchers: Vec<String>, // local_instance_ids
-    pub involved_sources_details: Option<Vec<FrontendInvolvedVoucherInfo>>,
-    pub bundle_data: Vec<u8>,
-    pub bundle_id: String,
-    pub notes: Option<String>,
-    pub sender_profile_name: Option<String>,
-}
-
-#[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct TransactionRecord {
     pub id: String,
     pub direction: String, // "sent" or "received"
@@ -212,63 +177,12 @@ pub struct TransactionRecord {
     pub countable_items: std::collections::HashMap<String, u32>,
 
     pub involved_vouchers: Vec<String>, // local_instance_ids
-    pub involved_sources_details: Option<Vec<human_money_core::wallet::types::InvolvedVoucherInfo>>,
+    pub involved_sources_details: Option<Vec<FrontendInvolvedVoucherInfo>>,
 
     pub bundle_data: Vec<u8>,
     pub bundle_id: String,
     pub notes: Option<String>,
     pub sender_profile_name: Option<String>,
-}
-
-impl From<TransactionRecord> for FrontendTransactionRecord {
-    fn from(r: TransactionRecord) -> Self {
-        (&r).into()
-    }
-}
-
-impl From<&TransactionRecord> for FrontendTransactionRecord {
-    fn from(r: &TransactionRecord) -> Self {
-        Self {
-            id: r.id.clone(),
-            direction: r.direction.clone(),
-            recipient_id: r.recipient_id.clone(),
-            sender_id: r.sender_id.clone(),
-            timestamp: r.timestamp.clone(),
-            summable_amounts: r.summable_amounts.clone(),
-            countable_items: r.countable_items.clone(),
-            involved_vouchers: r.involved_vouchers.clone(),
-            involved_sources_details: r
-                .involved_sources_details
-                .as_ref()
-                .map(|v| v.iter().map(|i| i.clone().into()).collect()),
-            bundle_data: r.bundle_data.clone(),
-            bundle_id: r.bundle_id.clone(),
-            notes: r.notes.clone(),
-            sender_profile_name: r.sender_profile_name.clone(),
-        }
-    }
-}
-
-impl From<FrontendTransactionRecord> for TransactionRecord {
-    fn from(r: FrontendTransactionRecord) -> Self {
-        Self {
-            id: r.id,
-            direction: r.direction,
-            recipient_id: r.recipient_id,
-            sender_id: r.sender_id,
-            timestamp: r.timestamp,
-            summable_amounts: r.summable_amounts,
-            countable_items: r.countable_items,
-            involved_vouchers: r.involved_vouchers,
-            involved_sources_details: r
-                .involved_sources_details
-                .map(|v| v.into_iter().map(|i| i.into()).collect()),
-            bundle_data: r.bundle_data,
-            bundle_id: r.bundle_id,
-            notes: r.notes,
-            sender_profile_name: r.sender_profile_name,
-        }
-    }
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -310,39 +224,6 @@ pub struct CreateBundleResult {
     pub bundle_id: String,
     pub involved_sources_details: Vec<crate::models::FrontendInvolvedVoucherInfo>,
     pub l2_dispatch: Vec<crate::gateway_resolver::IntentDispatchObservation>,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct SealUploadData {
-    pub seal_bytes: Vec<u8>,
-    pub seal_hash: String,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct FrontendRollbackReconciliationDto {
-    pub quarantined_voucher_ids: Vec<String>,
-    pub archived_voucher_ids: Vec<String>,
-    pub retained_voucher_ids: Vec<String>,
-    pub new_tx_nonce: u64,
-    pub consolidated_state_hash: String,
-    pub message: String,
-}
-
-impl From<human_money_core::models::seal::RollbackReconciliationReport>
-    for FrontendRollbackReconciliationDto
-{
-    fn from(r: human_money_core::models::seal::RollbackReconciliationReport) -> Self {
-        Self {
-            quarantined_voucher_ids: r.quarantined_voucher_ids,
-            archived_voucher_ids: r.archived_voucher_ids,
-            retained_voucher_ids: r.retained_voucher_ids,
-            new_tx_nonce: r.new_tx_nonce,
-            consolidated_state_hash: r.consolidated_state_hash,
-            message: r.message,
-        }
-    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

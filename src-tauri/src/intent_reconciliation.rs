@@ -5,7 +5,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::Utc;
-use human_money_core::humoco_proto::crypto::DEFAULT_LOCK_POW_BASE_BITS;
 use human_money_core::models::l2_intent::L2SendIntent;
 use rand::RngCore;
 use tauri::Manager;
@@ -16,10 +15,6 @@ const RECONCILIATION_DELAY_MS: u64 = 30_000;
 const TERMINAL_RETENTION_MS: u64 = 60_000;
 const RECONCILIATION_INTERVAL_SECS: u64 = 15;
 const INTENT_DISPATCH_TIMEOUT: Duration = Duration::from_secs(4);
-
-fn wallet_unavailable() -> FrontendError {
-    FrontendError::from("Wallet service unavailable".to_string())
-}
 
 fn now_ms() -> Result<u64, FrontendError> {
     u64::try_from(Utc::now().timestamp_millis())
@@ -36,17 +31,6 @@ fn random_non_zero_nonce() -> [u8; 32] {
     }
 }
 
-fn determine_intent_pow_base_bits(settings: &AppSettings, intent: &L2SendIntent) -> u32 {
-    let mut bits = DEFAULT_LOCK_POW_BASE_BITS;
-    for srv in &intent.manifest.servers {
-        let norm = crate::checkout::normalize_sync_write_url(&srv.write_url);
-        if let Some(probe) = settings.l2_probe_cache.get(&norm) {
-            bits = bits.max(probe.pow_base_bits);
-        }
-    }
-    bits
-}
-
 async fn reconcile_due_intent(
     state: &AppState,
     settings: &AppSettings,
@@ -58,7 +42,7 @@ async fn reconcile_due_intent(
     let nonce = random_non_zero_nonce();
 
     let requests = {
-        let service = state.service.lock().map_err(|_| wallet_unavailable())?;
+        let service = state.lock_service()?;
         let current_owner = service
             .with_wallet(|wallet| wallet.get_user_id().to_string())
             .map_err(FrontendError::from)?;
@@ -97,7 +81,7 @@ async fn reconcile_due_intent(
     }
     if let Some(newer_manifest) = best_upgraded {
         let upgraded_reqs = {
-            let mut service = state.service.lock().map_err(|_| wallet_unavailable())?;
+            let mut service = state.lock_service()?;
             if service
                 .update_l2_anchor_manifest(newer_manifest, None)
                 .is_ok()
@@ -135,8 +119,11 @@ async fn reconcile_due_intent(
         return Ok(());
     }
 
-    let pow_base_bits = determine_intent_pow_base_bits(settings, intent);
-    let mut service = state.service.lock().map_err(|_| wallet_unavailable())?;
+    let pow_base_bits = crate::services::common::max_pow_base_bits_for_servers(
+        settings,
+        intent.manifest.servers.iter().map(|s| s.write_url.as_str()),
+    );
+    let mut service = state.lock_service()?;
     let current_owner = service
         .with_wallet(|wallet| wallet.get_user_id().to_string())
         .map_err(FrontendError::from)?;
@@ -190,7 +177,7 @@ pub async fn reconcile_due_intents(
     let now = now_ms()?;
 
     let (owner, intents) = {
-        let mut service = state.service.lock().map_err(|_| wallet_unavailable())?;
+        let mut service = state.lock_service()?;
         let owner = match service.with_wallet(|wallet| wallet.get_user_id().to_string()) {
             Ok(owner) => owner,
             Err(_) => return Ok(0),
@@ -215,7 +202,7 @@ pub async fn reconcile_due_intents(
         let local_id = intent.local_instance_id.clone();
 
         if now >= intent.root_valid_until_ms {
-            let mut service = state.service.lock().map_err(|_| wallet_unavailable())?;
+            let mut service = state.lock_service()?;
             if let Err(error) = service.expire_intent_if_overdue(&local_id, now, None) {
                 log::debug!("Failed to expire L2 send intent {}: {}", local_id, error);
             }
@@ -284,6 +271,7 @@ mod tests {
     use human_money_core::{
         app_service::AppService,
         humoco_proto::{
+            crypto::DEFAULT_LOCK_POW_BASE_BITS,
             encode_quarter,
             manifest::{AnchorAuthority, AnchorManifest, GenesisTicket, NominatedBy, ServerEntry},
         },

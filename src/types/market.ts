@@ -41,20 +41,9 @@ export interface Ad {
     imageToken?: string | null;
 }
 
-export interface FrontendMyAd {
-    id: string;
-    kind: AdKind;
-    title: string;
-    text?: string | null;
-    pricing?: string | null;
-    publishedAt: number;
-    renewedAt?: number | null;
-    expiresAt: number;
-    allowInquiries: boolean;
-    isRemote?: boolean;
+export interface FrontendMyAd extends Ad {
     status: 'active' | 'expired' | string;
     daysLeft: number;
-    imageToken?: string | null;
 }
 
 export interface FrontendMyMarketProfile {

@@ -1,12 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
-import { triggerAutoBackup } from "../utils/autoBackup";
-import { scheduleContactOnboardingMarketSync } from "../utils/marketSync";
-import { channelMembersSyncManager } from "./channelMembersSyncManager";
+import { afterWalletMutation } from "../sync/autoBackup";
 import { Contact } from "../types";
-
-export function triggerSyncMembersUpdate(delayMs: number = 250, password?: string): void {
-    channelMembersSyncManager.trigger({ delayMs, resetQuota: true, password });
-}
 
 export const contactService = {
     getContacts: async () => {
@@ -15,18 +9,20 @@ export const contactService = {
 
     saveContact: async (contact: Contact, password?: string) => {
         const result = await invoke<void>("save_contact", { contact, password });
-        triggerAutoBackup();
-        triggerSyncMembersUpdate(250, password);
-        if ((contact.trustLevel ?? 0) >= 1) {
-            scheduleContactOnboardingMarketSync(3_000, password);
-        }
+        afterWalletMutation(password, {
+            syncMembers: true,
+            scheduleMarket: (contact.trustLevel ?? 0) >= 1,
+            contactsUpdated: true,
+        });
         return result;
     },
 
     deleteContact: async (did: string, password?: string) => {
         const result = await invoke<void>("delete_contact", { did, password });
-        triggerAutoBackup();
-        triggerSyncMembersUpdate(250, password);
+        afterWalletMutation(password, {
+            syncMembers: true,
+            contactsUpdated: true,
+        });
         return result;
     }
 };

@@ -135,6 +135,14 @@ pub struct StoredBackupSyncState {
     pub mirrors_by_write_url: std::collections::BTreeMap<String, BackupMirrorState>,
 }
 
+/// Central application state shared across Tauri commands and background workers.
+///
+/// # Lock Ordering Invariant
+/// Whenever multiple mutexes on `AppState` must be acquired simultaneously,
+/// acquire them strictly in the following total order to prevent deadlocks:
+/// `service -> settings -> contacts -> wot -> history -> events -> media_negative_cache`.
+///
+/// Never hold any `MutexGuard` across an `.await` point.
 pub struct AppState {
     pub service: Mutex<AppService>,
     pub history: Mutex<Option<Vec<TransactionRecord>>>,
@@ -143,6 +151,55 @@ pub struct AppState {
     pub settings: Mutex<Option<AppSettings>>,
     pub wot: Mutex<Option<humoco_wot::TrustRegister>>,
     pub media_negative_cache: Mutex<std::collections::HashMap<String, u64>>,
+}
+
+/// Loads and deserializes an encrypted JSON block, returning `Ok(None)` only on `StorageError::NotFound`.
+///
+/// Propagates lock, session, authentication, I/O, and JSON parse errors without silent defaults.
+pub fn load_encrypted_json_opt<T: serde::de::DeserializeOwned>(
+    service: &mut AppService,
+    key: &str,
+    password: Option<&str>,
+) -> Result<Option<T>, AppFacadeError> {
+    match service.load_encrypted_data(key, password) {
+        Ok(bytes) => serde_json::from_slice(&bytes)
+            .map(Some)
+            .map_err(|e| AppFacadeError::Json(format!("Failed to parse {}: {}", key, e))),
+        Err(AppFacadeError::Storage(human_money_core::StorageError::NotFound)) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// Loads and deserializes an encrypted JSON block, falling back to `T::default()` only on `StorageError::NotFound`.
+///
+/// Propagates lock, session, authentication, I/O, and JSON parse errors so corrupt or locked
+/// storage is never silently treated as empty state.
+pub fn load_encrypted_json_or_default<T: serde::de::DeserializeOwned + Default>(
+    service: &mut AppService,
+    key: &str,
+    password: Option<&str>,
+) -> Result<T, AppFacadeError> {
+    Ok(load_encrypted_json_opt(service, key, password)?.unwrap_or_default())
+}
+
+/// Serializes `value` as JSON and saves it to the encrypted store under `key`.
+pub fn save_encrypted_json<T: serde::Serialize>(
+    service: &mut AppService,
+    key: &str,
+    value: &T,
+    password: Option<&str>,
+) -> Result<(), AppFacadeError> {
+    let bytes = serde_json::to_vec(value)
+        .map_err(|e| AppFacadeError::Json(format!("Failed to serialize {}: {}", key, e)))?;
+    service.save_encrypted_data(key, &bytes, password)
+}
+
+fn endpoints_overlap(a_read: &str, a_write: &str, b_read: &str, b_write: &str) -> bool {
+    let ar = crate::services::common::normalize_sync_url(a_read);
+    let aw = crate::services::common::normalize_sync_url(a_write);
+    let br = crate::services::common::normalize_sync_url(b_read);
+    let bw = crate::services::common::normalize_sync_url(b_write);
+    (!ar.is_empty() && (ar == br || ar == bw)) || (!aw.is_empty() && (aw == br || aw == bw))
 }
 
 impl AppState {
@@ -158,9 +215,15 @@ impl AppState {
         }
     }
 
-    // 1. Central helper method to access the locked service
+    // 1. Central helper methods to access the locked service
     pub fn service(&self) -> MutexGuard<'_, AppService> {
         self.service.lock().unwrap()
+    }
+
+    pub fn lock_service(&self) -> Result<MutexGuard<'_, AppService>, crate::models::FrontendError> {
+        self.service.lock().map_err(|_| {
+            crate::models::FrontendError::from("Wallet service unavailable".to_string())
+        })
     }
 
     // 2. Settings Helpers
@@ -177,20 +240,22 @@ impl AppState {
         service: &mut AppService,
         password: Option<&str>,
     ) -> Result<AppSettings, AppFacadeError> {
-        let settings: AppSettings = match service.load_encrypted_data(SETTINGS_KEY, password) {
-            Ok(data) => serde_json::from_slice(&data).unwrap_or_default(),
-            Err(_) => {
-                info!("No settings file found, creating default settings.");
-                let default_settings = AppSettings::default();
-                let bytes = serde_json::to_vec(&default_settings).unwrap();
-                service
-                    .save_encrypted_data(SETTINGS_KEY, &bytes, password)
-                    .map_err(|e| {
-                        AppFacadeError::Generic(format!("Failed to save default settings: {}", e))
-                    })?;
-                default_settings
-            }
-        };
+        let settings: AppSettings =
+            match load_encrypted_json_opt::<AppSettings>(service, SETTINGS_KEY, password)? {
+                Some(loaded) => loaded,
+                None => {
+                    info!("No settings file found, creating default settings.");
+                    let default_settings = AppSettings::default();
+                    save_encrypted_json(service, SETTINGS_KEY, &default_settings, password)
+                        .map_err(|e| {
+                            AppFacadeError::Generic(format!(
+                                "Failed to save default settings: {}",
+                                e
+                            ))
+                        })?;
+                    default_settings
+                }
+            };
 
         *self.settings.lock().unwrap() = Some(settings.clone());
         Ok(settings)
@@ -207,19 +272,16 @@ impl AppState {
             guard.as_ref().map(|s| s.share_min_level)
         }
         .or_else(|| {
-            service
-                .load_encrypted_data(SETTINGS_KEY, password)
+            load_encrypted_json_opt::<AppSettings>(service, SETTINGS_KEY, password)
                 .ok()
-                .and_then(|bytes| serde_json::from_slice::<AppSettings>(&bytes).ok())
+                .flatten()
                 .map(|s| s.share_min_level)
         });
         let new_min = settings.share_min_level;
-        let bytes =
-            serde_json::to_vec(&settings).map_err(|e| AppFacadeError::Json(e.to_string()))?;
-        service.save_encrypted_data(SETTINGS_KEY, &bytes, password)?;
+        save_encrypted_json(service, SETTINGS_KEY, &settings, password)?;
         *self.settings.lock().unwrap() = Some(settings);
         if prev_min.is_some_and(|prev| new_min > prev) {
-            crate::commands::market::bump_own_card_version_for_eviction(service, password);
+            crate::services::market_service::bump_own_card_version_for_eviction(service, password);
         }
         Ok(())
     }
@@ -252,53 +314,26 @@ impl AppState {
         password: Option<&str>,
     ) -> Result<Vec<FrontendContact>, AppFacadeError> {
         info!("Fetching all contacts from address book from disk...");
-        match service.load_encrypted_data(CONTACTS_DATA_NAME, password) {
-            Ok(data) => {
-                let address_book: FrontendAddressBook =
-                    serde_json::from_slice(&data).map_err(|e| {
-                        error!("Failed to parse address book: {}", e);
-                        AppFacadeError::Json(format!("Failed to parse address book: {}", e))
-                    })?;
+        let address_book: FrontendAddressBook =
+            load_encrypted_json_or_default(service, CONTACTS_DATA_NAME, password).map_err(|e| {
+                error!("Failed to load address book: {:?}", e);
+                e
+            })?;
 
-                *self.contacts.lock().unwrap() = Some(address_book.clone());
+        *self.contacts.lock().unwrap() = Some(address_book.clone());
 
-                let wot_guard = self.wot.lock().unwrap();
-                let mut contacts: Vec<FrontendContact> =
-                    address_book.contacts.into_values().collect();
-                for c in contacts.iter_mut() {
-                    enrich_contact_with_wot(c, wot_guard.as_ref());
-                    c.syncs.truncate(2);
-                }
-                contacts.sort_by(|a, b| {
-                    let name_a = a.profile.first_name.as_deref().unwrap_or("");
-                    let name_b = b.profile.first_name.as_deref().unwrap_or("");
-                    name_a.to_lowercase().cmp(&name_b.to_lowercase())
-                });
-                Ok(contacts)
-            }
-            Err(e) => {
-                if matches!(
-                    &e,
-                    AppFacadeError::Storage(human_money_core::StorageError::NotFound)
-                ) {
-                    info!("No address book found, returning empty list.");
-                    let default_book = FrontendAddressBook::default();
-                    *self.contacts.lock().unwrap() = Some(default_book);
-                    Ok(vec![])
-                } else if matches!(
-                    &e,
-                    AppFacadeError::WalletLocked
-                        | AppFacadeError::SessionExpired(_)
-                        | AppFacadeError::SessionNotActive(_)
-                ) {
-                    error!("Error loading address book (locked/session issue): {:?}", e);
-                    Err(e)
-                } else {
-                    error!("Error loading address book: {:?}", e);
-                    Ok(vec![])
-                }
-            }
+        let wot_guard = self.wot.lock().unwrap();
+        let mut contacts: Vec<FrontendContact> = address_book.contacts.into_values().collect();
+        for c in contacts.iter_mut() {
+            enrich_contact_with_wot(c, wot_guard.as_ref());
+            c.syncs.truncate(2);
         }
+        contacts.sort_by(|a, b| {
+            let name_a = a.profile.first_name.as_deref().unwrap_or("");
+            let name_b = b.profile.first_name.as_deref().unwrap_or("");
+            name_a.to_lowercase().cmp(&name_b.to_lowercase())
+        });
+        Ok(contacts)
     }
 
     pub fn save_contact(
@@ -308,20 +343,8 @@ impl AppState {
         password: Option<&str>,
     ) -> Result<(), AppFacadeError> {
         contact.did = contact.did.trim().to_string();
-        let mut address_book = match service.load_encrypted_data(CONTACTS_DATA_NAME, password) {
-            Ok(data) => serde_json::from_slice::<FrontendAddressBook>(&data).unwrap_or_default(),
-            Err(e) => {
-                if matches!(
-                    &e,
-                    AppFacadeError::WalletLocked
-                        | AppFacadeError::SessionExpired(_)
-                        | AppFacadeError::SessionNotActive(_)
-                ) {
-                    return Err(e);
-                }
-                FrontendAddressBook::default()
-            }
-        };
+        let mut address_book: FrontendAddressBook =
+            load_encrypted_json_or_default(service, CONTACTS_DATA_NAME, password)?;
 
         let can_did = canonicalize_did(&contact.did)
             .map_err(|e| AppFacadeError::Generic(format!("Invalid contact DID: {}", e)))?;
@@ -407,12 +430,13 @@ impl AppState {
             contact.syncs = merge_contact_syncs(&[], &contact.syncs);
             contact.syncs.truncate(2);
         } else {
-            let card_syncs: Vec<crate::models::FrontendSyncDescriptor> = service
-                .load_encrypted_data(MARKET_CARD_STORE_KEY, password)
-                .ok()
-                .and_then(|bytes| serde_json::from_slice::<humoco_market::CardStore>(&bytes).ok())
-                .and_then(|store| {
-                    store
+            let card_syncs: Vec<crate::models::FrontendSyncDescriptor> =
+                match load_encrypted_json_or_default::<humoco_market::CardStore>(
+                    service,
+                    MARKET_CARD_STORE_KEY,
+                    password,
+                ) {
+                    Ok(store) => store
                         .cards
                         .values()
                         .find(|sc| {
@@ -427,8 +451,12 @@ impl AppState {
                                 .map(Into::into)
                                 .collect()
                         })
-                })
-                .unwrap_or_default();
+                        .unwrap_or_default(),
+                    Err(e) => {
+                        log::warn!("Failed to load CardStore during save_contact: {}", e);
+                        Vec::new()
+                    }
+                };
 
             let mut all_syncs = Vec::new();
             all_syncs.extend(contact.syncs);
@@ -494,32 +522,29 @@ impl AppState {
             }
 
             if new_eff_level < prev_level {
-                crate::commands::market::bump_own_card_version_for_eviction(service, password);
+                crate::services::market_service::bump_own_card_version_for_eviction(
+                    service, password,
+                );
             }
         }
 
         let removed_endpoints: Vec<crate::models::FrontendSyncDescriptor> = old_contact_syncs
             .into_iter()
             .filter(|old_ep| {
-                let old_r = old_ep.read_url.trim().trim_end_matches('/').to_lowercase();
-                let old_w = old_ep.write_url.trim().trim_end_matches('/').to_lowercase();
                 !contact.syncs.iter().any(|new_ep| {
-                    let new_r = new_ep.read_url.trim().trim_end_matches('/').to_lowercase();
-                    let new_w = new_ep.write_url.trim().trim_end_matches('/').to_lowercase();
-                    (!old_r.is_empty() && (new_r == old_r || new_w == old_r))
-                        || (!old_w.is_empty() && (new_r == old_w || new_w == old_w))
+                    endpoints_overlap(
+                        &old_ep.read_url,
+                        &old_ep.write_url,
+                        &new_ep.read_url,
+                        &new_ep.write_url,
+                    )
                 })
             })
             .collect();
 
         address_book.contacts.insert(contact.did.clone(), contact);
 
-        let data = serde_json::to_vec(&address_book).map_err(|e| {
-            AppFacadeError::Json(format!("Failed to serialize address book: {}", e))
-        })?;
-
-        service
-            .save_encrypted_data(CONTACTS_DATA_NAME, &data, password)
+        save_encrypted_json(service, CONTACTS_DATA_NAME, &address_book, password)
             .map_err(|e| AppFacadeError::Generic(format!("Failed to save address book: {}", e)))?;
 
         *self.contacts.lock().unwrap() = Some(address_book.clone());
@@ -539,20 +564,8 @@ impl AppState {
         password: Option<&str>,
     ) -> Result<(), AppFacadeError> {
         let did = did.trim();
-        let mut address_book = match service.load_encrypted_data(CONTACTS_DATA_NAME, password) {
-            Ok(data) => serde_json::from_slice::<FrontendAddressBook>(&data).unwrap_or_default(),
-            Err(e) => {
-                if matches!(
-                    &e,
-                    AppFacadeError::WalletLocked
-                        | AppFacadeError::SessionExpired(_)
-                        | AppFacadeError::SessionNotActive(_)
-                ) {
-                    return Err(e);
-                }
-                return Ok(());
-            }
-        };
+        let mut address_book: FrontendAddressBook =
+            load_encrypted_json_or_default(service, CONTACTS_DATA_NAME, password)?;
 
         let can_target = canonicalize_did(did).ok();
         let own_can_did = service
@@ -584,15 +597,9 @@ impl AppState {
         }
 
         if changed {
-            let data = serde_json::to_vec(&address_book).map_err(|e| {
-                AppFacadeError::Json(format!("Failed to serialize address book: {}", e))
-            })?;
-
-            service
-                .save_encrypted_data(CONTACTS_DATA_NAME, &data, password)
-                .map_err(|e| {
-                    AppFacadeError::Generic(format!("Failed to save address book: {}", e))
-                })?;
+            save_encrypted_json(service, CONTACTS_DATA_NAME, &address_book, password).map_err(
+                |e| AppFacadeError::Generic(format!("Failed to save address book: {}", e)),
+            )?;
 
             *self.contacts.lock().unwrap() = Some(address_book.clone());
             self.prune_orphaned_market_selected_syncs(
@@ -640,36 +647,15 @@ impl AppState {
         service: &mut AppService,
         password: Option<&str>,
     ) -> Result<Vec<TransactionRecord>, AppFacadeError> {
-        match service.load_encrypted_data(TRANSACTION_HISTORY_KEY, password) {
-            Ok(data) => {
-                let records: Result<Vec<TransactionRecord>, _> = serde_json::from_slice(&data);
-                match records {
-                    Ok(parsed_records) => {
-                        *self.history.lock().unwrap() = Some(parsed_records.clone());
-                        Ok(parsed_records)
-                    }
-                    Err(e) => {
-                        let msg = format!("Failed to parse transaction history: {}", e);
-                        error!("{}", msg);
-                        Err(AppFacadeError::Json(msg))
-                    }
-                }
-            }
-            Err(e) => {
-                if matches!(
-                    &e,
-                    AppFacadeError::WalletLocked
-                        | AppFacadeError::SessionExpired(_)
-                        | AppFacadeError::SessionNotActive(_)
-                ) {
-                    return Err(e);
-                }
-                info!("Keine Transaktionshistorie auf Festplatte gefunden. Erstelle neue.");
-                let empty = Vec::new();
-                *self.history.lock().unwrap() = Some(empty.clone());
-                Ok(empty)
-            }
-        }
+        let records: Vec<TransactionRecord> =
+            load_encrypted_json_or_default(service, TRANSACTION_HISTORY_KEY, password).map_err(
+                |e| {
+                    error!("Failed to load transaction history: {}", e);
+                    e
+                },
+            )?;
+        *self.history.lock().unwrap() = Some(records.clone());
+        Ok(records)
     }
 
     pub fn save_history(
@@ -678,9 +664,7 @@ impl AppState {
         history: Vec<TransactionRecord>,
         password: Option<&str>,
     ) -> Result<(), AppFacadeError> {
-        let history_bytes =
-            serde_json::to_vec(&history).map_err(|e| AppFacadeError::Json(e.to_string()))?;
-        service.save_encrypted_data(TRANSACTION_HISTORY_KEY, &history_bytes, password)?;
+        save_encrypted_json(service, TRANSACTION_HISTORY_KEY, &history, password)?;
         *self.history.lock().unwrap() = Some(history);
         Ok(())
     }
@@ -784,7 +768,9 @@ impl AppState {
         self.refresh_events_cache(service, Some(credential))?;
 
         // 5. Load the address book
-        let _ = self.load_contacts(service, Some(credential));
+        if let Err(e) = self.load_contacts(service, Some(credential)) {
+            log::warn!("Failed to pre-load contacts during session init: {}", e);
+        }
 
         // 6. Load the Web of Trust register
         self.load_wot_register(service, Some(credential))?;
@@ -808,8 +794,12 @@ impl AppState {
         reg.prune_unreachable_lists();
         reg.clear_drop_sent_log(None);
 
-        if let Ok(bytes) = service.load_encrypted_data(MARKET_CARD_STORE_KEY, password) {
-            if let Ok(mut store) = serde_json::from_slice::<humoco_market::CardStore>(&bytes) {
+        match load_encrypted_json_or_default::<humoco_market::CardStore>(
+            service,
+            MARKET_CARD_STORE_KEY,
+            password,
+        ) {
+            Ok(mut store) => {
                 let before = store.cards.len();
                 if let Some(ref can) = can_revoked {
                     if let Ok(pk) = human_money_core::crypto::get_pubkey_from_user_id(can) {
@@ -824,11 +814,14 @@ impl AppState {
                         .is_ok_and(|ev| ev.shortest_hops.is_some())
                 });
                 if store.cards.len() != before {
-                    if let Ok(new_bytes) = serde_json::to_vec(&store) {
-                        let _ =
-                            service.save_encrypted_data(MARKET_CARD_STORE_KEY, &new_bytes, password);
-                    }
+                    let _ = save_encrypted_json(service, MARKET_CARD_STORE_KEY, &store, password);
                 }
+            }
+            Err(e) => {
+                log::warn!(
+                    "Failed to load CardStore during trust withdrawal prune: {}",
+                    e
+                );
             }
         }
     }
@@ -840,7 +833,7 @@ impl AppState {
     ) -> Result<bool, AppFacadeError> {
         let now_secs = Utc::now().timestamp() as u64;
         service.with_wallet_and_identity(|_wallet, identity| {
-            let signer = CoreIdentitySigner::new(identity);
+            let signer = DidWotSigner::from_identity(identity);
             reg.ensure_own_list_signed(&signer, now_secs).map_err(|e| {
                 AppFacadeError::Generic(format!("Failed to sign WoT trust list: {}", e))
             })
@@ -856,42 +849,21 @@ impl AppState {
         let own_user_id = service.with_wallet(|w| w.get_user_id().to_string())?;
         let own_can_did = canonicalize_did(&own_user_id)
             .map_err(|e| AppFacadeError::Generic(format!("Invalid own wallet DID: {}", e)))?;
-        let mut reg = match service.load_encrypted_data(WOT_DATA_NAME, password) {
-            Ok(data) => {
-                serde_json::from_slice::<humoco_wot::TrustRegister>(&data).map_err(|e| {
-                    AppFacadeError::Json(format!("Failed to deserialize TrustRegister: {}", e))
-                })?
-            }
-            Err(e) => {
-                if matches!(
-                    &e,
-                    AppFacadeError::Storage(human_money_core::StorageError::NotFound)
-                ) {
-                    info!("No WoT register found, creating new one");
-                    humoco_wot::TrustRegister::new(&own_can_did, humoco_wot::WotPolicy::default())
-                        .map_err(|e| {
+        let mut reg = match load_encrypted_json_opt::<humoco_wot::TrustRegister>(
+            service,
+            WOT_DATA_NAME,
+            password,
+        )? {
+            Some(loaded) => loaded,
+            None => {
+                info!("No WoT register found, creating new one");
+                humoco_wot::TrustRegister::new(&own_can_did, humoco_wot::WotPolicy::default())
+                    .map_err(|e| {
                         AppFacadeError::Generic(format!(
                             "Failed to initialize TrustRegister: {}",
                             e
                         ))
                     })?
-                } else if matches!(
-                    &e,
-                    AppFacadeError::WalletLocked
-                        | AppFacadeError::SessionExpired(_)
-                        | AppFacadeError::SessionNotActive(_)
-                ) {
-                    return Err(e);
-                } else {
-                    info!("Error loading WoT register ({:?}), creating fallback.", e);
-                    humoco_wot::TrustRegister::new(&own_can_did, humoco_wot::WotPolicy::default())
-                        .map_err(|e| {
-                        AppFacadeError::Generic(format!(
-                            "Failed to initialize TrustRegister: {}",
-                            e
-                        ))
-                    })?
-                }
             }
         };
 
@@ -926,11 +898,7 @@ impl AppState {
         reg: &humoco_wot::TrustRegister,
         password: Option<&str>,
     ) -> Result<(), AppFacadeError> {
-        let bytes = serde_json::to_vec(reg).map_err(|e| {
-            AppFacadeError::Json(format!("Failed to serialize TrustRegister: {}", e))
-        })?;
-        service
-            .save_encrypted_data(WOT_DATA_NAME, &bytes, password)
+        save_encrypted_json(service, WOT_DATA_NAME, reg, password)
             .map_err(|e| AppFacadeError::Generic(format!("Failed to save TrustRegister: {}", e)))?;
         *self.wot.lock().unwrap() = Some(reg.clone());
         Ok(())
@@ -985,31 +953,45 @@ impl AppState {
             .filter_map(|gid| canonicalize_did(gid).ok())
             .collect();
 
-        let wot_guard = self.wot.lock().unwrap();
-        let reg = match wot_guard.as_ref() {
-            Some(r) => r,
-            None => return FrontendVoucherTrustDto::default(),
-        };
+        let (eval, provider_filter_names) = {
+            let wot_guard = self.wot.lock().unwrap();
+            let reg = match wot_guard.as_ref() {
+                Some(r) => r,
+                None => return FrontendVoucherTrustDto::default(),
+            };
 
-        let creator_canonical = creator_can.as_deref().unwrap_or(creator_id);
-        let valid_guarantor_canonicals: Vec<String> = valid_guarantors
-            .iter()
-            .map(|gid| canonicalize_did(gid).unwrap_or_else(|_| gid.to_string()))
-            .collect();
-        let valid_guarantor_refs: Vec<&str> = valid_guarantor_canonicals
-            .iter()
-            .map(|s| s.as_str())
-            .collect();
+            let creator_canonical = creator_can.as_deref().unwrap_or(creator_id);
+            let valid_guarantor_canonicals: Vec<String> = valid_guarantors
+                .iter()
+                .map(|gid| canonicalize_did(gid).unwrap_or_else(|_| gid.to_string()))
+                .collect();
+            let valid_guarantor_refs: Vec<&str> = valid_guarantor_canonicals
+                .iter()
+                .map(|s| s.as_str())
+                .collect();
 
-        let now_secs = Utc::now().timestamp() as u64;
-        let eval = match reg.evaluate_voucher(
-            creator_canonical,
-            &valid_guarantor_refs,
-            false,
-            Some(now_secs),
-        ) {
-            Ok(e) => e,
-            Err(_) => return FrontendVoucherTrustDto::default(),
+            let now_secs = Utc::now().timestamp() as u64;
+            let eval = match reg.evaluate_voucher(
+                creator_canonical,
+                &valid_guarantor_refs,
+                false,
+                Some(now_secs),
+            ) {
+                Ok(e) => e,
+                Err(_) => return FrontendVoucherTrustDto::default(),
+            };
+
+            let mut provider_filter_names = std::collections::HashMap::new();
+            if let Some(best_path) = eval.paths.first() {
+                for hop in &best_path.hops {
+                    if let Ok(can) = canonicalize_did(hop) {
+                        if let Some(pf) = reg.provider_filters.get(&can) {
+                            provider_filter_names.insert(can, pf.payload.name.clone());
+                        }
+                    }
+                }
+            }
+            (eval, provider_filter_names)
         };
 
         let score = eval.score;
@@ -1029,8 +1011,8 @@ impl AppState {
             lookup_contact_name(contacts_ref, did).or_else(|| {
                 canonicalize_did(did)
                     .ok()
-                    .and_then(|can| reg.provider_filters.get(&can))
-                    .map(|p| p.payload.name.clone())
+                    .and_then(|can| provider_filter_names.get(&can))
+                    .cloned()
             })
         };
 
@@ -1171,12 +1153,17 @@ impl AppState {
         let max_stored_cards = settings.max_stored_cards.clamp(100, 10_000);
         let now = Utc::now().timestamp().max(0) as u64;
 
-        let mut store = match service.load_encrypted_data(MARKET_CARD_STORE_KEY, password) {
-            Ok(data) => {
-                serde_json::from_slice::<humoco_market::CardStore>(&data).unwrap_or_default()
-            }
-            Err(_) => humoco_market::CardStore::default(),
-        };
+        let mut store: humoco_market::CardStore =
+            match load_encrypted_json_or_default(service, MARKET_CARD_STORE_KEY, password) {
+                Ok(s) => s,
+                Err(e) => {
+                    log::warn!(
+                        "Failed to load CardStore for piggybacked contact card: {}",
+                        e
+                    );
+                    return;
+                }
+            };
 
         let outcome = service.with_wallet(|wallet| {
             let is_offender = |did: &str| -> bool {
@@ -1201,15 +1188,13 @@ impl AppState {
         match outcome {
             Ok(humoco_market::AcceptOutcome::Accepted { did, replaced }) => {
                 log::info!("Accepted piggybacked contact card (replaced={})", replaced);
-                if let Ok(bytes) = serde_json::to_vec(&store) {
-                    if let Err(e) =
-                        service.save_encrypted_data(MARKET_CARD_STORE_KEY, &bytes, password)
-                    {
-                        log::warn!(
-                            "Failed to save CardStore after accepting piggybacked card: {}",
-                            e
-                        );
-                    }
+                if let Err(e) =
+                    save_encrypted_json(service, MARKET_CARD_STORE_KEY, &store, password)
+                {
+                    log::warn!(
+                        "Failed to save CardStore after accepting piggybacked card: {}",
+                        e
+                    );
                 }
                 if let Some(stored) = store.cards.values().find(|sc| sc.card.payload.did == did) {
                     let card_syncs: Vec<crate::models::FrontendSyncDescriptor> = stored
@@ -1258,11 +1243,17 @@ impl AppState {
             Err(_) => return,
         };
 
-        let mut address_book = match service.load_encrypted_data(CONTACTS_DATA_NAME, password) {
-            Ok(data) => serde_json::from_slice::<crate::models::FrontendAddressBook>(&data)
-                .unwrap_or_default(),
-            Err(_) => return,
-        };
+        let mut address_book: FrontendAddressBook =
+            match load_encrypted_json_or_default(service, CONTACTS_DATA_NAME, password) {
+                Ok(ab) => ab,
+                Err(e) => {
+                    log::warn!(
+                        "Failed to load address book in update_contact_from_card: {}",
+                        e
+                    );
+                    return;
+                }
+            };
 
         let mut updated = false;
         for (k, contact) in address_book.contacts.iter_mut() {
@@ -1285,9 +1276,7 @@ impl AppState {
         }
 
         if updated {
-            if let Ok(bytes) = serde_json::to_vec(&address_book) {
-                let _ = service.save_encrypted_data(CONTACTS_DATA_NAME, &bytes, password);
-            }
+            let _ = save_encrypted_json(service, CONTACTS_DATA_NAME, &address_book, password);
             *self.contacts.lock().unwrap() = Some(address_book);
         }
     }
@@ -1303,29 +1292,32 @@ impl AppState {
             return false;
         }
 
-        let mut address_book = match service.load_encrypted_data(CONTACTS_DATA_NAME, password) {
-            Ok(data) => serde_json::from_slice::<crate::models::FrontendAddressBook>(&data)
-                .unwrap_or_default(),
-            Err(_) => return false,
-        };
+        let mut address_book: FrontendAddressBook =
+            match load_encrypted_json_or_default(service, CONTACTS_DATA_NAME, password) {
+                Ok(ab) => ab,
+                Err(e) => {
+                    log::warn!(
+                        "Failed to load address book in record_contact_sync_health_batch: {}",
+                        e
+                    );
+                    return false;
+                }
+            };
 
         let settings_res = self.load_settings(service, password);
         let settings_opt = settings_res.ok();
 
         let mut updated = false;
         for (url, success) in results {
-            let norm_target = url.trim().trim_end_matches('/').to_lowercase();
+            let norm_target = crate::services::common::normalize_sync_url(url);
             if norm_target.is_empty() {
                 continue;
             }
             for contact in address_book.contacts.values_mut() {
                 for sync_ep in &mut contact.syncs {
-                    let norm_read = sync_ep.read_url.trim().trim_end_matches('/').to_lowercase();
-                    let norm_write = sync_ep
-                        .write_url
-                        .trim()
-                        .trim_end_matches('/')
-                        .to_lowercase();
+                    let norm_read = crate::services::common::normalize_sync_url(&sync_ep.read_url);
+                    let norm_write =
+                        crate::services::common::normalize_sync_url(&sync_ep.write_url);
                     if norm_read == norm_target || norm_write == norm_target {
                         if sync_ep.status == "deprecating"
                             && sync_ep.sunset_at.is_some_and(|eff| now_secs >= eff)
@@ -1345,20 +1337,12 @@ impl AppState {
                                         .as_ref()
                                         .map(|s| {
                                             s.market_selected_syncs.iter().any(|sel| {
-                                                let sr = sel
-                                                    .read_url
-                                                    .trim()
-                                                    .trim_end_matches('/')
-                                                    .to_lowercase();
-                                                let sw = sel
-                                                    .write_url
-                                                    .trim()
-                                                    .trim_end_matches('/')
-                                                    .to_lowercase();
-                                                (!sr.is_empty()
-                                                    && (sr == norm_read || sr == norm_write))
-                                                    || (!sw.is_empty()
-                                                        && (sw == norm_read || sw == norm_write))
+                                                endpoints_overlap(
+                                                    &sel.read_url,
+                                                    &sel.write_url,
+                                                    &norm_read,
+                                                    &norm_write,
+                                                )
                                             })
                                         })
                                         .unwrap_or(false);
@@ -1388,22 +1372,20 @@ impl AppState {
         }
 
         if updated {
-            if let Ok(bytes) = serde_json::to_vec(&address_book) {
-                let _ = service.save_encrypted_data(CONTACTS_DATA_NAME, &bytes, password);
-            }
+            let _ = save_encrypted_json(service, CONTACTS_DATA_NAME, &address_book, password);
             *self.contacts.lock().unwrap() = Some(address_book);
         }
 
         if let Some(mut settings) = settings_opt {
             let mut settings_updated = false;
             for (url, success) in results {
-                let norm_target = url.trim().trim_end_matches('/').to_lowercase();
+                let norm_target = crate::services::common::normalize_sync_url(url);
                 if norm_target.is_empty() {
                     continue;
                 }
                 for sel in &mut settings.market_selected_syncs {
-                    let norm_read = sel.read_url.trim().trim_end_matches('/').to_lowercase();
-                    let norm_write = sel.write_url.trim().trim_end_matches('/').to_lowercase();
+                    let norm_read = crate::services::common::normalize_sync_url(&sel.read_url);
+                    let norm_write = crate::services::common::normalize_sync_url(&sel.write_url);
                     if norm_read == norm_target || norm_write == norm_target {
                         if sel.status == "deprecating"
                             && sel.sunset_at.is_some_and(|eff| now_secs >= eff)
@@ -1456,50 +1438,42 @@ impl AppState {
             return;
         }
 
-        let admin_opt: Option<StoredSyncAdmin> = service
-            .load_encrypted_data(MARKET_SYNC_ADMIN_KEY, password)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+        let admin_opt: Option<StoredSyncAdmin> = match load_encrypted_json_opt::<StoredSyncAdmin>(
+            service,
+            MARKET_SYNC_ADMIN_KEY,
+            password,
+        ) {
+            Ok(opt) => opt,
+            Err(e) => {
+                log::warn!(
+                    "Failed to load {} during prune_orphaned_market_selected_syncs: {}",
+                    MARKET_SYNC_ADMIN_KEY,
+                    e
+                );
+                return;
+            }
+        };
 
         let initial_count = settings.market_selected_syncs.len();
         settings.market_selected_syncs.retain(|sel| {
-            let sr = sel.read_url.trim().trim_end_matches('/').to_lowercase();
-            let sw = sel.write_url.trim().trim_end_matches('/').to_lowercase();
+            let sr = crate::services::common::normalize_sync_url(&sel.read_url);
+            let sw = crate::services::common::normalize_sync_url(&sel.write_url);
             if sr.is_empty() && sw.is_empty() {
                 return false;
             }
 
-            let was_removed = removed_endpoints.iter().any(|rem| {
-                let rr = rem.read_url.trim().trim_end_matches('/').to_lowercase();
-                let rw = rem.write_url.trim().trim_end_matches('/').to_lowercase();
-                (!rr.is_empty() && (rr == sr || rr == sw))
-                    || (!rw.is_empty() && (rw == sr || rw == sw))
-            });
+            let was_removed = removed_endpoints
+                .iter()
+                .any(|rem| endpoints_overlap(&rem.read_url, &rem.write_url, &sr, &sw));
 
             if !was_removed {
                 return true;
             }
 
             // 1. Matches StoredSyncAdmin?
-            let matches_admin = admin_opt
-                .as_ref()
-                .map(|a| {
-                    let ar = a
-                        .descriptor
-                        .read_url
-                        .trim()
-                        .trim_end_matches('/')
-                        .to_lowercase();
-                    let aw = a
-                        .descriptor
-                        .write_url
-                        .trim()
-                        .trim_end_matches('/')
-                        .to_lowercase();
-                    (!ar.is_empty() && (ar == sr || ar == sw))
-                        || (!aw.is_empty() && (aw == sr || aw == sw))
-                })
-                .unwrap_or(false);
+            let matches_admin = admin_opt.as_ref().is_some_and(|a| {
+                endpoints_overlap(&a.descriptor.read_url, &a.descriptor.write_url, &sr, &sw)
+            });
 
             if matches_admin {
                 return true;
@@ -1507,12 +1481,9 @@ impl AppState {
 
             // 2. Matches any remaining contact's syncs?
             let matches_contact = address_book.contacts.values().any(|c| {
-                c.syncs.iter().any(|ep| {
-                    let er = ep.read_url.trim().trim_end_matches('/').to_lowercase();
-                    let ew = ep.write_url.trim().trim_end_matches('/').to_lowercase();
-                    (!er.is_empty() && (er == sr || er == sw))
-                        || (!ew.is_empty() && (ew == sr || ew == sw))
-                })
+                c.syncs
+                    .iter()
+                    .any(|ep| endpoints_overlap(&ep.read_url, &ep.write_url, &sr, &sw))
             });
 
             if matches_contact {
@@ -1520,20 +1491,16 @@ impl AppState {
             }
 
             // 3. Matches any settings.public_syncs?
-            let matches_public = settings.public_syncs.iter().any(|ps| {
-                let pr = ps.read_url.trim().trim_end_matches('/').to_lowercase();
-                let pw = ps.write_url.trim().trim_end_matches('/').to_lowercase();
-                (!pr.is_empty() && (pr == sr || pr == sw))
-                    || (!pw.is_empty() && (pw == sr || pw == sw))
-            });
-
-            matches_public
+            settings
+                .public_syncs
+                .iter()
+                .any(|ps| endpoints_overlap(&ps.read_url, &ps.write_url, &sr, &sw))
         });
 
         if settings.market_selected_syncs.len() != initial_count {
             let updated_syncs = settings.market_selected_syncs.clone();
             let _ = self.save_settings(service, settings, password);
-            crate::commands::market::sync_own_card_drops_on_settings_change(
+            crate::services::market_service::sync_own_card_drops_on_settings_change(
                 service,
                 &updated_syncs,
                 password,
@@ -1568,35 +1535,34 @@ pub fn canonicalize_did(input: &str) -> Result<String, humoco_wot::WotError> {
     humoco_wot::canonicalize_did(did_part)
 }
 
-pub struct CoreIdentitySigner<'a> {
-    pub identity: &'a human_money_core::models::profile::UserIdentity,
-    pub canonical_did: String,
+pub struct DidWotSigner {
+    pub did: String,
+    pub signing_key: ed25519_dalek::SigningKey,
 }
 
-impl<'a> CoreIdentitySigner<'a> {
-    pub fn new(identity: &'a human_money_core::models::profile::UserIdentity) -> Self {
-        let canonical_did = canonicalize_did(&identity.user_id).unwrap_or_else(|_| {
+impl DidWotSigner {
+    pub fn from_identity(identity: &human_money_core::models::profile::UserIdentity) -> Self {
+        let did = canonicalize_did(&identity.user_id).unwrap_or_else(|_| {
             identity
                 .user_id
                 .split_once('@')
-                .map(|(_, did)| did.to_string())
+                .map(|(_, d)| d.to_string())
                 .unwrap_or_else(|| identity.user_id.clone())
         });
         Self {
-            identity,
-            canonical_did,
+            did,
+            signing_key: identity.signing_key.clone(),
         }
     }
 }
 
-impl<'a> humoco_wot::WotSigner for CoreIdentitySigner<'a> {
+impl humoco_wot::WotSigner for DidWotSigner {
     fn did(&self) -> &str {
-        &self.canonical_did
+        &self.did
     }
 
     fn sign(&self, message: &[u8]) -> [u8; 64] {
-        human_money_core::services::crypto::sign_ed25519(&self.identity.signing_key, message)
-            .to_bytes()
+        human_money_core::services::crypto::sign_ed25519(&self.signing_key, message).to_bytes()
     }
 }
 
@@ -1678,11 +1644,11 @@ fn truncate_did(did: &str) -> String {
 }
 
 pub fn sync_endpoint_key(d: &crate::models::FrontendSyncDescriptor) -> String {
-    let w = d.write_url.trim().trim_end_matches('/');
+    let w = crate::services::common::normalize_sync_url(&d.write_url);
     if !w.is_empty() {
-        w.to_string()
+        w
     } else {
-        d.read_url.trim().trim_end_matches('/').to_string()
+        crate::services::common::normalize_sync_url(&d.read_url)
     }
 }
 
@@ -1749,11 +1715,10 @@ impl AppState {
         service: &mut AppService,
         password: Option<&str>,
     ) -> crate::models::StoredAppNotices {
-        service
-            .load_encrypted_data(APP_NOTICES_KEY, password)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-            .unwrap_or_default()
+        load_encrypted_json_or_default(service, APP_NOTICES_KEY, password).unwrap_or_else(|e| {
+            log::warn!("Failed to load {}: {}", APP_NOTICES_KEY, e);
+            Default::default()
+        })
     }
 
     pub fn save_app_notices(
@@ -1762,11 +1727,7 @@ impl AppState {
         notices: &crate::models::StoredAppNotices,
         password: Option<&str>,
     ) -> Result<(), crate::models::FrontendError> {
-        let bytes = serde_json::to_vec(notices).map_err(|e| {
-            crate::models::FrontendError::from(format!("Serialize notices: {}", e))
-        })?;
-        service
-            .save_encrypted_data(APP_NOTICES_KEY, &bytes, password)
+        save_encrypted_json(service, APP_NOTICES_KEY, notices, password)
             .map_err(crate::models::FrontendError::from)
     }
 
@@ -1781,7 +1742,14 @@ impl AppState {
             return;
         }
         let mut service = self.service.lock().unwrap();
-        let mut store = self.load_app_notices(&mut service, password);
+        let mut store: crate::models::StoredAppNotices =
+            match load_encrypted_json_or_default(&mut service, APP_NOTICES_KEY, password) {
+                Ok(s) => s,
+                Err(e) => {
+                    log::warn!("Failed to load app notices before append: {}", e);
+                    return;
+                }
+            };
         if let Some(ts) = last_sync_at {
             store.last_sync_at = Some(store.last_sync_at.map_or(ts, |prev| prev.max(ts)));
         }
@@ -1804,15 +1772,15 @@ pub fn merge_contact_syncs(
 
     let merge_entry = |res: &mut Vec<crate::models::FrontendSyncDescriptor>,
                        d: &crate::models::FrontendSyncDescriptor| {
-        let w = d.write_url.trim().trim_end_matches('/');
-        let r = d.read_url.trim().trim_end_matches('/');
+        let w = crate::services::common::normalize_sync_url(&d.write_url);
+        let r = crate::services::common::normalize_sync_url(&d.read_url);
         if w.is_empty() && r.is_empty() {
             return;
         }
 
         if let Some(target) = res.iter_mut().find(|existing_entry| {
-            let ew = existing_entry.write_url.trim().trim_end_matches('/');
-            let er = existing_entry.read_url.trim().trim_end_matches('/');
+            let ew = crate::services::common::normalize_sync_url(&existing_entry.write_url);
+            let er = crate::services::common::normalize_sync_url(&existing_entry.read_url);
             (!w.is_empty() && !ew.is_empty() && w == ew)
                 || (!r.is_empty() && !er.is_empty() && r == er)
         }) {
@@ -1851,82 +1819,43 @@ pub fn merge_contact_syncs(
     result
 }
 
-pub fn apply_revocation_notice_to_descriptor(
-    desc: &mut crate::models::FrontendSyncDescriptor,
+pub use crate::models::SyncRevocationFields;
+
+pub fn apply_revocation_notice<T: SyncRevocationFields>(
+    ep: &mut T,
     notice: &crate::sync_client::SyncRevocationNotice,
     now_secs: u64,
 ) {
-    desc.status = if now_secs >= notice.effective_at {
+    *ep.status_mut() = if now_secs >= notice.effective_at {
         "revoked".to_string()
     } else {
         "deprecating".to_string()
     };
-    desc.sunset_at = Some(notice.effective_at);
-    desc.revocation_reason = notice.reason.clone();
-    desc.replacement = notice.replacement.clone().map(Into::into);
+    *ep.sunset_at_mut() = Some(notice.effective_at);
+    *ep.revocation_reason_mut() = notice.reason.clone();
+    *ep.replacement_mut() = notice.replacement.clone().map(Into::into);
 }
 
-pub fn apply_revocation_notice_to_public_sync(
-    ps: &mut crate::settings::StoredPublicSync,
-    notice: &crate::sync_client::SyncRevocationNotice,
-    now_secs: u64,
-) {
-    ps.status = if now_secs >= notice.effective_at {
-        "revoked".to_string()
-    } else {
-        "deprecating".to_string()
+pub fn clear_revocation<T: SyncRevocationFields>(ep: &mut T, fallback_status: &str) -> bool {
+    let is_rev_status = {
+        let s = ep.status_mut().as_str();
+        s == "deprecating" || s == "revoked"
     };
-    ps.sunset_at = Some(notice.effective_at);
-    ps.revocation_reason = notice.reason.clone();
-    ps.replacement = notice.replacement.clone().map(Into::into);
-}
-
-pub fn clear_revocation_on_descriptor(
-    desc: &mut crate::models::FrontendSyncDescriptor,
-    fallback_status: &str,
-) -> bool {
-    if desc.sunset_at.is_some()
-        || desc.revocation_reason.is_some()
-        || desc.replacement.is_some()
-        || desc.status == "deprecating"
-        || desc.status == "revoked"
+    if ep.sunset_at_mut().is_some()
+        || ep.revocation_reason_mut().is_some()
+        || ep.replacement_mut().is_some()
+        || is_rev_status
     {
-        if desc.status == "deprecating" || desc.status == "revoked" {
-            desc.status = fallback_status.to_string();
+        if is_rev_status {
+            *ep.status_mut() = fallback_status.to_string();
         }
-        desc.sunset_at = None;
-        desc.revocation_reason = None;
-        desc.replacement = None;
+        *ep.sunset_at_mut() = None;
+        *ep.revocation_reason_mut() = None;
+        *ep.replacement_mut() = None;
         true
     } else {
         false
     }
-}
-
-pub fn clear_revocation_on_public_sync(
-    ps: &mut crate::settings::StoredPublicSync,
-    fallback_status: &str,
-) -> bool {
-    if ps.sunset_at.is_some()
-        || ps.revocation_reason.is_some()
-        || ps.replacement.is_some()
-        || ps.status == "deprecating"
-        || ps.status == "revoked"
-    {
-        if ps.status == "deprecating" || ps.status == "revoked" {
-            ps.status = fallback_status.to_string();
-        }
-        ps.sunset_at = None;
-        ps.revocation_reason = None;
-        ps.replacement = None;
-        true
-    } else {
-        false
-    }
-}
-
-fn norm_sync_url(u: &str) -> String {
-    u.trim().trim_end_matches('/').to_lowercase()
 }
 
 pub fn apply_revocation_notice_to_address_book(
@@ -1935,7 +1864,7 @@ pub fn apply_revocation_notice_to_address_book(
     notice: &crate::sync_client::SyncRevocationNotice,
     now_secs: u64,
 ) -> bool {
-    let old_norm = norm_sync_url(old_read_url);
+    let old_norm = crate::services::common::normalize_sync_url(old_read_url);
     let notice_pub = notice.drop_pub.trim().to_lowercase();
     let is_revoked_now = now_secs >= notice.effective_at;
     let mut updated = false;
@@ -1945,13 +1874,18 @@ pub fn apply_revocation_notice_to_address_book(
         let existing_endpoints: Vec<(String, String)> = contact
             .syncs
             .iter()
-            .map(|o| (norm_sync_url(&o.read_url), norm_sync_url(&o.write_url)))
+            .map(|o| {
+                (
+                    crate::services::common::normalize_sync_url(&o.read_url),
+                    crate::services::common::normalize_sync_url(&o.write_url),
+                )
+            })
             .collect();
         let mut idx_to_replace: Option<(usize, crate::models::FrontendSyncDescriptor)> = None;
         let mut idx_to_append: Option<crate::models::FrontendSyncDescriptor> = None;
 
         for (idx, ep) in contact.syncs.iter_mut().enumerate() {
-            if norm_sync_url(&ep.read_url) != old_norm {
+            if crate::services::common::normalize_sync_url(&ep.read_url) != old_norm {
                 continue;
             }
             if !ep.drop_pub.trim().eq_ignore_ascii_case(&notice_pub) {
@@ -1963,7 +1897,7 @@ pub fn apply_revocation_notice_to_address_book(
             let prev_reason = ep.revocation_reason.clone();
             let prev_rep = ep.replacement.clone();
 
-            apply_revocation_notice_to_descriptor(ep, notice, now_secs);
+            apply_revocation_notice(ep, notice, now_secs);
             if ep.status != prev_status
                 || ep.sunset_at != prev_sunset
                 || ep.revocation_reason != prev_reason
@@ -1973,10 +1907,10 @@ pub fn apply_revocation_notice_to_address_book(
             }
 
             if let Some(ref rep) = notice.replacement {
-                let rep_r = norm_sync_url(&rep.read_url);
-                let rep_w = norm_sync_url(&rep.write_url);
-                let ep_r = norm_sync_url(&ep.read_url);
-                let ep_w = norm_sync_url(&ep.write_url);
+                let rep_r = crate::services::common::normalize_sync_url(&rep.read_url);
+                let rep_w = crate::services::common::normalize_sync_url(&rep.write_url);
+                let ep_r = crate::services::common::normalize_sync_url(&ep.read_url);
+                let ep_w = crate::services::common::normalize_sync_url(&ep.write_url);
 
                 // Anti-loop: ignore self-redirects or targets already present on this contact
                 let is_self_redirect = rep_r == ep_r || (!rep_w.is_empty() && rep_w == ep_w);
@@ -2026,23 +1960,23 @@ mod tests {
         let temp_dir =
             std::env::temp_dir().join(format!("humoco_state_test_{}", uuid::Uuid::new_v4()));
         let password = "test-password-123";
-        let alice_service = crate::commands::sync::tests::setup_test_app(
+        let alice_service = crate::test_support::setup_test_app(
             &temp_dir.join("alice"),
             "Test Alice",
-            crate::commands::sync::tests::ALICE_PHRASE,
+            crate::test_support::ALICE_PHRASE,
             password,
         );
-        let bob_service = crate::commands::sync::tests::setup_test_app(
+        let bob_service = crate::test_support::setup_test_app(
             &temp_dir.join("bob"),
             "Test Bob",
-            crate::commands::sync::tests::BOB_PHRASE,
+            crate::test_support::BOB_PHRASE,
             password,
         );
         let bob_did = bob_service
             .with_wallet(|w| w.get_user_id().to_string())
             .unwrap();
 
-        let state = crate::commands::sync::tests::create_test_state(alice_service);
+        let state = crate::test_support::create_test_state(alice_service);
         let mut service = state.service.lock().unwrap();
 
         let sync1 = FrontendSyncDescriptor {
@@ -2161,23 +2095,23 @@ mod tests {
         let temp_dir =
             std::env::temp_dir().join(format!("humoco_health_test_{}", uuid::Uuid::new_v4()));
         let password = "test-password-123";
-        let alice_service = crate::commands::sync::tests::setup_test_app(
+        let alice_service = crate::test_support::setup_test_app(
             &temp_dir.join("alice"),
             "Test Alice",
-            crate::commands::sync::tests::ALICE_PHRASE,
+            crate::test_support::ALICE_PHRASE,
             password,
         );
-        let bob_service = crate::commands::sync::tests::setup_test_app(
+        let bob_service = crate::test_support::setup_test_app(
             &temp_dir.join("bob"),
             "Test Bob",
-            crate::commands::sync::tests::BOB_PHRASE,
+            crate::test_support::BOB_PHRASE,
             password,
         );
         let bob_did = bob_service
             .with_wallet(|w| w.get_user_id().to_string())
             .unwrap();
 
-        let state = crate::commands::sync::tests::create_test_state(alice_service);
+        let state = crate::test_support::create_test_state(alice_service);
         let mut service = state.service.lock().unwrap();
 
         let sync_desc = FrontendSyncDescriptor {
@@ -2366,23 +2300,23 @@ mod tests {
         let temp_dir =
             std::env::temp_dir().join(format!("humoco_prune_test_{}", uuid::Uuid::new_v4()));
         let password = "test-password-123";
-        let alice_service = crate::commands::sync::tests::setup_test_app(
+        let alice_service = crate::test_support::setup_test_app(
             &temp_dir.join("alice"),
             "Test Alice",
-            crate::commands::sync::tests::ALICE_PHRASE,
+            crate::test_support::ALICE_PHRASE,
             password,
         );
-        let bob_service = crate::commands::sync::tests::setup_test_app(
+        let bob_service = crate::test_support::setup_test_app(
             &temp_dir.join("bob"),
             "Test Bob",
-            crate::commands::sync::tests::BOB_PHRASE,
+            crate::test_support::BOB_PHRASE,
             password,
         );
         let bob_did = bob_service
             .with_wallet(|w| w.get_user_id().to_string())
             .unwrap();
 
-        let state = crate::commands::sync::tests::create_test_state(alice_service);
+        let state = crate::test_support::create_test_state(alice_service);
         let mut service = state.service.lock().unwrap();
 
         let bob_sync = FrontendSyncDescriptor {
@@ -2659,23 +2593,23 @@ mod tests {
         let temp_dir =
             std::env::temp_dir().join(format!("humoco_health_rev_{}", uuid::Uuid::new_v4()));
         let password = "test-password-123";
-        let alice_service = crate::commands::sync::tests::setup_test_app(
+        let alice_service = crate::test_support::setup_test_app(
             &temp_dir.join("alice"),
             "Test Alice",
-            crate::commands::sync::tests::ALICE_PHRASE,
+            crate::test_support::ALICE_PHRASE,
             password,
         );
-        let bob_service = crate::commands::sync::tests::setup_test_app(
+        let bob_service = crate::test_support::setup_test_app(
             &temp_dir.join("bob"),
             "Test Bob",
-            crate::commands::sync::tests::BOB_PHRASE,
+            crate::test_support::BOB_PHRASE,
             password,
         );
         let bob_did = bob_service
             .with_wallet(|w| w.get_user_id().to_string())
             .unwrap();
 
-        let state = crate::commands::sync::tests::create_test_state(alice_service);
+        let state = crate::test_support::create_test_state(alice_service);
         let mut service = state.service.lock().unwrap();
 
         let dep_ep = FrontendSyncDescriptor {
@@ -2782,10 +2716,10 @@ mod tests {
             uuid::Uuid::new_v4()
         ));
         let password = "test-password-123";
-        let alice_service = crate::commands::sync::tests::setup_test_app(
+        let alice_service = crate::test_support::setup_test_app(
             &temp_dir.join("alice"),
             "Test Alice",
-            crate::commands::sync::tests::ALICE_PHRASE,
+            crate::test_support::ALICE_PHRASE,
             password,
         );
         let (own_uid, own_vk) = alice_service
@@ -2796,7 +2730,7 @@ mod tests {
         let laden_uid = human_money_core::crypto::create_user_id(&own_vk, Some("laden")).unwrap();
         let privat_uid = human_money_core::crypto::create_user_id(&own_vk, Some("privat")).unwrap();
 
-        let state = crate::commands::sync::tests::create_test_state(alice_service);
+        let state = crate::test_support::create_test_state(alice_service);
         let mut service = state.service.lock().unwrap();
 
         // 1. Exact own active profile must be rejected
@@ -2916,5 +2850,112 @@ mod tests {
         assert_eq!(remaining[0].did, laden_uid);
 
         let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_encrypted_json_helpers_reject_corrupt_and_locked_state() {
+        use human_money_core::app_service::AppFacadeError;
+
+        let temp_dir =
+            std::env::temp_dir().join(format!("humoco_json_hardening_{}", uuid::Uuid::new_v4()));
+        let password = "test-password-123";
+        let alice_service = crate::test_support::setup_test_app(
+            &temp_dir.join("alice"),
+            "Test Alice",
+            crate::test_support::ALICE_PHRASE,
+            password,
+        );
+        let state = crate::test_support::create_test_state(alice_service);
+        let mut service = state.lock_service().unwrap();
+
+        // Missing keys cleanly return defaults or initialize defaults
+        let book: crate::models::FrontendAddressBook = super::load_encrypted_json_or_default(
+            &mut service,
+            super::CONTACTS_DATA_NAME,
+            Some(password),
+        )
+        .unwrap();
+        assert!(book.contacts.is_empty());
+        assert!(state.load_settings(&mut service, Some(password)).is_ok());
+
+        // Missing session / wrong auth propagates error instead of silent fallback
+        assert!(matches!(
+            state.load_settings(&mut service, None),
+            Err(AppFacadeError::SessionNotActive(_))
+        ));
+        assert!(matches!(
+            state.load_contacts(&mut service, Some("wrong-password")),
+            Err(AppFacadeError::Storage(
+                human_money_core::StorageError::AuthenticationFailed
+            ))
+        ));
+
+        // Corrupt JSON on disk MUST return AppFacadeError::Json (never silent default)
+        for key in [
+            crate::settings::SETTINGS_KEY,
+            super::CONTACTS_DATA_NAME,
+            super::WOT_DATA_NAME,
+            super::TRANSACTION_HISTORY_KEY,
+        ] {
+            service
+                .save_encrypted_data(key, b"{corrupt-json", Some(password))
+                .unwrap();
+        }
+        assert!(matches!(
+            state.load_settings(&mut service, Some(password)),
+            Err(AppFacadeError::Json(_))
+        ));
+        assert!(matches!(
+            state.load_contacts(&mut service, Some(password)),
+            Err(AppFacadeError::Json(_))
+        ));
+        assert!(matches!(
+            state.load_wot_register(&mut service, Some(password)),
+            Err(AppFacadeError::Json(_))
+        ));
+        assert!(matches!(
+            state.load_history_from_disk(&mut service, Some(password)),
+            Err(AppFacadeError::Json(_))
+        ));
+
+        drop(service);
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_generic_revocation_helpers_for_descriptor_and_public_sync() {
+        let notice = crate::sync_client::SyncRevocationNotice {
+            drop_pub: "aa".repeat(32),
+            issued_at: 1000,
+            effective_at: 2000,
+            reason: Some("Umzug".to_string()),
+            replacement: Some(crate::sync_client::SyncReplacementTarget {
+                write_url: "https://new.example.org/sync.php".to_string(),
+                read_url: "https://new.example.org/d".to_string(),
+                drop_pub: "bb".repeat(32),
+            }),
+            signature: "00".repeat(64),
+        };
+
+        let mut desc = FrontendSyncDescriptor::default();
+        super::apply_revocation_notice(&mut desc, &notice, 1500);
+        assert_eq!(desc.status, "deprecating");
+        assert_eq!(desc.sunset_at, Some(2000));
+        assert_eq!(desc.revocation_reason.as_deref(), Some("Umzug"));
+        assert!(desc.replacement.is_some());
+        assert!(super::clear_revocation(&mut desc, "active"));
+        assert_eq!(desc.status, "active");
+        assert!(desc.sunset_at.is_none());
+        assert!(desc.revocation_reason.is_none());
+        assert!(desc.replacement.is_none());
+        assert!(!super::clear_revocation(&mut desc, "active"));
+
+        let mut pub_sync = crate::settings::StoredPublicSync::default();
+        super::apply_revocation_notice(&mut pub_sync, &notice, 2500);
+        assert_eq!(pub_sync.status, "revoked");
+        assert_eq!(pub_sync.sunset_at, Some(2000));
+        assert!(super::clear_revocation(&mut pub_sync, "active"));
+        assert_eq!(pub_sync.status, "active");
+        assert!(pub_sync.sunset_at.is_none());
     }
 }

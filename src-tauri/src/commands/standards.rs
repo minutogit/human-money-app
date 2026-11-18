@@ -17,17 +17,6 @@ pub fn parse_standard_toml(
 }
 
 #[tauri::command]
-pub fn get_allowed_signature_roles_from_standard(
-    toml_content: String,
-    _state: tauri::State<AppState>,
-) -> Result<Vec<String>, FrontendError> {
-    info!("Getting allowed signature roles from standard...");
-    VoucherStandardDefinition::from_toml(&toml_content)
-        .map(|(std, _)| std.immutable.issuance.allowed_signature_roles)
-        .map_err(FrontendError::from)
-}
-
-#[tauri::command]
 pub fn evaluate_signature_suitability(
     voucher: crate::models::FrontendVoucher,
     role: String,

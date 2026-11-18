@@ -1,5 +1,5 @@
 // src/hooks/useVoucherCreation.ts
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { standardsService } from "../services/standardsService";
 import { profileService } from "../services/profileService";
 import { marketService } from "../services/marketService";
@@ -12,6 +12,7 @@ import {
     CreatorData, 
     CollateralData, 
     NewVoucherData,
+    PublicProfile,
     StoredAnchorTemplateMeta
 } from "../types";
 import { normalizeCoordinates } from "../utils/geoUtils";
@@ -60,6 +61,37 @@ export function getStandardShortSummary(
     );
 }
 
+function mergeProfileIntoCreatorIdentity(
+    prev: CreatorData,
+    profile: PublicProfile,
+    serviceOffer?: string
+): CreatorData {
+    return {
+        ...prev,
+        firstName: profile.firstName || prev.firstName,
+        lastName: profile.lastName || prev.lastName,
+        organization: profile.organization || prev.organization,
+        community: profile.community || prev.community,
+        gender: profile.gender || prev.gender,
+        email: profile.email || prev.email,
+        phone: profile.phone || prev.phone,
+        url: profile.url || prev.url,
+        coordinates: profile.coordinates || prev.coordinates,
+        serviceOffer: serviceOffer || prev.serviceOffer,
+        needs: profile.needs || prev.needs,
+        pictureUrl: profile.pictureUrl || prev.pictureUrl,
+        address: profile.address
+            ? {
+                  street: profile.address.street || prev.address.street,
+                  houseNumber: profile.address.houseNumber || prev.address.houseNumber,
+                  zipCode: profile.address.zipCode || prev.address.zipCode,
+                  city: profile.address.city || prev.address.city,
+                  country: profile.address.country || prev.address.country,
+              }
+            : prev.address,
+    };
+}
+
 export function useVoucherCreation() {
     const [standards, setStandards] = useState<VoucherStandardInfo[]>([]);
     const [selectedStandardId, setSelectedStandardId] = useState<string>("");
@@ -88,6 +120,14 @@ export function useVoucherCreation() {
     const [errors, setErrors] = useState<Record<string, boolean>>({});
     const [anchorTemplates, setAnchorTemplates] = useState<StoredAnchorTemplateMeta[]>([]);
     const [selectedAnchorId, setSelectedAnchorId] = useState<string | null>(null);
+    const isMountedRef = useRef(true);
+
+    useEffect(() => {
+        isMountedRef.current = true;
+        return () => {
+            isMountedRef.current = false;
+        };
+    }, []);
 
     useEffect(() => {
         let active = true;
@@ -152,13 +192,16 @@ export function useVoucherCreation() {
         }
     }, [standards]);
 
-    const handleLoadProfile = useCallback(async () => {
+    const syncProfileIdentity = useCallback(async (isActive: () => boolean) => {
         try {
             const profile = await profileService.getProfile();
+            if (!isActive()) return;
+
             let serviceOffer = profile.serviceOffer;
             if (!serviceOffer || serviceOffer.trim() === '') {
                 try {
                     const myMarket = await marketService.getMyMarketProfile();
+                    if (!isActive()) return;
                     if (myMarket.skills && myMarket.skills.length > 0) {
                         serviceOffer = myMarket.skills.map(s => s.title.trim()).filter(Boolean).join(', ');
                     }
@@ -167,84 +210,24 @@ export function useVoucherCreation() {
                 }
             }
 
-            setIdentity(prev => ({
-                ...prev,
-                firstName: profile.firstName || prev.firstName,
-                lastName: profile.lastName || prev.lastName,
-                organization: profile.organization || prev.organization,
-                community: profile.community || prev.community,
-                gender: profile.gender || prev.gender,
-                email: profile.email || prev.email,
-                phone: profile.phone || prev.phone,
-                url: profile.url || prev.url,
-                coordinates: profile.coordinates || prev.coordinates,
-                serviceOffer: serviceOffer || prev.serviceOffer,
-                needs: profile.needs || prev.needs,
-                pictureUrl: profile.pictureUrl || prev.pictureUrl,
-                address: profile.address ? {
-                    street: profile.address.street || prev.address.street,
-                    houseNumber: profile.address.houseNumber || prev.address.houseNumber,
-                    zipCode: profile.address.zipCode || prev.address.zipCode,
-                    city: profile.address.city || prev.address.city,
-                    country: profile.address.country || prev.address.country,
-                } : prev.address
-            }));
+            if (!isActive()) return;
+            setIdentity(prev => mergeProfileIntoCreatorIdentity(prev, profile, serviceOffer));
             logger.info("CreateVoucher: Profile data synchronized.");
         } catch (e) {
+            if (!isActive()) return;
             logger.error(`Failed to load profile: ${stringifyError(e)}`);
         }
     }, []);
 
+    const handleLoadProfile = useCallback(async () => {
+        await syncProfileIdentity(() => isMountedRef.current);
+    }, [syncProfileIdentity]);
+
     useEffect(() => {
         let active = true;
-        (async () => {
-            try {
-                const profile = await profileService.getProfile();
-                if (!active) return;
-                let serviceOffer = profile.serviceOffer;
-                if (!serviceOffer || serviceOffer.trim() === '') {
-                    try {
-                        const myMarket = await marketService.getMyMarketProfile();
-                        if (!active) return;
-                        if (myMarket.skills && myMarket.skills.length > 0) {
-                            serviceOffer = myMarket.skills.map(s => s.title.trim()).filter(Boolean).join(', ');
-                        }
-                    } catch {
-                        // Ignore if market profile cannot be loaded
-                    }
-                }
-
-                if (!active) return;
-                setIdentity(prev => ({
-                    ...prev,
-                    firstName: profile.firstName || prev.firstName,
-                    lastName: profile.lastName || prev.lastName,
-                    organization: profile.organization || prev.organization,
-                    community: profile.community || prev.community,
-                    gender: profile.gender || prev.gender,
-                    email: profile.email || prev.email,
-                    phone: profile.phone || prev.phone,
-                    url: profile.url || prev.url,
-                    coordinates: profile.coordinates || prev.coordinates,
-                    serviceOffer: serviceOffer || prev.serviceOffer,
-                    needs: profile.needs || prev.needs,
-                    pictureUrl: profile.pictureUrl || prev.pictureUrl,
-                    address: profile.address ? {
-                        street: profile.address.street || prev.address.street,
-                        houseNumber: profile.address.houseNumber || prev.address.houseNumber,
-                        zipCode: profile.address.zipCode || prev.address.zipCode,
-                        city: profile.address.city || prev.address.city,
-                        country: profile.address.country || prev.address.country,
-                    } : prev.address
-                }));
-                logger.info("CreateVoucher: Profile data synchronized.");
-            } catch (e) {
-                if (!active) return;
-                logger.error(`Failed to load profile: ${stringifyError(e)}`);
-            }
-        })();
+        void syncProfileIdentity(() => active);
         return () => { active = false; };
-    }, []);
+    }, [syncProfileIdentity]);
 
     const handleCoordBlur = useCallback(() => {
         if (!identity.coordinates) {

@@ -10,7 +10,7 @@ import {
     Clock,
 } from 'lucide-react';
 import { AppSettings, PrivacyDefault } from '../../types';
-import { BackupSettingsCard } from '../BackupSettingsCard';
+import { BackupSettingsCard } from './BackupSettingsCard';
 import { QuickPinCard } from './QuickPinCard';
 import { IdentityRecoveryCard } from './IdentityRecoveryCard';
 import { DangerZoneCard } from './DangerZoneCard';

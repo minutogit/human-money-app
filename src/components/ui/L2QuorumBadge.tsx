@@ -41,7 +41,6 @@ interface StatusConfig {
     borderStyle: string;
     textStyle: string;
     iconStyle: string;
-    dotColor: string;
     levelDots: string;
     Icon: React.ComponentType<{ size?: number; className?: string }>;
 }
@@ -59,7 +58,6 @@ const STATUS_CONFIGS: Record<L2VerdictState, StatusConfig> = {
         borderStyle: "border-emerald-300",
         textStyle: "text-emerald-800",
         iconStyle: "text-emerald-600",
-        dotColor: "bg-emerald-500",
         levelDots: "●●",
         Icon: CheckCheck,
     },
@@ -75,7 +73,6 @@ const STATUS_CONFIGS: Record<L2VerdictState, StatusConfig> = {
         borderStyle: "border-emerald-200",
         textStyle: "text-emerald-700",
         iconStyle: "text-emerald-500",
-        dotColor: "bg-emerald-400",
         levelDots: "●○",
         Icon: Check,
     },
@@ -91,7 +88,6 @@ const STATUS_CONFIGS: Record<L2VerdictState, StatusConfig> = {
         borderStyle: "border-amber-300",
         textStyle: "text-amber-800",
         iconStyle: "text-amber-600",
-        dotColor: "bg-amber-500",
         levelDots: "●○",
         Icon: AlertTriangle,
     },
@@ -107,7 +103,6 @@ const STATUS_CONFIGS: Record<L2VerdictState, StatusConfig> = {
         borderStyle: "border-rose-300",
         textStyle: "text-rose-800",
         iconStyle: "text-rose-600",
-        dotColor: "bg-rose-500",
         levelDots: "●",
         Icon: ShieldAlert,
     },
@@ -123,7 +118,6 @@ const STATUS_CONFIGS: Record<L2VerdictState, StatusConfig> = {
         borderStyle: "border-slate-300",
         textStyle: "text-slate-700",
         iconStyle: "text-slate-500",
-        dotColor: "bg-slate-400",
         levelDots: "○○",
         Icon: WifiOff,
     },
@@ -139,7 +133,6 @@ const STATUS_CONFIGS: Record<L2VerdictState, StatusConfig> = {
         borderStyle: "border-slate-300",
         textStyle: "text-slate-700",
         iconStyle: "text-slate-600",
-        dotColor: "bg-slate-400",
         levelDots: "○○",
         Icon: WifiOff,
     },
@@ -155,7 +148,6 @@ const STATUS_CONFIGS: Record<L2VerdictState, StatusConfig> = {
         borderStyle: "border-slate-300",
         textStyle: "text-slate-700",
         iconStyle: "text-slate-500",
-        dotColor: "bg-slate-400",
         levelDots: "○○",
         Icon: WifiOff,
     },
@@ -202,19 +194,16 @@ export const L2QuorumBadge: React.FC<L2QuorumBadgeProps> = ({
             container: "p-2.5 rounded-2xl text-xs",
             icon: 16,
             badge: "text-[10px] px-2 py-0.5",
-            dot: "w-2 h-2",
         },
         md: {
             container: "p-3.5 rounded-3xl text-sm",
             icon: 20,
             badge: "text-xs px-2.5 py-1",
-            dot: "w-2.5 h-2.5",
         },
         lg: {
             container: "p-4.5 rounded-[32px] text-base",
             icon: 26,
             badge: "text-sm px-3 py-1.5",
-            dot: "w-3 h-3",
         },
     }[size];
 

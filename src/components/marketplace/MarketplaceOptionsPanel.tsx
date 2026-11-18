@@ -5,7 +5,7 @@ import { Store, CloudOff, Settings } from 'lucide-react';
 import { PageOptionsPanel } from '../ui/PageOptionsPanel';
 import { Advanced } from '../ui/Advanced';
 import { Button } from '../ui/Button';
-import { ReachPresetSelector } from '../ReachPresetSelector';
+import { ReachPresetSelector } from '../settings/ReachPresetSelector';
 import { AppSettings, FrontendMyMarketProfile } from '../../types';
 import { settingsService } from '../../services/settingsService';
 import { useSession } from '../../context/SessionContext';

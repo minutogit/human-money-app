@@ -46,8 +46,8 @@ pub fn scope_to_str(scope: SecondaryScope) -> &'static str {
 
 pub fn parse_scope(raw: &str) -> Result<SecondaryScope, String> {
     match raw {
-        "dailyPay" | "daily_pay" => Ok(SecondaryScope::DailyPay),
-        "receiveOnly" | "receive_only" => Ok(SecondaryScope::ReceiveOnly),
+        "dailyPay" => Ok(SecondaryScope::DailyPay),
+        "receiveOnly" => Ok(SecondaryScope::ReceiveOnly),
         other => Err(format!("Unsupported PIN scope: {}", other)),
     }
 }
@@ -213,4 +213,75 @@ pub fn reset_failed_attempts(keystore_dir: &Path, folder_name: &str) -> Result<(
         save_keystore_file(keystore_dir, &store)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_keystore_dir(label: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "humoco_pin_keystore_test_{}_{}",
+            label,
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn test_validate_pin_format_and_scope() {
+        assert!(validate_pin_format("12345").is_err());
+        assert!(validate_pin_format("123456789").is_err());
+        assert!(validate_pin_format("12ab56").is_err());
+        assert!(validate_pin_format("123456").is_ok());
+        assert!(validate_pin_format("12345678").is_ok());
+
+        assert_eq!(parse_scope("dailyPay").unwrap(), SecondaryScope::DailyPay);
+        assert_eq!(
+            parse_scope("receiveOnly").unwrap(),
+            SecondaryScope::ReceiveOnly
+        );
+        assert!(parse_scope("daily_pay").is_err());
+        assert!(parse_scope("receive_only").is_err());
+        assert!(parse_scope("full").is_err());
+    }
+
+    #[test]
+    fn test_pepper_creation_strike_progression_reset_and_remove() {
+        let dir = temp_keystore_dir("lifecycle");
+        let dev = "device-binding-1";
+        let folder = "profile_a";
+        let pin = "246810";
+
+        let secret =
+            create_and_store_pepper(&dir, dev, folder, pin, SecondaryScope::DailyPay).unwrap();
+        assert_eq!(secret.len(), 64);
+
+        let entry = get_entry(&dir, folder).unwrap().expect("entry must exist");
+        assert_eq!(entry.failed_attempts, 0);
+        assert_eq!(entry.scope, SecondaryScope::DailyPay);
+
+        // Strike progression up to MAX_PIN_ATTEMPTS = 5
+        for expected_attempt in 1..=MAX_PIN_ATTEMPTS {
+            let (derived, attempt) = begin_pin_attempt(&dir, dev, folder, pin).unwrap();
+            assert_eq!(attempt, expected_attempt);
+            assert_eq!(derived.as_str(), secret.as_str());
+        }
+
+        // Device mismatch fails unwrapping even after recording strike
+        let mismatch = begin_pin_attempt(&dir, "other-device", folder, pin);
+        assert!(mismatch.is_err());
+
+        // Lockdown / success recovery resets failed_attempts without wiping entry
+        reset_failed_attempts(&dir, folder).unwrap();
+        let after_reset = get_entry(&dir, folder).unwrap().unwrap();
+        assert_eq!(after_reset.failed_attempts, 0);
+
+        // Remove entry cleans keystore slot
+        remove_entry(&dir, folder).unwrap();
+        assert!(get_entry(&dir, folder).unwrap().is_none());
+
+        let _ = fs::remove_dir_all(dir);
+    }
 }

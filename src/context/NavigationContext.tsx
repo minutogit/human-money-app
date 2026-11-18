@@ -1,6 +1,6 @@
 // src/context/NavigationContext.tsx
 import { createContext, useContext, useState, ReactNode, useEffect, useCallback, useRef } from 'react';
-import { AppState } from '../types';
+import { AppState, SettingsSection } from '../types';
 import { getVersion } from "@tauri-apps/api/app";
 import { profileService } from "../services/profileService";
 import { authService } from "../services/authService";
@@ -13,7 +13,7 @@ import { tourBridge } from '../utils/tourBridge';
 export interface NavigationContextType {
     appState: AppState;
     navigate: (newState: AppState) => void;
-    navigateToSettingsSection: (section: 'sync' | 'backup' | 'network' | 'profile' | 'standards' | 'security' | 'connection' | 'advanced') => void;
+    navigateToSettingsSection: (section: SettingsSection) => void;
     goBack: () => void;
     isSidebarOpen: boolean;
     setSidebarOpen: (open: boolean) => void;
@@ -63,7 +63,7 @@ export function NavigationProvider({ children }: { children: ReactNode }) {
         setAppState(newState);
     }, []);
 
-    const navigateToSettingsSection = useCallback((section: 'sync' | 'backup' | 'network' | 'profile' | 'standards' | 'security' | 'connection' | 'advanced') => {
+    const navigateToSettingsSection = useCallback((section: SettingsSection) => {
         navigate({ view: 'settings', initialSection: section });
     }, [navigate]);
 

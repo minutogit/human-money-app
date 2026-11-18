@@ -34,16 +34,6 @@ export interface SourceTransfer {
     amountToSend: string;
 }
 
-export interface MultiTransferRequest {
-    recipientId: string;
-    sources: SourceTransfer[];
-    notes?: string | null;
-    senderProfileName?: string | null;
-    standardDefinitionsToml: Record<string, string>;
-    usePrivacyMode?: boolean | null;
-    password?: string | null;
-}
-
 export interface TransactionRecord {
     id: string;
     direction: 'sent' | 'received';
@@ -83,8 +73,6 @@ export interface PurchaseCompletion {
     verdict: CheckoutReleaseVerdict;
     receivePayload?: ReceiveSuccessPayload;
 }
-
-export type CheckoutExecutionSummary = PurchaseCompletion;
 
 export interface IntentDispatchObservation {
     localInstanceId: string;

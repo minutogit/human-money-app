@@ -13,6 +13,7 @@ export interface ModalShellProps {
     children?: React.ReactNode;
     closeOnEscape?: boolean;
     closeOnBackdrop?: boolean;
+    hideCloseButton?: boolean;
     className?: string;
     zIndexClass?: string;
 }
@@ -35,6 +36,7 @@ export function ModalShell({
     children,
     closeOnEscape = true,
     closeOnBackdrop = true,
+    hideCloseButton = false,
     className = '',
     zIndexClass = 'z-[100]',
 }: ModalShellProps) {
@@ -72,7 +74,7 @@ export function ModalShell({
                 aria-modal="true"
                 className={`relative w-full ${maxWidthClass} max-h-[90vh] flex flex-col rounded-3xl bg-bg-card border border-theme-subtle shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200 ${className}`}
             >
-                {onClose && (
+                {onClose && !hideCloseButton && (
                     <button
                         type="button"
                         onClick={onClose}
@@ -84,7 +86,7 @@ export function ModalShell({
                 )}
 
                 {(title || description) && (
-                    <div className="px-6 pt-6 pb-3 pr-14">
+                    <div className={`px-6 pt-6 pb-3 ${onClose && !hideCloseButton ? 'pr-14' : ''}`}>
                         {title && (
                             typeof title === 'string' ? (
                                 <h2 className="text-xl font-bold text-theme-primary mb-2">{title}</h2>

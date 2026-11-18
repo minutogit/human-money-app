@@ -4,7 +4,7 @@ import { Shield, MoreHorizontal, CloudOff, Settings } from 'lucide-react';
 import { PageOptionsPanel } from '../ui/PageOptionsPanel';
 import { Advanced } from '../ui/Advanced';
 import { Button } from '../ui/Button';
-import { ReachPresetSelector } from '../ReachPresetSelector';
+import { ReachPresetSelector } from '../settings/ReachPresetSelector';
 import { ReachPresetDto, WotSummaryDto } from '../../types';
 
 export interface WotNetworkOptionsPanelProps {

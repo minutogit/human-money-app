@@ -10,8 +10,7 @@ import { marketService } from '../../services/marketService';
 import { contactService } from '../../services/contactService';
 import { profileService } from '../../services/profileService';
 import { useSession } from '../../context/SessionContext';
-import { open } from '@tauri-apps/plugin-dialog';
-import { readFile } from '@tauri-apps/plugin-fs';
+import { openFileAsBytes } from '../../utils/fileIo';
 import { logger } from '../../utils/log';
 import { translateError, stringifyError } from '../../utils/errorHelper';
 import { isExactSameUserId, truncateUserId } from '../../utils/userIdHelper';
@@ -280,17 +279,15 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
 
     const handleFilePicker = async () => {
         try {
-            const selectedPath = await open({
-                multiple: false,
+            const fileResult = await openFileAsBytes({
                 filters: [
                     { name: t('marketplace.cardFilterName'), extensions: ['hmcard', 'json'] },
                     { name: t('common.allFiles', 'All Files'), extensions: ['*'] },
                 ],
             });
 
-            if (typeof selectedPath === 'string') {
-                const bytes = await readFile(selectedPath);
-                const text = new TextDecoder().decode(bytes);
+            if (fileResult) {
+                const text = new TextDecoder().decode(new Uint8Array(fileResult.bytes));
                 setPayloadText(text);
                 await processImportPayload(text);
             }

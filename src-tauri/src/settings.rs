@@ -136,6 +136,24 @@ pub struct StoredPublicSync {
     pub replacement: Option<crate::models::FrontendSyncReplacementTarget>,
 }
 
+impl crate::models::SyncRevocationFields for StoredPublicSync {
+    fn status_mut(&mut self) -> &mut String {
+        &mut self.status
+    }
+
+    fn sunset_at_mut(&mut self) -> &mut Option<u64> {
+        &mut self.sunset_at
+    }
+
+    fn revocation_reason_mut(&mut self) -> &mut Option<String> {
+        &mut self.revocation_reason
+    }
+
+    fn replacement_mut(&mut self) -> &mut Option<crate::models::FrontendSyncReplacementTarget> {
+        &mut self.replacement
+    }
+}
+
 impl Default for StoredPublicSync {
     fn default() -> Self {
         Self {

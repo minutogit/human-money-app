@@ -29,10 +29,6 @@ fn now() -> Result<u64, FrontendError> {
         .map_err(|_| fail("Invalid verification time"))
 }
 
-pub(crate) fn normalize_sync_write_url(raw: &str) -> String {
-    raw.trim().trim_end_matches('/').to_string()
-}
-
 #[derive(serde::Serialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct PurchaseCompletion {
@@ -78,19 +74,25 @@ pub(crate) async fn resolve_trusted_lock_keys(
     for (url, probe) in &settings.l2_probe_cache {
         if probe.passed {
             if let Ok(pk) = decode_hex_fixed::<32>(&probe.lock_pub) {
-                known_url_to_key.insert(normalize_sync_write_url(url), pk);
+                known_url_to_key.insert(crate::services::common::normalize_sync_url(url), pk);
             }
         }
     }
     if let Some(ref own) = settings.own_nominated_lock_server {
         if let Ok(pk) = decode_hex_fixed::<32>(&own.lock_pub) {
-            known_url_to_key.insert(normalize_sync_write_url(&own.write_url), pk);
+            known_url_to_key.insert(
+                crate::services::common::normalize_sync_url(&own.write_url),
+                pk,
+            );
         }
     }
     for tmpl in &settings.l2_anchor_templates_meta {
         for srv in &tmpl.servers {
             if let Ok(pk) = decode_hex_fixed::<32>(&srv.lock_pub) {
-                known_url_to_key.insert(normalize_sync_write_url(&srv.write_url), pk);
+                known_url_to_key.insert(
+                    crate::services::common::normalize_sync_url(&srv.write_url),
+                    pk,
+                );
             }
         }
     }
@@ -100,21 +102,21 @@ pub(crate) async fn resolve_trusted_lock_keys(
 
     for s in &settings.public_syncs {
         if s.enabled && s.status != "revoked" {
-            let norm = normalize_sync_write_url(&s.write_url);
+            let norm = crate::services::common::normalize_sync_url(&s.write_url);
             if !norm.is_empty() {
                 trusted_urls.insert(norm);
             }
         }
     }
     if let Some(ref own) = settings.own_nominated_lock_server {
-        let norm = normalize_sync_write_url(&own.write_url);
+        let norm = crate::services::common::normalize_sync_url(&own.write_url);
         if !norm.is_empty() {
             trusted_urls.insert(norm);
         }
     }
     for tmpl in &settings.l2_anchor_templates_meta {
         for srv in &tmpl.servers {
-            let norm = normalize_sync_write_url(&srv.write_url);
+            let norm = crate::services::common::normalize_sync_url(&srv.write_url);
             if !norm.is_empty() {
                 trusted_urls.insert(norm);
             }
@@ -123,9 +125,9 @@ pub(crate) async fn resolve_trusted_lock_keys(
 
     let canonical_creator = creator_id.and_then(|c| canonicalize_did(c).ok());
     let contact_candidates: Vec<String> = {
+        let svc_guard = state.service.lock().ok();
         let book_guard = state.contacts.lock().ok();
         let wot_guard = state.wot.lock().ok();
-        let svc_guard = state.service.lock().ok();
 
         let self_did = wot_guard
             .as_ref()
@@ -213,7 +215,7 @@ pub(crate) async fn resolve_trusted_lock_keys(
                 if contact_trusted {
                     for sync in &contact.syncs {
                         if sync.status != "revoked" {
-                            let norm = normalize_sync_write_url(&sync.write_url);
+                            let norm = crate::services::common::normalize_sync_url(&sync.write_url);
                             if !norm.is_empty() {
                                 urls.push(norm);
                             }
@@ -246,7 +248,7 @@ pub(crate) async fn resolve_trusted_lock_keys(
         } else if manifest.is_some_and(|m| {
             m.servers
                 .iter()
-                .any(|s| normalize_sync_write_url(&s.write_url) == *url)
+                .any(|s| crate::services::common::normalize_sync_url(&s.write_url) == *url)
         }) {
             urls_to_live_probe.push(url.clone());
         }
@@ -395,7 +397,13 @@ fn build_receive_payload_and_record(
         summable_amounts: transfer_summary.summable_amounts.clone(),
         countable_items: transfer_summary.countable_items.clone(),
         involved_vouchers: involved_vouchers_ids.clone(),
-        involved_sources_details: Some(involved_vouchers_details.clone()),
+        involved_sources_details: Some(
+            involved_vouchers_details
+                .iter()
+                .cloned()
+                .map(Into::into)
+                .collect(),
+        ),
         bundle_data: Vec::new(),
         bundle_id: opened_bundle.bundle_id.clone(),
         notes: opened_bundle.notes.clone(),
@@ -439,17 +447,6 @@ fn build_receive_payload_and_record(
     Ok((payload, Some(record)))
 }
 
-fn determine_pow_base_bits(settings: &AppSettings, manifest: &AnchorManifest) -> u32 {
-    let mut bits = DEFAULT_LOCK_POW_BASE_BITS;
-    for srv in &manifest.servers {
-        let norm = normalize_sync_write_url(&srv.write_url);
-        if let Some(probe) = settings.l2_probe_cache.get(&norm) {
-            bits = bits.max(probe.pow_base_bits);
-        }
-    }
-    bits
-}
-
 /// Sync-Lock committee checkout orchestration.
 ///
 /// - `N = 0` (`layer2_anchor == None`): Returns `OfflineOnly` verdict requiring manual trust approval.
@@ -465,10 +462,7 @@ pub(crate) async fn checkout_bundle(
 ) -> Result<PurchaseCompletion, FrontendError> {
     // 1. Idempotent replay check before any network I/O
     {
-        let mut service = state
-            .service
-            .lock()
-            .map_err(|_| fail("Wallet service unavailable"))?;
+        let mut service = state.lock_service()?;
         if let Some(completion) = service
             .replay_checkout_purchase(purchase_id, bundle)
             .map_err(FrontendError::from)?
@@ -514,10 +508,7 @@ pub(crate) async fn checkout_bundle(
 
     // 2. Decrypt & inspect bundle to check N = 0 offline-only vs anchored vouchers
     let (opened_bundle, merchant_id) = {
-        let service = state
-            .service
-            .lock()
-            .map_err(|_| fail("Wallet service unavailable"))?;
+        let service = state.lock_service()?;
         service
             .with_wallet_and_identity(|wallet, identity| {
                 let parsed = bundle_processor::open_and_verify_bundle(identity, bundle)?;
@@ -538,10 +529,7 @@ pub(crate) async fn checkout_bundle(
         let verdict_core = CheckoutReleaseVerdict::new(L2ProcessingOutcome::OfflineOnly, false);
         let verdict_fe: crate::models::FrontendCheckoutReleaseVerdict = verdict_core.into();
         let receive_payload = {
-            let mut service = state
-                .service
-                .lock()
-                .map_err(|_| fail("Wallet service unavailable"))?;
+            let mut service = state.lock_service()?;
             build_receive_payload_and_record(
                 state,
                 &mut service,
@@ -583,15 +571,17 @@ pub(crate) async fn checkout_bundle(
     let mut pow_base_bits = opened_bundle
         .anchor_manifest
         .as_ref()
-        .map(|m| determine_pow_base_bits(&settings, m))
+        .map(|m| {
+            crate::services::common::max_pow_base_bits_for_servers(
+                &settings,
+                m.servers.iter().map(|s| s.write_url.as_str()),
+            )
+        })
         .unwrap_or(DEFAULT_LOCK_POW_BASE_BITS);
 
     // 3. Prepare durable challenge context + per-server SyncLockBatchRequests (running Discovery if local manifest missing)
     let first_prepare = {
-        let mut service = state
-            .service
-            .lock()
-            .map_err(|_| fail("Wallet service unavailable"))?;
+        let mut service = state.lock_service()?;
         service.prepare_checkout_requests(
             purchase_id,
             bundle,
@@ -615,12 +605,13 @@ pub(crate) async fn checkout_bundle(
             )
             .await?;
             if let Some(ref m) = discovered {
-                pow_base_bits = pow_base_bits.max(determine_pow_base_bits(&settings, m));
+                pow_base_bits =
+                    pow_base_bits.max(crate::services::common::max_pow_base_bits_for_servers(
+                        &settings,
+                        m.servers.iter().map(|s| s.write_url.as_str()),
+                    ));
             }
-            let mut service = state
-                .service
-                .lock()
-                .map_err(|_| fail("Wallet service unavailable"))?;
+            let mut service = state.lock_service()?;
             service
                 .prepare_checkout_requests(
                     purchase_id,
@@ -704,12 +695,13 @@ pub(crate) async fn checkout_bundle(
         }
 
         if let Some(newer_manifest) = best_upgraded {
-            pow_base_bits = pow_base_bits.max(determine_pow_base_bits(&settings, &newer_manifest));
+            pow_base_bits =
+                pow_base_bits.max(crate::services::common::max_pow_base_bits_for_servers(
+                    &settings,
+                    newer_manifest.servers.iter().map(|s| s.write_url.as_str()),
+                ));
             let upgraded_pair = {
-                let mut service = state
-                    .service
-                    .lock()
-                    .map_err(|_| fail("Wallet service unavailable"))?;
+                let mut service = state.lock_service()?;
                 service
                     .update_l2_anchor_manifest(newer_manifest, password)
                     .map_err(FrontendError::from)?;
@@ -777,10 +769,7 @@ pub(crate) async fn checkout_bundle(
         .unwrap_or(false);
     let manifest_revision = Some(context.manifest.revision);
 
-    let mut service = state
-        .service
-        .lock()
-        .map_err(|_| fail("Wallet service unavailable"))?;
+    let mut service = state.lock_service()?;
     let current_owner = service
         .with_wallet(|wallet| wallet.get_user_id().to_string())
         .map_err(FrontendError::from)?;

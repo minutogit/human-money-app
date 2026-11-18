@@ -1,0 +1,319 @@
+// src/components/transfer/sendTransferHelpers.ts
+import type { TFunction } from 'i18next';
+import { transferService, CreateBundleResult } from '../../services/transferService';
+import { postService } from '../../services/postService';
+import { runPostSyncPass } from '../../sync/postSync';
+import { parseCardUri, parseContactCard, parsePaymentRequest } from '../../utils/humocoUri';
+import { logger } from '../../utils/log';
+import { stringifyError, translateError } from '../../utils/errorHelper';
+import type { ProtectActionFn } from '../../utils/fileIo';
+import type {
+    InvolvedVoucherInfo,
+    SourceTransfer,
+    TransactionRecord,
+    VoucherStandardInfo,
+    VoucherSummary,
+} from '../../types';
+
+export type SendState = {
+    recipientId: string;
+    notes: string;
+    sendProfileName: boolean;
+    customSenderName: string;
+    targetAmountStr: string;
+    selectedStandardId: string | null;
+    selectedIsTest: boolean | null;
+    privacyMode: 'public' | 'stealth' | null;
+    isProcessing: boolean;
+    feedbackMsg: string;
+    showConfirm: boolean;
+    recipientError: boolean;
+    privacyError: boolean;
+};
+
+export type SendAction =
+    | { type: 'SET_RECIPIENT'; id: string }
+    | { type: 'SET_NOTES'; notes: string }
+    | { type: 'TOGGLE_PROFILE_NAME'; value: boolean }
+    | { type: 'SET_SENDER_NAME'; name: string }
+    | { type: 'SET_TARGET_AMOUNT'; amount: string }
+    | { type: 'SET_STANDARD'; id: string | null; isTest: boolean | null; preserveAmount?: boolean }
+    | { type: 'SET_PRIVACY'; mode: 'public' | 'stealth' | null }
+    | { type: 'SET_PROCESSING'; value: boolean }
+    | { type: 'SET_FEEDBACK'; msg: string }
+    | { type: 'TOGGLE_CONFIRM'; value: boolean }
+    | { type: 'SET_RECIPIENT_ERROR'; value: boolean }
+    | { type: 'SET_PRIVACY_ERROR'; value: boolean };
+
+export const initialSendState: SendState = {
+    recipientId: '',
+    notes: '',
+    sendProfileName: true,
+    customSenderName: '',
+    targetAmountStr: '',
+    selectedStandardId: null,
+    selectedIsTest: null,
+    privacyMode: null,
+    isProcessing: false,
+    feedbackMsg: '',
+    showConfirm: false,
+    recipientError: false,
+    privacyError: false,
+};
+
+export function sendReducer(state: SendState, action: SendAction): SendState {
+    switch (action.type) {
+        case 'SET_RECIPIENT':
+            return { ...state, recipientId: action.id.replace(/\s+/g, ''), recipientError: false };
+        case 'SET_NOTES':
+            return { ...state, notes: action.notes };
+        case 'TOGGLE_PROFILE_NAME':
+            return { ...state, sendProfileName: action.value };
+        case 'SET_SENDER_NAME':
+            return { ...state, customSenderName: action.name };
+        case 'SET_TARGET_AMOUNT':
+            return { ...state, targetAmountStr: action.amount };
+        case 'SET_STANDARD':
+            return {
+                ...state,
+                selectedStandardId: action.id,
+                selectedIsTest: action.isTest,
+                targetAmountStr: action.preserveAmount ? state.targetAmountStr : '',
+            };
+        case 'SET_PRIVACY':
+            return { ...state, privacyMode: action.mode, privacyError: false };
+        case 'SET_PROCESSING':
+            return { ...state, isProcessing: action.value };
+        case 'SET_FEEDBACK':
+            return { ...state, feedbackMsg: action.msg };
+        case 'TOGGLE_CONFIRM':
+            return { ...state, showConfirm: action.value };
+        case 'SET_RECIPIENT_ERROR':
+            return { ...state, recipientError: action.value };
+        case 'SET_PRIVACY_ERROR':
+            return { ...state, privacyError: action.value };
+        default:
+            return state;
+    }
+}
+
+export function formatProfileDisplayName(
+    profile?: {
+        firstName?: string;
+        lastName?: string;
+        organization?: string;
+        community?: string;
+    } | null,
+): string {
+    if (!profile) return '';
+    const fullName = [profile.firstName, profile.lastName].filter(Boolean).join(' ').trim();
+    let name = fullName || profile.organization || '';
+    if (profile.community) {
+        name = name ? `${name} (${profile.community})` : profile.community;
+    }
+    return name.startsWith('did:key:') ? '' : name;
+}
+
+export interface PaymentRequestResolution {
+    matched: boolean;
+    to?: string;
+    note?: string;
+    standardId?: string | null;
+    isTest?: boolean;
+    amount?: string;
+    missingStandardName?: string;
+}
+
+export function resolvePaymentRequestInput(
+    rawText: string,
+    standardIdToUuidMap: Map<string, string>,
+    voucherStandards: VoucherStandardInfo[],
+    currentSelectedStandardId: string | null,
+): PaymentRequestResolution {
+    const parsed = parsePaymentRequest(rawText);
+    if (!parsed) return { matched: false };
+
+    let matchedStandardId: string | null = null;
+    const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+    if (parsed.standardUuid) {
+        for (const [id, uuid] of standardIdToUuidMap.entries()) {
+            if (uuid === parsed.standardUuid || id === parsed.standardUuid) {
+                matchedStandardId = id;
+                break;
+            }
+        }
+        if (!matchedStandardId) {
+            const isStrictUuid = uuidPattern.test(parsed.standardUuid);
+            const foundByIdOrName = voucherStandards.find(
+                (s) =>
+                    s.id === parsed.standardUuid ||
+                    (!isStrictUuid &&
+                        s.displayName?.toLowerCase() === parsed.standardUuid?.toLowerCase()),
+            );
+            if (foundByIdOrName) matchedStandardId = foundByIdOrName.id;
+        }
+    } else if (parsed.standardName) {
+        const found = voucherStandards.find(
+            (s) => s.displayName?.toLowerCase() === parsed.standardName?.toLowerCase(),
+        );
+        if (found) matchedStandardId = found.id;
+    }
+
+    if (!matchedStandardId && (parsed.standardUuid || parsed.standardName)) {
+        return {
+            matched: true,
+            to: parsed.to,
+            note: parsed.note,
+            missingStandardName: parsed.standardName || parsed.standardUuid,
+        };
+    }
+
+    return {
+        matched: true,
+        to: parsed.to,
+        note: parsed.note,
+        standardId: matchedStandardId ?? currentSelectedStandardId,
+        isTest: matchedStandardId ? (parsed.isTest ?? false) : parsed.isTest,
+        amount: parsed.amount,
+    };
+}
+
+export function extractRecipientDidFromRawCode(trimmed: string): string | null {
+    const parsedCard = parseCardUri(trimmed);
+    if (parsedCard?.envelopeJson) {
+        try {
+            const env = JSON.parse(parsedCard.envelopeJson) as Record<string, unknown>;
+            let cardDid = typeof env.did === 'string' ? env.did : '';
+            if (!cardDid && typeof env.card_wire === 'string') {
+                const seg = env.card_wire.split('.')[1];
+                if (seg) {
+                    const payload = JSON.parse(
+                        window.atob(seg.replace(/-/g, '+').replace(/_/g, '/')),
+                    ) as { did?: string };
+                    if (typeof payload.did === 'string') cardDid = payload.did;
+                }
+            }
+            if (cardDid) return cardDid.replace(/\s+/g, '');
+        } catch {
+            // Fall through to parseContactCard
+        }
+    }
+    const parsedContact = parseContactCard(trimmed);
+    return parsedContact?.did ? parsedContact.did.replace(/\s+/g, '') : null;
+}
+
+export interface CommitTransferParams {
+    state: SendState;
+    ownUserId: string;
+    selectedMap: Map<string, string>;
+    selectionStats: Record<string, { total: number; count: number }>;
+    availableVouchers: VoucherSummary[];
+    voucherStandards: VoucherStandardInfo[];
+    standardIdToUuidMap: Map<string, string>;
+    uuidToPrecisionMap: Map<string, number>;
+    sendCardOverride: boolean | null;
+    protectAction: ProtectActionFn;
+    checkAndTriggerCooldown: (errOrResult: unknown) => boolean;
+    translate: TFunction;
+}
+
+export async function commitAndDepositTransfer({
+    state,
+    ownUserId,
+    selectedMap,
+    selectionStats,
+    availableVouchers,
+    voucherStandards,
+    standardIdToUuidMap,
+    uuidToPrecisionMap,
+    sendCardOverride,
+    protectAction,
+    checkAndTriggerCooldown,
+    translate,
+}: CommitTransferParams): Promise<{
+    bundleResult: CreateBundleResult;
+    depositedTo: number;
+    depositError?: string;
+} | null> {
+    const trimmedName = state.customSenderName.trim();
+    const senderName = state.sendProfileName && trimmedName.length > 0 ? trimmedName : null;
+    const sources: SourceTransfer[] = Array.from(selectedMap.entries()).map(([id, amount]) => ({
+        localInstanceId: id,
+        amountToSend: amount,
+    }));
+
+    const standardDefinitionsToml: Record<string, string> = {};
+    voucherStandards.forEach((s) => {
+        standardDefinitionsToml[standardIdToUuidMap.get(s.id) || s.id] = s.content;
+    });
+
+    const summableAmounts: Record<string, string> = {};
+    Object.entries(selectionStats).forEach(([displayCurrency, stat]) => {
+        const voucher = availableVouchers.find((v) => v.displayCurrency === displayCurrency);
+        const precision = voucher ? (uuidToPrecisionMap.get(voucher.voucherStandardUuid) ?? 2) : 2;
+        summableAmounts[displayCurrency] = stat.total.toFixed(precision);
+    });
+
+    const outcome = await protectAction(async (password) => {
+        const bundleResult: CreateBundleResult = await transferService.createBundle({
+            recipientId: state.recipientId,
+            sources,
+            notes: state.notes || null,
+            senderProfileName: senderName,
+            standardDefinitionsToml,
+            usePrivacyMode: state.privacyMode === 'stealth',
+            sendCardOverride: sendCardOverride ?? undefined,
+            password,
+        });
+
+        const record: TransactionRecord = {
+            id: crypto.randomUUID(),
+            direction: 'sent',
+            recipientId: state.recipientId,
+            senderId: ownUserId,
+            timestamp: new Date().toISOString(),
+            summableAmounts,
+            countableItems: {},
+            involvedVouchers: (bundleResult.involvedSourcesDetails as InvolvedVoucherInfo[]).map(
+                (d) => d.localInstanceId,
+            ),
+            involvedSourcesDetails: bundleResult.involvedSourcesDetails as InvolvedVoucherInfo[],
+            bundleData: bundleResult.bundleData,
+            bundleId: bundleResult.bundleId,
+            notes: state.notes || undefined,
+            senderProfileName: senderName || undefined,
+        };
+
+        try {
+            await transferService.saveTransactionRecord(record, password || undefined);
+        } catch (saveErr) {
+            logger.error(
+                `Failed to persist transaction record after transfer commit: ${stringifyError(saveErr)}`,
+            );
+        }
+
+        let depositedTo = 0;
+        let depositError: string | undefined;
+        try {
+            const depositRes = await postService.depositTransferToPost(
+                bundleResult.bundleId,
+                password || undefined,
+            );
+            depositedTo = depositRes.depositedTo;
+            if (depositRes.errors?.length) {
+                depositError = depositRes.errors.join('; ');
+                logger.warn(`Post deposit completed with ${depositRes.errors.length} error(s)`);
+            }
+            runPostSyncPass().catch(() => {});
+        } catch (err) {
+            checkAndTriggerCooldown(err);
+            depositError = translateError(err, translate);
+            logger.warn(`Post deposit failed after transfer commit: ${stringifyError(err)}`);
+        }
+
+        return { bundleResult, depositedTo, depositError };
+    });
+
+    return outcome ?? null;
+}

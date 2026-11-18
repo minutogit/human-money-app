@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { ShieldCheck, Copy, CheckCircle2 } from 'lucide-react';
 import { AppSettings } from '../../types';
 import { NetworkProtectionCard } from './NetworkProtectionCard';
-import { StandardsManager } from '../StandardsManager';
+import { StandardsManager } from '../standards/StandardsManager';
 import { HelpIcon } from '../ui/HelpIcon';
 import { Disclosure } from '../ui/Disclosure';
 import { copyToClipboard } from '../../utils/clipboard';

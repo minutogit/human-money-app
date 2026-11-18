@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { triggerAutoBackup } from "../utils/autoBackup";
+import { afterWalletMutation } from "../sync/autoBackup";
 import {
     VoucherSummary,
     VoucherDetails,
@@ -36,13 +36,13 @@ export const voucherService = {
 
     create: async (standardTomlContent: string, data: NewVoucherData, password?: string) => {
         const result = await invoke<Voucher>("create_new_voucher", { standardTomlContent, data, password });
-        triggerAutoBackup();
+        afterWalletMutation(password);
         return result;
     },
 
     removeSignature: async (localInstanceId: string, signatureId: string, password?: string) => {
         const result = await invoke<void>("remove_voucher_signature", { localInstanceId, signatureId, password });
-        triggerAutoBackup();
+        afterWalletMutation(password);
         return result;
     },
     evaluateGuarantorAnchorCheck: async (args: {
@@ -80,7 +80,7 @@ export const voucherService = {
 
     processAndAttachSignature: async (containerBytes: number[], standardTomlContent: string, containerPassword?: string, walletPassword?: string) => {
         const result = await invoke<string>("process_and_attach_signature", { containerBytes, standardTomlContent, containerPassword, walletPassword });
-        triggerAutoBackup();
+        afterWalletMutation(walletPassword);
         return result;
     },
 
@@ -116,7 +116,7 @@ export const voucherService = {
             notes: args.notes ?? null,
             password: args.password ?? null,
         });
-        triggerAutoBackup();
+        afterWalletMutation(args.password);
         return result;
     },
 
@@ -160,7 +160,7 @@ export const voucherService = {
             standardToml: args.standardToml,
             password: args.password ?? null,
         });
-        triggerAutoBackup();
+        afterWalletMutation(args.password);
         return result;
     }
 };

@@ -311,25 +311,17 @@ pub async fn fetch_revocation_notice(
     read_url: &str,
     expected_drop_pub: &str,
 ) -> Result<Option<SyncRevocationNotice>, String> {
-    validate_sync_url(read_url)?;
-    let base = read_url.trim().trim_end_matches('/');
-    let url = format!("{}/revocation.json", base);
+    let url = append_sync_path(read_url, "revocation.json")?;
     let resp = client.get(&url).send().await.map_err(|e| {
         format!(
             "Network error fetching revocation.json from {}: {}",
             read_url, e
         )
     })?;
-    let status = resp.status();
-    if status.as_u16() == 404 {
+    if resp.status().as_u16() == 404 {
         return Ok(None);
     }
-    if !status.is_success() {
-        return Err(format!(
-            "Server returned HTTP {} fetching revocation.json",
-            status
-        ));
-    }
+    let resp = map_unexpected_status(resp, "fetching revocation.json").await?;
     let notice: SyncRevocationNotice = resp
         .json()
         .await
@@ -345,10 +337,7 @@ pub async fn push_revocation_notice(
     notice: Option<&SyncRevocationNotice>,
     issued_at: u64,
 ) -> Result<(), String> {
-    validate_sync_url(write_url)?;
-    let sep = if write_url.contains('?') { "&" } else { "?" };
-    let url = format!("{}{}revoke", write_url, sep);
-
+    let url = append_sync_query(write_url, "revoke")?;
     let body_json = match notice {
         Some(n) => serde_json::to_string(n)
             .map_err(|e| format!("Failed to serialize revocation notice: {}", e))?,
@@ -359,40 +348,18 @@ pub async fn push_revocation_notice(
         .map_err(|e| format!("Failed to serialize revocation clear payload: {}", e))?,
     };
 
-    let timestamp = current_unix_timestamp();
-    let nonce = generate_sync_nonce();
-    let signed = humoco_market::sign_admin_request(
+    let req = apply_admin_headers(
+        client.put(&url),
         admin_sk,
         "PUT_REVOKE",
         "",
-        timestamp,
-        &nonce,
         body_json.as_bytes(),
-    );
+    )
+    .header("Content-Type", "application/json")
+    .body(body_json);
 
-    let resp = client
-        .put(&url)
-        .header("X-Drop-Pubkey", &signed.pubkey_hex)
-        .header("X-Drop-Timestamp", signed.timestamp.to_string())
-        .header("X-Drop-Nonce", &signed.nonce_hex)
-        .header("X-Drop-Signature", &signed.signature_hex)
-        .header("Content-Type", "application/json")
-        .body(body_json)
-        .send()
-        .await
-        .map_err(|e| format!("Network error pushing revocation: {}", e))?;
-
-    let status = resp.status();
-    if status.is_success() {
-        Ok(())
-    } else {
-        let text = resp.text().await.unwrap_or_default();
-        Err(format!(
-            "Server returned HTTP {} pushing revocation: {}",
-            status,
-            text.trim()
-        ))
-    }
+    send_sync_request(req, "pushing revocation").await?;
+    Ok(())
 }
 
 fn loopback_sync_allowed() -> bool {
@@ -536,36 +503,173 @@ pub fn extract_retry_after_from_error_str(err: &str) -> Option<u64> {
     None
 }
 
+/// Validates `url` against SSRF rules and returns the trimmed slice.
+fn validated_sync_url(url: &str) -> Result<&str, String> {
+    validate_sync_url(url)?;
+    Ok(url.trim())
+}
+
+/// Validates `base_url` against SSRF rules and appends `query` using `?` or `&`.
+fn append_sync_query(base_url: &str, query: &str) -> Result<String, String> {
+    let clean = validated_sync_url(base_url)?;
+    let sep = if clean.contains('?') { "&" } else { "?" };
+    Ok(format!("{}{}{}", clean, sep, query))
+}
+
+/// Validates `base_url` against SSRF rules and appends a relative path segment.
+fn append_sync_path(base_url: &str, path: &str) -> Result<String, String> {
+    let clean = validated_sync_url(base_url)?.trim_end_matches('/');
+    let rel = path.trim_start_matches('/');
+    Ok(format!("{}/{}", clean, rel))
+}
+
+/// Attaches `X-Drop-*` authentication headers (and optionally `X-Drop-Prefix`) to `req`.
+fn apply_signed_headers(
+    req: reqwest::RequestBuilder,
+    headers: &SignedDropHeaders,
+    include_prefix: bool,
+) -> reqwest::RequestBuilder {
+    let mut req = req
+        .header("X-Drop-Pubkey", &headers.pubkey_hex)
+        .header("X-Drop-Timestamp", headers.timestamp.to_string())
+        .header("X-Drop-Nonce", &headers.nonce_hex)
+        .header("X-Drop-Signature", &headers.signature_hex);
+    if include_prefix {
+        if let Some(ref prefix) = headers.prefix {
+            if !prefix.is_empty() {
+                req = req.header("X-Drop-Prefix", prefix);
+            }
+        }
+    }
+    req
+}
+
+/// Signs an admin operation with a fresh timestamp/nonce and attaches `X-Drop-*` headers.
+fn apply_admin_headers(
+    req: reqwest::RequestBuilder,
+    admin_sk: &SigningKey,
+    action: &str,
+    channel: &str,
+    body: &[u8],
+) -> reqwest::RequestBuilder {
+    let timestamp = current_unix_timestamp();
+    let nonce = generate_sync_nonce();
+    let signed =
+        humoco_market::sign_admin_request(admin_sk, action, channel, timestamp, &nonce, body);
+    apply_signed_headers(req, &signed, false)
+}
+
+/// Parses a trimmed ASCII header value into `T`, returning `None` if missing or invalid.
+fn parse_header<T: std::str::FromStr>(
+    headers: &reqwest::header::HeaderMap,
+    name: &str,
+) -> Option<T> {
+    headers
+        .get(name)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.trim().parse::<T>().ok())
+}
+
+/// Formats an HTTP 429 rate-limit error string including the `Retry-After` duration.
+fn rate_limit_error(op: &str, headers: &reqwest::header::HeaderMap) -> String {
+    let secs = parse_retry_after(headers);
+    format!("Rate limited {} (HTTP 429). Retry-After: {}s", op, secs)
+}
+
+/// Converts a non-success HTTP response into a rate-limit or contextual HTTP error string.
+async fn error_from_response(resp: reqwest::Response, op: &str) -> String {
+    let status = resp.status();
+    if status.as_u16() == 429 {
+        return rate_limit_error(op, resp.headers());
+    }
+    let text = resp.text().await.unwrap_or_default();
+    let detail = text.trim();
+    if detail.is_empty() {
+        format!("Server returned HTTP {} {}", status, op)
+    } else {
+        format!("Server returned HTTP {} {}: {}", status, op, detail)
+    }
+}
+
+/// Returns `Ok(resp)` for 2xx responses, or a standardized HTTP 429 / 4xx / 5xx error.
+async fn map_unexpected_status(
+    resp: reqwest::Response,
+    op: &str,
+) -> Result<reqwest::Response, String> {
+    if resp.status().is_success() {
+        return Ok(resp);
+    }
+    Err(error_from_response(resp, op).await)
+}
+
+/// Executes `req`, mapping transport failures and non-2xx responses with `op` context.
+async fn send_sync_request(
+    req: reqwest::RequestBuilder,
+    op: &str,
+) -> Result<reqwest::Response, String> {
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| format!("Network error {}: {}", op, e))?;
+    map_unexpected_status(resp, op).await
+}
+
+/// Executes a `DELETE` request treating HTTP 200, 204, and 404 (idempotent delete) as success.
+async fn send_delete_request(req: reqwest::RequestBuilder, op: &str) -> Result<(), String> {
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| format!("Network error {}: {}", op, e))?;
+    match resp.status().as_u16() {
+        200 | 204 | 404 => Ok(()),
+        _ => Err(error_from_response(resp, op).await),
+    }
+}
+
+/// Handles `PUT` responses for slot and media uploads, preserving 412, 413, 429, and 507 semantics.
+async fn handle_put_slot_response(
+    resp: reqwest::Response,
+    target: &str,
+    op: &str,
+) -> Result<PutSlotOutcome, String> {
+    match resp.status().as_u16() {
+        200 | 201 | 204 => Ok(PutSlotOutcome::Saved {
+            etag: extract_etag(resp.headers()),
+        }),
+        412 => Ok(PutSlotOutcome::PreconditionFailed {
+            current_etag: extract_etag(resp.headers()),
+        }),
+        413 => Err(format!(
+            "Payload too large: sync server rejected {} size (HTTP 413)",
+            target
+        )),
+        507 => Err("Insufficient storage: sync server quota exceeded (HTTP 507)".to_string()),
+        _ => Err(error_from_response(resp, op).await),
+    }
+}
+
+/// Validates `write_url`, sends a JSON `POST` to `?query`, and checks for non-2xx status.
+async fn post_sync_json<T: Serialize + ?Sized>(
+    client: &reqwest::Client,
+    write_url: &str,
+    query: &str,
+    payload: &T,
+    op: &str,
+) -> Result<reqwest::Response, String> {
+    let url = append_sync_query(write_url, query)?;
+    send_sync_request(client.post(&url).json(payload), op).await
+}
+
 pub async fn fetch_sync_info(
     client: &reqwest::Client,
     write_url: &str,
 ) -> Result<SyncServerInfo, String> {
-    validate_sync_url(write_url)?;
-    let sep = if write_url.contains('?') { "&" } else { "?" };
-    let url = format!("{}{}info", write_url, sep);
-
-    let resp = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| format!("Network error fetching sync info from {}: {}", write_url, e))?;
-
-    let status = resp.status();
-    if status.as_u16() == 429 {
-        let secs = parse_retry_after(resp.headers());
-        return Err(format!(
-            "Rate limited fetching sync info from {} (HTTP 429). Retry-After: {}s",
-            write_url, secs
-        ));
-    }
-    if !status.is_success() {
-        let text = resp.text().await.unwrap_or_default();
-        return Err(format!(
-            "Server returned HTTP {} on ?info: {}",
-            status,
-            text.trim()
-        ));
-    }
+    let url = append_sync_query(write_url, "info")?;
+    let resp = send_sync_request(
+        client.get(&url),
+        &format!("fetching sync info from {}", write_url),
+    )
+    .await?;
 
     let mut info: SyncServerInfo = resp
         .json()
@@ -588,10 +692,10 @@ pub async fn head_slot_capability(
     prefix: Option<&str>,
     channel: &str,
 ) -> Result<SyncCapabilityResult, String> {
-    validate_sync_url(write_url)?;
+    let clean_url = validated_sync_url(write_url)?;
 
     let mut req = client
-        .head(write_url)
+        .head(clean_url)
         .header("X-Drop-Pubkey", pubkey_hex64)
         .header("X-Channel", channel);
 
@@ -605,73 +709,33 @@ pub async fn head_slot_capability(
         .map_err(|e| format!("Network error checking capability on {}: {}", write_url, e))?;
 
     let status = resp.status();
-
-    if status.as_u16() == 200 {
-        let authorized = resp
-            .headers()
-            .get("x-drop-authorized")
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.trim().eq_ignore_ascii_case("true"))
-            .unwrap_or(false);
-        let max_bytes = resp
-            .headers()
-            .get("x-channel-max-bytes")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.trim().parse::<usize>().ok());
-        let ttl_days = resp
-            .headers()
-            .get("x-channel-ttl-days")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.trim().parse::<u32>().ok());
-        let slot_etag = resp
-            .headers()
-            .get("etag")
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.trim().trim_matches('"').to_string())
-            .filter(|s| !s.is_empty());
-        let media_max_count = resp
-            .headers()
-            .get("x-media-max-count")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.trim().parse::<usize>().ok());
-        let media_max_user_bytes = resp
-            .headers()
-            .get("x-media-max-bytes")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.trim().parse::<usize>().ok());
-        let media_used_count = resp
-            .headers()
-            .get("x-media-count")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.trim().parse::<usize>().ok());
-        let media_used_bytes = resp
-            .headers()
-            .get("x-media-bytes")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.trim().parse::<usize>().ok());
-
-        Ok(SyncCapabilityResult {
-            authorized,
-            max_bytes,
-            ttl_days,
-            slot_etag,
-            media_max_count,
-            media_max_user_bytes,
-            media_used_count,
-            media_used_bytes,
-        })
-    } else if status.as_u16() == 429 {
-        let secs = parse_retry_after(resp.headers());
-        Err(format!(
-            "Rate limited by sync server (HTTP 429). Retry-After: {}s",
-            secs
-        ))
-    } else {
-        Err(format!(
+    if status.as_u16() == 429 {
+        return Err(rate_limit_error("by sync server", resp.headers()));
+    }
+    if status.as_u16() != 200 {
+        return Err(format!(
             "Server returned HTTP {} on slot capability check",
             status
-        ))
+        ));
     }
+
+    let headers = resp.headers();
+    let authorized = headers
+        .get("x-drop-authorized")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim().eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+
+    Ok(SyncCapabilityResult {
+        authorized,
+        max_bytes: parse_header(headers, "x-channel-max-bytes"),
+        ttl_days: parse_header(headers, "x-channel-ttl-days"),
+        slot_etag: extract_etag(headers),
+        media_max_count: parse_header(headers, "x-media-max-count"),
+        media_max_user_bytes: parse_header(headers, "x-media-max-bytes"),
+        media_used_count: parse_header(headers, "x-media-count"),
+        media_used_bytes: parse_header(headers, "x-media-bytes"),
+    })
 }
 
 pub async fn put_slot(
@@ -682,22 +746,10 @@ pub async fn put_slot(
     blob_bytes: &[u8],
     if_match: Option<&str>,
 ) -> Result<PutSlotOutcome, String> {
-    validate_sync_url(write_url)?;
-
-    let mut req = client
-        .put(write_url)
-        .header("X-Drop-Pubkey", &signed_headers.pubkey_hex)
+    let clean_url = validated_sync_url(write_url)?;
+    let mut req = apply_signed_headers(client.put(clean_url), signed_headers, true)
         .header("X-Channel", channel)
-        .header("X-Drop-Timestamp", signed_headers.timestamp.to_string())
-        .header("X-Drop-Nonce", &signed_headers.nonce_hex)
-        .header("X-Drop-Signature", &signed_headers.signature_hex)
         .header("Content-Type", "application/octet-stream");
-
-    if let Some(ref p) = signed_headers.prefix {
-        if !p.is_empty() {
-            req = req.header("X-Drop-Prefix", p);
-        }
-    }
 
     if let Some(im) = if_match {
         if im == "none" {
@@ -713,33 +765,7 @@ pub async fn put_slot(
         .await
         .map_err(|e| format!("Network error sending slot: {}", e))?;
 
-    let status = resp.status();
-    let status_code = status.as_u16();
-
-    if status_code == 200 || status_code == 201 || status_code == 204 {
-        let etag = extract_etag(resp.headers());
-        Ok(PutSlotOutcome::Saved { etag })
-    } else if status_code == 412 {
-        let current_etag = extract_etag(resp.headers());
-        Ok(PutSlotOutcome::PreconditionFailed { current_etag })
-    } else if status_code == 413 {
-        Err("Payload too large: sync server rejected slot size (HTTP 413)".to_string())
-    } else if status_code == 429 {
-        let secs = parse_retry_after(resp.headers());
-        Err(format!(
-            "Too many requests: sync server rate limit exceeded (HTTP 429). Retry-After: {}s",
-            secs
-        ))
-    } else if status_code == 507 {
-        Err("Insufficient storage: sync server quota exceeded (HTTP 507)".to_string())
-    } else {
-        let text = resp.text().await.unwrap_or_default();
-        Err(format!(
-            "Server returned HTTP {} on slot PUT: {}",
-            status,
-            text.trim()
-        ))
-    }
+    handle_put_slot_response(resp, "slot", "on slot PUT").await
 }
 
 pub async fn delete_slot(
@@ -748,44 +774,10 @@ pub async fn delete_slot(
     signed_headers: &SignedDropHeaders,
     channel: &str,
 ) -> Result<(), String> {
-    validate_sync_url(write_url)?;
-
-    let mut req = client
-        .delete(write_url)
-        .header("X-Drop-Pubkey", &signed_headers.pubkey_hex)
-        .header("X-Channel", channel)
-        .header("X-Drop-Timestamp", signed_headers.timestamp.to_string())
-        .header("X-Drop-Nonce", &signed_headers.nonce_hex)
-        .header("X-Drop-Signature", &signed_headers.signature_hex);
-
-    if let Some(ref p) = signed_headers.prefix {
-        if !p.is_empty() {
-            req = req.header("X-Drop-Prefix", p);
-        }
-    }
-
-    let resp = req
-        .send()
-        .await
-        .map_err(|e| format!("Network error deleting slot: {}", e))?;
-
-    let status = resp.status();
-    if status.as_u16() == 200 || status.as_u16() == 204 || status.as_u16() == 404 {
-        Ok(())
-    } else if status.as_u16() == 429 {
-        let secs = parse_retry_after(resp.headers());
-        Err(format!(
-            "Rate limited deleting slot (HTTP 429). Retry-After: {}s",
-            secs
-        ))
-    } else {
-        let text = resp.text().await.unwrap_or_default();
-        Err(format!(
-            "Server returned HTTP {} on slot DELETE: {}",
-            status,
-            text.trim()
-        ))
-    }
+    let clean_url = validated_sync_url(write_url)?;
+    let req = apply_signed_headers(client.delete(clean_url), signed_headers, true)
+        .header("X-Channel", channel);
+    send_delete_request(req, "deleting slot").await
 }
 
 pub async fn delete_account(
@@ -793,37 +785,9 @@ pub async fn delete_account(
     write_url: &str,
     signed_headers: &SignedDropHeaders,
 ) -> Result<(), String> {
-    validate_sync_url(write_url)?;
-    let sep = if write_url.contains('?') { "&" } else { "?" };
-    let url = format!("{}{}account", write_url, sep);
-
-    let resp = client
-        .delete(&url)
-        .header("X-Drop-Pubkey", &signed_headers.pubkey_hex)
-        .header("X-Drop-Timestamp", signed_headers.timestamp.to_string())
-        .header("X-Drop-Nonce", &signed_headers.nonce_hex)
-        .header("X-Drop-Signature", &signed_headers.signature_hex)
-        .send()
-        .await
-        .map_err(|e| format!("Network error deleting account: {}", e))?;
-
-    let status = resp.status();
-    if status.as_u16() == 200 || status.as_u16() == 204 || status.as_u16() == 404 {
-        Ok(())
-    } else if status.as_u16() == 429 {
-        let secs = parse_retry_after(resp.headers());
-        Err(format!(
-            "Rate limited deleting account (HTTP 429). Retry-After: {}s",
-            secs
-        ))
-    } else {
-        let text = resp.text().await.unwrap_or_default();
-        Err(format!(
-            "Server returned HTTP {} on account DELETE: {}",
-            status,
-            text.trim()
-        ))
-    }
+    let url = append_sync_query(write_url, "account")?;
+    let req = apply_signed_headers(client.delete(&url), signed_headers, false);
+    send_delete_request(req, "deleting account").await
 }
 
 pub async fn put_media_blob(
@@ -833,49 +797,17 @@ pub async fn put_media_blob(
     blob_id: &str,
     blob_bytes: &[u8],
 ) -> Result<PutSlotOutcome, String> {
-    validate_sync_url(write_url)?;
-
-    let resp = client
-        .put(write_url)
-        .header("X-Drop-Pubkey", &signed_headers.pubkey_hex)
+    let clean_url = validated_sync_url(write_url)?;
+    let resp = apply_signed_headers(client.put(clean_url), signed_headers, false)
         .header("X-Channel", "media")
         .header("X-Media-Id", blob_id)
-        .header("X-Drop-Timestamp", signed_headers.timestamp.to_string())
-        .header("X-Drop-Nonce", &signed_headers.nonce_hex)
-        .header("X-Drop-Signature", &signed_headers.signature_hex)
         .header("Content-Type", "application/octet-stream")
         .body(blob_bytes.to_vec())
         .send()
         .await
         .map_err(|e| format!("Network error sending media blob: {}", e))?;
 
-    let status = resp.status();
-    let status_code = status.as_u16();
-
-    if status_code == 200 || status_code == 201 || status_code == 204 {
-        let etag = extract_etag(resp.headers());
-        Ok(PutSlotOutcome::Saved { etag })
-    } else if status_code == 412 {
-        let current_etag = extract_etag(resp.headers());
-        Ok(PutSlotOutcome::PreconditionFailed { current_etag })
-    } else if status_code == 413 {
-        Err("Payload too large: sync server rejected media size (HTTP 413)".to_string())
-    } else if status_code == 429 {
-        let secs = parse_retry_after(resp.headers());
-        Err(format!(
-            "Too many requests: sync server rate limit exceeded (HTTP 429). Retry-After: {}s",
-            secs
-        ))
-    } else if status_code == 507 {
-        Err("Insufficient storage: sync server quota exceeded (HTTP 507)".to_string())
-    } else {
-        let text = resp.text().await.unwrap_or_default();
-        Err(format!(
-            "Server returned HTTP {} on media PUT: {}",
-            status,
-            text.trim()
-        ))
-    }
+    handle_put_slot_response(resp, "media", "on media PUT").await
 }
 
 pub async fn delete_media_blob(
@@ -884,42 +816,13 @@ pub async fn delete_media_blob(
     signed_headers: &SignedDropHeaders,
     blob_id: Option<&str>,
 ) -> Result<(), String> {
-    validate_sync_url(write_url)?;
-
-    let mut req = client
-        .delete(write_url)
-        .header("X-Drop-Pubkey", &signed_headers.pubkey_hex)
-        .header("X-Channel", "media")
-        .header("X-Drop-Timestamp", signed_headers.timestamp.to_string())
-        .header("X-Drop-Nonce", &signed_headers.nonce_hex)
-        .header("X-Drop-Signature", &signed_headers.signature_hex);
-
+    let clean_url = validated_sync_url(write_url)?;
+    let mut req = apply_signed_headers(client.delete(clean_url), signed_headers, false)
+        .header("X-Channel", "media");
     if let Some(id) = blob_id {
         req = req.header("X-Media-Id", id);
     }
-
-    let resp = req
-        .send()
-        .await
-        .map_err(|e| format!("Network error deleting media blob: {}", e))?;
-
-    let status = resp.status();
-    if status.as_u16() == 200 || status.as_u16() == 204 || status.as_u16() == 404 {
-        Ok(())
-    } else if status.as_u16() == 429 {
-        let secs = parse_retry_after(resp.headers());
-        Err(format!(
-            "Rate limited deleting media blob (HTTP 429). Retry-After: {}s",
-            secs
-        ))
-    } else {
-        let text = resp.text().await.unwrap_or_default();
-        Err(format!(
-            "Server returned HTTP {} on media DELETE: {}",
-            status,
-            text.trim()
-        ))
-    }
+    send_delete_request(req, "deleting media blob").await
 }
 
 pub async fn push_members(
@@ -929,53 +832,22 @@ pub async fn push_members(
     channel: &str,
     pubkeys: &[String],
 ) -> Result<(), String> {
-    validate_sync_url(write_url)?;
-    let sep = if write_url.contains('?') { "&" } else { "?" };
-    let url = format!("{}{}members&channel={}", write_url, sep, channel);
-
+    let url = append_sync_query(write_url, &format!("members&channel={}", channel))?;
     let body_json = serde_json::to_string(&serde_json::json!({ "pubkeys": pubkeys }))
         .map_err(|e| format!("Failed to serialize members payload: {}", e))?;
 
-    let timestamp = current_unix_timestamp();
-    let nonce = generate_sync_nonce();
-    let signed = humoco_market::sign_admin_request(
+    let req = apply_admin_headers(
+        client.put(&url),
         admin_sk,
         "PUT_MEMBERS",
         channel,
-        timestamp,
-        &nonce,
         body_json.as_bytes(),
-    );
+    )
+    .header("Content-Type", "application/json")
+    .body(body_json);
 
-    let resp = client
-        .put(&url)
-        .header("X-Drop-Pubkey", &signed.pubkey_hex)
-        .header("X-Drop-Timestamp", signed.timestamp.to_string())
-        .header("X-Drop-Nonce", &signed.nonce_hex)
-        .header("X-Drop-Signature", &signed.signature_hex)
-        .header("Content-Type", "application/json")
-        .body(body_json)
-        .send()
-        .await
-        .map_err(|e| format!("Network error pushing members: {}", e))?;
-
-    let status = resp.status();
-    if status.as_u16() == 200 || status.as_u16() == 204 {
-        Ok(())
-    } else if status.as_u16() == 429 {
-        let secs = parse_retry_after(resp.headers());
-        Err(format!(
-            "Rate limited pushing members (HTTP 429). Retry-After: {}s",
-            secs
-        ))
-    } else {
-        let text = resp.text().await.unwrap_or_default();
-        Err(format!(
-            "Server returned HTTP {} pushing members: {}",
-            status,
-            text.trim()
-        ))
-    }
+    send_sync_request(req, "pushing members").await?;
+    Ok(())
 }
 
 pub async fn fetch_admin_status(
@@ -983,47 +855,12 @@ pub async fn fetch_admin_status(
     write_url: &str,
     admin_sk: &SigningKey,
 ) -> Result<SyncServerAdminStatus, String> {
-    validate_sync_url(write_url)?;
-    let sep = if write_url.contains('?') { "&" } else { "?" };
-    let url = format!("{}{}status", write_url, sep);
-
-    let timestamp = current_unix_timestamp();
-    let nonce = generate_sync_nonce();
-    let signed = humoco_market::sign_admin_request(admin_sk, "STATUS", "", timestamp, &nonce, b"");
-
-    let resp = client
-        .get(&url)
-        .header("X-Drop-Pubkey", &signed.pubkey_hex)
-        .header("X-Drop-Timestamp", signed.timestamp.to_string())
-        .header("X-Drop-Nonce", &signed.nonce_hex)
-        .header("X-Drop-Signature", &signed.signature_hex)
-        .send()
+    let url = append_sync_query(write_url, "status")?;
+    let req = apply_admin_headers(client.get(&url), admin_sk, "STATUS", "", b"");
+    let resp = send_sync_request(req, "fetching admin status").await?;
+    resp.json()
         .await
-        .map_err(|e| format!("Network error fetching admin status: {}", e))?;
-
-    let status = resp.status();
-    if status.as_u16() == 429 {
-        let secs = parse_retry_after(resp.headers());
-        return Err(format!(
-            "Rate limited fetching admin status (HTTP 429). Retry-After: {}s",
-            secs
-        ));
-    }
-    if !status.is_success() {
-        let text = resp.text().await.unwrap_or_default();
-        return Err(format!(
-            "Server returned HTTP {} on ?status: {}",
-            status,
-            text.trim()
-        ));
-    }
-
-    let status_data: SyncServerAdminStatus = resp
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse admin status JSON: {}", e))?;
-
-    Ok(status_data)
+        .map_err(|e| format!("Failed to parse admin status JSON: {}", e))
 }
 
 pub async fn put_admin_config(
@@ -1034,10 +871,7 @@ pub async fn put_admin_config(
     max_members: usize,
     max_user_storage_mb: usize,
 ) -> Result<SyncServerAdminStatus, String> {
-    validate_sync_url(write_url)?;
-    let sep = if write_url.contains('?') { "&" } else { "?" };
-    let url = format!("{}{}admin_config", write_url, sep);
-
+    let url = append_sync_query(write_url, "admin_config")?;
     let body_json = serde_json::to_string(&serde_json::json!({
         "max_total_storage_mb": max_total_storage_mb,
         "max_members": max_members,
@@ -1045,52 +879,20 @@ pub async fn put_admin_config(
     }))
     .map_err(|e| format!("Failed to serialize admin_config payload: {}", e))?;
 
-    let timestamp = current_unix_timestamp();
-    let nonce = generate_sync_nonce();
-    let signed = humoco_market::sign_admin_request(
+    let req = apply_admin_headers(
+        client.put(&url),
         admin_sk,
         "PUT_ADMIN_CONFIG",
         "",
-        timestamp,
-        &nonce,
         body_json.as_bytes(),
-    );
+    )
+    .header("Content-Type", "application/json")
+    .body(body_json);
 
-    let resp = client
-        .put(&url)
-        .header("X-Drop-Pubkey", &signed.pubkey_hex)
-        .header("X-Drop-Timestamp", signed.timestamp.to_string())
-        .header("X-Drop-Nonce", &signed.nonce_hex)
-        .header("X-Drop-Signature", &signed.signature_hex)
-        .header("Content-Type", "application/json")
-        .body(body_json)
-        .send()
+    let resp = send_sync_request(req, "pushing admin_config").await?;
+    resp.json()
         .await
-        .map_err(|e| format!("Network error pushing admin_config: {}", e))?;
-
-    let status = resp.status();
-    if status.as_u16() == 429 {
-        let secs = parse_retry_after(resp.headers());
-        return Err(format!(
-            "Rate limited pushing admin_config (HTTP 429). Retry-After: {}s",
-            secs
-        ));
-    }
-    if !status.is_success() {
-        let text = resp.text().await.unwrap_or_default();
-        return Err(format!(
-            "Server returned HTTP {} pushing admin_config: {}",
-            status,
-            text.trim()
-        ));
-    }
-
-    let status_data: SyncServerAdminStatus = resp
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse admin_config response JSON: {}", e))?;
-
-    Ok(status_data)
+        .map_err(|e| format!("Failed to parse admin_config response JSON: {}", e))
 }
 
 pub async fn list_index(
@@ -1099,10 +901,7 @@ pub async fn list_index(
     cached_etag: Option<&str>,
     cached_last_modified: Option<&str>,
 ) -> Result<IndexFetchResult, String> {
-    validate_sync_url(read_url)?;
-    let base = read_url.trim().trim_end_matches('/');
-    let url = format!("{}/index.json", base);
-
+    let url = append_sync_path(read_url, "index.json")?;
     let mut req = client.get(&url);
     if let Some(etag) = cached_etag {
         req = req.header("If-None-Match", etag);
@@ -1116,33 +915,19 @@ pub async fn list_index(
         .await
         .map_err(|e| format!("Network error fetching index: {}", e))?;
 
-    let status = resp.status();
-    if status.as_u16() == 304 {
-        return Ok(IndexFetchResult::NotModified);
-    }
-    if status.as_u16() == 404 {
-        return Ok(IndexFetchResult::Modified {
-            entries: Vec::new(),
-            etag: None,
-            last_modified: None,
-        });
-    }
-    if status.as_u16() == 429 {
-        let secs = parse_retry_after(resp.headers());
-        return Err(format!(
-            "Rate limited fetching index (HTTP 429). Retry-After: {}s",
-            secs
-        ));
-    }
-    if !status.is_success() {
-        let text = resp.text().await.unwrap_or_default();
-        return Err(format!(
-            "Server returned HTTP {} fetching index: {}",
-            status,
-            text.trim()
-        ));
+    match resp.status().as_u16() {
+        304 => return Ok(IndexFetchResult::NotModified),
+        404 => {
+            return Ok(IndexFetchResult::Modified {
+                entries: Vec::new(),
+                etag: None,
+                last_modified: None,
+            })
+        }
+        _ => {}
     }
 
+    let resp = map_unexpected_status(resp, "fetching index").await?;
     let new_etag = extract_etag(resp.headers());
     let new_last_modified = resp
         .headers()
@@ -1170,13 +955,11 @@ pub async fn get_slot(
     channel: &str,
     cached_etag: Option<&str>,
 ) -> Result<SlotFetchResult, String> {
-    validate_sync_url(read_url)?;
-    let base = read_url.trim().trim_end_matches('/');
     let slot_key = match prefix.filter(|s| !s.is_empty()) {
         Some(p) => format!("{}_{}", id, p),
         None => id.to_string(),
     };
-    let url = format!("{}/{}.{}.bin", base, slot_key, channel);
+    let url = append_sync_path(read_url, &format!("{}.{}.bin", slot_key, channel))?;
 
     let mut req = client.get(&url);
     if let Some(etag) = cached_etag
@@ -1191,37 +974,14 @@ pub async fn get_slot(
         .await
         .map_err(|e| format!("Network error fetching slot: {}", e))?;
 
-    if resp.status() == reqwest::StatusCode::NOT_MODIFIED {
-        return Ok(SlotFetchResult::NotModified);
+    match resp.status().as_u16() {
+        304 => return Ok(SlotFetchResult::NotModified),
+        404 => return Ok(SlotFetchResult::NotFound),
+        _ => {}
     }
 
-    if resp.status() == reqwest::StatusCode::NOT_FOUND {
-        return Ok(SlotFetchResult::NotFound);
-    }
-
-    if resp.status().as_u16() == 429 {
-        let secs = parse_retry_after(resp.headers());
-        return Err(format!(
-            "Rate limited fetching slot {} (HTTP 429). Retry-After: {}s",
-            id, secs
-        ));
-    }
-
-    if !resp.status().is_success() {
-        return Err(format!(
-            "Server returned HTTP {} fetching slot {}",
-            resp.status(),
-            id
-        ));
-    }
-
-    let etag = resp
-        .headers()
-        .get("etag")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.trim().trim_matches('"').to_string())
-        .filter(|s| !s.is_empty());
-
+    let resp = map_unexpected_status(resp, &format!("fetching slot {}", id)).await?;
+    let etag = extract_etag(resp.headers());
     let bytes = resp
         .bytes()
         .await
@@ -1495,31 +1255,28 @@ pub async fn probe_lock_server(
         })
         .unwrap_or(false);
 
-    let sep = if clean_write_url.contains('?') {
-        "&"
-    } else {
-        "?"
-    };
-    let lock_url = format!("{}{}lock", clean_write_url, sep);
-    let client_nonce = generate_lock_probe_nonce();
-    let probe_body = serde_json::json!({
-        "probe": true,
-        "client_nonce": client_nonce,
-    });
-    if let Ok(resp) = client.post(&lock_url).json(&probe_body).send().await {
-        if resp.status().is_success() {
-            if let Ok(parsed) = resp.json::<SyncLockProbeResponseDto>().await {
-                failed.waf_probe_passed =
-                    verify_lock_probe_response(&lock_pub, &client_nonce, &parsed);
+    if let Ok(lock_url) = append_sync_query(&clean_write_url, "lock") {
+        let client_nonce = generate_lock_probe_nonce();
+        let probe_body = serde_json::json!({
+            "probe": true,
+            "client_nonce": client_nonce,
+        });
+        if let Ok(resp) = client.post(&lock_url).json(&probe_body).send().await {
+            if resp.status().is_success() {
+                if let Ok(parsed) = resp.json::<SyncLockProbeResponseDto>().await {
+                    failed.waf_probe_passed =
+                        verify_lock_probe_response(&lock_pub, &client_nonce, &parsed);
+                }
             }
         }
     }
 
-    let selftest_url = format!("{}{}lock_selftest", clean_write_url, sep);
-    if let Ok(resp) = client.get(&selftest_url).send().await {
-        if resp.status().is_success() {
-            if let Ok(report) = resp.json::<SyncLockSelftestReportDto>().await {
-                failed.selftest_passed = verify_lock_selftest(&lock_pub, &report);
+    if let Ok(selftest_url) = append_sync_query(&clean_write_url, "lock_selftest") {
+        if let Ok(resp) = client.get(&selftest_url).send().await {
+            if resp.status().is_success() {
+                if let Ok(report) = resp.json::<SyncLockSelftestReportDto>().await {
+                    failed.selftest_passed = verify_lock_selftest(&lock_pub, &report);
+                }
             }
         }
     }
@@ -1561,7 +1318,7 @@ pub async fn request_genesis_ticket(
     pow_bits: Option<u32>,
     caller_signing_key: Option<&SigningKey>,
 ) -> Result<GenesisTicket, String> {
-    validate_sync_url(write_url)?;
+    let url = append_sync_query(write_url, "lock_ticket")?;
     let now_secs = current_unix_timestamp();
 
     let (pow_ts, pow_nonce) = if caller_signing_key.is_none() || pow_bits.is_some() {
@@ -1589,51 +1346,29 @@ pub async fn request_genesis_ticket(
     let raw_bytes = serde_json::to_vec(&req_body)
         .map_err(|e| format!("Failed to encode lock_ticket request: {}", e))?;
 
-    let sep = if write_url.contains('?') { "&" } else { "?" };
-    let url = format!("{}{}lock_ticket", write_url.trim(), sep);
     let mut req = client
         .post(&url)
         .header(reqwest::header::CONTENT_TYPE, "application/json");
 
     if let Some(sk) = caller_signing_key {
-        let pub_hex = hex::encode(sk.verifying_key().as_bytes());
         let nonce = generate_sync_nonce();
-        let body_hash = hex::encode(Sha256::digest(&raw_bytes));
-        let msg = format!(
-            "HUMOCO-DROP-REQ-V1\nPOST\nlock_ticket\n\n{}\n{}\n{}",
-            now_secs, nonce, body_hash
+        let signed = humoco_market::sign_member_request_direct(
+            sk,
+            "POST",
+            "lock_ticket",
+            None,
+            now_secs,
+            &nonce,
+            &raw_bytes,
         );
-        let sig_hex = hex::encode(sk.sign(msg.as_bytes()).to_bytes());
-        req = req
-            .header("X-Drop-Pubkey", pub_hex)
-            .header("X-Drop-Timestamp", now_secs.to_string())
-            .header("X-Drop-Nonce", nonce)
-            .header("X-Drop-Signature", sig_hex);
+        req = apply_signed_headers(req, &signed, false);
     }
 
-    let resp = req.body(raw_bytes).send().await.map_err(|e| {
-        format!(
-            "Network error requesting lock_ticket from {}: {}",
-            write_url, e
-        )
-    })?;
-
-    let status = resp.status();
-    if status.as_u16() == 429 {
-        let secs = parse_retry_after(resp.headers());
-        return Err(format!(
-            "Rate limited requesting lock_ticket (HTTP 429). Retry-After: {}s",
-            secs
-        ));
-    }
-    if !status.is_success() {
-        let text = resp.text().await.unwrap_or_default();
-        return Err(format!(
-            "Server returned HTTP {} on ?lock_ticket: {}",
-            status,
-            text.trim()
-        ));
-    }
+    let resp = send_sync_request(
+        req.body(raw_bytes),
+        &format!("requesting lock_ticket from {}", write_url),
+    )
+    .await?;
 
     let parsed: GenesisTicketResponse = resp
         .json()
@@ -1653,9 +1388,7 @@ pub async fn post_lock_batch(
     write_url: &str,
     request: &SyncLockBatchRequest,
 ) -> Result<SyncLockBatchOutcome, String> {
-    validate_sync_url(write_url)?;
-    let sep = if write_url.contains('?') { "&" } else { "?" };
-    let url = format!("{}{}lock", write_url.trim(), sep);
+    let url = append_sync_query(write_url, "lock")?;
 
     let resp = client
         .post(&url)
@@ -1666,10 +1399,9 @@ pub async fn post_lock_batch(
 
     let status_code = resp.status().as_u16();
     if status_code == 429 {
-        let secs = parse_retry_after(resp.headers());
-        return Err(format!(
-            "Rate limited posting lock batch to {} (HTTP 429). Retry-After: {}s",
-            write_url, secs
+        return Err(rate_limit_error(
+            &format!("posting lock batch to {}", write_url),
+            resp.headers(),
         ));
     }
 
@@ -1741,37 +1473,21 @@ pub async fn get_lock_freeze_status(
     write_url: &str,
     anchor_id_hex: &str,
 ) -> Result<Option<LockFreezeStatusDto>, String> {
-    validate_sync_url(write_url)?;
-    let sep = if write_url.contains('?') { "&" } else { "?" };
-    let url = format!(
-        "{}{}lock_freeze&anchor_id={}",
-        write_url.trim(),
-        sep,
-        anchor_id_hex.trim()
-    );
+    let url = append_sync_query(
+        write_url,
+        &format!("lock_freeze&anchor_id={}", anchor_id_hex.trim()),
+    )?;
     let resp = client.get(&url).send().await.map_err(|e| {
         format!(
             "Network error querying ?lock_freeze on {}: {}",
             write_url, e
         )
     })?;
-    let code = resp.status().as_u16();
-    if code == 404 {
+    if resp.status().as_u16() == 404 {
         return Ok(None);
     }
-    if code == 429 {
-        let secs = parse_retry_after(resp.headers());
-        return Err(format!("Rate limited (HTTP 429). Retry-After: {}s", secs));
-    }
-    if !resp.status().is_success() {
-        let text = resp.text().await.unwrap_or_default();
-        return Err(format!(
-            "Lock server {} returned HTTP {} on GET ?lock_freeze: {}",
-            write_url,
-            code,
-            text.trim()
-        ));
-    }
+    let resp =
+        map_unexpected_status(resp, &format!("querying ?lock_freeze on {}", write_url)).await?;
     let parsed: LockFreezeStatusDto = resp
         .json()
         .await
@@ -1784,30 +1500,16 @@ pub async fn post_lock_freeze_action(
     write_url: &str,
     body: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    validate_sync_url(write_url)?;
-    let sep = if write_url.contains('?') { "&" } else { "?" };
-    let url = format!("{}{}lock_freeze", write_url.trim(), sep);
-    let resp = client
-        .post(&url)
-        .json(body)
-        .send()
+    let resp = post_sync_json(
+        client,
+        write_url,
+        "lock_freeze",
+        body,
+        &format!("posting ?lock_freeze to {}", write_url),
+    )
+    .await?;
+    resp.json()
         .await
-        .map_err(|e| format!("Network error posting ?lock_freeze to {}: {}", write_url, e))?;
-    let code = resp.status().as_u16();
-    if code == 429 {
-        let secs = parse_retry_after(resp.headers());
-        return Err(format!("Rate limited (HTTP 429). Retry-After: {}s", secs));
-    }
-    let text = resp.text().await.unwrap_or_default();
-    if !(200..300).contains(&code) {
-        return Err(format!(
-            "Lock server {} returned HTTP {} on POST ?lock_freeze: {}",
-            write_url,
-            code,
-            text.trim()
-        ));
-    }
-    serde_json::from_str(&text)
         .map_err(|e| format!("Invalid POST ?lock_freeze response JSON: {}", e))
 }
 
@@ -1825,9 +1527,6 @@ pub async fn post_lock_import(
     snapshots: &[SnapshotExport],
     quorum_certificates: &[QuorumCertificate],
 ) -> Result<ImportAck, String> {
-    validate_sync_url(write_url)?;
-    let sep = if write_url.contains('?') { "&" } else { "?" };
-    let url = format!("{}{}lock_import", write_url.trim(), sep);
     let payload = serde_json::json!({
         "anchor_id": hex::encode(anchor_id),
         "active_manifest": active_manifest,
@@ -1835,27 +1534,17 @@ pub async fn post_lock_import(
         "snapshots": snapshots,
         "quorum_certificates": quorum_certificates,
     });
-    let resp = client
-        .post(&url)
-        .json(&payload)
-        .send()
+    let resp = post_sync_json(
+        client,
+        write_url,
+        "lock_import",
+        &payload,
+        &format!("posting ?lock_import to {}", write_url),
+    )
+    .await?;
+    let parsed: LockImportResponseDto = resp
+        .json()
         .await
-        .map_err(|e| format!("Network error posting ?lock_import to {}: {}", write_url, e))?;
-    let code = resp.status().as_u16();
-    if code == 429 {
-        let secs = parse_retry_after(resp.headers());
-        return Err(format!("Rate limited (HTTP 429). Retry-After: {}s", secs));
-    }
-    let text = resp.text().await.unwrap_or_default();
-    if !(200..300).contains(&code) {
-        return Err(format!(
-            "Lock server {} returned HTTP {} on ?lock_import: {}",
-            write_url,
-            code,
-            text.trim()
-        ));
-    }
-    let parsed: LockImportResponseDto = serde_json::from_str(&text)
         .map_err(|e| format!("Invalid ?lock_import response JSON: {}", e))?;
     if parsed.import_ack.anchor_id != *anchor_id || !parsed.import_ack.verify() {
         return Err("Returned ImportAck failed signature or anchor_id verification".to_string());
@@ -1876,9 +1565,6 @@ pub async fn post_lock_commit_sign(
     imported_state_hash: &[u8; 32],
     import_acks: &[ImportAck],
 ) -> Result<CommitteeSignature, String> {
-    validate_sync_url(write_url)?;
-    let sep = if write_url.contains('?') { "&" } else { "?" };
-    let url = format!("{}{}lock_commit", write_url.trim(), sep);
     let payload = serde_json::json!({
         "action": "sign_commit",
         "anchor_id": hex::encode(anchor_id),
@@ -1886,27 +1572,17 @@ pub async fn post_lock_commit_sign(
         "imported_state_hash": hex::encode(imported_state_hash),
         "import_acks": import_acks,
     });
-    let resp = client
-        .post(&url)
-        .json(&payload)
-        .send()
+    let resp = post_sync_json(
+        client,
+        write_url,
+        "lock_commit",
+        &payload,
+        &format!("posting ?lock_commit sign_commit to {}", write_url),
+    )
+    .await?;
+    let parsed: LockCommitSignResponseDto = resp
+        .json()
         .await
-        .map_err(|e| format!("Network error posting ?lock_commit to {}: {}", write_url, e))?;
-    let code = resp.status().as_u16();
-    if code == 429 {
-        let secs = parse_retry_after(resp.headers());
-        return Err(format!("Rate limited (HTTP 429). Retry-After: {}s", secs));
-    }
-    let text = resp.text().await.unwrap_or_default();
-    if !(200..300).contains(&code) {
-        return Err(format!(
-            "Lock server {} returned HTTP {} on ?lock_commit sign_commit: {}",
-            write_url,
-            code,
-            text.trim()
-        ));
-    }
-    let parsed: LockCommitSignResponseDto = serde_json::from_str(&text)
         .map_err(|e| format!("Invalid ?lock_commit response JSON: {}", e))?;
     let prop_hash = proposal.core_digest()?;
     let digest =
@@ -1927,30 +1603,19 @@ pub async fn post_lock_commit_finalize(
     anchor_id: &[u8; 32],
     new_manifest: &AnchorManifest,
 ) -> Result<(), String> {
-    validate_sync_url(write_url)?;
-    let sep = if write_url.contains('?') { "&" } else { "?" };
-    let url = format!("{}{}lock_commit", write_url.trim(), sep);
     let payload = serde_json::json!({
         "action": "finalize",
         "anchor_id": hex::encode(anchor_id),
         "new_manifest": new_manifest,
     });
-    let resp = client.post(&url).json(&payload).send().await.map_err(|e| {
-        format!(
-            "Network error finalizing ?lock_commit on {}: {}",
-            write_url, e
-        )
-    })?;
-    let code = resp.status().as_u16();
-    if !resp.status().is_success() {
-        let text = resp.text().await.unwrap_or_default();
-        return Err(format!(
-            "Lock server {} returned HTTP {} on ?lock_commit finalize: {}",
-            write_url,
-            code,
-            text.trim()
-        ));
-    }
+    post_sync_json(
+        client,
+        write_url,
+        "lock_commit",
+        &payload,
+        &format!("finalizing ?lock_commit on {}", write_url),
+    )
+    .await?;
     Ok(())
 }
 
@@ -1958,8 +1623,7 @@ pub fn anchor_manifest_candidate_urls(
     base_url: &str,
     anchor_hex: &str,
 ) -> Result<Vec<String>, String> {
-    validate_sync_url(base_url)?;
-    let trimmed = base_url.trim().trim_end_matches('/');
+    let trimmed = validated_sync_url(base_url)?.trim_end_matches('/');
     let mut urls = Vec::new();
     if trimmed.ends_with("/sync.php") || trimmed.ends_with("/sync") {
         let root = trimmed
@@ -2003,11 +1667,7 @@ pub async fn fetch_anchor_manifest_bin(
             continue;
         }
         if code == 429 {
-            let secs = parse_retry_after(resp.headers());
-            return Err(format!(
-                "Rate limited fetching anchor manifest (HTTP 429). Retry-After: {}s",
-                secs
-            ));
+            return Err(rate_limit_error("fetching anchor manifest", resp.headers()));
         }
         if !resp.status().is_success() {
             continue;
@@ -2030,8 +1690,8 @@ pub async fn fetch_static_lock_entry(
     read_url: &str,
     rel_path: &str,
 ) -> Result<Option<LockEntry>, String> {
-    validate_sync_url(read_url)?;
-    let base = normalize_lock_read_base(read_url);
+    let clean_read_url = validated_sync_url(read_url)?;
+    let base = normalize_lock_read_base(clean_read_url);
     let clean_rel = rel_path.trim().trim_start_matches('/');
     let clean_rel = clean_rel.strip_prefix("locks/").unwrap_or(clean_rel);
     if clean_rel.is_empty() || clean_rel.contains("..") {
@@ -2045,23 +1705,10 @@ pub async fn fetch_static_lock_entry(
         .await
         .map_err(|e| format!("Network error fetching static lock '{}': {}", url, e))?;
 
-    let code = resp.status().as_u16();
-    if code == 404 {
+    if resp.status().as_u16() == 404 {
         return Ok(None);
     }
-    if code == 429 {
-        let secs = parse_retry_after(resp.headers());
-        return Err(format!(
-            "Rate limited fetching static lock (HTTP 429). Retry-After: {}s",
-            secs
-        ));
-    }
-    if !resp.status().is_success() {
-        return Err(format!(
-            "Server returned HTTP {} fetching static lock '{}'",
-            code, url
-        ));
-    }
+    let resp = map_unexpected_status(resp, &format!("fetching static lock '{}'", url)).await?;
 
     let bytes = resp
         .bytes()
@@ -2448,6 +2095,163 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(hit, Some(entry));
+
+        server.await.unwrap();
+    }
+
+    #[test]
+    fn test_append_sync_query_and_path_helpers() {
+        assert_eq!(
+            append_sync_query(" https://sync.example.com/api.php ", "info").unwrap(),
+            "https://sync.example.com/api.php?info"
+        );
+        assert_eq!(
+            append_sync_query("https://sync.example.com/index.php?drop=1", "lock_ticket").unwrap(),
+            "https://sync.example.com/index.php?drop=1&lock_ticket"
+        );
+        assert!(append_sync_query("https://10.0.0.1/api.php", "info").is_err());
+
+        assert_eq!(
+            append_sync_path("https://sync.example.com/d-123/", "/index.json").unwrap(),
+            "https://sync.example.com/d-123/index.json"
+        );
+        assert!(append_sync_path("https://192.168.1.10/d-123", "index.json").is_err());
+    }
+
+    #[test]
+    fn test_rate_limit_error_and_header_helpers() {
+        let mut hdrs = reqwest::header::HeaderMap::new();
+        assert_eq!(
+            rate_limit_error("fetching index", &hdrs),
+            "Rate limited fetching index (HTTP 429). Retry-After: 60s"
+        );
+        hdrs.insert(reqwest::header::RETRY_AFTER, "42".parse().unwrap());
+        let formatted = rate_limit_error("fetching index", &hdrs);
+        assert_eq!(
+            formatted,
+            "Rate limited fetching index (HTTP 429). Retry-After: 42s"
+        );
+        assert_eq!(extract_retry_after_from_error_str(&formatted), Some(42));
+
+        let client = create_sync_http_client();
+        let signed = SignedDropHeaders {
+            pubkey_hex: "aa".repeat(32),
+            prefix: Some("delta".to_string()),
+            timestamp: 1_700_000_000,
+            nonce_hex: "bb".repeat(16),
+            signature_hex: "cc".repeat(64),
+        };
+        let req_with_pfx = apply_signed_headers(
+            client.put("https://sync.example.com/api.php"),
+            &signed,
+            true,
+        )
+        .build()
+        .unwrap();
+        assert_eq!(
+            req_with_pfx.headers().get("X-Drop-Prefix").unwrap(),
+            "delta"
+        );
+        assert_eq!(
+            req_with_pfx.headers().get("X-Drop-Timestamp").unwrap(),
+            "1700000000"
+        );
+
+        let req_without_pfx = apply_signed_headers(
+            client.put("https://sync.example.com/api.php"),
+            &signed,
+            false,
+        )
+        .build()
+        .unwrap();
+        assert!(req_without_pfx.headers().get("X-Drop-Prefix").is_none());
+
+        let admin_sk = SigningKey::from_bytes(&[33u8; 32]);
+        let admin_req = apply_admin_headers(
+            client.get("https://sync.example.com/api.php?status"),
+            &admin_sk,
+            "STATUS",
+            "",
+            b"",
+        )
+        .build()
+        .unwrap();
+        assert_eq!(
+            admin_req.headers().get("X-Drop-Pubkey").unwrap(),
+            hex::encode(admin_sk.verifying_key().as_bytes()).as_str()
+        );
+        assert!(admin_req.headers().get("X-Drop-Signature").is_some());
+        assert!(admin_req.headers().get("X-Drop-Prefix").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_put_slot_special_status_codes() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let responses = vec![
+            "HTTP/1.1 412 Precondition Failed\r\nETag: \"remote-v2\"\r\nContent-Length: 0\r\n\r\n",
+            "HTTP/1.1 413 Payload Too Large\r\nContent-Length: 0\r\n\r\n",
+            "HTTP/1.1 429 Too Many Requests\r\nRetry-After: 17\r\nContent-Length: 0\r\n\r\n",
+            "HTTP/1.1 507 Insufficient Storage\r\nContent-Length: 0\r\n\r\n",
+            "HTTP/1.1 204 No Content\r\nETag: \"saved-v3\"\r\nContent-Length: 0\r\n\r\n",
+        ];
+
+        let server = tokio::spawn(async move {
+            for raw in responses {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut buf = [0u8; 2048];
+                let _ = stream.read(&mut buf).await.unwrap();
+                stream.write_all(raw.as_bytes()).await.unwrap();
+            }
+        });
+
+        let client = create_sync_http_client();
+        let write_url = format!("http://127.0.0.1:{}/sync.php", addr.port());
+        let signed = SignedDropHeaders {
+            pubkey_hex: "aa".repeat(32),
+            prefix: None,
+            timestamp: 1_700_000_000,
+            nonce_hex: "bb".repeat(16),
+            signature_hex: "cc".repeat(64),
+        };
+
+        let r412 = put_slot(&client, &write_url, &signed, "card", b"abc", Some("old"))
+            .await
+            .unwrap();
+        assert_eq!(
+            r412,
+            PutSlotOutcome::PreconditionFailed {
+                current_etag: Some("remote-v2".to_string())
+            }
+        );
+
+        let r413 = put_slot(&client, &write_url, &signed, "card", b"abc", None)
+            .await
+            .unwrap_err();
+        assert!(r413.contains("HTTP 413"));
+
+        let r429 = put_slot(&client, &write_url, &signed, "card", b"abc", None)
+            .await
+            .unwrap_err();
+        assert_eq!(extract_retry_after_from_error_str(&r429), Some(17));
+        assert!(r429.contains("(HTTP 429). Retry-After: 17s"));
+
+        let r507 = put_slot(&client, &write_url, &signed, "card", b"abc", None)
+            .await
+            .unwrap_err();
+        assert!(r507.contains("HTTP 507"));
+
+        let r204 = put_slot(&client, &write_url, &signed, "card", b"abc", None)
+            .await
+            .unwrap();
+        assert_eq!(
+            r204,
+            PutSlotOutcome::Saved {
+                etag: Some("saved-v3".to_string())
+            }
+        );
 
         server.await.unwrap();
     }

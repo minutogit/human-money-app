@@ -35,7 +35,6 @@ export interface ResetLocalPasswordViaBackupArgs {
     backupPassword?: string | null;
     mnemonic?: string | null;
     passphrase?: string | null;
-    userPrefix?: string | null;
     language?: MnemonicLanguage | null;
     newPassword: string;
     localInstanceId: string;
@@ -43,14 +42,14 @@ export interface ResetLocalPasswordViaBackupArgs {
 
 export interface ExportBackupFileArgs {
     destinationPath: string;
-    protectionMode: "mnemonic_only" | "custom_password" | string;
+    protectionMode: "mnemonic_only" | "custom_password";
     backupPassword?: string | null;
     password?: string | null;
 }
 
 export interface SyncBackupFolderArgs {
     folderPath: string;
-    protectionMode: "mnemonic_only" | "custom_password" | string;
+    protectionMode: "mnemonic_only" | "custom_password";
     backupPassword?: string | null;
     password?: string | null;
     forceFull?: boolean;
@@ -138,7 +137,6 @@ export const backupService = {
             backupPassword: args.backupPassword ?? null,
             mnemonic: args.mnemonic ?? null,
             passphrase: args.passphrase ?? null,
-            userPrefix: args.userPrefix ?? null,
             language: args.language ?? null,
             newPassword: args.newPassword,
             localInstanceId: args.localInstanceId,

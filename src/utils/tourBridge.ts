@@ -1,5 +1,5 @@
 // src/utils/tourBridge.ts
-import { AppState, UiMode } from '../types';
+import { AppState, UiMode, isPublicView } from '../types';
 
 export type SettingsTabId = 'profile' | 'security' | 'connection' | 'advanced';
 
@@ -16,14 +16,14 @@ export interface HumocoTourState {
 
 export type TourListener = (state: HumocoTourState) => void;
 
-const PUBLIC_VIEWS = new Set([
-    'loading',
-    'needs_profile',
-    'needs_login',
-    'restore_backup',
-    'needs_recovery',
-    'help_center'
-]);
+export interface HumocoTourBridge {
+    setState: (partial: HumocoTourState) => void;
+    getState: () => HumocoTourState;
+    subscribe: (listener: TourListener) => () => void;
+    registerSettingsTabSetter: (setter: ((tab: SettingsTabId) => void) | null) => void;
+    registerUiModeSetter: (setter: ((mode: UiMode) => void) | null) => void;
+    setUiMode: (mode: UiMode) => void;
+}
 
 class TourBridge {
     private state: HumocoTourState = {};
@@ -40,7 +40,7 @@ class TourBridge {
 
         // Automatically align authentication state for non-public views if not explicitly specified
         if (nextPartial.appState && nextPartial.isAuthenticated === undefined) {
-            const isPublic = PUBLIC_VIEWS.has(nextPartial.appState.view);
+            const isPublic = isPublicView(nextPartial.appState.view);
             nextPartial.isAuthenticated = !isPublic;
             if (nextPartial.isSessionActive === undefined) {
                 nextPartial.isSessionActive = !isPublic;

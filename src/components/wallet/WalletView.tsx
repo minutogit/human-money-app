@@ -1,0 +1,312 @@
+// src/components/WalletView.tsx
+import { useState, useEffect, useCallback } from "react";
+import { useTranslation } from "react-i18next";
+import { voucherService } from "../../services/voucherService";
+import { settingsService } from "../../services/settingsService";
+import { profileService } from "../../services/profileService";
+import { standardsService } from "../../services/standardsService";
+import { logger } from "../../utils/log";
+import { Button } from "../ui/Button";
+import { VoucherSummary, AppSettings, PublicProfile, VoucherStandardDefinition } from "../../types";
+import { getMissingProfileHint } from "../../utils/signatureHints";
+import { useSession } from "../../context/SessionContext";
+import { stringifyError, translateError } from "../../utils/errorHelper";
+import { PageLayout } from "../ui/PageLayout";
+import { AlertBanner } from "../ui/AlertBanner";
+import { VoucherCard } from "../ui/VoucherCard";
+import { formatDate } from "../../utils/format";
+import { 
+    Plus, 
+    History,
+    ArrowUpRight,
+    ArrowDownLeft
+} from "lucide-react";
+
+import { useNavigation } from "../../context/NavigationContext";
+import { useVoucherFilters } from "../../hooks/useVoucherFilters";
+import { VoucherFilterBar } from "../voucher/VoucherFilterBar";
+import { ExportSigningRequestModal } from "../voucher/ExportSigningRequestModal";
+import { SignatureRequestBanner } from "../voucher/SignatureRequestBanner";
+
+export function WalletView() {
+    const { t } = useTranslation();
+    const { protectAction } = useSession();
+    const { navigate, goBack, appState } = useNavigation();
+    
+    const [vouchers, setVouchers] = useState<VoucherSummary[]>([]);
+    const [settings, setSettings] = useState<AppSettings | null>(null);
+    const [userProfile, setUserProfile] = useState<PublicProfile | null>(null);
+    const [parsedStandards, setParsedStandards] = useState<Record<string, VoucherStandardDefinition>>({});
+    const [ownUserId, setOwnUserId] = useState<string>("");
+    const [feedbackMsg, setFeedbackMsg] = useState("");
+
+    // Export state
+    const [showExportModal, setShowExportModal] = useState(false);
+    const [exportId, setExportId] = useState("");
+
+    // Extract initial filters from appState if available
+    const initialStatusFilter = appState.view === 'wallet' ? appState.initialStatusFilter : undefined;
+    const initialStandardFilter = appState.view === 'wallet' ? appState.initialStandardFilter : undefined;
+    const initialFilter = appState.view === 'wallet' ? appState.initialFilter : undefined;
+
+    const {
+        statusFilters,
+        standardFilters,
+        searchQuery,
+        setSearchQuery,
+        originFilter,
+        setOriginFilter,
+        modeFilter,
+        setModeFilter,
+        expiringSoonOnly,
+        setExpiringSoonOnly,
+        sortOption,
+        setSortOption,
+        statusCounts,
+        standardCounts,
+        filteredVouchers,
+        activeFilterCount,
+        toggleStatusFilter,
+        toggleStandardFilter,
+        resetFilters
+    } = useVoucherFilters({ 
+        vouchers, 
+        ownUserId,
+        initialStatusFilter, 
+        initialStandardFilter,
+        initialFilter
+    });
+
+    // Expand/collapse state for vouchers
+    const [expandedVoucherIds, setExpandedVoucherIds] = useState<string[]>([]);
+
+    useEffect(() => {
+        let active = true;
+        logger.info("WalletView component displayed");
+        async function fetchData() {
+            try {
+                const [voucherList, currentSettings, profile, standards, id] = await Promise.all([
+                    voucherService.getSummaries(),
+                    settingsService.getSettings().catch(() => null),
+                    profileService.getProfile().catch(() => null),
+                    standardsService.getStandards().catch(() => []),
+                    voucherService.getUserId().catch(() => "")
+                ]);
+                if (!active) return;
+                setVouchers(voucherList || []);
+                setSettings(currentSettings);
+                setUserProfile(profile);
+                setOwnUserId(id || "");
+
+                // Parse standards for hints
+                const parsed: Record<string, VoucherStandardDefinition> = {};
+                for (const s of standards) {
+                    try {
+                        parsed[s.id] = await standardsService.parseStandard(s.content);
+                    } catch (e) {
+                        logger.error(`Failed to parse standard ${s.id}: ${stringifyError(e)}`);
+                    }
+                }
+                if (!active) return;
+                setParsedStandards(parsed);
+            } catch (e) {
+                if (!active) return;
+                const msg = `Failed to fetch wallet data: ${stringifyError(e)}`;
+                console.error(msg);
+                setFeedbackMsg(translateError(e, t));
+            }
+        }
+        fetchData();
+        return () => { active = false; };
+    }, [t]);
+
+    const toggleVoucherExpansion = useCallback((voucherId: string) => {
+        setExpandedVoucherIds(prev => 
+            prev.includes(voucherId) 
+                ? prev.filter(id => id !== voucherId) 
+                : [...prev, voucherId]
+        );
+    }, []);
+
+    const handleRequestSignature = useCallback((voucherId: string, e: React.MouseEvent) => {
+        e.stopPropagation();
+        setExportId(voucherId);
+        setShowExportModal(true);
+    }, []);
+
+    const getSignatureHintForVoucher = (voucher: VoucherSummary): string | null => {
+        if (!userProfile) return null;
+        let standard: VoucherStandardDefinition | undefined = parsedStandards[voucher.voucherStandardUuid];
+        if (!standard) {
+            standard = Object.values(parsedStandards).find(s => s.immutable.identity.uuid === voucher.voucherStandardUuid);
+        }
+        if (!standard) return null;
+        return getMissingProfileHint(standard, userProfile, t);
+    };
+
+    const allStatusNames = ['active', 'incomplete', 'archived', 'quarantined'];
+    const availableStatuses = allStatusNames.filter(s => statusCounts[s] > 0 || statusFilters.includes(s));
+    const availableStandards = Array.from(new Set((vouchers || []).map(v => v?.displayStandardName).filter(Boolean))).sort() as string[];
+
+    return (
+        <PageLayout 
+            title={t('wallet.title')} 
+            description={t('wallet.description')} 
+            onBack={goBack}
+            actions={
+                <div className="flex items-center gap-2">
+                    <Button 
+                        onClick={() => navigate({ view: 'send_vouchers' })} 
+                        size="sm"
+                        variant="secondary"
+                        className="gap-1.5"
+                        disabled={vouchers.filter(v => v.status === 'active').length === 0}
+                        data-testid="wallet-action-send"
+                    >
+                        <ArrowUpRight size={16} />
+                        <span className="hidden sm:inline">{t('transfer.send')}</span>
+                    </Button>
+                    <Button 
+                        onClick={() => navigate({ view: 'receive_bundle' })} 
+                        size="sm"
+                        variant="secondary"
+                        className="gap-1.5"
+                        data-testid="wallet-action-receive"
+                    >
+                        <ArrowDownLeft size={16} />
+                        <span className="hidden sm:inline">{t('transfer.receive')}</span>
+                    </Button>
+                    <Button 
+                        onClick={() => navigate({ view: 'create_voucher', previousView: appState })} 
+                        size="sm" 
+                        variant="primary"
+                        className="gap-1.5"
+                        data-testid="wallet-action-create"
+                    >
+                        <Plus size={16} />
+                        <span>{t('common.create')}</span>
+                    </Button>
+                </div>
+            }
+        >
+            <div className="max-w-5xl mx-auto space-y-6">
+                {feedbackMsg && (
+                    <AlertBanner variant="error">
+                        {feedbackMsg}
+                    </AlertBanner>
+                )}
+                <VoucherFilterBar 
+                    statusFilters={statusFilters}
+                    standardFilters={standardFilters}
+                    searchQuery={searchQuery}
+                    setSearchQuery={setSearchQuery}
+                    originFilter={originFilter}
+                    setOriginFilter={setOriginFilter}
+                    modeFilter={modeFilter}
+                    setModeFilter={setModeFilter}
+                    expiringSoonOnly={expiringSoonOnly}
+                    setExpiringSoonOnly={setExpiringSoonOnly}
+                    sortOption={sortOption}
+                    setSortOption={setSortOption}
+                    statusCounts={statusCounts}
+                    standardCounts={standardCounts}
+                    activeFilterCount={activeFilterCount}
+                    toggleStatusFilter={toggleStatusFilter}
+                    toggleStandardFilter={toggleStandardFilter}
+                    resetFilters={resetFilters}
+                    availableStatuses={availableStatuses}
+                    availableStandards={availableStandards}
+                />
+
+                <div className="space-y-4">
+                    {filteredVouchers.length > 0 ? filteredVouchers.map(v => {
+                        const isExpanded = expandedVoucherIds.includes(v.localInstanceId);
+                        const hint = getSignatureHintForVoucher(v);
+                        const statusName = (typeof v.status === 'string' ? v.status : (Object.keys(v.status)[0] || 'unknown')).toLowerCase();
+                        
+                        return (
+                            <VoucherCard 
+                                key={v.localInstanceId}
+                                voucher={v}
+                                isExpanded={isExpanded}
+                                onToggleExpand={toggleVoucherExpansion}
+                                mode="view"
+                                onRequestSignature={handleRequestSignature}
+                            >
+                                <div className="space-y-6 pt-6 border-t border-theme-subtle/30">
+                                    <div>
+                                        <h4 className="text-[10px] font-black text-theme-light uppercase tracking-widest mb-2">{t('common.description')}</h4>
+                                        <p className="text-sm text-theme-secondary leading-relaxed bg-theme-subtle/10 p-4 rounded-xl border border-theme-subtle/20">
+                                            {v.description || t('voucher.noDescription')}
+                                        </p>
+                                    </div>
+
+                                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+                                        <div className="bg-white/50 p-3 rounded-xl border border-theme-subtle/30">
+                                            <p className="text-[9px] font-black text-theme-light uppercase tracking-widest mb-1">{t('voucher.signatures')}</p>
+                                            <p className="text-sm font-bold text-theme-secondary">✍️ {v.signaturesCount}</p>
+                                        </div>
+                                        <div className="bg-white/50 p-3 rounded-xl border border-theme-subtle/30">
+                                            <p className="text-[9px] font-black text-theme-light uppercase tracking-widest mb-1">{t('voucher.collateral')}</p>
+                                            <p className="text-sm font-bold text-theme-secondary">{v.hasCollateral ? `✅ ${t('common.yes')}` : `❌ ${t('common.no')}`}</p>
+                                        </div>
+                                        <div className="bg-white/50 p-3 rounded-xl border border-theme-subtle/30">
+                                            <p className="text-[9px] font-black text-theme-light uppercase tracking-widest mb-1">{t('voucher.validity')}</p>
+                                            <p className="text-sm font-bold text-theme-secondary">{t('voucher.validUntil', { date: formatDate(v.validUntil) })}</p>
+                                        </div>
+                                    </div>
+
+                                    {statusName === 'incomplete' && (
+                                        <SignatureRequestBanner 
+                                            onAction={(e) => {
+                                                e.stopPropagation();
+                                                handleRequestSignature(v.localInstanceId, e);
+                                            }}
+                                            hint={hint}
+                                        />
+                                    )}
+                                    
+                                    <div className="flex justify-end pt-4">
+                                        <Button variant="outline" size="sm" onClick={() => navigate({ view: "voucher_details", voucherId: v.localInstanceId, previousView: appState })}>
+                                            {t('voucher.fullDetailsView')}
+                                        </Button>
+                                    </div>
+                                </div>
+                            </VoucherCard>
+                        );
+                    }) : (
+                        <div className="text-center py-16 px-6 bg-white/50 rounded-3xl border-2 border-dashed border-theme-subtle/50 space-y-4">
+                            <History size={48} className="mx-auto text-theme-light opacity-20" />
+                            <p className="text-sm font-black text-theme-placeholder uppercase tracking-[0.2em]">{t('wallet.noVouchersFound')}</p>
+                            <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+                                {vouchers.length > 0 ? (
+                                    <Button variant="outline" size="sm" onClick={resetFilters}>
+                                        {t('voucher.filter.reset')}
+                                    </Button>
+                                ) : (
+                                    <>
+                                        <Button variant="primary" size="sm" onClick={() => navigate({ view: 'create_voucher', previousView: appState })}>
+                                            {t('voucher.create')}
+                                        </Button>
+                                        <Button variant="outline" size="sm" onClick={() => navigate({ view: 'receive_bundle' })}>
+                                            {t('transfer.receive')}
+                                        </Button>
+                                    </>
+                                )}
+                            </div>
+                        </div>
+                    )}
+                </div>
+            </div>
+
+            <ExportSigningRequestModal 
+                isOpen={showExportModal}
+                voucherId={exportId}
+                onClose={() => { setShowExportModal(false); setExportId(""); }}
+                settings={settings}
+                protectAction={protectAction}
+                onSettingsRefresh={setSettings}
+            />
+        </PageLayout>
+    );
+}

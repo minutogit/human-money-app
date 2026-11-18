@@ -9,17 +9,14 @@ import {
     FrontendSyncDescriptor,
     InquiryTarget,
 } from "../types";
-import { triggerAutoBackup } from "../utils/autoBackup";
-import { scheduleContactOnboardingMarketSync } from "../utils/marketSync";
+import { afterWalletMutation, triggerAutoBackup } from "../sync/autoBackup";
+import { APP_EVENTS, emitAppEvent, POST_INBOX_UPDATED_EVENT } from "../utils/appEvents";
 import { notifyAppNoticesUpdated } from "../utils/syncEvents";
-import { channelMembersSyncManager } from "./channelMembersSyncManager";
 
-export const POST_INBOX_UPDATED_EVENT = 'humoco:post-inbox-updated';
+export { POST_INBOX_UPDATED_EVENT };
 
 export function notifyPostInboxUpdated(): void {
-    if (typeof window !== 'undefined') {
-        window.dispatchEvent(new CustomEvent(POST_INBOX_UPDATED_EVENT));
-    }
+    emitAppEvent(APP_EVENTS.POST_INBOX_UPDATED);
 }
 
 export const postService = {
@@ -95,11 +92,12 @@ export const postService = {
             sendReturnHandshake,
             password: password || undefined,
         });
-        triggerAutoBackup();
-        channelMembersSyncManager.trigger({ delayMs: 250, resetQuota: true, password });
-        if (trustLevel >= 1) {
-            scheduleContactOnboardingMarketSync(3_000, password);
-        }
+        afterWalletMutation(password, {
+            syncMembers: true,
+            scheduleMarket: trustLevel >= 1,
+            contactsUpdated: true,
+            wotUpdated: true,
+        });
         notifyPostInboxUpdated();
         return res;
     },
@@ -184,11 +182,33 @@ export const postService = {
             isWifi: typeof isWifi === 'boolean' ? isWifi : undefined,
             password: password || undefined,
         });
-        if (res.importedPayments > 0 || res.importedSignatures > 0) {
+        if (!res) {
+            return res;
+        }
+        const hasBackupChanges =
+            res.uploadedTo > 0 ||
+            res.importedPayments > 0 ||
+            res.importedReceipts > 0 ||
+            res.importedSignatures > 0 ||
+            res.newSignRequests > 0 ||
+            res.newWotHandshakes > 0 ||
+            res.newInquiries > 0 ||
+            res.newInquiryMessages > 0;
+        const hasInboxChanges = hasBackupChanges || res.prunedBoxes > 0;
+
+        if (hasBackupChanges) {
             triggerAutoBackup();
         }
-        notifyPostInboxUpdated();
-        notifyAppNoticesUpdated();
+        if (hasInboxChanges) {
+            notifyPostInboxUpdated();
+            emitAppEvent(APP_EVENTS.SYNC_COMPLETED, { source: 'post' });
+        }
+        if (res.newWotHandshakes > 0) {
+            emitAppEvent(APP_EVENTS.WOT_UPDATED);
+        }
+        if (hasInboxChanges || res.polledSyncs > 0) {
+            notifyAppNoticesUpdated();
+        }
         return res;
     },
 };

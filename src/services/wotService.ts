@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { triggerAutoBackup } from "../utils/autoBackup";
+import { afterWalletMutation } from "../sync/autoBackup";
 import { WotSummaryDto, WotImportResultDto, VoucherTrustDto, WotProviderDto } from "../types";
 
 export interface ExportWotPackageArgs {
@@ -25,7 +25,7 @@ export const wotService = {
             maxHops,
             password: password ?? null,
         });
-        triggerAutoBackup();
+        afterWalletMutation(password, { wotUpdated: true });
         return result;
     },
 
@@ -44,7 +44,7 @@ export const wotService = {
             containerPassword: args.containerPassword,
             password: args.password,
         });
-        triggerAutoBackup();
+        afterWalletMutation(args.password, { wotUpdated: true, contactsUpdated: true });
         return result;
     },
 
@@ -62,7 +62,7 @@ export const wotService = {
             level,
             password: password ?? null,
         });
-        triggerAutoBackup();
+        afterWalletMutation(password, { wotUpdated: true });
         return result;
     },
 
@@ -74,7 +74,7 @@ export const wotService = {
             issuerDid,
             password: password ?? null,
         });
-        triggerAutoBackup();
+        afterWalletMutation(password, { wotUpdated: true });
         return result;
     },
 
@@ -86,7 +86,7 @@ export const wotService = {
             issuerDid,
             password: password ?? null,
         });
-        triggerAutoBackup();
+        afterWalletMutation(password, { wotUpdated: true });
         return result;
     },
 

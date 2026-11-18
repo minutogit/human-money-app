@@ -1,0 +1,445 @@
+// src/components/__tests__/TransactionHistoryView.test.tsx
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { TransactionHistoryView } from '../TransactionHistoryView';
+import { UiModeProvider, UI_MODE_STORAGE_KEY } from '../../../context/UiModeContext';
+import { transferService } from '../../../services/transferService';
+import { contactService } from '../../../services/contactService';
+import { TransactionRecord, Contact, WalletEvent } from '../../../types';
+import { writeText } from '@tauri-apps/plugin-clipboard-manager';
+import { save } from '@tauri-apps/plugin-dialog';
+import { writeFile } from '@tauri-apps/plugin-fs';
+
+vi.mock('../../../services/transferService');
+vi.mock('../../../services/contactService');
+vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({
+    writeText: vi.fn(),
+    readText: vi.fn(),
+}));
+vi.mock('@tauri-apps/plugin-dialog', () => ({
+    save: vi.fn(),
+}));
+vi.mock('@tauri-apps/plugin-fs', () => ({
+    writeFile: vi.fn(),
+}));
+
+const mockNavigate = vi.fn();
+const mockGoBack = vi.fn();
+
+vi.mock('../../../context/NavigationContext', () => ({
+    useNavigation: () => ({
+        navigate: mockNavigate,
+        goBack: mockGoBack,
+        appState: { view: 'transaction_history' },
+    }),
+}));
+
+vi.mock('react-i18next', () => ({
+    useTranslation: () => ({
+        t: (key: string, options?: Record<string, unknown>) => {
+            if (options?.count !== undefined) return `${key}:${options.count}`;
+            if (options?.error !== undefined) return `${key}:${options.error}`;
+            return key;
+        },
+        i18n: { language: 'de' },
+    }),
+}));
+
+const mockRecords: TransactionRecord[] = [
+    {
+        id: 'tx-1-rec',
+        direction: 'received',
+        senderId: 'did:key:z6MkhaXG',
+        senderProfileName: 'Alice Wonder',
+        timestamp: '2026-06-01T12:00:00.000Z',
+        summableAmounts: { 'Minuto': '100.00' },
+        countableItems: {},
+        involvedVouchers: ['v-1'],
+        bundleId: 'bundle-alice-1111',
+        notes: 'Honig und Apfelsaft',
+        bundleData: [1, 2, 3]
+    },
+    {
+        id: 'tx-2-sent',
+        direction: 'sent',
+        recipientId: 'did:key:z6MkpTHR',
+        timestamp: '2026-06-02T15:30:00.000Z',
+        summableAmounts: { 'Minuto': '30.00' },
+        countableItems: {},
+        involvedVouchers: ['v-2'],
+        bundleId: 'bundle-bob-2222',
+        notes: 'Werkstattmiete Juni',
+        bundleData: [4, 5, 6]
+    },
+    {
+        id: 'tx-3-sent-freetaler',
+        direction: 'sent',
+        recipientId: 'did:key:z6Mkunknown',
+        timestamp: '2025-01-01T10:00:00.000Z',
+        summableAmounts: { 'FreeTaler': '15.00' },
+        countableItems: {},
+        involvedVouchers: ['v-3'],
+        bundleId: 'bundle-charlie-3333',
+        notes: 'Alte Zahlung aus 2025'
+    }
+];
+
+const mockContacts: Contact[] = [
+    {
+        did: 'did:key:z6MkpTHR',
+        profile: {
+            id: 'did:key:z6MkpTHR',
+            firstName: 'Bob',
+            lastName: 'Baumeister'
+        },
+        tags: [],
+        addedAt: '2026-01-01T00:00:00.000Z',
+        trustLevel: 2,
+        desiredHops: 3
+    }
+];
+
+describe('TransactionHistoryView', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        localStorage.clear();
+        vi.mocked(transferService.getHistory).mockResolvedValue([...mockRecords]);
+        vi.mocked(transferService.getEventHistory).mockResolvedValue([]);
+        vi.mocked(contactService.getContacts).mockResolvedValue([...mockContacts]);
+        vi.mocked(contactService.saveContact).mockResolvedValue();
+    });
+
+    const renderWithMode = (mode: 'simple' | 'expert') => {
+        localStorage.setItem(UI_MODE_STORAGE_KEY, mode);
+        return render(
+            <UiModeProvider>
+                <TransactionHistoryView />
+            </UiModeProvider>
+        );
+    };
+
+    it('renders transaction records cleanly in simple mode without raw receipt hashes or open secondary filters', async () => {
+        renderWithMode('simple');
+
+        await waitFor(() => {
+            expect(screen.getByText('Bob Baumeister')).toBeInTheDocument();
+        });
+
+        expect(screen.getByText('Alice Wonder')).toBeInTheDocument();
+        expect(screen.getByText('"Honig und Apfelsaft"')).toBeInTheDocument();
+        expect(screen.getByText('"Werkstattmiete Juni"')).toBeInTheDocument();
+
+        // Receipt numbers & secondary filters hidden in simple mode by default
+        expect(screen.queryByText('#bundle-a')).not.toBeInTheDocument();
+        expect(screen.queryByTestId('history-filters-content')).not.toBeInTheDocument();
+        expect(screen.getByTestId('history-filters-toggle')).toBeInTheDocument();
+        expect(screen.getByTestId('page-header-more-actions')).toBeInTheDocument();
+    });
+
+    it('renders short receipt numbers and open secondary filters in expert mode', async () => {
+        renderWithMode('expert');
+
+        await waitFor(() => {
+            expect(screen.getByText('Bob Baumeister')).toBeInTheDocument();
+        });
+
+        expect(screen.getByText('#bundle-a')).toBeInTheDocument();
+        expect(screen.getByText('#bundle-b')).toBeInTheDocument();
+        expect(screen.getByTestId('history-filters-content')).toBeInTheDocument();
+    });
+
+    it('toggles transaction details open and closed on row click with full IDs in expert mode', async () => {
+        renderWithMode('expert');
+
+        await waitFor(() => {
+            expect(screen.getByText('Bob Baumeister')).toBeInTheDocument();
+        });
+
+        // Initially expanded details not shown
+        expect(screen.queryByText('bundle-alice-1111')).not.toBeInTheDocument();
+
+        // Click on Alice's row
+        const aliceRow = screen.getByText('Alice Wonder').closest('.p-4');
+        expect(aliceRow).toBeDefined();
+        fireEvent.click(aliceRow!);
+
+        // Expanded details now visible
+        await waitFor(() => {
+            expect(screen.getByText('bundle-alice-1111')).toBeInTheDocument();
+            expect(screen.getByText('did:key:z6MkhaXG')).toBeInTheDocument();
+        });
+
+        // Click on the same row again -> closes it
+        fireEvent.click(aliceRow!);
+        await waitFor(() => {
+            expect(screen.queryByText('bundle-alice-1111')).not.toBeInTheDocument();
+        });
+    });
+
+    it('shows compact TechId fingerprints and copies full transaction ID and DID to clipboard in simple mode', async () => {
+        renderWithMode('simple');
+
+        await waitFor(() => {
+            expect(screen.getByText('Alice Wonder')).toBeInTheDocument();
+        });
+
+        // Open Alice's row
+        const aliceRow = screen.getByText('Alice Wonder').closest('.p-4');
+        fireEvent.click(aliceRow!);
+
+        await waitFor(() => {
+            expect(screen.getAllByTestId('tech-id-copy')).toHaveLength(2);
+        });
+
+        // Raw DID is not exposed directly in simple mode
+        expect(screen.queryByText('did:key:z6MkhaXG')).not.toBeInTheDocument();
+        expect(screen.getByText('…MkhaXG')).toBeInTheDocument();
+
+        const [copyTxBtn, copyDidBtn] = screen.getAllByTestId('tech-id-copy');
+        fireEvent.click(copyTxBtn);
+        expect(writeText).toHaveBeenCalledWith('bundle-alice-1111');
+
+        fireEvent.click(copyDidBtn);
+        expect(writeText).toHaveBeenCalledWith('did:key:z6MkhaXG');
+    });
+
+    it('filters transactions by direction (all, inbound, outbound)', async () => {
+        renderWithMode('simple');
+
+        await waitFor(() => {
+            expect(screen.getByText('Alice Wonder')).toBeInTheDocument();
+            expect(screen.getByText('Bob Baumeister')).toBeInTheDocument();
+        });
+
+        // Filter only received (inbound)
+        const inboundBtn = screen.getByText('history.filterInbound');
+        fireEvent.click(inboundBtn);
+
+        expect(screen.getByText('Alice Wonder')).toBeInTheDocument();
+        expect(screen.queryByText('Bob Baumeister')).not.toBeInTheDocument();
+
+        // Filter only sent (outbound)
+        const outboundBtn = screen.getByText('history.filterOutbound');
+        fireEvent.click(outboundBtn);
+
+        expect(screen.queryByText('Alice Wonder')).not.toBeInTheDocument();
+        expect(screen.getByText('Bob Baumeister')).toBeInTheDocument();
+
+        // Reset to all
+        const allBtn = screen.getByText('history.filterAllDirections');
+        fireEvent.click(allBtn);
+
+        expect(screen.getByText('Alice Wonder')).toBeInTheDocument();
+        expect(screen.getByText('Bob Baumeister')).toBeInTheDocument();
+    });
+
+    it('filters transactions by search query matching contact name or notes', async () => {
+        renderWithMode('simple');
+
+        await waitFor(() => {
+            expect(screen.getByText('Alice Wonder')).toBeInTheDocument();
+        });
+
+        const searchInput = screen.getByPlaceholderText('history.searchPlaceholder');
+        
+        // Search by resolved contact name
+        fireEvent.change(searchInput, { target: { value: 'Baumeister' } });
+        expect(screen.getByText('Bob Baumeister')).toBeInTheDocument();
+        expect(screen.queryByText('Alice Wonder')).not.toBeInTheDocument();
+
+        // Search by notes
+        fireEvent.change(searchInput, { target: { value: 'Apfelsaft' } });
+        expect(screen.getByText('Alice Wonder')).toBeInTheDocument();
+        expect(screen.queryByText('Bob Baumeister')).not.toBeInTheDocument();
+
+        // Search by bundle ID
+        fireEvent.change(searchInput, { target: { value: 'bundle-bob' } });
+        expect(screen.getByText('Bob Baumeister')).toBeInTheDocument();
+        expect(screen.queryByText('Alice Wonder')).not.toBeInTheDocument();
+    });
+
+    it('shows "+ Als Kontakt speichern" only for unknown counterparties and opens dialog', async () => {
+        renderWithMode('simple');
+
+        await waitFor(() => {
+            expect(screen.getByText('Alice Wonder')).toBeInTheDocument();
+        });
+
+        // 1. Open Bob's row (Bob is already in mockContacts)
+        const bobRow = screen.getByText('Bob Baumeister').closest('.p-4');
+        fireEvent.click(bobRow!);
+
+        await waitFor(() => {
+            expect(screen.getByText('…b-2222')).toBeInTheDocument();
+        });
+        // Bob is known -> no save contact button
+        expect(screen.queryByText('history.saveAsContact')).not.toBeInTheDocument();
+
+        // Close Bob's row
+        fireEvent.click(bobRow!);
+
+        // 2. Open Alice's row (Alice's DID is NOT in mockContacts)
+        const aliceRow = screen.getByText('Alice Wonder').closest('.p-4');
+        fireEvent.click(aliceRow!);
+
+        await waitFor(() => {
+            expect(screen.getByText('history.saveAsContact')).toBeInTheDocument();
+        });
+
+        // Click save contact -> opens ContactDialog
+        fireEvent.click(screen.getByText('history.saveAsContact'));
+
+        await waitFor(() => {
+            expect(screen.getByText('contacts.addNewContact')).toBeInTheDocument();
+        });
+    });
+
+    it('does not show deprecated Activities button or event log disclosures in simple mode', async () => {
+        const mockEvents: WalletEvent[] = [
+            {
+                eventId: 'ev-1',
+                localInstanceId: 'v-1',
+                voucherId: 'voucher-1',
+                timestamp: '2026-06-01T12:00:00.000Z',
+                eventType: 'transferReceived',
+                bffData: {
+                    displayCurrency: 'Minuto',
+                    amount: '100.00',
+                    isTestVoucher: false,
+                    counterpartyId: 'did:key:z6MkhaXG',
+                    counterpartyName: 'Alice Wonder',
+                },
+            },
+        ];
+        vi.mocked(transferService.getEventHistory).mockResolvedValue(mockEvents);
+
+        renderWithMode('simple');
+
+        await waitFor(() => {
+            expect(screen.getByTestId('page-header-more-actions')).toBeInTheDocument();
+        });
+
+        fireEvent.click(screen.getByTestId('page-header-more-actions'));
+        expect(screen.getByText('history.exportCsv')).toBeInTheDocument();
+        expect(screen.queryByText('history.eventLogButton')).not.toBeInTheDocument();
+        expect(screen.queryByTestId('history-event-log-toggle')).not.toBeInTheDocument();
+
+        // Expand transaction row: per-tx event log remains expert-only
+        fireEvent.click(screen.getByText('Alice Wonder'));
+        await waitFor(() => {
+            expect(screen.getByText('history.txStatus')).toBeInTheDocument();
+        });
+        expect(screen.queryByTestId('tx-event-log-toggle')).not.toBeInTheDocument();
+    });
+
+    it('renders global and per-transaction event log disclosures in expert mode', async () => {
+        const mockEvents: WalletEvent[] = [
+            {
+                eventId: 'ev-1',
+                localInstanceId: 'v-1',
+                voucherId: 'voucher-1',
+                timestamp: '2026-06-01T12:00:00.000Z',
+                eventType: 'transferReceived',
+                bffData: {
+                    displayCurrency: 'Minuto',
+                    amount: '100.00',
+                    isTestVoucher: false,
+                    counterpartyId: 'did:key:z6MkhaXG',
+                    counterpartyName: 'Alice Wonder',
+                },
+            },
+            {
+                eventId: 'ev-2',
+                localInstanceId: 'v-created-99',
+                voucherId: 'voucher-99',
+                timestamp: '2026-05-01T09:00:00.000Z',
+                eventType: 'voucherCreated',
+                bffData: {
+                    displayCurrency: 'Minuto',
+                    amount: '50.00',
+                    isTestVoucher: false,
+                },
+            },
+        ];
+        vi.mocked(transferService.getEventHistory).mockResolvedValue(mockEvents);
+
+        renderWithMode('expert');
+
+        const globalToggle = await screen.findByTestId('history-event-log-toggle');
+        expect(screen.queryByTestId('history-event-log-content')).not.toBeInTheDocument();
+
+        fireEvent.click(globalToggle);
+        await waitFor(() => {
+            expect(screen.getByTestId('history-event-log-content')).toBeInTheDocument();
+            expect(screen.getByText('history.eventCreated')).toBeInTheDocument();
+        });
+
+        // Expand tx-1-rec and inspect per-transaction event log
+        fireEvent.click(screen.getByText('Alice Wonder'));
+        const txToggle = await screen.findByTestId('tx-event-log-toggle');
+        fireEvent.click(txToggle);
+
+        await waitFor(() => {
+            expect(screen.getByTestId('tx-event-log-content')).toBeInTheDocument();
+            expect(screen.getByTestId('tx-event-log-content')).toHaveTextContent('#v-1');
+        });
+    });
+
+    it('triggers CSV export directly from header actions in expert mode', async () => {
+        vi.mocked(save).mockResolvedValue('/path/to/kontoauszug.csv');
+        vi.mocked(writeFile).mockResolvedValue();
+
+        renderWithMode('expert');
+
+        await waitFor(() => {
+            expect(screen.getByText('history.exportCsv')).toBeInTheDocument();
+        });
+
+        fireEvent.click(screen.getByText('history.exportCsv'));
+
+        await waitFor(() => {
+            expect(save).toHaveBeenCalledWith(expect.objectContaining({
+                filters: [{ name: 'CSV (*.csv)', extensions: ['csv'] }]
+            }));
+            expect(writeFile).toHaveBeenCalled();
+            expect(screen.getByText('history.exportCsvSuccess')).toBeInTheDocument();
+        });
+    });
+
+    it('renders per-currency summary entries even when a currency has only outbound amounts', async () => {
+        vi.mocked(transferService.getHistory).mockResolvedValue([
+            {
+                id: 'tx-in-ft',
+                direction: 'received',
+                senderId: 'did:key:zBob123456',
+                recipientId: 'did:key:zMe',
+                timestamp: '2026-11-10T10:00:00Z',
+                summableAmounts: { FreeTaler: '10' },
+                countableItems: {},
+                bundleId: 'bundle-ft-in',
+                involvedVouchers: [],
+            },
+            {
+                id: 'tx-out-min',
+                direction: 'sent',
+                senderId: 'did:key:zMe',
+                recipientId: 'did:key:zAlice123456',
+                timestamp: '2026-11-11T10:00:00Z',
+                summableAmounts: { Minuto: '60' },
+                countableItems: {},
+                bundleId: 'bundle-min-out',
+                involvedVouchers: [],
+            },
+        ]);
+
+        render(<TransactionHistoryView />);
+
+        await waitFor(() => {
+            const summaryLabel = screen.getByText('history.summaryBookings:2');
+            const summaryBar = summaryLabel.parentElement?.parentElement;
+            expect(summaryBar).not.toBeNull();
+            expect(summaryBar!.textContent).toMatch(/\+10[.,]00\s*\/\s*-0[.,]00 FreeTaler/);
+            expect(summaryBar!.textContent).toMatch(/\+0[.,]00\s*\/\s*-60[.,]00 Minuto/);
+        });
+    });
+});

@@ -2,6 +2,7 @@ pub mod auth;
 pub mod backup;
 pub mod contacts;
 pub mod integrity;
+pub mod l2;
 pub mod market;
 pub mod post;
 pub mod profile;
@@ -14,10 +15,3 @@ pub mod transfers;
 pub mod utils;
 pub mod vouchers;
 pub mod wot;
-
-pub use market::*;
-pub use post::*;
-pub use profile::*;
-pub use recovery::*;
-pub use sync::*;
-pub use wot::*;

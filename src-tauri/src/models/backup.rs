@@ -2,6 +2,23 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// Canonical IPC backup encryption mode selected by the user.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BackupProtectionMode {
+    MnemonicOnly,
+    CustomPassword,
+}
+
+impl BackupProtectionMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::MnemonicOnly => "mnemonic_only",
+            Self::CustomPassword => "custom_password",
+        }
+    }
+}
+
 /// Portable single-file container for offline export/import.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct PortableBackupContainer {

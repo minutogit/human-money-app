@@ -8,12 +8,14 @@ import { MY_PROFILE_UPDATED_EVENT } from '../utils/syncEvents';
 import { FrontendMyMarketProfile } from '../types';
 import { AuthModal } from '../components/ui/AuthModal';
 import { useTranslation } from 'react-i18next';
-// AppSettings import removed as unused
 
-import { startSealSyncLoop, stopSealSyncLoop } from '../utils/sealSync';
-import { startAutoBackupLoop, stopAutoBackupLoop } from '../utils/autoBackup';
-import { startPostSyncLoop, stopPostSyncLoop } from '../utils/postSync';
-import { startMarketSyncLoop, stopMarketSyncLoop } from '../utils/marketSync';
+import { startSealSyncLoop, stopSealSyncLoop } from '../sync/sealSync';
+import { startAutoBackupLoop, stopAutoBackupLoop } from '../sync/autoBackup';
+import { startPostSyncLoop, stopPostSyncLoop } from '../sync/postSync';
+import { startMarketSyncLoop, stopMarketSyncLoop } from '../sync/marketSync';
+import { channelMembersSyncManager } from '../sync/channelMembersSyncManager';
+import { rateLimitManager } from '../sync/rateLimitManager';
+import { APP_EVENTS, emitAppEvent } from '../utils/appEvents';
 import { useWindowTitleSync } from '../hooks/useWindowTitleSync';
 import { useIntegrityCheck } from '../hooks/useIntegrityCheck';
 import { useSessionHeartbeat } from '../hooks/useSessionHeartbeat';
@@ -53,6 +55,14 @@ export interface SessionContextType {
     lockSession: () => Promise<void>;
 }
 
+interface PendingModalRequest {
+    id: number;
+    mode: 'session' | 'stepUp';
+    resolve: (value: unknown) => void;
+    reject: (reason: unknown) => void;
+    action: (password: string | null) => Promise<unknown>;
+}
+
 const SessionContext = createContext<SessionContextType | null>(null);
 
 export function useSession() {
@@ -67,7 +77,6 @@ export function useOptionalSession() {
 
 export function SessionProvider({ children }: { children: ReactNode }) {
     const { t } = useTranslation();
-    const [isModalOpen, setIsModalOpen] = useState(false);
     const [modalErrorMsg, setModalErrorMsg] = useState<string>('');
     const [accessMode, setAccessMode] = useState<SessionAccessMode>('full');
     const [isSessionActive, setIsSessionActive] = useState(false);
@@ -80,6 +89,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     const [lockdownKind, setLockdownKind] = useState<SecurityLockdownKind>(null);
     const [lockdownDetails, setLockdownDetails] = useState<SecurityLockdownDetails | null>(null);
     const [isRecoveryRequired, setIsRecoveryRequired] = useState(false);
+    const [activePending, setActivePending] = useState<PendingModalRequest | null>(null);
 
     const triggerSecurityLockdown = useCallback((kind: SecurityLockdownKind, details?: SecurityLockdownDetails) => {
         setLockdownKind(kind);
@@ -91,52 +101,103 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         }
     }, []);
 
-    // Refs für Throttling und Status
+    // Refs for throttling, session state, and modal prompt queue
     const lastHeartbeatRef = useRef(0);
     const isSessionActiveRef = useRef(false);
+    const isAuthenticatedRef = useRef(false);
+    const pendingQueueRef = useRef<PendingModalRequest[]>([]);
+    const nextPendingIdRef = useRef(1);
+    const isModalSubmittingRef = useRef(false);
+    const syncLoopsRunningRef = useRef(false);
 
-    // Hooks für Side-Effects
+    const startSyncLoops = useCallback((_syncPassword?: string) => {
+        if (syncLoopsRunningRef.current) {
+            return;
+        }
+        syncLoopsRunningRef.current = true;
+        startSealSyncLoop();
+        startAutoBackupLoop();
+        startPostSyncLoop();
+        startMarketSyncLoop();
+    }, []);
+
+    const stopSyncLoops = useCallback(() => {
+        syncLoopsRunningRef.current = false;
+        stopSealSyncLoop();
+        stopAutoBackupLoop();
+        stopPostSyncLoop();
+        stopMarketSyncLoop();
+    }, []);
+
+    // Side-effect hooks
     useWindowTitleSync(profileName);
-    
+
     const onSessionExpired = useCallback(() => {
         setIsSessionActive(false);
         isSessionActiveRef.current = false;
+        stopSyncLoops();
         // DO NOT clear profileName and DO NOT set isAuthenticated to false
-    }, []);
+    }, [stopSyncLoops]);
 
     useSessionHeartbeat(isSessionActive, onSessionExpired, lastHeartbeatRef);
 
     const { integrityReport, checkIntegrity } = useIntegrityCheck();
 
-    // Sync State -> Ref (needed for protectAction which uses the ref)
     useEffect(() => {
         isSessionActiveRef.current = isSessionActive;
     }, [isSessionActive]);
 
-    const [pendingAction, setPendingAction] = useState<{
-        mode: 'session' | 'stepUp';
-        resolve: (value: unknown) => void;
-        reject: (reason: unknown) => void;
-        action: (password: string | null) => Promise<unknown>;
-    } | null>(null);
+    useEffect(() => {
+        isAuthenticatedRef.current = isAuthenticated;
+    }, [isAuthenticated]);
 
-    // Hilfsfunktion zum Aktivieren der Session
+    useEffect(() => {
+        return () => {
+            stopSyncLoops();
+            if (pendingQueueRef.current.length > 0) {
+                const remaining = pendingQueueRef.current;
+                pendingQueueRef.current = [];
+                remaining.forEach((entry) => entry.reject(new Error("SessionProvider unmounted")));
+            }
+        };
+    }, [stopSyncLoops]);
+
     const activateSession = useCallback(() => {
         setIsSessionActive(true);
         isSessionActiveRef.current = true;
         lastHeartbeatRef.current = Date.now();
     }, []);
 
-    // Wird von App.tsx nach Login aufgerufen
+    const enqueuePendingRequest = useCallback(
+        <T,>(
+            mode: 'session' | 'stepUp',
+            action: (password: string | null) => Promise<T>,
+        ): Promise<T> => {
+            return new Promise<T>((resolve, reject) => {
+                const entry: PendingModalRequest = {
+                    id: nextPendingIdRef.current++,
+                    mode,
+                    resolve: resolve as (value: unknown) => void,
+                    reject,
+                    action: action as (password: string | null) => Promise<unknown>,
+                };
+                pendingQueueRef.current.push(entry);
+                if (pendingQueueRef.current.length === 1) {
+                    setModalErrorMsg('');
+                    setActivePending(entry);
+                }
+            });
+        },
+        [],
+    );
+
     const notifyLogin = useCallback((name?: string, folder?: string) => {
         setIsAuthenticated(true);
+        isAuthenticatedRef.current = true;
         if (name) setProfileName(name);
         if (folder) setFolderName(folder);
         activateSession();
-        startSealSyncLoop();
-        startAutoBackupLoop();
-        startPostSyncLoop();
-        startMarketSyncLoop();
+        startSyncLoops();
         checkIntegrity();
 
         authService.getSessionAccessMode?.()
@@ -153,50 +214,56 @@ export function SessionProvider({ children }: { children: ReactNode }) {
             .then((active) => {
                 if (active) {
                     activateSession();
+                    startSyncLoops();
                 } else {
                     setIsSessionActive(false);
                     isSessionActiveRef.current = false;
+                    stopSyncLoops();
                 }
             })
             .catch(() => {
                 setIsSessionActive(false);
                 isSessionActiveRef.current = false;
+                stopSyncLoops();
             });
-    }, [activateSession, checkIntegrity]);
+    }, [activateSession, checkIntegrity, startSyncLoops, stopSyncLoops]);
 
     const notifyLogout = useCallback(() => {
         setIsAuthenticated(false);
+        isAuthenticatedRef.current = false;
         setIsSessionActive(false);
-        setAccessMode('full');
         isSessionActiveRef.current = false;
+        setAccessMode('full');
         setProfileName("");
         setDisplayProfileName("");
         setUserAvatarUrl(null);
         setFolderName("");
-        stopSealSyncLoop();
-        stopAutoBackupLoop();
-        stopPostSyncLoop();
-        stopMarketSyncLoop();
-    }, []);
+        stopSyncLoops();
+        channelMembersSyncManager.reset();
+        rateLimitManager.clearCooldown();
+        emitAppEvent(APP_EVENTS.SESSION_LOCKED);
+
+        if (pendingQueueRef.current.length > 0) {
+            const remaining = pendingQueueRef.current;
+            pendingQueueRef.current = [];
+            setActivePending(null);
+            setModalErrorMsg('');
+            remaining.forEach((entry) => entry.reject(new Error("User logged out")));
+        }
+    }, [stopSyncLoops]);
 
     const elevateSession = useCallback(async (masterPassword: string) => {
         const nextMode = await authService.elevateSessionWithPassword(masterPassword);
         setAccessMode(nextMode);
         activateSession();
-    }, [activateSession]);
+        if (isAuthenticatedRef.current) {
+            startSyncLoops(masterPassword);
+        }
+    }, [activateSession, startSyncLoops]);
 
     const requireFullAccess = useCallback(async <T,>(action: (masterPassword: string) => Promise<T>): Promise<T | void> => {
-        return new Promise<T>((resolve, reject) => {
-            setModalErrorMsg('');
-            setPendingAction({
-                mode: 'stepUp',
-                resolve: resolve as (value: unknown) => void,
-                reject,
-                action: (pwd) => action(pwd || ''),
-            });
-            setIsModalOpen(true);
-        });
-    }, []);
+        return enqueuePendingRequest<T>('stepUp', (pwd) => action(pwd || ''));
+    }, [enqueuePendingRequest]);
 
     const protectAction = useCallback(async <T,>(action: (password: string | null) => Promise<T>): Promise<T | void> => {
         const executeWithSessionCheck = async (pwd: string | null): Promise<T> => {
@@ -211,6 +278,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
                     logger.warn("Backend rejected action (wallet locked/session expired). Resetting frontend session state.");
                     setIsSessionActive(false);
                     isSessionActiveRef.current = false;
+                    stopSyncLoops();
                     throw new Error("SESSION_EXPIRED_RETRY");
                 }
                 if (errCode === 'error.security.supersededByHandover'
@@ -241,116 +309,148 @@ export function SessionProvider({ children }: { children: ReactNode }) {
             const settings = await settingsService.getSettings();
             const timeout = settings.sessionTimeoutSeconds;
 
-            // MODUS A: Immer Passwort fragen (Timeout = 0)
+            // Mode A: Always prompt for password (timeout = 0)
             if (timeout === 0) {
-                return new Promise<T>((resolve, reject) => {
-                    setModalErrorMsg('');
-                    setPendingAction({ 
-                        mode: 'session',
-                        resolve: resolve as (value: unknown) => void, 
-                        reject, 
-                        action: action as (password: string | null) => Promise<unknown> 
-                    });
-                    setIsModalOpen(true);
-                });
+                return enqueuePendingRequest<T>('session', action);
             }
 
-            // MODUS B: Session nutzen
+            // Mode B: Reuse active session when unlocked
             if (isSessionActiveRef.current) {
                 try {
                     return await executeWithSessionCheck(null);
                 } catch (e) {
                     if (e instanceof Error && e.message === "SESSION_EXPIRED_RETRY") {
-                        // Session war im Backend abgelaufen -> Modal öffnen
-                        return new Promise<T>((resolve, reject) => {
-                            setModalErrorMsg('');
-                            setPendingAction({ 
-                                mode: 'session',
-                                resolve: resolve as (value: unknown) => void, 
-                                reject, 
-                                action: action as (password: string | null) => Promise<unknown> 
-                            });
-                            setIsModalOpen(true);
-                        });
+                        return enqueuePendingRequest<T>('session', action);
                     }
                     throw e;
                 }
             } else {
-                // Session noch nicht aktiv -> Modal öffnen
-                return new Promise<T>((resolve, reject) => {
-                    setModalErrorMsg('');
-                    setPendingAction({ 
-                        mode: 'session',
-                        resolve: resolve as (value: unknown) => void, 
-                        reject, 
-                        action: action as (password: string | null) => Promise<unknown> 
-                    });
-                    setIsModalOpen(true);
-                });
+                return enqueuePendingRequest<T>('session', action);
             }
         } catch (e) {
             logger.error(`Error in protectAction: ${stringifyError(e)}`);
             throw e;
         }
-    }, [triggerSecurityLockdown]);
+    }, [enqueuePendingRequest, stopSyncLoops, triggerSecurityLockdown]);
+
+    const runPendingEntry = async (entry: PendingModalRequest, password: string | null) => {
+        try {
+            const result = await entry.action(password);
+            entry.resolve(result);
+        } catch (actionErr) {
+            entry.reject(actionErr);
+        }
+    };
 
     const handleModalConfirm = async (password: string) => {
-        if (!pendingAction) return;
-
-        if (pendingAction.mode === 'stepUp') {
-            try {
-                await elevateSession(password);
-                setModalErrorMsg('');
-                const currentPending = pendingAction;
-                setIsModalOpen(false);
-                setPendingAction(null);
-                try {
-                    const result = await currentPending.action(password);
-                    currentPending.resolve(result);
-                } catch (actionErr) {
-                    currentPending.reject(actionErr);
-                }
-            } catch (err) {
-                setModalErrorMsg(translateError(err, t));
-            }
-            return;
-        }
+        const currentPending = pendingQueueRef.current[0];
+        if (!currentPending || isModalSubmittingRef.current) return;
+        isModalSubmittingRef.current = true;
 
         try {
-            const settings = await settingsService.getSettings();
-            const timeout = settings.sessionTimeoutSeconds;
+            if (currentPending.mode === 'stepUp') {
+                try {
+                    await elevateSession(password);
+                } catch (err) {
+                    isModalSubmittingRef.current = false;
+                    setModalErrorMsg(translateError(err, t));
+                    return;
+                }
+
+                setModalErrorMsg('');
+                pendingQueueRef.current.shift();
+
+                let timeout = 0;
+                try {
+                    const settings = await settingsService.getSettings();
+                    timeout = settings.sessionTimeoutSeconds;
+                } catch {
+                    timeout = 0;
+                }
+
+                const toRun: Array<{ entry: PendingModalRequest; pwd: string | null }> = [
+                    { entry: currentPending, pwd: password },
+                ];
+
+                while (pendingQueueRef.current.length > 0) {
+                    const next = pendingQueueRef.current[0];
+                    if (next.mode === 'stepUp') {
+                        pendingQueueRef.current.shift();
+                        toRun.push({ entry: next, pwd: password });
+                    } else if (next.mode === 'session' && timeout > 0 && isSessionActiveRef.current) {
+                        pendingQueueRef.current.shift();
+                        toRun.push({ entry: next, pwd: null });
+                    } else {
+                        break;
+                    }
+                }
+
+                setActivePending(pendingQueueRef.current[0] ?? null);
+                isModalSubmittingRef.current = false;
+                await Promise.all(toRun.map((item) => runPendingEntry(item.entry, item.pwd)));
+                return;
+            }
+
+            let timeout = 0;
+            try {
+                const settings = await settingsService.getSettings();
+                timeout = settings.sessionTimeoutSeconds;
+            } catch (err) {
+                isModalSubmittingRef.current = false;
+                setModalErrorMsg(translateError(err, t));
+                return;
+            }
 
             if (timeout > 0) {
-                // Session im Backend starten
-                await authService.unlockSession(password, timeout);
+                try {
+                    const unlocked = await authService.unlockSession(password, timeout);
+                    if ((unlocked as unknown) === false) {
+                        throw new Error('Invalid password');
+                    }
+                } catch (err) {
+                    isModalSubmittingRef.current = false;
+                    setModalErrorMsg(translateError(err, t));
+                    return;
+                }
 
-                // Frontend Status synchronisieren (via Helper)
+                setModalErrorMsg('');
                 activateSession();
-
+                if (isAuthenticatedRef.current) {
+                    startSyncLoops(password);
+                }
                 logger.info(`Session unlocked via modal for ${timeout} seconds.`);
 
-                const result = await pendingAction.action(null);
-                pendingAction.resolve(result);
+                pendingQueueRef.current.shift();
+                const toRun: PendingModalRequest[] = [currentPending];
+                while (pendingQueueRef.current.length > 0 && pendingQueueRef.current[0].mode === 'session') {
+                    toRun.push(pendingQueueRef.current.shift()!);
+                }
+
+                setActivePending(pendingQueueRef.current[0] ?? null);
+                isModalSubmittingRef.current = false;
+                await Promise.all(toRun.map((entry) => runPendingEntry(entry, null)));
             } else {
-                // Modus A: Passwort direkt verwenden
-                const result = await pendingAction.action(password);
-                pendingAction.resolve(result);
+                // Mode A (timeout === 0): prompt once per queued request
+                setModalErrorMsg('');
+                pendingQueueRef.current.shift();
+                setActivePending(pendingQueueRef.current[0] ?? null);
+                isModalSubmittingRef.current = false;
+                await runPendingEntry(currentPending, password);
             }
-        } catch (e) {
-            pendingAction.reject(e);
         } finally {
-            setIsModalOpen(false);
-            setPendingAction(null);
+            isModalSubmittingRef.current = false;
         }
     };
 
     const handleModalCancel = () => {
-        if (pendingAction) {
-            pendingAction.reject(new Error("User cancelled authentication"));
-        }
+        const cancelled = pendingQueueRef.current;
+        pendingQueueRef.current = [];
+        isModalSubmittingRef.current = false;
         setModalErrorMsg('');
-        setIsModalOpen(false);
-        setPendingAction(null);
+        setActivePending(null);
+        for (const entry of cancelled) {
+            entry.reject(new Error("User cancelled authentication"));
+        }
     };
 
     const lockSession = useCallback(async () => {
@@ -361,8 +461,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         } finally {
             setIsSessionActive(false);
             isSessionActiveRef.current = false;
+            stopSyncLoops();
+            emitAppEvent(APP_EVENTS.SESSION_LOCKED);
         }
-    }, []);
+    }, [stopSyncLoops]);
 
     const clearLocks = useCallback(() => {
         setIsForkLocked(false);
@@ -411,6 +513,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         return tourBridge.subscribe((partial) => {
             if (partial.isAuthenticated !== undefined) {
                 setIsAuthenticated(partial.isAuthenticated);
+                isAuthenticatedRef.current = partial.isAuthenticated;
             }
             if (partial.isSessionActive !== undefined) {
                 setIsSessionActive(partial.isSessionActive);
@@ -429,15 +532,18 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         });
     }, []);
 
+    const isModalOpen = activePending !== null;
+
     return (
         <SessionContext.Provider value={{ protectAction, requireFullAccess, elevateSession, accessMode, isSessionActive, isAuthenticated, profileName, displayProfileName, userAvatarUrl, folderName, setProfileName, setFolderName, notifyLogin, notifyLogout, isForkLocked, lockdownKind, lockdownDetails, triggerSecurityLockdown, isRecoveryRequired, integrityReport, checkIntegrity, clearLocks, lockSession }}>
             {children}
             <AuthModal
+                key={activePending?.id ?? 'closed'}
                 isOpen={isModalOpen}
                 onConfirm={handleModalConfirm}
                 onCancel={handleModalCancel}
-                title={pendingAction?.mode === 'stepUp' ? t('auth.stepUpTitle') : undefined}
-                description={pendingAction?.mode === 'stepUp' ? t('auth.stepUpDesc') : undefined}
+                title={activePending?.mode === 'stepUp' ? t('auth.stepUpTitle') : undefined}
+                description={activePending?.mode === 'stepUp' ? t('auth.stepUpDesc') : undefined}
                 errorMsg={modalErrorMsg || undefined}
             />
         </SessionContext.Provider>

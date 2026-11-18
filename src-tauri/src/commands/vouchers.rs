@@ -430,9 +430,9 @@ pub fn evaluate_guarantor_anchor_check(
 
     let settings = state.get_cached_settings().unwrap_or_default();
     let own_server_present = if let Some(ref own) = settings.own_nominated_lock_server {
-        let own_norm = crate::checkout::normalize_sync_write_url(&own.write_url);
+        let own_norm = crate::services::common::normalize_sync_url(&own.write_url);
         let present = manifest.servers.iter().any(|s| {
-            crate::checkout::normalize_sync_write_url(&s.write_url) == own_norm
+            crate::services::common::normalize_sync_url(&s.write_url) == own_norm
                 && hex::encode(s.lock_pub) == own.lock_pub.to_ascii_lowercase()
                 && matches!(
                     s.nominated_by,
@@ -452,11 +452,11 @@ pub fn evaluate_guarantor_anchor_check(
         .servers
         .iter()
         .map(|s| {
-            let norm = crate::checkout::normalize_sync_write_url(&s.write_url);
+            let norm = crate::services::common::normalize_sync_url(&s.write_url);
             let asn = settings
                 .own_nominated_lock_server
                 .as_ref()
-                .filter(|o| crate::checkout::normalize_sync_write_url(&o.write_url) == norm)
+                .filter(|o| crate::services::common::normalize_sync_url(&o.write_url) == norm)
                 .and_then(|o| {
                     o.asn
                         .as_deref()

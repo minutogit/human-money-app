@@ -1,0 +1,258 @@
+import { useState, useEffect } from "react";
+import { useTranslation } from "react-i18next";
+import { integrityService } from "../../services/integrityService";
+import { useSession } from "../../context/SessionContext";
+import { logger } from "../../utils/log";
+import { translateError, stringifyError } from "../../utils/errorHelper";
+import { ProofOfDoubleSpendSummary } from "../../types";
+import { PageLayout } from "../ui/PageLayout";
+import { Button } from "../ui/Button";
+import { AlertBanner } from "../ui/AlertBanner";
+import { Advanced } from "../ui/Advanced";
+import { TechId } from "../ui/TechId";
+import { PageLoadingState, PageEmptyState, PageErrorState } from "../ui/PageState";
+import { open } from "@tauri-apps/plugin-dialog";
+import { readFile } from "@tauri-apps/plugin-fs";
+import { Upload } from "lucide-react";
+
+interface ConflictListViewProps {
+    onBack: () => void;
+    onViewConflict: (proofId: string) => void;
+}
+
+export function ConflictListView({ onBack, onViewConflict }: ConflictListViewProps) {
+    const { t } = useTranslation();
+    const { protectAction } = useSession();
+    const [conflicts, setConflicts] = useState<ProofOfDoubleSpendSummary[]>([]);
+    const [isLoading, setIsLoading] = useState(true);
+    const [isImporting, setIsImporting] = useState(false);
+    const [errorMsg, setErrorMsg] = useState("");
+
+    const handleImportProof = async () => {
+        setIsImporting(true);
+        setErrorMsg("");
+        try {
+            const selected = await open({
+                multiple: false,
+                filters: [
+                    { name: t('conflict.filterName'), extensions: ['hmcproof'] },
+                    { name: t('voucher.export.allFiles'), extensions: ['*'] }
+                ]
+            });
+            if (!selected || typeof selected !== 'string') return;
+
+            const fileBytes = await readFile(selected);
+            const proofId = await protectAction(async (password) => {
+                return await integrityService.importDoubleSpendProof(Array.from(fileBytes), password || undefined);
+            });
+
+            if (proofId) {
+                onViewConflict(proofId);
+            }
+        } catch (e) {
+            logger.error(`Failed to import double spend proof: ${stringifyError(e)}`);
+            setErrorMsg(t('conflict.importProofFailed', { error: translateError(e, t) }));
+        } finally {
+            setIsImporting(false);
+        }
+    };
+
+    useEffect(() => {
+        let active = true;
+        logger.info("ConflictListView: Loading conflicts");
+        async function fetchConflicts() {
+            setIsLoading(true);
+            setErrorMsg("");
+            try {
+                const result = await integrityService.getDoubleSpendConflicts();
+                if (active) setConflicts(result);
+            } catch (e) {
+                if (active) {
+                    const msg = t('conflict.fetchFailed', { error: translateError(e, t) });
+                    logger.error(`Failed to fetch conflicts: ${stringifyError(e)}`);
+                    setErrorMsg(msg);
+                }
+            } finally {
+                if (active) setIsLoading(false);
+            }
+        }
+        fetchConflicts();
+        return () => {
+            active = false;
+        };
+    }, [t]);
+
+    function formatTimestamp(isoString: string): string {
+        return new Date(isoString).toLocaleString();
+    }
+
+    const victimConflicts = conflicts.filter(c => c.conflictRole === "victim");
+    const witnessConflicts = conflicts.filter(c => c.conflictRole === "witness");
+
+    const ConflictCard = ({ conflict }: { conflict: ProofOfDoubleSpendSummary }) => (
+        <div
+            key={conflict.proofId}
+            className={`border rounded-lg shadow-sm hover:shadow-md transition-all ${
+                conflict.conflictRole === 'victim' 
+                    ? 'bg-red-50 border-red-200 hover:border-red-400' 
+                    : 'bg-bg-card-alternate border-theme-subtle hover:border-theme-primary'
+            }`}
+        >
+            <div className="p-6">
+                <div className="flex items-start justify-between mb-4">
+                    <div className="flex-grow">
+                        <div className="flex flex-wrap items-center gap-2 mb-2">
+                            <span className={`px-3 py-1 text-xs font-bold rounded-full ${
+                                conflict.conflictRole === 'victim'
+                                    ? 'bg-red-600 text-white'
+                                    : 'bg-gray-500 text-white'
+                            }`}>
+                                {conflict.conflictRole === 'victim' ? t('conflict.actionRequired') : t('conflict.securityInsight')}
+                            </span>
+                            {conflict.isResolved ? (
+                                <span className="px-3 py-1 text-xs font-bold rounded-full bg-green-100 text-green-800 border border-green-200">
+                                    {t('conflict.resolvedOfficially')}
+                                </span>
+                            ) : conflict.localOverride ? (
+                                <span className="px-3 py-1 text-xs font-bold rounded-full bg-blue-100 text-blue-800 border border-blue-200">
+                                    {t('conflict.resolvedLocally')}
+                                </span>
+                            ) : (
+                                <span className="px-3 py-1 text-xs font-bold rounded-full bg-red-100 text-red-800 border border-red-200">
+                                    {t('conflict.unresolved')}
+                                </span>
+                            )}
+                        </div>
+                        <h3 className="font-semibold text-theme-primary mb-1">
+                            {conflict.displayAffectedVoucherName || conflict.affectedVoucherName || t('conflict.unknownVoucher')}
+                        </h3>
+                        <p data-testid="conflict-card-summary" className="text-xs text-theme-secondary mb-2 leading-relaxed">
+                            {conflict.conflictRole === 'victim' ? t('conflict.listVictimSummary') : t('conflict.listWitnessSummary')}
+                        </p>
+                        {conflict.localNote && (
+                             <div className="mb-3">
+                                <p className="text-[10px] font-bold text-blue-600 uppercase tracking-tight mb-1">{t('conflict.personalNote')}</p>
+                                <p className="text-xs italic text-blue-800 bg-blue-50 px-2 py-1.5 rounded border border-blue-100 line-clamp-1 max-w-lg">
+                                   "{conflict.localNote}"
+                                </p>
+                             </div>
+                        )}
+                        <Advanced>
+                            <p className="text-sm text-theme-light flex items-center gap-1.5 flex-wrap">
+                                <span>{t('conflict.idLabel')}</span>
+                                <TechId value={conflict.proofId} kind="proof" />
+                            </p>
+                        </Advanced>
+                        <div className="text-sm text-theme-light flex items-center gap-1.5 flex-wrap mt-1">
+                            <span>{t('conflict.offenderLabel')}</span>
+                            <TechId value={conflict.offenderId} kind="did" />
+                        </div>
+                        <p className="text-sm text-theme-light mt-1">
+                            {t('conflict.reportedLabel', { date: formatTimestamp(conflict.reportTimestamp) })}
+                        </p>
+                    </div>
+                    <Button
+                        onClick={() => onViewConflict(conflict.proofId)}
+                        variant={conflict.conflictRole === 'victim' && !conflict.localOverride && !conflict.isResolved ? 'primary' : 'secondary'}
+                        size="sm"
+                        className="whitespace-nowrap"
+                    >
+                        {t('conflict.viewDetails')}
+                    </Button>
+                </div>
+                <Advanced>
+                    <div className="border-t border-theme-subtle pt-3">
+                        <p className="text-xs text-theme-light flex items-center gap-1.5 flex-wrap">
+                            <strong>{t('conflict.forkPointLabel')}</strong>
+                            <TechId value={conflict.forkPointPrevHash} kind="hash" />
+                        </p>
+                    </div>
+                </Advanced>
+            </div>
+        </div>
+    );
+
+    return (
+        <PageLayout
+            title={t('conflict.title')}
+            onBack={onBack}
+            maxWidth="4xl"
+            actions={
+                <>
+                    <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={handleImportProof}
+                        disabled={isImporting}
+                        className="gap-1.5 text-xs font-bold"
+                    >
+                        <Upload size={14} />
+                        {isImporting ? t('common.loading') : t('conflict.importProofBtn')}
+                    </Button>
+                    {!isLoading && !errorMsg && (
+                        <span className="text-xs font-semibold text-theme-light px-2">
+                            {conflicts.length === 1
+                                ? t('conflict.reportTotalCount', { count: conflicts.length })
+                                : t('conflict.reportsTotalCount', { count: conflicts.length })}
+                        </span>
+                    )}
+                </>
+            }
+        >
+            {isLoading ? (
+                <PageLoadingState message={t('conflict.loading')} />
+            ) : errorMsg && conflicts.length === 0 ? (
+                <PageErrorState title={t('conflict.loadErrorTitle')} message={errorMsg} />
+            ) : (
+                <div className="space-y-8">
+                    {errorMsg && (
+                        <AlertBanner variant="error" onDismiss={() => setErrorMsg('')}>
+                            {errorMsg}
+                        </AlertBanner>
+                    )}
+
+                    {conflicts.length === 0 ? (
+                        <PageEmptyState
+                            icon={<span className="text-3xl">✅</span>}
+                            title={t('conflict.noConflictsTitle')}
+                            description={t('conflict.noConflictsDescription')}
+                        />
+                    ) : (
+                        <>
+                            {victimConflicts.length > 0 && (
+                                <section className="space-y-4">
+                                    <h2 className="text-lg font-bold text-red-700 flex items-center gap-2">
+                                        <span className="flex h-3 w-3 rounded-full bg-red-600 animate-pulse"></span>
+                                        {t('conflict.victimConflictsHeader', { count: victimConflicts.length })}
+                                    </h2>
+                                    <div className="space-y-4">
+                                        {victimConflicts.map(c => <ConflictCard key={c.proofId} conflict={c} />)}
+                                    </div>
+                                </section>
+                            )}
+
+                            {witnessConflicts.length > 0 && (
+                                <section className="space-y-4">
+                                    <h2 className="text-lg font-bold text-theme-light flex items-center gap-2">
+                                        {t('conflict.witnessConflictsHeader', { count: witnessConflicts.length })}
+                                    </h2>
+                                    <details className="group">
+                                        <summary className="list-none cursor-pointer flex items-center gap-2 text-theme-light hover:text-theme-primary transition-colors py-2 font-medium">
+                                            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 transform group-open:rotate-180 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                                            </svg>
+                                            {t('conflict.showWitnessConflicts')}
+                                        </summary>
+                                        <div className="space-y-4 mt-4 pt-4 border-t border-theme-subtle">
+                                            {witnessConflicts.map(c => <ConflictCard key={c.proofId} conflict={c} />)}
+                                        </div>
+                                    </details>
+                                </section>
+                            )}
+                        </>
+                    )}
+                </div>
+            )}
+        </PageLayout>
+    );
+}

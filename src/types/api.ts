@@ -5,35 +5,19 @@ import { VoucherDetails } from './voucher';
 import { FrontendSyncDescriptor, StoredPublicSync } from './market';
 import type { HelpTopicId } from '../help/helpTopics';
 
-export interface ReceiveBundleArgs {
-    bundleData: number[];
-    standardDefinitionsToml: Record<string, string>;
-    password?: string | null;
-    forceAcceptToleranceBundle: boolean;
-}
-
-export interface OpenVoucherSigningRequestArgs {
-    containerBytes: number[];
-    password?: string | null;
-}
-
-export interface ProcessAndAttachSignatureArgs {
-    containerBytes: number[];
-    standardTomlContent: string;
-    containerPassword?: string | null;
-    walletPassword?: string | null;
-}
-
 export type PrivacyDefault = 'ask' | 'stealth' | 'public';
 
 export type UiMode = 'simple' | 'expert';
 
-export type SealSyncStatus = 'Synced' | 'PendingUpload';
-
-export interface SealUploadData {
-    sealBytes: number[];
-    sealHash: string;
-}
+export type SettingsSection =
+    | 'sync'
+    | 'backup'
+    | 'network'
+    | 'profile'
+    | 'standards'
+    | 'security'
+    | 'connection'
+    | 'advanced';
 
 export interface LockServerProbeResult {
     writeUrl: string;
@@ -165,20 +149,6 @@ export interface DeadQuorumAdjudicationDto {
     doubleSpendProofsCount: number;
 }
 
-export interface RollbackReport {
-    quarantinedVoucherIds?: string[];
-    archivedVoucherIds?: string[];
-    retainedVoucherIds?: string[];
-    newTxNonce?: number;
-    consolidatedStateHash?: string;
-    quarantined_voucher_ids?: string[];
-    archived_voucher_ids?: string[];
-    retained_voucher_ids?: string[];
-    new_tx_nonce?: number;
-    consolidated_state_hash?: string;
-    message: string;
-}
-
 export interface AppSettings {
     sessionTimeoutSeconds: number;
     lastUsedDirectory?: string;
@@ -266,7 +236,7 @@ export type AppState =
           initialMethod?: 'social' | 'words_or_sheet' | 'file_or_folder';
       }
     | { view: "needs_recovery"; initialPayload?: string }
-    | { view: "settings"; initialSection?: 'sync' | 'backup' | 'network' | 'profile' | 'standards' | 'security' | 'connection' | 'advanced' }
+    | { view: "settings"; initialSection?: SettingsSection }
     | { view: "support" }
     | { view: "bug_report" }
     | { view: "create_voucher"; previousView?: AppState }

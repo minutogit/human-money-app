@@ -103,28 +103,9 @@ impl From<human_money_core::app_service::AppFacadeError> for FrontendError {
             }
             human_money_core::app_service::AppFacadeError::Validation(val_err) => {
                 let msg = val_err.to_string();
-                if msg.contains("still in use") || msg.contains("in use by") {
-                    "standards.inUseError".to_string()
-                } else if msg.contains("Initial transaction amount must match") {
-                    if let Some((expected, found)) = extract_expected_found(&msg) {
-                        details.insert("expected".into(), expected);
-                        details.insert("found".into(), found);
-                    }
-                    "error.validation.initAmountMismatch".to_string()
-                } else if msg.contains("Insufficient funds") {
-                    if let Some((needed, available)) =
-                        extract_two_labeled_values(&msg, "Needed:", "Available:")
-                    {
-                        details.insert("needed".into(), needed);
-                        details.insert("available".into(), available);
-                    }
-                    "error.validation.insufficientFunds".to_string()
-                } else if msg.contains(
-                    "Split change voucher is blocked by unresolved or conflicted parent intent",
-                ) {
-                    "error.validation.splitChangePendingL2".to_string()
-                } else if msg.contains("Output has an unresolved durable L2 send intent") {
-                    "error.validation.intentPendingL2".to_string()
+                if let Some((c, d)) = classify_validation_message(&msg) {
+                    details = d;
+                    c
                 } else {
                     "error.validation.generic".to_string()
                 }
@@ -144,13 +125,42 @@ impl From<human_money_core::app_service::AppFacadeError> for FrontendError {
     }
 }
 
+fn classify_validation_message(msg: &str) -> Option<(String, HashMap<String, String>)> {
+    let mut details = HashMap::new();
+    if msg.contains("still in use") || msg.contains("in use by") {
+        return Some(("standards.inUseError".into(), details));
+    }
+    if msg.contains("Initial transaction amount must match") {
+        if let Some((expected, found)) = extract_expected_found(msg) {
+            details.insert("expected".into(), expected);
+            details.insert("found".into(), found);
+        }
+        return Some(("error.validation.initAmountMismatch".into(), details));
+    }
+    if msg.contains("Insufficient funds") {
+        if let Some((needed, available)) = extract_two_labeled_values(msg, "Needed:", "Available:")
+        {
+            details.insert("needed".into(), needed);
+            details.insert("available".into(), available);
+        }
+        return Some(("error.validation.insufficientFunds".into(), details));
+    }
+    if msg.contains("Split change voucher is blocked by unresolved or conflicted parent intent") {
+        return Some(("error.validation.splitChangePendingL2".into(), details));
+    }
+    if msg.contains("Output has an unresolved durable L2 send intent") {
+        return Some(("error.validation.intentPendingL2".into(), details));
+    }
+    None
+}
+
 /// Maps known error message prefixes to i18n codes and extracts interpolation variables.
 ///
 /// Uses stable prefixes from `thiserror` `#[error("...")]` macros in `human_money_core::error`.
 /// Performance note: This runs only on error paths, never in hot loops — HashMap allocation
 /// and String cloning are perfectly acceptable here for code clarity.
 fn classify_error(msg: &str) -> (String, HashMap<String, String>) {
-    let mut details = HashMap::new();
+    let details = HashMap::new();
 
     // --- Security Errors (must precede generic wallet lock substring checks) ---
     if msg.starts_with("Security Notice: This wallet profile was transferred to another device") {
@@ -195,33 +205,8 @@ fn classify_error(msg: &str) -> (String, HashMap<String, String>) {
     }
 
     // --- Validation Errors (with structured details extraction) ---
-    if msg.contains("still in use") || msg.contains("in use by") {
-        return ("standards.inUseError".into(), details);
-    }
-
-    if msg.contains("Initial transaction amount must match") {
-        if let Some((expected, found)) = extract_expected_found(msg) {
-            details.insert("expected".into(), expected);
-            details.insert("found".into(), found);
-        }
-        return ("error.validation.initAmountMismatch".into(), details);
-    }
-
-    if msg.contains("Insufficient funds") {
-        if let Some((needed, available)) = extract_two_labeled_values(msg, "Needed:", "Available:")
-        {
-            details.insert("needed".into(), needed);
-            details.insert("available".into(), available);
-        }
-        return ("error.validation.insufficientFunds".into(), details);
-    }
-
-    if msg.contains("Split change voucher is blocked by unresolved or conflicted parent intent") {
-        return ("error.validation.splitChangePendingL2".into(), details);
-    }
-
-    if msg.contains("Output has an unresolved durable L2 send intent") {
-        return ("error.validation.intentPendingL2".into(), details);
+    if let Some(hit) = classify_validation_message(msg) {
+        return hit;
     }
 
     // --- Bundle Processing ---

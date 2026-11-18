@@ -8,38 +8,24 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
-use chrono::Utc;
 use ed25519_dalek::SigningKey;
 use human_money_core::humoco_proto::{
-    self,
-    crypto::DEFAULT_LOCK_POW_BASE_BITS,
-    decode_hex_fixed, resolve_import_union,
+    self, decode_hex_fixed, resolve_import_union,
     types::{EquivocationProof, LockPubKey, LockReceiptKind, QuorumCertificate},
     AnchorManifest, CommitteeSignature, ImportAck, MigrationProposal, NominatedBy, ServerEntry,
-    SnapshotExport, DEAD_QUORUM_CLAIM_WINDOW_SECS,
+    SnapshotExport,
 };
-use human_money_core::models::voucher::Voucher;
-use human_money_core::models::voucher_standard_definition::VoucherStandardDefinition;
-use human_money_core::services::{
-    crypto::{derive_ed25519_keypair, get_pubkey_from_user_id},
-    dead_quorum_swap::{
-        adjudicate_dead_quorum_claims, solve_swap_ticket_pow, DeadQuorumClaimSubmission,
-        DeadQuorumSwapOffer,
-    },
-    l2_gateway, l2_rotation,
-};
+use human_money_core::services::{crypto::get_pubkey_from_user_id, l2_gateway, l2_rotation};
 use humoco_market::CardStore;
 use humoco_wot::{
-    resolve_successor_chain, KeyRotationReason, KeySuccessorAttestation, ServerOffenderList,
-    ServerOffenderRecord, WotEquivocationProof, WotLockDelegation, WotLockReceipt,
-    WotLockReceiptKind, WotSigner,
+    resolve_successor_chain, KeySuccessorAttestation, ServerOffenderList, ServerOffenderRecord,
+    WotEquivocationProof, WotLockDelegation, WotLockReceipt, WotLockReceiptKind,
 };
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
-use crate::checkout::normalize_sync_write_url;
 use crate::gateway_resolver::{sybil_fold_committee, SybilServerCandidate};
-use crate::models::{FrontendAddressBook, FrontendError, MnemonicLanguage, TransactionRecord};
+use crate::models::{FrontendAddressBook, FrontendError};
+use crate::services::common::max_pow_base_bits_for_servers;
 use crate::settings::AppSettings;
 use crate::state::{AppState, CONTACTS_DATA_NAME, MARKET_CARD_STORE_KEY};
 use crate::sync_client::{self, SyncRevocationNotice};
@@ -50,7 +36,7 @@ pub const L2_LIFECYCLE_STATE_KEY: &str = "l2_lifecycle_state";
 pub const HEALTH_CHECK_INTERVAL_SECS: u64 = 6 * 3600;
 pub const UNHEALTHY_HYSTERESIS_SECS: u64 = 5 * 86_400;
 
-fn lifecycle_err(msg: impl Into<String>) -> FrontendError {
+pub(crate) fn lifecycle_err(msg: impl Into<String>) -> FrontendError {
     FrontendError::from(msg.into())
 }
 
@@ -181,21 +167,6 @@ pub struct FrontendDeadQuorumAdjudicationDto {
     pub double_spend_proofs_count: usize,
 }
 
-struct LocalWotDidSigner {
-    did: String,
-    signing_key: SigningKey,
-}
-
-impl WotSigner for LocalWotDidSigner {
-    fn did(&self) -> &str {
-        &self.did
-    }
-
-    fn sign(&self, message: &[u8]) -> [u8; 64] {
-        human_money_core::services::crypto::sign_ed25519(&self.signing_key, message).to_bytes()
-    }
-}
-
 pub fn load_server_offender_list(
     service: &mut human_money_core::app_service::AppService,
     password: Option<&str>,
@@ -291,7 +262,7 @@ pub fn save_key_successor_attestations(
         .map_err(FrontendError::from)
 }
 
-fn strip_user_id_prefix(id: &str) -> &str {
+pub(crate) fn strip_user_id_prefix(id: &str) -> &str {
     let trimmed = id.trim();
     trimmed.split_once('@').map_or(trimmed, |(_, did)| did)
 }
@@ -329,6 +300,100 @@ pub fn save_lifecycle_state(
         .map_err(FrontendError::from)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ServerProbeOutcome {
+    Healthy,
+    Unhealthy,
+    Revoked,
+}
+
+/// Pure decision helper classifying a server's `/info` response into healthy, unhealthy, or revoked.
+pub(crate) fn classify_server_probe_info(
+    info: &sync_client::SyncServerInfo,
+    expected_lock_hex: &str,
+    now_secs: u64,
+) -> ServerProbeOutcome {
+    let revoked = info.revocation.as_ref().is_some_and(|rev| {
+        sync_client::verify_revocation_notice(rev, &info.drop_pub).is_ok()
+            && rev.effective_at <= now_secs
+    });
+    if revoked {
+        return ServerProbeOutcome::Revoked;
+    }
+    let lock_matches = info
+        .lock
+        .as_ref()
+        .is_some_and(|l| l.lock_pub.trim().eq_ignore_ascii_case(expected_lock_hex));
+    if lock_matches {
+        ServerProbeOutcome::Healthy
+    } else {
+        ServerProbeOutcome::Unhealthy
+    }
+}
+
+/// Pure decision helper applying verified effective `SyncRevocationNotice` entries to anchor health.
+pub(crate) fn apply_revocation_notices_to_health(
+    health: &mut StoredAnchorHealth,
+    notices: &[(LockPubKey, SyncRevocationNotice)],
+    expected_servers: &[ServerEntry],
+    now_secs: u64,
+) {
+    for (lock_pub, notice) in notices {
+        let Some(srv) = expected_servers.iter().find(|s| s.lock_pub == *lock_pub) else {
+            continue;
+        };
+        let expected_admin = hex::encode(srv.admin_pub);
+        if sync_client::verify_revocation_notice(notice, &expected_admin).is_ok()
+            && notice.effective_at <= now_secs
+        {
+            health.revoked_lock_pubs.insert(hex::encode(lock_pub));
+        }
+    }
+}
+
+/// Pure 5-day hysteresis and immediate-revocation state machine for server health demotions.
+///
+/// Clears servers that recovered in the current tick, preserves original `unhealthy_since`
+/// timestamps for persistent failures, records newly revoked servers immediately, and returns
+/// all `LockPubKey`s eligible for committee rotation.
+pub(crate) fn apply_health_observations_and_collect_demotions(
+    health: &mut StoredAnchorHealth,
+    unhealthy_now: &HashSet<String>,
+    revoked_now: &HashSet<String>,
+    now_secs: u64,
+) -> HashSet<LockPubKey> {
+    health.last_checked_secs = now_secs;
+
+    // Clear servers that came back healthy
+    health
+        .unhealthy_since_by_lock_pub
+        .retain(|k, _| unhealthy_now.contains(k));
+    for lk in unhealthy_now {
+        health
+            .unhealthy_since_by_lock_pub
+            .entry(lk.clone())
+            .or_insert(now_secs);
+    }
+    for lk in revoked_now {
+        health.revoked_lock_pubs.insert(lk.clone());
+    }
+
+    let mut failed: HashSet<LockPubKey> = HashSet::new();
+    for lk in &health.revoked_lock_pubs {
+        if let Ok(pk) = decode_hex_fixed::<32>(lk) {
+            failed.insert(pk);
+        }
+    }
+    for (lk, &since) in &health.unhealthy_since_by_lock_pub {
+        if now_secs.saturating_sub(since) >= UNHEALTHY_HYSTERESIS_SECS {
+            if let Ok(pk) = decode_hex_fixed::<32>(lk) {
+                failed.insert(pk);
+            }
+        }
+    }
+    failed
+}
+
 pub fn record_revoked_servers(
     service: &mut human_money_core::app_service::AppService,
     anchor_id: &[u8; 32],
@@ -346,17 +411,7 @@ pub fn record_revoked_servers(
         .anchors
         .entry(anchor_hex.clone())
         .or_insert_with(|| StoredAnchorHealth::new(anchor_hex));
-    for (lock_pub, notice) in notices {
-        let Some(srv) = expected_servers.iter().find(|s| s.lock_pub == *lock_pub) else {
-            continue;
-        };
-        let expected_admin = hex::encode(srv.admin_pub);
-        if sync_client::verify_revocation_notice(notice, &expected_admin).is_ok()
-            && notice.effective_at <= now_secs
-        {
-            health.revoked_lock_pubs.insert(hex::encode(lock_pub));
-        }
-    }
+    apply_revocation_notices_to_health(health, notices, expected_servers, now_secs);
     save_lifecycle_state(service, &lc, password)
 }
 
@@ -603,19 +658,8 @@ pub async fn mirror_manifest_to_own_syncs(
     }
 }
 
-fn determine_manifest_pow_bits(settings: &AppSettings, manifest: &AnchorManifest) -> u32 {
-    let mut bits = DEFAULT_LOCK_POW_BASE_BITS;
-    for srv in &manifest.servers {
-        let norm = normalize_sync_write_url(&srv.write_url);
-        if let Some(probe) = settings.l2_probe_cache.get(&norm) {
-            bits = bits.max(probe.pow_base_bits);
-        }
-    }
-    bits
-}
-
 #[allow(clippy::too_many_arguments)]
-fn select_rotation_proposal(
+pub(crate) fn select_rotation_proposal(
     anchor_id: [u8; 32],
     manifest: &AnchorManifest,
     failed_lock_pubs: &HashSet<LockPubKey>,
@@ -767,6 +811,46 @@ fn select_rotation_proposal(
     None
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct VetoDecision {
+    pub proposal_hash: [u8; 32],
+    pub reason: &'static str,
+}
+
+/// Pure decision helper deduplicating polled migration proposals and returning those requiring an
+/// automatic guarantor veto for `guarantor_index`.
+pub(crate) fn evaluate_polled_proposals_for_veto(
+    manifest: &AnchorManifest,
+    polled_proposals: &[MigrationProposal],
+    guarantor_index: u8,
+) -> Vec<VetoDecision> {
+    let mut seen_hashes: HashSet<[u8; 32]> = HashSet::new();
+    let mut decisions = Vec::new();
+    for prop in polled_proposals {
+        let Ok(prop_hash) = prop.core_digest() else {
+            continue;
+        };
+        if !seen_hashes.insert(prop_hash) {
+            continue;
+        }
+        if let Some(reason) =
+            l2_rotation::evaluate_guarantor_veto_reason(manifest, prop, guarantor_index)
+        {
+            decisions.push(VetoDecision {
+                proposal_hash: prop_hash,
+                reason,
+            });
+        }
+    }
+    decisions
+}
+
+/// Pure state transition updating lifecycle veto counters after dispatching a veto.
+pub(crate) fn record_guarantor_veto_sent(lc: &mut StoredL2LifecycleState, reason: &str) {
+    lc.auto_vetoes_sent = lc.auto_vetoes_sent.saturating_add(1);
+    lc.last_veto_reason = Some(reason.to_string());
+}
+
 async fn check_guarantor_vetoes(
     state: &AppState,
     client: &reqwest::Client,
@@ -809,19 +893,11 @@ async fn check_guarantor_vetoes(
             }
         }
 
-        let mut seen_hashes: HashSet<[u8; 32]> = HashSet::new();
-        for prop in polled_proposals {
-            let Ok(prop_hash) = prop.core_digest() else {
-                continue;
-            };
-            if !seen_hashes.insert(prop_hash) {
-                continue;
-            }
-            let Some(reason) = l2_rotation::evaluate_guarantor_veto_reason(&manifest, &prop, g_idx)
-            else {
-                continue;
-            };
-
+        for VetoDecision {
+            proposal_hash: prop_hash,
+            reason,
+        } in evaluate_polled_proposals_for_veto(&manifest, &polled_proposals, g_idx)
+        {
             let veto_res = {
                 let service = state
                     .service
@@ -863,8 +939,7 @@ async fn check_guarantor_vetoes(
                     .lock()
                     .map_err(|_| lifecycle_err("Wallet service unavailable"))?;
                 let mut lc = load_lifecycle_state(&mut service, password);
-                lc.auto_vetoes_sent = lc.auto_vetoes_sent.saturating_add(1);
-                lc.last_veto_reason = Some(reason.to_string());
+                record_guarantor_veto_sent(&mut lc, reason);
                 save_lifecycle_state(&mut service, &lc, password)?;
             }
         }
@@ -874,6 +949,181 @@ async fn check_guarantor_vetoes(
 }
 
 type ImportedStatePair = ([u8; 32], Vec<ImportAck>);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ProposedPhaseDecision {
+    WaitTimelock(StoredRotationPhase),
+    AwaitSnapshots(StoredRotationPhase),
+    ReadyToImport {
+        proposal: MigrationProposal,
+        verified_exports: Vec<SnapshotExport>,
+        expected_state_hash: [u8; 32],
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CommitPhaseDecision {
+    AwaitCommitSigs(StoredRotationPhase),
+    Finalized(AnchorManifest),
+}
+
+pub(crate) fn is_proposal_timelock_elapsed(effective_at_secs: u64, now_secs: u64) -> bool {
+    now_secs >= effective_at_secs
+}
+
+/// Pure Phase 1 -> Phase 2 state transition: enters `Proposed` only if `>= threshold` servers
+/// acknowledged the proposal, picking the earliest `effective_at` capped at the protocol timelock.
+pub(crate) fn compute_proposal_phase(
+    proposal: MigrationProposal,
+    accepted_effective_ats: &[Option<u64>],
+    threshold: u8,
+    now_secs: u64,
+) -> Option<StoredRotationPhase> {
+    if accepted_effective_ats.len() < usize::from(threshold) {
+        return None;
+    }
+    let mut effective_at_secs = now_secs.saturating_add(humoco_proto::PROPOSAL_TIMELOCK_SECS);
+    for eff in accepted_effective_ats.iter().flatten() {
+        effective_at_secs = effective_at_secs.min(*eff);
+    }
+    Some(StoredRotationPhase::Proposed {
+        proposal,
+        effective_at_secs,
+    })
+}
+
+/// Pure `Proposed` phase evaluator: checks timelock expiry, deduplicates and verifies
+/// `FreezeSnapshot`s, enforces `>= manifest.threshold`, and computes the deterministic import union.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn evaluate_proposed_phase_transition(
+    anchor_id: [u8; 32],
+    manifest: &AnchorManifest,
+    proposal: MigrationProposal,
+    effective_at_secs: u64,
+    candidate_exports: Vec<SnapshotExport>,
+    qcs: &[QuorumCertificate],
+    pow_base_bits: u32,
+    now_secs: u64,
+) -> Result<ProposedPhaseDecision, FrontendError> {
+    if !is_proposal_timelock_elapsed(effective_at_secs, now_secs) {
+        return Ok(ProposedPhaseDecision::WaitTimelock(
+            StoredRotationPhase::Proposed {
+                proposal,
+                effective_at_secs,
+            },
+        ));
+    }
+
+    let mut verified_exports: Vec<SnapshotExport> = Vec::new();
+    let mut seen_pubs: HashSet<LockPubKey> = HashSet::new();
+    for exp in candidate_exports {
+        if seen_pubs.insert(exp.snapshot.lock_pub) && exp.snapshot.verify() {
+            verified_exports.push(exp);
+        }
+    }
+
+    if verified_exports.len() < usize::from(manifest.threshold) {
+        return Ok(ProposedPhaseDecision::AwaitSnapshots(
+            StoredRotationPhase::Proposed {
+                proposal,
+                effective_at_secs,
+            },
+        ));
+    }
+
+    let resolved = resolve_import_union(
+        &anchor_id,
+        manifest,
+        &proposal,
+        &verified_exports,
+        qcs,
+        pow_base_bits,
+    )
+    .map_err(|e| lifecycle_err(format!("resolve_import_union failed: {}", e)))?;
+
+    Ok(ProposedPhaseDecision::ReadyToImport {
+        proposal,
+        verified_exports,
+        expected_state_hash: resolved.imported_state_hash,
+    })
+}
+
+pub(crate) fn verify_collected_import_acks(
+    acks: &[ImportAck],
+    expected_state_hash: &[u8; 32],
+) -> Result<(), FrontendError> {
+    for ack in acks {
+        if ack.imported_state_hash != *expected_state_hash {
+            return Err(lifecycle_err("Target server ImportAck state hash mismatch"));
+        }
+    }
+    Ok(())
+}
+
+/// Pure `Imported` -> `Finalized` evaluator: deduplicates `commit_sigs` by `lock_pub`, stays in
+/// `StoredRotationPhase::Imported` until `>= manifest.threshold`, and assembles the next manifest.
+pub(crate) fn evaluate_imported_commit_transition(
+    manifest: &AnchorManifest,
+    anchor_id: &[u8; 32],
+    proposal: MigrationProposal,
+    imported_state_hash: [u8; 32],
+    import_acks: Vec<ImportAck>,
+    commit_sigs: Vec<CommitteeSignature>,
+) -> Result<CommitPhaseDecision, FrontendError> {
+    let mut unique_sigs: Vec<CommitteeSignature> = Vec::new();
+    let mut signed_pubs: HashSet<LockPubKey> = HashSet::new();
+    for cs in commit_sigs {
+        if signed_pubs.insert(cs.lock_pub) {
+            unique_sigs.push(cs);
+        }
+    }
+
+    if unique_sigs.len() < usize::from(manifest.threshold) {
+        return Ok(CommitPhaseDecision::AwaitCommitSigs(
+            StoredRotationPhase::Imported {
+                proposal,
+                imported_state_hash_hex: hex::encode(imported_state_hash),
+                import_acks,
+            },
+        ));
+    }
+
+    let (next_manifest, _reduced) = l2_rotation::assemble_migrated_manifest(
+        manifest,
+        anchor_id,
+        proposal,
+        imported_state_hash,
+        import_acks,
+        unique_sigs,
+    )
+    .map_err(FrontendError::from)?;
+
+    Ok(CommitPhaseDecision::Finalized(next_manifest))
+}
+
+/// Pure state transition updating `StoredAnchorHealth` from the result of a rotation step.
+pub(crate) fn apply_rotation_step_outcome(
+    health: &mut StoredAnchorHealth,
+    outcome: Result<&Option<StoredRotationPhase>, &str>,
+    current_manifest_rev: u64,
+    now_secs: u64,
+) {
+    match outcome {
+        Ok(next_phase) => {
+            health.last_checked_secs = now_secs;
+            health.active_rotation = next_phase.clone();
+            health.last_error = None;
+            if next_phase.is_none() {
+                health.unhealthy_since_by_lock_pub.clear();
+                health.revoked_lock_pubs.clear();
+                health.last_rotated_rev = current_manifest_rev.saturating_add(1);
+            }
+        }
+        Err(err_msg) => {
+            health.last_error = Some(err_msg.to_string());
+        }
+    }
+}
 
 #[derive(Clone, Copy)]
 struct RotationEnv<'a> {
@@ -904,7 +1154,7 @@ async fn drive_active_rotation(
             proposal,
             effective_at_secs,
         } => {
-            if now_secs < effective_at_secs {
+            if !is_proposal_timelock_elapsed(effective_at_secs, now_secs) {
                 return Ok(Some(StoredRotationPhase::Proposed {
                     proposal,
                     effective_at_secs,
@@ -912,16 +1162,13 @@ async fn drive_active_rotation(
             }
 
             // Ensure permanent freeze & collect >= Q_old FreezeSnapshots
-            let mut exports: Vec<SnapshotExport> = Vec::new();
-            let mut seen_pubs: HashSet<LockPubKey> = HashSet::new();
+            let mut candidate_exports: Vec<SnapshotExport> = Vec::new();
             for srv in &manifest.servers {
                 if let Ok(Some(st)) =
                     sync_client::get_lock_freeze_status(client, &srv.write_url, &anchor_hex).await
                 {
                     if let Some(exp) = st.snapshot_export {
-                        if seen_pubs.insert(exp.snapshot.lock_pub) && exp.snapshot.verify() {
-                            exports.push(exp);
-                        }
+                        candidate_exports.push(exp);
                     }
                 } else {
                     let fetch_body = serde_json::json!({
@@ -934,21 +1181,11 @@ async fn drive_active_rotation(
                     {
                         if let Some(exp_val) = val.get("snapshot_export").cloned() {
                             if let Ok(exp) = serde_json::from_value::<SnapshotExport>(exp_val) {
-                                if seen_pubs.insert(exp.snapshot.lock_pub) && exp.snapshot.verify()
-                                {
-                                    exports.push(exp);
-                                }
+                                candidate_exports.push(exp);
                             }
                         }
                     }
                 }
-            }
-
-            if exports.len() < usize::from(manifest.threshold) {
-                return Ok(Some(StoredRotationPhase::Proposed {
-                    proposal,
-                    effective_at_secs,
-                }));
             }
 
             let qcs: Vec<QuorumCertificate> = {
@@ -967,10 +1204,29 @@ async fn drive_active_rotation(
                     })
                     .map_err(FrontendError::from)?
             };
-            let pow_bits = determine_manifest_pow_bits(settings, &manifest);
-            let resolved =
-                resolve_import_union(&anchor_id, &manifest, &proposal, &exports, &qcs, pow_bits)
-                    .map_err(|e| lifecycle_err(format!("resolve_import_union failed: {}", e)))?;
+            let pow_bits = max_pow_base_bits_for_servers(
+                settings,
+                manifest.servers.iter().map(|srv| srv.write_url.as_str()),
+            );
+
+            let (proposal, exports, expected_state_hash) = match evaluate_proposed_phase_transition(
+                anchor_id,
+                &manifest,
+                proposal,
+                effective_at_secs,
+                candidate_exports,
+                &qcs,
+                pow_bits,
+                now_secs,
+            )? {
+                ProposedPhaseDecision::WaitTimelock(p)
+                | ProposedPhaseDecision::AwaitSnapshots(p) => return Ok(Some(p)),
+                ProposedPhaseDecision::ReadyToImport {
+                    proposal,
+                    verified_exports,
+                    expected_state_hash,
+                } => (proposal, verified_exports, expected_state_hash),
+            };
 
             let mut import_acks: Vec<ImportAck> = Vec::with_capacity(proposal.new_servers.len());
             for new_srv in &proposal.new_servers {
@@ -985,13 +1241,11 @@ async fn drive_active_rotation(
                 )
                 .await
                 .map_err(lifecycle_err)?;
-                if ack.imported_state_hash != resolved.imported_state_hash {
-                    return Err(lifecycle_err("Target server ImportAck state hash mismatch"));
-                }
+                verify_collected_import_acks(std::slice::from_ref(&ack), &expected_state_hash)?;
                 import_acks.push(ack);
             }
 
-            (proposal, Some((resolved.imported_state_hash, import_acks)))
+            (proposal, Some((expected_state_hash, import_acks)))
         }
         StoredRotationPhase::Imported {
             proposal,
@@ -1010,7 +1264,6 @@ async fn drive_active_rotation(
 
     // Phase 3: Collect >= Q_old commit signatures
     let mut commit_sigs: Vec<CommitteeSignature> = Vec::new();
-    let mut signed_pubs: HashSet<LockPubKey> = HashSet::new();
     for old_srv in &manifest.servers {
         if let Ok(cs) = sync_client::post_lock_commit_sign(
             client,
@@ -1022,7 +1275,10 @@ async fn drive_active_rotation(
         )
         .await
         {
-            if signed_pubs.insert(cs.lock_pub) {
+            if !commit_sigs
+                .iter()
+                .any(|existing| existing.lock_pub == cs.lock_pub)
+            {
                 commit_sigs.push(cs);
             }
         }
@@ -1031,23 +1287,17 @@ async fn drive_active_rotation(
         }
     }
 
-    if commit_sigs.len() < usize::from(manifest.threshold) {
-        return Ok(Some(StoredRotationPhase::Imported {
-            proposal,
-            imported_state_hash_hex: hex::encode(imported_state_hash),
-            import_acks,
-        }));
-    }
-
-    let (next_manifest, _reduced) = l2_rotation::assemble_migrated_manifest(
+    let next_manifest = match evaluate_imported_commit_transition(
         &manifest,
         &anchor_id,
-        proposal.clone(),
+        proposal,
         imported_state_hash,
         import_acks,
         commit_sigs,
-    )
-    .map_err(FrontendError::from)?;
+    )? {
+        CommitPhaseDecision::AwaitCommitSigs(phase) => return Ok(Some(phase)),
+        CommitPhaseDecision::Finalized(m) => m,
+    };
 
     let mut final_urls = HashSet::new();
     for srv in manifest.servers.iter().chain(next_manifest.servers.iter()) {
@@ -1132,7 +1382,7 @@ pub(crate) async fn run_lifecycle_tick_with_now(
 
         // Resume active crash-safe rotation phase if any
         if let Some(phase) = existing_phase {
-            match drive_active_rotation(
+            let step_result = drive_active_rotation(
                 RotationEnv {
                     state,
                     settings: &settings,
@@ -1144,42 +1394,30 @@ pub(crate) async fn run_lifecycle_tick_with_now(
                 manifest.clone(),
                 phase,
             )
-            .await
-            {
+            .await;
+            let mut service = state
+                .service
+                .lock()
+                .map_err(|_| lifecycle_err("Wallet service unavailable"))?;
+            let mut lc = load_lifecycle_state(&mut service, password);
+            let entry = lc
+                .anchors
+                .entry(anchor_hex.clone())
+                .or_insert_with(|| StoredAnchorHealth::new(anchor_hex.clone()));
+            match &step_result {
                 Ok(next_phase) => {
-                    let mut service = state
-                        .service
-                        .lock()
-                        .map_err(|_| lifecycle_err("Wallet service unavailable"))?;
-                    let mut lc = load_lifecycle_state(&mut service, password);
-                    let entry = lc
-                        .anchors
-                        .entry(anchor_hex.clone())
-                        .or_insert_with(|| StoredAnchorHealth::new(anchor_hex.clone()));
-                    entry.last_checked_secs = now_secs;
-                    entry.active_rotation = next_phase.clone();
-                    entry.last_error = None;
-                    if next_phase.is_none() {
-                        entry.unhealthy_since_by_lock_pub.clear();
-                        entry.revoked_lock_pubs.clear();
-                        entry.last_rotated_rev = manifest.revision.saturating_add(1);
-                    }
-                    save_lifecycle_state(&mut service, &lc, password)?;
+                    apply_rotation_step_outcome(entry, Ok(next_phase), manifest.revision, now_secs);
                 }
                 Err(err) => {
-                    let mut service = state
-                        .service
-                        .lock()
-                        .map_err(|_| lifecycle_err("Wallet service unavailable"))?;
-                    let mut lc = load_lifecycle_state(&mut service, password);
-                    let entry = lc
-                        .anchors
-                        .entry(anchor_hex.clone())
-                        .or_insert_with(|| StoredAnchorHealth::new(anchor_hex.clone()));
-                    entry.last_error = Some(err.message);
-                    save_lifecycle_state(&mut service, &lc, password)?;
+                    apply_rotation_step_outcome(
+                        entry,
+                        Err(err.message.as_str()),
+                        manifest.revision,
+                        now_secs,
+                    );
                 }
             }
+            save_lifecycle_state(&mut service, &lc, password)?;
             continue;
         }
 
@@ -1195,21 +1433,15 @@ pub(crate) async fn run_lifecycle_tick_with_now(
                 continue;
             }
             match sync_client::fetch_sync_info(client, &srv.write_url).await {
-                Ok(info) => {
-                    let lock_matches = info
-                        .lock
-                        .as_ref()
-                        .is_some_and(|l| l.lock_pub.trim().eq_ignore_ascii_case(&lock_hex));
-                    let revoked = info.revocation.as_ref().is_some_and(|rev| {
-                        sync_client::verify_revocation_notice(rev, &info.drop_pub).is_ok()
-                            && rev.effective_at <= now_secs
-                    });
-                    if revoked {
-                        revoked_now.insert(lock_hex);
-                    } else if !lock_matches {
+                Ok(info) => match classify_server_probe_info(&info, &lock_hex, now_secs) {
+                    ServerProbeOutcome::Healthy => {}
+                    ServerProbeOutcome::Unhealthy => {
                         unhealthy_now.insert(lock_hex);
                     }
-                }
+                    ServerProbeOutcome::Revoked => {
+                        revoked_now.insert(lock_hex);
+                    }
+                },
                 Err(_) => {
                     unhealthy_now.insert(lock_hex);
                 }
@@ -1237,36 +1469,12 @@ pub(crate) async fn run_lifecycle_tick_with_now(
                 .anchors
                 .entry(anchor_hex.clone())
                 .or_insert_with(|| StoredAnchorHealth::new(anchor_hex.clone()));
-            health.last_checked_secs = now_secs;
-
-            // Clear servers that came back healthy
-            health
-                .unhealthy_since_by_lock_pub
-                .retain(|k, _| unhealthy_now.contains(k));
-            for lk in unhealthy_now {
-                health
-                    .unhealthy_since_by_lock_pub
-                    .entry(lk)
-                    .or_insert(now_secs);
-            }
-            for lk in revoked_now {
-                health.revoked_lock_pubs.insert(lk);
-            }
-
-            let mut failed: HashSet<LockPubKey> = HashSet::new();
-            for lk in &health.revoked_lock_pubs {
-                if let Ok(pk) = decode_hex_fixed::<32>(lk) {
-                    failed.insert(pk);
-                }
-            }
-            for (lk, &since) in &health.unhealthy_since_by_lock_pub {
-                if now_secs.saturating_sub(since) >= UNHEALTHY_HYSTERESIS_SECS {
-                    if let Ok(pk) = decode_hex_fixed::<32>(lk) {
-                        failed.insert(pk);
-                    }
-                }
-            }
-
+            let failed = apply_health_observations_and_collect_demotions(
+                health,
+                &unhealthy_now,
+                &revoked_now,
+                now_secs,
+            );
             save_lifecycle_state(&mut service, &lc, password)?;
             failed
         };
@@ -1325,23 +1533,26 @@ pub(crate) async fn run_lifecycle_tick_with_now(
             "proposal": proposal,
             "current_manifest": manifest,
         });
-        let mut accepted = 0usize;
-        let mut effective_at_secs = now_secs.saturating_add(humoco_proto::PROPOSAL_TIMELOCK_SECS);
+        let mut accepted_effective_ats: Vec<Option<u64>> = Vec::new();
         for srv in &manifest.servers {
             if let Ok(resp) =
                 sync_client::post_lock_freeze_action(client, &srv.write_url, &prop_body).await
             {
-                accepted += 1;
-                if let Some(eff) = resp.get("effective_at").and_then(|v| v.as_u64()) {
-                    effective_at_secs = effective_at_secs.min(eff);
-                }
+                accepted_effective_ats.push(resp.get("effective_at").and_then(|v| v.as_u64()));
             }
         }
 
-        if accepted >= usize::from(manifest.threshold) {
-            let phase = StoredRotationPhase::Proposed {
-                proposal,
-                effective_at_secs,
+        if let Some(phase) = compute_proposal_phase(
+            proposal,
+            &accepted_effective_ats,
+            manifest.threshold,
+            now_secs,
+        ) {
+            let phase_effective_at = match &phase {
+                StoredRotationPhase::Proposed {
+                    effective_at_secs, ..
+                } => *effective_at_secs,
+                StoredRotationPhase::Imported { .. } => now_secs,
             };
             {
                 let mut service = state
@@ -1359,7 +1570,7 @@ pub(crate) async fn run_lifecycle_tick_with_now(
             }
 
             // If timelock is already elapsed (e.g., short dev/test timelock = 0), advance immediately
-            if now_secs >= effective_at_secs {
+            if is_proposal_timelock_elapsed(phase_effective_at, now_secs) {
                 if let Ok(next_phase) = drive_active_rotation(
                     RotationEnv {
                         state,
@@ -1383,12 +1594,12 @@ pub(crate) async fn run_lifecycle_tick_with_now(
                         .anchors
                         .entry(anchor_hex.clone())
                         .or_insert_with(|| StoredAnchorHealth::new(anchor_hex.clone()));
-                    health.active_rotation = next_phase.clone();
-                    if next_phase.is_none() {
-                        health.unhealthy_since_by_lock_pub.clear();
-                        health.revoked_lock_pubs.clear();
-                        health.last_rotated_rev = manifest.revision.saturating_add(1);
-                    }
+                    apply_rotation_step_outcome(
+                        health,
+                        Ok(&next_phase),
+                        manifest.revision,
+                        now_secs,
+                    );
                     save_lifecycle_state(&mut service, &lc, password)?;
                 }
             }
@@ -1403,7 +1614,7 @@ pub(crate) async fn run_lifecycle_tick_with_now(
     build_status_dto(&mut service, &lc, password)
 }
 
-fn build_status_dto(
+pub(crate) fn build_status_dto(
     service: &mut human_money_core::app_service::AppService,
     lc: &StoredL2LifecycleState,
     password: Option<&str>,
@@ -1483,466 +1694,6 @@ pub(crate) async fn maybe_run_background_lifecycle_tick(state: &AppState) {
     }
 }
 
-#[tauri::command]
-pub fn get_l2_lifecycle_status(
-    password: Option<String>,
-    state: tauri::State<AppState>,
-) -> Result<FrontendL2LifecycleStatusDto, FrontendError> {
-    let mut service = state
-        .service
-        .lock()
-        .map_err(|_| lifecycle_err("Wallet service unavailable"))?;
-    let lc = load_lifecycle_state(&mut service, password.as_deref());
-    build_status_dto(&mut service, &lc, password.as_deref())
-}
-
-#[tauri::command]
-pub async fn run_l2_lifecycle_tick(
-    force: bool,
-    password: Option<String>,
-    state: tauri::State<'_, AppState>,
-) -> Result<FrontendL2LifecycleStatusDto, FrontendError> {
-    let client = sync_client::create_sync_probe_client();
-    let now_secs = sync_client::current_unix_timestamp();
-    run_lifecycle_tick_with_now(state.inner(), &client, now_secs, force, password.as_deref()).await
-}
-
-#[tauri::command]
-pub async fn discover_anchor_manifest_cmd(
-    anchor_id_hex: String,
-    creator_did: Option<String>,
-    guarantor_dids: Vec<String>,
-    password: Option<String>,
-    state: tauri::State<'_, AppState>,
-) -> Result<Option<FrontendAnchorDiscoveryDto>, FrontendError> {
-    let anchor_id = decode_hex_fixed::<32>(anchor_id_hex.trim()).map_err(lifecycle_err)?;
-    let settings = state.get_cached_settings().unwrap_or_default();
-    let client = sync_client::create_sync_probe_client();
-    let found = discover_anchor_manifest(
-        state.inner(),
-        &settings,
-        &client,
-        &anchor_id,
-        creator_did.as_deref(),
-        &guarantor_dids,
-        password.as_deref(),
-    )
-    .await?;
-
-    Ok(found.map(|m| FrontendAnchorDiscoveryDto {
-        anchor_id: hex::encode(anchor_id),
-        revision: m.revision,
-        threshold: m.threshold,
-        server_count: m.servers.len(),
-        reduced_guarantor_protection: m.has_reduced_guarantor_protection().unwrap_or(false),
-        manifest_json: serde_json::to_string_pretty(&m).unwrap_or_default(),
-    }))
-}
-
-#[tauri::command]
-pub fn register_guarantor_anchor_role(
-    anchor_id_hex: String,
-    guarantor_index: u8,
-    context_nonce_hex: Option<String>,
-    password: Option<String>,
-    state: tauri::State<AppState>,
-) -> Result<String, FrontendError> {
-    let mut service = state
-        .service
-        .lock()
-        .map_err(|_| lifecycle_err("Wallet service unavailable"))?;
-
-    let trimmed_anchor = anchor_id_hex.trim().to_ascii_lowercase();
-    let key = if trimmed_anchor.is_empty() {
-        format!("pending:{}", guarantor_index)
-    } else {
-        decode_hex_fixed::<32>(&trimmed_anchor).map_err(lifecycle_err)?;
-        trimmed_anchor
-    };
-
-    let nonce_bytes = match context_nonce_hex
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    {
-        Some(h) => hex::decode(h).map_err(|e| lifecycle_err(e.to_string()))?,
-        None => {
-            let mut buf = [0u8; 32];
-            rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut buf);
-            buf.to_vec()
-        }
-    };
-
-    let pub_hex = service
-        .with_wallet_and_identity(|_, id| {
-            let sk = l2_rotation::derive_guarantor_mig_signing_key(id, &nonce_bytes)?;
-            Ok::<_, human_money_core::Error>(hex::encode(sk.verifying_key().to_bytes()))
-        })
-        .map_err(FrontendError::from)?
-        .map_err(FrontendError::from)?;
-
-    let mut lc = load_lifecycle_state(&mut service, password.as_deref());
-    lc.guarantor_roles.insert(
-        key.clone(),
-        StoredGuarantorRole {
-            anchor_id: key,
-            guarantor_index,
-            context_nonce_hex: hex::encode(&nonce_bytes),
-        },
-    );
-    save_lifecycle_state(&mut service, &lc, password.as_deref())?;
-    Ok(pub_hex)
-}
-
-#[tauri::command]
-pub fn create_key_successor_attestation_cmd(
-    new_mnemonic: String,
-    language: Option<MnemonicLanguage>,
-    passphrase: Option<String>,
-    reason: String,
-    new_creator_mig_pub_hex: Option<String>,
-    password: Option<String>,
-    state: tauri::State<AppState>,
-) -> Result<String, FrontendError> {
-    let rot_reason = match reason.trim().to_ascii_lowercase().as_str() {
-        "compromise" => KeyRotationReason::Compromise,
-        "device_migration" | "devicemigration" => KeyRotationReason::DeviceMigration,
-        _ => KeyRotationReason::Routine,
-    };
-    let core_lang: human_money_core::MnemonicLanguage =
-        language.unwrap_or(MnemonicLanguage::English).into();
-    let (new_vk, new_sk) = derive_ed25519_keypair(
-        new_mnemonic.trim(),
-        passphrase.as_deref().filter(|s| !s.is_empty()),
-        core_lang,
-    )
-    .map_err(FrontendError::from)?;
-    let new_did = human_money_core::services::crypto::create_user_id(&new_vk, None)
-        .map_err(|e| lifecycle_err(e.to_string()))?;
-    let new_mig_pub = match new_creator_mig_pub_hex
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    {
-        Some(h) => Some(decode_hex_fixed::<32>(h).map_err(lifecycle_err)?),
-        None => None,
-    };
-
-    let now_secs = sync_client::current_unix_timestamp().max(1);
-    let mut service = state
-        .service
-        .lock()
-        .map_err(|_| lifecycle_err("Wallet service unavailable"))?;
-
-    let att = service
-        .with_wallet_and_identity(|w, id| {
-            let old_signer = LocalWotDidSigner {
-                did: strip_user_id_prefix(w.get_user_id()).to_string(),
-                signing_key: id.signing_key.clone(),
-            };
-            let new_signer = LocalWotDidSigner {
-                did: strip_user_id_prefix(&new_did).to_string(),
-                signing_key: new_sk.clone(),
-            };
-            KeySuccessorAttestation::sign_dual(
-                &old_signer,
-                &new_signer,
-                rot_reason,
-                new_mig_pub,
-                now_secs,
-            )
-        })
-        .map_err(FrontendError::from)?
-        .map_err(|e| lifecycle_err(e.to_string()))?;
-
-    let mut store = load_key_successor_attestations(&mut service, password.as_deref());
-    if !store.contains(&att) {
-        store.push(att.clone());
-        save_key_successor_attestations(&mut service, &store, password.as_deref())?;
-    }
-
-    serde_json::to_string_pretty(&att).map_err(|e| lifecycle_err(e.to_string()))
-}
-
-#[tauri::command]
-pub fn import_key_successor_attestation_cmd(
-    attestation_json: String,
-    password: Option<String>,
-    state: tauri::State<AppState>,
-) -> Result<String, FrontendError> {
-    let att: KeySuccessorAttestation = serde_json::from_str(attestation_json.trim())
-        .map_err(|e| lifecycle_err(format!("Invalid KeySuccessorAttestation JSON: {}", e)))?;
-    let now_secs = sync_client::current_unix_timestamp();
-    att.verify(now_secs)
-        .map_err(|e| lifecycle_err(format!("Attestation verification failed: {}", e)))?;
-
-    let mut service = state
-        .service
-        .lock()
-        .map_err(|_| lifecycle_err("Wallet service unavailable"))?;
-    let mut store = load_key_successor_attestations(&mut service, password.as_deref());
-    if !store.contains(&att) {
-        store.push(att.clone());
-        save_key_successor_attestations(&mut service, &store, password.as_deref())?;
-    }
-    Ok(att.new_did)
-}
-
-#[tauri::command]
-pub fn create_guarantor_claim_bundle(
-    local_instance_id: String,
-    guarantor_id: String,
-    amount: String,
-    standard_toml: String,
-    notes: Option<String>,
-    password: Option<String>,
-    state: tauri::State<AppState>,
-) -> Result<FrontendClaimBundleDto, FrontendError> {
-    let mut service = state
-        .service
-        .lock()
-        .map_err(|_| lifecycle_err("Wallet service unavailable"))?;
-
-    if let Some(ref pwd) = password {
-        let _ = service.unlock_session(pwd, 300);
-    }
-
-    let sender_id = service
-        .with_wallet(|w| w.get_user_id().to_string())
-        .map_err(FrontendError::from)?;
-
-    let res = service
-        .create_guarantor_claim_bundle(
-            &local_instance_id,
-            guarantor_id.trim(),
-            amount.trim(),
-            &standard_toml,
-            None,
-            notes.clone(),
-            password.as_deref(),
-        )
-        .map_err(FrontendError::from)?;
-
-    let mut summable_amounts = std::collections::HashMap::new();
-    let mut countable_items = std::collections::HashMap::new();
-    if let Some(first) = res.involved_sources_details.first() {
-        summable_amounts.insert(first.display_currency.clone(), first.amount.clone());
-    } else {
-        countable_items.insert("Claim".to_string(), 1);
-    }
-
-    let record = TransactionRecord {
-        id: Uuid::new_v4().to_string(),
-        direction: "sent".to_string(),
-        recipient_id: guarantor_id.trim().to_string(),
-        sender_id,
-        timestamp: Utc::now().to_rfc3339(),
-        summable_amounts,
-        countable_items,
-        involved_vouchers: vec![local_instance_id],
-        involved_sources_details: Some(res.involved_sources_details.clone()),
-        bundle_data: res.bundle_bytes.clone(),
-        bundle_id: res.bundle_id.clone(),
-        notes,
-        sender_profile_name: None,
-    };
-    let _ = state.append_to_history(&mut service, record, password.as_deref());
-    let _ = state.refresh_events_cache(&mut service, password.as_deref());
-
-    Ok(FrontendClaimBundleDto {
-        bundle_data: res.bundle_bytes,
-        bundle_id: res.bundle_id,
-        guarantor_id: guarantor_id.trim().to_string(),
-        claimed_amount: amount.trim().to_string(),
-    })
-}
-
-#[tauri::command]
-pub fn create_dead_quorum_swap_offer_cmd(
-    dead_anchor_id_hex: String,
-    replacement_anchor_id_hex: String,
-    claim_window_secs: Option<u64>,
-    pow_bits: Option<u32>,
-    password: Option<String>,
-    state: tauri::State<AppState>,
-) -> Result<String, FrontendError> {
-    let dead_id = decode_hex_fixed::<32>(dead_anchor_id_hex.trim()).map_err(lifecycle_err)?;
-    let repl_id =
-        decode_hex_fixed::<32>(replacement_anchor_id_hex.trim()).map_err(lifecycle_err)?;
-    let window = claim_window_secs
-        .unwrap_or(DEAD_QUORUM_CLAIM_WINDOW_SECS)
-        .max(DEAD_QUORUM_CLAIM_WINDOW_SECS);
-    let bits = pow_bits.unwrap_or(10);
-    let now_secs = sync_client::current_unix_timestamp().max(1);
-
-    let mut service = state
-        .service
-        .lock()
-        .map_err(|_| lifecycle_err("Wallet service unavailable"))?;
-    if let Some(ref pwd) = password {
-        let _ = service.unlock_session(pwd, 300);
-    }
-
-    let offer = service
-        .with_wallet_and_identity(|_, id| {
-            DeadQuorumSwapOffer::create_and_sign(id, dead_id, repl_id, now_secs, window, bits)
-        })
-        .map_err(FrontendError::from)?
-        .map_err(FrontendError::from)?;
-
-    serde_json::to_string_pretty(&offer).map_err(|e| lifecycle_err(e.to_string()))
-}
-
-#[tauri::command]
-pub fn create_dead_quorum_swap_claim_cmd(
-    offer_json: String,
-    local_instance_id: String,
-    password: Option<String>,
-    state: tauri::State<AppState>,
-) -> Result<String, FrontendError> {
-    let offer: DeadQuorumSwapOffer = serde_json::from_str(offer_json.trim())
-        .map_err(|e| lifecycle_err(format!("Invalid DeadQuorumSwapOffer JSON: {}", e)))?;
-    let offer_digest = offer.verify().map_err(FrontendError::from)?;
-
-    let service = state
-        .service
-        .lock()
-        .map_err(|_| lifecycle_err("Wallet service unavailable"))?;
-    let _ = password;
-
-    let (voucher, claimant_did, qcs): (Voucher, String, Vec<QuorumCertificate>) = service
-        .with_wallet(|w| {
-            let inst = w.get_voucher_instance(&local_instance_id).ok_or_else(|| {
-                human_money_core::Error::VoucherNotFound(local_instance_id.clone())
-            })?;
-            let init_t_id = inst
-                .voucher
-                .transactions
-                .first()
-                .map(|t| t.t_id.as_str())
-                .unwrap_or("");
-            let qcs = w
-                .profile
-                .l2_quorum_certificates
-                .get(init_t_id)
-                .cloned()
-                .unwrap_or_default();
-            Ok::<_, human_money_core::Error>((
-                inst.voucher.clone(),
-                w.get_user_id().to_string(),
-                qcs,
-            ))
-        })
-        .map_err(FrontendError::from)?
-        .map_err(FrontendError::from)?;
-
-    if voucher.layer2_anchor != Some(offer.dead_anchor_id) {
-        return Err(lifecycle_err(
-            "Selected voucher does not belong to the dead_anchor_id in this swap offer",
-        ));
-    }
-    let tip_t_id = voucher
-        .transactions
-        .last()
-        .map(|t| t.t_id.clone())
-        .unwrap_or_default();
-
-    let pow_nonce = solve_swap_ticket_pow(
-        &offer_digest,
-        &voucher.voucher_id,
-        &tip_t_id,
-        &claimant_did,
-        offer.swap_ticket_pow_bits,
-        0,
-        5_000_000,
-    )
-    .map_err(FrontendError::from)?;
-
-    let submission = DeadQuorumClaimSubmission {
-        voucher,
-        claimant_did,
-        quorum_certificates: qcs,
-        swap_pow_nonce: pow_nonce,
-    };
-    serde_json::to_string_pretty(&submission).map_err(|e| lifecycle_err(e.to_string()))
-}
-
-#[tauri::command]
-pub fn adjudicate_dead_quorum_swap_cmd(
-    offer_json: String,
-    submissions_json: Vec<String>,
-    standard_toml: String,
-    password: Option<String>,
-    state: tauri::State<AppState>,
-) -> Result<FrontendDeadQuorumAdjudicationDto, FrontendError> {
-    let offer: DeadQuorumSwapOffer = serde_json::from_str(offer_json.trim())
-        .map_err(|e| lifecycle_err(format!("Invalid DeadQuorumSwapOffer JSON: {}", e)))?;
-    let (std_def, _) =
-        VoucherStandardDefinition::from_toml(&standard_toml).map_err(FrontendError::from)?;
-
-    let mut submissions = Vec::with_capacity(submissions_json.len());
-    for raw in &submissions_json {
-        let sub: DeadQuorumClaimSubmission = serde_json::from_str(raw.trim())
-            .map_err(|e| lifecycle_err(format!("Invalid DeadQuorumClaimSubmission JSON: {}", e)))?;
-        submissions.push(sub);
-    }
-
-    let now_secs = sync_client::current_unix_timestamp();
-    let dead_hex = hex::encode(offer.dead_anchor_id);
-
-    let mut service = state
-        .service
-        .lock()
-        .map_err(|_| lifecycle_err("Wallet service unavailable"))?;
-    if let Some(ref pwd) = password {
-        let _ = service.unlock_session(pwd, 300);
-    }
-
-    let adj = service
-        .with_wallet_and_identity(|w, id| {
-            let dead_manifest = w.profile.l2_anchor_manifests.get(&dead_hex);
-            adjudicate_dead_quorum_claims(
-                &offer,
-                dead_manifest,
-                &std_def,
-                &submissions,
-                id,
-                now_secs,
-            )
-        })
-        .map_err(FrontendError::from)?
-        .map_err(FrontendError::from)?;
-
-    let proofs_count = adj.double_spend_proofs.len();
-    for proof in adj.double_spend_proofs {
-        let _ = service.import_proof(proof, password.as_deref());
-    }
-
-    Ok(FrontendDeadQuorumAdjudicationDto {
-        approved: adj
-            .approved
-            .into_iter()
-            .map(|a| FrontendApprovedSwapClaimDto {
-                claimant_did: a.claimant_did,
-                voucher_id: a.voucher_id,
-                tip_t_id: a.tip_t_id,
-                approved_amount: a.approved_amount,
-            })
-            .collect(),
-        rejected: adj
-            .rejected
-            .into_iter()
-            .map(|r| FrontendRejectedSwapClaimDto {
-                claimant_did: r.claimant_did,
-                voucher_id: r.voucher_id,
-                tip_t_id: r.tip_t_id,
-                reason: r.reason,
-            })
-            .collect(),
-        double_spend_proofs_count: proofs_count,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1950,17 +1701,25 @@ mod tests {
     use human_money_core::{
         humoco_proto::{
             encode_quarter, types::LockReceipt, AnchorAuthority, GenesisTicket, MigrationCert,
-            ProposalInitiator,
+            ProposalInitiator, DEAD_QUORUM_CLAIM_WINDOW_SECS,
         },
-        services::{l2_gateway, l2_rotation},
+        services::{
+            dead_quorum_swap::{
+                adjudicate_dead_quorum_claims, solve_swap_ticket_pow, DeadQuorumClaimSubmission,
+                DeadQuorumSwapOffer,
+            },
+            l2_gateway, l2_rotation,
+        },
         test_utils::{self, ACTORS},
     };
     use humoco_market::{own_envelope, render_wire, sign_sd_card, DropDescriptor, WireFilter};
+    use humoco_wot::KeyRotationReason;
     use std::sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
     };
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use uuid::Uuid;
 
     fn temp_dir(tag: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!("l2-lc-{}-{}", tag, Uuid::new_v4()))
@@ -2250,11 +2009,11 @@ mod tests {
         let old_creator_did = ACTORS.alice.identity.user_id.clone();
         let new_creator_did = ACTORS.charlie.identity.user_id.clone();
         let att = KeySuccessorAttestation::sign_dual(
-            &LocalWotDidSigner {
+            &crate::state::DidWotSigner {
                 did: strip_user_id_prefix(&old_creator_did).to_string(),
                 signing_key: ACTORS.alice.identity.signing_key.clone(),
             },
-            &LocalWotDidSigner {
+            &crate::state::DidWotSigner {
                 did: strip_user_id_prefix(&new_creator_did).to_string(),
                 signing_key: ACTORS.charlie.identity.signing_key.clone(),
             },
@@ -3200,5 +2959,595 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir_issuer);
         let _ = std::fs::remove_dir_all(dir_guar);
         let _ = std::fs::remove_dir_all(dir_holder);
+    }
+
+    fn make_probe_info(
+        lock_hex: &str,
+        drop_pub_hex: &str,
+        revocation: Option<SyncRevocationNotice>,
+    ) -> sync_client::SyncServerInfo {
+        sync_client::SyncServerInfo {
+            drop_pub: drop_pub_hex.to_string(),
+            read_url: "https://node.example/d".to_string(),
+            register_url: None,
+            channels: vec![],
+            revocation,
+            lock: Some(sync_client::SyncLockInfoDto {
+                lock_pub: lock_hex.to_string(),
+                delegation: None,
+                max_retention_quarter: 8159,
+                max_inodes: 1000,
+                used_inodes: 10,
+                inode_warning: false,
+                pow_base_bits: 0,
+                allow_pow_tickets: true,
+                selftest: None,
+            }),
+        }
+    }
+
+    fn make_freeze_export(
+        anchor_id: [u8; 32],
+        sk: &SigningKey,
+        retain_q: u16,
+        proposal_hash: [u8; 32],
+        frozen_at: u64,
+    ) -> SnapshotExport {
+        let lock_pub = sk.verifying_key().to_bytes();
+        let bucket = humoco_proto::derive_bucket(&anchor_id, &lock_pub);
+        let mut snap = humoco_proto::FreezeSnapshot {
+            anchor_id,
+            bucket,
+            from_rev: 1,
+            retain_until_quarter: retain_q,
+            write_seq: 0,
+            bucket_head: humoco_proto::crypto::compute_bucket_init_head(&bucket, retain_q),
+            state_hash: humoco_proto::compute_freeze_state_hash(&anchor_id, 1, &[], &[]).unwrap(),
+            permanent: true,
+            proposal_hash: Some(proposal_hash),
+            frozen_at,
+            expires_at: None,
+            lock_pub,
+            sig: [0u8; 64],
+        };
+        snap.sig = sk.sign(&snap.digest()).to_bytes();
+        SnapshotExport {
+            snapshot: snap,
+            entries: vec![],
+            conflicts: vec![],
+        }
+    }
+
+    #[test]
+    fn test_server_probe_classification_and_5d_hysteresis_state_machine() {
+        let s1_sk = SigningKey::from_bytes(&[61u8; 32]);
+        let s1_hex = hex::encode(s1_sk.verifying_key().as_bytes());
+        let s2_sk = SigningKey::from_bytes(&[62u8; 32]);
+        let _s2_hex = hex::encode(s2_sk.verifying_key().as_bytes());
+        let wrong_hex = "ff".repeat(32);
+
+        let now0 = 1_760_000_000u64;
+
+        // 1. Classify probe info: healthy, mismatched lock_pub, missing lock, future/invalid/active revocation
+        let healthy_info = make_probe_info(&s1_hex.to_uppercase(), &s1_hex, None);
+        assert_eq!(
+            classify_server_probe_info(&healthy_info, &s1_hex, now0),
+            ServerProbeOutcome::Healthy
+        );
+
+        let mismatched_info = make_probe_info(&wrong_hex, &s1_hex, None);
+        assert_eq!(
+            classify_server_probe_info(&mismatched_info, &s1_hex, now0),
+            ServerProbeOutcome::Unhealthy
+        );
+
+        let mut no_lock_info = make_probe_info(&s1_hex, &s1_hex, None);
+        no_lock_info.lock = None;
+        assert_eq!(
+            classify_server_probe_info(&no_lock_info, &s1_hex, now0),
+            ServerProbeOutcome::Unhealthy
+        );
+
+        let future_rev =
+            sync_client::sign_revocation_notice(&s1_sk, now0, now0 + 600, None, None).unwrap();
+        let future_rev_info = make_probe_info(&s1_hex, &s1_hex, Some(future_rev));
+        assert_eq!(
+            classify_server_probe_info(&future_rev_info, &s1_hex, now0),
+            ServerProbeOutcome::Healthy,
+            "future revocation notice must not trigger early revocation"
+        );
+
+        let mut forged_rev =
+            sync_client::sign_revocation_notice(&s2_sk, now0, now0, None, None).unwrap();
+        forged_rev.drop_pub = s1_hex.clone();
+        let forged_rev_info = make_probe_info(&s1_hex, &s1_hex, Some(forged_rev));
+        assert_eq!(
+            classify_server_probe_info(&forged_rev_info, &s1_hex, now0),
+            ServerProbeOutcome::Healthy,
+            "forged revocation notice must be ignored"
+        );
+
+        let active_rev =
+            sync_client::sign_revocation_notice(&s1_sk, now0, now0, Some("eol".into()), None)
+                .unwrap();
+        let active_rev_info = make_probe_info(&s1_hex, &s1_hex, Some(active_rev.clone()));
+        assert_eq!(
+            classify_server_probe_info(&active_rev_info, &s1_hex, now0),
+            ServerProbeOutcome::Revoked
+        );
+
+        // 2. Hysteresis state machine: day 0 -> day 5 - 1s -> recovery resets timer -> day 5 demotes
+        let mut health = StoredAnchorHealth::new("aa".repeat(32));
+        let mut unhealthy = HashSet::from([s1_hex.clone()]);
+        let empty_revoked = HashSet::new();
+
+        let demoted_t0 = apply_health_observations_and_collect_demotions(
+            &mut health,
+            &unhealthy,
+            &empty_revoked,
+            now0,
+        );
+        assert!(demoted_t0.is_empty());
+        assert_eq!(health.unhealthy_since_by_lock_pub.get(&s1_hex), Some(&now0));
+
+        // 4d 23h 59m 59s later -> still under 5d threshold, original `since` preserved
+        let demoted_before_5d = apply_health_observations_and_collect_demotions(
+            &mut health,
+            &unhealthy,
+            &empty_revoked,
+            now0 + UNHEALTHY_HYSTERESIS_SECS - 1,
+        );
+        assert!(demoted_before_5d.is_empty());
+        assert_eq!(health.unhealthy_since_by_lock_pub.get(&s1_hex), Some(&now0));
+
+        // Server recovers for one tick -> unhealthy timestamp must clear!
+        unhealthy.clear();
+        let demoted_recovered = apply_health_observations_and_collect_demotions(
+            &mut health,
+            &unhealthy,
+            &empty_revoked,
+            now0 + UNHEALTHY_HYSTERESIS_SECS - 1,
+        );
+        assert!(demoted_recovered.is_empty());
+        assert!(!health.unhealthy_since_by_lock_pub.contains_key(&s1_hex));
+
+        // Fails again at t_fail2 -> new 5-day clock starts
+        let t_fail2 = now0 + UNHEALTHY_HYSTERESIS_SECS;
+        unhealthy.insert(s1_hex.clone());
+        assert!(apply_health_observations_and_collect_demotions(
+            &mut health,
+            &unhealthy,
+            &empty_revoked,
+            t_fail2,
+        )
+        .is_empty());
+        assert_eq!(
+            health.unhealthy_since_by_lock_pub.get(&s1_hex),
+            Some(&t_fail2)
+        );
+
+        // Exactly 5 days after t_fail2 -> demoted!
+        let demoted_day5 = apply_health_observations_and_collect_demotions(
+            &mut health,
+            &unhealthy,
+            &empty_revoked,
+            t_fail2 + UNHEALTHY_HYSTERESIS_SECS,
+        );
+        assert!(demoted_day5.contains(&s1_sk.verifying_key().to_bytes()));
+
+        // 3. Immediate revocation bypasses 5-day hysteresis via apply_revocation_notices_to_health
+        let mut rev_health = StoredAnchorHealth::new("bb".repeat(32));
+        let expected_servers = vec![ServerEntry {
+            write_url: "https://s1.example/sync.php".into(),
+            read_url: "https://s1.example/d".into(),
+            admin_pub: s1_sk.verifying_key().to_bytes(),
+            lock_pub: s1_sk.verifying_key().to_bytes(),
+            nominated_by: NominatedBy::Creator,
+        }];
+        let s2_wrong_notice =
+            sync_client::sign_revocation_notice(&s2_sk, now0, now0, None, None).unwrap();
+        apply_revocation_notices_to_health(
+            &mut rev_health,
+            &[
+                (s1_sk.verifying_key().to_bytes(), s2_wrong_notice),
+                (s1_sk.verifying_key().to_bytes(), active_rev),
+            ],
+            &expected_servers,
+            now0,
+        );
+        assert!(rev_health.revoked_lock_pubs.contains(&s1_hex));
+        let demoted_rev = apply_health_observations_and_collect_demotions(
+            &mut rev_health,
+            &HashSet::new(),
+            &HashSet::new(),
+            now0,
+        );
+        assert!(demoted_rev.contains(&s1_sk.verifying_key().to_bytes()));
+    }
+
+    #[test]
+    fn test_rotation_phase_state_machine_transitions_without_network() {
+        let s1_sk = SigningKey::from_bytes(&[71u8; 32]);
+        let s2_sk = SigningKey::from_bytes(&[72u8; 32]);
+        let s3_sk = SigningKey::from_bytes(&[73u8; 32]);
+        let s4_sk = SigningKey::from_bytes(&[74u8; 32]);
+        let bad_sk = SigningKey::from_bytes(&[75u8; 32]);
+        let creator_mig_sk = SigningKey::from_bytes(&[76u8; 32]);
+        let g_mig_sk = SigningKey::from_bytes(&[77u8; 32]);
+
+        let s3_standby = ServerEntry {
+            write_url: "https://standby.gamma.example/sync.php".into(),
+            read_url: "https://standby.gamma.example/d".into(),
+            admin_pub: s3_sk.verifying_key().to_bytes(),
+            lock_pub: s3_sk.verifying_key().to_bytes(),
+            nominated_by: NominatedBy::Creator,
+        };
+        let manifest = make_test_manifest(
+            &s1_sk,
+            &s2_sk,
+            "https://srv1.alpha.example",
+            "https://srv2.beta.example",
+            Some(s3_standby.clone()),
+            creator_mig_sk.verifying_key().to_bytes(),
+            vec![g_mig_sk.verifying_key().to_bytes()],
+        );
+        let anchor_id = manifest.rev1_anchor_id().unwrap();
+        let now0 = 1_760_000_100u64;
+
+        // 1. select_rotation_proposal: empty failed set returns None
+        let settings = AppSettings::default();
+        let offenders = ServerOffenderList::new();
+        assert!(select_rotation_proposal(
+            anchor_id,
+            &manifest,
+            &HashSet::new(),
+            Some(&creator_mig_sk),
+            None,
+            &settings,
+            &offenders,
+            now0,
+        )
+        .is_none());
+
+        // 2. select_rotation_proposal promotes HolderStandby when standby covers failed Creator seat
+        let failed = HashSet::from([s1_sk.verifying_key().to_bytes()]);
+        let standby_prop = select_rotation_proposal(
+            anchor_id,
+            &manifest,
+            &failed,
+            Some(&creator_mig_sk),
+            None,
+            &settings,
+            &offenders,
+            now0,
+        )
+        .expect("standby successor must be promoted");
+        assert_eq!(standby_prop.initiator, ProposalInitiator::HolderStandby);
+        assert_eq!(standby_prop.new_servers[0], s3_standby);
+
+        // 3. select_rotation_proposal without standby falls back to l2_probe_cache for Creator seat
+        let mut manifest_no_standby = manifest.clone();
+        manifest_no_standby.successors.clear();
+        let mut settings_with_probe = AppSettings::default();
+        settings_with_probe.l2_probe_cache.insert(
+            "https://srv4.delta.example/sync.php".into(),
+            sync_client::FrontendLockServerProbeResult {
+                write_url: "https://srv4.delta.example/sync.php".into(),
+                read_url: "https://srv4.delta.example/d".into(),
+                drop_pub: hex::encode(s4_sk.verifying_key().as_bytes()),
+                admin_pub: hex::encode(s4_sk.verifying_key().as_bytes()),
+                lock_pub: hex::encode(s4_sk.verifying_key().as_bytes()),
+                delegation_valid: true,
+                waf_probe_passed: true,
+                selftest_passed: true,
+                key_leak_safe: true,
+                passed: true,
+                latency_ms: 12,
+                max_retention_quarter: manifest.retain_until_quarter,
+                pow_base_bits: 0,
+                allow_pow_tickets: true,
+                inode_warning: false,
+                used_inodes: 0,
+                max_inodes: 1000,
+                probed_at_secs: now0,
+                error: None,
+            },
+        );
+        let creator_prop = select_rotation_proposal(
+            anchor_id,
+            &manifest_no_standby,
+            &failed,
+            Some(&creator_mig_sk),
+            None,
+            &settings_with_probe,
+            &offenders,
+            now0,
+        )
+        .expect("creator probe cache fallback must select non-sybil replacement");
+        assert_eq!(creator_prop.initiator, ProposalInitiator::Creator);
+        assert_eq!(
+            creator_prop.new_servers[0].lock_pub,
+            s4_sk.verifying_key().to_bytes()
+        );
+
+        // 4. Phase 1 -> Proposed: requires >= threshold acknowledgements
+        assert!(compute_proposal_phase(
+            standby_prop.clone(),
+            &[Some(now0 + 100)],
+            manifest.threshold,
+            now0
+        )
+        .is_none());
+        let proposed_phase = compute_proposal_phase(
+            standby_prop.clone(),
+            &[None, Some(now0 + 500)],
+            manifest.threshold,
+            now0,
+        )
+        .expect("threshold acks must enter Proposed phase");
+        let StoredRotationPhase::Proposed {
+            proposal: prop,
+            effective_at_secs,
+        } = proposed_phase
+        else {
+            panic!("expected Proposed phase");
+        };
+        assert_eq!(effective_at_secs, now0 + 500);
+
+        // 5. Phase 2: Before timelock -> WaitTimelock
+        let d_wait = evaluate_proposed_phase_transition(
+            anchor_id,
+            &manifest,
+            prop.clone(),
+            effective_at_secs,
+            vec![],
+            &[],
+            0,
+            effective_at_secs - 1,
+        )
+        .unwrap();
+        assert!(matches!(d_wait, ProposedPhaseDecision::WaitTimelock(_)));
+
+        // After timelock with only 1 valid export (plus duplicate & forged snapshot) -> AwaitSnapshots
+        let prop_hash = prop.core_digest().unwrap();
+        let exp1 = make_freeze_export(
+            anchor_id,
+            &s1_sk,
+            manifest.retain_until_quarter,
+            prop_hash,
+            effective_at_secs,
+        );
+        let mut bad_exp = make_freeze_export(
+            anchor_id,
+            &bad_sk,
+            manifest.retain_until_quarter,
+            prop_hash,
+            effective_at_secs,
+        );
+        bad_exp.snapshot.sig = [9u8; 64]; // invalid signature
+        let d_await_snaps = evaluate_proposed_phase_transition(
+            anchor_id,
+            &manifest,
+            prop.clone(),
+            effective_at_secs,
+            vec![exp1.clone(), exp1.clone(), bad_exp],
+            &[],
+            0,
+            effective_at_secs,
+        )
+        .unwrap();
+        assert!(matches!(
+            d_await_snaps,
+            ProposedPhaseDecision::AwaitSnapshots(_)
+        ));
+
+        // With 2 distinct valid exports -> ReadyToImport
+        let exp2 = make_freeze_export(
+            anchor_id,
+            &s2_sk,
+            manifest.retain_until_quarter,
+            prop_hash,
+            effective_at_secs,
+        );
+        let d_ready = evaluate_proposed_phase_transition(
+            anchor_id,
+            &manifest,
+            prop.clone(),
+            effective_at_secs,
+            vec![exp1, exp2],
+            &[],
+            0,
+            effective_at_secs,
+        )
+        .unwrap();
+        let ProposedPhaseDecision::ReadyToImport {
+            expected_state_hash,
+            ..
+        } = d_ready
+        else {
+            panic!("expected ReadyToImport");
+        };
+
+        // 6. Verify ImportAck state hash matching
+        let mut ack_s3 = ImportAck {
+            anchor_id,
+            proposal_hash: prop_hash,
+            to_rev: 2,
+            imported_state_hash: expected_state_hash,
+            retain_until_quarter: manifest.retain_until_quarter,
+            lock_pub: s3_sk.verifying_key().to_bytes(),
+            acked_at: effective_at_secs + 1,
+            sig: [0u8; 64],
+        };
+        ack_s3.sig = s3_sk.sign(&ack_s3.digest()).to_bytes();
+        let mut ack_s2 = ImportAck {
+            anchor_id,
+            proposal_hash: prop_hash,
+            to_rev: 2,
+            imported_state_hash: expected_state_hash,
+            retain_until_quarter: manifest.retain_until_quarter,
+            lock_pub: s2_sk.verifying_key().to_bytes(),
+            acked_at: effective_at_secs + 1,
+            sig: [0u8; 64],
+        };
+        ack_s2.sig = s2_sk.sign(&ack_s2.digest()).to_bytes();
+        verify_collected_import_acks(&[ack_s3.clone(), ack_s2.clone()], &expected_state_hash)
+            .unwrap();
+
+        let mut bad_ack = ack_s3.clone();
+        bad_ack.imported_state_hash = [0xAAu8; 32];
+        assert!(verify_collected_import_acks(&[bad_ack], &expected_state_hash).is_err());
+
+        // 7. Phase 3: Commit sigs < threshold stays Imported; >= threshold finalizes Rev 2
+        let c_digest =
+            MigrationCert::commit_digest(&anchor_id, &prop_hash, 2, &expected_state_hash);
+        let cs1 = CommitteeSignature {
+            lock_pub: s1_sk.verifying_key().to_bytes(),
+            committed_at: effective_at_secs + 2,
+            sig: s1_sk.sign(&c_digest).to_bytes(),
+        };
+        let cs2 = CommitteeSignature {
+            lock_pub: s2_sk.verifying_key().to_bytes(),
+            committed_at: effective_at_secs + 2,
+            sig: s2_sk.sign(&c_digest).to_bytes(),
+        };
+
+        let c_wait = evaluate_imported_commit_transition(
+            &manifest,
+            &anchor_id,
+            prop.clone(),
+            expected_state_hash,
+            vec![ack_s3.clone(), ack_s2.clone()],
+            vec![cs1.clone(), cs1.clone()], // duplicate sig counts once -> < threshold(2)
+        )
+        .unwrap();
+        let CommitPhaseDecision::AwaitCommitSigs(imported_phase) = c_wait else {
+            panic!("expected AwaitCommitSigs");
+        };
+
+        let c_done = evaluate_imported_commit_transition(
+            &manifest,
+            &anchor_id,
+            prop,
+            expected_state_hash,
+            vec![ack_s3, ack_s2],
+            vec![cs1, cs2],
+        )
+        .unwrap();
+        let CommitPhaseDecision::Finalized(rev2_manifest) = c_done else {
+            panic!("expected Finalized");
+        };
+        assert_eq!(rev2_manifest.revision, 2);
+
+        // 8. StoredAnchorHealth transition updates on error vs pause vs completion
+        let mut health = StoredAnchorHealth::new(hex::encode(anchor_id));
+        health
+            .unhealthy_since_by_lock_pub
+            .insert(hex::encode(s1_sk.verifying_key().as_bytes()), now0);
+        apply_rotation_step_outcome(
+            &mut health,
+            Ok(&Some(imported_phase)),
+            manifest.revision,
+            now0 + 10,
+        );
+        assert!(matches!(
+            health.active_rotation,
+            Some(StoredRotationPhase::Imported { .. })
+        ));
+        assert_eq!(health.last_rotated_rev, 1);
+
+        apply_rotation_step_outcome(
+            &mut health,
+            Err("temporary timeout"),
+            manifest.revision,
+            now0 + 20,
+        );
+        assert_eq!(health.last_error.as_deref(), Some("temporary timeout"));
+        assert!(health.active_rotation.is_some());
+
+        apply_rotation_step_outcome(&mut health, Ok(&None), manifest.revision, now0 + 30);
+        assert!(health.active_rotation.is_none());
+        assert!(health.last_error.is_none());
+        assert!(health.unhealthy_since_by_lock_pub.is_empty());
+        assert!(health.revoked_lock_pubs.is_empty());
+        assert_eq!(health.last_rotated_rev, 2);
+    }
+
+    #[test]
+    fn test_conflict_veto_checks_and_deduplication() {
+        let s1_sk = SigningKey::from_bytes(&[81u8; 32]);
+        let s2_sk = SigningKey::from_bytes(&[82u8; 32]);
+        let s3_sk = SigningKey::from_bytes(&[83u8; 32]);
+        let s_evil_sk = SigningKey::from_bytes(&[84u8; 32]);
+        let creator_mig_sk = SigningKey::from_bytes(&[85u8; 32]);
+        let g_mig_sk = SigningKey::from_bytes(&[86u8; 32]);
+
+        let s3_standby_g0 = ServerEntry {
+            write_url: "https://gstandby.gamma.example/sync.php".into(),
+            read_url: "https://gstandby.gamma.example/d".into(),
+            admin_pub: s3_sk.verifying_key().to_bytes(),
+            lock_pub: s3_sk.verifying_key().to_bytes(),
+            nominated_by: NominatedBy::Guarantor(0),
+        };
+        let manifest = make_test_manifest(
+            &s1_sk,
+            &s2_sk,
+            "https://srv1.alpha.example",
+            "https://srv2.beta.example",
+            Some(s3_standby_g0),
+            creator_mig_sk.verifying_key().to_bytes(),
+            vec![g_mig_sk.verifying_key().to_bytes()],
+        );
+        let anchor_id = manifest.rev1_anchor_id().unwrap();
+
+        // 1. Authorized HolderStandby promotion of guarantor's own standby seat -> NO veto
+        let ok_standby_prop = l2_rotation::build_holder_standby_proposal(
+            anchor_id,
+            &manifest,
+            &[s2_sk.verifying_key().to_bytes()],
+            1_760_000_100,
+        )
+        .unwrap();
+        assert!(
+            evaluate_polled_proposals_for_veto(&manifest, &[ok_standby_prop], 0).is_empty(),
+            "authorized standby promotion of guarantor seat must not trigger veto"
+        );
+
+        // 2. Unauthorized proposal replacing guarantor seat with creator server (and reducing protection)
+        let mut bad_prop = MigrationProposal {
+            anchor_id,
+            from_rev: 1,
+            to_rev: 2,
+            new_threshold: 2,
+            new_servers: vec![
+                manifest.servers[0].clone(),
+                ServerEntry {
+                    write_url: "https://evil.example/sync.php".into(),
+                    read_url: "https://evil.example/d".into(),
+                    admin_pub: s_evil_sk.verifying_key().to_bytes(),
+                    lock_pub: s_evil_sk.verifying_key().to_bytes(),
+                    nominated_by: NominatedBy::Creator,
+                },
+            ],
+            new_successors: vec![],
+            retain_until_quarter: manifest.retain_until_quarter,
+            proposed_at: 1_760_000_200,
+            initiator: ProposalInitiator::Creator,
+            proposer_sig: None,
+            guarantor_cosigs: vec![],
+        };
+        let digest = bad_prop.core_digest().unwrap();
+        bad_prop.proposer_sig = Some(creator_mig_sk.sign(&digest).to_bytes());
+
+        // Duplicate identical proposals polled across multiple servers deduplicate to 1 VetoDecision
+        let decisions =
+            evaluate_polled_proposals_for_veto(&manifest, &[bad_prop.clone(), bad_prop], 0);
+        assert_eq!(decisions.len(), 1);
+        assert_eq!(decisions[0].proposal_hash, digest);
+
+        let mut lc = StoredL2LifecycleState::default();
+        record_guarantor_veto_sent(&mut lc, decisions[0].reason);
+        assert_eq!(lc.auto_vetoes_sent, 1);
+        assert_eq!(lc.last_veto_reason.as_deref(), Some(decisions[0].reason));
     }
 }

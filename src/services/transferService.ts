@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { triggerAutoBackup } from "../utils/autoBackup";
+import { afterWalletMutation } from "../sync/autoBackup";
 import { TransactionRecord, AssetClassSummary, ReceiveSuccessPayload, WalletEvent, SourceTransfer, IntentDispatchObservation, PurchaseCompletion } from "../types";
 
 interface ReceiveBundleArgs {
@@ -88,13 +88,13 @@ export const transferService = {
             sendCardOverride: args.sendCardOverride ?? null,
             password: args.password
         });
-        triggerAutoBackup();
+        afterWalletMutation(args.password);
         return result;
     },
 
     saveTransactionRecord: async (record: TransactionRecord, password?: string) => {
         const result = await invoke<void>("save_transaction_record", { record, password });
-        triggerAutoBackup();
+        afterWalletMutation(password);
         return result;
     },
 
@@ -109,7 +109,7 @@ export const transferService = {
             password: args.password,
             forceAcceptToleranceBundle: args.forceAcceptToleranceBundle
         });
-        triggerAutoBackup();
+        afterWalletMutation(args.password);
         return result;
     },
 
@@ -129,7 +129,7 @@ export const transferService = {
             standardDefinitionsToml: args.standardDefinitionsToml,
             password: args.password ?? null,
         });
-        triggerAutoBackup();
+        afterWalletMutation(args.password);
         return result;
     },
 };

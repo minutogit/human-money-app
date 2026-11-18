@@ -749,8 +749,13 @@ fn test_empty_redacted_card_hides_person_and_ads_and_blocks_stale_zombie() {
     ));
 
     let carol_cards_v1: Vec<StoredCard> = carol_store.cards.values().cloned().collect();
-    let carol_view_v1 =
-        build_market_view(&[], &carol_cards_v1, "did:key:carol", &|_| TrustTier::Trusted, now);
+    let carol_view_v1 = build_market_view(
+        &[],
+        &carol_cards_v1,
+        "did:key:carol",
+        &|_| TrustTier::Trusted,
+        now,
+    );
     assert_eq!(carol_view_v1.len(), 1);
     assert_eq!(build_ad_board(&carol_view_v1).len(), 1);
 
@@ -805,14 +810,9 @@ fn test_empty_redacted_card_hides_person_and_ads_and_blocks_stale_zombie() {
     assert!(fwd_to_carol.card_wire.ends_with('~'));
 
     assert!(matches!(
-        accept_envelope(
-            &mut carol_store,
-            &fwd_to_carol,
-            now + 5,
-            500,
-            None,
-            &|_| false
-        ),
+        accept_envelope(&mut carol_store, &fwd_to_carol, now + 5, 500, None, &|_| {
+            false
+        }),
         AcceptOutcome::Accepted { replaced: true, .. }
     ));
 

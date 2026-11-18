@@ -1,8 +1,8 @@
 // src/components/ui/HelpModal.tsx
 import { useState, useEffect } from 'react';
-import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { Button } from './Button';
+import { ModalShell } from './ModalShell';
 import { HelpCircle, ExternalLink } from 'lucide-react';
 import { HELP_TOPICS, HelpTopicId, HELP_GROUPS } from '../../help/helpTopics';
 import { HelpContentRenderer } from '../../help/HelpContentRenderer';
@@ -25,21 +25,6 @@ export function HelpModal({ isOpen, onClose, topic, onNavigateToHelpCenter }: He
             setActiveTopicId(topic);
         }
     }, [isOpen, topic]);
-
-    useEffect(() => {
-        if (!isOpen) return;
-
-        const handleKeyDown = (event: KeyboardEvent) => {
-            if (event.key === 'Escape') {
-                onClose();
-            }
-        };
-
-        window.addEventListener('keydown', handleKeyDown);
-        return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [isOpen, onClose]);
-
-    if (!isOpen) return null;
 
     const currentTopic = HELP_TOPICS[activeTopicId] || HELP_TOPICS[topic];
     if (!currentTopic) return null;
@@ -65,89 +50,31 @@ export function HelpModal({ isOpen, onClose, topic, onNavigateToHelpCenter }: He
         }
     };
 
-    const modalContent = (
-        <div
-            className="fixed inset-0 z-[110] flex items-center justify-center bg-black/60 backdrop-blur-md p-4 animate-in fade-in duration-200"
-            onClick={onClose}
-        >
-            <div
-                role="dialog"
-                aria-modal="true"
-                className="w-full max-w-xl bg-white dark:bg-gray-900 border border-theme-subtle rounded-[32px] overflow-hidden shadow-premium-2xl animate-in zoom-in-95 slide-in-from-bottom-6 duration-300 flex flex-col max-h-[85vh]"
-                onClick={(e) => e.stopPropagation()}
-            >
-                {/* Header */}
-                <div className="bg-theme-primary/5 p-6 border-b border-theme-subtle/60 flex items-start justify-between gap-4">
-                    <div className="flex items-center gap-3.5 min-w-0">
-                        <div className="p-3 bg-theme-primary/10 rounded-2xl text-theme-primary shrink-0">
-                            <HelpCircle size={26} />
-                        </div>
-                        <div className="min-w-0">
-                            <span className="inline-block px-2.5 py-0.5 rounded-full text-[10px] font-bold tracking-wider uppercase bg-theme-primary/10 text-theme-primary mb-1">
-                                {groupLabel}
-                            </span>
-                            <h2 className="text-lg font-black text-theme-secondary tracking-tight leading-snug truncate">
-                                {title}
-                            </h2>
-                        </div>
+    return (
+        <ModalShell
+            isOpen={isOpen}
+            onClose={onClose}
+            hideCloseButton
+            maxWidth="xl"
+            zIndexClass="z-[110]"
+            className="bg-white dark:bg-gray-900 rounded-[32px] max-h-[85vh]"
+            title={
+                <div className="flex items-center gap-3.5 min-w-0">
+                    <div className="p-3 bg-theme-primary/10 rounded-2xl text-theme-primary shrink-0">
+                        <HelpCircle size={26} />
+                    </div>
+                    <div className="min-w-0">
+                        <span className="inline-block px-2.5 py-0.5 rounded-full text-[10px] font-bold tracking-wider uppercase bg-theme-primary/10 text-theme-primary mb-1">
+                            {groupLabel}
+                        </span>
+                        <h2 className="text-lg font-black text-theme-secondary tracking-tight leading-snug truncate">
+                            {title}
+                        </h2>
                     </div>
                 </div>
-
-                {/* Content */}
-                <div className="p-6 md:p-8 space-y-6 overflow-y-auto custom-scrollbar flex-1">
-                    {/* Highlighted short summary */}
-                    <div className="text-sm font-medium text-theme-secondary leading-relaxed bg-theme-primary/5 p-4 rounded-2xl border border-theme-primary/10">
-                        {short}
-                    </div>
-
-                    {/* Detailed long description */}
-                    <HelpContentRenderer content={long} />
-
-                    {/* Deep dive collapsible (Mehr erfahren / Technischer Hintergrund) */}
-                    {currentTopic.deepDiveKey && (
-                        <AdvancedDisclosure
-                            title={
-                                <span className="text-xs font-bold text-theme-primary">
-                                    {t('helpCenter.deepDiveTitle', 'Mehr erfahren / Technischer Hintergrund')}
-                                </span>
-                            }
-                            contentTestId="help-deep-dive"
-                            className="bg-slate-50 border border-theme-subtle rounded-2xl overflow-hidden"
-                            buttonClassName="w-full flex items-center justify-between gap-2 p-4 text-left hover:bg-slate-100/70 transition-colors cursor-pointer"
-                            contentClassName="px-4 pb-4 pt-3 border-t border-theme-subtle/50 text-xs text-theme-secondary leading-relaxed"
-                        >
-                            <HelpContentRenderer content={t(currentTopic.deepDiveKey)} />
-                        </AdvancedDisclosure>
-                    )}
-
-                    {/* Related topics chips */}
-                    {relatedTopics.length > 0 && (
-                        <div className="pt-4 border-t border-theme-subtle/50 space-y-2.5">
-                            <span className="text-xs font-bold uppercase tracking-wider text-theme-light">
-                                {t('helpCenter.relatedTopics')}
-                            </span>
-                            <div className="flex flex-wrap gap-2">
-                                {relatedTopics.map((relId) => {
-                                    const relTopic = HELP_TOPICS[relId];
-                                    if (!relTopic) return null;
-                                    return (
-                                        <button
-                                            key={relId}
-                                            type="button"
-                                            onClick={() => setActiveTopicId(relId)}
-                                            className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-theme-subtle/20 hover:bg-theme-primary/10 hover:text-theme-primary text-theme-secondary transition-all cursor-pointer border border-theme-subtle/40"
-                                        >
-                                            {t(relTopic.titleKey)}
-                                        </button>
-                                    );
-                                })}
-                            </div>
-                        </div>
-                    )}
-                </div>
-
-                {/* Footer */}
-                <div className="p-5 bg-theme-subtle/10 flex flex-wrap items-center justify-between gap-3 border-t border-theme-subtle/60">
+            }
+            footer={
+                <div className="flex flex-wrap items-center justify-between gap-3">
                     <button
                         type="button"
                         onClick={handleOpenInHelpCenter}
@@ -160,11 +87,59 @@ export function HelpModal({ isOpen, onClose, topic, onNavigateToHelpCenter }: He
                         {t('common.close')}
                     </Button>
                 </div>
-            </div>
-        </div>
-    );
+            }
+        >
+            <div className="space-y-6 py-2">
+                {/* Highlighted short summary */}
+                <div className="text-sm font-medium text-theme-secondary leading-relaxed bg-theme-primary/5 p-4 rounded-2xl border border-theme-primary/10">
+                    {short}
+                </div>
 
-    return typeof document !== 'undefined' && document.body
-        ? createPortal(modalContent, document.body)
-        : modalContent;
+                {/* Detailed long description */}
+                <HelpContentRenderer content={long} />
+
+                {/* Deep dive collapsible */}
+                {currentTopic.deepDiveKey && (
+                    <AdvancedDisclosure
+                        title={
+                            <span className="text-xs font-bold text-theme-primary">
+                                {t('helpCenter.deepDiveTitle', 'Mehr erfahren / Technischer Hintergrund')}
+                            </span>
+                        }
+                        contentTestId="help-deep-dive"
+                        className="bg-slate-50 border border-theme-subtle rounded-2xl overflow-hidden"
+                        buttonClassName="w-full flex items-center justify-between gap-2 p-4 text-left hover:bg-slate-100/70 transition-colors cursor-pointer"
+                        contentClassName="px-4 pb-4 pt-3 border-t border-theme-subtle/50 text-xs text-theme-secondary leading-relaxed"
+                    >
+                        <HelpContentRenderer content={t(currentTopic.deepDiveKey)} />
+                    </AdvancedDisclosure>
+                )}
+
+                {/* Related topics chips */}
+                {relatedTopics.length > 0 && (
+                    <div className="pt-4 border-t border-theme-subtle/50 space-y-2.5">
+                        <span className="text-xs font-bold uppercase tracking-wider text-theme-light">
+                            {t('helpCenter.relatedTopics')}
+                        </span>
+                        <div className="flex flex-wrap gap-2">
+                            {relatedTopics.map((relId) => {
+                                const relTopic = HELP_TOPICS[relId];
+                                if (!relTopic) return null;
+                                return (
+                                    <button
+                                        key={relId}
+                                        type="button"
+                                        onClick={() => setActiveTopicId(relId)}
+                                        className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-theme-subtle/20 hover:bg-theme-primary/10 hover:text-theme-primary text-theme-secondary transition-all cursor-pointer border border-theme-subtle/40"
+                                    >
+                                        {t(relTopic.titleKey)}
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    </div>
+                )}
+            </div>
+        </ModalShell>
+    );
 }

@@ -1,36 +1,24 @@
 // src/components/settings/NetworkProtectionCard.tsx
-import React, { useState, useEffect } from 'react';
+import React, { useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
     Network,
     Server,
-    ShieldCheck,
     ShieldAlert,
-    Plus,
-    Trash2,
-    RefreshCw,
     Wifi,
     WifiOff,
     CheckCircle2,
-    XCircle,
 } from 'lucide-react';
-import {
-    AppSettings,
-    LockServerProbeResult,
-    AnchorServerInputDto,
-    L2LifecycleStatusDto,
-} from '../../types';
+import { AppSettings } from '../../types';
 import { settingsService } from '../../services/settingsService';
-import { useSession } from '../../context/SessionContext';
 import { Card } from '../ui/Card';
-import { Button } from '../ui/Button';
-import { Input } from '../ui/Input';
 import { HelpIcon } from '../ui/HelpIcon';
 import { AdvancedDisclosure } from '../ui/AdvancedDisclosure';
-import { TechId } from '../ui/TechId';
-import { translateError, stringifyError } from '../../utils/errorHelper';
+import { stringifyError } from '../../utils/errorHelper';
 import { logger } from '../../utils/log';
-import { defaultQuarterYearsAhead, formatQuarter, parseQuarterStr } from '../../utils/retentionQuarter';
+import { LockServerProbeSection } from './network/LockServerProbeSection';
+import { AnchorTemplateBuilder } from './network/AnchorTemplateBuilder';
+import { L2LifecycleSection } from './network/L2LifecycleSection';
 
 export interface NetworkProtectionCardProps {
     settings: AppSettings | null;
@@ -39,24 +27,9 @@ export interface NetworkProtectionCardProps {
     initialOpen?: boolean;
 }
 
-interface DraftServerSelection {
-    writeUrl: string;
-    nominatedBy: 'creator' | 'guarantor';
-    asn: string;
-}
-
-function formatAgeLabel(tsSecs: number | null | undefined): string {
-    if (!tsSecs || tsSecs <= 0) return '—';
-    const diffSecs = Math.max(0, Math.floor(Date.now() / 1000) - tsSecs);
-    if (diffSecs < 60) return `${diffSecs}s`;
-    const mins = Math.floor(diffSecs / 60);
-    if (mins < 60) return `${mins}m`;
-    const hours = Math.floor(mins / 60);
-    if (hours < 48) return `${hours}h`;
-    const days = Math.floor(hours / 24);
-    return `${days}d`;
-}
-
+/**
+ * Orchestrates L2 lock protection overview, PoS mode toggle, server probing, anchor templates, and lifecycle status.
+ */
 export const NetworkProtectionCard: React.FC<NetworkProtectionCardProps> = ({
     settings,
     onSettingsUpdated,
@@ -64,56 +37,26 @@ export const NetworkProtectionCard: React.FC<NetworkProtectionCardProps> = ({
     initialOpen = false,
 }) => {
     const { t } = useTranslation();
-    const { protectAction } = useSession();
 
-    const [probeUrl, setProbeUrl] = useState('');
-    const [expectedAdminPub, setExpectedAdminPub] = useState('');
-    const [isProbing, setIsProbing] = useState(false);
-    const [lastProbe, setLastProbe] = useState<LockServerProbeResult | null>(null);
     const [actionError, setActionError] = useState<string | null>(null);
     const [actionSuccess, setActionSuccess] = useState<string | null>(null);
 
-    const [ownServerUrl, setOwnServerUrl] = useState(settings?.ownNominatedLockServer?.writeUrl || '');
-    const [ownServerAsn, setOwnServerAsn] = useState(settings?.ownNominatedLockServer?.asn || '');
-    const [isSavingOwn, setIsSavingOwn] = useState(false);
-
-    const [tplLabel, setTplLabel] = useState('');
-    const [tplQuarter, setTplQuarter] = useState(() => defaultQuarterYearsAhead(5));
-    const [tplThreshold, setTplThreshold] = useState('');
-    const [tplGuarantorKeys, setTplGuarantorKeys] = useState('');
-    const [selectedServers, setSelectedServers] = useState<DraftServerSelection[]>([]);
-    const [isAssembling, setIsAssembling] = useState(false);
-
-    const [lifecycleStatus, setLifecycleStatus] = useState<L2LifecycleStatusDto | null>(null);
-    const [isRunningLifecycle, setIsRunningLifecycle] = useState(false);
-    const [regAnchorHex, setRegAnchorHex] = useState('');
-    const [regGuarantorIdx, setRegGuarantorIdx] = useState('0');
-    const [regContextNonceHex, setRegContextNonceHex] = useState('');
-    const [isRegisteringRole, setIsRegisteringRole] = useState(false);
-    const [registeredGuarantorPub, setRegisteredGuarantorPub] = useState<string | null>(null);
-
-    useEffect(() => {
-        setOwnServerUrl(settings?.ownNominatedLockServer?.writeUrl || '');
-        setOwnServerAsn(settings?.ownNominatedLockServer?.asn || '');
-    }, [settings?.ownNominatedLockServer]);
-
-    useEffect(() => {
-        if (typeof settingsService.getL2LifecycleStatus === 'function') {
-            settingsService
-                .getL2LifecycleStatus()
-                .then(setLifecycleStatus)
-                .catch(() => {});
-        }
+    const clearFeedback = useCallback(() => {
+        setActionError(null);
+        setActionSuccess(null);
     }, []);
 
-    const probeList = Object.values(settings?.l2ProbeCache || {}).sort(
-        (a, b) => (b.probedAtSecs || 0) - (a.probedAtSecs || 0)
-    );
-    const passingProbes = probeList.filter((p) => p.passed);
-    const templates = settings?.l2AnchorTemplatesMeta || [];
-    const hasActiveLockConfig = Boolean(templates.length > 0 || settings?.ownNominatedLockServer);
+    const handleError = useCallback((message: string) => {
+        setActionSuccess(null);
+        setActionError(message);
+    }, []);
 
-    const refreshSettings = async () => {
+    const handleSuccess = useCallback((message: string) => {
+        setActionError(null);
+        setActionSuccess(message);
+    }, []);
+
+    const refreshSettings = useCallback(async () => {
         try {
             const fresh = await settingsService.getSettings();
             if (fresh) {
@@ -122,187 +65,14 @@ export const NetworkProtectionCard: React.FC<NetworkProtectionCardProps> = ({
         } catch (e) {
             logger.warn(`Failed to reload settings after lock update: ${stringifyError(e)}`);
         }
-    };
+    }, [onSettingsUpdated]);
 
-    const handleProbe = async () => {
-        const trimmed = probeUrl.trim();
-        if (!trimmed) return;
-        setIsProbing(true);
-        setActionError(null);
-        setActionSuccess(null);
-        try {
-            const res = await protectAction(async (pwd) => {
-                return await settingsService.probeLockServer(
-                    trimmed,
-                    expectedAdminPub.trim() || null,
-                    pwd || null
-                );
-            });
-            if (res) {
-                setLastProbe(res);
-                if (!res.passed && res.error) {
-                    setActionError(res.error);
-                } else if (res.passed) {
-                    setActionSuccess(t('settings.lockProbePassedMsg', 'Server passed external verification.'));
-                }
-                await refreshSettings();
-            }
-        } catch (e) {
-            setActionError(translateError(e, t));
-        } finally {
-            setIsProbing(false);
-        }
-    };
-
-    const handleSaveOwnNominated = async (clear = false) => {
-        setIsSavingOwn(true);
-        setActionError(null);
-        setActionSuccess(null);
-        try {
-            const targetUrl = clear ? null : ownServerUrl.trim() || null;
-            const targetAsn = clear ? null : ownServerAsn.trim() || null;
-            const res = await protectAction(async (pwd) => {
-                return await settingsService.setOwnNominatedLockServer(targetUrl, targetAsn, pwd || null);
-            });
-            onSettingsUpdated((s) => (s ? { ...s, ownNominatedLockServer: res ?? null } : s));
-            setActionSuccess(
-                clear
-                    ? t('settings.ownLockClearedMsg', 'Own nominated lock server removed.')
-                    : t('settings.ownLockSavedMsg', 'Own nominated lock server saved.')
-            );
-            await refreshSettings();
-        } catch (e) {
-            setActionError(translateError(e, t));
-        } finally {
-            setIsSavingOwn(false);
-        }
-    };
-
-    const toggleServerInDraft = (writeUrl: string) => {
-        setSelectedServers((prev) => {
-            const exists = prev.some((s) => s.writeUrl === writeUrl);
-            if (exists) {
-                return prev.filter((s) => s.writeUrl !== writeUrl);
-            }
-            if (prev.length >= 5) return prev;
-            const isOwn = settings?.ownNominatedLockServer?.writeUrl === writeUrl;
-            return [
-                ...prev,
-                {
-                    writeUrl,
-                    nominatedBy: isOwn ? 'guarantor' : 'creator',
-                    asn: isOwn ? settings?.ownNominatedLockServer?.asn || '' : '',
-                },
-            ];
-        });
-    };
-
-    const updateDraftServer = (
-        writeUrl: string,
-        patch: Partial<DraftServerSelection>
-    ) => {
-        setSelectedServers((prev) =>
-            prev.map((s) => (s.writeUrl === writeUrl ? { ...s, ...patch } : s))
-        );
-    };
-
-    const handleAssembleTemplate = async () => {
-        if (selectedServers.length === 0) return;
-        const parsedQ = parseQuarterStr(tplQuarter);
-        if (parsedQ === null) {
-            setActionError(t('settings.invalidQuarterFormat', 'Invalid quarter format. Expected YYYY-QN (e.g. 2031-Q4).'));
-            return;
-        }
-        setIsAssembling(true);
-        setActionError(null);
-        setActionSuccess(null);
-        try {
-            let guarantorIdx = 0;
-            const serverInputs: AnchorServerInputDto[] = selectedServers.map((s) => ({
-                writeUrl: s.writeUrl,
-                nominatedBy: s.nominatedBy,
-                guarantorIndex: s.nominatedBy === 'guarantor' ? guarantorIdx++ : null,
-                asn: s.asn.trim() || null,
-            }));
-            const guarantorKeys = tplGuarantorKeys
-                .split(/[\s,;]+/)
-                .map((k) => k.trim())
-                .filter(Boolean);
-            const parsedThresh = tplThreshold.trim()
-                ? Number.parseInt(tplThreshold.trim(), 10)
-                : null;
-
-            await protectAction(async (pwd) => {
-                return await settingsService.assembleAnchorTemplate({
-                    label: tplLabel.trim() || `Set (${selectedServers.length})`,
-                    retainUntilQuarterStr: tplQuarter.trim().toUpperCase(),
-                    servers: serverInputs,
-                    guarantorMigPubsHex: guarantorKeys,
-                    threshold: Number.isFinite(parsedThresh as number) ? parsedThresh : null,
-                    password: pwd || null,
-                });
-            });
-
-            setTplLabel('');
-            setTplThreshold('');
-            setTplGuarantorKeys('');
-            setSelectedServers([]);
-            setActionSuccess(t('settings.anchorTemplateSavedMsg', 'Anchor set template saved.'));
-            await refreshSettings();
-        } catch (e) {
-            setActionError(translateError(e, t));
-        } finally {
-            setIsAssembling(false);
-        }
-    };
-
-    const handleRunLifecycleTick = async () => {
-        setIsRunningLifecycle(true);
-        setActionError(null);
-        setActionSuccess(null);
-        try {
-            const st = await protectAction(async (pwd) => {
-                return await settingsService.runL2LifecycleTick(true, pwd || null);
-            });
-            if (st) {
-                setLifecycleStatus(st);
-                setActionSuccess(t('settings.lifecycleTickCompleteMsg'));
-            }
-        } catch (e) {
-            setActionError(translateError(e, t));
-        } finally {
-            setIsRunningLifecycle(false);
-        }
-    };
-
-    const handleRegisterGuarantorRole = async () => {
-        if (!regAnchorHex.trim()) return;
-        const idx = Number.parseInt(regGuarantorIdx, 10);
-        if (!Number.isFinite(idx) || idx < 0) return;
-        setIsRegisteringRole(true);
-        setActionError(null);
-        setActionSuccess(null);
-        try {
-            const pub = await protectAction(async (pwd) => {
-                return await settingsService.registerGuarantorAnchorRole({
-                    anchorIdHex: regAnchorHex.trim(),
-                    guarantorIndex: idx,
-                    contextNonceHex: regContextNonceHex.trim() || null,
-                    password: pwd || null,
-                });
-            });
-            if (pub) {
-                setRegisteredGuarantorPub(pub);
-                const st = await settingsService.getL2LifecycleStatus().catch(() => null);
-                if (st) setLifecycleStatus(st);
-                setActionSuccess(t('settings.guarantorRoleRegisteredMsg'));
-            }
-        } catch (e) {
-            setActionError(translateError(e, t));
-        } finally {
-            setIsRegisteringRole(false);
-        }
-    };
+    const probeList = Object.values(settings?.l2ProbeCache || {}).sort(
+        (a, b) => (b.probedAtSecs || 0) - (a.probedAtSecs || 0)
+    );
+    const passingProbes = probeList.filter((p) => p.passed);
+    const templates = settings?.l2AnchorTemplatesMeta || [];
+    const hasActiveLockConfig = Boolean(templates.length > 0 || settings?.ownNominatedLockServer);
 
     return (
         <div id="settings-network-section">
@@ -419,450 +189,32 @@ export const NetworkProtectionCard: React.FC<NetworkProtectionCardProps> = ({
                             </div>
                         </div>
 
-                        {/* 1. External Server Probe */}
-                        <div className="space-y-3 p-4 rounded-xl bg-white dark:bg-slate-900 border border-theme-subtle">
-                            <div className="flex items-center justify-between gap-2">
-                                <h4 className="text-xs font-black uppercase tracking-wider text-theme-primary flex items-center gap-1.5">
-                                    <RefreshCw size={13} />
-                                    {t('settings.lockProbeTitle', 'External Lock Server Verification')}
-                                </h4>
-                            </div>
-                            <p className="text-[11px] text-theme-light leading-relaxed">
-                                {t(
-                                    'settings.lockProbeDesc',
-                                    'Verifies ?info delegation, POST ?lock WAF probe, ?lock_selftest, key-leak protection, latency, and max retention quarter.'
-                                )}
-                            </p>
-                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                                <div className="sm:col-span-2">
-                                    <Input
-                                        value={probeUrl}
-                                        onChange={(e) => setProbeUrl(e.target.value)}
-                                        placeholder="https://sync.example.org/sync.php"
-                                        aria-label={t('settings.lockServerUrlLabel', 'Lock Server URL')}
-                                    />
-                                </div>
-                                <Input
-                                    value={expectedAdminPub}
-                                    onChange={(e) => setExpectedAdminPub(e.target.value)}
-                                    placeholder={t('settings.expectedAdminPubPlaceholder', 'Expected Admin Pub (optional hex)')}
-                                    aria-label={t('settings.expectedAdminPubPlaceholder', 'Expected Admin Pub (optional hex)')}
-                                />
-                            </div>
-                            <div className="flex items-center justify-end">
-                                <Button
-                                    type="button"
-                                    size="sm"
-                                    onClick={handleProbe}
-                                    disabled={isProbing || !probeUrl.trim()}
-                                >
-                                    {isProbing
-                                        ? t('settings.probingLockServer', 'Probing...')
-                                        : t('settings.probeLockServerBtn', 'Verify Server')}
-                                </Button>
-                            </div>
+                        <LockServerProbeSection
+                            settings={settings}
+                            probeList={probeList}
+                            passingProbes={passingProbes}
+                            onSettingsUpdated={onSettingsUpdated}
+                            onSuccess={handleSuccess}
+                            onError={handleError}
+                            onClearFeedback={clearFeedback}
+                            onRefreshSettings={refreshSettings}
+                        />
 
-                            {lastProbe && (
-                                <div
-                                    data-testid="last-lock-probe-result"
-                                    className={`p-3 rounded-xl border text-xs space-y-1.5 ${
-                                        lastProbe.passed
-                                            ? 'bg-emerald-50/70 border-emerald-200 text-emerald-950'
-                                            : 'bg-rose-50/70 border-rose-200 text-rose-950'
-                                    }`}
-                                >
-                                    <div className="flex items-center justify-between gap-2 font-bold">
-                                        <span className="truncate">{lastProbe.writeUrl}</span>
-                                        <span>
-                                            {lastProbe.latencyMs} ms · Max {formatQuarter(lastProbe.maxRetentionQuarter)}
-                                        </span>
-                                    </div>
-                                    <div className="flex flex-wrap gap-2 text-[10px]">
-                                        <span className="inline-flex items-center gap-1">
-                                            {lastProbe.delegationValid ? <CheckCircle2 size={11} /> : <XCircle size={11} />}
-                                            ?info Delegation
-                                        </span>
-                                        <span className="inline-flex items-center gap-1">
-                                            {lastProbe.wafProbePassed ? <CheckCircle2 size={11} /> : <XCircle size={11} />}
-                                            WAF POST
-                                        </span>
-                                        <span className="inline-flex items-center gap-1">
-                                            {lastProbe.selftestPassed ? <CheckCircle2 size={11} /> : <XCircle size={11} />}
-                                            ?lock_selftest
-                                        </span>
-                                        <span className="inline-flex items-center gap-1">
-                                            {lastProbe.keyLeakSafe ? <CheckCircle2 size={11} /> : <XCircle size={11} />}
-                                            No Key Leak
-                                        </span>
-                                    </div>
-                                    <div className="text-[10px] flex flex-wrap items-center gap-2 opacity-80">
-                                        <span>Lock Pub:</span>
-                                        <TechId value={lastProbe.lockPub} kind="hash" />
-                                        {lastProbe.inodeWarning && (
-                                            <span className="px-1.5 py-0.5 rounded bg-amber-200 text-amber-900 font-bold">
-                                                Inodes {lastProbe.usedInodes}/{lastProbe.maxInodes}
-                                            </span>
-                                        )}
-                                    </div>
-                                </div>
-                            )}
+                        <AnchorTemplateBuilder
+                            passingProbes={passingProbes}
+                            templates={templates}
+                            ownNominatedLockServer={settings?.ownNominatedLockServer}
+                            onSuccess={handleSuccess}
+                            onError={handleError}
+                            onClearFeedback={clearFeedback}
+                            onRefreshSettings={refreshSettings}
+                        />
 
-                            {probeList.length > 0 && (
-                                <div className="space-y-1.5 pt-1">
-                                    <p className="text-[10px] font-bold uppercase tracking-wider text-theme-light">
-                                        {t('settings.cachedLockProbes', 'Verified Lock Servers')} ({passingProbes.length}/{probeList.length})
-                                    </p>
-                                    <div className="space-y-1.5 max-h-48 overflow-y-auto">
-                                        {probeList.map((p) => (
-                                            <div
-                                                key={p.writeUrl}
-                                                className="flex items-center justify-between gap-2 p-2 rounded-lg border border-theme-subtle/60 bg-bg-app/30 text-[11px]"
-                                            >
-                                                <div className="min-w-0 flex-1">
-                                                    <div className="flex items-center gap-1.5 font-semibold truncate">
-                                                        {p.passed ? (
-                                                            <CheckCircle2 size={12} className="text-emerald-600 shrink-0" />
-                                                        ) : (
-                                                            <XCircle size={12} className="text-rose-500 shrink-0" />
-                                                        )}
-                                                        <span className="truncate">{p.writeUrl}</span>
-                                                    </div>
-                                                    <div className="text-[10px] text-theme-light">
-                                                        {p.latencyMs} ms · Max {formatQuarter(p.maxRetentionQuarter)} ·{' '}
-                                                        {t('settings.probeAgeLabel', 'Age')}: {formatAgeLabel(p.probedAtSecs)}
-                                                    </div>
-                                                </div>
-                                                {p.passed && (
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => setOwnServerUrl(p.writeUrl)}
-                                                        className="text-[10px] font-bold text-theme-primary hover:underline shrink-0 cursor-pointer"
-                                                    >
-                                                        {t('settings.useAsOwnServer', 'Use as own')}
-                                                    </button>
-                                                )}
-                                            </div>
-                                        ))}
-                                    </div>
-                                </div>
-                            )}
-                        </div>
-
-                        {/* 2. Own Guarantor Nominated Lock Server */}
-                        <div className="space-y-3 p-4 rounded-xl bg-white dark:bg-slate-900 border border-theme-subtle">
-                            <h4 className="text-xs font-black uppercase tracking-wider text-theme-primary flex items-center gap-1.5">
-                                <ShieldCheck size={13} />
-                                {t('settings.ownNominatedServerTitle', 'Own Trusted Lock Server (Guarantor Check)')}
-                            </h4>
-                            <p className="text-[11px] text-theme-light leading-relaxed">
-                                {t(
-                                    'settings.ownNominatedServerDesc',
-                                    'Verified server required to countersign vouched vouchers. Automatically treated as trusted at checkout.'
-                                )}
-                            </p>
-                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                                <div className="sm:col-span-2">
-                                    <Input
-                                        value={ownServerUrl}
-                                        onChange={(e) => setOwnServerUrl(e.target.value)}
-                                        placeholder="https://my-lock-server.example.org/sync.php"
-                                        aria-label={t('settings.ownLockUrlLabel', 'Own Lock Server URL')}
-                                    />
-                                </div>
-                                <Input
-                                    value={ownServerAsn}
-                                    onChange={(e) => setOwnServerAsn(e.target.value)}
-                                    placeholder={t('settings.asnOptionalPlaceholder', 'ASN (optional, e.g. AS24940)')}
-                                    aria-label={t('settings.asnOptionalPlaceholder', 'ASN (optional)')}
-                                />
-                            </div>
-                            <div className="flex items-center justify-between gap-2">
-                                {settings?.ownNominatedLockServer ? (
-                                    <Button
-                                        type="button"
-                                        size="sm"
-                                        variant="outline"
-                                        onClick={() => handleSaveOwnNominated(true)}
-                                        disabled={isSavingOwn}
-                                    >
-                                        <Trash2 size={13} className="mr-1" />
-                                        {t('settings.clearOwnServerBtn', 'Remove')}
-                                    </Button>
-                                ) : (
-                                    <span />
-                                )}
-                                <Button
-                                    type="button"
-                                    size="sm"
-                                    onClick={() => handleSaveOwnNominated(false)}
-                                    disabled={isSavingOwn || !ownServerUrl.trim()}
-                                >
-                                    {t('settings.saveOwnServerBtn', 'Save Own Server')}
-                                </Button>
-                            </div>
-                        </div>
-
-                        {/* 3. Anchor Set Templates (1..=5 Servers) */}
-                        <div className="space-y-3 p-4 rounded-xl bg-white dark:bg-slate-900 border border-theme-subtle">
-                            <h4 className="text-xs font-black uppercase tracking-wider text-theme-primary flex items-center gap-1.5">
-                                <Plus size={13} />
-                                {t('settings.anchorTemplatesTitle', 'Lock Committee Templates (1–5 Servers)')}
-                            </h4>
-                            <p className="text-[11px] text-theme-light leading-relaxed">
-                                {t(
-                                    'settings.anchorTemplatesDesc',
-                                    'Combine 1 to 5 independently verified servers into a reusable double-spend protection template for new vouchers.'
-                                )}
-                            </p>
-
-                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                                <Input
-                                    value={tplLabel}
-                                    onChange={(e) => setTplLabel(e.target.value)}
-                                    placeholder={t('settings.anchorLabelPlaceholder', 'Template name (e.g. Regional 2-of-3)')}
-                                />
-                                <Input
-                                    value={tplQuarter}
-                                    onChange={(e) => setTplQuarter(e.target.value)}
-                                    placeholder="2031-Q4"
-                                    aria-label={t('settings.retainUntilQuarterLabel', 'Retain until quarter')}
-                                />
-                                <Input
-                                    value={tplThreshold}
-                                    onChange={(e) => setTplThreshold(e.target.value)}
-                                    placeholder={t('settings.quorumOptionalPlaceholder', 'Threshold Q (default majority)')}
-                                />
-                            </div>
-
-                            {passingProbes.length > 0 ? (
-                                <div className="space-y-1.5">
-                                    <p className="text-[10px] font-bold uppercase tracking-wider text-theme-light">
-                                        {t('settings.selectCommitteeServers', 'Select 1–5 verified servers')}
-                                    </p>
-                                    {passingProbes.map((p) => {
-                                        const draft = selectedServers.find((s) => s.writeUrl === p.writeUrl);
-                                        return (
-                                            <div
-                                                key={p.writeUrl}
-                                                className="p-2 rounded-lg border border-theme-subtle/70 flex flex-wrap items-center justify-between gap-2 text-xs"
-                                            >
-                                                <label className="flex items-center gap-2 cursor-pointer min-w-0 flex-1">
-                                                    <input
-                                                        type="checkbox"
-                                                        checked={Boolean(draft)}
-                                                        onChange={() => toggleServerInDraft(p.writeUrl)}
-                                                        className="accent-theme-primary"
-                                                    />
-                                                    <span className="truncate font-medium">{p.writeUrl}</span>
-                                                    <span className="text-[10px] text-theme-light shrink-0">
-                                                        (≤ {formatQuarter(p.maxRetentionQuarter)})
-                                                    </span>
-                                                </label>
-                                                {draft && (
-                                                    <div className="flex items-center gap-1.5">
-                                                        <select
-                                                            value={draft.nominatedBy}
-                                                            onChange={(e) =>
-                                                                updateDraftServer(p.writeUrl, {
-                                                                    nominatedBy: e.target.value as 'creator' | 'guarantor',
-                                                                })
-                                                            }
-                                                            className="text-[11px] bg-white dark:bg-slate-800 border border-theme-subtle rounded-lg px-2 py-1"
-                                                        >
-                                                            <option value="creator">Creator</option>
-                                                            <option value="guarantor">Guarantor</option>
-                                                        </select>
-                                                        <input
-                                                            type="text"
-                                                            value={draft.asn}
-                                                            onChange={(e) =>
-                                                                updateDraftServer(p.writeUrl, { asn: e.target.value })
-                                                            }
-                                                            placeholder="ASN"
-                                                            className="w-20 text-[11px] bg-white dark:bg-slate-800 border border-theme-subtle rounded-lg px-2 py-1"
-                                                        />
-                                                    </div>
-                                                )}
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-                            ) : (
-                                <p className="text-[11px] italic text-theme-light">
-                                    {t('settings.probeServersFirstHint', 'Verify at least one server above before assembling a template.')}
-                                </p>
-                            )}
-
-                            <Input
-                                value={tplGuarantorKeys}
-                                onChange={(e) => setTplGuarantorKeys(e.target.value)}
-                                placeholder={t('settings.guarantorMigKeysPlaceholder', 'Guarantor rotation keys (optional, comma-separated 64-hex)')}
-                            />
-
-                            <div className="flex justify-end">
-                                <Button
-                                    type="button"
-                                    size="sm"
-                                    onClick={handleAssembleTemplate}
-                                    disabled={isAssembling || selectedServers.length === 0}
-                                >
-                                    {isAssembling
-                                        ? t('common.saving', 'Saving...')
-                                        : t('settings.createAnchorTemplateBtn', 'Assemble Anchor Set')}
-                                </Button>
-                            </div>
-
-                            {templates.length > 0 && (
-                                <div className="space-y-2 pt-2 border-t border-theme-subtle/50">
-                                    <p className="text-[10px] font-bold uppercase tracking-wider text-theme-light">
-                                        {t('settings.savedAnchorTemplates', 'Saved Anchor Sets')} ({templates.length})
-                                    </p>
-                                    {templates.map((tpl) => (
-                                        <div
-                                            key={tpl.anchorId}
-                                            className="p-3 rounded-xl border border-theme-subtle bg-bg-app/30 text-xs space-y-1"
-                                        >
-                                            <div className="flex items-center justify-between gap-2 font-bold">
-                                                <span>{tpl.label}</span>
-                                                <span className="text-[11px] font-mono">
-                                                    {tpl.threshold}/{tpl.servers.length} · ≥ {formatQuarter(tpl.retainUntilQuarter)}
-                                                </span>
-                                            </div>
-                                            <div className="flex flex-wrap items-center gap-2 text-[10px] text-theme-light">
-                                                <span>Anchor:</span>
-                                                <TechId value={tpl.anchorId} kind="hash" />
-                                                <span>· {t('settings.probeAgeLabel', 'Age')}: {formatAgeLabel(tpl.createdAtSecs)}</span>
-                                            </div>
-                                        </div>
-                                    ))}
-                                </div>
-                            )}
-                        </div>
-
-                        {/* Section 4: Committee Maintenance, Rotation & Guarantor Veto */}
-                        <div data-testid="l2-lifecycle-panel" className="space-y-3 pt-4 border-t border-theme-subtle/50">
-                            <div className="flex items-center justify-between gap-2">
-                                <div>
-                                    <h4 className="text-xs font-bold uppercase tracking-wider text-theme-primary flex items-center gap-1.5">
-                                        <RefreshCw size={14} className="text-theme-primary" />
-                                        {t('settings.lifecycleTitle')}
-                                    </h4>
-                                    <p className="text-xs text-theme-secondary/80 mt-0.5">
-                                        {t('settings.lifecycleDesc')}
-                                    </p>
-                                </div>
-                                <Button
-                                    type="button"
-                                    size="sm"
-                                    variant="secondary"
-                                    onClick={handleRunLifecycleTick}
-                                    disabled={isRunningLifecycle}
-                                >
-                                    {isRunningLifecycle
-                                        ? t('settings.runningLifecycleTick')
-                                        : t('settings.runLifecycleTickBtn')}
-                                </Button>
-                            </div>
-
-                            {lifecycleStatus && (
-                                <div className="space-y-2">
-                                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px]">
-                                        <div className="p-2 rounded-lg border border-theme-subtle bg-bg-app/30">
-                                            <p className="text-[10px] text-theme-light">{t('settings.lifecycleTrackedAnchors')}</p>
-                                            <p className="font-bold">{lifecycleStatus.trackedAnchorsCount}</p>
-                                        </div>
-                                        <div className="p-2 rounded-lg border border-theme-subtle bg-bg-app/30">
-                                            <p className="text-[10px] text-theme-light">{t('settings.lifecycleGuarantorRoles')}</p>
-                                            <p className="font-bold">{lifecycleStatus.guarantorRolesCount}</p>
-                                        </div>
-                                        <div className="p-2 rounded-lg border border-theme-subtle bg-bg-app/30">
-                                            <p className="text-[10px] text-theme-light">{t('settings.lifecycleOffenders')}</p>
-                                            <p className="font-bold">{lifecycleStatus.serverOffendersCount}</p>
-                                        </div>
-                                        <div className="p-2 rounded-lg border border-theme-subtle bg-bg-app/30">
-                                            <p className="text-[10px] text-theme-light">{t('settings.lifecycleAutoVetoes')}</p>
-                                            <p className="font-bold">{lifecycleStatus.autoVetoesSent}</p>
-                                        </div>
-                                    </div>
-                                    {lifecycleStatus.lastVetoReason && (
-                                        <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-2">
-                                            {lifecycleStatus.lastVetoReason}
-                                        </p>
-                                    )}
-                                    {lifecycleStatus.anchors.map((a) => (
-                                        <div
-                                            key={a.anchorId}
-                                            className="p-2.5 rounded-lg border border-theme-subtle/70 bg-bg-app/20 text-[11px] space-y-1"
-                                        >
-                                            <div className="flex items-center justify-between gap-2">
-                                                <TechId value={a.anchorId} kind="hash" />
-                                                <div className="flex items-center gap-1.5">
-                                                    <span className="font-mono font-bold">Rev {a.revision}</span>
-                                                    {a.reducedGuarantorProtection && (
-                                                        <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 font-bold text-[10px]">
-                                                            {t('voucher.reducedGuarantorProtectionBadge')}
-                                                        </span>
-                                                    )}
-                                                    {a.activeRotationPhase && (
-                                                        <span className="px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-900 font-bold text-[10px]">
-                                                            {a.activeRotationPhase}
-                                                        </span>
-                                                    )}
-                                                </div>
-                                            </div>
-                                            {(a.unhealthyServers.length > 0 || a.revokedServers.length > 0) && (
-                                                <p className="text-[10px] text-rose-700">
-                                                    {t('settings.lifecycleDegradedCounts', {
-                                                        unhealthy: a.unhealthyServers.length,
-                                                        revoked: a.revokedServers.length,
-                                                    })}
-                                                </p>
-                                            )}
-                                        </div>
-                                    ))}
-                                </div>
-                            )}
-
-                            <div className="pt-2 border-t border-theme-subtle/40 space-y-2">
-                                <p className="text-[11px] font-bold text-theme-secondary">
-                                    {t('settings.registerGuarantorRoleTitle')}
-                                </p>
-                                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                                    <Input
-                                        value={regAnchorHex}
-                                        onChange={(e) => setRegAnchorHex(e.target.value)}
-                                        placeholder={t('settings.guarantorAnchorHexPlaceholder')}
-                                    />
-                                    <Input
-                                        value={regGuarantorIdx}
-                                        onChange={(e) => setRegGuarantorIdx(e.target.value)}
-                                        placeholder={t('settings.guarantorIdxPlaceholder')}
-                                    />
-                                    <Input
-                                        value={regContextNonceHex}
-                                        onChange={(e) => setRegContextNonceHex(e.target.value)}
-                                        placeholder={t('settings.guarantorContextNoncePlaceholder')}
-                                    />
-                                </div>
-                                <div className="flex items-center justify-between gap-2">
-                                    {registeredGuarantorPub ? (
-                                        <div className="flex items-center gap-1.5 text-[11px]">
-                                            <span className="text-theme-light">{t('settings.derivedGuarantorKeyLabel')}:</span>
-                                            <TechId value={registeredGuarantorPub} kind="hash" />
-                                        </div>
-                                    ) : <span />}
-                                    <Button
-                                        type="button"
-                                        size="sm"
-                                        variant="outline"
-                                        onClick={handleRegisterGuarantorRole}
-                                        disabled={isRegisteringRole || !regAnchorHex.trim()}
-                                    >
-                                        {t('settings.registerGuarantorRoleBtn')}
-                                    </Button>
-                                </div>
-                            </div>
-                        </div>
+                        <L2LifecycleSection
+                            onSuccess={handleSuccess}
+                            onError={handleError}
+                            onClearFeedback={clearFeedback}
+                        />
                     </AdvancedDisclosure>
                 </div>
             </Card>

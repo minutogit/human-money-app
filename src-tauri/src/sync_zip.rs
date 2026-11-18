@@ -21,7 +21,8 @@ pub fn generate_sync_config_php(
         Some(url) => format!("'{}'", url.replace('\'', "\\'")),
         None => "null".to_string(),
     };
-    let max_media_user_bytes: u64 = 6_291_456u64.min((max_user_storage_mb as u64).saturating_mul(1024 * 1024));
+    let max_media_user_bytes: u64 =
+        6_291_456u64.min((max_user_storage_mb as u64).saturating_mul(1024 * 1024));
     format!(
         r#"<?php // config.php – adjust to your needs
 return [

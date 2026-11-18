@@ -28,7 +28,7 @@ import { marketService } from '../../services/marketService';
 import { postService, POST_INBOX_UPDATED_EVENT } from '../../services/postService';
 import { settingsService } from '../../services/settingsService';
 import { contactService } from '../../services/contactService';
-import ContactDialog from '../ContactDialog';
+import ContactDialog from '../contacts/ContactDialog';
 import { PageLayout } from '../ui/PageLayout';
 import { Button } from '../ui/Button';
 import { PageLoadingState } from '../ui/PageState';

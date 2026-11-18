@@ -42,7 +42,7 @@ import { contactService } from '../../services/contactService';
 import { marketService } from '../../services/marketService';
 import { postService } from '../../services/postService';
 import { useRateLimitCooldown } from '../../hooks/useRateLimitCooldown';
-import ContactDialog from '../ContactDialog';
+import ContactDialog from '../contacts/ContactDialog';
 import { ShareCardModal } from './ShareCardModal';
 import { AdCard, resolveAuthorHops } from './AdCard';
 import { copyToClipboard } from '../../utils/clipboard';

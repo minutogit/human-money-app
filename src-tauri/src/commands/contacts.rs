@@ -39,7 +39,7 @@ pub async fn save_contact(
     if !is_own_root {
         if let Some(lvl) = trust_level {
             if lvl >= 1 {
-                let _ = crate::commands::post::send_wot_handshake_via_post_impl(
+                let _ = crate::services::post_service::send_wot_handshake_via_post_impl(
                     contact_did,
                     lvl.min(1),
                     true,
@@ -260,23 +260,23 @@ mod tests {
         let temp_dir =
             std::env::temp_dir().join(format!("humoco_contacts_test_{}", uuid::Uuid::new_v4()));
         let password = "test-password-123";
-        let alice_service = crate::commands::sync::tests::setup_test_app(
+        let alice_service = crate::test_support::setup_test_app(
             &temp_dir.join("alice"),
             "Test Alice",
-            crate::commands::sync::tests::ALICE_PHRASE,
+            crate::test_support::ALICE_PHRASE,
             password,
         );
-        let bob_service = crate::commands::sync::tests::setup_test_app(
+        let bob_service = crate::test_support::setup_test_app(
             &temp_dir.join("bob"),
             "Test Bob",
-            crate::commands::sync::tests::BOB_PHRASE,
+            crate::test_support::BOB_PHRASE,
             password,
         );
         let bob_did = bob_service
             .with_wallet(|w| w.get_user_id().to_string())
             .unwrap();
 
-        let state = crate::commands::sync::tests::create_test_state(alice_service);
+        let state = crate::test_support::create_test_state(alice_service);
         let mut service = state.service.lock().unwrap();
 
         let did = &bob_did;

@@ -1,182 +1,16 @@
 use crate::models::{FrontendError, MnemonicLanguage, ProfileInfo};
 use crate::pin_keystore::{self, ProfilePinStatusDto, MAX_PIN_ATTEMPTS};
+use crate::services::fs_helpers::{
+    load_profile_metadata, load_profile_metadata_map_from_dir, record_profile_metadata,
+    remove_profile_metadata_entry, resolve_or_create_local_instance_id,
+};
 use crate::settings::{AppSettings, SETTINGS_KEY};
 use crate::AppState;
 use chrono::{DateTime, Utc};
 use log::{error, info};
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::Manager;
-
-const PROFILE_METADATA_FILE: &str = "profile_metadata.json";
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub(crate) struct ProfileMetadata {
-    pub(crate) last_used: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) user_id: Option<String>,
-}
-
-fn get_metadata_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    app.path()
-        .app_data_dir()
-        .map(|dir| dir.join("wallet_data").join(PROFILE_METADATA_FILE))
-        .map_err(|e| format!("Could not determine app data directory: {}", e))
-}
-
-fn load_profile_metadata(
-    app: &tauri::AppHandle,
-) -> Result<HashMap<String, ProfileMetadata>, String> {
-    let metadata_path = get_metadata_path(app)?;
-
-    if !metadata_path.exists() {
-        return Ok(HashMap::new());
-    }
-
-    let content = fs::read_to_string(&metadata_path)
-        .map_err(|e| format!("Failed to read profile metadata: {}", e))?;
-
-    serde_json::from_str(&content).map_err(|e| format!("Failed to parse profile metadata: {}", e))
-}
-
-pub(crate) fn load_profile_metadata_map_from_dir(
-    wallet_data_dir: &std::path::Path,
-) -> HashMap<String, (String, Option<String>)> {
-    let metadata_path = wallet_data_dir.join(PROFILE_METADATA_FILE);
-    if !metadata_path.exists() {
-        return HashMap::new();
-    }
-    let Ok(content) = fs::read_to_string(&metadata_path) else {
-        return HashMap::new();
-    };
-    let Ok(map) = serde_json::from_str::<HashMap<String, ProfileMetadata>>(&content) else {
-        return HashMap::new();
-    };
-    map.into_iter()
-        .map(|(k, v)| (k, (v.last_used, v.user_id)))
-        .collect()
-}
-
-fn save_profile_metadata(
-    app: &tauri::AppHandle,
-    metadata: &HashMap<String, ProfileMetadata>,
-) -> Result<(), String> {
-    let metadata_path = get_metadata_path(app)?;
-
-    // Ensure directory exists
-    if let Some(parent) = metadata_path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| format!("Failed to create metadata directory: {}", e))?;
-    }
-
-    let content = serde_json::to_string_pretty(metadata)
-        .map_err(|e| format!("Failed to serialize profile metadata: {}", e))?;
-
-    fs::write(&metadata_path, content)
-        .map_err(|e| format!("Failed to write profile metadata: {}", e))
-}
-
-pub(crate) fn record_profile_metadata_in_dir(
-    wallet_data_dir: &std::path::Path,
-    folder_name: &str,
-    user_id: Option<String>,
-) -> Result<(), String> {
-    let metadata_path = wallet_data_dir.join(PROFILE_METADATA_FILE);
-    let mut metadata: HashMap<String, ProfileMetadata> = if metadata_path.exists() {
-        fs::read_to_string(&metadata_path)
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
-    } else {
-        HashMap::new()
-    };
-
-    let existing_uid = metadata.get(folder_name).and_then(|m| m.user_id.clone());
-    metadata.insert(
-        folder_name.to_string(),
-        ProfileMetadata {
-            last_used: Utc::now().to_rfc3339(),
-            user_id: user_id.or(existing_uid),
-        },
-    );
-
-    if let Some(parent) = metadata_path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| format!("Failed to create metadata directory: {}", e))?;
-    }
-    let content = serde_json::to_string_pretty(&metadata).map_err(|e| e.to_string())?;
-    fs::write(&metadata_path, content).map_err(|e| e.to_string())
-}
-
-pub(crate) fn record_profile_metadata(
-    app: &tauri::AppHandle,
-    folder_name: &str,
-    user_id: Option<String>,
-) -> Result<(), String> {
-    let mut metadata = load_profile_metadata(app).unwrap_or_default();
-    let existing_uid = metadata.get(folder_name).and_then(|m| m.user_id.clone());
-    metadata.insert(
-        folder_name.to_string(),
-        ProfileMetadata {
-            last_used: Utc::now().to_rfc3339(),
-            user_id: user_id.or(existing_uid),
-        },
-    );
-    save_profile_metadata(app, &metadata)
-}
-
-pub(crate) fn remove_profile_metadata_entry_in_dir(
-    wallet_data_dir: &std::path::Path,
-    folder_name: &str,
-) -> Result<(), String> {
-    let metadata_path = wallet_data_dir.join(PROFILE_METADATA_FILE);
-    if !metadata_path.exists() {
-        return Ok(());
-    }
-    let mut metadata: HashMap<String, ProfileMetadata> = fs::read_to_string(&metadata_path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default();
-    if metadata.remove(folder_name).is_some() {
-        let content = serde_json::to_string_pretty(&metadata).map_err(|e| e.to_string())?;
-        fs::write(&metadata_path, content).map_err(|e| e.to_string())?;
-    }
-    Ok(())
-}
-
-pub(crate) fn remove_profile_metadata_entry(
-    app: &tauri::AppHandle,
-    folder_name: &str,
-) -> Result<(), String> {
-    if let Ok(mut metadata) = load_profile_metadata(app) {
-        if metadata.remove(folder_name).is_some() {
-            save_profile_metadata(app, &metadata)?;
-        }
-    }
-    Ok(())
-}
-
-#[tauri::command]
-pub fn profile_exists(app: tauri::AppHandle) -> bool {
-    info!("Checking for existing profile...");
-    // This must check the same path the AppService will use.
-    let profile_path = match app.path().app_data_dir() {
-        Ok(dir) => dir.join("wallet_data").join("profile.enc"),
-        Err(e) => {
-            error!(
-                "Could not determine app data directory for profile check: {}",
-                e
-            );
-            return false;
-        }
-    };
-
-    let exists = profile_path.exists();
-    info!("Profile check at '{}': {}", profile_path.display(), exists);
-    exists
-}
 
 #[tauri::command]
 pub fn list_profiles(
@@ -314,7 +148,7 @@ pub async fn create_profile(
 
     if let Some(preset) = initial_reach_preset {
         if matches!(preset.as_str(), "near" | "medium" | "far") {
-            crate::commands::settings_cmd::apply_reach_preset_impl(
+            crate::services::settings_service::apply_reach_preset_impl(
                 preset,
                 Some(password.clone()),
                 &state,
@@ -324,7 +158,7 @@ pub async fn create_profile(
 
     if let Some(targets) = initial_sync_targets {
         for target in targets {
-            let _ = crate::commands::sync::save_public_sync_impl(
+            let _ = crate::services::sync_engine::save_public_sync_impl(
                 target.write_url,
                 target.read_url,
                 target.drop_pub,
@@ -369,17 +203,7 @@ pub fn login(
                 .initialize_profile_session(&mut service, &password)
                 .map_err(FrontendError::from)?;
 
-            let app_handle = app.clone();
-            let pwd = password.clone();
-            tauri::async_runtime::spawn(async move {
-                use tauri::Manager;
-                let app_state = app_handle.state::<AppState>();
-                let _ = crate::commands::settings_cmd::reconcile_restored_wallet_if_pending(
-                    &app_state,
-                    Some(&pwd),
-                )
-                .await;
-            });
+            crate::services::common::spawn_pending_l2_reconciliation(&app, &password);
 
             Ok(())
         }
@@ -433,17 +257,7 @@ pub fn recover_wallet_and_set_new_password(
                 .initialize_profile_session(&mut service, &new_password)
                 .map_err(FrontendError::from)?;
 
-            let app_handle = app.clone();
-            let pwd = new_password.clone();
-            tauri::async_runtime::spawn(async move {
-                use tauri::Manager;
-                let app_state = app_handle.state::<AppState>();
-                let _ = crate::commands::settings_cmd::reconcile_restored_wallet_if_pending(
-                    &app_state,
-                    Some(&pwd),
-                )
-                .await;
-            });
+            crate::services::common::spawn_pending_l2_reconciliation(&app, &new_password);
 
             Ok(())
         }
@@ -485,17 +299,7 @@ pub fn handover_to_this_device(
                 .initialize_profile_session(&mut service, &password)
                 .map_err(FrontendError::from)?;
 
-            let app_handle = app.clone();
-            let pwd = password.clone();
-            tauri::async_runtime::spawn(async move {
-                use tauri::Manager;
-                let app_state = app_handle.state::<AppState>();
-                let _ = crate::commands::settings_cmd::reconcile_restored_wallet_if_pending(
-                    &app_state,
-                    Some(&pwd),
-                )
-                .await;
-            });
+            crate::services::common::spawn_pending_l2_reconciliation(&app, &password);
 
             Ok(())
         }
@@ -608,8 +412,7 @@ fn resolve_pin_keystore_dir_and_device_id(
         .path()
         .app_config_dir()
         .map_err(|e| FrontendError::from(e.to_string()))?;
-    let device_id =
-        crate::commands::utils::get_local_instance_id(app.clone()).map_err(FrontendError::from)?;
+    let device_id = resolve_or_create_local_instance_id(app).map_err(FrontendError::from)?;
     Ok((keystore_dir, device_id))
 }
 
@@ -876,17 +679,7 @@ pub fn login_with_pin_impl(
                 .map_err(FrontendError::from)?;
 
             if let Some(app_handle) = app {
-                let app_clone = app_handle.clone();
-                let sec = secret.clone();
-                tauri::async_runtime::spawn(async move {
-                    use tauri::Manager;
-                    let app_state = app_clone.state::<AppState>();
-                    let _ = crate::commands::settings_cmd::reconcile_restored_wallet_if_pending(
-                        &app_state,
-                        Some(&sec),
-                    )
-                    .await;
-                });
+                crate::services::common::spawn_pending_l2_reconciliation(app_handle, &secret);
             }
 
             Ok(mode.as_str().to_string())
@@ -982,6 +775,7 @@ pub fn elevate_session_with_password(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::fs_helpers::ProfileMetadata;
     use std::sync::Mutex;
 
     #[test]
@@ -1085,7 +879,7 @@ mod tests {
         use human_money_core::app_service::AppService;
         use human_money_core::services::mnemonic::MnemonicLanguage;
 
-        let dir = crate::commands::sync::tests::temp_test_dir("pin_auth_test");
+        let dir = crate::test_support::temp_test_dir("pin_auth_test");
         let wallet_dir = dir.join("wallet_data");
         let keystore_dir = dir.join("keystore");
         std::fs::create_dir_all(&wallet_dir).unwrap();

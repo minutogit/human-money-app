@@ -15,9 +15,9 @@ const SRC_ROOT = path.resolve(__dirname, '..');
 const ALLOWED_RELATIVE_PREFIXES = [
     'context/UiModeContext.tsx',
     'components/ui/',
-    'components/Sidebar.tsx',
-    'components/Header.tsx',
-    'components/HelpCenterView.tsx',
+    'components/shell/Sidebar.tsx',
+    'components/shell/Header.tsx',
+    'components/support/HelpCenterView.tsx',
 ];
 
 function collectSourceFiles(dir: string): string[] {
