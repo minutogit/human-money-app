@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::time::Duration;
 
 use human_money_core::app_service::l2_intents::L2SendIntent;
@@ -44,8 +44,7 @@ pub fn run_value_outflow_preflight(
         ensure_restore_l2_reconciled(state, service, password)?;
     }
 
-    if !req.check_known_offender_dids.is_empty()
-        || !req.check_blocking_intent_local_ids.is_empty()
+    if !req.check_known_offender_dids.is_empty() || !req.check_blocking_intent_local_ids.is_empty()
     {
         service
             .with_wallet(|wallet| -> Result<(), FrontendError> {
@@ -124,9 +123,19 @@ pub async fn dispatch_l2_send_intents(
     for intent in intents {
         let nonce = random_non_zero_nonce();
         let reqs_res = {
-            let service = state.lock_service()?;
+            let mut service = state.lock_service()?;
+            let known_heads = crate::state::load_known_head_receipts_for_anchor(
+                &mut service,
+                &intent.anchor_id,
+                password,
+            );
             service
-                .build_intent_committee_requests(&intent.local_instance_id, &nonce, &HashMap::new(), true)
+                .build_intent_committee_requests(
+                    &intent.local_instance_id,
+                    &nonce,
+                    &known_heads,
+                    true,
+                )
                 .map_err(FrontendError::from)
         };
 
@@ -139,7 +148,8 @@ pub async fn dispatch_l2_send_intents(
             continue;
         };
 
-        let dispatch = dispatch_lock_committee_batches(&client, &requests, Duration::from_secs(4)).await;
+        let dispatch =
+            dispatch_lock_committee_batches(&client, &requests, Duration::from_secs(4)).await;
 
         let valid_slots: HashSet<[u8; 32]> = intent.entries.iter().map(|e| e.slot).collect();
         let matching_receipts: Vec<_> = dispatch
@@ -149,31 +159,45 @@ pub async fn dispatch_l2_send_intents(
             .cloned()
             .collect();
 
-        if !matching_receipts.is_empty() || !dispatch.competing_entries.is_empty() {
+        if !matching_receipts.is_empty()
+            || !dispatch.competing_entries.is_empty()
+            || !dispatch.receipts.is_empty()
+        {
             let mut service = state.lock_service()?;
-            match service.record_intent_server_receipts(
-                &intent.local_instance_id,
-                &nonce,
-                &matching_receipts,
-                dispatch.competing_entries.first(),
-                pow_base_bits,
-                now_ms,
+            let _ = crate::state::record_known_head_receipts(
+                &mut service,
+                &intent.anchor_id,
+                &dispatch.receipts,
                 password,
-            ) {
-                Ok((_, Some(equiv_proof))) => {
-                    if let Err(err) = record_equivocation_proof(
-                        &mut service,
-                        None,
-                        &equiv_proof,
-                        now_secs,
-                        password,
-                    ) {
-                        log::warn!("Failed to persist server equivocation proof: {}", err.message);
+            );
+            if !matching_receipts.is_empty() || !dispatch.competing_entries.is_empty() {
+                match service.record_intent_server_receipts(
+                    &intent.local_instance_id,
+                    &nonce,
+                    &matching_receipts,
+                    dispatch.competing_entries.first(),
+                    pow_base_bits,
+                    now_ms,
+                    password,
+                ) {
+                    Ok((_, Some(equiv_proof))) => {
+                        if let Err(err) = record_equivocation_proof(
+                            &mut service,
+                            None,
+                            &equiv_proof,
+                            now_secs,
+                            password,
+                        ) {
+                            log::warn!(
+                                "Failed to persist server equivocation proof: {}",
+                                err.message
+                            );
+                        }
                     }
-                }
-                Ok((_, None)) => {}
-                Err(err) => {
-                    log::warn!("Recording L2 send intent receipts failed: {}", err);
+                    Ok((_, None)) => {}
+                    Err(err) => {
+                        log::warn!("Recording L2 send intent receipts failed: {}", err);
+                    }
                 }
             }
         }

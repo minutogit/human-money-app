@@ -162,10 +162,64 @@ pub struct SyncCapabilityResult {
     pub media_used_bytes: Option<usize>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct SlotAckReceipt {
+    pub lock_pub: String,
+    pub pubkey: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefix: Option<String>,
+    pub channel: String,
+    pub etag: String,
+    pub timestamp: u64,
+    pub sig: String,
+}
+
+impl SlotAckReceipt {
+    pub fn verify(
+        &self,
+        expected_pubkey: &str,
+        expected_prefix: Option<&str>,
+        expected_channel: &str,
+        expected_etag: &str,
+    ) -> bool {
+        let norm_expected_pfx = expected_prefix.filter(|s| !s.is_empty());
+        let norm_self_pfx = self.prefix.as_deref().filter(|s| !s.is_empty());
+        let clean_etag = expected_etag.trim().trim_matches('"');
+        if self.pubkey != expected_pubkey
+            || norm_self_pfx != norm_expected_pfx
+            || self.channel != expected_channel
+            || self.etag.trim().trim_matches('"') != clean_etag
+        {
+            return false;
+        }
+        let Ok(pk_bytes) = decode_hex_fixed::<32>(&self.lock_pub) else {
+            return false;
+        };
+        let Ok(sig_bytes) = decode_hex_fixed::<64>(&self.sig) else {
+            return false;
+        };
+        let msg = format!(
+            "HUMOCO-SLOT-ACK-V1\n{}\n{}\n{}\n{}\n{}\n{}",
+            self.lock_pub,
+            self.pubkey,
+            norm_self_pfx.unwrap_or(""),
+            self.channel,
+            self.etag,
+            self.timestamp
+        );
+        verify_ed25519_strict(&pk_bytes, msg.as_bytes(), &sig_bytes)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PutSlotOutcome {
-    Saved { etag: Option<String> },
-    PreconditionFailed { current_etag: Option<String> },
+    Saved {
+        etag: Option<String>,
+        slot_ack: Option<SlotAckReceipt>,
+    },
+    PreconditionFailed {
+        current_etag: Option<String>,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -671,9 +725,24 @@ async fn handle_put_slot_response(
     op: &str,
 ) -> Result<PutSlotOutcome, String> {
     match resp.status().as_u16() {
-        200 | 201 | 204 => Ok(PutSlotOutcome::Saved {
-            etag: extract_etag(resp.headers()),
-        }),
+        200 | 201 | 204 => {
+            let header_etag = extract_etag(resp.headers());
+            let body_bytes = resp.bytes().await.unwrap_or_default();
+            let parsed_json = serde_json::from_slice::<serde_json::Value>(&body_bytes).ok();
+            let body_etag = parsed_json
+                .as_ref()
+                .and_then(|v| v.get("etag").and_then(|e| e.as_str()))
+                .map(|s| s.trim().trim_matches('"').to_string())
+                .filter(|s| !s.is_empty());
+            let slot_ack = parsed_json
+                .as_ref()
+                .and_then(|v| v.get("slot_ack"))
+                .and_then(|ack| serde_json::from_value::<SlotAckReceipt>(ack.clone()).ok());
+            Ok(PutSlotOutcome::Saved {
+                etag: header_etag.or(body_etag),
+                slot_ack,
+            })
+        }
         412 => Ok(PutSlotOutcome::PreconditionFailed {
             current_etag: extract_etag(resp.headers()),
         }),
@@ -2287,7 +2356,8 @@ mod tests {
         assert_eq!(
             r204,
             PutSlotOutcome::Saved {
-                etag: Some("saved-v3".to_string())
+                etag: Some("saved-v3".to_string()),
+                slot_ack: None,
             }
         );
 

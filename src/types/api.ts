@@ -200,6 +200,23 @@ export interface SecurityPolicy {
     publicSyncs: StoredPublicSync[];
 }
 
+export type WalletSyncAlertKind =
+    | 'stale_local_backup'
+    | 'fork_detected'
+    | 'server_rollback'
+    | 'unexpected_data_loss';
+
+export interface WalletSyncAlert {
+    kind: WalletSyncAlertKind | string;
+    mirrorWriteUrl: string;
+    remoteEpoch?: number | null;
+    remoteTxNonce?: number | null;
+    localEpoch: number;
+    localTxNonce: number;
+    detectedAt: string;
+    hasSignedAckProof: boolean;
+}
+
 export interface InternalLifecycleState {
     pendingRestoreL2Reconciliation: boolean;
     backupDirty: boolean;
@@ -207,6 +224,7 @@ export interface InternalLifecycleState {
     lastSyncBackupAt?: string | null;
     l2ProbeCache: Record<string, LockServerProbeResult>;
     l2AnchorTemplatesMeta: StoredAnchorTemplateMeta[];
+    walletSyncAlert?: WalletSyncAlert | null;
 }
 
 export interface AppConfigDto {

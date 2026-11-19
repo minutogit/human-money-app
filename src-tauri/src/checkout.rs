@@ -7,6 +7,7 @@
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
+use crate::state::canonicalize_did;
 use human_money_core::humoco_proto::{
     crypto::DEFAULT_LOCK_POW_BASE_BITS, decode_hex_fixed, manifest::AnchorManifest,
     types::LockPubKey,
@@ -14,7 +15,6 @@ use human_money_core::humoco_proto::{
 use human_money_core::models::conflict::TrustStatus;
 use human_money_core::models::layer2_api::{CheckoutReleaseVerdict, L2ProcessingOutcome};
 use human_money_core::services::{bundle_processor, l2_gateway};
-use crate::state::canonicalize_did;
 
 use crate::{
     models::FrontendError,
@@ -666,12 +666,14 @@ pub(crate) async fn checkout_bundle(
     // 3. Prepare durable challenge context + per-server SyncLockBatchRequests (running Discovery if local manifest missing)
     let first_prepare = {
         let mut service = state.lock_service()?;
+        let known_heads =
+            crate::state::load_known_head_receipts_for_anchor(&mut service, &anchor_id, password);
         service.prepare_checkout_requests(
             purchase_id,
             bundle,
             pow_base_bits,
             now()?,
-            &HashMap::new(),
+            &known_heads,
             password,
         )
     };
@@ -695,13 +697,18 @@ pub(crate) async fn checkout_bundle(
                     ));
             }
             let mut service = state.lock_service()?;
+            let known_heads = crate::state::load_known_head_receipts_for_anchor(
+                &mut service,
+                &anchor_id,
+                password,
+            );
             service
                 .prepare_checkout_requests(
                     purchase_id,
                     bundle,
                     pow_base_bits,
                     now()?,
-                    &HashMap::new(),
+                    &known_heads,
                     password,
                 )
                 .map_err(FrontendError::from)?
@@ -789,13 +796,18 @@ pub(crate) async fn checkout_bundle(
                 service
                     .update_l2_anchor_manifest(newer_manifest, password)
                     .map_err(FrontendError::from)?;
+                let known_heads = crate::state::load_known_head_receipts_for_anchor(
+                    &mut service,
+                    &anchor_id,
+                    password,
+                );
                 service
                     .prepare_checkout_requests(
                         purchase_id,
                         bundle,
                         pow_base_bits,
                         now()?,
-                        &HashMap::new(),
+                        &known_heads,
                         password,
                     )
                     .map_err(FrontendError::from)?
@@ -862,6 +874,12 @@ pub(crate) async fn checkout_bundle(
     if current_owner != merchant_id {
         return Err(fail("Wallet changed during checkout"));
     }
+    let _ = crate::state::record_known_head_receipts(
+        &mut service,
+        &anchor_id,
+        &dispatch.receipts,
+        password,
+    );
 
     for competing_entry in &dispatch.competing_entries {
         if let Err(err) = service.record_checkout_upstream_conflict(

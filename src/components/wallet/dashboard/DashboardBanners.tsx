@@ -25,6 +25,7 @@ import type {
     FrontendPendingWotHandshake,
     IntegrityReport,
     RecoveryProtectionStatusDto,
+    WalletSyncAlert,
 } from '../../../types';
 
 type NavigateFn = ReturnType<typeof useNavigation>['navigate'];
@@ -51,6 +52,10 @@ interface DashboardBannersProps {
     onOpenIntegrityModal: () => void;
     onSnoozeRehearsal: () => void;
     onOpenRehearsalModal: () => void;
+    walletSyncAlert?: WalletSyncAlert | null;
+    isReconcilingSyncAlert?: boolean;
+    onReconcileL2?: () => void;
+    onDismissSyncAlert?: () => void;
 }
 
 export function DashboardBanners({
@@ -75,6 +80,10 @@ export function DashboardBanners({
     onOpenIntegrityModal,
     onSnoozeRehearsal,
     onOpenRehearsalModal,
+    walletSyncAlert,
+    isReconcilingSyncAlert = false,
+    onReconcileL2,
+    onDismissSyncAlert,
 }: DashboardBannersProps) {
     const { t } = useTranslation();
     const session = useOptionalSession();
@@ -122,8 +131,188 @@ export function DashboardBanners({
         }
     };
 
+    const syncAlertLocalState = walletSyncAlert
+        ? `E${walletSyncAlert.localEpoch}/#${walletSyncAlert.localTxNonce}`
+        : '';
+    const syncAlertRemoteState =
+        walletSyncAlert &&
+        walletSyncAlert.remoteEpoch != null &&
+        walletSyncAlert.remoteTxNonce != null
+            ? `E${walletSyncAlert.remoteEpoch}/#${walletSyncAlert.remoteTxNonce}`
+            : '—';
+    const isCriticalSyncAlert =
+        walletSyncAlert?.kind === 'stale_local_backup' ||
+        walletSyncAlert?.kind === 'fork_detected';
+
     return (
         <div className="space-y-3">
+            {walletSyncAlert && (
+                <div
+                    data-testid="wallet-sync-alert-banner"
+                    className={`rounded-2xl border p-4 shadow-sm ${
+                        isCriticalSyncAlert
+                            ? 'bg-rose-50 border-rose-200 text-rose-950'
+                            : 'bg-amber-50 border-amber-200 text-amber-950'
+                    }`}
+                >
+                    <div className="flex items-start gap-3">
+                        <div
+                            className={`mt-0.5 rounded-xl p-2 shrink-0 ${
+                                isCriticalSyncAlert
+                                    ? 'bg-rose-100 text-rose-700'
+                                    : 'bg-amber-100 text-amber-700'
+                            }`}
+                        >
+                            {isCriticalSyncAlert ? (
+                                <ShieldAlert size={18} />
+                            ) : (
+                                <AlertCircle size={18} />
+                            )}
+                        </div>
+                        <div className="min-w-0 flex-1 space-y-1.5">
+                            <div className="flex items-start justify-between gap-2">
+                                <h3 className="text-sm font-bold">
+                                    {walletSyncAlert.kind === 'stale_local_backup'
+                                        ? t(
+                                              'dashboard.syncAlertStaleTitle',
+                                              'Veralteter Profilstand erkannt',
+                                          )
+                                        : walletSyncAlert.kind === 'fork_detected'
+                                          ? t(
+                                                'dashboard.syncAlertForkTitle',
+                                                'Abweichender Synchronisationsstand erkannt',
+                                            )
+                                          : walletSyncAlert.kind === 'server_rollback'
+                                            ? t(
+                                                  'dashboard.syncAlertRollbackTitle',
+                                                  'Zurückgesetzter Sync-Dienst erkannt',
+                                              )
+                                            : t(
+                                                  'dashboard.syncAlertDataLossTitle',
+                                                  'Unerwarteter Datenverlust auf dem Sync-Dienst',
+                                              )}
+                                </h3>
+                                {!isCriticalSyncAlert && onDismissSyncAlert && (
+                                    <button
+                                        type="button"
+                                        onClick={onDismissSyncAlert}
+                                        className="rounded-lg p-1 text-amber-700 hover:bg-amber-100 transition-colors"
+                                        aria-label={t('dashboard.syncAlertDismiss', 'Bestätigen')}
+                                    >
+                                        <X size={16} />
+                                    </button>
+                                )}
+                            </div>
+                            <p className="text-xs leading-relaxed opacity-90">
+                                {walletSyncAlert.kind === 'stale_local_backup'
+                                    ? t('dashboard.syncAlertStaleDesc', {
+                                          url: walletSyncAlert.mirrorWriteUrl,
+                                          remoteState: syncAlertRemoteState,
+                                          localState: syncAlertLocalState,
+                                      })
+                                    : walletSyncAlert.kind === 'fork_detected'
+                                      ? t('dashboard.syncAlertForkDesc', {
+                                            url: walletSyncAlert.mirrorWriteUrl,
+                                            remoteState: syncAlertRemoteState,
+                                            localState: syncAlertLocalState,
+                                        })
+                                      : walletSyncAlert.kind === 'server_rollback'
+                                        ? t('dashboard.syncAlertRollbackDesc', {
+                                              url: walletSyncAlert.mirrorWriteUrl,
+                                              remoteState: syncAlertRemoteState,
+                                              localState: syncAlertLocalState,
+                                          })
+                                        : t('dashboard.syncAlertDataLossDesc', {
+                                              url: walletSyncAlert.mirrorWriteUrl,
+                                              localState: syncAlertLocalState,
+                                          })}
+                            </p>
+                            {walletSyncAlert.hasSignedAckProof &&
+                                (walletSyncAlert.kind === 'server_rollback' ||
+                                    walletSyncAlert.kind === 'unexpected_data_loss') && (
+                                    <p className="text-[11px] font-medium opacity-80">
+                                        {t(
+                                            'dashboard.syncAlertAckProof',
+                                            'Signierte Empfangsbestätigung des Sync-Dienstes liegt als Nachweis vor.',
+                                        )}
+                                    </p>
+                                )}
+                            <div className="flex flex-wrap items-center gap-2 pt-1">
+                                {isCriticalSyncAlert ? (
+                                    <>
+                                        {onReconcileL2 && (
+                                            <button
+                                                type="button"
+                                                onClick={onReconcileL2}
+                                                disabled={isReconcilingSyncAlert}
+                                                className="inline-flex items-center gap-1.5 rounded-xl bg-rose-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-800 disabled:opacity-60 transition-colors"
+                                            >
+                                                <RefreshCw
+                                                    size={13}
+                                                    className={
+                                                        isReconcilingSyncAlert ? 'animate-spin' : ''
+                                                    }
+                                                />
+                                                {t(
+                                                    'dashboard.syncAlertReconcileBtn',
+                                                    'Gutscheine jetzt abgleichen',
+                                                )}
+                                            </button>
+                                        )}
+                                        <button
+                                            type="button"
+                                            onClick={() =>
+                                                onNavigate({
+                                                    view: 'settings',
+                                                    initialSection: 'backup',
+                                                })
+                                            }
+                                            className="inline-flex items-center gap-1.5 rounded-xl border border-rose-300 bg-white px-3 py-1.5 text-xs font-semibold text-rose-900 hover:bg-rose-100/70 transition-colors"
+                                        >
+                                            {t(
+                                                'dashboard.syncAlertOpenBackup',
+                                                'Sicherung öffnen',
+                                            )}
+                                            <ArrowUpRight size={13} />
+                                        </button>
+                                    </>
+                                ) : (
+                                    <>
+                                        <button
+                                            type="button"
+                                            onClick={() =>
+                                                onNavigate({
+                                                    view: 'settings',
+                                                    initialSection: 'sync',
+                                                })
+                                            }
+                                            className="inline-flex items-center gap-1.5 rounded-xl bg-amber-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-800 transition-colors"
+                                        >
+                                            {t(
+                                                'dashboard.syncAlertOpenSync',
+                                                'Sync-Dienste prüfen',
+                                            )}
+                                            <ArrowUpRight size={13} />
+                                        </button>
+                                        {onDismissSyncAlert && (
+                                            <button
+                                                type="button"
+                                                onClick={onDismissSyncAlert}
+                                                className="inline-flex items-center gap-1.5 rounded-xl border border-amber-300 bg-white px-3 py-1.5 text-xs font-semibold text-amber-900 hover:bg-amber-100/70 transition-colors"
+                                            >
+                                                {t(
+                                                    'dashboard.syncAlertDismiss',
+                                                    'Hinweis ausblenden',
+                                                )}
+                                            </button>
+                                        )}
+                                    </>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
             {incompleteCount > 0 && (
                 <Card
                     variant="accent"

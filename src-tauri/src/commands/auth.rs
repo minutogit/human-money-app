@@ -148,7 +148,7 @@ pub async fn create_profile(
                 .map_err(|e| {
                     FrontendError::from(format!("Failed to save default securityPolicy: {}", e))
                 })?;
-                crate::state::save_encrypted_json(
+                crate::state::save_local_sidecar_json(
                     &mut service,
                     INTERNAL_LIFECYCLE_STATE_KEY,
                     &InternalLifecycleState::default(),
@@ -393,7 +393,9 @@ pub fn get_session_status_impl(state: &AppState) -> Result<SessionStatusDto, Fro
 }
 
 #[tauri::command]
-pub fn get_session_status(state: tauri::State<AppState>) -> Result<SessionStatusDto, FrontendError> {
+pub fn get_session_status(
+    state: tauri::State<AppState>,
+) -> Result<SessionStatusDto, FrontendError> {
     get_session_status_impl(&state)
 }
 
@@ -593,7 +595,9 @@ pub fn unlock_session_with_pin_impl(
 ) -> Result<SessionStatusDto, FrontendError> {
     {
         let service = state.authorize_and_lock(RequiredAccess::Unlocked, None)?;
-        if service.get_base_access_mode().map_err(FrontendError::from)?
+        if service
+            .get_base_access_mode()
+            .map_err(FrontendError::from)?
             == human_money_core::AccessMode::Full
         {
             return Err(FrontendError::from(human_money_core::Error::App(
@@ -1199,7 +1203,10 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(wrong_once.code, "error.auth.invalidPin");
-        assert_eq!(wrong_once.details.get("remaining").map(String::as_str), Some("4"));
+        assert_eq!(
+            wrong_once.details.get("remaining").map(String::as_str),
+            Some("4")
+        );
 
         let cached_pin = unlock_session_with_pin_impl(
             &folder,
@@ -1258,13 +1265,11 @@ mod tests {
             crate::services::sync_engine::admin::delete_sync_admin_impl(None, &app_state)
                 .unwrap_err();
         assert_eq!(sync_err.code, "error.auth.insufficientAccessMode");
-        assert!(
-            crate::services::sync_engine::admin::delete_sync_admin_impl(
-                Some(master_pw.to_string()),
-                &app_state,
-            )
-            .is_ok()
-        );
+        assert!(crate::services::sync_engine::admin::delete_sync_admin_impl(
+            Some(master_pw.to_string()),
+            &app_state,
+        )
+        .is_ok());
 
         let standards_dir = dir.join("standards");
         std::fs::create_dir_all(&standards_dir).unwrap();
@@ -1318,9 +1323,11 @@ mod tests {
         assert_eq!(wipe_reauth_err.code, "error.auth.pinWipedMaxAttempts");
         let after_reauth_wipe = get_session_status_impl(&app_state).unwrap();
         assert!(!after_reauth_wipe.has_cached_session);
-        assert!(!get_profile_pin_status_impl(&folder, &keystore_dir, &app_state)
-            .unwrap()
-            .enabled);
+        assert!(
+            !get_profile_pin_status_impl(&folder, &keystore_dir, &app_state)
+                .unwrap()
+                .enabled
+        );
 
         // Re-enable PIN and verify 5-strike wipe on login_with_pin_impl as well
         enable_profile_pin_impl(

@@ -8,6 +8,7 @@ import { contactService } from '../../../services/contactService';
 import { settingsService } from '../../../services/settingsService';
 import { marketService } from '../../../services/marketService';
 import { recoveryService } from '../../../services/recoveryService';
+import { backupService } from '../../../services/backupService';
 import { postService, POST_INBOX_UPDATED_EVENT } from '../../../services/postService';
 import { useNavigation } from '../../../context/NavigationContext';
 import { useSession } from '../../../context/SessionContext';
@@ -56,6 +57,7 @@ export function useDashboardData() {
     const [voucherCountsByStandard, setVoucherCountsByStandard] = useState<Record<string, number>>({});
     const [showBackupReminder, setShowBackupReminder] = useState(false);
     const [rehearsalSnoozed, setRehearsalSnoozed] = useState(false);
+    const [isReconcilingSyncAlert, setIsReconcilingSyncAlert] = useState(false);
     const [appConfig, setAppConfig] = useState<AppConfigDto | null>(null);
     const [protectionStatus, setProtectionStatus] = useState<RecoveryProtectionStatusDto | null>(null);
     const [contactsCount, setContactsCount] = useState(0);
@@ -265,6 +267,53 @@ export function useDashboardData() {
         [appConfig, hasCachedSession],
     );
 
+    const handleReconcileSyncAlert = useCallback(async () => {
+        setIsReconcilingSyncAlert(true);
+        try {
+            const res = await backupService.reconcileRestoredWalletL2();
+            const refreshedConfig = await settingsService.getConfig().catch(() => null);
+            if (refreshedConfig) {
+                setAppConfig(refreshedConfig);
+            } else if (res.l2ReconciliationStatus === 'reconciled') {
+                setAppConfig((prev) =>
+                    prev
+                        ? {
+                              ...prev,
+                              lifecycle: {
+                                  ...prev.lifecycle,
+                                  pendingRestoreL2Reconciliation: false,
+                                  walletSyncAlert: null,
+                              },
+                          }
+                        : prev,
+                );
+            }
+        } catch {
+            // Surface remains in current alert state if offline or incomplete
+        } finally {
+            setIsReconcilingSyncAlert(false);
+        }
+    }, []);
+
+    const handleDismissSyncAlert = useCallback(async () => {
+        try {
+            await backupService.dismissWalletSyncAlert();
+            setAppConfig((prev) =>
+                prev
+                    ? {
+                          ...prev,
+                          lifecycle: {
+                              ...prev.lifecycle,
+                              walletSyncAlert: null,
+                          },
+                      }
+                    : prev,
+            );
+        } catch {
+            // Keep alert visible if dismissal failed
+        }
+    }, []);
+
     const handleProtectedNavigate = useCallback(
         (target: Parameters<typeof navigate>[0]) => {
             navigate(target);
@@ -296,6 +345,10 @@ export function useDashboardData() {
         rehearsalSnoozed,
         setRehearsalSnoozed,
         appConfig,
+        walletSyncAlert: appConfig?.lifecycle.walletSyncAlert ?? null,
+        isReconcilingSyncAlert,
+        handleReconcileSyncAlert,
+        handleDismissSyncAlert,
         protectionStatus,
         setProtectionStatus,
         contactsCount,

@@ -189,4 +189,10 @@ export const backupService = {
             password: password ?? null,
         });
     },
+
+    dismissWalletSyncAlert: async (password?: string | null): Promise<void> => {
+        await invoke("dismiss_wallet_sync_alert", {
+            password: password ?? null,
+        });
+    },
 };

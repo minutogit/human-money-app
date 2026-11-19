@@ -1173,11 +1173,25 @@ pub(crate) fn reset_local_password_via_backup_impl(
             )
             .map_err(FrontendError::from)?;
 
-            let new_record = LocalSealRecord {
-                seal: recovered_seal,
+            let mut recent_seal_hashes = existing_seal
+                .as_ref()
+                .map(|r| r.recent_seal_hashes.clone())
+                .unwrap_or_default();
+            let mut new_record = LocalSealRecord {
+                seal: recovered_seal.clone(),
                 sync_status: SyncStatus::PendingUpload,
                 lock_reason: None,
+                recent_seal_hashes: Vec::new(),
             };
+            new_record.recent_seal_hashes = std::mem::take(&mut recent_seal_hashes);
+            if let Some(prev) = existing_seal.as_ref() {
+                if let Ok(prev_h) = prev.seal.compute_hash() {
+                    new_record.push_seal_hash(prev_h);
+                }
+            }
+            if let Ok(new_h) = recovered_seal.compute_hash() {
+                new_record.push_seal_hash(new_h);
+            }
             let auth_new_pw = AuthMethod::Password(new_password);
             local_storage
                 .save_seal(&auth_new_pw, &new_record)
@@ -1354,7 +1368,11 @@ pub(crate) fn get_backup_status_impl(
     let security_policy = state.get_or_load_security_policy_locked(None)?;
     let lifecycle = state.get_or_load_internal_lifecycle_locked(None)?;
     let has_own_sync = has_own_sync_target(state)?;
-    Ok(compute_backup_status_dto(&security_policy, &lifecycle, has_own_sync))
+    Ok(compute_backup_status_dto(
+        &security_policy,
+        &lifecycle,
+        has_own_sync,
+    ))
 }
 
 pub(crate) fn run_auto_backup_sync_impl(
@@ -1370,14 +1388,22 @@ pub(crate) fn run_auto_backup_sync_impl(
     let folder_str = match &security_policy.backup_sync_folder {
         Some(f) if !f.trim().is_empty() => f.clone(),
         _ => {
-            return Ok(compute_backup_status_dto(&security_policy, &lifecycle, has_own_sync));
+            return Ok(compute_backup_status_dto(
+                &security_policy,
+                &lifecycle,
+                has_own_sync,
+            ));
         }
     };
 
     if !security_policy.auto_backup_enabled
         || security_policy.backup_protection_mode.as_deref() == Some("custom_password")
     {
-        return Ok(compute_backup_status_dto(&security_policy, &lifecycle, has_own_sync));
+        return Ok(compute_backup_status_dto(
+            &security_policy,
+            &lifecycle,
+            has_own_sync,
+        ));
     }
 
     let folder_path = Path::new(&folder_str);
@@ -1392,7 +1418,11 @@ pub(crate) fn run_auto_backup_sync_impl(
                 }
             }
         }
-        return Ok(compute_backup_status_dto(&security_policy, &lifecycle, has_own_sync));
+        return Ok(compute_backup_status_dto(
+            &security_policy,
+            &lifecycle,
+            has_own_sync,
+        ));
     }
 
     let mut service = state.authorize_and_lock(crate::state::RequiredAccess::DailyPay, None)?;
@@ -1525,9 +1555,12 @@ pub(crate) async fn fetch_and_merge_backup_slot(
 
 struct AuthorizedBackupTarget {
     desc: humoco_market::DropDescriptor,
+    cap_pubkey: String,
     is_public: bool,
     base_prefix: Option<String>,
     remote_base_etag: Option<String>,
+    remote_delta_etag: Option<String>,
+    ttl_days: Option<u32>,
     effective_max_bytes: usize,
 }
 
@@ -1536,7 +1569,11 @@ fn target_can_use_delta(
     state: &crate::state::StoredBackupSyncState,
     delta_len: usize,
     now_secs: u64,
+    force_base_urls: &std::collections::HashSet<String>,
 ) -> bool {
+    if force_base_urls.contains(&target.desc.write_url) {
+        return false;
+    }
     let Some(cur_sha) = state.base_manifest_sha256.as_deref() else {
         return false;
     };
@@ -1553,6 +1590,9 @@ fn target_can_use_delta(
         .as_ref()
         .is_some_and(|exp| target.remote_base_etag.as_deref() != Some(exp.as_str()))
     {
+        return false;
+    }
+    if m.delta_slot_etag != target.remote_delta_etag {
         return false;
     }
     if now_secs.saturating_sub(m.base_uploaded_at) >= BACKUP_BASE_TTL_SECS {
@@ -1697,11 +1737,25 @@ pub(crate) async fn sync_backup_with_standards_impl(
         .await
         {
             if cap.authorized {
+                let delta_pfx = humoco_market::derive_delta_prefix(cap_prefix.as_deref());
+                let remote_delta_etag = crate::sync_client::head_slot_capability(
+                    &probe_client,
+                    &sync_desc.write_url,
+                    &cap_pubkey,
+                    Some(delta_pfx.as_str()),
+                    "backup",
+                )
+                .await
+                .ok()
+                .and_then(|dcap| dcap.slot_etag);
                 authorized_targets.push(AuthorizedBackupTarget {
                     desc: sync_desc,
+                    cap_pubkey,
                     is_public,
                     base_prefix: cap_prefix,
                     remote_base_etag: cap.slot_etag,
+                    remote_delta_etag,
+                    ttl_days: cap.ttl_days,
                     effective_max_bytes: cap
                         .max_bytes
                         .filter(|&v| v > 0)
@@ -1731,8 +1785,235 @@ pub(crate) async fn sync_backup_with_standards_impl(
         .unwrap_or(humoco_market::DROP_BACKUP_MAX_BYTES);
     let now_secs = crate::sync_client::current_unix_timestamp();
 
+    let (mut backup_sync_state, local_epoch, local_tx_nonce, local_seal_hash, probe_lock_pubs) = {
+        let mut service = state.lock_service()?;
+        let current_seal = service.get_current_seal().map_err(FrontendError::from)?;
+        let (local_epoch, local_tx_nonce, local_seal_hash) = match current_seal {
+            Some(s) => {
+                let h = s.compute_hash().unwrap_or_default();
+                (s.payload.epoch, s.payload.tx_nonce, h)
+            }
+            None => (0, 0, String::new()),
+        };
+        let stored_state: crate::state::StoredBackupSyncState =
+            crate::state::load_local_sidecar_json_or_default(
+                &mut service,
+                crate::state::BACKUP_SYNC_STATE_KEY,
+                password.as_deref(),
+            )
+            .map_err(FrontendError::from)?;
+        let lc = state
+            .get_or_load_internal_lifecycle(&mut service, password.as_deref())
+            .map_err(FrontendError::from)?;
+        let mut lock_pubs = std::collections::HashMap::new();
+        for (url_key, probe) in &lc.l2_probe_cache {
+            if !probe.lock_pub.is_empty() {
+                lock_pubs.insert(url_key.clone(), probe.lock_pub.clone());
+            }
+        }
+        (
+            stored_state,
+            local_epoch,
+            local_tx_nonce,
+            local_seal_hash,
+            lock_pubs,
+        )
+    };
+
+    // Pre-Upload Remote Seal Inspection & Rollback / Unexpected-Loss Detection
+    let mut errors = Vec::new();
+    let mut skip_urls = std::collections::HashSet::new();
+    let mut force_base_urls = std::collections::HashSet::new();
+    let mut mirror_anomalies: std::collections::HashMap<String, crate::settings::WalletSyncAlert> =
+        std::collections::HashMap::new();
+    let mut pending_sync_alert: Option<crate::settings::WalletSyncAlert> = None;
+    let mut state_dirty = false;
+
+    for target in &authorized_targets {
+        let mirror_opt = backup_sync_state
+            .mirrors_by_write_url
+            .get(&target.desc.write_url)
+            .cloned();
+        let fast_path_match = mirror_opt.as_ref().is_some_and(|m| {
+            m.base_slot_etag == target.remote_base_etag
+                && m.delta_slot_etag == target.remote_delta_etag
+        });
+        if fast_path_match {
+            continue;
+        }
+
+        if target.remote_base_etag.is_some() {
+            let Some(merged_bytes) = fetch_and_merge_backup_slot(
+                &probe_client,
+                &target.desc.read_url,
+                &target.cap_pubkey,
+                target.base_prefix.as_deref(),
+            )
+            .await
+            else {
+                skip_urls.insert(target.desc.write_url.clone());
+                errors.push(format!(
+                    "Inspection skipped for {}: unable to fetch remote backup manifest",
+                    target.desc.write_url
+                ));
+                continue;
+            };
+
+            let Ok(container) = serde_json::from_slice::<PortableBackupContainer>(&merged_bytes)
+            else {
+                skip_urls.insert(target.desc.write_url.clone());
+                errors.push(format!(
+                    "Inspection skipped for {}: unreadable remote backup container",
+                    target.desc.write_url
+                ));
+                continue;
+            };
+            let Ok(manifest_bytes) = human_money_core::hex::decode(&container.manifest_hex) else {
+                skip_urls.insert(target.desc.write_url.clone());
+                errors.push(format!(
+                    "Inspection skipped for {}: invalid remote manifest hex",
+                    target.desc.write_url
+                ));
+                continue;
+            };
+
+            let inspect_res = {
+                let service = state.lock_service()?;
+                service.inspect_mnemonic_backup_with_unlocked_identity(&manifest_bytes)
+            };
+            let report = match inspect_res {
+                Ok(r) => r,
+                Err(err) => {
+                    skip_urls.insert(target.desc.write_url.clone());
+                    errors.push(format!(
+                        "Inspection failed for {}: {}",
+                        target.desc.write_url, err
+                    ));
+                    continue;
+                }
+            };
+
+            match report.sync_state {
+                Some(human_money_core::SealSyncState::RemoteIsNewer)
+                | Some(human_money_core::SealSyncState::ForkDetected) => {
+                    let is_fork = matches!(
+                        report.sync_state,
+                        Some(human_money_core::SealSyncState::ForkDetected)
+                    );
+                    let alert = crate::settings::WalletSyncAlert {
+                        kind: if is_fork {
+                            "fork_detected".to_string()
+                        } else {
+                            "stale_local_backup".to_string()
+                        },
+                        mirror_write_url: target.desc.write_url.clone(),
+                        remote_epoch: Some(report.manifest.seal.payload.epoch),
+                        remote_tx_nonce: Some(report.manifest.seal.payload.tx_nonce),
+                        local_epoch,
+                        local_tx_nonce,
+                        detected_at: Utc::now().to_rfc3339(),
+                        has_signed_ack_proof: mirror_opt
+                            .as_ref()
+                            .and_then(|m| m.last_slot_ack.as_ref())
+                            .is_some(),
+                    };
+                    if is_fork {
+                        let mut service = state.lock_service()?;
+                        let _ = service.persist_seal_lock_reason(
+                            human_money_core::models::seal::SealLockReason::ForkDetected,
+                            password.as_deref(),
+                        );
+                    }
+                    let alert_clone = alert.clone();
+                    let _ = state.mutate_internal_lifecycle_for_owner(
+                        &owner_did,
+                        password.as_deref(),
+                        |lc| {
+                            lc.pending_restore_l2_reconciliation = true;
+                            lc.wallet_sync_alert = Some(alert_clone);
+                            true
+                        },
+                    );
+                    return Ok(FrontendBackupSyncResult {
+                        uploaded_to: 0,
+                        authorized_targets: authorized_count,
+                        padded_bytes: 0,
+                        timestamp: None,
+                        errors: vec![if is_fork {
+                            format!(
+                                "FORK_DETECTED: Conflicting wallet state detected on {}",
+                                target.desc.write_url
+                            )
+                        } else {
+                            format!(
+                                "STALE_LOCAL_BACKUP: Newer backup state (epoch {}, nonce {}) exists on {}",
+                                report.manifest.seal.payload.epoch,
+                                report.manifest.seal.payload.tx_nonce,
+                                target.desc.write_url
+                            )
+                        }],
+                        retry_after_secs: None,
+                        skipped_wifi_only: false,
+                    });
+                }
+                _ => {}
+            }
+
+            if let Some(ref m) = mirror_opt {
+                if (
+                    report.manifest.seal.payload.epoch,
+                    report.manifest.seal.payload.tx_nonce,
+                ) < (m.last_synced_epoch, m.last_synced_tx_nonce)
+                {
+                    let alert = crate::settings::WalletSyncAlert {
+                        kind: "server_rollback".to_string(),
+                        mirror_write_url: target.desc.write_url.clone(),
+                        remote_epoch: Some(report.manifest.seal.payload.epoch),
+                        remote_tx_nonce: Some(report.manifest.seal.payload.tx_nonce),
+                        local_epoch: m.last_synced_epoch,
+                        local_tx_nonce: m.last_synced_tx_nonce,
+                        detected_at: Utc::now().to_rfc3339(),
+                        has_signed_ack_proof: m.last_slot_ack.is_some(),
+                    };
+                    force_base_urls.insert(target.desc.write_url.clone());
+                    mirror_anomalies.insert(target.desc.write_url.clone(), alert.clone());
+                    pending_sync_alert = Some(alert);
+                }
+            }
+        } else if let Some(ref m) = mirror_opt {
+            if m.base_uploaded_at > 0 {
+                let ttl_days_eff = target.ttl_days.map(u64::from).or(m.last_known_ttl_days);
+                let ttl_secs = ttl_days_eff
+                    .filter(|&d| d > 0)
+                    .map(|d| d.saturating_mul(86_400));
+                let within_ttl = match ttl_secs {
+                    None => true,
+                    Some(secs) => {
+                        now_secs
+                            .saturating_sub(m.base_uploaded_at)
+                            .saturating_add(3600)
+                            < secs
+                    }
+                };
+                if within_ttl {
+                    let alert = crate::settings::WalletSyncAlert {
+                        kind: "unexpected_data_loss".to_string(),
+                        mirror_write_url: target.desc.write_url.clone(),
+                        remote_epoch: None,
+                        remote_tx_nonce: None,
+                        local_epoch: m.last_synced_epoch,
+                        local_tx_nonce: m.last_synced_tx_nonce,
+                        detected_at: Utc::now().to_rfc3339(),
+                        has_signed_ack_proof: m.last_slot_ack.is_some(),
+                    };
+                    mirror_anomalies.insert(target.desc.write_url.clone(), alert.clone());
+                    pending_sync_alert = Some(alert);
+                }
+            }
+        }
+    }
+
     let (
-        mut backup_sync_state,
         base_manifest_bytes,
         base_manifest_sha256,
         base_padded_bytes,
@@ -1742,26 +2023,15 @@ pub(crate) async fn sync_backup_with_standards_impl(
         let mut service = state.lock_service()?;
 
         let pending_seal_hash = service
-            .get_seal_for_upload()
+            .get_current_seal()
             .ok()
             .flatten()
-            .and_then(|bytes| {
-                serde_json::from_slice::<human_money_core::models::seal::WalletSeal>(&bytes).ok()
-            })
             .and_then(|seal| seal.compute_hash().ok());
-
-        let stored_state: crate::state::StoredBackupSyncState =
-            crate::state::load_encrypted_json_or_default(
-                &mut service,
-                crate::state::BACKUP_SYNC_STATE_KEY,
-                password.as_deref(),
-            )
-            .map_err(FrontendError::from)?;
 
         // Try building a delta against the stored Base manifest (if one exists)
         let delta_attempt = if let (Some(prev_manifest), Some(prev_sha256)) = (
-            stored_state.base_manifest_bytes.as_deref(),
-            stored_state.base_manifest_sha256.as_deref(),
+            backup_sync_state.base_manifest_bytes.as_deref(),
+            backup_sync_state.base_manifest_sha256.as_deref(),
         ) {
             match service.create_differential_backup(
                 Some(prev_manifest),
@@ -1790,11 +2060,20 @@ pub(crate) async fn sync_backup_with_standards_impl(
         };
 
         // Determine if any mirror needs a fresh Base (or if Delta grew too large)
-        let any_mirror_needs_base = authorized_targets.iter().any(|target| {
-            !delta_attempt
-                .as_ref()
-                .is_some_and(|d| target_can_use_delta(target, &stored_state, d.len(), now_secs))
-        });
+        let any_mirror_needs_base = authorized_targets
+            .iter()
+            .filter(|t| !skip_urls.contains(&t.desc.write_url))
+            .any(|target| {
+                !delta_attempt.as_ref().is_some_and(|d| {
+                    target_can_use_delta(
+                        target,
+                        &backup_sync_state,
+                        d.len(),
+                        now_secs,
+                        &force_base_urls,
+                    )
+                })
+            });
 
         let (base_m_bytes, base_m_sha, base_padded) = if any_mirror_needs_base {
             let diff = service
@@ -1824,7 +2103,6 @@ pub(crate) async fn sync_backup_with_standards_impl(
         };
 
         (
-            stored_state,
             base_m_bytes,
             base_m_sha,
             base_padded,
@@ -1836,24 +2114,37 @@ pub(crate) async fn sync_backup_with_standards_impl(
     let client = crate::sync_client::create_sync_http_client();
     let mut uploaded_to = 0;
     let mut last_uploaded_bytes = 0usize;
-    let mut errors = Vec::new();
-    let mut state_dirty = false;
     let mut base_uploaded_any = false;
 
     for target in authorized_targets {
+        if skip_urls.contains(&target.desc.write_url) {
+            continue;
+        }
         let target_delta_prefix = humoco_market::derive_delta_prefix(target.base_prefix.as_deref());
-        let can_use_delta = delta_padded_opt
-            .as_ref()
-            .is_some_and(|d| target_can_use_delta(&target, &backup_sync_state, d.len(), now_secs));
+        let can_use_delta = delta_padded_opt.as_ref().is_some_and(|d| {
+            target_can_use_delta(
+                &target,
+                &backup_sync_state,
+                d.len(),
+                now_secs,
+                &force_base_urls,
+            )
+        });
 
-        let (upload_prefix, upload_bytes, is_delta_upload) = if can_use_delta {
+        let (upload_prefix, upload_bytes, is_delta_upload, if_match_val) = if can_use_delta {
             (
                 Some(target_delta_prefix.as_str()),
                 delta_padded_opt.as_ref().expect("checked above"),
                 true,
+                target.remote_delta_etag.as_deref().unwrap_or("none"),
             )
         } else if let Some(ref base_bytes) = base_padded_bytes {
-            (target.base_prefix.as_deref(), base_bytes, false)
+            (
+                target.base_prefix.as_deref(),
+                base_bytes,
+                false,
+                target.remote_base_etag.as_deref().unwrap_or("none"),
+            )
         } else {
             continue;
         };
@@ -1892,28 +2183,58 @@ pub(crate) async fn sync_backup_with_standards_impl(
                     &signed,
                     "backup",
                     upload_bytes,
-                    None,
+                    Some(if_match_val),
                 )
                 .await
                 {
-                    Ok(crate::sync_client::PutSlotOutcome::Saved { etag }) => {
+                    Ok(crate::sync_client::PutSlotOutcome::Saved { etag, slot_ack }) => {
                         uploaded_to += 1;
                         last_uploaded_bytes = last_uploaded_bytes.max(upload_bytes.len());
                         state_dirty = true;
+                        let normalized_etag = etag
+                            .map(|e| e.trim().trim_matches('"').to_string())
+                            .filter(|s| !s.is_empty());
+                        let norm_url =
+                            crate::services::common::normalize_sync_url(&target.desc.write_url);
+                        let verified_ack = slot_ack.filter(|ack| {
+                            let etag_ok = normalized_etag.as_deref().is_some_and(|e| {
+                                ack.verify(&target.cap_pubkey, upload_prefix, "backup", e)
+                            });
+                            let probe_ok = probe_lock_pubs
+                                .get(&norm_url)
+                                .is_none_or(|expected_lp| ack.lock_pub == *expected_lp);
+                            etag_ok && probe_ok
+                        });
+                        let anomaly = mirror_anomalies.get(&target.desc.write_url).cloned();
                         if is_delta_upload {
                             if let Some(m) = backup_sync_state
                                 .mirrors_by_write_url
                                 .get_mut(&target.desc.write_url)
                             {
                                 m.delta_active = true;
+                                m.delta_slot_etag = normalized_etag;
+                                m.last_synced_epoch = local_epoch;
+                                m.last_synced_tx_nonce = local_tx_nonce;
+                                m.last_synced_seal_hash = local_seal_hash.clone();
+                                if let Some(ack) = verified_ack {
+                                    m.last_slot_ack = Some(ack);
+                                }
+                                m.last_known_ttl_days = target.ttl_days.map(u64::from);
+                                if anomaly.is_some() {
+                                    m.anomaly = anomaly;
+                                }
                             }
                         } else {
                             base_uploaded_any = true;
-                            let had_delta = backup_sync_state
+                            let prev_mirror = backup_sync_state
                                 .mirrors_by_write_url
                                 .get(&target.desc.write_url)
+                                .cloned();
+                            let had_delta = prev_mirror
+                                .as_ref()
                                 .map(|m| m.delta_active)
-                                .unwrap_or(false);
+                                .unwrap_or(false)
+                                || target.remote_delta_etag.is_some();
                             let mut delta_cleared = !had_delta;
                             if had_delta {
                                 let del_nonce = crate::sync_client::generate_sync_nonce();
@@ -1936,17 +2257,27 @@ pub(crate) async fn sync_backup_with_standards_impl(
                                 }
                             }
                             if let Some(ref new_sha) = base_manifest_sha256 {
-                                let normalized_etag = etag
-                                    .map(|e| e.trim().trim_matches('"').to_string())
-                                    .filter(|s| !s.is_empty());
                                 backup_sync_state.mirrors_by_write_url.insert(
                                     target.desc.write_url.clone(),
                                     crate::state::BackupMirrorState {
                                         base_manifest_sha256: new_sha.clone(),
                                         base_slot_etag: normalized_etag,
+                                        delta_slot_etag: if delta_cleared {
+                                            None
+                                        } else {
+                                            target.remote_delta_etag.clone()
+                                        },
                                         base_uploaded_at: now_secs,
                                         base_padded_bytes: upload_bytes.len(),
                                         delta_active: !delta_cleared,
+                                        last_synced_epoch: local_epoch,
+                                        last_synced_tx_nonce: local_tx_nonce,
+                                        last_synced_seal_hash: local_seal_hash.clone(),
+                                        last_slot_ack: verified_ack.or_else(|| {
+                                            prev_mirror.and_then(|pm| pm.last_slot_ack)
+                                        }),
+                                        last_known_ttl_days: target.ttl_days.map(u64::from),
+                                        anomaly,
                                     },
                                 );
                             }
@@ -1954,7 +2285,7 @@ pub(crate) async fn sync_backup_with_standards_impl(
                     }
                     Ok(crate::sync_client::PutSlotOutcome::PreconditionFailed { .. }) => {
                         errors.push(format!(
-                            "Upload to {} failed: precondition failed",
+                            "Upload skipped for {}: remote backup changed concurrently (HTTP 412)",
                             target.desc.write_url
                         ));
                     }
@@ -1972,6 +2303,15 @@ pub(crate) async fn sync_backup_with_standards_impl(
         }
     }
 
+    if !mirror_anomalies.is_empty() {
+        for (url, anomaly) in &mirror_anomalies {
+            if let Some(m) = backup_sync_state.mirrors_by_write_url.get_mut(url) {
+                m.anomaly = Some(anomaly.clone());
+                state_dirty = true;
+            }
+        }
+    }
+
     if state_dirty {
         if base_uploaded_any {
             if let (Some(new_bytes), Some(new_sha)) = (base_manifest_bytes, base_manifest_sha256) {
@@ -1980,13 +2320,27 @@ pub(crate) async fn sync_backup_with_standards_impl(
             }
         }
         let mut service = state.lock_service()?;
-        crate::state::save_encrypted_json(
+        crate::state::save_local_sidecar_json(
             &mut service,
             crate::state::BACKUP_SYNC_STATE_KEY,
             &backup_sync_state,
             password.as_deref(),
         )
         .map_err(FrontendError::from)?;
+    }
+
+    if let Some(alert) = pending_sync_alert.clone() {
+        let _ = state.mutate_internal_lifecycle_for_owner(&owner_did, password.as_deref(), |lc| {
+            let keep_higher = lc
+                .wallet_sync_alert
+                .as_ref()
+                .is_some_and(|cur| cur.kind == "stale_local_backup" || cur.kind == "fork_detected");
+            if !keep_higher {
+                lc.wallet_sync_alert = Some(alert);
+                return true;
+            }
+            false
+        });
     }
 
     let timestamp_str = if uploaded_to > 0 {
@@ -2564,8 +2918,8 @@ pub(crate) async fn reconcile_restored_wallet_l2_impl(
     state: &AppState,
 ) -> Result<FrontendRestoreReconcileResultDto, FrontendError> {
     let owner_did = {
-        let service =
-            state.authorize_and_lock(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
+        let service = state
+            .authorize_and_lock(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
         service
             .with_wallet(|w| w.get_user_id().to_string())
             .map_err(FrontendError::from)?
@@ -2585,14 +2939,22 @@ pub(crate) async fn reconcile_restored_wallet_l2_impl(
         .get_or_load_internal_lifecycle_locked(password.as_deref())?
         .pending_restore_l2_reconciliation;
     if summary.all_responded || active_voucher_queries_count == 0 {
-        let updated = state.mutate_internal_lifecycle_for_owner(
-            &owner_did,
+        crate::services::l2_anchor_service::clear_fork_lock_after_reconciliation(
+            state,
             password.as_deref(),
-            |lc| {
+        );
+        let updated =
+            state.mutate_internal_lifecycle_for_owner(&owner_did, password.as_deref(), |lc| {
                 lc.pending_restore_l2_reconciliation = false;
+                if lc
+                    .wallet_sync_alert
+                    .as_ref()
+                    .is_some_and(|a| a.kind == "stale_local_backup" || a.kind == "fork_detected")
+                {
+                    lc.wallet_sync_alert = None;
+                }
                 true
-            },
-        )?;
+            })?;
         if let Some(lc) = updated {
             pending_restore_l2 = lc.pending_restore_l2_reconciliation;
         }
@@ -2604,6 +2966,24 @@ pub(crate) async fn reconcile_restored_wallet_l2_impl(
         l2_reconciliation_status,
         pending_restore_l2_reconciliation: pending_restore_l2,
     })
+}
+
+pub(crate) fn dismiss_wallet_sync_alert_impl(
+    password: Option<String>,
+    state: &AppState,
+) -> Result<(), FrontendError> {
+    let mut service =
+        state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, password.as_deref())?;
+    state
+        .mutate_internal_lifecycle(&mut service, password.as_deref(), |lc| {
+            if let Some(ref alert) = lc.wallet_sync_alert {
+                if alert.kind == "server_rollback" || alert.kind == "unexpected_data_loss" {
+                    lc.wallet_sync_alert = None;
+                }
+            }
+        })
+        .map_err(FrontendError::from)?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -3254,6 +3634,459 @@ mod tests {
         assert!(
             !server.slots.lock().unwrap().contains_key(&delta_slot_key),
             "orphaned delta slot must be deleted after Base re-upload"
+        );
+
+        let _ = fs::remove_dir_all(base_dir);
+    }
+
+    fn copy_dir_recursive_for_test(src: &std::path::Path, dst: &std::path::Path) {
+        fs::create_dir_all(dst).unwrap();
+        for entry in fs::read_dir(src).unwrap() {
+            let entry = entry.unwrap();
+            let ty = entry.file_type().unwrap();
+            let dest_path = dst.join(entry.file_name());
+            if ty.is_dir() {
+                copy_dir_recursive_for_test(&entry.path(), &dest_path);
+            } else {
+                fs::copy(entry.path(), &dest_path).unwrap();
+            }
+        }
+    }
+
+    async fn setup_authorized_backup_mirror(
+        state: &crate::AppState,
+        password: &str,
+    ) -> crate::test_support::MockSyncServer {
+        use crate::models::FrontendMemberPolicyDto;
+        use crate::services::sync_engine::{finalize_sync_setup_impl, prepare_sync_setup_impl};
+        use crate::test_support::MockSyncServer;
+
+        let draft = prepare_sync_setup_impl(
+            Some(FrontendMemberPolicyDto {
+                direct_min: 2,
+                hop2_enabled: true,
+                bridge_min: 2,
+                hop2_min: 2,
+            }),
+            Some(300),
+            Some(256),
+            None,
+            Some(password.to_string()),
+            state,
+        )
+        .unwrap();
+        let server =
+            MockSyncServer::start(draft.data_dir.clone(), draft.admin_pubkey.clone()).await;
+        let fin =
+            finalize_sync_setup_impl(server.base_url.clone(), Some(password.to_string()), state)
+                .await
+                .unwrap();
+
+        {
+            let mut s = state.service.lock().unwrap();
+            state
+                .mutate_security_policy(&mut s, Some(password), |policy| {
+                    policy.sync_backup_enabled = true;
+                    policy.market_selected_syncs = vec![fin.descriptor.clone()];
+                })
+                .unwrap();
+        }
+        server
+    }
+
+    #[tokio::test]
+    async fn test_acknowledge_seal_sync_marks_wallet_synced() {
+        use crate::test_support::{
+            create_test_state, setup_test_app as setup_sync_test_app, ALICE_PHRASE,
+        };
+        use human_money_core::models::seal::SyncStatus;
+
+        let base_dir = temp_test_dir("ack_seal_sync_marks_synced");
+        let password = "TestPassword123!";
+        let service =
+            setup_sync_test_app(&base_dir.join("wallet"), "Alice", ALICE_PHRASE, password);
+        let state = create_test_state(service);
+        let server = setup_authorized_backup_mirror(&state, password).await;
+
+        {
+            let mut s = state.service.lock().unwrap();
+            s.unlock_session(password, 3600).unwrap();
+            s.save_encrypted_data("seal_sync_check", b"initial-data", Some(password))
+                .unwrap();
+            assert_eq!(s.get_seal_sync_status().unwrap(), SyncStatus::PendingUpload);
+        }
+
+        let res = super::sync_backup_with_standards_impl(
+            Some(password.to_string()),
+            None,
+            HashMap::new(),
+            &state,
+        )
+        .await
+        .unwrap();
+        assert_eq!(res.uploaded_to, 1, "errors: {:?}", res.errors);
+        assert_eq!(server.slots.lock().unwrap().len(), 1);
+
+        {
+            let s = state.service.lock().unwrap();
+            assert_eq!(s.get_seal_sync_status().unwrap(), SyncStatus::Synced);
+        }
+        let lc = state
+            .get_or_load_internal_lifecycle_locked(Some(password))
+            .unwrap();
+        assert!(!lc.pending_restore_l2_reconciliation);
+        assert!(lc.wallet_sync_alert.is_none());
+
+        let _ = fs::remove_dir_all(base_dir);
+    }
+
+    #[tokio::test]
+    async fn test_sync_backup_stale_clone_and_fork_abort_upload_and_block_spend() {
+        use crate::services::preflight::{run_value_outflow_preflight, ValueOutflowPreflight};
+        use crate::test_support::{
+            create_test_state, setup_test_app as setup_sync_test_app, ALICE_PHRASE,
+        };
+        use human_money_core::models::seal::SealLockReason;
+
+        let base_dir = temp_test_dir("sync_backup_stale_and_fork_guard");
+        let wallet_a_dir = base_dir.join("wallet_a");
+        let wallet_b_stale_dir = base_dir.join("wallet_b_stale");
+        let wallet_b_fork_dir = base_dir.join("wallet_b_fork");
+        let password = "TestPassword123!";
+
+        let service_a = setup_sync_test_app(&wallet_a_dir, "Alice", ALICE_PHRASE, password);
+        let state_a = create_test_state(service_a);
+        let server = setup_authorized_backup_mirror(&state_a, password).await;
+
+        // 1. Initial sync on Device A (v1)
+        let res_a1 = super::sync_backup_with_standards_impl(
+            Some(password.to_string()),
+            None,
+            HashMap::new(),
+            &state_a,
+        )
+        .await
+        .unwrap();
+        assert_eq!(res_a1.uploaded_to, 1, "errors: {:?}", res_a1.errors);
+
+        // Clone Device A at v1 to create two secondary device snapshots BEFORE A advances
+        copy_dir_recursive_for_test(&wallet_a_dir, &wallet_b_stale_dir);
+        copy_dir_recursive_for_test(&wallet_a_dir, &wallet_b_fork_dir);
+
+        // 2. Advance Device A by multiple steps (gap > 1) and sync newer state to mirror
+        {
+            let mut s = state_a.service.lock().unwrap();
+            s.save_encrypted_data("tx_step_1", b"state-a-2", Some(password))
+                .unwrap();
+            s.save_encrypted_data("tx_step_2", b"state-a-3", Some(password))
+                .unwrap();
+        }
+        let res_a2 = super::sync_backup_with_standards_impl(
+            Some(password.to_string()),
+            None,
+            HashMap::new(),
+            &state_a,
+        )
+        .await
+        .unwrap();
+        assert_eq!(res_a2.uploaded_to, 1, "errors: {:?}", res_a2.errors);
+        let server_slots_after_a = server.slots.lock().unwrap().clone();
+        let server_etags_after_a = server.etags.lock().unwrap().clone();
+
+        // 3. Stale clone (unmodified v1) attempts sync -> RemoteIsNewer -> aborts upload, warns, blocks spend
+        let mut service_b_stale = AppService::new(&wallet_b_stale_dir).unwrap();
+        let profiles_stale = service_b_stale.list_profiles().unwrap();
+        service_b_stale
+            .login(
+                &profiles_stale[0].folder_name,
+                password,
+                false,
+                "device-drops-test".to_string(),
+            )
+            .unwrap();
+        let state_b_stale = create_test_state(service_b_stale);
+        {
+            let mut lc = state_b_stale
+                .get_or_load_internal_lifecycle_locked(Some(password))
+                .unwrap();
+            lc.backup_dirty = true;
+            let mut s = state_b_stale.service.lock().unwrap();
+            crate::state::save_local_sidecar_json(
+                &mut s,
+                crate::settings::INTERNAL_LIFECYCLE_STATE_KEY,
+                &lc,
+                Some(password),
+            )
+            .unwrap();
+            *state_b_stale.internal_lifecycle.lock().unwrap() = Some(lc);
+        }
+
+        let res_b_stale = super::sync_backup_with_standards_impl(
+            Some(password.to_string()),
+            None,
+            HashMap::new(),
+            &state_b_stale,
+        )
+        .await
+        .unwrap();
+        assert_eq!(res_b_stale.uploaded_to, 0);
+        assert_eq!(*server.slots.lock().unwrap(), server_slots_after_a);
+        assert_eq!(*server.etags.lock().unwrap(), server_etags_after_a);
+
+        let lc_stale = state_b_stale
+            .get_or_load_internal_lifecycle_locked(Some(password))
+            .unwrap();
+        assert!(lc_stale.pending_restore_l2_reconciliation);
+        assert_eq!(
+            lc_stale.wallet_sync_alert.as_ref().map(|a| a.kind.as_str()),
+            Some("stale_local_backup")
+        );
+
+        let spend_block_stale = {
+            let mut s = state_b_stale.service.lock().unwrap();
+            run_value_outflow_preflight(
+                &state_b_stale,
+                &mut s,
+                Some(password),
+                &ValueOutflowPreflight {
+                    require_restore_reconciled: true,
+                    check_known_offender_dids: &[],
+                    check_blocking_intent_local_ids: &[],
+                    check_anchor_id_quorum_health: None,
+                },
+            )
+        };
+        assert!(spend_block_stale.is_err());
+
+        // 4. Divergent clone (offline write after v1) attempts sync -> ForkDetected -> aborts + locks seal
+        let mut service_b_fork = AppService::new(&wallet_b_fork_dir).unwrap();
+        let profiles_fork = service_b_fork.list_profiles().unwrap();
+        service_b_fork
+            .login(
+                &profiles_fork[0].folder_name,
+                password,
+                false,
+                "device-drops-test".to_string(),
+            )
+            .unwrap();
+        service_b_fork
+            .save_encrypted_data("tx_fork_b", b"state-b-fork", Some(password))
+            .unwrap();
+        let state_b_fork = create_test_state(service_b_fork);
+
+        let res_b_fork = super::sync_backup_with_standards_impl(
+            Some(password.to_string()),
+            None,
+            HashMap::new(),
+            &state_b_fork,
+        )
+        .await
+        .unwrap();
+        assert_eq!(res_b_fork.uploaded_to, 0);
+        assert_eq!(*server.slots.lock().unwrap(), server_slots_after_a);
+
+        let lc_fork = state_b_fork
+            .get_or_load_internal_lifecycle_locked(Some(password))
+            .unwrap();
+        assert!(lc_fork.pending_restore_l2_reconciliation);
+        assert_eq!(
+            lc_fork.wallet_sync_alert.as_ref().map(|a| a.kind.as_str()),
+            Some("fork_detected")
+        );
+        {
+            let s = state_b_fork.service.lock().unwrap();
+            assert_eq!(
+                s.get_seal_lock_reason(Some(password)).unwrap(),
+                Some(SealLockReason::ForkDetected)
+            );
+        }
+
+        let _ = fs::remove_dir_all(base_dir);
+    }
+
+    #[tokio::test]
+    async fn test_sync_backup_detects_server_rollback_with_signed_ack_and_heals() {
+        use crate::test_support::{
+            create_test_state, setup_test_app as setup_sync_test_app, ALICE_PHRASE,
+        };
+
+        let base_dir = temp_test_dir("sync_backup_server_rollback");
+        let password = "TestPassword123!";
+        let service =
+            setup_sync_test_app(&base_dir.join("wallet"), "Alice", ALICE_PHRASE, password);
+        let state = create_test_state(service);
+        let server = setup_authorized_backup_mirror(&state, password).await;
+
+        // 1. Upload v1 and snapshot server state
+        let res1 = super::sync_backup_with_standards_impl(
+            Some(password.to_string()),
+            None,
+            HashMap::new(),
+            &state,
+        )
+        .await
+        .unwrap();
+        assert_eq!(res1.uploaded_to, 1, "errors: {:?}", res1.errors);
+        let v1_slots = server.slots.lock().unwrap().clone();
+        let v1_etags = server.etags.lock().unwrap().clone();
+
+        // 2. Advance to v2 and sync -> server issues verified SlotAckReceipt
+        {
+            let mut s = state.service.lock().unwrap();
+            s.save_encrypted_data("rollback_step_2", b"v2-data", Some(password))
+                .unwrap();
+        }
+        let res2 = super::sync_backup_with_standards_impl(
+            Some(password.to_string()),
+            None,
+            HashMap::new(),
+            &state,
+        )
+        .await
+        .unwrap();
+        assert_eq!(res2.uploaded_to, 1, "errors: {:?}", res2.errors);
+        let v2_etags = server.etags.lock().unwrap().clone();
+        assert_ne!(v1_etags, v2_etags);
+
+        // 3. Roll back server storage & ETags to stale v1 and advance local wallet to v3
+        *server.slots.lock().unwrap() = v1_slots;
+        *server.etags.lock().unwrap() = v1_etags;
+        {
+            let mut s = state.service.lock().unwrap();
+            s.save_encrypted_data("rollback_step_3", b"v3-data", Some(password))
+                .unwrap();
+        }
+
+        let res3 = super::sync_backup_with_standards_impl(
+            Some(password.to_string()),
+            None,
+            HashMap::new(),
+            &state,
+        )
+        .await
+        .unwrap();
+        assert_eq!(res3.uploaded_to, 1, "mirror must heal via Base re-upload");
+        assert_ne!(*server.etags.lock().unwrap(), v2_etags);
+
+        let lc = state
+            .get_or_load_internal_lifecycle_locked(Some(password))
+            .unwrap();
+        let alert = lc
+            .wallet_sync_alert
+            .expect("server_rollback alert must be recorded");
+        assert_eq!(alert.kind, "server_rollback");
+        assert!(alert.has_signed_ack_proof);
+
+        let _ = fs::remove_dir_all(base_dir);
+    }
+
+    #[tokio::test]
+    async fn test_sync_backup_wipe_alert_respects_server_ttl() {
+        use crate::test_support::{
+            create_test_state, setup_test_app as setup_sync_test_app, ALICE_PHRASE,
+        };
+
+        let base_dir = temp_test_dir("sync_backup_wipe_ttl");
+        let password = "TestPassword123!";
+        let service =
+            setup_sync_test_app(&base_dir.join("wallet"), "Alice", ALICE_PHRASE, password);
+        let state = create_test_state(service);
+        let server = setup_authorized_backup_mirror(&state, password).await;
+
+        // 1. Initial upload (mock server default ttl_days = 30)
+        let res1 = super::sync_backup_with_standards_impl(
+            Some(password.to_string()),
+            None,
+            HashMap::new(),
+            &state,
+        )
+        .await
+        .unwrap();
+        assert_eq!(res1.uploaded_to, 1, "errors: {:?}", res1.errors);
+
+        // 2. Wipe server slot WITHIN TTL -> must emit unexpected_data_loss and heal mirror
+        server.slots.lock().unwrap().clear();
+        server.etags.lock().unwrap().clear();
+        {
+            let mut s = state.service.lock().unwrap();
+            s.save_encrypted_data("wipe_within_ttl", b"step-2", Some(password))
+                .unwrap();
+        }
+        let res2 = super::sync_backup_with_standards_impl(
+            Some(password.to_string()),
+            None,
+            HashMap::new(),
+            &state,
+        )
+        .await
+        .unwrap();
+        assert_eq!(res2.uploaded_to, 1, "errors: {:?}", res2.errors);
+        let lc2 = state
+            .get_or_load_internal_lifecycle_locked(Some(password))
+            .unwrap();
+        assert_eq!(
+            lc2.wallet_sync_alert.as_ref().map(|a| a.kind.as_str()),
+            Some("unexpected_data_loss")
+        );
+
+        // 3. Clear alert, age base_uploaded_at past server ttl_days (7d), wipe again -> NO unexpected_data_loss
+        *server.ttl_days.lock().unwrap() = 7;
+        {
+            let mut lc = lc2;
+            lc.wallet_sync_alert = None;
+            let now_secs = chrono::Utc::now().timestamp().max(0) as u64;
+            let mut s = state.service.lock().unwrap();
+            crate::state::save_local_sidecar_json(
+                &mut s,
+                crate::settings::INTERNAL_LIFECYCLE_STATE_KEY,
+                &lc,
+                Some(password),
+            )
+            .unwrap();
+            *state.internal_lifecycle.lock().unwrap() = Some(lc);
+
+            let mut bkp_state: crate::state::StoredBackupSyncState =
+                crate::state::load_local_sidecar_json_or_default(
+                    &mut s,
+                    crate::state::BACKUP_SYNC_STATE_KEY,
+                    Some(password),
+                )
+                .unwrap();
+            for mirror in bkp_state.mirrors_by_write_url.values_mut() {
+                mirror.base_uploaded_at = now_secs.saturating_sub(10 * 86_400);
+            }
+            crate::state::save_local_sidecar_json(
+                &mut s,
+                crate::state::BACKUP_SYNC_STATE_KEY,
+                &bkp_state,
+                Some(password),
+            )
+            .unwrap();
+        }
+
+        server.slots.lock().unwrap().clear();
+        server.etags.lock().unwrap().clear();
+        {
+            let mut s = state.service.lock().unwrap();
+            s.save_encrypted_data("wipe_past_ttl", b"step-3", Some(password))
+                .unwrap();
+        }
+        let res3 = super::sync_backup_with_standards_impl(
+            Some(password.to_string()),
+            None,
+            HashMap::new(),
+            &state,
+        )
+        .await
+        .unwrap();
+        assert_eq!(res3.uploaded_to, 1, "errors: {:?}", res3.errors);
+        let lc3 = state
+            .get_or_load_internal_lifecycle_locked(Some(password))
+            .unwrap();
+        assert!(
+            lc3.wallet_sync_alert.is_none(),
+            "expired slot beyond ttl_days must not raise unexpected_data_loss alert: {:?}",
+            lc3.wallet_sync_alert
         );
 
         let _ = fs::remove_dir_all(base_dir);

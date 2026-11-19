@@ -100,7 +100,8 @@ pub fn apply_reach_preset_impl(
     )?;
 
     {
-        let mut service = state.authorize_and_lock(RequiredAccess::DailyPay, password.as_deref())?;
+        let mut service =
+            state.authorize_and_lock(RequiredAccess::DailyPay, password.as_deref())?;
         set_own_card_max_hops_inner(state, &mut service, card_max_hops, password.as_deref())?;
 
         state
@@ -262,11 +263,21 @@ mod tests {
         };
         {
             let mut svc = state.service.lock().unwrap();
-            crate::state::save_encrypted_json(&mut svc, UI_PREFERENCES_KEY, &ui_base, Some(master_pw))
-                .unwrap();
-            crate::state::save_encrypted_json(&mut svc, SECURITY_POLICY_KEY, &sec_base, Some(master_pw))
-                .unwrap();
             crate::state::save_encrypted_json(
+                &mut svc,
+                UI_PREFERENCES_KEY,
+                &ui_base,
+                Some(master_pw),
+            )
+            .unwrap();
+            crate::state::save_encrypted_json(
+                &mut svc,
+                SECURITY_POLICY_KEY,
+                &sec_base,
+                Some(master_pw),
+            )
+            .unwrap();
+            crate::state::save_local_sidecar_json(
                 &mut svc,
                 INTERNAL_LIFECYCLE_STATE_KEY,
                 &lc_base,
@@ -346,10 +357,12 @@ mod tests {
         )
         .unwrap();
         assert_eq!(sec_after_clear.backup_sync_folder, None);
-        assert!(get_app_config_impl(&state)
-            .unwrap()
-            .lifecycle
-            .pending_restore_l2_reconciliation);
+        assert!(
+            get_app_config_impl(&state)
+                .unwrap()
+                .lifecycle
+                .pending_restore_l2_reconciliation
+        );
 
         // 4. Saving session_timeout_seconds == 0 immediately clears active session cache & demotes timed elevation
         crate::commands::auth::elevate_session_with_password_impl(master_pw, &state).unwrap();

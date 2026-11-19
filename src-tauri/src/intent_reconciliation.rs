@@ -1,6 +1,6 @@
 //! Background worker driving mandatory `1..=N` committee completion for pending outbound Sync Lock sends.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -42,15 +42,20 @@ async fn reconcile_due_intent(
     let nonce = random_non_zero_nonce();
 
     let requests = {
-        let service = state.lock_service()?;
+        let mut service = state.lock_service()?;
         let current_owner = service
             .with_wallet(|wallet| wallet.get_user_id().to_string())
             .map_err(FrontendError::from)?;
         if current_owner != owner {
             return Ok(());
         }
+        let known_heads = crate::state::load_known_head_receipts_for_anchor(
+            &mut service,
+            &intent.anchor_id,
+            None,
+        );
         service
-            .build_intent_committee_requests(local_id, &nonce, &HashMap::new(), true)
+            .build_intent_committee_requests(local_id, &nonce, &known_heads, true)
             .map_err(FrontendError::from)?
     };
 
@@ -86,8 +91,13 @@ async fn reconcile_due_intent(
                 .update_l2_anchor_manifest(newer_manifest, None)
                 .is_ok()
             {
+                let known_heads = crate::state::load_known_head_receipts_for_anchor(
+                    &mut service,
+                    &intent.anchor_id,
+                    None,
+                );
                 service
-                    .build_intent_committee_requests(local_id, &nonce, &HashMap::new(), true)
+                    .build_intent_committee_requests(local_id, &nonce, &known_heads, true)
                     .ok()
             } else {
                 None
@@ -130,6 +140,12 @@ async fn reconcile_due_intent(
     if current_owner != owner {
         return Ok(());
     }
+    let _ = crate::state::record_known_head_receipts(
+        &mut service,
+        &intent.anchor_id,
+        &dispatch.receipts,
+        None,
+    );
 
     let (resolution_opt, equivocation_opt) = service
         .record_intent_server_receipts(
@@ -395,7 +411,10 @@ mod tests {
             .prepare_l2_send_intent(&local_id, DEFAULT_LOCK_POW_BASE_BITS, Some(password))
             .unwrap();
 
-        (state_with(service, Some(InternalLifecycleState::default())), local_id)
+        (
+            state_with(service, Some(InternalLifecycleState::default())),
+            local_id,
+        )
     }
 
     #[tokio::test]

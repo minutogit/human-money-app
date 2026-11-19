@@ -66,22 +66,44 @@ export function SendView({
                     <AlertBanner variant="error">{state.feedbackMsg}</AlertBanner>
                 )}
 
-                {flow.appConfig?.lifecycle.pendingRestoreL2Reconciliation && (
+                {(flow.appConfig?.lifecycle.pendingRestoreL2Reconciliation ||
+                    flow.appConfig?.lifecycle.walletSyncAlert?.kind === 'stale_local_backup' ||
+                    flow.appConfig?.lifecycle.walletSyncAlert?.kind === 'fork_detected') && (
                     <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 text-xs space-y-2 mb-4">
                         <div className="flex items-center gap-2 font-bold text-amber-800">
                             <AlertTriangle size={16} className="shrink-0" />
                             <span>
-                                {t(
-                                    'transfer.pendingL2ReconciliationTitle',
-                                    'Online-Sicherheitsabgleich erforderlich',
-                                )}
+                                {flow.appConfig?.lifecycle.walletSyncAlert?.kind ===
+                                'fork_detected'
+                                    ? t(
+                                          'dashboard.syncAlertForkTitle',
+                                          'Abweichender Synchronisationsstand erkannt',
+                                      )
+                                    : flow.appConfig?.lifecycle.walletSyncAlert?.kind ===
+                                        'stale_local_backup'
+                                      ? t(
+                                            'dashboard.syncAlertStaleTitle',
+                                            'Veralteter Profilstand erkannt',
+                                        )
+                                      : t(
+                                            'transfer.pendingL2ReconciliationTitle',
+                                            'Online-Sicherheitsabgleich erforderlich',
+                                        )}
                             </span>
                         </div>
                         <p className="leading-relaxed">
-                            {t(
-                                'transfer.pendingL2ReconciliationDesc',
-                                'Nach einer Wiederherstellung aus der Sicherung ist vor dem Ausgeben von Gutscheinen ein einmaliger Online-Sicherheitsabgleich erforderlich, um SST-V4-Konflikte auszuschließen.',
-                            )}
+                            {flow.appConfig?.lifecycle.walletSyncAlert?.kind ===
+                                'stale_local_backup' ||
+                            flow.appConfig?.lifecycle.walletSyncAlert?.kind ===
+                                'fork_detected'
+                                ? t(
+                                      'transfer.pendingL2ReconciliationStaleDesc',
+                                      'Auf einem Sync-Dienst wurde ein neuerer oder abweichender Profilstand erkannt. Das Ausgeben von Gutscheinen ist gesperrt, bis Sie entweder die neuere Sicherung einspielen oder einen Online-Sicherheitsabgleich durchführen.',
+                                  )
+                                : t(
+                                      'transfer.pendingL2ReconciliationDesc',
+                                      'Nach einer Wiederherstellung aus der Sicherung ist vor dem Ausgeben von Gutscheinen ein einmaliger Online-Sicherheitsabgleich erforderlich, um SST-V4-Konflikte auszuschließen.',
+                                  )}
                         </p>
                         <Button
                             variant="secondary"

@@ -213,7 +213,8 @@ fn register_os_url_scheme_best_effort() {
             let data_dir = std::env::var_os("XDG_DATA_HOME")
                 .map(std::path::PathBuf::from)
                 .or_else(|| {
-                    std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".local/share"))
+                    std::env::var_os("HOME")
+                        .map(|h| std::path::PathBuf::from(h).join(".local/share"))
                 });
             let Some(applications_dir) = data_dir.map(|d| d.join("applications")) else {
                 return;
@@ -462,6 +463,7 @@ pub fn run() {
             stage_dropped_backup_bytes,
             reset_local_password_via_backup,
             reconcile_restored_wallet_l2,
+            dismiss_wallet_sync_alert,
             // Web of Trust (WoT)
             get_wot_summary,
             set_wot_max_hops,

@@ -67,6 +67,8 @@ export function Dashboard() {
                     isOpeningSignRequest={data.isOpeningSignRequest}
                     integrityReport={data.integrityReport}
                     protectionStatus={data.protectionStatus}
+                    walletSyncAlert={data.walletSyncAlert}
+                    isReconcilingSyncAlert={data.isReconcilingSyncAlert}
                     showBackupReminder={data.showBackupReminder}
                     rehearsalSnoozed={data.rehearsalSnoozed}
                     resolveIdentity={resolveIdentity}
@@ -76,6 +78,8 @@ export function Dashboard() {
                     onOpenIntegrityModal={() => setShowIntegrityModal(true)}
                     onSnoozeRehearsal={() => data.setRehearsalSnoozed(true)}
                     onOpenRehearsalModal={() => setShowRehearsalModal(true)}
+                    onReconcileL2={data.handleReconcileSyncAlert}
+                    onDismissSyncAlert={data.handleDismissSyncAlert}
                 />
 
                 <FirstStepsChecklist

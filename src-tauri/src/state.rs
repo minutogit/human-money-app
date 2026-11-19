@@ -17,6 +17,7 @@ pub const MARKET_OWN_PROFILE_KEY: &str = "market_own_profile";
 pub const MARKET_SYNC_ADMIN_KEY: &str = "market_sync_admin";
 pub const MARKET_SYNC_KEY: &str = "market_sync_state";
 pub const BACKUP_SYNC_STATE_KEY: &str = "backup_sync_state";
+pub const KNOWN_LOCK_HEADS_KEY: &str = "known_lock_heads";
 pub const MARKET_POST_STATE_KEY: &str = "market_post_state";
 pub const APP_NOTICES_KEY: &str = "app_notices";
 pub const MAX_APP_NOTICES: usize = 50;
@@ -130,9 +131,23 @@ pub struct BackupMirrorState {
     pub base_manifest_sha256: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_slot_etag: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delta_slot_etag: Option<String>,
     pub base_uploaded_at: u64,
     pub base_padded_bytes: usize,
     pub delta_active: bool,
+    #[serde(default)]
+    pub last_synced_epoch: u32,
+    #[serde(default)]
+    pub last_synced_tx_nonce: u64,
+    #[serde(default)]
+    pub last_synced_seal_hash: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_slot_ack: Option<crate::sync_client::SlotAckReceipt>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_known_ttl_days: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anomaly: Option<crate::settings::WalletSyncAlert>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Default, PartialEq, Eq)]
@@ -143,6 +158,13 @@ pub struct StoredBackupSyncState {
     pub base_manifest_sha256: Option<String>,
     #[serde(default)]
     pub mirrors_by_write_url: std::collections::BTreeMap<String, BackupMirrorState>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct KnownLockHeadsState {
+    #[serde(default)]
+    pub heads:
+        std::collections::BTreeMap<String, human_money_core::models::layer2_api::LockReceipt>,
 }
 
 /// Central application state shared across Tauri commands and background workers.
@@ -171,6 +193,54 @@ pub struct AppState {
     pub startup_launch_items: Mutex<Vec<String>>,
 }
 
+fn load_bytes_opt_inner(
+    service: &mut AppService,
+    key: &str,
+    password: Option<&str>,
+    is_local_sidecar: bool,
+) -> Result<Option<Vec<u8>>, AppFacadeError> {
+    let res = if is_local_sidecar {
+        service.load_local_sidecar_data(key, password)
+    } else {
+        service.load_encrypted_data(key, password)
+    };
+    match res {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(AppFacadeError::Storage(human_money_core::StorageError::NotFound)) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+fn load_json_opt_inner<T: serde::de::DeserializeOwned>(
+    service: &mut AppService,
+    key: &str,
+    password: Option<&str>,
+    is_local_sidecar: bool,
+) -> Result<Option<T>, AppFacadeError> {
+    match load_bytes_opt_inner(service, key, password, is_local_sidecar)? {
+        Some(bytes) => serde_json::from_slice(&bytes)
+            .map(Some)
+            .map_err(|e| AppFacadeError::Json(format!("Failed to parse {}: {}", key, e))),
+        None => Ok(None),
+    }
+}
+
+fn save_json_inner<T: serde::Serialize>(
+    service: &mut AppService,
+    key: &str,
+    value: &T,
+    password: Option<&str>,
+    is_local_sidecar: bool,
+) -> Result<(), AppFacadeError> {
+    let bytes = serde_json::to_vec(value)
+        .map_err(|e| AppFacadeError::Json(format!("Failed to serialize {}: {}", key, e)))?;
+    if is_local_sidecar {
+        service.save_local_sidecar_data(key, &bytes, password)
+    } else {
+        service.save_encrypted_data(key, &bytes, password)
+    }
+}
+
 /// Loads an encrypted raw byte block, returning `Ok(None)` only on `StorageError::NotFound`.
 ///
 /// Propagates lock, session, authentication, and I/O errors without silent defaults.
@@ -179,11 +249,7 @@ pub fn load_encrypted_bytes_opt(
     key: &str,
     password: Option<&str>,
 ) -> Result<Option<Vec<u8>>, AppFacadeError> {
-    match service.load_encrypted_data(key, password) {
-        Ok(bytes) => Ok(Some(bytes)),
-        Err(AppFacadeError::Storage(human_money_core::StorageError::NotFound)) => Ok(None),
-        Err(e) => Err(e),
-    }
+    load_bytes_opt_inner(service, key, password, false)
 }
 
 /// Loads and deserializes an encrypted JSON block, returning `Ok(None)` only on `StorageError::NotFound`.
@@ -194,12 +260,7 @@ pub fn load_encrypted_json_opt<T: serde::de::DeserializeOwned>(
     key: &str,
     password: Option<&str>,
 ) -> Result<Option<T>, AppFacadeError> {
-    match load_encrypted_bytes_opt(service, key, password)? {
-        Some(bytes) => serde_json::from_slice(&bytes)
-            .map(Some)
-            .map_err(|e| AppFacadeError::Json(format!("Failed to parse {}: {}", key, e))),
-        None => Ok(None),
-    }
+    load_json_opt_inner(service, key, password, false)
 }
 
 /// Loads and deserializes an encrypted JSON block, falling back to `T::default()` only on `StorageError::NotFound`.
@@ -231,9 +292,106 @@ pub fn save_encrypted_json<T: serde::Serialize>(
     value: &T,
     password: Option<&str>,
 ) -> Result<(), AppFacadeError> {
-    let bytes = serde_json::to_vec(value)
-        .map_err(|e| AppFacadeError::Json(format!("Failed to serialize {}: {}", key, e)))?;
-    save_encrypted_bytes(service, key, &bytes, password)
+    save_json_inner(service, key, value, password, false)
+}
+
+/// Loads a device-local encrypted JSON sidecar (`.local_<key>.enc`), returning `Ok(None)` only on `StorageError::NotFound`.
+pub fn load_local_sidecar_json_opt<T: serde::de::DeserializeOwned>(
+    service: &mut AppService,
+    key: &str,
+    password: Option<&str>,
+) -> Result<Option<T>, AppFacadeError> {
+    load_json_opt_inner(service, key, password, true)
+}
+
+/// Loads a device-local encrypted JSON sidecar, falling back to `T::default()` only on `StorageError::NotFound`.
+pub fn load_local_sidecar_json_or_default<T: serde::de::DeserializeOwned + Default>(
+    service: &mut AppService,
+    key: &str,
+    password: Option<&str>,
+) -> Result<T, AppFacadeError> {
+    Ok(load_local_sidecar_json_opt(service, key, password)?.unwrap_or_default())
+}
+
+/// Serializes `value` as JSON and saves it to a device-local encrypted sidecar (`.local_<key>.enc`).
+/// Never triggers `WalletSeal` or backup dirtying.
+pub fn save_local_sidecar_json<T: serde::Serialize>(
+    service: &mut AppService,
+    key: &str,
+    value: &T,
+    password: Option<&str>,
+) -> Result<(), AppFacadeError> {
+    save_json_inner(service, key, value, password, true)
+}
+
+/// Loads verified highest `LockReceipt`s recorded per `lock_pub` for `anchor_id` from the local sidecar.
+pub fn load_known_head_receipts_for_anchor(
+    service: &mut AppService,
+    anchor_id: &[u8; 32],
+    password: Option<&str>,
+) -> std::collections::HashMap<
+    human_money_core::models::layer2_api::LockPubKey,
+    human_money_core::models::layer2_api::LockReceipt,
+> {
+    let Ok(heads_state) = load_local_sidecar_json_or_default::<KnownLockHeadsState>(
+        service,
+        KNOWN_LOCK_HEADS_KEY,
+        password,
+    ) else {
+        return std::collections::HashMap::new();
+    };
+    let pfx = format!("{}:", human_money_core::hex::encode(anchor_id));
+    let mut out = std::collections::HashMap::new();
+    for (k, receipt) in heads_state.heads {
+        if k.starts_with(&pfx) && receipt.verify_signature() {
+            out.insert(receipt.lock_pub, receipt);
+        }
+    }
+    out
+}
+
+/// Records verified `LockReceipt`s (retaining the highest `write_seq` per `(anchor_id, lock_pub)`)
+/// into the local sidecar without mutating `WalletSeal`.
+pub fn record_known_head_receipts(
+    service: &mut AppService,
+    anchor_id: &[u8; 32],
+    receipts: &[human_money_core::models::layer2_api::LockReceipt],
+    password: Option<&str>,
+) -> Result<(), crate::models::FrontendError> {
+    if receipts.is_empty() {
+        return Ok(());
+    }
+    let mut heads_state = load_local_sidecar_json_or_default::<KnownLockHeadsState>(
+        service,
+        KNOWN_LOCK_HEADS_KEY,
+        password,
+    )
+    .map_err(crate::models::FrontendError::from)?;
+    let anchor_hex = human_money_core::hex::encode(anchor_id);
+    let mut changed = false;
+    for r in receipts {
+        if !r.verify_signature() {
+            continue;
+        }
+        let key = format!(
+            "{}:{}",
+            anchor_hex,
+            human_money_core::hex::encode(r.lock_pub)
+        );
+        let replace = heads_state
+            .heads
+            .get(&key)
+            .is_none_or(|prev| r.write_seq > prev.write_seq);
+        if replace {
+            heads_state.heads.insert(key, r.clone());
+            changed = true;
+        }
+    }
+    if changed {
+        save_local_sidecar_json(service, KNOWN_LOCK_HEADS_KEY, &heads_state, password)
+            .map_err(crate::models::FrontendError::from)?;
+    }
+    Ok(())
 }
 
 fn endpoints_overlap(a_read: &str, a_write: &str, b_read: &str, b_write: &str) -> bool {
@@ -328,6 +486,41 @@ impl AppState {
             .ok_or_else(|| AppFacadeError::Generic(format!("{} not loaded", name)))
     }
 
+    fn load_store_inner<T>(
+        service: &mut AppService,
+        cache: &Mutex<Option<T>>,
+        key: &str,
+        password: Option<&str>,
+        is_local_sidecar: bool,
+    ) -> Result<T, AppFacadeError>
+    where
+        T: serde::Serialize + serde::de::DeserializeOwned + Default + Clone,
+    {
+        let loaded_opt = if is_local_sidecar {
+            load_local_sidecar_json_opt::<T>(service, key, password)?
+        } else {
+            load_encrypted_json_opt::<T>(service, key, password)?
+        };
+        let value: T = match loaded_opt {
+            Some(loaded) => loaded,
+            None => {
+                info!("No {} file found, creating default.", key);
+                let default_value = T::default();
+                let save_res = if is_local_sidecar {
+                    save_local_sidecar_json(service, key, &default_value, password)
+                } else {
+                    save_encrypted_json(service, key, &default_value, password)
+                };
+                save_res.map_err(|e| {
+                    AppFacadeError::Generic(format!("Failed to save default {}: {}", key, e))
+                })?;
+                default_value
+            }
+        };
+        *cache.lock().unwrap() = Some(value.clone());
+        Ok(value)
+    }
+
     fn load_store<T>(
         service: &mut AppService,
         cache: &Mutex<Option<T>>,
@@ -337,19 +530,19 @@ impl AppState {
     where
         T: serde::Serialize + serde::de::DeserializeOwned + Default + Clone,
     {
-        let value: T = match load_encrypted_json_opt::<T>(service, key, password)? {
-            Some(loaded) => loaded,
-            None => {
-                info!("No {} file found, creating default.", key);
-                let default_value = T::default();
-                save_encrypted_json(service, key, &default_value, password).map_err(|e| {
-                    AppFacadeError::Generic(format!("Failed to save default {}: {}", key, e))
-                })?;
-                default_value
-            }
-        };
-        *cache.lock().unwrap() = Some(value.clone());
-        Ok(value)
+        Self::load_store_inner(service, cache, key, password, false)
+    }
+
+    fn load_local_store<T>(
+        service: &mut AppService,
+        cache: &Mutex<Option<T>>,
+        key: &str,
+        password: Option<&str>,
+    ) -> Result<T, AppFacadeError>
+    where
+        T: serde::Serialize + serde::de::DeserializeOwned + Default + Clone,
+    {
+        Self::load_store_inner(service, cache, key, password, true)
     }
 
     fn get_or_load_store<T>(
@@ -366,6 +559,22 @@ impl AppState {
             return Ok(cached);
         }
         Self::load_store(service, cache, key, password)
+    }
+
+    fn get_or_load_local_store<T>(
+        service: &mut AppService,
+        cache: &Mutex<Option<T>>,
+        key: &str,
+        name: &str,
+        password: Option<&str>,
+    ) -> Result<T, AppFacadeError>
+    where
+        T: serde::Serialize + serde::de::DeserializeOwned + Default + Clone,
+    {
+        if let Ok(cached) = Self::get_cached_store(cache, name) {
+            return Ok(cached);
+        }
+        Self::load_local_store(service, cache, key, password)
     }
 
     fn get_or_load_store_locked<T>(
@@ -386,6 +595,24 @@ impl AppState {
             .map_err(crate::models::FrontendError::from)
     }
 
+    fn get_or_load_local_store_locked<T>(
+        &self,
+        cache: &Mutex<Option<T>>,
+        key: &str,
+        name: &str,
+        password: Option<&str>,
+    ) -> Result<T, crate::models::FrontendError>
+    where
+        T: serde::Serialize + serde::de::DeserializeOwned + Default + Clone,
+    {
+        if let Ok(cached) = Self::get_cached_store(cache, name) {
+            return Ok(cached);
+        }
+        let mut service = self.lock_service()?;
+        Self::load_local_store(&mut service, cache, key, password)
+            .map_err(crate::models::FrontendError::from)
+    }
+
     fn save_store<T>(
         service: &mut AppService,
         cache: &Mutex<Option<T>>,
@@ -401,13 +628,30 @@ impl AppState {
         Ok(())
     }
 
-    fn mutate_store_for_owner<T>(
+    fn save_local_store<T>(
+        service: &mut AppService,
+        cache: &Mutex<Option<T>>,
+        key: &str,
+        value: T,
+        password: Option<&str>,
+    ) -> Result<(), AppFacadeError>
+    where
+        T: serde::Serialize + Clone,
+    {
+        save_local_sidecar_json(service, key, &value, password)?;
+        *cache.lock().unwrap() = Some(value);
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn mutate_store_for_owner_inner<T>(
         &self,
         expected_owner_did: &str,
         cache: &Mutex<Option<T>>,
         key: &str,
         name: &str,
         password: Option<&str>,
+        is_local_sidecar: bool,
         f: impl FnOnce(&mut T) -> bool,
     ) -> Result<Option<T>, crate::models::FrontendError>
     where
@@ -420,13 +664,51 @@ impl AppState {
         if current_did != expected_owner_did {
             return Ok(None);
         }
-        let mut value = Self::get_or_load_store(&mut service, cache, key, name, password)
-            .map_err(crate::models::FrontendError::from)?;
+        let mut value = if is_local_sidecar {
+            Self::get_or_load_local_store(&mut service, cache, key, name, password)
+        } else {
+            Self::get_or_load_store(&mut service, cache, key, name, password)
+        }
+        .map_err(crate::models::FrontendError::from)?;
         if f(&mut value) {
-            Self::save_store(&mut service, cache, key, value.clone(), password)
-                .map_err(crate::models::FrontendError::from)?;
+            if is_local_sidecar {
+                Self::save_local_store(&mut service, cache, key, value.clone(), password)
+            } else {
+                Self::save_store(&mut service, cache, key, value.clone(), password)
+            }
+            .map_err(crate::models::FrontendError::from)?;
         }
         Ok(Some(value))
+    }
+
+    fn mutate_store_for_owner<T>(
+        &self,
+        expected_owner_did: &str,
+        cache: &Mutex<Option<T>>,
+        key: &str,
+        name: &str,
+        password: Option<&str>,
+        f: impl FnOnce(&mut T) -> bool,
+    ) -> Result<Option<T>, crate::models::FrontendError>
+    where
+        T: serde::Serialize + serde::de::DeserializeOwned + Default + Clone,
+    {
+        self.mutate_store_for_owner_inner(expected_owner_did, cache, key, name, password, false, f)
+    }
+
+    fn mutate_local_store_for_owner<T>(
+        &self,
+        expected_owner_did: &str,
+        cache: &Mutex<Option<T>>,
+        key: &str,
+        name: &str,
+        password: Option<&str>,
+        f: impl FnOnce(&mut T) -> bool,
+    ) -> Result<Option<T>, crate::models::FrontendError>
+    where
+        T: serde::Serialize + serde::de::DeserializeOwned + Default + Clone,
+    {
+        self.mutate_store_for_owner_inner(expected_owner_did, cache, key, name, password, true, f)
     }
 
     pub fn get_cached_ui_preferences(&self) -> Result<UiPreferences, AppFacadeError> {
@@ -609,7 +891,7 @@ impl AppState {
         service: &mut AppService,
         password: Option<&str>,
     ) -> Result<InternalLifecycleState, AppFacadeError> {
-        Self::get_or_load_store(
+        Self::get_or_load_local_store(
             service,
             &self.internal_lifecycle,
             INTERNAL_LIFECYCLE_STATE_KEY,
@@ -622,7 +904,7 @@ impl AppState {
         &self,
         password: Option<&str>,
     ) -> Result<InternalLifecycleState, crate::models::FrontendError> {
-        self.get_or_load_store_locked(
+        self.get_or_load_local_store_locked(
             &self.internal_lifecycle,
             INTERNAL_LIFECYCLE_STATE_KEY,
             "InternalLifecycleState",
@@ -635,7 +917,7 @@ impl AppState {
         service: &mut AppService,
         password: Option<&str>,
     ) -> Result<InternalLifecycleState, AppFacadeError> {
-        Self::load_store(
+        Self::load_local_store(
             service,
             &self.internal_lifecycle,
             INTERNAL_LIFECYCLE_STATE_KEY,
@@ -649,7 +931,7 @@ impl AppState {
         lifecycle: InternalLifecycleState,
         password: Option<&str>,
     ) -> Result<(), AppFacadeError> {
-        Self::save_store(
+        Self::save_local_store(
             service,
             &self.internal_lifecycle,
             INTERNAL_LIFECYCLE_STATE_KEY,
@@ -676,7 +958,7 @@ impl AppState {
         password: Option<&str>,
         f: impl FnOnce(&mut InternalLifecycleState) -> bool,
     ) -> Result<Option<InternalLifecycleState>, crate::models::FrontendError> {
-        self.mutate_store_for_owner(
+        self.mutate_local_store_for_owner(
             expected_owner_did,
             &self.internal_lifecycle,
             INTERNAL_LIFECYCLE_STATE_KEY,
@@ -3555,7 +3837,6 @@ mod tests {
         for key in [
             crate::settings::UI_PREFERENCES_KEY,
             crate::settings::SECURITY_POLICY_KEY,
-            crate::settings::INTERNAL_LIFECYCLE_STATE_KEY,
             super::CONTACTS_DATA_NAME,
             super::WOT_DATA_NAME,
             super::TRANSACTION_HISTORY_KEY,
@@ -3564,6 +3845,13 @@ mod tests {
                 .save_encrypted_data(key, b"{corrupt-json", Some(password))
                 .unwrap();
         }
+        service
+            .save_local_sidecar_data(
+                crate::settings::INTERNAL_LIFECYCLE_STATE_KEY,
+                b"{corrupt-json",
+                Some(password),
+            )
+            .unwrap();
         assert!(matches!(
             state.load_ui_preferences(&mut service, Some(password)),
             Err(AppFacadeError::Json(_))
@@ -3995,6 +4283,73 @@ mod tests {
         )
         .unwrap();
         assert!(store_end.cards.is_empty());
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_known_lock_heads_sidecar_persists_without_advancing_seal_nonce() {
+        use ed25519_dalek::{Signer, SigningKey};
+        use human_money_core::models::layer2_api::{LockReceipt, LockReceiptKind};
+
+        let temp_dir = std::env::temp_dir().join(format!(
+            "humoco_known_lock_heads_test_{}",
+            uuid::Uuid::new_v4()
+        ));
+        let password = "test-password-123";
+        let alice_service = crate::test_support::setup_test_app(
+            &temp_dir.join("alice"),
+            "Test Alice",
+            crate::test_support::ALICE_PHRASE,
+            password,
+        );
+        let state = crate::test_support::create_test_state(alice_service);
+        let mut service = state.service.lock().unwrap();
+
+        let seal_before = service.get_current_seal().unwrap();
+        let lock_sk = SigningKey::from_bytes(&[0x11u8; 32]);
+        let lock_pub = lock_sk.verifying_key().to_bytes();
+        let anchor_id = [0x99u8; 32];
+        let mut receipt = LockReceipt {
+            kind: LockReceiptKind::FirstWrite,
+            lock_pub,
+            bucket: [0x22u8; 32],
+            slot: [0x33u8; 32],
+            child_lock: [0x44u8; 32],
+            entry_hash: [0x55u8; 32],
+            retain_until_quarter: 20271,
+            write_seq: 1,
+            bucket_head: [0x66u8; 32],
+            recipient_nonce: [0x77u8; 32],
+            sig: [0u8; 64],
+        };
+        let digest = receipt.digest();
+        receipt.sig = lock_sk.sign(&digest).to_bytes();
+
+        super::record_known_head_receipts(
+            &mut service,
+            &anchor_id,
+            std::slice::from_ref(&receipt),
+            Some(password),
+        )
+        .unwrap();
+
+        let loaded =
+            super::load_known_head_receipts_for_anchor(&mut service, &anchor_id, Some(password));
+        assert_eq!(loaded.get(&lock_pub), Some(&receipt));
+
+        assert!(service
+            .load_local_sidecar_data(super::KNOWN_LOCK_HEADS_KEY, Some(password))
+            .is_ok());
+        assert!(service
+            .load_encrypted_data(super::KNOWN_LOCK_HEADS_KEY, Some(password))
+            .is_err());
+
+        let seal_after = service.get_current_seal().unwrap();
+        assert_eq!(
+            serde_json::to_value(&seal_after).unwrap(),
+            serde_json::to_value(&seal_before).unwrap()
+        );
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }

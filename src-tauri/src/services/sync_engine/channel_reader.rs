@@ -1136,7 +1136,7 @@ pub async fn delete_own_sync_slots_impl(
             .map_err(FrontendError::from)?;
         }
 
-        crate::state::save_encrypted_json(
+        crate::state::save_local_sidecar_json(
             &mut service,
             BACKUP_SYNC_STATE_KEY,
             &StoredBackupSyncState::default(),
@@ -1457,13 +1457,12 @@ pub async fn remove_public_sync_impl(
             .map_err(FrontendError::from)?;
         }
 
-        if let Some(mut backup_state) =
-            crate::state::load_encrypted_json_opt::<StoredBackupSyncState>(
-                &mut service,
-                BACKUP_SYNC_STATE_KEY,
-                password.as_deref(),
-            )
-            .map_err(FrontendError::from)?
+        if let Some(mut backup_state) = crate::state::load_local_sidecar_json_opt::<
+            StoredBackupSyncState,
+        >(
+            &mut service, BACKUP_SYNC_STATE_KEY, password.as_deref()
+        )
+        .map_err(FrontendError::from)?
         {
             let removed = backup_state
                 .mirrors_by_write_url
@@ -1474,7 +1473,7 @@ pub async fn remove_public_sync_impl(
                     .remove(&write_url)
                     .is_some();
             if removed {
-                crate::state::save_encrypted_json(
+                crate::state::save_local_sidecar_json(
                     &mut service,
                     BACKUP_SYNC_STATE_KEY,
                     &backup_state,

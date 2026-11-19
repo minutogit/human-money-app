@@ -226,3 +226,11 @@ pub async fn reconcile_restored_wallet_l2(
 ) -> Result<FrontendRestoreReconcileResultDto, FrontendError> {
     backup_service::reconcile_restored_wallet_l2_impl(password, &state).await
 }
+
+#[tauri::command]
+pub fn dismiss_wallet_sync_alert(
+    password: Option<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), FrontendError> {
+    backup_service::dismiss_wallet_sync_alert_impl(password, &state)
+}

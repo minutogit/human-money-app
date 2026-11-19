@@ -2039,7 +2039,7 @@ pub async fn complete_social_recovery_impl(
             &crate::settings::SecurityPolicy::default(),
             Some(&new_password),
         );
-        let _ = crate::state::save_encrypted_json(
+        let _ = crate::state::save_local_sidecar_json(
             &mut service,
             crate::settings::INTERNAL_LIFECYCLE_STATE_KEY,
             &crate::settings::InternalLifecycleState::default(),

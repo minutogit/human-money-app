@@ -474,6 +474,13 @@ export function useSendTransfer({
                                   lifecycle: {
                                       ...prev.lifecycle,
                                       pendingRestoreL2Reconciliation: false,
+                                      walletSyncAlert:
+                                          prev.lifecycle.walletSyncAlert?.kind ===
+                                              'stale_local_backup' ||
+                                          prev.lifecycle.walletSyncAlert?.kind ===
+                                              'fork_detected'
+                                              ? null
+                                              : prev.lifecycle.walletSyncAlert,
                                   },
                               }
                             : prev,

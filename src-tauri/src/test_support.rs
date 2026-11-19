@@ -55,11 +55,14 @@ pub(crate) fn create_test_state(service: AppService) -> AppState {
 pub(crate) struct MockSyncServer {
     pub base_url: String,
     pub data_dir: String,
+    pub lock_pubkey: String,
+    pub lock_signing_key: ed25519_dalek::SigningKey,
     pub admin_pubkey: Arc<Mutex<String>>,
     pub members: Arc<Mutex<Vec<String>>>,
     pub channel_members: Arc<Mutex<HashMap<String, Vec<String>>>>,
     pub slots: Arc<Mutex<HashMap<String, Vec<u8>>>>,
     pub etags: Arc<Mutex<HashMap<String, String>>>,
+    pub ttl_days: Arc<Mutex<u32>>,
     pub rotation_cert: Arc<Mutex<Option<String>>>,
     pub put_members_count: Arc<Mutex<usize>>,
     pub admin_config: Arc<Mutex<(u64, usize, u64)>>,
@@ -68,15 +71,20 @@ pub(crate) struct MockSyncServer {
 
 impl MockSyncServer {
     pub async fn start(data_dir: String, admin_pubkey: String) -> Self {
+        use ed25519_dalek::{Signer, SigningKey};
+
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let base_url = format!("http://127.0.0.1:{}", port);
 
+        let lock_signing_key = SigningKey::from_bytes(&[0x77u8; 32]);
+        let lock_pubkey = hex::encode(lock_signing_key.verifying_key().as_bytes());
         let admin_pub = Arc::new(Mutex::new(admin_pubkey));
         let members = Arc::new(Mutex::new(Vec::<String>::new()));
         let channel_members = Arc::new(Mutex::new(HashMap::<String, Vec<String>>::new()));
         let slots = Arc::new(Mutex::new(HashMap::<String, Vec<u8>>::new()));
         let etags = Arc::new(Mutex::new(HashMap::<String, String>::new()));
+        let ttl_days = Arc::new(Mutex::new(30u32));
         let rotation_cert = Arc::new(Mutex::new(None));
         let put_members_count = Arc::new(Mutex::new(0));
         let admin_config = Arc::new(Mutex::new((2048u64, 300usize, 25u64)));
@@ -84,11 +92,14 @@ impl MockSyncServer {
 
         let s_data_dir = data_dir.clone();
         let s_base_url = base_url.clone();
+        let s_lock_sk = lock_signing_key.clone();
+        let s_lock_pub = lock_pubkey.clone();
         let s_admin_pub = Arc::clone(&admin_pub);
         let s_members = Arc::clone(&members);
         let s_channel_members = Arc::clone(&channel_members);
         let s_slots = Arc::clone(&slots);
         let s_etags = Arc::clone(&etags);
+        let s_ttl_days = Arc::clone(&ttl_days);
         let s_rotation = Arc::clone(&rotation_cert);
         let s_put_members = Arc::clone(&put_members_count);
         let s_admin_config = Arc::clone(&admin_config);
@@ -102,11 +113,14 @@ impl MockSyncServer {
                     Ok((mut stream, _)) = listener.accept() => {
                         let data_dir = s_data_dir.clone();
                         let base_url = s_base_url.clone();
+                        let lock_sk = s_lock_sk.clone();
+                        let lock_pub_hex = s_lock_pub.clone();
                         let admin_pub = Arc::clone(&s_admin_pub);
                         let members = Arc::clone(&s_members);
                         let channel_members = Arc::clone(&s_channel_members);
                         let slots = Arc::clone(&s_slots);
                         let etags = Arc::clone(&s_etags);
+                        let ttl_days_arc = Arc::clone(&s_ttl_days);
                         let rotation = Arc::clone(&s_rotation);
                         let put_members = Arc::clone(&s_put_members);
                         let admin_config = Arc::clone(&s_admin_config);
@@ -181,7 +195,17 @@ impl MockSyncServer {
                                     "drop_pub": cur_admin,
                                     "read_url": format!("{}/{}", base_url, data_dir),
                                     "register_url": null,
-                                    "channels": ["card", "wot", "backup", "post"]
+                                    "channels": ["card", "wot", "backup", "post"],
+                                    "lock": {
+                                        "lock_pub": lock_pub_hex,
+                                        "delegation": null,
+                                        "max_retention_quarter": 8159,
+                                        "max_inodes": 50000,
+                                        "used_inodes": 0,
+                                        "inode_warning": false,
+                                        "pow_base_bits": 8,
+                                        "allow_pow_tickets": false
+                                    }
                                 });
                                 let body_str = serde_json::to_string(&info_json).unwrap();
                                 format!(
@@ -208,9 +232,16 @@ impl MockSyncServer {
                                 } else {
                                     String::new()
                                 };
+                                let cur_ttl = *ttl_days_arc.lock().unwrap();
+                                let ttl_hdr = if cur_ttl > 0 {
+                                    format!("X-Channel-Ttl-Days: {}\r\n", cur_ttl)
+                                } else {
+                                    String::new()
+                                };
                                 format!(
-                                    "HTTP/1.1 200 OK\r\nCache-Control: no-store\r\nX-Drop-Authorized: {}\r\nX-Drop-Channels: card,wot,backup,post\r\nX-Channel-Max-Bytes: 524288\r\nX-Channel-Ttl-Days: 30\r\nX-Slot-Occupied: {}\r\n{}{}Content-Length: 0\r\n\r\n",
+                                    "HTTP/1.1 200 OK\r\nCache-Control: no-store\r\nX-Drop-Authorized: {}\r\nX-Drop-Channels: card,wot,backup,post\r\nX-Channel-Max-Bytes: 524288\r\n{}X-Slot-Occupied: {}\r\n{}{}Content-Length: 0\r\n\r\n",
                                     if is_auth { "true" } else { "false" },
+                                    ttl_hdr,
                                     if occupied { "true" } else { "false" },
                                     etag_hdr,
                                     rot_hdr_line
@@ -331,26 +362,67 @@ impl MockSyncServer {
                                         }
                                     };
                                     let if_match_hdr = headers.get("if-match").cloned();
-                                    let cur_etag = etags.lock().unwrap().get(&key).cloned().unwrap_or_else(|| "\"etag123\"".to_string());
-                                    if let Some(ref im) = if_match_hdr {
-                                        let im_trim = im.trim_matches('"');
-                                        let cur_trim = cur_etag.trim_matches('"');
-                                        if im != "none" && im_trim != cur_trim {
-                                            format!(
-                                                "HTTP/1.1 412 Precondition Failed\r\nETag: {}\r\nContent-Length: 0\r\n\r\n",
-                                                cur_etag
-                                            ).into_bytes()
+                                    let slot_exists = slots.lock().unwrap().contains_key(&key);
+                                    let cur_etag_opt = etags.lock().unwrap().get(&key).cloned();
+                                    let precondition_failed = if let Some(ref im) = if_match_hdr {
+                                        let im_trim = im.trim().trim_matches('"');
+                                        if im_trim == "none" || im_trim.is_empty() {
+                                            slot_exists
                                         } else {
-                                            slots.lock().unwrap().insert(key.clone(), body);
-                                            let new_etag = format!("\"etag_{}\"", rand::random::<u32>());
-                                            etags.lock().unwrap().insert(key, new_etag.clone());
-                                            format!("HTTP/1.1 204 No Content\r\n{}ETag: {}\r\nContent-Length: 0\r\n\r\n", rot_hdr_line, new_etag).into_bytes()
+                                            match cur_etag_opt.as_deref() {
+                                                Some(cur) => cur.trim().trim_matches('"') != im_trim,
+                                                None => true,
+                                            }
                                         }
                                     } else {
+                                        false
+                                    };
+                                    if precondition_failed {
+                                        let hdr_etag = cur_etag_opt.unwrap_or_else(|| "\"\"".to_string());
+                                        format!(
+                                            "HTTP/1.1 412 Precondition Failed\r\nETag: {}\r\nContent-Length: 0\r\n\r\n",
+                                            hdr_etag
+                                        ).into_bytes()
+                                    } else {
+                                        let new_len = body.len();
+                                        let etag_hex = hex::encode(sha2::Sha256::digest(&body));
+                                        let new_etag = format!("\"{}\"", etag_hex);
                                         slots.lock().unwrap().insert(key.clone(), body);
-                                        let new_etag = format!("\"etag_{}\"", rand::random::<u32>());
                                         etags.lock().unwrap().insert(key, new_etag.clone());
-                                        format!("HTTP/1.1 204 No Content\r\n{}ETag: {}\r\nContent-Length: 0\r\n\r\n", rot_hdr_line, new_etag).into_bytes()
+                                        if channel == "media" {
+                                            format!(
+                                                "HTTP/1.1 200 OK\r\n{}ETag: {}\r\nContent-Length: 0\r\n\r\n",
+                                                rot_hdr_line, new_etag
+                                            ).into_bytes()
+                                        } else {
+                                            let ts_now = crate::sync_client::current_unix_timestamp();
+                                            let pfx_str = prefix_opt.as_deref().unwrap_or("");
+                                            let ack_msg = format!(
+                                                "HUMOCO-SLOT-ACK-V1\n{}\n{}\n{}\n{}\n{}\n{}",
+                                                lock_pub_hex, pubkey, pfx_str, channel, etag_hex, ts_now
+                                            );
+                                            let ack_sig = hex::encode(lock_sk.sign(ack_msg.as_bytes()).to_bytes());
+                                            let resp_json = serde_json::json!({
+                                                "status": "ok",
+                                                "channel": channel,
+                                                "bytes": new_len,
+                                                "etag": etag_hex,
+                                                "slot_ack": {
+                                                    "lock_pub": lock_pub_hex,
+                                                    "pubkey": pubkey,
+                                                    "prefix": prefix_opt,
+                                                    "channel": channel,
+                                                    "etag": etag_hex,
+                                                    "timestamp": ts_now,
+                                                    "sig": ack_sig,
+                                                }
+                                            })
+                                            .to_string();
+                                            format!(
+                                                "HTTP/1.1 200 OK\r\n{}Content-Type: application/json\r\nETag: {}\r\nContent-Length: {}\r\n\r\n{}",
+                                                rot_hdr_line, new_etag, resp_json.len(), resp_json
+                                            ).into_bytes()
+                                        }
                                     }
                                 } else {
                                     format!("HTTP/1.1 403 Forbidden\r\n{}Content-Length: 0\r\n\r\n", rot_hdr_line).into_bytes()
@@ -481,11 +553,14 @@ impl MockSyncServer {
         Self {
             base_url,
             data_dir,
+            lock_pubkey,
+            lock_signing_key,
             admin_pubkey: admin_pub,
             members,
             channel_members,
             slots,
             etags,
+            ttl_days,
             rotation_cert,
             put_members_count,
             admin_config,

@@ -577,8 +577,22 @@ pub(crate) async fn reconcile_vouchers_via_static_locks(
 
         if let Some(entry) = found_entry {
             let mut service = state.lock_service()?;
-            match service.reconcile_voucher_state(&local_id, Some(&entry), None, pow_bits, password)
-            {
+            let res =
+                service.reconcile_voucher_state(&local_id, Some(&entry), None, pow_bits, password);
+            let res = match res {
+                Err(human_money_core::Error::WalletLockedDueToFork) => {
+                    let _ = service.reconcile_rollback_with_diagnostics(&[], None, password);
+                    service.reconcile_voucher_state(
+                        &local_id,
+                        Some(&entry),
+                        None,
+                        pow_bits,
+                        password,
+                    )
+                }
+                other => other,
+            };
+            match res {
                 Ok(VoucherReconciliationResult::AlreadySpent { .. })
                 | Ok(VoucherReconciliationResult::ConflictDetected { .. }) => {
                     reconciled_spent_count += 1;
@@ -609,6 +623,19 @@ pub(crate) async fn reconcile_vouchers_via_static_locks(
     })
 }
 
+pub(crate) fn clear_fork_lock_after_reconciliation(state: &AppState, password: Option<&str>) {
+    if let Ok(mut service) = state.lock_service() {
+        if matches!(
+            service.get_seal_lock_reason(password),
+            Ok(Some(
+                human_money_core::models::seal::SealLockReason::ForkDetected
+            ))
+        ) {
+            let _ = service.reconcile_rollback_with_diagnostics(&[], None, password);
+        }
+    }
+}
+
 pub(crate) async fn reconcile_restored_wallet_if_pending(
     state: &AppState,
     password: Option<&str>,
@@ -628,8 +655,16 @@ pub(crate) async fn reconcile_restored_wallet_if_pending(
 
     let summary = reconcile_vouchers_via_static_locks(state, None, password).await?;
     if summary.all_responded || summary.active_anchored_count == 0 {
+        clear_fork_lock_after_reconciliation(state, password);
         let updated = state.mutate_internal_lifecycle_for_owner(&owner_did, password, |lc| {
             lc.pending_restore_l2_reconciliation = false;
+            if lc
+                .wallet_sync_alert
+                .as_ref()
+                .is_some_and(|a| a.kind == "stale_local_backup" || a.kind == "fork_detected")
+            {
+                lc.wallet_sync_alert = None;
+            }
             true
         })?;
         return Ok(updated.is_some());

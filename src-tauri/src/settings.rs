@@ -215,6 +215,24 @@ impl Default for SecurityPolicy {
     }
 }
 
+/// Warning surfaced in the UI when backup sync detects a stale local copy, fork,
+/// server rollback, or unexpected backup data loss within channel TTL.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WalletSyncAlert {
+    pub kind: String, // "stale_local_backup" | "fork_detected" | "server_rollback" | "unexpected_data_loss"
+    pub mirror_write_url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_epoch: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_tx_nonce: Option<u64>,
+    pub local_epoch: u32,
+    pub local_tx_nonce: u64,
+    pub detected_at: String,
+    #[serde(default)]
+    pub has_signed_ack_proof: bool,
+}
+
 /// Backend-managed lifecycle flags and L2 probe/template metadata; never writable via patch commands.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
@@ -231,6 +249,8 @@ pub struct InternalLifecycleState {
     pub l2_probe_cache: BTreeMap<String, crate::sync_client::FrontendLockServerProbeResult>,
     #[serde(default)]
     pub l2_anchor_templates_meta: Vec<StoredAnchorTemplateMeta>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wallet_sync_alert: Option<WalletSyncAlert>,
 }
 
 /// Read-only composite view of all three stores exposed to the UI via `get_app_config`.
