@@ -11,21 +11,38 @@ interface AuthModalProps {
     title?: string;
     description?: string;
     errorMsg?: string;
+    credentialKind?: 'password' | 'pin';
+    canSwitchToPassword?: boolean;
+    onSwitchToPassword?: () => void;
 }
 
-export function AuthModal({ isOpen, onConfirm, onCancel, title, description, errorMsg }: AuthModalProps) {
+export function AuthModal({
+    isOpen,
+    onConfirm,
+    onCancel,
+    title,
+    description,
+    errorMsg,
+    credentialKind = 'password',
+    canSwitchToPassword = false,
+    onSwitchToPassword,
+}: AuthModalProps) {
     const { t } = useTranslation();
     const [password, setPassword] = useState('');
+    const isPin = credentialKind === 'pin';
 
-    // Reset password field when modal opens
+    // Reset credential field when modal opens or switches between PIN and password
     useEffect(() => {
         if (isOpen) setPassword('');
-    }, [isOpen]);
+    }, [isOpen, credentialKind]);
 
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
         onConfirm(password);
     };
+
+    const resolvedTitle = title || (isPin ? t('auth.pinReauthTitle') : t('auth.authenticationRequired'));
+    const resolvedDescription = description || (isPin ? t('auth.pinReauthDesc') : t('auth.enterPasswordToContinue'));
 
     return (
         <ModalShell
@@ -35,8 +52,8 @@ export function AuthModal({ isOpen, onConfirm, onCancel, title, description, err
             hideCloseButton={true}
             maxWidth="md"
             zIndexClass="z-50"
-            title={title || t('auth.authenticationRequired')}
-            description={description || t('auth.enterPasswordToContinue')}
+            title={resolvedTitle}
+            description={resolvedDescription}
         >
             <div className="space-y-4">
                 {errorMsg && (
@@ -48,14 +65,33 @@ export function AuthModal({ isOpen, onConfirm, onCancel, title, description, err
                 <form onSubmit={handleSubmit} className="space-y-4">
                     <Input
                         type="password"
+                        inputMode={isPin ? 'numeric' : undefined}
+                        maxLength={isPin ? 8 : undefined}
                         value={password}
-                        onChange={(e) => setPassword(e.target.value)}
-                        placeholder={t('auth.walletPasswordPlaceholder')}
+                        onChange={(e) => {
+                            const val = e.target.value;
+                            setPassword(isPin ? val.replace(/\D/g, '').slice(0, 8) : val);
+                        }}
+                        placeholder={isPin ? t('auth.enterQuickPinPlaceholder') : t('auth.walletPasswordPlaceholder')}
                         autoFocus
                     />
-                    <div className="flex justify-end gap-3 pt-2">
-                        <Button type="button" variant="secondary" onClick={onCancel}>{t('common.cancel')}</Button>
-                        <Button type="submit" disabled={!password}>{t('common.confirm')}</Button>
+                    <div className="flex items-center justify-between gap-3 pt-2">
+                        <div>
+                            {isPin && canSwitchToPassword && onSwitchToPassword && (
+                                <button
+                                    type="button"
+                                    data-testid="auth-modal-switch-password"
+                                    onClick={onSwitchToPassword}
+                                    className="text-xs font-semibold text-theme-primary hover:underline cursor-pointer"
+                                >
+                                    {t('auth.useMasterPasswordInstead')}
+                                </button>
+                            )}
+                        </div>
+                        <div className="flex justify-end gap-3">
+                            <Button type="button" variant="secondary" onClick={onCancel}>{t('common.cancel')}</Button>
+                            <Button type="submit" disabled={isPin ? password.length < 6 : !password}>{t('common.confirm')}</Button>
+                        </div>
                     </div>
                 </form>
             </div>

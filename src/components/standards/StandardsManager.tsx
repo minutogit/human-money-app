@@ -13,9 +13,11 @@ import { readFile } from '@tauri-apps/plugin-fs';
 import { FileCode, Download, Trash2, Plus, ShieldCheck, CheckCircle2, Eye } from 'lucide-react';
 import { logger } from '../../utils/log';
 import { translateError } from '../../utils/errorHelper';
+import { useOptionalSession } from '../../context/SessionContext';
 
 export function StandardsManager() {
     const { t, i18n } = useTranslation();
+    const session = useOptionalSession();
     const [standards, setStandards] = useState<VoucherStandardInfo[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState('');
@@ -122,7 +124,16 @@ export function StandardsManager() {
         setError('');
         setSuccessMsg('');
         try {
-            await standardsService.deleteStandard(deleteTarget.id);
+            if (session?.protectAction) {
+                await session.protectAction(
+                    async (walletPwd) => {
+                        await standardsService.deleteStandard(deleteTarget.id, walletPwd);
+                    },
+                    { requireFullAccess: true }
+                );
+            } else {
+                await standardsService.deleteStandard(deleteTarget.id, null);
+            }
             logger.info(`Deleted standard ${deleteTarget.id}`);
             setSuccessMsg(t('standards.deleteSuccess', { name: deleteTarget.displayName, defaultValue: `Standard '${deleteTarget.displayName}' wurde gelöscht.` }));
             await loadStandards();

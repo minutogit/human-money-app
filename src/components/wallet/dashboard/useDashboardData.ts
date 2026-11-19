@@ -34,8 +34,6 @@ export function useDashboardData() {
         folderName,
         integrityReport,
         protectAction,
-        accessMode = 'full',
-        requireFullAccess,
     } = useSession();
 
     const [userId, setUserId] = useState('');
@@ -270,22 +268,15 @@ export function useDashboardData() {
 
     const handleProtectedNavigate = useCallback(
         (target: Parameters<typeof navigate>[0]) => {
-            if (accessMode === 'receiveOnly' && requireFullAccess) {
-                void requireFullAccess(async () => {
-                    navigate(target);
-                }).catch(() => undefined);
-                return;
-            }
             navigate(target);
         },
-        [accessMode, navigate, requireFullAccess],
+        [navigate],
     );
 
     return {
         profileName,
         profileScope: folderName || profileName,
         integrityReport,
-        accessMode,
         userId,
         balances,
         activeVouchers,

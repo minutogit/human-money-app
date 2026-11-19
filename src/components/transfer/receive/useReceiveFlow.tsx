@@ -5,7 +5,7 @@ import { settingsService } from '../../../services/settingsService';
 import { voucherService } from '../../../services/voucherService';
 import { standardsService } from '../../../services/standardsService';
 import { profileService } from '../../../services/profileService';
-import { postService, POST_INBOX_UPDATED_EVENT } from '../../../services/postService';
+import { postService } from '../../../services/postService';
 import { backupService } from '../../../services/backupService';
 import { useSession } from '../../../context/SessionContext';
 import { useOptionalNavigation } from '../../../context/NavigationContext';
@@ -33,11 +33,8 @@ import {
 
 export type {
     PendingPasswordImportState,
-    PendingPosFallbackState,
     ResultModalState,
 } from './useReceiveModals';
-
-const POS_ACTIVE_STORAGE_KEY = 'humoco_pos_cashier_active';
 
 export interface UseReceiveFlowOptions {
     onBack: () => void;
@@ -47,7 +44,7 @@ export interface UseReceiveFlowOptions {
 
 export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseReceiveFlowOptions) {
     const { t } = useTranslation();
-    const { protectAction, accessMode } = useSession();
+    const { protectAction } = useSession();
     const nav = useOptionalNavigation();
     const navigate = nav?.navigate;
 
@@ -59,17 +56,10 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseRec
     const [feedbackMsg, setFeedbackMsg] = useState('');
     const [isProcessing, setIsProcessing] = useState(false);
     const [isDragOver, setIsDragOver] = useState(false);
-    const [isPosMode, setIsPosMode] = useState(false);
-    const [hasStagedPosPayments, setHasStagedPosPayments] = useState(false);
-    const [isSettingsLoaded, setIsSettingsLoaded] = useState(false);
-    const [purchaseId, setPurchaseId] = useState('');
     const [settings, setSettings] = useState<AppSettings | null>(null);
     const [isCheckingPost, setIsCheckingPost] = useState(false);
     const [postCheckStatus, setPostCheckStatus] = useState<{ variant: 'info' | 'success' | 'error'; message: string } | null>(null);
     const processedDroppedFileRef = useRef<{ name: string; bytes: number[] } | null>(null);
-    const autoStagedPosMsgIdRef = useRef<string | null>(null);
-    const activePosPaymentIdRef = useRef<string | null>(null);
-    const dismissPosPaymentRef = useRef<((postPaymentId: string) => Promise<void>) | null>(null);
 
     const modalsRef = useRef<ReturnType<typeof useReceiveModals> | null>(null);
     const wotRef = useRef<ReturnType<typeof useReceiveWotImport> | null>(null);
@@ -104,41 +94,20 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseRec
             type: ReceiveImportKind,
             name: string,
             password?: string,
-            forcePos?: boolean,
-            postPaymentId?: string,
         ) => {
             setIsProcessing(true);
             setFeedbackMsg('');
-            if (postPaymentId) {
-                activePosPaymentIdRef.current = postPaymentId;
-            }
             try {
                 const outcome = await executeReceiveImport({
                     fileData,
                     type,
                     password,
-                    usePosCheckout: Boolean(forcePos || isPosMode || purchaseId.trim().length > 0),
-                    purchaseId,
-                    onEnsurePurchaseId: setPurchaseId,
                     ensureStandardsToml,
                     protectAction,
-                    accessMode,
                 });
 
                 if (outcome.kind === 'success') {
-                    activePosPaymentIdRef.current = null;
-                    autoStagedPosMsgIdRef.current = null;
                     onReceiveSuccess(outcome.payload);
-                } else if (outcome.kind === 'posFallback') {
-                    modalsRef.current?.setPendingPosFallback({
-                        fileData: outcome.fileData,
-                        standardDefinitionsToml: outcome.standardDefinitionsToml,
-                        outcomeKind: outcome.outcomeKind,
-                        merchantWarning: outcome.merchantWarning,
-                        verdict: outcome.verdict,
-                        purchaseId: outcome.purchaseId,
-                        postPaymentId: postPaymentId ?? activePosPaymentIdRef.current ?? undefined,
-                    });
                 } else if (outcome.kind === 'signatureAttached') {
                     modalsRef.current?.setResultModal({
                         isOpen: true,
@@ -232,14 +201,11 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseRec
             }
         },
         [
-            accessMode,
             clearSelection,
             ensureStandardsToml,
-            isPosMode,
             navigate,
             onReceiveSuccess,
             protectAction,
-            purchaseId,
             t,
         ],
     );
@@ -249,16 +215,12 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseRec
         onReceiveSuccess,
         navigate,
         protectAction,
-        accessMode,
         ensureStandardsToml,
         droppedFileContent,
         setFeedbackMsg,
         setIsProcessing,
         resetAllSelections,
-        clearSelection,
         executeReceiveDirectly,
-        onDismissPosPayment: (postPaymentId: string) =>
-            dismissPosPaymentRef.current?.(postPaymentId) ?? Promise.resolve(),
     });
     modalsRef.current = modals;
 
@@ -290,22 +252,6 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseRec
                 if (!active) return;
                 setVoucherStandards(standards);
                 setSettings(currentSettings);
-                const storedLocalPos =
-                    typeof localStorage !== 'undefined' &&
-                    localStorage.getItem(POS_ACTIVE_STORAGE_KEY) === 'true';
-                const initialPosActive = Boolean(
-                    currentSettings?.enablePosMode &&
-                        (currentSettings?.posCashierActive ?? storedLocalPos)
-                );
-                if (initialPosActive) {
-                    setIsPosMode(true);
-                }
-                if (typeof localStorage !== 'undefined' && typeof currentSettings?.posCashierActive === 'boolean') {
-                    localStorage.setItem(
-                        POS_ACTIVE_STORAGE_KEY,
-                        currentSettings.posCashierActive ? 'true' : 'false'
-                    );
-                }
                 setOwnUserId(userId);
                 setOwnProfile(profile);
             } catch (e) {
@@ -313,8 +259,6 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseRec
                 const msg = `Failed to fetch initial data: ${translateError(e, t)}`;
                 logger.error(msg);
                 setFeedbackMsg(msg);
-            } finally {
-                if (active) setIsSettingsLoaded(true);
             }
         }
         fetchData();
@@ -322,81 +266,6 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseRec
             active = false;
         };
     }, [t]);
-
-    const dismissPosPayment = useCallback(
-        async (postPaymentId: string) => {
-            try {
-                await protectAction(async (pwd) => {
-                    await postService.dismissPendingPostItem(
-                        'pos_payment',
-                        postPaymentId,
-                        pwd || undefined,
-                    );
-                });
-                autoStagedPosMsgIdRef.current = null;
-                activePosPaymentIdRef.current = null;
-                if (typeof postService?.getPostInboxSummary === 'function') {
-                    const summary = await postService.getPostInboxSummary().catch(() => null);
-                    const remaining = summary?.pendingPosPayments ?? [];
-                    setHasStagedPosPayments(remaining.length > 0);
-                    const next = remaining[0];
-                    if (next && Array.isArray(next.bundleBytes) && next.bundleBytes.length > 0) {
-                        autoStagedPosMsgIdRef.current = next.id;
-                        await executeReceiveDirectly(
-                            next.bundleBytes,
-                            'transfer',
-                            `post-${next.id}.transfer`,
-                            undefined,
-                            true,
-                            next.id,
-                        );
-                    }
-                }
-            } catch (err) {
-                setFeedbackMsg(translateError(err, t));
-            }
-        },
-        [executeReceiveDirectly, protectAction, t],
-    );
-    dismissPosPaymentRef.current = dismissPosPayment;
-
-    useEffect(() => {
-        if (!isSettingsLoaded || droppedFile || isProcessing) {
-            return;
-        }
-        const checkStagedPosPayments = () => {
-            if (typeof postService?.getPostInboxSummary !== 'function') return;
-            postService
-                .getPostInboxSummary()
-                .then((summary) => {
-                    const staged = summary?.pendingPosPayments ?? [];
-                    setHasStagedPosPayments(staged.length > 0);
-                    if (!isPosMode && staged.length === 0) return;
-                    const next = staged[0];
-                    if (
-                        next &&
-                        next.id !== autoStagedPosMsgIdRef.current &&
-                        !modalsRef.current?.pendingPosFallback &&
-                        Array.isArray(next.bundleBytes) &&
-                        next.bundleBytes.length > 0
-                    ) {
-                        autoStagedPosMsgIdRef.current = next.id;
-                        void executeReceiveDirectly(
-                            next.bundleBytes,
-                            'transfer',
-                            `post-${next.id}.transfer`,
-                            undefined,
-                            true,
-                            next.id,
-                        );
-                    }
-                })
-                .catch(() => {});
-        };
-        checkStagedPosPayments();
-        window.addEventListener(POST_INBOX_UPDATED_EVENT, checkStagedPosPayments);
-        return () => window.removeEventListener(POST_INBOX_UPDATED_EVENT, checkStagedPosPayments);
-    }, [isSettingsLoaded, isPosMode, droppedFile, isProcessing, executeReceiveDirectly]);
 
     const processStandardFile = useCallback(async (fileData: number[]) => {
         setIsProcessing(true);
@@ -411,7 +280,7 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseRec
     }, []);
 
     const processIncomingFile = useCallback(
-        async (fileName: string, bytes: number[], forcePos?: boolean) => {
+        async (fileName: string, bytes: number[]) => {
             setBundleName(fileName);
             setDroppedFileContent(bytes);
             const classification = classifyHumocoFile({ fileName, bytes });
@@ -435,7 +304,7 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseRec
                 return true;
             }
             if (isReceiveImportKind(classification.kind)) {
-                await executeReceiveDirectly(bytes, classification.kind, fileName, undefined, forcePos);
+                await executeReceiveDirectly(bytes, classification.kind, fileName);
                 return true;
             }
             return false;
@@ -444,18 +313,11 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseRec
     );
 
     useEffect(() => {
-        if (droppedFile && isSettingsLoaded && processedDroppedFileRef.current !== droppedFile) {
+        if (droppedFile && processedDroppedFileRef.current !== droppedFile) {
             processedDroppedFileRef.current = droppedFile;
-            const forcePos = Boolean(
-                settings?.enablePosMode &&
-                    (isPosMode ||
-                        (settings.posCashierActive ??
-                            (typeof localStorage !== 'undefined' &&
-                                localStorage.getItem(POS_ACTIVE_STORAGE_KEY) === 'true'))),
-            );
-            void processIncomingFile(droppedFile.name, droppedFile.bytes, forcePos);
+            void processIncomingFile(droppedFile.name, droppedFile.bytes);
         }
-    }, [droppedFile, isSettingsLoaded, isPosMode, processIncomingFile, settings?.enablePosMode, settings?.posCashierActive]);
+    }, [droppedFile, processIncomingFile]);
 
     useEffect(() => {
         const preventGlobalDefaults = (e: Event) => e.preventDefault();
@@ -508,22 +370,6 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseRec
         }
     };
 
-    const handlePosModeToggle = (checked: boolean) => {
-        setIsPosMode(checked);
-        if (typeof localStorage !== 'undefined') {
-            localStorage.setItem(POS_ACTIVE_STORAGE_KEY, checked ? 'true' : 'false');
-        }
-        if (settings) {
-            const nextSettings: AppSettings = { ...settings, posCashierActive: checked };
-            setSettings(nextSettings);
-            void protectAction(async (pwd) => {
-                await settingsService.saveSettings(nextSettings, pwd || undefined);
-            }).catch((err) => {
-                logger.warn(`Failed to persist PoS cashier mode: ${stringifyError(err)}`);
-            });
-        }
-    };
-
     const handleCheckPostNow = async () => {
         if (isCheckingPost) return;
         setIsCheckingPost(true);
@@ -531,25 +377,6 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseRec
         setFeedbackMsg('');
         try {
             const res = await postService.syncPostChannels();
-            let stagedPosPayments = res.pendingPosPayments ?? [];
-            if (stagedPosPayments.length === 0 && typeof postService.getPostInboxSummary === 'function') {
-                const summary = await postService.getPostInboxSummary().catch(() => null);
-                stagedPosPayments = summary?.pendingPosPayments ?? [];
-            }
-            setHasStagedPosPayments(stagedPosPayments.length > 0);
-            if (stagedPosPayments.length > 0 && (isPosMode || !settings?.enablePosMode)) {
-                const nextPayment = stagedPosPayments[0];
-                autoStagedPosMsgIdRef.current = nextPayment.id;
-                await executeReceiveDirectly(
-                    nextPayment.bundleBytes,
-                    'transfer',
-                    `post-${nextPayment.id}.transfer`,
-                    undefined,
-                    true,
-                    nextPayment.id,
-                );
-                return;
-            }
             const incomingCount =
                 (res.importedPayments ?? 0) +
                 (res.newSignRequests ?? 0) +
@@ -621,11 +448,6 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseRec
         isDragOver,
         setIsDragOver,
         settings,
-        isPosMode,
-        hasStagedPosPayments,
-        purchaseId,
-        setPurchaseId,
-        handlePosModeToggle,
         handleFileSelect,
         handleDrop,
         handleCheckPostNow,

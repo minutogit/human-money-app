@@ -6,7 +6,7 @@ pub const FIXED_SCALE: i128 = 100_000_000;
 pub fn get_active_asset_classes_impl(
     state: &AppState,
 ) -> Result<Vec<crate::models::FrontendAssetClassSummary>, FrontendError> {
-    let service = state.service.lock().unwrap();
+    let service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
     let asset_classes = service
         .with_wallet(|w| w.get_active_asset_classes())
         .map_err(FrontendError::from)?;
@@ -16,7 +16,7 @@ pub fn get_active_asset_classes_impl(
 pub fn get_user_profile_impl(
     state: &AppState,
 ) -> Result<crate::models::FrontendUserProfile, FrontendError> {
-    let service = state.service.lock().unwrap();
+    let service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
     let profile = service
         .with_wallet(|w| w.profile.to_public_profile())
         .map_err(FrontendError::from)?;
@@ -24,7 +24,7 @@ pub fn get_user_profile_impl(
 }
 
 pub fn get_user_id_impl(state: &AppState) -> Result<String, FrontendError> {
-    let service = state.service.lock().unwrap();
+    let service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
     service
         .with_wallet(|w| w.get_user_id().to_string())
         .map_err(FrontendError::from)
@@ -274,7 +274,7 @@ pub fn calculate_aggregated_balances(
 pub fn get_total_balance_by_currency_impl(
     state: &AppState,
 ) -> Result<Vec<crate::models::FrontendAggregatedBalance>, FrontendError> {
-    let service = state.service.lock().unwrap();
+    let service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
     let balances = service
         .with_wallet_and_identity(calculate_aggregated_balances)
         .map_err(FrontendError::from)?;
@@ -285,7 +285,7 @@ pub fn get_voucher_summaries_impl(
     test_filter: Option<bool>,
     state: &AppState,
 ) -> Result<Vec<crate::models::FrontendVoucherSummary>, FrontendError> {
-    let service = state.service.lock().unwrap();
+    let service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
     let summaries = service
         .with_wallet_and_identity(|w, id| {
             let raw_summaries = w.list_vouchers(Some(id), None, None, test_filter);
@@ -323,7 +323,7 @@ pub fn get_voucher_details_impl(
     local_id: String,
     state: &AppState,
 ) -> Result<crate::models::FrontendVoucherDetails, FrontendError> {
-    let service = state.service.lock().unwrap();
+    let service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
     let details = service
         .with_wallet_and_identity(
             |w, id| -> Result<crate::models::FrontendVoucherDetails, human_money_core::Error> {
@@ -369,7 +369,7 @@ pub fn get_voucher_details_impl(
 pub fn get_double_spend_conflicts_impl(
     state: &AppState,
 ) -> Result<Vec<crate::models::FrontendProofOfDoubleSpendSummary>, FrontendError> {
-    let service = state.service.lock().unwrap();
+    let service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
     let conflicts = service.list_conflicts().map_err(FrontendError::from)?;
     Ok(conflicts.into_iter().map(|s| s.into()).collect())
 }
@@ -387,7 +387,7 @@ pub fn get_proof_of_double_spend_impl(
     proof_id: String,
     state: &AppState,
 ) -> Result<crate::models::FullProofDetails, FrontendError> {
-    let service = state.service.lock().unwrap();
+    let service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
     let summaries = service.list_conflicts().map_err(FrontendError::from)?;
     let summary = summaries
         .into_iter()
@@ -419,7 +419,7 @@ pub fn get_proof_id_for_voucher_impl(
     local_id: String,
     state: &AppState,
 ) -> Result<Option<String>, FrontendError> {
-    let service = state.service.lock().unwrap();
+    let service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
     service
         .get_proof_id_for_voucher(&local_id)
         .map_err(FrontendError::from)
@@ -430,7 +430,7 @@ pub fn check_reputation_impl(
     state: &AppState,
 ) -> Result<crate::models::FrontendTrustStatus, FrontendError> {
     let offender_id = offender_id.trim().to_string();
-    let service = state.service.lock().unwrap();
+    let service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
     let status = service
         .with_wallet(|w| w.check_reputation(&offender_id))
         .map_err(FrontendError::from)?;
@@ -442,6 +442,7 @@ pub fn get_event_history_impl(
     limit: usize,
     state: &AppState,
 ) -> Result<Vec<crate::models::FrontendWalletEvent>, FrontendError> {
+    state.authorize(crate::state::RequiredAccess::Unlocked, None)?;
     let events_cache = state.events.lock().unwrap();
     if let Some(events) = events_cache.as_ref() {
         let start = offset.min(events.len());
@@ -487,6 +488,7 @@ mod tests {
             wot: Mutex::new(None),
             recovery_owner: Mutex::new(None),
             guardian_vault: Mutex::new(None),
+            app_notices: Mutex::new(None),
             post_op_lock: tokio::sync::Mutex::new(()),
             media_negative_cache: Mutex::new(std::collections::HashMap::new()),
             startup_launch_items: Mutex::new(Vec::new()),

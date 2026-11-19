@@ -22,6 +22,15 @@ vi.mock('../../../utils/clipboard', () => ({
     readFromClipboard: vi.fn().mockResolvedValue({ text: '', error: false }),
 }));
 
+let mockSessionValue: {
+    protectAction: ReturnType<typeof vi.fn>;
+    isAuthenticated: boolean;
+} | null = null;
+
+vi.mock('../../../context/SessionContext', () => ({
+    useOptionalSession: () => mockSessionValue,
+}));
+
 vi.mock('@tauri-apps/plugin-dialog', () => ({
     open: vi.fn(),
     save: vi.fn(),
@@ -348,5 +357,38 @@ en = "Backed by personal labor guarantee."
         expect(inModal.getByText(/\[immutable\.identity\]/)).toBeInTheDocument();
 
         consoleWarnSpy.mockRestore();
+    });
+
+    it('protects standard deletion with requireFullAccess and forwards walletPassword', async () => {
+        const protectActionMock = vi.fn(async (action: (pwd: string | null) => Promise<unknown>) => {
+            return await action('master-pw');
+        });
+        mockSessionValue = {
+            protectAction: protectActionMock,
+            isAuthenticated: true,
+        };
+        vi.mocked(standardsService.deleteStandard).mockResolvedValue(undefined);
+
+        render(<StandardsManager />);
+
+        await waitFor(() => {
+            expect(screen.getByText('Minuto Standard')).toBeInTheDocument();
+        });
+
+        fireEvent.click(screen.getByTitle('Delete'));
+        const modal = screen.getByRole('dialog');
+        fireEvent.click(within(modal).getByRole('button', { name: 'Delete' }));
+
+        await waitFor(() => {
+            expect(protectActionMock).toHaveBeenCalledWith(expect.any(Function), {
+                requireFullAccess: true,
+            });
+            expect(standardsService.deleteStandard).toHaveBeenCalledWith(
+                'minuto-standard-uuid-1234',
+                'master-pw'
+            );
+        });
+
+        mockSessionValue = null;
     });
 });

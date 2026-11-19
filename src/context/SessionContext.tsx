@@ -1,6 +1,6 @@
 // src/context/SessionContext.tsx
 import { createContext, useContext, useState, useCallback, ReactNode, useEffect, useRef } from 'react';
-import { authService, SessionAccessMode } from '../services/authService';
+import { authService, SessionAccessMode, SessionStatusDto } from '../services/authService';
 import { settingsService } from '../services/settingsService';
 import { marketService } from '../services/marketService';
 import { logger } from '../utils/log';
@@ -17,7 +17,7 @@ import { channelMembersSyncManager } from '../sync/channelMembersSyncManager';
 import { rateLimitManager } from '../sync/rateLimitManager';
 import { APP_EVENTS, emitAppEvent } from '../utils/appEvents';
 import { useWindowTitleSync } from '../hooks/useWindowTitleSync';
-import { useIntegrityCheck } from '../hooks/useIntegrityCheck';
+import { useIntegrityCheck, CheckIntegrityOptions } from '../hooks/useIntegrityCheck';
 import { useSessionHeartbeat } from '../hooks/useSessionHeartbeat';
 import { isBackendError, stringifyError, translateError } from '../utils/errorHelper';
 import { tourBridge } from '../utils/tourBridge';
@@ -41,8 +41,9 @@ export interface SessionContextType {
     requireFullAccess: <T>(action: (masterPassword: string) => Promise<T>) => Promise<T | void>;
     elevateSession: (masterPassword: string) => Promise<void>;
     accessMode: SessionAccessMode;
-    isSessionActive: boolean;
-    isAuthenticated?: boolean;
+    baseAccessMode: SessionAccessMode;
+    hasCachedSession: boolean;
+    isAuthenticated: boolean;
     profileName: string;
     displayProfileName?: string;
     userAvatarUrl?: string | null;
@@ -57,7 +58,7 @@ export interface SessionContextType {
     triggerSecurityLockdown: (kind: SecurityLockdownKind, details?: SecurityLockdownDetails) => void;
     isRecoveryRequired: boolean;
     integrityReport: import('../types').IntegrityReport | null;
-    checkIntegrity: () => Promise<void>;
+    checkIntegrity: (options?: CheckIntegrityOptions) => Promise<void>;
     clearLocks: () => void;
     lockSession: () => Promise<void>;
 }
@@ -65,6 +66,7 @@ export interface SessionContextType {
 interface PendingModalRequest {
     id: number;
     mode: 'session' | 'stepUp';
+    credentialKind: 'password' | 'pin';
     resolve: (value: unknown) => void;
     reject: (reason: unknown) => void;
     action: (password: string | null) => Promise<unknown>;
@@ -86,12 +88,13 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     const { t } = useTranslation();
     const [modalErrorMsg, setModalErrorMsg] = useState<string>('');
     const [accessMode, setAccessMode] = useState<SessionAccessMode>('full');
-    const [isSessionActive, setIsSessionActive] = useState(false);
+    const [baseAccessMode, setBaseAccessMode] = useState<SessionAccessMode>('full');
+    const [hasCachedSession, setHasCachedSession] = useState(false);
     const [isAuthenticated, setIsAuthenticated] = useState(false);
     const [profileName, setProfileName] = useState<string>("");
     const [displayProfileName, setDisplayProfileName] = useState<string>("");
     const [userAvatarUrl, setUserAvatarUrl] = useState<string | null>(null);
-    const [folderName, setFolderName] = useState<string>("");
+    const [folderName, setFolderNameState] = useState<string>("");
     const [isForkLocked, setIsForkLocked] = useState(false);
     const [lockdownKind, setLockdownKind] = useState<SecurityLockdownKind>(null);
     const [lockdownDetails, setLockdownDetails] = useState<SecurityLockdownDetails | null>(null);
@@ -111,12 +114,19 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     // Refs for throttling, session state, and modal prompt queue
     const lastHeartbeatRef = useRef(0);
     const accessModeRef = useRef<SessionAccessMode>('full');
-    const isSessionActiveRef = useRef(false);
+    const baseAccessModeRef = useRef<SessionAccessMode>('full');
+    const hasCachedSessionRef = useRef(false);
     const isAuthenticatedRef = useRef(false);
+    const folderNameRef = useRef<string>("");
     const pendingQueueRef = useRef<PendingModalRequest[]>([]);
     const nextPendingIdRef = useRef(1);
     const isModalSubmittingRef = useRef(false);
     const syncLoopsRunningRef = useRef(false);
+
+    const setFolderName = useCallback((folder: string) => {
+        folderNameRef.current = folder;
+        setFolderNameState(folder);
+    }, []);
 
     const startSyncLoops = useCallback((_syncPassword?: string) => {
         if (syncLoopsRunningRef.current) {
@@ -137,32 +147,69 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         stopMarketSyncLoop();
     }, []);
 
+    const applySessionStatus = useCallback(
+        (status: SessionStatusDto) => {
+            const nextAccess: SessionAccessMode =
+                status.accessMode === 'dailyPay' ? 'dailyPay' : 'full';
+            const nextBase: SessionAccessMode =
+                status.baseAccessMode === 'dailyPay' ? 'dailyPay' : 'full';
+            const nextCached = Boolean(status.isUnlocked && status.hasCachedSession);
+
+            accessModeRef.current = nextAccess;
+            baseAccessModeRef.current = nextBase;
+            hasCachedSessionRef.current = nextCached;
+
+            setAccessMode(nextAccess);
+            setBaseAccessMode(nextBase);
+            setHasCachedSession(nextCached);
+
+            if (nextCached && isAuthenticatedRef.current) {
+                lastHeartbeatRef.current = Date.now();
+                startSyncLoops();
+            } else {
+                stopSyncLoops();
+            }
+        },
+        [startSyncLoops, stopSyncLoops],
+    );
+
     // Side-effect hooks
     useWindowTitleSync(profileName);
 
-    const onSessionExpired = useCallback(() => {
-        setIsSessionActive(false);
-        isSessionActiveRef.current = false;
-        stopSyncLoops();
-        emitAppEvent(APP_EVENTS.SESSION_LOCKED);
-        // DO NOT clear profileName and DO NOT set isAuthenticated to false
-    }, [stopSyncLoops]);
+    const onStatusSync = useCallback(
+        (status: SessionStatusDto) => {
+            applySessionStatus(status);
+            if (!status.hasCachedSession) {
+                emitAppEvent(APP_EVENTS.SESSION_LOCKED);
+            }
+            // DO NOT clear profileName and DO NOT set isAuthenticated to false
+        },
+        [applySessionStatus],
+    );
 
-    useSessionHeartbeat(isSessionActive, onSessionExpired, lastHeartbeatRef);
+    useSessionHeartbeat(hasCachedSession, onStatusSync, lastHeartbeatRef);
 
     const { integrityReport, checkIntegrity } = useIntegrityCheck();
 
     useEffect(() => {
-        isSessionActiveRef.current = isSessionActive;
-    }, [isSessionActive]);
+        hasCachedSessionRef.current = hasCachedSession;
+    }, [hasCachedSession]);
 
     useEffect(() => {
         accessModeRef.current = accessMode;
     }, [accessMode]);
 
     useEffect(() => {
+        baseAccessModeRef.current = baseAccessMode;
+    }, [baseAccessMode]);
+
+    useEffect(() => {
         isAuthenticatedRef.current = isAuthenticated;
     }, [isAuthenticated]);
+
+    useEffect(() => {
+        folderNameRef.current = folderName;
+    }, [folderName]);
 
     useEffect(() => {
         return () => {
@@ -175,21 +222,17 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         };
     }, [stopSyncLoops]);
 
-    const activateSession = useCallback(() => {
-        setIsSessionActive(true);
-        isSessionActiveRef.current = true;
-        lastHeartbeatRef.current = Date.now();
-    }, []);
-
     const enqueuePendingRequest = useCallback(
         <T,>(
             mode: 'session' | 'stepUp',
+            credentialKind: 'password' | 'pin',
             action: (password: string | null) => Promise<T>,
         ): Promise<T> => {
             return new Promise<T>((resolve, reject) => {
                 const entry: PendingModalRequest = {
                     id: nextPendingIdRef.current++,
                     mode,
+                    credentialKind,
                     resolve: resolve as (value: unknown) => void,
                     reject,
                     action: action as (password: string | null) => Promise<unknown>,
@@ -204,59 +247,59 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         [],
     );
 
+    const switchActivePendingToPassword = useCallback((errorText?: string) => {
+        const current = pendingQueueRef.current[0];
+        if (!current) return;
+        current.credentialKind = 'password';
+        setModalErrorMsg(errorText ?? '');
+        setActivePending({ ...current });
+    }, []);
+
     const notifyLogin = useCallback((name?: string, folder?: string) => {
         setIsAuthenticated(true);
         isAuthenticatedRef.current = true;
         accessModeRef.current = 'full';
+        baseAccessModeRef.current = 'full';
+        setAccessMode('full');
+        setBaseAccessMode('full');
         if (name) setProfileName(name);
-        if (folder) setFolderName(folder);
-        activateSession();
-        startSyncLoops();
-        checkIntegrity();
+        if (folder) {
+            folderNameRef.current = folder;
+            setFolderNameState(folder);
+        }
 
-        authService.getSessionAccessMode?.()
-            ?.then((mode) => {
-                const resolved: SessionAccessMode =
-                    mode === 'full' || mode === 'dailyPay' || mode === 'receiveOnly'
-                        ? mode
-                        : 'full';
-                accessModeRef.current = resolved;
-                setAccessMode(resolved);
-            })
-            ?.catch(() => {
-                accessModeRef.current = 'full';
-                setAccessMode('full');
-            });
-
-        authService.isSessionActive()
-            .then((active) => {
-                if (active) {
-                    activateSession();
-                    startSyncLoops();
-                } else {
-                    setIsSessionActive(false);
-                    isSessionActiveRef.current = false;
-                    stopSyncLoops();
-                }
+        authService
+            .getSessionStatus()
+            .then((status) => {
+                if (!isAuthenticatedRef.current) return;
+                applySessionStatus(status);
+                void checkIntegrity({
+                    allowSilentRepair: status.accessMode === 'full' && status.hasCachedSession,
+                });
             })
             .catch(() => {
-                setIsSessionActive(false);
-                isSessionActiveRef.current = false;
+                if (!isAuthenticatedRef.current) return;
+                hasCachedSessionRef.current = false;
+                setHasCachedSession(false);
                 stopSyncLoops();
+                void checkIntegrity({ allowSilentRepair: false });
             });
-    }, [activateSession, checkIntegrity, startSyncLoops, stopSyncLoops]);
+    }, [applySessionStatus, checkIntegrity, stopSyncLoops]);
 
     const notifyLogout = useCallback(() => {
         setIsAuthenticated(false);
         isAuthenticatedRef.current = false;
-        setIsSessionActive(false);
-        isSessionActiveRef.current = false;
+        setHasCachedSession(false);
+        hasCachedSessionRef.current = false;
         accessModeRef.current = 'full';
+        baseAccessModeRef.current = 'full';
         setAccessMode('full');
+        setBaseAccessMode('full');
         setProfileName("");
         setDisplayProfileName("");
         setUserAvatarUrl(null);
-        setFolderName("");
+        folderNameRef.current = "";
+        setFolderNameState("");
         stopSyncLoops();
         channelMembersSyncManager.reset();
         rateLimitManager.clearCooldown();
@@ -272,24 +315,12 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     }, [stopSyncLoops]);
 
     const elevateSession = useCallback(async (masterPassword: string) => {
-        const nextMode = await authService.elevateSessionWithPassword(masterPassword);
-        accessModeRef.current = nextMode;
-        setAccessMode(nextMode);
-        try {
-            const settings = await settingsService.getSettings();
-            if (settings.sessionTimeoutSeconds > 0) {
-                activateSession();
-                if (isAuthenticatedRef.current) {
-                    startSyncLoops(masterPassword);
-                }
-            }
-        } catch {
-            // Do not activate persistent session timer when settings are unavailable or timeout is 0.
-        }
-    }, [activateSession, startSyncLoops]);
+        const status = await authService.elevateSessionWithPassword(masterPassword);
+        applySessionStatus(status);
+    }, [applySessionStatus]);
 
     const requireFullAccess = useCallback(async <T,>(action: (masterPassword: string) => Promise<T>): Promise<T | void> => {
-        return enqueuePendingRequest<T>('stepUp', (pwd) => action(pwd || ''));
+        return enqueuePendingRequest<T>('stepUp', 'password', (pwd) => action(pwd || ''));
     }, [enqueuePendingRequest]);
 
     const protectAction = useCallback(async <T,>(
@@ -303,11 +334,18 @@ export function SessionProvider({ children }: { children: ReactNode }) {
                 const errMsg = stringifyError(error);
                 const errCode = isBackendError(error) ? error.code : '';
 
-                if (errCode === 'error.wallet.locked' || errCode === 'error.auth.sessionTimeout' || errCode === 'error.auth.passwordRequired'
-                    || errMsg.includes("Password required") || errMsg.includes("Session timed out") || errMsg.includes("Wallet is locked")) {
+                if (errCode === 'error.wallet.locked'
+                    || errCode === 'error.auth.sessionTimeout'
+                    || errCode === 'error.auth.sessionNotActive'
+                    || errCode === 'error.auth.passwordRequired'
+                    || errMsg.includes("Password required")
+                    || errMsg.includes("Session timed out")
+                    || errMsg.includes("Wallet is locked")) {
                     logger.warn("Backend rejected action (wallet locked/session expired). Resetting frontend session state.");
-                    setIsSessionActive(false);
-                    isSessionActiveRef.current = false;
+                    hasCachedSessionRef.current = false;
+                    accessModeRef.current = baseAccessModeRef.current;
+                    setHasCachedSession(false);
+                    setAccessMode(baseAccessModeRef.current);
                     stopSyncLoops();
                     emitAppEvent(APP_EVENTS.SESSION_LOCKED);
                     throw new Error("SESSION_EXPIRED_RETRY");
@@ -344,31 +382,41 @@ export function SessionProvider({ children }: { children: ReactNode }) {
             const settings = await settingsService.getSettings();
             const timeout = settings.sessionTimeoutSeconds;
             const needsStepUp = Boolean(options?.requireFullAccess && accessModeRef.current !== 'full');
+            const sessionCredentialKind: 'password' | 'pin' =
+                baseAccessModeRef.current === 'dailyPay' ? 'pin' : 'password';
 
-            // Mode A: Always prompt for password (timeout = 0)
+            // Mode A: Always prompt per action (timeout = 0)
             if (timeout === 0) {
-                return enqueuePendingRequest<T>(needsStepUp ? 'stepUp' : 'session', action);
+                return enqueuePendingRequest<T>(
+                    needsStepUp ? 'stepUp' : 'session',
+                    needsStepUp ? 'password' : sessionCredentialKind,
+                    action,
+                );
             }
 
             if (needsStepUp) {
-                return enqueuePendingRequest<T>('stepUp', action);
+                return enqueuePendingRequest<T>('stepUp', 'password', action);
             }
 
-            // Mode B: Reuse active session when unlocked
-            if (isSessionActiveRef.current) {
+            // Mode B: Reuse active session when unlocked and cached
+            if (hasCachedSessionRef.current) {
                 try {
                     return await executeWithSessionCheck(null);
                 } catch (e) {
                     if (e instanceof Error && e.message === "SESSION_EXPIRED_RETRY") {
-                        return enqueuePendingRequest<T>('session', action);
+                        return enqueuePendingRequest<T>(
+                            'session',
+                            baseAccessModeRef.current === 'dailyPay' ? 'pin' : 'password',
+                            action,
+                        );
                     }
                     if (e instanceof Error && e.message === "STEP_UP_REQUIRED_RETRY") {
-                        return enqueuePendingRequest<T>('stepUp', action);
+                        return enqueuePendingRequest<T>('stepUp', 'password', action);
                     }
                     throw e;
                 }
             } else {
-                return enqueuePendingRequest<T>('session', action);
+                return enqueuePendingRequest<T>('session', sessionCredentialKind, action);
             }
         } catch (e) {
             logger.error(`Error in protectAction: ${stringifyError(e)}`);
@@ -381,11 +429,21 @@ export function SessionProvider({ children }: { children: ReactNode }) {
             const result = await entry.action(password);
             entry.resolve(result);
         } catch (actionErr) {
+            const msg = stringifyError(actionErr);
+            const code = isBackendError(actionErr) ? actionErr.code : '';
+            const isInsufficient =
+                code === 'error.auth.insufficientAccessMode' ||
+                msg.includes('InsufficientAccessMode');
+            if (entry.mode === 'session' && isInsufficient) {
+                enqueuePendingRequest('stepUp', 'password', entry.action)
+                    .then(entry.resolve, entry.reject);
+                return;
+            }
             entry.reject(actionErr);
         }
     };
 
-    const handleModalConfirm = async (password: string) => {
+    const handleModalConfirm = async (credential: string) => {
         const currentPending = pendingQueueRef.current[0];
         if (!currentPending || isModalSubmittingRef.current) return;
         isModalSubmittingRef.current = true;
@@ -393,7 +451,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         try {
             if (currentPending.mode === 'stepUp') {
                 try {
-                    await elevateSession(password);
+                    await elevateSession(credential);
                 } catch (err) {
                     isModalSubmittingRef.current = false;
                     setModalErrorMsg(translateError(err, t));
@@ -412,15 +470,15 @@ export function SessionProvider({ children }: { children: ReactNode }) {
                 }
 
                 const toRun: Array<{ entry: PendingModalRequest; pwd: string | null }> = [
-                    { entry: currentPending, pwd: password },
+                    { entry: currentPending, pwd: credential },
                 ];
 
                 while (pendingQueueRef.current.length > 0) {
                     const next = pendingQueueRef.current[0];
                     if (next.mode === 'stepUp') {
                         pendingQueueRef.current.shift();
-                        toRun.push({ entry: next, pwd: password });
-                    } else if (next.mode === 'session' && timeout > 0 && isSessionActiveRef.current) {
+                        toRun.push({ entry: next, pwd: credential });
+                    } else if (next.mode === 'session' && timeout > 0 && hasCachedSessionRef.current) {
                         pendingQueueRef.current.shift();
                         toRun.push({ entry: next, pwd: null });
                     } else {
@@ -444,37 +502,65 @@ export function SessionProvider({ children }: { children: ReactNode }) {
                 return;
             }
 
+            const folderArg = folderNameRef.current || undefined;
+
             if (timeout > 0) {
-                try {
-                    const unlocked = await authService.unlockSession(password, timeout);
-                    if ((unlocked as unknown) === false) {
-                        throw new Error('Invalid password');
+                if (currentPending.credentialKind === 'pin') {
+                    try {
+                        const status = await authService.unlockSessionWithPin(
+                            credential,
+                            timeout,
+                            folderArg,
+                        );
+                        applySessionStatus(status);
+                        setModalErrorMsg('');
+                    } catch (err) {
+                        const code = isBackendError(err) ? err.code : '';
+                        const msg = stringifyError(err);
+                        const isPinWiped =
+                            code === 'error.auth.pinWipedMaxAttempts' ||
+                            msg.includes('pinWipedMaxAttempts');
+                        isModalSubmittingRef.current = false;
+                        if (isPinWiped) {
+                            switchActivePendingToPassword(translateError(err, t));
+                        } else {
+                            setModalErrorMsg(translateError(err, t));
+                        }
+                        return;
                     }
-                    setModalErrorMsg('');
-                    activateSession();
-                    if (isAuthenticatedRef.current) {
-                        startSyncLoops(password);
-                    }
-                    logger.info(`Session unlocked via modal for ${timeout} seconds.`);
-                } catch (err) {
-                    const msg = stringifyError(err);
-                    const code = isBackendError(err) ? err.code : '';
-                    const isInsufficient =
-                        code === 'error.auth.insufficientAccessMode' ||
-                        msg.includes('InsufficientAccessMode');
-                    if (isInsufficient && accessModeRef.current !== 'full') {
-                        try {
-                            await elevateSession(password);
-                            setModalErrorMsg('');
-                        } catch (elevErr) {
+                } else {
+                    try {
+                        if (baseAccessModeRef.current !== 'full') {
+                            await elevateSession(credential);
+                        } else {
+                            const status = await authService.unlockSession(credential, timeout);
+                            if ((status as unknown) === false) {
+                                throw new Error('Invalid password');
+                            }
+                            applySessionStatus(status);
+                        }
+                        setModalErrorMsg('');
+                        logger.info(`Session unlocked via modal for ${timeout} seconds.`);
+                    } catch (err) {
+                        const msg = stringifyError(err);
+                        const code = isBackendError(err) ? err.code : '';
+                        const isInsufficient =
+                            code === 'error.auth.insufficientAccessMode' ||
+                            msg.includes('InsufficientAccessMode');
+                        if (isInsufficient && accessModeRef.current !== 'full') {
+                            try {
+                                await elevateSession(credential);
+                                setModalErrorMsg('');
+                            } catch (elevErr) {
+                                isModalSubmittingRef.current = false;
+                                setModalErrorMsg(translateError(elevErr, t));
+                                return;
+                            }
+                        } else {
                             isModalSubmittingRef.current = false;
-                            setModalErrorMsg(translateError(elevErr, t));
+                            setModalErrorMsg(translateError(err, t));
                             return;
                         }
-                    } else {
-                        isModalSubmittingRef.current = false;
-                        setModalErrorMsg(translateError(err, t));
-                        return;
                     }
                 }
 
@@ -488,12 +574,66 @@ export function SessionProvider({ children }: { children: ReactNode }) {
                 isModalSubmittingRef.current = false;
                 await Promise.all(toRun.map((entry) => runPendingEntry(entry, null)));
             } else {
-                // Mode A (timeout === 0): prompt once per queued request
-                setModalErrorMsg('');
-                pendingQueueRef.current.shift();
-                setActivePending(pendingQueueRef.current[0] ?? null);
-                isModalSubmittingRef.current = false;
-                await runPendingEntry(currentPending, password);
+                // Mode A (timeout === 0): prompt per action; PIN uses ephemeral backend unlock + lock
+                if (currentPending.credentialKind === 'pin') {
+                    try {
+                        await authService.unlockSessionWithPin(credential, 30, folderArg);
+                    } catch (err) {
+                        const code = isBackendError(err) ? err.code : '';
+                        const msg = stringifyError(err);
+                        const isPinWiped =
+                            code === 'error.auth.pinWipedMaxAttempts' ||
+                            msg.includes('pinWipedMaxAttempts');
+                        isModalSubmittingRef.current = false;
+                        if (isPinWiped) {
+                            switchActivePendingToPassword(translateError(err, t));
+                        } else {
+                            setModalErrorMsg(translateError(err, t));
+                        }
+                        return;
+                    }
+
+                    setModalErrorMsg('');
+                    pendingQueueRef.current.shift();
+                    setActivePending(pendingQueueRef.current[0] ?? null);
+                    isModalSubmittingRef.current = false;
+                    try {
+                        await runPendingEntry(currentPending, null);
+                    } finally {
+                        await authService.lockSession().catch(() => undefined);
+                        hasCachedSessionRef.current = false;
+                        accessModeRef.current = baseAccessModeRef.current;
+                        setHasCachedSession(false);
+                        setAccessMode(baseAccessModeRef.current);
+                    }
+                } else {
+                    if (baseAccessModeRef.current !== 'full') {
+                        try {
+                            await elevateSession(credential);
+                        } catch (err) {
+                            isModalSubmittingRef.current = false;
+                            setModalErrorMsg(translateError(err, t));
+                            return;
+                        }
+                    } else {
+                        try {
+                            const status = await authService.unlockSession(credential, 0);
+                            if ((status as unknown) === false) {
+                                throw new Error('Invalid password');
+                            }
+                            applySessionStatus(status);
+                        } catch (err) {
+                            isModalSubmittingRef.current = false;
+                            setModalErrorMsg(translateError(err, t));
+                            return;
+                        }
+                    }
+                    setModalErrorMsg('');
+                    pendingQueueRef.current.shift();
+                    setActivePending(pendingQueueRef.current[0] ?? null);
+                    isModalSubmittingRef.current = false;
+                    await runPendingEntry(currentPending, credential);
+                }
             }
         } finally {
             isModalSubmittingRef.current = false;
@@ -517,8 +657,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         } catch (e) {
             logger.warn(`Failed to lock session in backend: ${stringifyError(e)}`);
         } finally {
-            setIsSessionActive(false);
-            isSessionActiveRef.current = false;
+            const fallbackBase = baseAccessModeRef.current;
+            hasCachedSessionRef.current = false;
+            accessModeRef.current = fallbackBase;
+            setHasCachedSession(false);
+            setAccessMode(fallbackBase);
             stopSyncLoops();
             emitAppEvent(APP_EVENTS.SESSION_LOCKED);
         }
@@ -543,7 +686,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         };
 
         const loadSummary = () => {
-            if (!isSessionActive || accessMode === 'receiveOnly') return;
+            if (!isAuthenticated) return;
             if (typeof marketService?.getMyMarketProfile !== 'function') return;
             Promise.resolve(marketService.getMyMarketProfile())
                 .then((mp) => applySummary(mp))
@@ -565,7 +708,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         return () => {
             window.removeEventListener(MY_PROFILE_UPDATED_EVENT, onProfileUpdated);
         };
-    }, [isSessionActive, accessMode]);
+    }, [isAuthenticated]);
 
     useEffect(() => {
         return tourBridge.subscribe((partial) => {
@@ -573,9 +716,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
                 setIsAuthenticated(partial.isAuthenticated);
                 isAuthenticatedRef.current = partial.isAuthenticated;
             }
-            if (partial.isSessionActive !== undefined) {
-                setIsSessionActive(partial.isSessionActive);
-                isSessionActiveRef.current = partial.isSessionActive;
+            if (partial.hasCachedSession !== undefined) {
+                setHasCachedSession(partial.hasCachedSession);
+                hasCachedSessionRef.current = partial.hasCachedSession;
             }
             if (partial.isForkLocked !== undefined) {
                 setIsForkLocked(partial.isForkLocked);
@@ -593,13 +736,45 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     const isModalOpen = activePending !== null;
 
     return (
-        <SessionContext.Provider value={{ protectAction, requireFullAccess, elevateSession, accessMode, isSessionActive, isAuthenticated, profileName, displayProfileName, userAvatarUrl, folderName, setProfileName, setFolderName, notifyLogin, notifyLogout, isForkLocked, lockdownKind, lockdownDetails, triggerSecurityLockdown, isRecoveryRequired, integrityReport, checkIntegrity, clearLocks, lockSession }}>
+        <SessionContext.Provider
+            value={{
+                protectAction,
+                requireFullAccess,
+                elevateSession,
+                accessMode,
+                baseAccessMode,
+                hasCachedSession,
+                isAuthenticated,
+                profileName,
+                displayProfileName,
+                userAvatarUrl,
+                folderName,
+                setProfileName,
+                setFolderName,
+                notifyLogin,
+                notifyLogout,
+                isForkLocked,
+                lockdownKind,
+                lockdownDetails,
+                triggerSecurityLockdown,
+                isRecoveryRequired,
+                integrityReport,
+                checkIntegrity,
+                clearLocks,
+                lockSession,
+            }}
+        >
             {children}
             <AuthModal
                 key={activePending?.id ?? 'closed'}
                 isOpen={isModalOpen}
                 onConfirm={handleModalConfirm}
                 onCancel={handleModalCancel}
+                credentialKind={activePending?.credentialKind ?? 'password'}
+                canSwitchToPassword={
+                    activePending?.mode === 'session' && activePending?.credentialKind === 'pin'
+                }
+                onSwitchToPassword={() => switchActivePendingToPassword()}
                 title={activePending?.mode === 'stepUp' ? t('auth.stepUpTitle') : undefined}
                 description={activePending?.mode === 'stepUp' ? t('auth.stepUpDesc') : undefined}
                 errorMsg={modalErrorMsg || undefined}

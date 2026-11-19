@@ -49,7 +49,7 @@ pub async fn sync_market_channels_with_options(
     state: &AppState,
 ) -> Result<FrontendMarketSyncResult, FrontendError> {
     let mut settings = {
-        let mut service = state.lock_service()?;
+        let mut service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
         state
             .get_cached_settings()
             .or_else(|_| state.load_settings(&mut service, password.as_deref()))
@@ -250,7 +250,7 @@ pub fn get_sync_overview_status_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendSyncOverviewStatus, FrontendError> {
-    let mut service = state.lock_service()?;
+    let mut service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
     let settings = state
         .get_cached_settings()
         .or_else(|_| state.load_settings(&mut service, password.as_deref()))

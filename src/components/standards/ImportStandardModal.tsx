@@ -6,6 +6,7 @@ import { Input } from '../ui/Input';
 import { ConfirmationModal } from '../ui/ConfirmationModal';
 import { CheckCircle2, Lock, ShieldCheck } from 'lucide-react';
 import { translateError } from '../../utils/errorHelper';
+import { useOptionalSession } from '../../context/SessionContext';
 
 interface ImportStandardModalProps {
     isOpen: boolean;
@@ -23,6 +24,7 @@ export function ImportStandardModal({
     onSuccess
 }: ImportStandardModalProps) {
     const { t } = useTranslation();
+    const session = useOptionalSession();
     const [definition, setDefinition] = useState<VoucherStandardDefinition | null>(initialDefinition || null);
     const [password, setPassword] = useState('');
     const [needsPassword, setNeedsPassword] = useState(!initialDefinition);
@@ -62,7 +64,20 @@ export function ImportStandardModal({
         setError('');
         setIsImporting(true);
         try {
-            const importedId = await standardsService.importStandard(containerBytes, password || null);
+            const importedId = session?.isAuthenticated
+                ? await session.protectAction(
+                      async (walletPwd) =>
+                          await standardsService.importStandard(
+                              containerBytes,
+                              password || null,
+                              walletPwd
+                          ),
+                      { requireFullAccess: true }
+                  )
+                : await standardsService.importStandard(containerBytes, password || null, null);
+            if (!importedId) {
+                return;
+            }
             onSuccess(importedId);
             onClose();
         } catch (e) {

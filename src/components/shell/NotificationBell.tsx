@@ -28,7 +28,7 @@ import { describeAppNotice, formatLastSyncLabel } from "../../utils/appNotices";
 export const NotificationBell: React.FC = () => {
     const { t } = useTranslation();
     const { navigate } = useNavigation();
-    const { isSessionActive } = useSession();
+    const { isAuthenticated, protectAction } = useSession();
 
     const [notices, setNotices] = useState<FrontendAppNotice[]>([]);
     const [lastSyncAt, setLastSyncAt] = useState<number | null>(null);
@@ -39,7 +39,7 @@ export const NotificationBell: React.FC = () => {
     const triggerRef = useRef<HTMLButtonElement>(null);
 
     const loadNotices = useCallback(async () => {
-        if (!isSessionActive || typeof marketService?.getAppNotices !== "function") return;
+        if (!isAuthenticated || typeof marketService?.getAppNotices !== "function") return;
         try {
             const res = await marketService.getAppNotices();
             setNotices(res?.notices || []);
@@ -47,10 +47,10 @@ export const NotificationBell: React.FC = () => {
         } catch {
             // Silently ignore when locked or unavailable
         }
-    }, [isSessionActive]);
+    }, [isAuthenticated]);
 
     useEffect(() => {
-        if (!isSessionActive) {
+        if (!isAuthenticated) {
             setNotices([]);
             setLastSyncAt(null);
             return;
@@ -64,15 +64,15 @@ export const NotificationBell: React.FC = () => {
         return () => {
             window.removeEventListener(APP_NOTICES_UPDATED_EVENT, onUpdated);
         };
-    }, [isSessionActive, loadNotices]);
+    }, [isAuthenticated, loadNotices]);
 
     useAppEvent(APP_EVENTS.POST_INBOX_UPDATED, () => {
         void loadNotices();
-    }, isSessionActive);
+    }, isAuthenticated);
 
     useAppEvent(APP_EVENTS.SYNC_COMPLETED, () => {
         void loadNotices();
-    }, isSessionActive);
+    }, isAuthenticated);
 
     useEffect(() => {
         if (!isOpen) return;
@@ -101,7 +101,7 @@ export const NotificationBell: React.FC = () => {
     }, [isOpen]);
 
     const handleSyncNow = async () => {
-        if (isSyncing || !isSessionActive) return;
+        if (isSyncing || !isAuthenticated) return;
         setIsSyncing(true);
         try {
             const [mktRes, postRes] = await Promise.allSettled([
@@ -150,9 +150,13 @@ export const NotificationBell: React.FC = () => {
         const desc = describeAppNotice(notice, t);
         if (!notice.read && typeof marketService?.markAppNoticesRead === "function") {
             try {
-                const res = await marketService.markAppNoticesRead(notice.id);
-                setNotices(res?.notices || []);
-                notifyAppNoticesUpdated();
+                const res = await protectAction(async (pwd) => {
+                    return await marketService.markAppNoticesRead(notice.id, pwd || undefined);
+                });
+                if (res) {
+                    setNotices(res.notices || []);
+                    notifyAppNoticesUpdated();
+                }
             } catch {
                 // ignore
             }
@@ -164,9 +168,13 @@ export const NotificationBell: React.FC = () => {
     const handleMarkAllRead = async () => {
         if (typeof marketService?.markAppNoticesRead !== "function") return;
         try {
-            const res = await marketService.markAppNoticesRead(null);
-            setNotices(res?.notices || []);
-            notifyAppNoticesUpdated();
+            const res = await protectAction(async (pwd) => {
+                return await marketService.markAppNoticesRead(null, pwd || undefined);
+            });
+            if (res) {
+                setNotices(res.notices || []);
+                notifyAppNoticesUpdated();
+            }
         } catch {
             // ignore
         }
@@ -175,9 +183,13 @@ export const NotificationBell: React.FC = () => {
     const handleClearAll = async () => {
         if (typeof marketService?.clearAppNotices !== "function") return;
         try {
-            const res = await marketService.clearAppNotices();
-            setNotices(res?.notices || []);
-            notifyAppNoticesUpdated();
+            const res = await protectAction(async (pwd) => {
+                return await marketService.clearAppNotices(pwd || undefined);
+            });
+            if (res) {
+                setNotices(res.notices || []);
+                notifyAppNoticesUpdated();
+            }
         } catch {
             // ignore
         }

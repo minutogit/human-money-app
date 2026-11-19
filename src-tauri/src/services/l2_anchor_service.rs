@@ -39,7 +39,7 @@ fn parse_asn_u32(raw: Option<&str>) -> Option<u32> {
 }
 
 pub(crate) fn get_seal_sync_status_impl(state: &AppState) -> Result<String, FrontendError> {
-    let service = state.lock_service()?;
+    let service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
     let status = service
         .get_seal_sync_status()
         .map_err(FrontendError::from)?;
@@ -56,6 +56,7 @@ pub(crate) async fn probe_lock_server_cmd_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendLockServerProbeResult, FrontendError> {
+    state.authorize(crate::state::RequiredAccess::Unlocked, None)?;
     let client = sync_client::create_sync_probe_client();
     let mut result = sync_client::probe_lock_server(
         &client,
@@ -96,6 +97,7 @@ pub(crate) fn set_own_nominated_lock_server_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<Option<NominatedLockServerMeta>, FrontendError> {
+    state.authorize(crate::state::RequiredAccess::Full, password.as_deref())?;
     let mut settings = state.get_cached_settings().unwrap_or_default();
 
     let updated = match write_url
@@ -162,6 +164,7 @@ pub(crate) async fn assemble_anchor_template_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<StoredAnchorTemplateMeta, FrontendError> {
+    state.authorize(crate::state::RequiredAccess::Full, password.as_deref())?;
     if servers.is_empty() || servers.len() > human_money_core::humoco_proto::MAX_COMMITTEE_SIZE {
         return Err(FrontendError::from(
             "Anker-Vorlage benötigt 1 bis 5 geprüfte Lock-Server.".to_string(),
@@ -392,6 +395,7 @@ pub(crate) async fn assemble_anchor_template_impl(
 }
 
 pub(crate) async fn prewarm_l2_checkout_impl(state: &AppState) -> Result<(), FrontendError> {
+    state.authorize(crate::state::RequiredAccess::Unlocked, None)?;
     let Ok(settings) = state.get_cached_settings() else {
         return Ok(());
     };
@@ -417,6 +421,7 @@ pub(crate) async fn prewarm_l2_checkout_impl(state: &AppState) -> Result<(), Fro
 pub(crate) fn check_l2_lock_status_impl(
     state: &AppState,
 ) -> Result<FrontendL2LockStatusDto, FrontendError> {
+    state.authorize(crate::state::RequiredAccess::Unlocked, None)?;
     let settings = state.get_cached_settings().unwrap_or_default();
     let unresolved_intents_count = {
         let service = state.lock_service()?;
@@ -614,6 +619,7 @@ pub(crate) async fn check_voucher_l2_status_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendVoucherL2StatusDto, FrontendError> {
+    state.authorize(crate::state::RequiredAccess::Unlocked, None)?;
     let settings = state.get_cached_settings().unwrap_or_default();
 
     let (target_opt, is_currently_archived, pow_bits, reduced_protection, manifest_rev) = {

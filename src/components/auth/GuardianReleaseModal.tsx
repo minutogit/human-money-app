@@ -463,14 +463,6 @@ export const GuardianReleaseModal: React.FC<GuardianReleaseModalProps> = ({
                                 )}
 
                                 {/* Password Input */}
-                                {session?.accessMode === 'receiveOnly' && (
-                                    <AlertBanner variant="warning">
-                                        {t(
-                                            'backup.releaseCashierRequiresFullHint',
-                                            'Im Kassen-Modus ist eine Wiederherstellungs-Freigabe gesperrt. Beim Bestätigen wirst du gebeten, dein volles Profil-Passwort einzugeben.'
-                                        )}
-                                    </AlertBanner>
-                                )}
                                 <div className="space-y-1.5">
                                     <label className="text-xs font-bold text-theme-secondary uppercase tracking-wider flex items-center gap-1.5">
                                         <KeyRound size={15} className="text-theme-primary" />

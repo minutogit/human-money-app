@@ -34,8 +34,8 @@ import type { HelpTopicId } from "./help/helpTopics";
 function AppContent() {
     const { t } = useTranslation();
     const { appState, navigate, pendingDroppedFile, setPendingDroppedFile } = useNavigation();
-    const { isForkLocked, isRecoveryRequired, clearLocks, isSessionActive, isAuthenticated, protectAction } = useSession();
-    const isLoggedIn = isAuthenticated ?? isSessionActive;
+    const { isForkLocked, isRecoveryRequired, clearLocks, isAuthenticated, protectAction } = useSession();
+    const isLoggedIn = isAuthenticated;
 
     const appStateViewRef = useRef(appState.view);
     appStateViewRef.current = appState.view;

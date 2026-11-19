@@ -31,7 +31,8 @@ pub fn mark_inquiry_read_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<(), FrontendError> {
-    let mut service = state.service.lock().unwrap();
+    let mut service =
+        state.authorize_and_lock(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
     let mut post_state: StoredPostState = crate::state::load_encrypted_json_or_default(
         &mut service,
         crate::state::MARKET_POST_STATE_KEY,
@@ -64,7 +65,8 @@ pub fn dismiss_pending_post_item_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<(), FrontendError> {
-    let mut service = state.service.lock().unwrap();
+    let mut service =
+        state.authorize_and_lock(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
     let mut post_state: StoredPostState = crate::state::load_encrypted_json_or_default(
         &mut service,
         crate::state::MARKET_POST_STATE_KEY,
@@ -81,9 +83,6 @@ pub fn dismiss_pending_post_item_impl(
         }
         "inquiry" => {
             post_state.inquiries.retain(|i| i.inquiry_id != id);
-        }
-        "pos_payment" => {
-            post_state.pending_pos_payments.retain(|p| p.id != id);
         }
         other => {
             return Err(FrontendError::from(format!(
@@ -106,6 +105,7 @@ pub fn get_post_inbox_summary_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendPostInboxSummary, FrontendError> {
+    state.authorize(crate::state::RequiredAccess::Unlocked, None)?;
     let mut post_state = load_post_state(state, password.as_deref())?;
     let unacknowledged_payments = post_state
         .outbox_entries
@@ -127,7 +127,6 @@ pub fn get_post_inbox_summary_impl(
     Ok(FrontendPostInboxSummary {
         pending_sign_requests: post_state.pending_sign_requests,
         pending_wot_handshakes: post_state.pending_wot_handshakes,
-        pending_pos_payments: post_state.pending_pos_payments,
         inquiries: post_state.inquiries,
         unacknowledged_payments,
     })
@@ -537,7 +536,7 @@ pub async fn sync_post_channels_impl(
     state: &AppState,
 ) -> Result<FrontendPostSyncResult, FrontendError> {
     let settings = {
-        let mut service = state.service.lock().unwrap();
+        let mut service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
         state
             .get_cached_settings()
             .or_else(|_| state.load_settings(&mut service, password.as_deref()))
@@ -556,7 +555,6 @@ pub async fn sync_post_channels_impl(
             new_inquiries: 0,
             new_inquiry_messages: 0,
             pruned_boxes: 0,
-            pending_pos_payments: Vec::new(),
             errors: Vec::new(),
             retry_after_secs: None,
         });
@@ -824,7 +822,6 @@ pub async fn sync_post_channels_impl(
         new_inquiries: stats.new_inquiries,
         new_inquiry_messages: stats.new_inquiry_messages,
         pruned_boxes: stats.pruned_boxes,
-        pending_pos_payments: post_state.pending_pos_payments,
         errors: stats.errors,
         retry_after_secs,
     })

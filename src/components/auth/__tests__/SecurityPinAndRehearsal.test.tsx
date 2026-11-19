@@ -37,7 +37,7 @@ describe('QuickPinCard & RecoveryRehearsalModal', () => {
         vi.mocked(recoveryService.snoozeRecoveryRehearsal).mockResolvedValue(Date.now() + 86400);
     });
 
-    it('QuickPinCard shows disabled status initially, validates PIN mismatch, enables Cashier Mode, and disables PIN', async () => {
+    it('QuickPinCard shows disabled status initially, validates PIN mismatch, enables DailyPay PIN, and disables PIN', async () => {
         vi.mocked(authService.getProfilePinStatus).mockResolvedValue({
             enabled: false,
             scope: null,
@@ -47,7 +47,7 @@ describe('QuickPinCard & RecoveryRehearsalModal', () => {
         });
         vi.mocked(authService.enableProfilePin).mockResolvedValue({
             enabled: true,
-            scope: 'receiveOnly',
+            scope: 'dailyPay',
             failedAttempts: 0,
             maxAttempts: 5,
             remainingAttempts: 5,
@@ -60,7 +60,7 @@ describe('QuickPinCard & RecoveryRehearsalModal', () => {
         expect(badge).toHaveTextContent('Not configured');
 
         fireEvent.click(screen.getByTestId('quick-pin-configure-btn'));
-        fireEvent.click(screen.getByTestId('pin-scope-receive-only'));
+        expect(screen.queryByTestId('pin-scope-receive-only')).not.toBeInTheDocument();
 
         // Mismatch validation
         fireEvent.change(screen.getByTestId('quick-pin-input'), { target: { value: '123456' } });
@@ -71,7 +71,7 @@ describe('QuickPinCard & RecoveryRehearsalModal', () => {
         expect(await screen.findByText('The two PIN entries do not match.')).toBeInTheDocument();
         expect(authService.enableProfilePin).not.toHaveBeenCalled();
 
-        // Matching PIN saves and updates status badge to Cashier Mode
+        // Matching PIN saves and updates status badge to DailyPay
         fireEvent.change(screen.getByTestId('quick-pin-confirm-input'), { target: { value: '123456' } });
         fireEvent.click(screen.getByTestId('quick-pin-save-btn'));
 
@@ -79,11 +79,11 @@ describe('QuickPinCard & RecoveryRehearsalModal', () => {
             expect(authService.enableProfilePin).toHaveBeenCalledWith(
                 'MasterPass123',
                 '123456',
-                'receiveOnly',
+                'dailyPay',
                 'alice_folder'
             );
         });
-        expect(await screen.findByTestId('quick-pin-status-badge')).toHaveTextContent('Cashier Mode');
+        expect(await screen.findByTestId('quick-pin-status-badge')).toHaveTextContent('Daily PIN');
 
         // Disable active PIN
         fireEvent.click(screen.getByTestId('quick-pin-disable-open-btn'));

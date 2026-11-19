@@ -195,17 +195,6 @@ pub(crate) fn open_wallet_archive(
     Some(FileVoucherArchive::with_key(archive_dir, key))
 }
 
-/// Ensures the active session satisfies `required` `AccessMode` (or a valid credential override was provided).
-pub(crate) fn ensure_access_mode(
-    service: &mut AppService,
-    required: human_money_core::AccessMode,
-    password: Option<&str>,
-) -> Result<(), FrontendError> {
-    service
-        .require_access_mode(required, password)
-        .map_err(FrontendError::from)
-}
-
 /// Blocks voucher spending operations until the mandatory post-restore L2 reconciliation completes.
 pub(crate) fn ensure_restore_l2_reconciled(
     state: &crate::state::AppState,

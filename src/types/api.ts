@@ -172,8 +172,6 @@ export interface AppSettings {
     l2AnchorTemplatesMeta?: StoredAnchorTemplateMeta[];
     ownNominatedLockServer?: NominatedLockServerMeta | null;
     l2ProbeCache?: Record<string, LockServerProbeResult>;
-    enablePosMode?: boolean;
-    posCashierActive?: boolean;
     marketShowUnknown?: boolean;
     maxStoredCards?: number;
     marketSendCardOnPayment?: boolean;

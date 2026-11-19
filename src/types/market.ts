@@ -394,18 +394,9 @@ export interface FrontendMarketInquiryItem {
     messages: FrontendInquiryChatMessage[];
 }
 
-export interface FrontendPendingPosPayment {
-    id: string;
-    senderDid: string;
-    receivedAt: number;
-    bundleBytes: number[];
-    note?: string | null;
-}
-
 export interface FrontendPostInboxSummary {
     pendingSignRequests: FrontendPendingSignRequest[];
     pendingWotHandshakes: FrontendPendingWotHandshake[];
-    pendingPosPayments?: FrontendPendingPosPayment[];
     inquiries: FrontendMarketInquiryItem[];
     unacknowledgedPayments: string[];
 }
@@ -423,5 +414,4 @@ export interface FrontendPostSyncResult {
     prunedBoxes: number;
     errors: string[];
     retryAfterSecs?: number | null;
-    pendingPosPayments?: FrontendPendingPosPayment[];
 }

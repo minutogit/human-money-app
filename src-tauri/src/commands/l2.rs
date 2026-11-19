@@ -25,7 +25,7 @@ use crate::models::{
 };
 use crate::services::l2_anchor_service;
 use crate::settings::{NominatedLockServerMeta, StoredAnchorTemplateMeta};
-use crate::state::{AppState, DidWotSigner};
+use crate::state::{AppState, DidWotSigner, RequiredAccess};
 use crate::sync_client::{self, FrontendLockServerProbeResult};
 
 #[tauri::command]
@@ -103,10 +103,7 @@ pub fn get_l2_lifecycle_status(
     password: Option<String>,
     state: tauri::State<AppState>,
 ) -> Result<FrontendL2LifecycleStatusDto, FrontendError> {
-    let mut service = state
-        .service
-        .lock()
-        .map_err(|_| lifecycle_err("Wallet service unavailable"))?;
+    let mut service = state.authorize_and_lock(RequiredAccess::Unlocked, None)?;
     let lc = load_lifecycle_state(&mut service, password.as_deref());
     build_status_dto(&mut service, &lc, password.as_deref())
 }
@@ -117,6 +114,7 @@ pub async fn run_l2_lifecycle_tick(
     password: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<FrontendL2LifecycleStatusDto, FrontendError> {
+    state.authorize(RequiredAccess::DailyPay, password.as_deref())?;
     let client = sync_client::create_sync_probe_client();
     let now_secs = sync_client::current_unix_timestamp();
     run_lifecycle_tick_with_now(state.inner(), &client, now_secs, force, password.as_deref()).await
@@ -130,6 +128,7 @@ pub async fn discover_anchor_manifest_cmd(
     password: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<Option<FrontendAnchorDiscoveryDto>, FrontendError> {
+    state.authorize(RequiredAccess::Unlocked, None)?;
     let anchor_id = decode_hex_fixed::<32>(anchor_id_hex.trim()).map_err(lifecycle_err)?;
     let settings = state.get_cached_settings().unwrap_or_default();
     let client = sync_client::create_sync_probe_client();
@@ -162,10 +161,7 @@ pub fn register_guarantor_anchor_role(
     password: Option<String>,
     state: tauri::State<AppState>,
 ) -> Result<String, FrontendError> {
-    let mut service = state
-        .service
-        .lock()
-        .map_err(|_| lifecycle_err("Wallet service unavailable"))?;
+    let mut service = state.authorize_and_lock(RequiredAccess::Full, password.as_deref())?;
 
     let trimmed_anchor = anchor_id_hex.trim().to_ascii_lowercase();
     let key = if trimmed_anchor.is_empty() {
@@ -244,10 +240,7 @@ pub fn create_key_successor_attestation_cmd(
     };
 
     let now_secs = sync_client::current_unix_timestamp().max(1);
-    let mut service = state
-        .service
-        .lock()
-        .map_err(|_| lifecycle_err("Wallet service unavailable"))?;
+    let mut service = state.authorize_and_lock(RequiredAccess::Full, password.as_deref())?;
 
     let att = service
         .with_wallet_and_identity(|w, id| {
@@ -291,10 +284,7 @@ pub fn import_key_successor_attestation_cmd(
     att.verify(now_secs)
         .map_err(|e| lifecycle_err(format!("Attestation verification failed: {}", e)))?;
 
-    let mut service = state
-        .service
-        .lock()
-        .map_err(|_| lifecycle_err("Wallet service unavailable"))?;
+    let mut service = state.authorize_and_lock(RequiredAccess::Full, password.as_deref())?;
     let mut store = load_key_successor_attestations(&mut service, password.as_deref());
     if !store.contains(&att) {
         store.push(att.clone());
@@ -315,10 +305,8 @@ pub async fn create_guarantor_claim_bundle(
 ) -> Result<FrontendClaimBundleDto, FrontendError> {
     let normalized_amount = amount.trim().replace(',', ".");
     let (res, l2_requests) = {
-        let mut service = state
-            .service
-            .lock()
-            .map_err(|_| lifecycle_err("Wallet service unavailable"))?;
+        let mut service =
+            state.authorize_and_lock(RequiredAccess::DailyPay, password.as_deref())?;
 
         crate::services::common::ensure_restore_l2_reconciled(
             &state,
@@ -511,10 +499,7 @@ pub fn create_dead_quorum_swap_offer_cmd(
     let bits = pow_bits.unwrap_or(10);
     let now_secs = sync_client::current_unix_timestamp().max(1);
 
-    let service = state
-        .service
-        .lock()
-        .map_err(|_| lifecycle_err("Wallet service unavailable"))?;
+    let service = state.authorize_and_lock(RequiredAccess::Full, password.as_deref())?;
 
     let offer = service
         .with_wallet_and_identity(|_, id| {
@@ -538,10 +523,7 @@ pub async fn create_dead_quorum_swap_claim_cmd(
     let offer_digest = offer.verify().map_err(FrontendError::from)?;
 
     let (voucher, claimant_did, qcs): (Voucher, String, Vec<QuorumCertificate>) = {
-        let service = state
-            .service
-            .lock()
-            .map_err(|_| lifecycle_err("Wallet service unavailable"))?;
+        let service = state.authorize_and_lock(RequiredAccess::DailyPay, password.as_deref())?;
         let _ = password;
 
         service
@@ -631,10 +613,7 @@ pub fn adjudicate_dead_quorum_swap_cmd(
 
     let now_secs = sync_client::current_unix_timestamp();
 
-    let mut service = state
-        .service
-        .lock()
-        .map_err(|_| lifecycle_err("Wallet service unavailable"))?;
+    let mut service = state.authorize_and_lock(RequiredAccess::Full, password.as_deref())?;
 
     let sender_id = service
         .with_wallet(|w| w.get_user_id().to_string())

@@ -69,11 +69,11 @@ interface NavGroup {
 
 export const Sidebar: React.FC<SidebarProps> = ({ openClaimsCount }) => {
   const { t } = useTranslation();
-  const { isSessionActive, isAuthenticated, profileName, displayProfileName, userAvatarUrl, notifyLogout, protectAction, lockSession, accessMode = 'full', requireFullAccess } = useSession();
+  const { hasCachedSession, isAuthenticated, profileName, displayProfileName, userAvatarUrl, notifyLogout, protectAction, lockSession, accessMode = 'full', requireFullAccess } = useSession();
   const { appState, navigate, appVersion, isSidebarOpen, setSidebarOpen } = useNavigation();
   const { isExpert } = useUiMode();
   const currentView = appState.view;
-  const isLoggedIn = isAuthenticated ?? isSessionActive;
+  const isLoggedIn = isAuthenticated;
 
   // Local state for fetched conflicts count if not passed via props
   const [fetchedClaimsCount, setFetchedClaimsCount] = useState<number>(0);
@@ -178,14 +178,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ openClaimsCount }) => {
         <div className="p-3 border-b border-theme-subtle bg-bg-app/30 flex items-center justify-between gap-2 shrink-0">
           <div
             onClick={() => {
-              if (!isSessionActive) {
+              if (!hasCachedSession && !isAuthenticated) {
                 protectAction(async () => {}).catch(() => {});
-                return;
-              }
-              if (accessMode === 'receiveOnly' && requireFullAccess) {
-                requireFullAccess(async () => {
-                  openOwnProfileEditor();
-                }).catch(() => {});
                 return;
               }
               openOwnProfileEditor();
@@ -193,14 +187,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ openClaimsCount }) => {
             onKeyDown={(e) => {
               if (e.key === 'Enter' || e.key === ' ') {
                 e.preventDefault();
-                if (!isSessionActive) {
+                if (!hasCachedSession && !isAuthenticated) {
                   protectAction(async () => {}).catch(() => {});
-                  return;
-                }
-                if (accessMode === 'receiveOnly' && requireFullAccess) {
-                  requireFullAccess(async () => {
-                    openOwnProfileEditor();
-                  }).catch(() => {});
                   return;
                 }
                 openOwnProfileEditor();
@@ -210,12 +198,12 @@ export const Sidebar: React.FC<SidebarProps> = ({ openClaimsCount }) => {
             tabIndex={0}
             data-testid="sidebar-profile-button"
             title={
-              !isSessionActive
+              !hasCachedSession
                 ? t('auth.sessionLocked')
                 : t('profile.editProfileAndCardTooltip', 'Profil & Visitenkarte bearbeiten')
             }
             className={`flex items-center gap-3 min-w-0 flex-1 transition-colors cursor-pointer rounded-xl p-1 -m-1 ${
-              !isSessionActive
+              !hasCachedSession
                 ? "hover:bg-theme-warning/10"
                 : "hover:bg-theme-primary/5"
             }`}
@@ -229,30 +217,24 @@ export const Sidebar: React.FC<SidebarProps> = ({ openClaimsCount }) => {
             </div>
             <div className="flex flex-col min-w-0">
               <h2 className="text-sm font-bold text-theme-secondary truncate flex items-center gap-1.5">
-                {(displayProfileName || profileName) || (isSessionActive ? t('auth.loggedIn') : t('auth.sessionLocked'))}
-                {!isSessionActive && (displayProfileName || profileName) && (
+                {(displayProfileName || profileName) || (hasCachedSession ? t('auth.loggedIn') : t('auth.sessionLocked'))}
+                {!hasCachedSession && (displayProfileName || profileName) && (
                   <svg className="w-3.5 h-3.5 text-theme-warning shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
                   </svg>
                 )}
               </h2>
               <span className="text-[10px] font-medium text-theme-light uppercase tracking-widest flex items-center gap-1">
-                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${isSessionActive ? "bg-theme-success animate-pulse" : "bg-theme-warning"}`}></span>
-                {isSessionActive ? t('common.activeWallet') : t('auth.sessionLocked')}
+                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${hasCachedSession ? "bg-theme-success animate-pulse" : "bg-theme-warning"}`}></span>
+                {hasCachedSession ? t('common.activeWallet') : t('auth.sessionLocked')}
               </span>
-              {isSessionActive && accessMode !== 'full' && (
+              {isAuthenticated && accessMode !== 'full' && (
                 <div className="mt-1 flex items-center gap-1.5 flex-wrap">
                   <span
                     data-testid="sidebar-access-mode-badge"
-                    className={`inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-bold tracking-wide border ${
-                      accessMode === 'receiveOnly'
-                        ? 'bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800/50'
-                        : 'bg-sky-50 text-sky-800 border-sky-200 dark:bg-sky-950/40 dark:text-sky-300 dark:border-sky-800/50'
-                    }`}
+                    className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-bold tracking-wide border bg-sky-50 text-sky-800 border-sky-200 dark:bg-sky-950/40 dark:text-sky-300 dark:border-sky-800/50"
                   >
-                    {accessMode === 'receiveOnly'
-                      ? t('auth.cashierModeBadge')
-                      : t('auth.quickPinModeBadge')}
+                    {t('auth.quickPinModeBadge')}
                   </span>
                   {requireFullAccess && (
                     <button
@@ -280,7 +262,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ openClaimsCount }) => {
               )}
             </div>
           </div>
-          {isSessionActive && (
+          {hasCachedSession && (
             <button
               type="button"
               onClick={(e) => {

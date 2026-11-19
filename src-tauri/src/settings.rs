@@ -73,10 +73,6 @@ pub struct AppSettings {
     pub backup_protection_mode: Option<String>,
     #[serde(default)]
     pub last_backup_at: Option<String>,
-    #[serde(default)]
-    pub enable_pos_mode: bool,
-    #[serde(default)]
-    pub pos_cashier_active: bool,
     #[serde(default = "default_balance_view_mode")]
     pub balance_view_mode: String,
     #[serde(default = "default_auto_backup_enabled")]
@@ -224,8 +220,6 @@ impl Default for AppSettings {
             backup_sync_folder: None,
             backup_protection_mode: None,
             last_backup_at: None,
-            enable_pos_mode: false,
-            pos_cashier_active: false,
             balance_view_mode: default_balance_view_mode(),
             auto_backup_enabled: true,
             backup_dirty: false,

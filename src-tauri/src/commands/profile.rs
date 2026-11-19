@@ -27,7 +27,7 @@ fn compact_sync_url_for_contact_uri(raw: &str) -> String {
 }
 
 pub fn get_my_quick_contact_impl(state: &AppState) -> Result<FrontendQuickContact, FrontendError> {
-    let service = state.service.lock().unwrap();
+    let service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
     let (raw_did, full_name) = service
         .with_wallet(|w| {
             let did = w.get_user_id().to_string();

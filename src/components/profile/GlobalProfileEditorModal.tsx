@@ -9,24 +9,32 @@ import { logger } from "../../utils/log";
 import { stringifyError } from "../../utils/errorHelper";
 
 export const GlobalProfileEditorModal: React.FC = () => {
-    const { isSessionActive, protectAction } = useSession();
+    const { isAuthenticated, protectAction } = useSession();
     const [isOpen, setIsOpen] = useState(false);
     const [myProfile, setMyProfile] = useState<FrontendMyMarketProfile | null>(null);
 
     const openEditor = useCallback(async () => {
-        if (!isSessionActive) return;
+        if (!isAuthenticated) return;
         try {
-            const loaded = await protectAction(async (pwd) => {
-                return await marketService.getMyMarketProfile(pwd || undefined);
-            });
+            const loaded = await marketService.getMyMarketProfile();
             if (loaded) {
                 setMyProfile(loaded);
                 setIsOpen(true);
             }
-        } catch (err) {
-            logger.error("Failed to open global profile editor: " + stringifyError(err));
+        } catch {
+            try {
+                const loaded = await protectAction(async (pwd) => {
+                    return await marketService.getMyMarketProfile(pwd || undefined);
+                });
+                if (loaded) {
+                    setMyProfile(loaded);
+                    setIsOpen(true);
+                }
+            } catch (err) {
+                logger.error("Failed to open global profile editor: " + stringifyError(err));
+            }
         }
-    }, [isSessionActive, protectAction]);
+    }, [isAuthenticated, protectAction]);
 
     useEffect(() => {
         const handler = () => {
@@ -39,9 +47,12 @@ export const GlobalProfileEditorModal: React.FC = () => {
     }, [openEditor]);
 
     const handleSave = async (req: FrontendSaveMyMarketProfileRequest) => {
-        const updated = await protectAction(async (pwd) => {
-            return await marketService.saveMyMarketProfile(req, pwd || undefined);
-        });
+        const updated = await protectAction(
+            async (pwd) => {
+                return await marketService.saveMyMarketProfile(req, pwd || undefined);
+            },
+            { requireFullAccess: true }
+        );
         if (updated) {
             setMyProfile(updated);
         }

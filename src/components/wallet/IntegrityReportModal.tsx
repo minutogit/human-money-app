@@ -22,9 +22,12 @@ export function IntegrityReportModal({ report, onClose }: IntegrityReportModalPr
         setIsRepairing(true);
         setError(null);
         try {
-            await protectAction(async (password) => {
-                await integrityService.repairWalletIntegrity(password || undefined);
-            });
+            await protectAction(
+                async (password) => {
+                    await integrityService.repairWalletIntegrity(password || undefined);
+                },
+                { requireFullAccess: true }
+            );
             logger.info("Wallet integrity repaired successfully.");
             await checkIntegrity();
             onClose();

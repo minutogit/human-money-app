@@ -43,8 +43,8 @@ const VIEW_TITLE_KEYS: Record<string, string> = {
 export const Header: React.FC = () => {
     const { t } = useTranslation();
     const { appState, navigate, setSidebarOpen } = useNavigation();
-    const { isSessionActive, isAuthenticated, protectAction } = useSession();
-    const isLoggedIn = isAuthenticated ?? isSessionActive;
+    const { isAuthenticated, protectAction } = useSession();
+    const isLoggedIn = isAuthenticated;
 
     const [isPasteModalOpen, setIsPasteModalOpen] = useState(false);
     const [pasteInput, setPasteInput] = useState("");

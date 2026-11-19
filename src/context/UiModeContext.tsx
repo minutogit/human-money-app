@@ -37,8 +37,8 @@ function writeStoredUiMode(mode: UiMode): void {
 
 export function UiModeProvider({ children }: { children: ReactNode }) {
     const session = useOptionalSession();
-    const isSessionActive = session?.isSessionActive ?? false;
-    const isAuthenticated = session?.isAuthenticated ?? isSessionActive;
+    const isAuthenticated = session?.isAuthenticated ?? false;
+    const hasCachedSession = session?.hasCachedSession ?? false;
 
     const [mode, setModeState] = useState<UiMode>(() => {
         const tourMode = tourBridge.getState().uiMode;
@@ -59,7 +59,7 @@ export function UiModeProvider({ children }: { children: ReactNode }) {
     }, []);
 
     useEffect(() => {
-        if (!isSessionActive || !isAuthenticated) return;
+        if (!isAuthenticated) return;
         // Avoid overwriting tour mode when driven by tourBridge
         if (tourBridge.getState().uiMode) return;
 
@@ -80,13 +80,13 @@ export function UiModeProvider({ children }: { children: ReactNode }) {
         return () => {
             active = false;
         };
-    }, [isSessionActive, isAuthenticated]);
+    }, [isAuthenticated]);
 
     const setMode = useCallback((nextMode: UiMode) => {
         setModeState(nextMode);
         writeStoredUiMode(nextMode);
 
-        if (!isSessionActive || tourBridge.getState().uiMode) return;
+        if (!isAuthenticated || !hasCachedSession || tourBridge.getState().uiMode) return;
         settingsService.getSettings()
             .then((current) => {
                 return settingsService.saveSettings({ ...current, uiMode: nextMode });
@@ -94,7 +94,7 @@ export function UiModeProvider({ children }: { children: ReactNode }) {
             .catch((e) => {
                 logger.warn(`Failed to persist uiMode to settings: ${stringifyError(e)}`);
             });
-    }, [isSessionActive]);
+    }, [isAuthenticated, hasCachedSession]);
 
     const toggle = useCallback(() => {
         setMode(mode === 'expert' ? 'simple' : 'expert');

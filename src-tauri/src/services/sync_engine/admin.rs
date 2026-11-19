@@ -61,12 +61,7 @@ fn load_admin_with_signing_key(
     state: &AppState,
     password: Option<&str>,
 ) -> Result<(StoredSyncAdmin, ed25519_dalek::SigningKey, Vec<u8>), FrontendError> {
-    let mut service = state.lock_service()?;
-    crate::services::common::ensure_access_mode(
-        &mut service,
-        human_money_core::AccessMode::Full,
-        password,
-    )?;
+    let mut service = state.authorize_and_lock(crate::state::RequiredAccess::Full, password)?;
     let bytes = service
         .load_encrypted_data(MARKET_SYNC_ADMIN_KEY, password)
         .map_err(FrontendError::from)?;
@@ -365,7 +360,7 @@ pub async fn sync_channel_members_impl(
     state: &AppState,
 ) -> Result<usize, FrontendError> {
     let (mut admin, admin_sk) = {
-        let mut service = state.lock_service()?;
+        let mut service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
         let Some(admin) = load_stored_sync_admin_opt(&mut service, password) else {
             return Ok(0);
         };
@@ -391,7 +386,8 @@ pub fn prepare_sync_setup_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendSyncSetupDraft, FrontendError> {
-    let mut service = state.lock_service()?;
+    let mut service =
+        state.authorize_and_lock(crate::state::RequiredAccess::Full, password.as_deref())?;
     let master_seed = get_wallet_master_seed(&mut service)?;
 
     let drop_index = 0u32;
@@ -469,7 +465,8 @@ pub fn get_rust_sync_config_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<String, FrontendError> {
-    let mut service = state.lock_service()?;
+    let mut service =
+        state.authorize_and_lock(crate::state::RequiredAccess::Full, password.as_deref())?;
     if let Some(admin) = load_stored_sync_admin_opt(&mut service, password.as_deref()) {
         return Ok(crate::sync_zip::generate_rust_sync_config_toml(
             &admin.descriptor.drop_pub,
@@ -501,7 +498,8 @@ pub fn save_sync_setup_zip_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<(), FrontendError> {
-    let mut service = state.lock_service()?;
+    let mut service =
+        state.authorize_and_lock(crate::state::RequiredAccess::Full, password.as_deref())?;
     let admin: StoredSyncAdmin = service
         .load_encrypted_data(MARKET_SYNC_ADMIN_KEY, password.as_deref())
         .map_err(FrontendError::from)
@@ -725,6 +723,7 @@ pub async fn test_sync_connection_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendSyncConnectionTestResult, FrontendError> {
+    state.authorize(crate::state::RequiredAccess::Unlocked, None)?;
     let fail_result = |message: String, write_ok: bool| FrontendSyncConnectionTestResult {
         success: false,
         message,
@@ -851,7 +850,7 @@ pub async fn get_sync_admin_status_impl(
     state: &AppState,
 ) -> Result<Option<FrontendSyncAdminStatus>, FrontendError> {
     let (admin, admin_sk) = {
-        let mut service = state.lock_service()?;
+        let mut service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
         let Some(admin) = load_stored_sync_admin_opt(&mut service, password.as_deref()) else {
             return Ok(None);
         };
@@ -974,7 +973,8 @@ pub async fn block_sync_slot_impl(
     state: &AppState,
 ) -> Result<FrontendSyncAdminStatus, FrontendError> {
     let blocked = {
-        let mut service = state.lock_service()?;
+        let mut service =
+            state.authorize_and_lock(crate::state::RequiredAccess::Full, password.as_deref())?;
         let admin: StoredSyncAdmin = service
             .load_encrypted_data(MARKET_SYNC_ADMIN_KEY, password.as_deref())
             .map_err(FrontendError::from)
@@ -1002,12 +1002,8 @@ pub fn delete_sync_admin_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<(), FrontendError> {
-    let mut service = state.lock_service()?;
-    crate::services::common::ensure_access_mode(
-        &mut service,
-        human_money_core::AccessMode::Full,
-        password.as_deref(),
-    )?;
+    let mut service =
+        state.authorize_and_lock(crate::state::RequiredAccess::Full, password.as_deref())?;
     let admin_opt = load_stored_sync_admin_opt(&mut service, password.as_deref());
 
     service

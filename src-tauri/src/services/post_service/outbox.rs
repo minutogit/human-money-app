@@ -381,7 +381,8 @@ pub async fn deposit_transfer_to_post_impl(
     state: &AppState,
 ) -> Result<FrontendPostDepositResult, FrontendError> {
     let record = {
-        let mut service = state.service.lock().unwrap();
+        let mut service = state
+            .authorize_and_lock(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
         let history = state
             .load_history_from_disk(&mut service, password.as_deref())
             .map_err(FrontendError::from)?;
@@ -480,6 +481,7 @@ pub async fn send_signing_request_via_post_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendPostDepositResult, FrontendError> {
+    state.authorize(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
     let recipient_ed_pk = get_pubkey_from_user_id(&recipient_did).map_err(FrontendError::from)?;
     let signing_ctx = load_post_signing_context(state, password.as_deref())?;
     let anchor_manifest_json =
@@ -514,6 +516,7 @@ pub async fn reply_detached_signature_via_post_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendPostDepositResult, FrontendError> {
+    state.authorize(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
     let recipient_ed_pk = get_pubkey_from_user_id(&recipient_did).map_err(FrontendError::from)?;
     let signing_ctx = load_post_signing_context(state, password.as_deref())?;
     let now_secs = sync_client::current_unix_timestamp();
@@ -581,6 +584,7 @@ pub async fn send_wot_handshake_via_post_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendPostDepositResult, FrontendError> {
+    state.authorize(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
     if proposed_level > 1 {
         return Err(FrontendError::from(format!(
             "proposed_level must be 0 or 1, got {}",
@@ -684,6 +688,7 @@ pub async fn accept_wot_handshake_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendPostDepositResult, FrontendError> {
+    state.authorize(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
     if trust_level > 3 {
         return Err(FrontendError::from(format!(
             "trust_level must be 0..=3, got {}",
@@ -775,6 +780,7 @@ pub async fn send_market_inquiry_via_post_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendMarketInquiryItem, FrontendError> {
+    state.authorize(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
     let now_secs = sync_client::current_unix_timestamp();
     let inquiry_id = uuid::Uuid::new_v4().to_string();
 
@@ -887,6 +893,7 @@ pub async fn send_market_inquiry_message_via_post_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendMarketInquiryItem, FrontendError> {
+    state.authorize(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
     let dec = match decision
         .as_deref()
         .map(str::trim)

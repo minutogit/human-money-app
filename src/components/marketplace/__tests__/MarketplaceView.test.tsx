@@ -30,7 +30,8 @@ vi.mock('../../../context/NavigationContext', () => ({
 vi.mock('../../../context/SessionContext', () => ({
   useSession: () => ({
     protectAction: vi.fn((action) => action(undefined)),
-    isSessionActive: true,
+    isAuthenticated: true,
+    hasCachedSession: true,
   }),
 }));
 

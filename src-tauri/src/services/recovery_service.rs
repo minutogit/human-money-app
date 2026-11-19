@@ -644,7 +644,7 @@ pub async fn export_profile_mnemonic_impl(
     state: &AppState,
 ) -> Result<Option<ExportedMnemonicKitDto>, FrontendError> {
     let (phrase, lang, has_bip39_passphrase, user_prefix) = {
-        let service = state.lock_service()?;
+        let service = state.authorize_and_lock(crate::state::RequiredAccess::Full, Some(&password))?;
         let exported = service
             .export_mnemonic(&password)
             .map_err(FrontendError::from)?;
@@ -712,7 +712,7 @@ pub async fn confirm_emergency_sheet_saved_impl(
     app: Option<&tauri::AppHandle>,
 ) -> Result<ConfirmEmergencySheetResultDto, FrontendError> {
     let phrase = {
-        let service = state.lock_service()?;
+        let service = state.authorize_and_lock(crate::state::RequiredAccess::Full, Some(&password))?;
         let exp = service
             .export_mnemonic(&password)
             .map_err(FrontendError::from)?;
@@ -768,7 +768,7 @@ pub fn get_recovery_protection_status_impl(
     let now_secs = Utc::now().timestamp() as u64;
 
     let (has_voucher, owner_state, guardian_vault, contacts) = {
-        let mut service = state.lock_service()?;
+        let mut service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
         let has_voucher = service
             .with_wallet(|w| !w.voucher_store.vouchers.is_empty())
             .unwrap_or_else(|_| {
@@ -884,7 +884,7 @@ pub fn verify_recovery_rehearsal_with_password_impl(
     password: Option<&str>,
     state: &AppState,
 ) -> Result<RehearsalCheckResultDto, FrontendError> {
-    let mut service = state.lock_service()?;
+    let mut service = state.authorize_and_lock(crate::state::RequiredAccess::DailyPay, password)?;
 
     let mut owner_state = load_recovery_owner_state_with_cache(state, &mut service, password)?
         .ok_or_else(|| {
@@ -964,7 +964,7 @@ pub fn snooze_recovery_rehearsal_with_password_impl(
     password: Option<&str>,
     state: &AppState,
 ) -> Result<u64, FrontendError> {
-    let mut service = state.lock_service()?;
+    let mut service = state.authorize_and_lock(crate::state::RequiredAccess::DailyPay, password)?;
 
     let mut owner_state = load_recovery_owner_state_with_cache(state, &mut service, password)?
         .ok_or_else(|| {
@@ -1032,7 +1032,7 @@ pub async fn setup_social_recovery_guardians_with_params(
         my_profile_name,
         old_owner_state,
     ) = {
-        let mut service = state.lock_service()?;
+        let mut service = state.authorize_and_lock(crate::state::RequiredAccess::Full, Some(&password))?;
         let exp = service
             .export_mnemonic(&password)
             .map_err(FrontendError::from)?;
@@ -1307,22 +1307,8 @@ pub async fn revoke_social_recovery_impl(
     app: Option<&tauri::AppHandle>,
 ) -> Result<RevokeSocialRecoveryResultDto, FrontendError> {
     let (my_identity, old_guardians, old_epoch, emergency_confirmed) = {
-        let mut service = state.lock_service()?;
-        if let Some(ref pw) = password {
-            let _ = service.export_mnemonic(pw).map_err(FrontendError::from)?;
-        } else {
-            let mode = service.get_access_mode().map_err(FrontendError::from)?;
-            if mode != human_money_core::AccessMode::Full {
-                return Err(FrontendError::from(
-                    human_money_core::app_service::AppFacadeError::App(
-                        human_money_core::error::AppError::InsufficientAccessMode {
-                            required: "full".to_string(),
-                            current: mode.as_str().to_string(),
-                        },
-                    ),
-                ));
-            }
-        }
+        let mut service =
+            state.authorize_and_lock(crate::state::RequiredAccess::Full, password.as_deref())?;
         let owner = load_recovery_owner_state_with_cache(state, &mut service, password.as_deref())?
             .unwrap_or_default();
         let id = service
@@ -1529,7 +1515,7 @@ pub fn inspect_guardian_recovery_request_impl(
     let sas_code = compute_recovery_sas(&link.pk_temp);
 
     let (vault, contacts) = {
-        let mut service = state.lock_service()?;
+        let mut service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
         let vault = load_guardian_vault_with_cache(state, &mut service, password)?;
         let contacts = state
             .load_contacts(&mut service, password)
@@ -1574,12 +1560,7 @@ pub fn approve_guardian_recovery_request_impl(
     let sas_code = compute_recovery_sas(&link.pk_temp);
 
     let (entry, extra_descriptors, resolved_owner_name) = {
-        let mut service = state.lock_service()?;
-        crate::services::common::ensure_access_mode(
-            &mut service,
-            human_money_core::AccessMode::Full,
-            password,
-        )?;
+        let mut service = state.authorize_and_lock(crate::state::RequiredAccess::Full, password)?;
         let vault = load_guardian_vault_with_cache(state, &mut service, password)?;
         let entry = vault
             .wards

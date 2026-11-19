@@ -29,6 +29,13 @@ pub fn cached_media_storage_key(blob_id: &str) -> String {
     format!("market_media_cache_{}", blob_id)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RequiredAccess {
+    Unlocked,
+    DailyPay,
+    Full,
+}
+
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct PostOutboxEntry {
     pub msg_id: String,
@@ -54,8 +61,6 @@ pub struct StoredPostState {
     pub pending_wot_handshakes: Vec<crate::models::FrontendPendingWotHandshake>,
     #[serde(default)]
     pub pending_wot_packages_by_msg_id: std::collections::BTreeMap<String, String>,
-    #[serde(default)]
-    pub pending_pos_payments: Vec<crate::models::FrontendPendingPosPayment>,
     #[serde(default)]
     pub inquiries: Vec<crate::models::FrontendMarketInquiryItem>,
     #[serde(default)]
@@ -155,6 +160,7 @@ pub struct AppState {
     pub wot: Mutex<Option<humoco_wot::TrustRegister>>,
     pub recovery_owner: Mutex<Option<Option<crate::models::recovery::RecoveryOwnerState>>>,
     pub guardian_vault: Mutex<Option<humoco_market::GuardianVaultStore>>,
+    pub app_notices: Mutex<Option<crate::models::StoredAppNotices>>,
     pub post_op_lock: tokio::sync::Mutex<()>,
     pub media_negative_cache: Mutex<std::collections::HashMap<String, u64>>,
     pub startup_launch_items: Mutex<Vec<String>>,
@@ -221,6 +227,7 @@ impl AppState {
             wot: Mutex::new(None),
             recovery_owner: Mutex::new(None),
             guardian_vault: Mutex::new(None),
+            app_notices: Mutex::new(None),
             post_op_lock: tokio::sync::Mutex::new(()),
             media_negative_cache: Mutex::new(std::collections::HashMap::new()),
             startup_launch_items: Mutex::new(Vec::new()),
@@ -236,6 +243,45 @@ impl AppState {
         self.service.lock().map_err(|_| {
             crate::models::FrontendError::from("Wallet service unavailable".to_string())
         })
+    }
+
+    /// Enforces `required` access at the Tauri boundary and returns the locked `AppService`.
+    pub fn authorize_and_lock(
+        &self,
+        required: RequiredAccess,
+        password: Option<&str>,
+    ) -> Result<MutexGuard<'_, AppService>, crate::models::FrontendError> {
+        let service = self.lock_service()?;
+        match required {
+            RequiredAccess::Unlocked => {
+                if !service.is_wallet_unlocked() {
+                    return Err(crate::models::FrontendError::from(
+                        AppFacadeError::WalletLocked,
+                    ));
+                }
+            }
+            RequiredAccess::DailyPay => {
+                service
+                    .require_access_mode(human_money_core::AccessMode::DailyPay, password)
+                    .map_err(crate::models::FrontendError::from)?;
+            }
+            RequiredAccess::Full => {
+                service
+                    .require_access_mode(human_money_core::AccessMode::Full, password)
+                    .map_err(crate::models::FrontendError::from)?;
+            }
+        }
+        Ok(service)
+    }
+
+    /// Enforces `required` access without holding `AppService` mutex across `.await` points.
+    pub fn authorize(
+        &self,
+        required: RequiredAccess,
+        password: Option<&str>,
+    ) -> Result<(), crate::models::FrontendError> {
+        let _service = self.authorize_and_lock(required, password)?;
+        Ok(())
     }
 
     // 2. Settings Helpers
@@ -276,12 +322,9 @@ impl AppState {
     pub fn save_settings(
         &self,
         service: &mut AppService,
-        mut settings: AppSettings,
+        settings: AppSettings,
         password: Option<&str>,
     ) -> Result<(), AppFacadeError> {
-        if !settings.enable_pos_mode {
-            settings.pos_cashier_active = false;
-        }
         let prev_min = {
             let guard = self.settings.lock().unwrap();
             guard.as_ref().map(|s| s.share_min_level)
@@ -784,6 +827,7 @@ impl AppState {
         *self.wot.lock().unwrap() = None;
         *self.recovery_owner.lock().unwrap() = None;
         *self.guardian_vault.lock().unwrap() = None;
+        *self.app_notices.lock().unwrap() = None;
     }
 
     /// Central session initializer — called after Login, Create Profile, Recovery, and Handover.
@@ -896,6 +940,20 @@ impl AppState {
             }
             Err(e) => {
                 log::warn!("Failed to pre-load own market profile: {}", e);
+            }
+        }
+
+        // 9. Pre-cache app notices (supports timeout = 0)
+        match load_encrypted_json_or_default::<crate::models::StoredAppNotices>(
+            service,
+            APP_NOTICES_KEY,
+            Some(credential),
+        ) {
+            Ok(notices) => {
+                *self.app_notices.lock().unwrap() = Some(notices);
+            }
+            Err(e) => {
+                log::warn!("Failed to pre-load app notices: {}", e);
             }
         }
 
@@ -1840,10 +1898,38 @@ impl AppState {
         service: &mut AppService,
         password: Option<&str>,
     ) -> crate::models::StoredAppNotices {
-        load_encrypted_json_or_default(service, APP_NOTICES_KEY, password).unwrap_or_else(|e| {
-            log::warn!("Failed to load {}: {}", APP_NOTICES_KEY, e);
-            Default::default()
-        })
+        match load_encrypted_json_or_default::<crate::models::StoredAppNotices>(
+            service,
+            APP_NOTICES_KEY,
+            password,
+        ) {
+            Ok(loaded) => {
+                *self.app_notices.lock().unwrap() = Some(loaded.clone());
+                loaded
+            }
+            Err(
+                AppFacadeError::SessionNotActive(_)
+                | AppFacadeError::SessionExpired(_)
+                | AppFacadeError::App(
+                    human_money_core::error::AppError::SessionNotActive { .. }
+                    | human_money_core::error::AppError::SessionExpired { .. },
+                ),
+            ) if password.is_none() => {
+                if let Some(cached) = self.app_notices.lock().unwrap().clone() {
+                    return cached;
+                }
+                Default::default()
+            }
+            Err(e) => {
+                log::warn!("Failed to load {}: {}", APP_NOTICES_KEY, e);
+                if password.is_none() {
+                    if let Some(cached) = self.app_notices.lock().unwrap().clone() {
+                        return cached;
+                    }
+                }
+                Default::default()
+            }
+        }
     }
 
     pub fn save_app_notices(
@@ -1853,7 +1939,9 @@ impl AppState {
         password: Option<&str>,
     ) -> Result<(), crate::models::FrontendError> {
         save_encrypted_json(service, APP_NOTICES_KEY, notices, password)
-            .map_err(crate::models::FrontendError::from)
+            .map_err(crate::models::FrontendError::from)?;
+        *self.app_notices.lock().unwrap() = Some(notices.clone());
+        Ok(())
     }
 
     /// Updates `last_sync_at` and prepends new notices, truncating to `MAX_APP_NOTICES` (50).

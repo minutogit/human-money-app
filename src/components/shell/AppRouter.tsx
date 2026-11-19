@@ -29,7 +29,7 @@ import { useTranslation } from 'react-i18next';
 
 export const AppRouter: React.FC = () => {
     const { t } = useTranslation();
-    const { notifyLogin, isSessionActive } = useSession();
+    const { notifyLogin, isAuthenticated } = useSession();
     const { appState, navigate, goBack } = useNavigation();
 
     switch (appState.view) {
@@ -75,7 +75,7 @@ export const AppRouter: React.FC = () => {
                     navigate({ view: "logged_in" });
                 }}
                 onBack={async () => {
-                    if (isSessionActive) {
+                    if (isAuthenticated) {
                         navigate({ view: "logged_in" });
                         return;
                     }

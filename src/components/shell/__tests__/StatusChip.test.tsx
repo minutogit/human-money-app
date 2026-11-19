@@ -31,7 +31,8 @@ const mockTriggerSecurityLockdown = vi.fn();
 
 vi.mock('../../../context/SessionContext', () => ({
     useSession: () => ({
-        isSessionActive: true,
+        isAuthenticated: true,
+        hasCachedSession: true,
         triggerSecurityLockdown: mockTriggerSecurityLockdown,
     }),
 }));

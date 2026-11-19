@@ -33,14 +33,25 @@ export const standardsService = {
         return await invoke<VoucherStandardDefinition>("inspect_voucher_standard_file", { containerBytes, password });
     },
 
-    importStandard: async (containerBytes: number[], password?: string | null) => {
-        const res = await invoke<string>("import_voucher_standard", { containerBytes, password });
+    importStandard: async (
+        containerBytes: number[],
+        password?: string | null,
+        walletPassword?: string | null
+    ) => {
+        const res = await invoke<string>("import_voucher_standard", {
+            containerBytes,
+            password,
+            walletPassword: walletPassword ?? null,
+        });
         emitAppEvent(APP_EVENTS.STANDARDS_UPDATED);
         return res;
     },
 
-    deleteStandard: async (standardId: string) => {
-        await invoke<void>("delete_voucher_standard", { standardId });
+    deleteStandard: async (standardId: string, walletPassword?: string | null) => {
+        await invoke<void>("delete_voucher_standard", {
+            standardId,
+            walletPassword: walletPassword ?? null,
+        });
         emitAppEvent(APP_EVENTS.STANDARDS_UPDATED);
     }
 };

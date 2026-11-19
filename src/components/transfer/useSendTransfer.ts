@@ -45,7 +45,7 @@ export function useSendTransfer({
     initialPaymentUri,
 }: UseSendTransferParams) {
     const { t } = useTranslation();
-    const { protectAction, profileName, accessMode = 'full', requireFullAccess } = useSession();
+    const { protectAction, profileName } = useSession();
     const { navigate, goBack } = useNavigation();
     const { checkAndTriggerCooldown } = useRateLimitCooldown({ trackCountdown: false });
 
@@ -312,11 +312,6 @@ export function useSendTransfer({
 
     const handlePrepareTransfer = (e: FormEvent) => {
         e.preventDefault();
-        if (accessMode === 'receiveOnly') {
-            if (requireFullAccess) void requireFullAccess(async () => {}).catch(() => undefined);
-            else dispatch({ type: 'SET_FEEDBACK', msg: t('auth.cashierModeRestrictedDesc') });
-            return;
-        }
         if (appSettings?.pendingRestoreL2Reconciliation) {
             dispatch({ type: 'SET_FEEDBACK', msg: t('transfer.pendingL2ReconciliationBlocked', 'Ausgaben sind vorübergehend gesperrt, bis der Online-Sicherheitsabgleich durchgeführt wurde.') });
             return;
@@ -409,7 +404,7 @@ export function useSendTransfer({
     };
 
     return {
-        state, dispatch, accessMode, requireFullAccess, navigate, goBack,
+        state, dispatch, navigate, goBack,
         paymentRequestSuccessMsg, isEditingSender, setIsEditingSender,
         availableVouchers, filteredVouchers, activeAssetClasses, ownUserId, trustStatus,
         appSettings, contacts, standardIdToUuidMap, uuidToPrecisionMap,

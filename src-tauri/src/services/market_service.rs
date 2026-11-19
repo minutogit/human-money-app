@@ -123,9 +123,14 @@ pub(crate) fn load_own_market_profile_state(
             *state.own_market_profile.lock().unwrap() = Some(stored.clone());
             Ok(stored)
         }
-        Err(human_money_core::app_service::AppFacadeError::App(
-            human_money_core::error::AppError::SessionNotActive { .. },
-        )) if password.is_none() => {
+        Err(
+            human_money_core::app_service::AppFacadeError::SessionNotActive(_)
+            | human_money_core::app_service::AppFacadeError::SessionExpired(_)
+            | human_money_core::app_service::AppFacadeError::App(
+                human_money_core::error::AppError::SessionNotActive { .. }
+                | human_money_core::error::AppError::SessionExpired { .. },
+            ),
+        ) if password.is_none() => {
             if let Some(cached) = state.own_market_profile.lock().unwrap().clone() {
                 return Ok(cached);
             }
@@ -311,11 +316,9 @@ pub(crate) fn set_own_card_max_hops_inner(
     max_hops: u8,
     password: Option<&str>,
 ) -> Result<u8, FrontendError> {
-    crate::services::common::ensure_access_mode(
-        service,
-        human_money_core::AccessMode::DailyPay,
-        password,
-    )?;
+    service
+        .require_access_mode(human_money_core::AccessMode::DailyPay, password)
+        .map_err(FrontendError::from)?;
     let clamped = max_hops.clamp(1, 3);
     let mut stored = load_own_market_profile_for_write(service, password)?;
 
@@ -669,7 +672,7 @@ pub fn get_my_market_profile_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendMyMarketProfile, FrontendError> {
-    let mut service = state.service.lock().unwrap();
+    let mut service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
     let stored = load_own_market_profile_state(state, &mut service, password.as_deref())?;
 
     let core_profile = service
@@ -761,12 +764,8 @@ pub fn save_my_market_profile_impl(
         }
     }
 
-    let mut service = state.service.lock().unwrap();
-    crate::services::common::ensure_access_mode(
-        &mut service,
-        human_money_core::AccessMode::Full,
-        password.as_deref(),
-    )?;
+    let mut service =
+        state.authorize_and_lock(crate::state::RequiredAccess::Full, password.as_deref())?;
 
     let mut core_profile = service
         .with_wallet(|w| w.profile.to_public_profile())
@@ -857,12 +856,8 @@ pub async fn set_card_published_impl(
 ) -> Result<FrontendMyMarketProfile, FrontendError> {
     let now = chrono::Utc::now().timestamp().max(0) as u64;
     {
-        let mut service = state.service.lock().unwrap();
-        crate::services::common::ensure_access_mode(
-            &mut service,
-            human_money_core::AccessMode::DailyPay,
-            password.as_deref(),
-        )?;
+        let mut service = state
+            .authorize_and_lock(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
         let mut stored = load_own_market_profile_for_write(&mut service, password.as_deref())?;
 
         if published {
@@ -934,12 +929,8 @@ pub fn upsert_ad_impl(
     }
 
     let now = chrono::Utc::now().timestamp().max(0) as u64;
-    let mut service = state.service.lock().unwrap();
-    crate::services::common::ensure_access_mode(
-        &mut service,
-        human_money_core::AccessMode::DailyPay,
-        password.as_deref(),
-    )?;
+    let mut service =
+        state.authorize_and_lock(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
     let mut stored = load_own_market_profile_for_write(&mut service, password.as_deref())?;
 
     let existing_idx = ad_input
@@ -1064,12 +1055,8 @@ pub fn renew_ad_impl(
     }
 
     let now = chrono::Utc::now().timestamp().max(0) as u64;
-    let mut service = state.service.lock().unwrap();
-    crate::services::common::ensure_access_mode(
-        &mut service,
-        human_money_core::AccessMode::DailyPay,
-        password.as_deref(),
-    )?;
+    let mut service =
+        state.authorize_and_lock(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
     let mut stored = load_own_market_profile_for_write(&mut service, password.as_deref())?;
 
     let ad_idx = stored
@@ -1110,12 +1097,8 @@ pub fn delete_ad_impl(
     state: &AppState,
 ) -> Result<FrontendMyMarketProfile, FrontendError> {
     let now = chrono::Utc::now().timestamp().max(0) as u64;
-    let mut service = state.service.lock().unwrap();
-    crate::services::common::ensure_access_mode(
-        &mut service,
-        human_money_core::AccessMode::DailyPay,
-        password.as_deref(),
-    )?;
+    let mut service =
+        state.authorize_and_lock(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
     let mut stored = load_own_market_profile_for_write(&mut service, password.as_deref())?;
 
     let old_token_opt = stored
@@ -1145,6 +1128,7 @@ pub async fn get_ad_image_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<Option<String>, FrontendError> {
+    state.authorize(crate::state::RequiredAccess::Unlocked, None)?;
     if !humoco_market::is_valid_image_token(&image_token) {
         return Ok(None);
     }
@@ -1250,7 +1234,7 @@ pub fn get_market_view_impl(
     state: &AppState,
 ) -> Result<FrontendMarketSnapshot, FrontendError> {
     let now = chrono::Utc::now().timestamp().max(0) as u64;
-    let mut service = state.service.lock().unwrap();
+    let mut service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
 
     // Auto-renew own card if published and (validity < 30 days OR active ads count changed)
     let mut stored_opt = load_own_market_profile_state(state, &mut service, password.as_deref()).ok();
@@ -1470,7 +1454,7 @@ pub fn export_forward_card_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendForwardCardExport, FrontendError> {
-    let mut service = state.service.lock().unwrap();
+    let mut service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
 
     let store: humoco_market::CardStore = service
         .load_encrypted_data(MARKET_CARD_STORE_KEY, password.as_deref())
@@ -1515,12 +1499,8 @@ pub fn import_contact_card_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendImportCardResult, FrontendError> {
-    let mut service = state.service.lock().unwrap();
-    crate::services::common::ensure_access_mode(
-        &mut service,
-        human_money_core::AccessMode::DailyPay,
-        password.as_deref(),
-    )?;
+    let mut service =
+        state.authorize_and_lock(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
 
     let trimmed_payload = payload.trim();
     let lower_payload = trimmed_payload.to_ascii_lowercase();
@@ -1726,12 +1706,8 @@ pub fn delete_foreign_contact_card_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<(), FrontendError> {
-    let mut service = state.service.lock().unwrap();
-    crate::services::common::ensure_access_mode(
-        &mut service,
-        human_money_core::AccessMode::DailyPay,
-        password.as_deref(),
-    )?;
+    let mut service =
+        state.authorize_and_lock(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
 
     let mut store: humoco_market::CardStore = service
         .load_encrypted_data(MARKET_CARD_STORE_KEY, password.as_deref())
@@ -1757,7 +1733,7 @@ pub fn get_app_notices_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<StoredAppNotices, FrontendError> {
-    let mut service = state.service.lock().unwrap();
+    let mut service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
     Ok(state.load_app_notices(&mut service, password.as_deref()))
 }
 
@@ -1766,8 +1742,14 @@ pub fn mark_app_notices_read_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<StoredAppNotices, FrontendError> {
-    let mut service = state.service.lock().unwrap();
-    let mut store = state.load_app_notices(&mut service, password.as_deref());
+    let mut service =
+        state.authorize_and_lock(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
+    let mut store: StoredAppNotices = crate::state::load_encrypted_json_or_default(
+        &mut service,
+        crate::state::APP_NOTICES_KEY,
+        password.as_deref(),
+    )
+    .map_err(FrontendError::from)?;
     let mut changed = false;
     for notice in &mut store.notices {
         let matches = notice_id
@@ -1789,8 +1771,14 @@ pub fn clear_app_notices_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<StoredAppNotices, FrontendError> {
-    let mut service = state.service.lock().unwrap();
-    let mut store = state.load_app_notices(&mut service, password.as_deref());
+    let mut service =
+        state.authorize_and_lock(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
+    let mut store: StoredAppNotices = crate::state::load_encrypted_json_or_default(
+        &mut service,
+        crate::state::APP_NOTICES_KEY,
+        password.as_deref(),
+    )
+    .map_err(FrontendError::from)?;
     if !store.notices.is_empty() {
         store.notices.clear();
         state.save_app_notices(&mut service, &store, password.as_deref())?;
@@ -2729,12 +2717,11 @@ mod tests {
     async fn test_k1_k2_market_cache_error_propagation_and_access_mode_guards() {
         let base_dir = temp_test_dir("market_k1_k2_guards");
         let password = "MasterPassword123!";
-        let receive_pin = "112233";
         let daily_pin = "445566";
         let mut alice_service =
             setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
         alice_service
-            .enable_secondary_auth(password, receive_pin, human_money_core::SecondaryScope::ReceiveOnly)
+            .enable_secondary_auth(password, daily_pin, human_money_core::SecondaryScope::DailyPay)
             .unwrap();
         let folder = alice_service.list_profiles().unwrap()[0].folder_name.clone();
         let alice_state = create_test_state(alice_service);
@@ -2797,56 +2784,38 @@ mod tests {
         assert_eq!(cached_profile.skills.len(), 1);
         assert!(cached_profile.published);
 
-        // K2: Log in with ReceiveOnly PIN + active session cache (timeout > 0); all mutations must fail closed
+        // K2: Log in with DailyPay PIN + active session cache (timeout > 0);
+        // Full-only profile mutations fail closed while DailyPay ad mutations succeed
         alice_state.clear_all_caches();
         {
             let mut s = alice_state.service.lock().unwrap();
             s.logout();
             let granted = s
-                .login_with_secondary(&folder, receive_pin, true, "device-market-test".into())
+                .login_with_secondary(&folder, daily_pin, true, "device-market-test".into())
                 .unwrap();
-            assert_eq!(granted, human_money_core::AccessMode::ReceiveOnly);
-            s.unlock_secondary_session(receive_pin, 300).unwrap();
+            assert_eq!(granted, human_money_core::AccessMode::DailyPay);
+            s.unlock_secondary_session(daily_pin, 300).unwrap();
         }
 
-        let err_pub = set_card_published_impl(false, false, None, &alice_state)
-            .await
-            .unwrap_err();
-        assert!(err_pub.message.to_lowercase().contains("access") || err_pub.message.to_lowercase().contains("insufficient") || err_pub.message.to_lowercase().contains("mode"));
-
-        let ad_id = cached_profile.ads[0].id.clone();
-        assert!(delete_ad_impl(ad_id.clone(), None, &alice_state).is_err());
-        assert!(renew_ad_impl(ad_id, 90, None, &alice_state).is_err());
-        assert!(upsert_ad_impl(
-            FrontendAdInput {
-                id: None,
-                kind: humoco_market::AdKind::Offer,
-                title: "Unauthorized".to_string(),
-                text: None,
-                pricing: None,
-                duration_days: 30,
+        let err_profile = save_my_market_profile_impl(
+            FrontendSaveMyMarketProfileRequest {
+                profile: FrontendUserProfile {
+                    first_name: Some("Bob".to_string()),
+                    ..Default::default()
+                },
+                visibility: CardFieldVisibility::default(),
+                skills: vec![],
+                max_hops: 2,
+                validity_years: 2,
                 allow_inquiries: true,
-                is_remote: false,
-                image_webp_data_uri: None,
+                published: Some(true),
             },
             None,
             &alice_state,
         )
-        .is_err());
+        .unwrap_err();
+        assert_eq!(err_profile.code, "error.auth.insufficientAccessMode");
 
-        // Switching to DailyPay PIN allows ad mutations while profile edits still require Full
-        {
-            let mut s = alice_state.service.lock().unwrap();
-            s.logout();
-            s.login(&folder, password, true, "device-market-test".into())
-                .unwrap();
-            s.enable_secondary_auth(password, daily_pin, human_money_core::SecondaryScope::DailyPay)
-                .unwrap();
-            s.logout();
-            s.login_with_secondary(&folder, daily_pin, true, "device-market-test".into())
-                .unwrap();
-            s.unlock_secondary_session(daily_pin, 300).unwrap();
-        }
         assert!(upsert_ad_impl(
             FrontendAdInput {
                 id: None,

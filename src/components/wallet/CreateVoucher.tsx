@@ -29,7 +29,7 @@ interface CreateVoucherProps {
 
 export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps) {
     const { t } = useTranslation();
-    const { protectAction, accessMode = 'full', requireFullAccess } = useSession();
+    const { protectAction } = useSession();
     const navigation = useOptionalNavigation();
     const {
         standards,
@@ -162,26 +162,6 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
             onBack={onCancel}
         >
             <div className="max-w-5xl mx-auto space-y-8 pb-20">
-                {accessMode === 'receiveOnly' && (
-                    <AlertBanner variant="warning" title={t('auth.cashierModeRestrictedTitle')}>
-                        <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
-                            <span>{t('auth.cashierModeRestrictedDesc')}</span>
-                            {requireFullAccess && (
-                                <Button
-                                    type="button"
-                                    variant="primary"
-                                    size="xs"
-                                    onClick={() => {
-                                        void requireFullAccess(async () => {}).catch(() => undefined);
-                                    }}
-                                >
-                                    {t('auth.unlockFullAccess')}
-                                </Button>
-                            )}
-                        </div>
-                    </AlertBanner>
-                )}
-
                 {feedback && (
                     <AlertBanner variant={feedback.type}>{feedback.msg}</AlertBanner>
                 )}
@@ -242,7 +222,7 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
                                 <span className="text-xs font-bold">{t('voucher.create.missingPrefix')}{getMissingFieldNames(errors)}</span>
                             </div>
                         )}
-                        <Button type="submit" disabled={isLoading || accessMode === 'receiveOnly' || retentionInsufficient} className="w-full sm:w-auto sm:min-w-[320px] py-5 rounded-3xl shadow-premium-lg text-lg gap-3">
+                        <Button type="submit" disabled={isLoading || retentionInsufficient} className="w-full sm:w-auto sm:min-w-[320px] py-5 rounded-3xl shadow-premium-lg text-lg gap-3">
                             {isLoading ? <Clock className="animate-spin" size={24} /> : <PlusCircle size={24} />}
                             {isLoading ? t('voucher.create.creating') : t('voucher.create')}
                         </Button>

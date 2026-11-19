@@ -707,7 +707,7 @@ pub fn preview_contact_trust_change_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendTrustChangeImpact, FrontendError> {
-    let mut service = state.lock_service()?;
+    let mut service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
     let settings = state
         .get_cached_settings()
         .or_else(|_| state.load_settings(&mut service, password.as_deref()))

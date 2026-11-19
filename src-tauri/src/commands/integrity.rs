@@ -1,4 +1,5 @@
 use crate::models::{FrontendError, IntegrityReport};
+use crate::state::RequiredAccess;
 use crate::AppState;
 use log::{error, info};
 use tauri::State;
@@ -8,7 +9,7 @@ pub async fn check_wallet_integrity(
     state: State<'_, AppState>,
 ) -> Result<IntegrityReport, FrontendError> {
     info!("Checking wallet integrity...");
-    let mut service = state.service.lock().unwrap();
+    let mut service = state.authorize_and_lock(RequiredAccess::Unlocked, None)?;
     let report = service
         .check_integrity(None)
         .map_err(|e| {
@@ -27,7 +28,7 @@ pub async fn repair_wallet_integrity(
     password: Option<String>,
 ) -> Result<(), FrontendError> {
     info!("Repairing wallet integrity...");
-    let mut service = state.service.lock().unwrap();
+    let mut service = state.authorize_and_lock(RequiredAccess::Full, password.as_deref())?;
     service
         .repair_integrity(password.as_deref())
         .map_err(|e| {
@@ -46,7 +47,7 @@ pub fn export_double_spend_proof(
     state: State<'_, AppState>,
 ) -> Result<Vec<u8>, FrontendError> {
     info!("Exporting double spend proof: {}", proof_id);
-    let service = state.service.lock().unwrap();
+    let service = state.authorize_and_lock(RequiredAccess::Unlocked, None)?;
     let proof = service
         .get_proof_of_double_spend(&proof_id)
         .map_err(FrontendError::from)?;
@@ -68,7 +69,7 @@ pub fn import_double_spend_proof(
     let proof: human_money_core::models::conflict::ProofOfDoubleSpend =
         serde_json::from_slice(&proof_bytes).map_err(|e| FrontendError::from(e.to_string()))?;
     let proof_id = proof.proof_id.clone();
-    let mut service = state.service.lock().unwrap();
+    let mut service = state.authorize_and_lock(RequiredAccess::DailyPay, password.as_deref())?;
     service
         .import_proof(proof, password.as_deref())
         .map_err(FrontendError::from)?;

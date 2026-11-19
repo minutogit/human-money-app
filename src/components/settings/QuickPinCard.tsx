@@ -5,7 +5,6 @@ import {
     KeyRound,
     ShieldCheck,
     Lock,
-    Store,
     CheckCircle2,
     Trash2,
 } from 'lucide-react';
@@ -158,9 +157,7 @@ export const QuickPinCard: React.FC = () => {
                             }`}
                         >
                             {status?.enabled
-                                ? status.scope === 'receiveOnly'
-                                    ? t('settings.pinBadgeReceiveOnly')
-                                    : t('settings.pinBadgeDailyPay')
+                                ? t('settings.pinBadgeDailyPay')
                                 : t('settings.pinBadgeDisabled')}
                         </span>
                     )}
@@ -230,44 +227,14 @@ export const QuickPinCard: React.FC = () => {
                             <label className="text-xs font-bold text-theme-secondary uppercase tracking-wider block">
                                 {t('settings.pinScopeLabel')}
                             </label>
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                                <button
-                                    type="button"
-                                    onClick={() => setScope('dailyPay')}
-                                    data-testid="pin-scope-daily-pay"
-                                    className={`text-left p-3.5 rounded-xl border transition-all cursor-pointer ${
-                                        scope === 'dailyPay'
-                                            ? 'border-theme-primary bg-theme-primary/5 ring-2 ring-theme-primary/20'
-                                            : 'border-theme-subtle hover:border-theme-primary/40'
-                                    }`}
-                                >
-                                    <div className="flex items-center gap-2 font-bold text-sm text-theme-secondary">
-                                        <ShieldCheck size={16} className="text-theme-primary shrink-0" />
-                                        <span>{t('settings.pinScopeDailyPayTitle')}</span>
-                                    </div>
-                                    <p className="text-xs text-theme-light mt-1">
-                                        {t('settings.pinScopeDailyPayDesc')}
-                                    </p>
-                                </button>
-
-                                <button
-                                    type="button"
-                                    onClick={() => setScope('receiveOnly')}
-                                    data-testid="pin-scope-receive-only"
-                                    className={`text-left p-3.5 rounded-xl border transition-all cursor-pointer ${
-                                        scope === 'receiveOnly'
-                                            ? 'border-amber-500 bg-amber-50/70 dark:bg-amber-950/30 ring-2 ring-amber-500/20'
-                                            : 'border-theme-subtle hover:border-amber-400/50'
-                                    }`}
-                                >
-                                    <div className="flex items-center gap-2 font-bold text-sm text-theme-secondary">
-                                        <Store size={16} className="text-amber-600 shrink-0" />
-                                        <span>{t('settings.pinScopeReceiveOnlyTitle')}</span>
-                                    </div>
-                                    <p className="text-xs text-theme-light mt-1">
-                                        {t('settings.pinScopeReceiveOnlyDesc')}
-                                    </p>
-                                </button>
+                            <div className="p-3.5 rounded-xl border border-theme-primary bg-theme-primary/5">
+                                <div className="flex items-center gap-2 font-bold text-sm text-theme-secondary">
+                                    <ShieldCheck size={16} className="text-theme-primary shrink-0" />
+                                    <span>{t('settings.pinScopeDailyPayTitle')}</span>
+                                </div>
+                                <p className="text-xs text-theme-light mt-1">
+                                    {t('settings.pinScopeDailyPayDesc')}
+                                </p>
                             </div>
                         </div>
 

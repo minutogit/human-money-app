@@ -161,14 +161,13 @@ pub(crate) fn export_wallet_backup_file_impl(
     state: &AppState,
     app: &tauri::AppHandle,
 ) -> Result<FrontendBackupSummaryDto, FrontendError> {
-    let (_expected_mode, protection) = parse_protection_mode(protection_mode, backup_password)?;
+    let (expected_mode, protection) = parse_protection_mode(protection_mode, backup_password)?;
     let custom_standards = collect_custom_standards(app);
-    let mut service = state.lock_service()?;
-    crate::services::common::ensure_access_mode(
-        &mut service,
-        human_money_core::AccessMode::Full,
-        password,
-    )?;
+    let required = match expected_mode {
+        "backup_password" => crate::state::RequiredAccess::Full,
+        _ => crate::state::RequiredAccess::DailyPay,
+    };
+    let mut service = state.authorize_and_lock(required, password)?;
     let summary = export_backup_file_impl(
         Path::new(destination_path),
         protection,
@@ -269,12 +268,11 @@ pub(crate) fn sync_wallet_backup_folder_impl(
 ) -> Result<FrontendBackupSummaryDto, FrontendError> {
     let (expected_mode, protection) = parse_protection_mode(protection_mode, backup_password)?;
     let custom_standards = collect_custom_standards(app);
-    let mut service = state.lock_service()?;
-    crate::services::common::ensure_access_mode(
-        &mut service,
-        human_money_core::AccessMode::Full,
-        password,
-    )?;
+    let required = match expected_mode {
+        "backup_password" => crate::state::RequiredAccess::Full,
+        _ => crate::state::RequiredAccess::DailyPay,
+    };
+    let mut service = state.authorize_and_lock(required, password)?;
     let summary = sync_backup_folder_impl(
         Path::new(&folder_path),
         expected_mode,
@@ -1366,6 +1364,7 @@ fn has_own_sync_target(state: &AppState) -> bool {
 pub(crate) fn get_backup_status_impl(
     state: &AppState,
 ) -> Result<FrontendAutoBackupStatusDto, FrontendError> {
+    state.authorize(crate::state::RequiredAccess::Unlocked, None)?;
     let Ok(settings) = state.get_cached_settings() else {
         return Ok(not_configured_backup_status());
     };
@@ -1377,6 +1376,7 @@ pub(crate) fn run_auto_backup_sync_impl(
     state: &AppState,
     app: &tauri::AppHandle,
 ) -> Result<FrontendAutoBackupStatusDto, FrontendError> {
+    state.authorize(crate::state::RequiredAccess::DailyPay, None)?;
     let Ok(mut settings) = state.get_cached_settings() else {
         return Ok(not_configured_backup_status());
     };
@@ -1408,7 +1408,7 @@ pub(crate) fn run_auto_backup_sync_impl(
         return Ok(compute_backup_status_dto(&settings, has_own_sync));
     }
 
-    let mut service = state.lock_service()?;
+    let mut service = state.authorize_and_lock(crate::state::RequiredAccess::DailyPay, None)?;
     let custom_standards = collect_custom_standards(app);
 
     match sync_backup_folder_impl(
@@ -1587,6 +1587,7 @@ pub(crate) async fn sync_backup_with_standards_impl(
     custom_standards: HashMap<String, String>,
     state: &AppState,
 ) -> Result<FrontendBackupSyncResult, FrontendError> {
+    state.authorize(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
     let settings = state.get_cached_settings().map_err(FrontendError::from)?;
     if !settings.sync_backup_enabled {
         return Ok(FrontendBackupSyncResult {
@@ -2549,6 +2550,7 @@ pub(crate) async fn reconcile_restored_wallet_l2_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendRestoreReconcileResultDto, FrontendError> {
+    state.authorize(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
     let summary = crate::services::l2_anchor_service::reconcile_vouchers_via_static_locks(
         state,
         None,

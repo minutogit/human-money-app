@@ -1866,8 +1866,8 @@ async fn test_unreachable_recipient_returns_error_and_locked_dispatch_defers_msg
 }
 
 #[tokio::test]
-async fn test_merge_and_save_post_state_preserves_concurrent_outbox_and_pos_cashier_staging() {
-    let base_dir = temp_test_dir("post_concurrency_and_pos_staging");
+async fn test_merge_and_save_post_state_preserves_concurrent_outbox_and_auto_imports_payment() {
+    let base_dir = temp_test_dir("post_concurrency_and_auto_import");
     let password = "TestPassword123!";
 
     let alice_state = create_test_state(setup_test_app(
@@ -1931,7 +1931,7 @@ async fn test_merge_and_save_post_state_preserves_concurrent_outbox_and_pos_cash
     assert_eq!(merged.outbox_entries[0].msg_id, "concurrent-outbox-1");
     save_post_state(&alice_state, &StoredPostState::default(), Some(password)).unwrap();
 
-    // Finding 9: Active PoS cashier stages online PoST payment instead of auto-importing
+    // Syncing PoST auto-imports incoming payment directly into Bob's wallet
     let server_a = MockSyncServer::start("d-alice".to_string(), ADMIN_A.to_string()).await;
     let server_b = MockSyncServer::start("d-bob".to_string(), ADMIN_B.to_string()).await;
     let (server_a_url, alice_drop) =
@@ -2079,16 +2079,6 @@ async fn test_merge_and_save_post_state_preserves_concurrent_outbox_and_pos_cash
         dep_res
     );
 
-    {
-        let mut s_bob = bob_state.service.lock().unwrap();
-        let mut bob_settings = bob_state.load_settings(&mut s_bob, Some(password)).unwrap();
-        bob_settings.enable_pos_mode = true;
-        bob_settings.pos_cashier_active = true;
-        bob_state
-            .save_settings(&mut s_bob, bob_settings, Some(password))
-            .unwrap();
-    }
-
     let bob_sync = sync_post_channels_impl(
         None,
         None,
@@ -2099,30 +2089,6 @@ async fn test_merge_and_save_post_state_preserves_concurrent_outbox_and_pos_cash
     .await
     .unwrap();
     assert_eq!(bob_sync.imported_payments, 1, "bob_sync: {:?}", bob_sync);
-    assert_eq!(bob_sync.pending_pos_payments.len(), 1);
-    // Voucher must still NOT be auto-committed into Bob's wallet while PoS cashier is active
-    {
-        let s_bob = bob_state.service.lock().unwrap();
-        let bob_vouchers = s_bob
-            .with_wallet_and_identity(|w, id| w.list_vouchers(Some(id), None, None, None))
-            .unwrap();
-        assert!(bob_vouchers.is_empty());
-    }
-
-    // Committing the staged payment credits Bob's wallet and removes it from pending_pos_payments
-    let staged_bytes = bob_sync.pending_pos_payments[0].bundle_bytes.clone();
-    crate::services::transfer_service::receive_bundle_impl(
-        None,
-        staged_bytes,
-        std_map,
-        Some(password.to_string()),
-        false,
-        &bob_state,
-    )
-    .unwrap();
-
-    let post_after = load_post_state(&bob_state, Some(password)).unwrap();
-    assert!(post_after.pending_pos_payments.is_empty());
     {
         let s_bob = bob_state.service.lock().unwrap();
         let bob_vouchers = s_bob

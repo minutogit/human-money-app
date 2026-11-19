@@ -10,29 +10,15 @@ import {
     CheckCircle2,
     RefreshCw,
     ClipboardPaste,
-    AlertCircle,
     ArrowRightLeft,
 } from 'lucide-react';
 import { Button } from '../../ui/Button';
-import { Input } from '../../ui/Input';
 import { Textarea } from '../../ui/Textarea';
 import { AlertBanner } from '../../ui/AlertBanner';
 import { Advanced } from '../../ui/Advanced';
-import { HelpIcon } from '../../ui/HelpIcon';
 import { readFromClipboard } from '../../../utils/clipboard';
-import type { AppSettings } from '../../../types';
-import type { PendingPosFallbackState } from './useReceiveFlow';
 
 interface ReceiveInputStepProps {
-    settings: AppSettings | null;
-    isPosMode: boolean;
-    hasStagedPosPayments?: boolean;
-    purchaseId: string;
-    onPosModeToggle: (checked: boolean) => void;
-    onPurchaseIdChange: (value: string) => void;
-    pendingPosFallback: PendingPosFallbackState | null;
-    onAcceptPosFallback: () => void;
-    onCancelPosFallback: () => void;
     isProcessing: boolean;
     isCheckingPost?: boolean;
     postCheckStatus?: { variant: 'info' | 'success' | 'error'; message: string } | null;
@@ -48,15 +34,6 @@ interface ReceiveInputStepProps {
 }
 
 export function ReceiveInputStep({
-    settings,
-    isPosMode,
-    hasStagedPosPayments = false,
-    purchaseId,
-    onPosModeToggle,
-    onPurchaseIdChange,
-    pendingPosFallback,
-    onAcceptPosFallback,
-    onCancelPosFallback,
     isProcessing,
     isCheckingPost = false,
     postCheckStatus = null,
@@ -76,95 +53,6 @@ export function ReceiveInputStep({
 
     return (
         <div className="space-y-8">
-            {(settings?.enablePosMode || hasStagedPosPayments) && (
-                <div className="flex flex-col sm:flex-row items-center justify-between gap-4 p-4 bg-white/40 border border-theme-subtle/50 rounded-2xl">
-                    <div className="flex items-center gap-2">
-                        <label className="flex items-center gap-3 cursor-pointer select-none">
-                            <input
-                                type="checkbox"
-                                checked={isPosMode}
-                                onChange={(e) => onPosModeToggle(e.target.checked)}
-                                className="rounded accent-theme-primary h-4 w-4"
-                            />
-                            <span className="text-xs font-bold text-theme-secondary">
-                                {t('transfer.posModeToggle', 'PoS Cashier Mode (Point-of-Sale Checkout)')}
-                            </span>
-                        </label>
-                        <HelpIcon topic="posMode" size={14} />
-                    </div>
-                    {isPosMode && (
-                        <div className="w-full sm:w-64">
-                            <Input
-                                placeholder={t(
-                                    'transfer.purchaseIdPlaceholder',
-                                    'Receipt / Purchase ID (optional)',
-                                )}
-                                value={purchaseId}
-                                onChange={(e) => onPurchaseIdChange(e.target.value)}
-                                className="text-xs font-mono py-1.5"
-                            />
-                        </div>
-                    )}
-                </div>
-            )}
-
-            {pendingPosFallback && (
-                <div
-                    data-testid="pos-fallback-card"
-                    className="p-6 bg-amber-500/10 border border-amber-500/30 rounded-3xl space-y-4 animate-in fade-in duration-300"
-                >
-                    <div className="flex items-start gap-3">
-                        <AlertCircle className="text-amber-600 shrink-0 mt-0.5" size={20} />
-                        <div className="space-y-1">
-                            <h4 className="text-base font-bold text-amber-900">
-                                {t('transfer.checkout.fallbackCardTitle', 'L2 PoS Protection Unavailable')}
-                            </h4>
-                            <p className="text-xs text-amber-800 leading-relaxed">
-                                {pendingPosFallback.merchantWarning ||
-                                    (pendingPosFallback.outcomeKind === 'offlineOnly'
-                                        ? t(
-                                              'transfer.checkout.fallbackNoServersDesc',
-                                              'No lock servers are configured (N = 0). You can still accept this transfer on a trust basis using pure Layer-1 math (SST V4).',
-                                          )
-                                        : t(
-                                              'transfer.checkout.fallbackQuorumDesc',
-                                              'Could not reach enough trusted lock servers for green release. You can reject or accept on a trust basis (L1 verified).',
-                                          ))}
-                            </p>
-                            <p className="text-[11px] text-amber-700/80 font-medium">
-                                {t(
-                                    'transfer.checkout.fallbackNotice',
-                                    'Offline transfers are cryptographically protected by SST V4 self-exposure if a double-spend is attempted.',
-                                )}
-                            </p>
-                        </div>
-                    </div>
-                    <div className="flex items-center justify-end gap-3 pt-2">
-                        <button
-                            type="button"
-                            onClick={onCancelPosFallback}
-                            disabled={isProcessing}
-                            className="px-4 py-2 text-xs font-bold text-stone-600 hover:text-stone-900 transition-colors"
-                        >
-                            {t('transfer.checkout.fallbackCancel', 'Cancel / Reject')}
-                        </button>
-                        <Button
-                            type="button"
-                            onClick={onAcceptPosFallback}
-                            disabled={isProcessing}
-                            className="bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold px-4 py-2 rounded-xl shadow-md"
-                        >
-                            {isProcessing
-                                ? t('transfer.importFile.loading')
-                                : t(
-                                      'transfer.checkout.fallbackAcceptTrust',
-                                      'Accept on Trust Basis (L1 Verified)',
-                                  )}
-                        </Button>
-                    </div>
-                </div>
-            )}
-
             <div
                 id="bundle-drop-zone"
                 className={`relative group border-2 border-dashed rounded-[40px] p-12 transition-all flex flex-col items-center justify-center text-center overflow-hidden min-h-[280px] cursor-pointer ${

@@ -14,7 +14,8 @@ pub fn create_new_voucher(
     state: tauri::State<AppState>,
 ) -> Result<crate::models::FrontendVoucherDetails, FrontendError> {
     info!("Attempting to create a new voucher...");
-    let mut service = state.service.lock().unwrap();
+    let mut service =
+        state.authorize_and_lock(crate::state::RequiredAccess::Full, password.as_deref())?;
     let user_id = service
         .with_wallet(|w| w.get_user_id().to_string())
         .map_err(FrontendError::from)?;
@@ -236,7 +237,7 @@ pub fn create_signing_request_bundle(
         "Creating signing request bundle for voucher {} with config {:?}",
         local_instance_id, config
     );
-    let service = state.service.lock().unwrap();
+    let service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
     create_signing_request_bundle_impl(&local_instance_id, config, &service)
 }
 
@@ -336,10 +337,11 @@ pub fn open_voucher_signing_request(
     state: tauri::State<AppState>,
 ) -> Result<crate::models::FrontendVoucherDetails, FrontendError> {
     info!("Opening voucher signing request bundle...");
-    let service = state.service.lock().unwrap();
+    let service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
     open_voucher_signing_request_impl(&container_bytes, password.as_deref(), &service)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn create_detached_signature_response_bundle_impl(
     voucher: crate::models::FrontendVoucher,
     role: String,
@@ -354,6 +356,7 @@ pub(crate) fn create_detached_signature_response_bundle_impl(
         "Creating detached signature response for role {} with config {:?}",
         role, config
     );
+    state.authorize(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
 
     let core_voucher_preview = human_money_core::models::voucher::Voucher::from(voucher.clone());
     if role.trim().eq_ignore_ascii_case("guarantor") && core_voucher_preview.layer2_anchor.is_some()
@@ -384,17 +387,8 @@ pub(crate) fn create_detached_signature_response_bundle_impl(
         }
     }
 
-    let mut service = state.service.lock().unwrap();
-
-    if !service.is_wallet_unlocked() {
-        error!(
-            "SIGNING ERROR: AppService is in LOCKED state. No profile is currently loaded in the backend."
-        );
-        return Err(FrontendError::from(
-            "Wallet is completely locked. Please log out and log in again to refresh your session."
-                .to_string(),
-        ));
-    }
+    let mut service =
+        state.authorize_and_lock(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
 
     service
         .create_detached_signature_response_bundle(
@@ -440,7 +434,10 @@ pub fn process_and_attach_signature(
     state: tauri::State<AppState>,
 ) -> Result<String, FrontendError> {
     info!("Processing and attaching signature from bundle...");
-    let mut service = state.service.lock().unwrap();
+    let mut service = state.authorize_and_lock(
+        crate::state::RequiredAccess::DailyPay,
+        wallet_password.as_deref(),
+    )?;
     service
         .process_and_attach_signature(
             &container_bytes,
@@ -462,7 +459,8 @@ pub fn remove_voucher_signature(
         "Removing signature {} from voucher {}...",
         signature_id, local_instance_id
     );
-    let mut service = state.service.lock().unwrap();
+    let mut service =
+        state.authorize_and_lock(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
     service
         .remove_voucher_signature(&local_instance_id, &signature_id, password.as_deref())
         .map_err(FrontendError::from)
@@ -491,6 +489,7 @@ pub(crate) fn evaluate_guarantor_anchor_check_impl(
     manifest_json: Option<String>,
     state: &AppState,
 ) -> Result<FrontendGuarantorAnchorCheckDto, FrontendError> {
+    state.authorize(crate::state::RequiredAccess::Unlocked, None)?;
     let (std_def, _) =
         human_money_core::models::voucher_standard_definition::VoucherStandardDefinition::from_toml(
             &standard_toml_content,

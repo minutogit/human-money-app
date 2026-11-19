@@ -205,12 +205,6 @@ pub(crate) fn merge_and_save_post_state(
             &mut working.pending_wot_packages_by_msg_id,
             &latest.pending_wot_packages_by_msg_id,
         );
-        merge_vec_by_id(
-            &baseline.pending_pos_payments,
-            &mut working.pending_pos_payments,
-            &latest.pending_pos_payments,
-            |p| p.id.as_str(),
-        );
         merge_inquiries_3way(&baseline.inquiries, &mut working.inquiries, &latest.inquiries);
         if working.inquiry_rate_tracker == baseline.inquiry_rate_tracker
             && latest.inquiry_rate_tracker != baseline.inquiry_rate_tracker
@@ -233,31 +227,6 @@ pub(crate) fn merge_and_save_post_state(
     service
         .save_encrypted_data(MARKET_POST_STATE_KEY, &bytes, password)
         .map_err(FrontendError::from)
-}
-
-/// Removes any staged PoS payment matching `bundle_bytes` once committed.
-pub(crate) fn remove_pending_pos_payment_by_bytes(
-    state: &AppState,
-    bundle_bytes: &[u8],
-    password: Option<&str>,
-) {
-    let mut service = state.service.lock().unwrap();
-    let Ok(mut post_state) = crate::state::load_encrypted_json_or_default::<StoredPostState>(
-        &mut service,
-        MARKET_POST_STATE_KEY,
-        password,
-    ) else {
-        return;
-    };
-    let before = post_state.pending_pos_payments.len();
-    post_state
-        .pending_pos_payments
-        .retain(|p| p.bundle_bytes != bundle_bytes);
-    if post_state.pending_pos_payments.len() != before {
-        if let Ok(bytes) = serde_json::to_vec(&post_state) {
-            let _ = service.save_encrypted_data(MARKET_POST_STATE_KEY, &bytes, password);
-        }
-    }
 }
 
 /// Persists the encrypted Post outbox/inbox state directly (test helper).

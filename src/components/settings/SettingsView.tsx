@@ -15,7 +15,6 @@ import { ExpertTabsLayout } from '../ui/ExpertTabsLayout';
 import { SegmentedTabs } from '../ui/SegmentedTabs';
 import { AlertBanner } from '../ui/AlertBanner';
 import { Card } from '../ui/Card';
-import { Button } from '../ui/Button';
 import { Disclosure } from '../ui/Disclosure';
 import { LanguageSelector } from '../ui/LanguageSelector';
 import { MyProfileCard } from '../profile/MyProfileCard';
@@ -47,7 +46,7 @@ interface SettingsViewProps {
 
 export function SettingsView({ onBack }: SettingsViewProps) {
     const { t } = useTranslation();
-    const { protectAction, accessMode = 'full', requireFullAccess } = useSession();
+    const { protectAction } = useSession();
     const nav = useOptionalNavigation();
     const appVersion = nav?.appVersion || '0.3.0';
 
@@ -420,25 +419,6 @@ export function SettingsView({ onBack }: SettingsViewProps) {
             onBack={onBack}
         >
             <div className="max-w-4xl mx-auto space-y-6">
-                {accessMode === 'receiveOnly' && (
-                    <AlertBanner
-                        variant="info"
-                        data-testid="settings-receive-only-banner"
-                        action={
-                            requireFullAccess ? (
-                                <Button
-                                    size="xs"
-                                    variant="primary"
-                                    onClick={() => void requireFullAccess(async () => undefined).catch(() => undefined)}
-                                >
-                                    {t('settings.unlockFullAccessBtn')}
-                                </Button>
-                            ) : undefined
-                        }
-                    >
-                        {t('settings.receiveOnlyBanner')}
-                    </AlertBanner>
-                )}
                 {error && <AlertBanner variant="error">{error}</AlertBanner>}
                 {devFeedback && <AlertBanner variant="success">{devFeedback}</AlertBanner>}
 

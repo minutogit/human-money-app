@@ -60,7 +60,7 @@ pub async fn discover_available_syncs_impl(
     let mut descriptors: Vec<(FrontendSyncDescriptor, String)> = Vec::new();
 
     {
-        let mut service = state.lock_service()?;
+        let mut service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
 
         // 1. Own drop admin
         if let Some(admin) = load_stored_sync_admin_opt(&mut service, password.as_deref()) {
@@ -425,7 +425,7 @@ pub async fn probe_contact_syncs_impl(
     state: &AppState,
 ) -> Result<Vec<FrontendSyncDescriptor>, FrontendError> {
     let (id_ctx, mut settings, has_own_sync, mut address_book) = {
-        let mut service = state.lock_service()?;
+        let mut service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
         let id_ctx = SyncIdentityContext::from_service(&service)?;
         let s = state
             .get_cached_settings()
@@ -572,6 +572,7 @@ pub async fn set_selected_upload_syncs_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<Vec<FrontendSyncDescriptor>, FrontendError> {
+    state.authorize(crate::state::RequiredAccess::Full, password.as_deref())?;
     if syncs.len() > 3 {
         return Err(FrontendError::from(
             "Maximum 3 upload drops allowed".to_string(),

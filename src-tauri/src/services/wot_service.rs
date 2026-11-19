@@ -105,7 +105,7 @@ fn import_provider_filter_to_dto(
 }
 
 pub fn get_wot_summary_impl(state: &AppState) -> Result<FrontendWotSummaryDto, FrontendError> {
-    let mut service = state.service.lock().unwrap();
+    let mut service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
     let reg = state
         .get_or_load_wot_register(&mut service, None)
         .map_err(FrontendError::from)?;
@@ -140,7 +140,8 @@ pub fn set_wot_max_hops_impl(
         ));
     }
 
-    let mut service = state.service.lock().unwrap();
+    let mut service =
+        state.authorize_and_lock(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
     let mut reg = state
         .get_or_load_wot_register(&mut service, password.as_deref())
         .map_err(FrontendError::from)?;
@@ -176,7 +177,8 @@ pub fn export_wot_package_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<Vec<u8>, FrontendError> {
-    let mut service = state.service.lock().unwrap();
+    let mut service =
+        state.authorize_and_lock(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
     let (sender_did, sender_profile) = service
         .with_wallet(|w| {
             (
@@ -285,14 +287,17 @@ pub fn import_wot_package_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendWotImportResultDto, FrontendError> {
+    state.authorize(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
     // Case 1: Unencrypted public provider filter JSON
     if let Some(raw_json) = looks_like_provider_filter(&container_bytes) {
-        let mut service = state.service.lock().unwrap();
+        let mut service =
+            state.authorize_and_lock(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
         return import_provider_filter_to_dto(state, &mut service, raw_json, password.as_deref());
     }
 
     // Case 2: SecureContainer
-    let mut service = state.service.lock().unwrap();
+    let mut service =
+        state.authorize_and_lock(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
     let plaintext = service
         .open_trust_container(&container_bytes, container_password.as_deref(), |bytes| {
             if let Some(raw_json) = looks_like_provider_filter(bytes) {
@@ -366,7 +371,7 @@ pub fn import_wot_package_impl(
 pub fn get_wot_providers_impl(
     state: &AppState,
 ) -> Result<Vec<FrontendWotProviderDto>, FrontendError> {
-    let mut service = state.service.lock().unwrap();
+    let mut service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
     let reg = state
         .get_or_load_wot_register(&mut service, None)
         .map_err(FrontendError::from)?;
@@ -394,7 +399,8 @@ pub fn set_wot_provider_trust_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<Vec<FrontendWotProviderDto>, FrontendError> {
-    let mut service = state.service.lock().unwrap();
+    let mut service =
+        state.authorize_and_lock(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
     let mut reg = state
         .get_or_load_wot_register(&mut service, password.as_deref())
         .map_err(FrontendError::from)?;
@@ -415,7 +421,8 @@ pub fn remove_wot_provider_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<Vec<FrontendWotProviderDto>, FrontendError> {
-    let mut service = state.service.lock().unwrap();
+    let mut service =
+        state.authorize_and_lock(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
     let mut reg = state
         .get_or_load_wot_register(&mut service, password.as_deref())
         .map_err(FrontendError::from)?;
@@ -443,11 +450,13 @@ pub async fn refresh_wot_provider_url_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendWotProviderDto, FrontendError> {
+    state.authorize(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
     let can_issuer = crate::state::canonicalize_did(&issuer_did)
         .map_err(|e| FrontendError::from(e.to_string()))?;
 
     let (source_url, grace_secs) = {
-        let mut service = state.service.lock().unwrap();
+        let mut service = state
+            .authorize_and_lock(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
         let reg = state
             .get_or_load_wot_register(&mut service, password.as_deref())
             .map_err(FrontendError::from)?;
@@ -523,7 +532,8 @@ pub async fn refresh_wot_provider_url_impl(
         )));
     }
 
-    let mut service = state.service.lock().unwrap();
+    let mut service =
+        state.authorize_and_lock(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
     let mut reg = state
         .get_or_load_wot_register(&mut service, password.as_deref())
         .map_err(FrontendError::from)?;
@@ -548,7 +558,7 @@ pub fn evaluate_voucher_trust_preview_impl(
     guarantor_ids: Vec<String>,
     state: &AppState,
 ) -> Result<FrontendVoucherTrustDto, FrontendError> {
-    let service = state.service.lock().unwrap();
+    let service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
     let trust = service
         .with_wallet(|w| state.evaluate_voucher_trust_preview(w, &creator_id, &guarantor_ids))
         .map_err(FrontendError::from)?;

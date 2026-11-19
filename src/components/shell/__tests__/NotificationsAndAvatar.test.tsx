@@ -32,9 +32,13 @@ vi.mock('../../../context/NavigationContext', () => ({
     }),
 }));
 
+const mockProtectAction = vi.fn(async (action: (pwd: string | null) => Promise<unknown>) => action(null));
+
 vi.mock('../../../context/SessionContext', () => ({
     useSession: () => ({
-        isSessionActive: true,
+        isAuthenticated: true,
+        hasCachedSession: false,
+        protectAction: mockProtectAction,
     }),
 }));
 
@@ -116,8 +120,49 @@ describe('UserAvatar, NotificationBell and EventToastStack', () => {
 
         fireEvent.click(screen.getByText('Zahlung über Sync empfangen'));
         await waitFor(() => {
-            expect(marketService.markAppNoticesRead).toHaveBeenCalledWith('n1');
+            expect(mockProtectAction).toHaveBeenCalled();
+            expect(marketService.markAppNoticesRead).toHaveBeenCalledWith('n1', undefined);
             expect(mockNavigate).toHaveBeenCalledWith({ view: 'wallet' });
+        });
+    });
+
+    it('NotificationBell clears notices through protectAction when hasCachedSession is false (timeout=0)', async () => {
+        const nowSecs = Math.floor(Date.now() / 1000);
+        vi.mocked(marketService.getAppNotices).mockResolvedValue({
+            lastSyncAt: nowSecs - 60,
+            notices: [
+                {
+                    id: 'n-t0',
+                    kind: 'payment',
+                    createdAt: nowSecs - 30,
+                    read: false,
+                    importedPayments: 1,
+                    importedReceipts: 0,
+                    importedSignatures: 0,
+                    newSignRequests: 0,
+                    newWotHandshakes: 0,
+                    newInquiries: 0,
+                    newInquiryMessages: 0,
+                    importedCards: 0,
+                    newAds: 0,
+                },
+            ],
+        });
+        vi.mocked(marketService.clearAppNotices).mockResolvedValue({
+            lastSyncAt: nowSecs - 60,
+            notices: [],
+        });
+
+        render(<NotificationBell />);
+
+        expect(await screen.findByTestId('notification-bell-badge')).toHaveTextContent('1');
+        fireEvent.click(screen.getByTestId('notification-bell-button'));
+        const clearBtn = await screen.findByRole('button', { name: /clear|leeren|entfernen/i });
+        fireEvent.click(clearBtn);
+
+        await waitFor(() => {
+            expect(mockProtectAction).toHaveBeenCalled();
+            expect(marketService.clearAppNotices).toHaveBeenCalledWith(undefined);
         });
     });
 

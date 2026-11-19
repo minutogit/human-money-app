@@ -192,15 +192,9 @@ export const LoginCredentialPanel: React.FC<LoginCredentialPanelProps> = ({
                         </label>
                         <span
                             data-testid="login-pin-scope-badge"
-                            className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                                pinStatus.scope === 'receiveOnly'
-                                    ? 'bg-amber-50 text-amber-800 border border-amber-200'
-                                    : 'bg-sky-50 text-sky-800 border border-sky-200'
-                            }`}
+                            className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-sky-50 text-sky-800 border border-sky-200"
                         >
-                            {pinStatus.scope === 'receiveOnly'
-                                ? t('auth.cashierModeBadge')
-                                : t('auth.quickPinModeBadge')}
+                            {t('auth.quickPinModeBadge')}
                         </span>
                     </div>
                     <Input

@@ -72,7 +72,7 @@ export function MarketplaceView({
 }: MarketplaceViewProps) {
     const { t } = useTranslation();
     const { navigate, goBack, appState, navigateToSettingsSection } = useNavigation();
-    const { protectAction, accessMode } = useSession();
+    const { protectAction } = useSession();
     const handleBack = onBack || goBack;
 
     const [activeTab, setActiveTab] = useState<MarketplaceTab>(initialTab || 'board');
@@ -237,12 +237,9 @@ export function MarketplaceView({
 
     const handleConfirmPublishAndCreateAd = async () => {
         try {
-            const updated = await protectAction(
-                async (pwd) => {
-                    return await marketService.setCardPublished(true, false, pwd || undefined);
-                },
-                { requireFullAccess: accessMode === 'receiveOnly' },
-            );
+            const updated = await protectAction(async (pwd) => {
+                return await marketService.setCardPublished(true, false, pwd || undefined);
+            });
             if (updated) {
                 setMyProfile(updated);
                 setIsPublishPromptOpen(false);
@@ -257,12 +254,9 @@ export function MarketplaceView({
 
     const handleTogglePublished = async (published: boolean) => {
         try {
-            const updated = await protectAction(
-                async (pwd) => {
-                    return await marketService.setCardPublished(published, false, pwd || undefined);
-                },
-                { requireFullAccess: accessMode === 'receiveOnly' },
-            );
+            const updated = await protectAction(async (pwd) => {
+                return await marketService.setCardPublished(published, false, pwd || undefined);
+            });
             if (updated) {
                 setMyProfile(updated);
             }
@@ -274,12 +268,9 @@ export function MarketplaceView({
 
     const handleSaveAd = async (input: FrontendAdInput) => {
         try {
-            await protectAction(
-                async (pwd) => {
-                    await marketService.upsertAd(input, pwd || undefined);
-                },
-                { requireFullAccess: accessMode === 'receiveOnly' },
-            );
+            await protectAction(async (pwd) => {
+                await marketService.upsertAd(input, pwd || undefined);
+            });
             setIsCreateAdOpen(false);
             setEditingAd(null);
             await refreshData(false);
@@ -292,12 +283,9 @@ export function MarketplaceView({
 
     const handleRenewAd = async (id: string, durationDays: number) => {
         try {
-            await protectAction(
-                async (pwd) => {
-                    await marketService.renewAd(id, durationDays, pwd || undefined);
-                },
-                { requireFullAccess: accessMode === 'receiveOnly' },
-            );
+            await protectAction(async (pwd) => {
+                await marketService.renewAd(id, durationDays, pwd || undefined);
+            });
             setRenewingAd(null);
             await refreshData(false);
         } catch (err) {
@@ -309,12 +297,9 @@ export function MarketplaceView({
 
     const handleDeleteAd = async (id: string) => {
         try {
-            await protectAction(
-                async (pwd) => {
-                    await marketService.deleteAd(id, pwd || undefined);
-                },
-                { requireFullAccess: accessMode === 'receiveOnly' },
-            );
+            await protectAction(async (pwd) => {
+                await marketService.deleteAd(id, pwd || undefined);
+            });
             await refreshData(false);
         } catch (err) {
             logger.error('Failed to delete ad: ' + stringifyError(err));
@@ -534,7 +519,6 @@ export function MarketplaceView({
     const defaultEmptyInbox: FrontendPostInboxSummary = {
         pendingSignRequests: [],
         pendingWotHandshakes: [],
-        pendingPosPayments: [],
         inquiries: [],
         unacknowledgedPayments: [],
     };

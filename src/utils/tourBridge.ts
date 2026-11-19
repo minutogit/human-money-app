@@ -6,7 +6,7 @@ export type SettingsTabId = 'profile' | 'security' | 'connection' | 'advanced';
 export interface HumocoTourState {
     appState?: AppState;
     isAuthenticated?: boolean;
-    isSessionActive?: boolean;
+    hasCachedSession?: boolean;
     isForkLocked?: boolean;
     isRecoveryRequired?: boolean;
     settingsTab?: SettingsTabId;
@@ -42,8 +42,8 @@ class TourBridge {
         if (nextPartial.appState && nextPartial.isAuthenticated === undefined) {
             const isPublic = isPublicView(nextPartial.appState.view);
             nextPartial.isAuthenticated = !isPublic;
-            if (nextPartial.isSessionActive === undefined) {
-                nextPartial.isSessionActive = !isPublic;
+            if (nextPartial.hasCachedSession === undefined) {
+                nextPartial.hasCachedSession = !isPublic;
             }
         }
 

@@ -119,7 +119,6 @@ amount_decimal_places = 4`,
   const mockSettings: AppSettings = {
     sessionTimeoutSeconds: 300,
     privacyDefault: 'public',
-    enablePosMode: true,
     marketSyncEnabled: true,
   };
 
@@ -368,79 +367,7 @@ amount_decimal_places = 4`,
     });
   });
 
-  it('displays PoS trust fallback card on pos.noServersConfigured and accepts offline on trust basis', async () => {
-    (open as Mock).mockResolvedValue('/path/to/payment.transfer');
-    const { readFile } = await import('@tauri-apps/plugin-fs');
-    (readFile as Mock).mockResolvedValue(new Uint8Array([1, 2, 3]));
-
-    (invoke as Mock).mockImplementation((cmd: string) => {
-      if (cmd === 'get_voucher_standards') {
-        return Promise.resolve(mockStandards);
-      }
-      if (cmd === 'get_app_settings') {
-        return Promise.resolve(mockSettings);
-      }
-      if (cmd === 'checkout_received_bundle') {
-        return Promise.resolve({
-          purchaseId: 'pos-offline-1',
-          newlyCommitted: false,
-          verdict: {
-            outcome: 'OfflineOnly',
-            canReleaseGoodsAutomatically: false,
-            requiresMerchantApproval: true,
-            isGoodsReleaseAuthorized: false,
-            merchantWarning: 'No lock servers configured (N = 0).',
-          },
-        });
-      }
-      if (cmd === 'receive_bundle') {
-        return Promise.resolve({
-          senderId: 'did:key:sender',
-          transferSummary: { totalAmount: '10', unit: 'Taler' },
-          involvedVouchers: ['v-1'],
-        });
-      }
-      return Promise.resolve(undefined);
-    });
-
-    localStorage.setItem(UI_MODE_STORAGE_KEY, 'expert');
-
-    render(
-      <ReceiveView onBack={mockOnBack} onReceiveSuccess={mockOnReceiveSuccess} />
-    );
-
-    // 1. Enable PoS Mode checkbox
-    const posCheckbox = await screen.findByRole('checkbox', { name: /PoS Cashier Mode/i });
-    fireEvent.click(posCheckbox);
-    expect(posCheckbox).toBeChecked();
-
-    // 2. Select file
-    const selectButton = screen.getByRole('button', { name: /Select File/i });
-    fireEvent.click(selectButton);
-
-    // 3. Pos fallback card should appear
-    await waitFor(() => {
-      expect(screen.getByTestId('pos-fallback-card')).toBeInTheDocument();
-    });
-
-    // 4. Click Accept on Trust Basis
-    const acceptTrustButton = screen.getByRole('button', { name: /Accept on Trust Basis/i });
-    fireEvent.click(acceptTrustButton);
-
-    // 5. Assert onReceiveSuccess called with checkoutVerdict: 'OfflineOnly'
-    await waitFor(() => {
-      expect(mockOnReceiveSuccess).toHaveBeenCalledWith(
-        expect.objectContaining({
-          checkoutVerdict: expect.objectContaining({
-            outcome: 'OfflineOnly',
-          }),
-          newlyCommitted: true,
-        })
-      );
-    });
-  });
-
-  it('APP-UX-09 P3 Simple Mode: renders unified My Code QR + Select File + PoS toggle without tabs or technical file guides', async () => {
+  it('APP-UX-09 P3 Simple Mode: renders unified My Code QR + Select File without tabs, PoS toggle, or technical file guides', async () => {
     localStorage.setItem(UI_MODE_STORAGE_KEY, 'simple');
 
     const { container } = render(
@@ -454,7 +381,7 @@ amount_decimal_places = 4`,
     expect(screen.getByText('My Code')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Select File/i })).toBeInTheDocument();
     expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
-    expect(screen.getByRole('checkbox', { name: /PoS Cashier Mode/i })).toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: /PoS Cashier Mode/i })).not.toBeInTheDocument();
     expect(screen.queryByText(/\.transfer/)).not.toBeInTheDocument();
     expect(screen.queryByText(/\.ask/)).not.toBeInTheDocument();
     expect(container.textContent).not.toContain('did:key:');

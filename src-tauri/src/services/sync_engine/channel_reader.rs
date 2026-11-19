@@ -934,7 +934,8 @@ pub async fn delete_own_sync_slots_impl(
     state: &AppState,
 ) -> Result<usize, FrontendError> {
     let (id_ctx, drops) = {
-        let mut service = state.lock_service()?;
+        let mut service =
+            state.authorize_and_lock(crate::state::RequiredAccess::Full, password.as_deref())?;
         let id_ctx = SyncIdentityContext::from_service(&service)?;
         let settings = state
             .get_cached_settings()
@@ -1072,6 +1073,7 @@ pub async fn probe_public_sync_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendPublicSyncInfo, FrontendError> {
+    state.authorize(crate::state::RequiredAccess::Unlocked, None)?;
     let canonical_url = humoco_market::canonicalize_write_url(&url)
         .map_err(|e| FrontendError::from(e.to_string()))?;
     sync_client::validate_sync_url(&canonical_url).map_err(FrontendError::from)?;
@@ -1119,6 +1121,7 @@ pub async fn save_public_sync_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendPublicSyncInfo, FrontendError> {
+    state.authorize(crate::state::RequiredAccess::Full, password.as_deref())?;
     let canonical_url = humoco_market::canonicalize_write_url(&write_url)
         .map_err(|e| FrontendError::from(e.to_string()))?;
     sync_client::validate_sync_url(&canonical_url).map_err(FrontendError::from)?;
@@ -1230,14 +1233,7 @@ pub async fn remove_public_sync_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<(), FrontendError> {
-    {
-        let mut service = state.lock_service()?;
-        crate::services::common::ensure_access_mode(
-            &mut service,
-            human_money_core::AccessMode::Full,
-            password.as_deref(),
-        )?;
-    }
+    state.authorize(crate::state::RequiredAccess::Full, password.as_deref())?;
     let canonical_url = humoco_market::canonicalize_write_url(&write_url)
         .map_err(|e| FrontendError::from(e.to_string()))?;
 

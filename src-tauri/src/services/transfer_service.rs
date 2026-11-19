@@ -43,7 +43,8 @@ pub async fn create_transfer_bundle_impl(
     log::debug!("Creating transfer bundle (sources={})", sources.len());
 
     {
-        let mut service = state.lock_service()?;
+        let mut service = state
+            .authorize_and_lock(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
         crate::services::common::ensure_restore_l2_reconciled(
             state,
             &mut service,
@@ -534,7 +535,8 @@ pub fn receive_bundle_impl(
     state: &AppState,
 ) -> Result<ReceiveSuccessPayload, FrontendError> {
     info!("Attempting to receive and process a transfer bundle...");
-    let mut service = state.lock_service()?;
+    let mut service =
+        state.authorize_and_lock(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
     let archive = app.and_then(|a| crate::services::common::open_wallet_archive(a, &service));
 
     match service.receive_bundle(
@@ -671,11 +673,6 @@ pub fn receive_bundle_impl(
                     .collect();
 
             drop(service);
-            crate::services::post_service::remove_pending_pos_payment_by_bytes(
-                state,
-                &bundle_data,
-                password.as_deref(),
-            );
 
             Ok(ReceiveSuccessPayload {
                 sender_id: result.header.sender_id,
@@ -712,7 +709,8 @@ pub fn save_transaction_record_impl(
     state: &AppState,
 ) -> Result<(), FrontendError> {
     log::debug!("Saving new transaction record");
-    let mut service = state.service.lock().unwrap();
+    let mut service =
+        state.authorize_and_lock(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
     state
         .append_to_history(&mut service, record, password.as_deref())
         .map_err(FrontendError::from)
@@ -722,6 +720,7 @@ pub fn get_transaction_history_impl(
     state: &AppState,
 ) -> Result<Vec<TransactionRecord>, FrontendError> {
     info!("Loading transaction history...");
+    state.authorize(crate::state::RequiredAccess::Unlocked, None)?;
     state.get_cached_history().map_err(FrontendError::from)
 }
 
@@ -814,7 +813,7 @@ pub fn prepare_transfer_plan_impl(
     state: &AppState,
 ) -> Result<FrontendTransferPlan, FrontendError> {
     let recipient_id = recipient_id.trim().to_string();
-    let service = state.service.lock().unwrap();
+    let service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
     let (bonuses, trust_percents, recipient_list_known) = service
         .with_wallet(|w| compute_wot_bonuses(state, w, &recipient_id))
         .map_err(FrontendError::from)?;
@@ -847,6 +846,7 @@ pub async fn checkout_received_bundle_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<crate::checkout::PurchaseCompletion, FrontendError> {
+    state.authorize(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
     crate::checkout::checkout_bundle(
         state,
         &purchase_id,

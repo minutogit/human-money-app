@@ -37,15 +37,6 @@ export function ReceiveView({ onBack, onReceiveSuccess, droppedFile }: ReceiveVi
                 />
 
                 <ReceiveInputStep
-                    settings={flow.settings}
-                    isPosMode={flow.isPosMode}
-                    hasStagedPosPayments={flow.hasStagedPosPayments}
-                    purchaseId={flow.purchaseId}
-                    onPosModeToggle={flow.handlePosModeToggle}
-                    onPurchaseIdChange={flow.setPurchaseId}
-                    pendingPosFallback={flow.pendingPosFallback}
-                    onAcceptPosFallback={flow.handleAcceptPosTrustFallback}
-                    onCancelPosFallback={flow.handleCancelPosFallback}
                     isProcessing={flow.isProcessing}
                     isCheckingPost={flow.isCheckingPost}
                     postCheckStatus={flow.postCheckStatus}

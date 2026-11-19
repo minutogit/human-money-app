@@ -45,7 +45,8 @@ vi.mock('../context/NavigationContext', () => ({
 vi.mock('../context/SessionContext', () => ({
     useSession: () => ({
         protectAction: mockProtectAction,
-        isSessionActive: true,
+        isAuthenticated: true,
+        hasCachedSession: true,
     }),
     useOptionalSession: () => null,
 }));

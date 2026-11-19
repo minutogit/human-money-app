@@ -1,8 +1,15 @@
 import { invoke } from "@tauri-apps/api/core";
 import { ProfileInfo } from "../types";
 
-export type SessionAccessMode = 'full' | 'dailyPay' | 'receiveOnly';
-export type PinScope = 'dailyPay' | 'receiveOnly';
+export type SessionAccessMode = 'full' | 'dailyPay';
+export type PinScope = 'dailyPay';
+
+export interface SessionStatusDto {
+    isUnlocked: boolean;
+    hasCachedSession: boolean;
+    accessMode: SessionAccessMode | 'locked';
+    baseAccessMode: SessionAccessMode | 'locked';
+}
 
 export interface ProfilePinStatusDto {
     enabled: boolean;
@@ -76,12 +83,24 @@ export const authService = {
         return await invoke<void>("refresh_session_activity");
     },
 
-    isSessionActive: async () => {
-        return await invoke<boolean>("is_session_active");
+    getSessionStatus: async (): Promise<SessionStatusDto> => {
+        return await invoke<SessionStatusDto>("get_session_status");
     },
 
-    unlockSession: async (password: string, timeout: number) => {
-        return await invoke<void>("unlock_session", { password, durationSeconds: timeout });
+    unlockSession: async (password: string, timeout: number): Promise<SessionStatusDto> => {
+        return await invoke<SessionStatusDto>("unlock_session", { password, durationSeconds: timeout });
+    },
+
+    unlockSessionWithPin: async (
+        pin: string,
+        timeout: number,
+        folderName?: string
+    ): Promise<SessionStatusDto> => {
+        return await invoke<SessionStatusDto>("unlock_session_with_pin", {
+            pin,
+            durationSeconds: timeout,
+            folderName: folderName ?? null,
+        });
     },
 
     lockSession: async () => {
@@ -92,10 +111,6 @@ export const authService = {
         return await invoke<ProfilePinStatusDto>("get_profile_pin_status", {
             folderName: folderName || undefined,
         });
-    },
-
-    getSessionAccessMode: async (): Promise<SessionAccessMode | 'locked'> => {
-        return await invoke<SessionAccessMode | 'locked'>("get_session_access_mode");
     },
 
     enableProfilePin: async (
@@ -128,8 +143,8 @@ export const authService = {
         });
     },
 
-    elevateSessionWithPassword: async (masterPassword: string): Promise<SessionAccessMode> => {
-        return await invoke<SessionAccessMode>("elevate_session_with_password", {
+    elevateSessionWithPassword: async (masterPassword: string): Promise<SessionStatusDto> => {
+        return await invoke<SessionStatusDto>("elevate_session_with_password", {
             masterPassword,
         });
     },

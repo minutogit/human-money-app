@@ -44,7 +44,6 @@ interface DashboardBannersProps {
     protectionStatus: RecoveryProtectionStatusDto | null;
     showBackupReminder: boolean;
     rehearsalSnoozed: boolean;
-    accessMode: string;
     resolveIdentity: (did?: string | null, providedName?: string | null) => string;
     onNavigate: NavigateFn;
     onOpenSignRequest: (req: FrontendPendingSignRequest) => void;
@@ -69,7 +68,6 @@ export function DashboardBanners({
     protectionStatus,
     showBackupReminder,
     rehearsalSnoozed,
-    accessMode,
     resolveIdentity,
     onNavigate,
     onOpenSignRequest,
@@ -426,8 +424,7 @@ export function DashboardBanners({
 
             {protectionStatus?.rehearsalDue &&
                 protectionStatus?.questionIds &&
-                !rehearsalSnoozed &&
-                accessMode !== 'receiveOnly' && (
+                !rehearsalSnoozed && (
                     <Card
                         variant="glass"
                         className="py-3 px-4 flex flex-wrap gap-3 items-center justify-between border-l-4 border-l-indigo-500 bg-indigo-50/40 dark:bg-indigo-950/20"

@@ -35,7 +35,8 @@ let mockIntegrityReport: IntegrityReport | null = null;
 
 vi.mock('../../../context/SessionContext', () => ({
     useSession: () => ({
-        isSessionActive: true,
+        isAuthenticated: true,
+        hasCachedSession: true,
         profileName: 'Alice',
         integrityReport: mockIntegrityReport,
         protectAction: vi.fn((fn: (pwd: string | null) => unknown) => fn('pwd')),

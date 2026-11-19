@@ -69,7 +69,6 @@ export function Dashboard() {
                     protectionStatus={data.protectionStatus}
                     showBackupReminder={data.showBackupReminder}
                     rehearsalSnoozed={data.rehearsalSnoozed}
-                    accessMode={data.accessMode}
                     resolveIdentity={resolveIdentity}
                     onNavigate={data.navigate}
                     onOpenSignRequest={data.handleOpenSignRequest}

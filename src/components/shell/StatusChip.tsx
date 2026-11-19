@@ -34,7 +34,7 @@ export type StatusLevel = "healthy" | "warning" | "critical";
 export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
     const { t } = useTranslation();
     const { navigateToSettingsSection, navigate } = useNavigation();
-    const { isSessionActive, accessMode } = useSession();
+    const { isAuthenticated } = useSession();
 
     // 1. Backup state
     const [backupStatus, setBackupStatus] = useState<FrontendAutoBackupStatusDto>({
@@ -96,7 +96,7 @@ export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
 
     // Fetch backup status
     const refreshBackup = useCallback(async () => {
-        if (!isSessionActive) return;
+        if (!isAuthenticated) return;
         try {
             const current = await backupService.getBackupStatus();
             if (current) {
@@ -105,11 +105,11 @@ export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
         } catch {
             // Silently retain last known status
         }
-    }, [isSessionActive]);
+    }, [isAuthenticated]);
 
     // Fetch sync status & daily sync throttle
     const refreshSync = useCallback(async () => {
-        if (!isSessionActive) return;
+        if (!isAuthenticated) return;
         try {
             const current = await marketService.getSyncOverviewStatus();
             if (!current) return;
@@ -138,11 +138,11 @@ export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
         } catch {
             // Silently retain last known status
         }
-    }, [isSessionActive, maybeTriggerGentleDailySync]);
+    }, [isAuthenticated, maybeTriggerGentleDailySync]);
 
     // Fetch voucher conflicts count (unresolved victim conflicts requiring action)
     const refreshConflicts = useCallback(async () => {
-        if (!isSessionActive || typeof integrityService?.getDoubleSpendConflicts !== "function") {
+        if (!isAuthenticated || typeof integrityService?.getDoubleSpendConflicts !== "function") {
             setConflictsCount(0);
             return;
         }
@@ -157,12 +157,11 @@ export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
         } catch {
             // Retain last known count
         }
-    }, [isSessionActive]);
+    }, [isAuthenticated]);
 
     // Fetch expiring ads
     const refreshAds = useCallback(async () => {
-        if (!isSessionActive || accessMode === "receiveOnly") {
-            if (accessMode === "receiveOnly") setExpiringAdsCount(0);
+        if (!isAuthenticated) {
             return;
         }
         try {
@@ -178,18 +177,18 @@ export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
         } catch {
             // Silently retain last known status
         }
-    }, [isSessionActive, accessMode]);
+    }, [isAuthenticated]);
 
     const refreshAll = useCallback(() => {
-        if (!isSessionActive) return;
+        if (!isAuthenticated) return;
         void refreshBackup();
         void refreshSync();
         void refreshConflicts();
         void refreshAds();
-    }, [isSessionActive, refreshBackup, refreshSync, refreshConflicts, refreshAds]);
+    }, [isAuthenticated, refreshBackup, refreshSync, refreshConflicts, refreshAds]);
 
     useEffect(() => {
-        if (!isSessionActive) {
+        if (!isAuthenticated) {
             hasTriggeredDailySyncRef.current = false;
             setBackupStatus({
                 status: "notConfigured",
@@ -233,7 +232,7 @@ export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
             window.clearInterval(refreshInterval);
             window.removeEventListener(SYNC_STATUS_UPDATED_EVENT, onSyncUpdated);
         };
-    }, [isSessionActive, refreshAll, refreshSync]);
+    }, [isAuthenticated, refreshAll, refreshSync]);
 
     useAppEvent(
         APP_EVENTS.BACKUP_UPDATED,
@@ -244,7 +243,7 @@ export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
                 void refreshBackup();
             }
         },
-        isSessionActive,
+        isAuthenticated,
     );
 
     useAppEvent(
@@ -253,7 +252,7 @@ export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
             void refreshBackup();
             void refreshConflicts();
         },
-        isSessionActive,
+        isAuthenticated,
     );
 
     useAppEvent(
@@ -263,7 +262,7 @@ export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
             void refreshSync();
             void refreshAds();
         },
-        isSessionActive,
+        isAuthenticated,
     );
 
     useAppEvent(
@@ -271,7 +270,7 @@ export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
         () => {
             void refreshConflicts();
         },
-        isSessionActive,
+        isAuthenticated,
     );
 
     useAppEvent(
@@ -279,7 +278,7 @@ export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
         () => {
             void refreshAds();
         },
-        isSessionActive,
+        isAuthenticated,
     );
 
     // Close on outside click or Escape
@@ -358,7 +357,7 @@ export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
     const syncLevel: StatusLevel = syncHasIssue ? "warning" : "healthy";
 
     const handlePullSyncNow = async () => {
-        if (isManualSyncing || !isSessionActive) return;
+        if (isManualSyncing || !isAuthenticated) return;
         setIsManualSyncing(true);
         try {
             await Promise.allSettled([

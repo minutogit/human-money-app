@@ -37,7 +37,7 @@ interface HelpCenterViewProps {
 
 export const HelpCenterView: React.FC<HelpCenterViewProps> = ({ initialTopic, onBack }) => {
     const { t } = useTranslation();
-    const { isSessionActive } = useSession();
+    const { isAuthenticated } = useSession();
     const { goBack, navigate } = useNavigation();
     const { isExpert } = useUiMode();
 
@@ -75,7 +75,7 @@ export const HelpCenterView: React.FC<HelpCenterViewProps> = ({ initialTopic, on
     const handleBack = () => {
         if (onBack) {
             onBack();
-        } else if (isSessionActive) {
+        } else if (isAuthenticated) {
             goBack();
         } else {
             navigate({ view: 'needs_login' });
@@ -384,7 +384,7 @@ export const HelpCenterView: React.FC<HelpCenterViewProps> = ({ initialTopic, on
         </div>
     );
 
-    if (isSessionActive) {
+    if (isAuthenticated) {
         return (
             <PageLayout
                 title={t('helpCenter.title')}

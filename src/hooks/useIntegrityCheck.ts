@@ -5,14 +5,22 @@ import { logger } from '../utils/log';
 import { stringifyError } from '../utils/errorHelper';
 import { IntegrityReport } from '../types';
 
+export interface CheckIntegrityOptions {
+    allowSilentRepair?: boolean;
+}
+
 export function useIntegrityCheck() {
     const [integrityReport, setIntegrityReport] = useState<IntegrityReport | null>(null);
     const silentRepairAttempted = useRef(false);
 
-    const checkIntegrity = useCallback(async () => {
+    const checkIntegrity = useCallback(async (options?: CheckIntegrityOptions) => {
         try {
             const report = await integrityService.checkIntegrity();
-            if (report.type === 'missingIntegrityRecord' && !silentRepairAttempted.current) {
+            if (
+                options?.allowSilentRepair === true &&
+                report.type === 'missingIntegrityRecord' &&
+                !silentRepairAttempted.current
+            ) {
                 silentRepairAttempted.current = true;
                 try {
                     await integrityService.repairWalletIntegrity(undefined);

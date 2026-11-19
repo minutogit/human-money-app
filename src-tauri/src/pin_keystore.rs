@@ -47,7 +47,6 @@ pub fn scope_to_str(scope: SecondaryScope) -> &'static str {
 pub fn parse_scope(raw: &str) -> Result<SecondaryScope, String> {
     match raw {
         "dailyPay" => Ok(SecondaryScope::DailyPay),
-        "receiveOnly" => Ok(SecondaryScope::ReceiveOnly),
         other => Err(format!("Unsupported PIN scope: {}", other)),
     }
 }
@@ -238,10 +237,7 @@ mod tests {
         assert!(validate_pin_format("12345678").is_ok());
 
         assert_eq!(parse_scope("dailyPay").unwrap(), SecondaryScope::DailyPay);
-        assert_eq!(
-            parse_scope("receiveOnly").unwrap(),
-            SecondaryScope::ReceiveOnly
-        );
+        assert!(parse_scope("receiveOnly").is_err());
         assert!(parse_scope("daily_pay").is_err());
         assert!(parse_scope("receive_only").is_err());
         assert!(parse_scope("full").is_err());

@@ -1,10 +1,12 @@
 // src-tauri/src/commands/contacts.rs
 use crate::models::{FrontendContact, FrontendError};
+use crate::state::RequiredAccess;
 use crate::AppState;
 use log::info;
 
 #[tauri::command]
 pub fn get_contacts(state: tauri::State<AppState>) -> Result<Vec<FrontendContact>, FrontendError> {
+    state.authorize(RequiredAccess::Unlocked, None)?;
     state.get_cached_contacts().map_err(FrontendError::from)
 }
 
@@ -24,12 +26,8 @@ pub async fn save_contact(
         .any(|d| d.drop_pub.trim().is_empty() || d.read_url.trim().is_empty());
     info!("Saving contact for DID: {}", contact_did);
     let is_own_root = {
-        let mut service = state.service.lock().unwrap();
-        crate::services::common::ensure_access_mode(
-            &mut service,
-            human_money_core::AccessMode::DailyPay,
-            password.as_deref(),
-        )?;
+        let mut service =
+            state.authorize_and_lock(RequiredAccess::DailyPay, password.as_deref())?;
         let own_can = service
             .with_wallet(|w| crate::state::canonicalize_did(w.get_user_id()).ok())
             .ok()
@@ -77,12 +75,7 @@ pub fn delete_contact(
 ) -> Result<(), FrontendError> {
     let did = did.trim().to_string();
     info!("Deleting contact for DID: {}", did);
-    let mut service = state.service.lock().unwrap();
-    crate::services::common::ensure_access_mode(
-        &mut service,
-        human_money_core::AccessMode::DailyPay,
-        password.as_deref(),
-    )?;
+    let mut service = state.authorize_and_lock(RequiredAccess::DailyPay, password.as_deref())?;
     state
         .delete_contact(&mut service, &did, password.as_deref())
         .map_err(FrontendError::from)
@@ -256,6 +249,7 @@ mod tests {
             wot: Mutex::new(None),
             recovery_owner: Mutex::new(None),
             guardian_vault: Mutex::new(None),
+            app_notices: Mutex::new(None),
             post_op_lock: tokio::sync::Mutex::new(()),
             media_negative_cache: Mutex::new(std::collections::HashMap::new()),
             startup_launch_items: Mutex::new(Vec::new()),

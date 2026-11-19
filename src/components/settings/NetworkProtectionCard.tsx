@@ -154,49 +154,11 @@ export const NetworkProtectionCard: React.FC<NetworkProtectionCardProps> = ({
                             </span>
                         }
                         defaultOpen={initialOpen || hasActiveLockConfig || probeList.length > 0}
-                        isCustom={Boolean(settings?.enablePosMode || hasActiveLockConfig)}
+                        isCustom={hasActiveLockConfig}
                         className="border border-theme-subtle rounded-2xl overflow-hidden"
                         buttonClassName="w-full flex items-center justify-between gap-2 p-4 bg-slate-50/70 dark:bg-slate-800/40 hover:bg-slate-100/70 transition-colors text-left cursor-pointer"
                         contentClassName="p-4 space-y-6 border-t border-theme-subtle"
                     >
-                        {/* PoS Mode Toggle */}
-                        <div className="flex items-start gap-3 p-3 bg-white dark:bg-slate-900 border border-theme-subtle rounded-xl hover:border-theme-primary/40 transition-colors">
-                            <input
-                                type="checkbox"
-                                id="enablePosMode"
-                                checked={!!settings?.enablePosMode}
-                                onChange={(e) =>
-                                    onSettingsUpdated((s) =>
-                                        s
-                                            ? {
-                                                  ...s,
-                                                  enablePosMode: e.target.checked,
-                                                  ...(e.target.checked ? {} : { posCashierActive: false }),
-                                              }
-                                            : null
-                                    )
-                                }
-                                className="mt-0.5 accent-theme-primary"
-                            />
-                            <div className="flex-1">
-                                <div className="flex items-center gap-2">
-                                    <label
-                                        htmlFor="enablePosMode"
-                                        className="text-xs font-medium text-theme-secondary leading-relaxed cursor-pointer"
-                                    >
-                                        {t('settings.enablePosMode')}
-                                    </label>
-                                    <HelpIcon topic="posMode" size={14} />
-                                </div>
-                                <label
-                                    htmlFor="enablePosMode"
-                                    className="block text-[10px] text-theme-light/60 font-normal cursor-pointer"
-                                >
-                                    {t('settings.enablePosModeDesc')}
-                                </label>
-                            </div>
-                        </div>
-
                         <LockServerProbeSection
                             settings={settings}
                             probeList={probeList}

@@ -20,7 +20,7 @@ interface GlobalFileDropZoneProps {
 export function GlobalFileDropZone({ children }: GlobalFileDropZoneProps) {
   const { t } = useTranslation();
   const { appState, navigate, setPendingDroppedFile } = useNavigation();
-  const { isAuthenticated, isSessionActive, protectAction } = useSession();
+  const { isAuthenticated, protectAction } = useSession();
   const [isDraggingOver, setIsDraggingOver] = useState(false);
   const dragCounterRef = useRef(0);
 
@@ -30,7 +30,7 @@ export function GlobalFileDropZone({ children }: GlobalFileDropZoneProps) {
     did?: string;
   } | null>(null);
 
-  const isLoggedIn = isAuthenticated ?? isSessionActive;
+  const isLoggedIn = isAuthenticated;
   const isDropZoneActive = Boolean(appState.view !== 'receive_bundle');
 
   // Auto-dismiss drop feedback after 5 seconds

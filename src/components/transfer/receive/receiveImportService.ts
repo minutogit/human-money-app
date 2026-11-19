@@ -10,7 +10,6 @@ import { isBackendError, stringifyError } from '../../../utils/errorHelper';
 import { APP_EVENTS, emitAppEvent } from '../../../utils/appEvents';
 import type { ProtectActionFn } from '../../../utils/fileIo';
 import type {
-    CheckoutReleaseVerdict,
     ReceiveSuccessPayload,
     VoucherDetails,
     VoucherStandardInfo,
@@ -99,15 +98,6 @@ async function resolveDetachedSigCandidates(
 
 export type ReceiveImportOutcome =
     | { kind: 'success'; payload: ReceiveSuccessPayload | VoucherDetails }
-    | {
-          kind: 'posFallback';
-          fileData: number[];
-          standardDefinitionsToml: Record<string, string>;
-          outcomeKind: 'offlineOnly' | 'yellow';
-          merchantWarning?: string;
-          verdict: CheckoutReleaseVerdict;
-          purchaseId: string;
-      }
     | { kind: 'signatureAttached'; voucherId: string }
     | { kind: 'wotImported'; result: WotImportResultDto }
     | { kind: 'proofImported'; proofId: string }
@@ -118,110 +108,24 @@ export interface ExecuteReceiveImportParams {
     fileData: number[];
     type: ReceiveImportKind;
     password?: string;
-    usePosCheckout: boolean;
-    purchaseId: string;
-    onEnsurePurchaseId: (id: string) => void;
     ensureStandardsToml: () => Promise<Record<string, string>>;
     protectAction: ProtectActionFn;
-    accessMode?: 'full' | 'dailyPay' | 'receiveOnly';
 }
 
 /**
  * Executes cryptographic verification & import for a classified Human Money payload.
- * Preserves the Z01 checkout release verdict boundary (never authorizes release from raw DTOs).
  */
 export async function executeReceiveImport({
     fileData,
     type,
     password,
-    usePosCheckout,
-    purchaseId,
-    onEnsurePurchaseId,
     ensureStandardsToml,
     protectAction,
-    accessMode,
 }: ExecuteReceiveImportParams): Promise<ReceiveImportOutcome> {
     if (type === 'transfer') {
         const standardDefinitionsToml = await ensureStandardsToml();
 
-        const runReceiveCall = async <T,>(
-            fn: (walletPassword: string | null) => Promise<T>,
-        ): Promise<T | void> => {
-            if (accessMode === 'receiveOnly') {
-                try {
-                    return await fn(password || null);
-                } catch (err) {
-                    if (!isAuthOrDecryptError(err)) throw err;
-                }
-            }
-            return await protectAction(fn);
-        };
-
-        if (usePosCheckout) {
-            const activePurchaseId = purchaseId.trim() || `pos-${Date.now()}`;
-            if (!purchaseId.trim()) {
-                onEnsurePurchaseId(activePurchaseId);
-            }
-            const completion = await runReceiveCall(async (walletPassword) => {
-                return await transferService.checkoutReceivedBundle({
-                    purchaseId: activePurchaseId,
-                    bundleData: fileData,
-                    standardDefinitionsToml,
-                    password: password || walletPassword || undefined,
-                });
-            });
-
-            if (completion) {
-                if (
-                    !completion.newlyCommitted &&
-                    (completion.verdict.outcome === 'OfflineOnly' ||
-                        completion.verdict.outcome.startsWith('Yellow'))
-                ) {
-                    return {
-                        kind: 'posFallback',
-                        fileData,
-                        standardDefinitionsToml,
-                        outcomeKind:
-                            completion.verdict.outcome === 'OfflineOnly'
-                                ? 'offlineOnly'
-                                : 'yellow',
-                        merchantWarning: completion.verdict.merchantWarning,
-                        verdict: completion.verdict,
-                        purchaseId: completion.purchaseId,
-                    };
-                }
-                if (
-                    completion.verdict.outcome.startsWith('Quarantined') ||
-                    (completion.receivePayload?.conflictSummaries?.some(
-                        (c) => !c.isResolved && !c.localOverride,
-                    ) ??
-                        false) ||
-                    Boolean(
-                        completion.receivePayload?.verifiableConflicts &&
-                            Object.keys(completion.receivePayload.verifiableConflicts).length > 0,
-                    )
-                ) {
-                    emitAppEvent(APP_EVENTS.CONFLICTS_UPDATED);
-                }
-                const basePayload: ReceiveSuccessPayload = completion.receivePayload ?? {
-                    senderId: 'pos-terminal',
-                    transferSummary: { summableAmounts: {}, countableItems: {} },
-                    involvedVouchers: [],
-                };
-                return {
-                    kind: 'success',
-                    payload: {
-                        ...basePayload,
-                        purchaseId: completion.purchaseId,
-                        newlyCommitted: completion.newlyCommitted,
-                        isReplay: completion.isReplay === true,
-                        checkoutVerdict: completion.verdict,
-                    },
-                };
-            }
-        }
-
-        const payload = await runReceiveCall(async (walletPassword) => {
+        const payload = await protectAction(async (walletPassword) => {
             return await transferService.receiveBundle({
                 bundleData: fileData,
                 standardDefinitionsToml,

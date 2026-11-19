@@ -159,7 +159,7 @@ export const postService = {
     },
 
     dismissPendingPostItem: async (
-        itemKind: 'sign_request' | 'wot_handshake' | 'inquiry' | 'pos_payment',
+        itemKind: 'sign_request' | 'wot_handshake' | 'inquiry',
         id: string,
         password?: string
     ): Promise<void> => {

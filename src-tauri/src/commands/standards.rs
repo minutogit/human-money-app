@@ -1,4 +1,5 @@
 use crate::models::{FrontendError, FrontendSignatureImpact, VoucherStandardDefinitionDto};
+use crate::state::RequiredAccess;
 use crate::AppState;
 use human_money_core::models::secure_container::ContainerConfig;
 use log::info;
@@ -24,7 +25,7 @@ pub fn evaluate_signature_suitability(
     state: tauri::State<AppState>,
 ) -> Result<FrontendSignatureImpact, FrontendError> {
     info!("Evaluating signature suitability for role: {}", role);
-    let service = state.service.lock().unwrap();
+    let service = state.authorize_and_lock(RequiredAccess::Unlocked, None)?;
     let core_voucher = human_money_core::models::voucher::Voucher::from(voucher);
     let impact = service
         .evaluate_signature_suitability(&core_voucher, &role, &standard_toml_content)
@@ -57,7 +58,7 @@ pub fn export_voucher_standard(
     let toml_content = std::fs::read_to_string(&toml_path)
         .map_err(|e| FrontendError::from(format!("Failed to read standard file: {}", e)))?;
 
-    let service = state.service.lock().unwrap();
+    let service = state.authorize_and_lock(RequiredAccess::Unlocked, None)?;
     service
         .export_voucher_standard(&toml_content, config)
         .map_err(FrontendError::from)
@@ -81,6 +82,7 @@ pub fn inspect_voucher_standard_file(
 pub fn import_voucher_standard(
     container_bytes: Vec<u8>,
     password: Option<String>,
+    wallet_password: Option<String>,
     app: tauri::AppHandle,
     state: tauri::State<AppState>,
 ) -> Result<String, FrontendError> {
@@ -96,15 +98,29 @@ pub fn import_voucher_standard(
         })?;
     }
 
-    let service = state.service.lock().unwrap();
+    let service = state.lock_service()?;
+    if service.is_wallet_unlocked() {
+        service
+            .require_access_mode(
+                human_money_core::AccessMode::Full,
+                wallet_password.as_deref(),
+            )
+            .map_err(FrontendError::from)?;
+    }
     service
-        .import_voucher_standard(&container_bytes, password.as_deref(), &standards_dir)
+        .import_voucher_standard(
+            &container_bytes,
+            password.as_deref(),
+            wallet_password.as_deref(),
+            &standards_dir,
+        )
         .map_err(FrontendError::from)
 }
 
 #[tauri::command]
 pub fn delete_voucher_standard(
     standard_id: String,
+    wallet_password: Option<String>,
     app: tauri::AppHandle,
     state: tauri::State<AppState>,
 ) -> Result<(), FrontendError> {
@@ -115,8 +131,8 @@ pub fn delete_voucher_standard(
         .map_err(|e| FrontendError::from(e.to_string()))?;
     let standards_dir = app_data_dir.join("voucher_standards");
 
-    let service = state.service.lock().unwrap();
+    let service = state.authorize_and_lock(RequiredAccess::Full, wallet_password.as_deref())?;
     service
-        .delete_voucher_standard(&standard_id, &standards_dir)
+        .delete_voucher_standard(&standard_id, wallet_password.as_deref(), &standards_dir)
         .map_err(FrontendError::from)
 }

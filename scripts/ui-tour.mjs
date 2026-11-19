@@ -183,7 +183,7 @@ function getHudScript(initialStepId = '1.1', initialUiMode = 'simple') {
             window.__HUMOCO_TOUR__.setState({
                 appState: step.appState,
                 isAuthenticated: step.auth,
-                isSessionActive: step.auth,
+                hasCachedSession: step.auth,
                 isForkLocked: false,
                 isRecoveryRequired: false,
                 ...(step.sessionOverrides || {}),
@@ -526,7 +526,7 @@ async function runTour() {
                 const stepPayload = JSON.stringify({
                     appState: step.appState,
                     isAuthenticated: step.auth,
-                    isSessionActive: step.auth,
+                    hasCachedSession: step.auth,
                     isForkLocked: false,
                     isRecoveryRequired: false,
                     ...(step.sessionOverrides || {}),

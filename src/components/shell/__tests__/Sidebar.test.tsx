@@ -29,8 +29,8 @@ const mockLockSession = vi.fn();
 
 vi.mock('../../../context/SessionContext', () => ({
     useSession: () => ({
-        isSessionActive: true,
         isAuthenticated: true,
+        hasCachedSession: true,
         profileName: 'Alice',
         notifyLogout: mockNotifyLogout,
         protectAction: vi.fn(),

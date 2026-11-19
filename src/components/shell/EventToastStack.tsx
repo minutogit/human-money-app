@@ -25,7 +25,7 @@ interface ActiveToast {
 
 export const EventToastStack: React.FC = () => {
     const { t } = useTranslation();
-    const { isSessionActive } = useSession();
+    const { isAuthenticated } = useSession();
     const { navigate } = useNavigation();
 
     const [toasts, setToasts] = useState<ActiveToast[]>([]);
@@ -61,7 +61,7 @@ export const EventToastStack: React.FC = () => {
 
     // Clear on logout & initialize seen IDs on login so old persisted notices don't re-toast
     useEffect(() => {
-        if (!isSessionActive) {
+        if (!isAuthenticated) {
             seenNoticeIdsRef.current = null;
             setToasts([]);
             timersRef.current.forEach((timer) => window.clearTimeout(timer));
@@ -87,11 +87,11 @@ export const EventToastStack: React.FC = () => {
         return () => {
             active = false;
         };
-    }, [isSessionActive]);
+    }, [isAuthenticated]);
 
     useEffect(() => {
         const onNoticesUpdated = async () => {
-            if (!isSessionActive || typeof marketService?.getAppNotices !== "function") return;
+            if (!isAuthenticated || typeof marketService?.getAppNotices !== "function") return;
             try {
                 const res = await marketService.getAppNotices();
                 const list: FrontendAppNotice[] = res?.notices || [];
@@ -135,9 +135,9 @@ export const EventToastStack: React.FC = () => {
             window.removeEventListener(APP_NOTICES_UPDATED_EVENT, onNoticesUpdated);
             window.removeEventListener(TRANSIENT_SYNC_TOAST_EVENT, onTransient);
         };
-    }, [isSessionActive, enqueueToast, t]);
+    }, [isAuthenticated, enqueueToast, t]);
 
-    if (!isSessionActive || toasts.length === 0) {
+    if (!isAuthenticated || toasts.length === 0) {
         return null;
     }
 

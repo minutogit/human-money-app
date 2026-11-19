@@ -941,9 +941,6 @@ pub(crate) async fn checkout_bundle(
             }
 
             drop(service);
-            crate::services::post_service::remove_pending_pos_payment_by_bytes(
-                state, bundle, password,
-            );
 
             Ok(PurchaseCompletion {
                 purchase_id: completion.purchase_id,

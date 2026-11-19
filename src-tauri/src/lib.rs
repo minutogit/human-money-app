@@ -361,7 +361,8 @@ pub fn run() {
             login,
             login_with_pin,
             get_profile_pin_status,
-            get_session_access_mode,
+            get_session_status,
+            unlock_session_with_pin,
             enable_profile_pin,
             disable_profile_pin,
             elevate_session_with_password,
@@ -373,7 +374,6 @@ pub fn run() {
             unlock_session,
             lock_session,
             refresh_session_activity,
-            is_session_active, // <--- NEU
             generate_mnemonic,
             get_bip39_wordlist,
             get_voucher_standards,

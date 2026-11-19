@@ -7,7 +7,7 @@ const en = enJson as Record<string, string>;
 
 const mockNavigate = vi.fn();
 const mockGoBack = vi.fn();
-let mockIsSessionActive = false;
+let mockIsAuthenticated = false;
 
 vi.mock('../../../context/NavigationContext', () => ({
     useNavigation: () => ({
@@ -19,14 +19,14 @@ vi.mock('../../../context/NavigationContext', () => ({
 
 vi.mock('../../../context/SessionContext', () => ({
     useSession: () => ({
-        isSessionActive: mockIsSessionActive,
+        isAuthenticated: mockIsAuthenticated,
     }),
 }));
 
 describe('HelpCenterView Component', () => {
     beforeEach(() => {
         vi.clearAllMocks();
-        mockIsSessionActive = false;
+        mockIsAuthenticated = false;
     });
 
     it('renders header, search bar, and category filters', () => {
@@ -92,8 +92,8 @@ describe('HelpCenterView Component', () => {
         expect(onBack).toHaveBeenCalled();
     });
 
-    it('renders in PageLayout when session is active', () => {
-        mockIsSessionActive = true;
+    it('renders in PageLayout when user is authenticated', () => {
+        mockIsAuthenticated = true;
         render(<HelpCenterView />);
 
         expect(screen.getAllByText(en['helpCenter.title']).length).toBeGreaterThanOrEqual(1);

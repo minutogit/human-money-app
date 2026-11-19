@@ -877,18 +877,38 @@ export function getTauriMockInitScript(initialScenario = 'normal') {
         },
         "get_user_id": () => MOCK_USER_DID,
         "get_local_instance_id": () => "inst_alice_local_dev_node",
-        "is_session_active": () => {
-            if (window.__HUMOCO_SCENARIO__ === 'empty') return false;
-            if (window.__HUMOCO_TOUR__) {
+        "get_session_status": () => {
+            let isUnlocked = true;
+            let hasCachedSession = true;
+            if (window.__HUMOCO_SCENARIO__ === 'empty') {
+                isUnlocked = false;
+                hasCachedSession = false;
+            } else if (window.__HUMOCO_TOUR__) {
                 const s = window.__HUMOCO_TOUR__.getState();
-                if (s.isSessionActive !== undefined) return s.isSessionActive;
-                if (s.isAuthenticated !== undefined) return s.isAuthenticated;
+                isUnlocked = s.isAuthenticated ?? true;
+                hasCachedSession = s.hasCachedSession ?? isUnlocked;
             }
-            return true;
+            return {
+                isUnlocked,
+                hasCachedSession,
+                accessMode: isUnlocked ? 'full' : 'locked',
+                baseAccessMode: isUnlocked ? 'full' : 'locked',
+            };
         },
         "login": () => null,
         "logout": () => null,
-        "unlock_session": () => null,
+        "unlock_session": () => ({
+            isUnlocked: true,
+            hasCachedSession: true,
+            accessMode: 'full',
+            baseAccessMode: 'full',
+        }),
+        "unlock_session_with_pin": () => ({
+            isUnlocked: true,
+            hasCachedSession: true,
+            accessMode: 'dailyPay',
+            baseAccessMode: 'dailyPay',
+        }),
         "lock_session": () => null,
         "refresh_session_activity": () => null,
         "update_user_profile": () => null,

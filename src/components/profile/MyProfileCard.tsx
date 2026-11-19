@@ -87,12 +87,9 @@ export const MyProfileCard: React.FC<MyProfileCardProps> = ({
             if (onTogglePublished) {
                 await onTogglePublished(nextPublished);
             } else if (session?.protectAction) {
-                const updated = await session.protectAction(
-                    async (pwd) => {
-                        return await marketService.setCardPublished(nextPublished, false, pwd || undefined);
-                    },
-                    { requireFullAccess: session.accessMode === "receiveOnly" },
-                );
+                const updated = await session.protectAction(async (pwd) => {
+                    return await marketService.setCardPublished(nextPublished, false, pwd || undefined);
+                });
                 if (updated) {
                     setInternalProfile(updated);
                 }

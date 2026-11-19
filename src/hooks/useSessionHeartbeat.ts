@@ -1,25 +1,25 @@
 // src/hooks/useSessionHeartbeat.ts
 import { useEffect, useRef } from 'react';
-import { authService } from '../services/authService';
+import { authService, SessionStatusDto } from '../services/authService';
 import { logger } from '../utils/log';
 import { stringifyError } from '../utils/errorHelper';
 
 export function useSessionHeartbeat(
-    isSessionActive: boolean,
-    onSessionExpired: () => void,
+    hasCachedSession: boolean,
+    onStatusSync: (status: SessionStatusDto) => void,
     lastHeartbeatRef: React.MutableRefObject<number>
 ) {
-    const isSessionActiveRef = useRef(isSessionActive);
+    const hasCachedSessionRef = useRef(hasCachedSession);
 
     // Sync Ref
     useEffect(() => {
-        isSessionActiveRef.current = isSessionActive;
-    }, [isSessionActive]);
+        hasCachedSessionRef.current = hasCachedSession;
+    }, [hasCachedSession]);
 
     // Global Activity Listener
     useEffect(() => {
         const handleActivity = () => {
-            if (isSessionActiveRef.current) {
+            if (hasCachedSessionRef.current) {
                 const now = Date.now();
                 if (now - lastHeartbeatRef.current > 2000) {
                     lastHeartbeatRef.current = now;
@@ -42,12 +42,12 @@ export function useSessionHeartbeat(
     // Polling for Session Status
     useEffect(() => {
         const checkStatus = async () => {
-            if (isSessionActiveRef.current) {
+            if (hasCachedSessionRef.current) {
                 try {
-                    const active = await authService.isSessionActive();
-                    if (!active) {
+                    const status = await authService.getSessionStatus();
+                    if (!status.hasCachedSession) {
                         logger.info("Session background check: Session expired.");
-                        onSessionExpired();
+                        onStatusSync(status);
                     }
                 } catch (e) {
                     logger.error(`Session check failed: ${stringifyError(e)}`);
@@ -57,5 +57,5 @@ export function useSessionHeartbeat(
 
         const interval = setInterval(checkStatus, 10000);
         return () => clearInterval(interval);
-    }, [onSessionExpired]);
+    }, [onStatusSync]);
 }

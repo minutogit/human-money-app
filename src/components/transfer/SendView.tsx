@@ -61,26 +61,6 @@ export function SendView({
                     <AlertBanner variant="success">{flow.paymentRequestSuccessMsg}</AlertBanner>
                 )}
 
-                {flow.accessMode === 'receiveOnly' && (
-                    <AlertBanner variant="warning" title={t('auth.cashierModeRestrictedTitle')}>
-                        <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
-                            <span>{t('auth.cashierModeRestrictedDesc')}</span>
-                            {flow.requireFullAccess && (
-                                <Button
-                                    type="button"
-                                    variant="primary"
-                                    size="xs"
-                                    onClick={() => {
-                                        void flow.requireFullAccess?.(async () => {}).catch(() => undefined);
-                                    }}
-                                >
-                                    {t('auth.unlockFullAccess')}
-                                </Button>
-                            )}
-                        </div>
-                    </AlertBanner>
-                )}
-
                 {state.feedbackMsg && (
                     <AlertBanner variant="error">{state.feedbackMsg}</AlertBanner>
                 )}
