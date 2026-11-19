@@ -137,6 +137,9 @@ impl From<human_money_core::app_service::AppFacadeError> for FrontendError {
                     "error.validation.voucherNotActive".to_string()
                 }
             }
+            human_money_core::app_service::AppFacadeError::InvalidPayloadType => {
+                "error.validation.unsupportedPayloadType".to_string()
+            }
             human_money_core::app_service::AppFacadeError::Validation(val_err) => {
                 let msg = val_err.to_string();
                 if let Some((c, d)) = classify_validation_message(&msg) {
@@ -186,6 +189,9 @@ fn classify_validation_message(msg: &str) -> Option<(String, HashMap<String, Str
     }
     if msg.contains("Output has an unresolved durable L2 send intent") {
         return Some(("error.validation.intentPendingL2".into(), details));
+    }
+    if msg.contains("bundle missing AnchorManifest sidecar") {
+        return Some(("error.validation.anchorManifestMissing".into(), details));
     }
     None
 }
@@ -246,6 +252,9 @@ fn classify_error(msg: &str) -> (String, HashMap<String, String>) {
     }
 
     // --- Bundle Processing ---
+    if msg.contains("Invalid payload type in secure container") {
+        return ("error.validation.unsupportedPayloadType".into(), details);
+    }
     if msg.starts_with("Transaction Rejected:") {
         return ("error.transfer.bundleTooOld".into(), details);
     }
@@ -396,5 +405,34 @@ mod tests {
             "Validation Error: Security violation: Output has an unresolved durable L2 send intent",
         );
         assert_eq!(classified_intent, "error.validation.intentPendingL2");
+    }
+
+    #[test]
+    fn test_error_mapping_forward_compat_anchor_and_payload_type() {
+        let missing_anchor_err = AppFacadeError::Validation(
+            human_money_core::error::ValidationError::SecurityViolation(
+                "bundle missing AnchorManifest sidecar".into(),
+            ),
+        );
+        let mapped_anchor = FrontendError::from(missing_anchor_err);
+        assert_eq!(mapped_anchor.code, "error.validation.anchorManifestMissing");
+
+        let (classified_anchor, _) = classify_error(
+            "Validation Error: Security violation: bundle missing AnchorManifest sidecar",
+        );
+        assert_eq!(classified_anchor, "error.validation.anchorManifestMissing");
+
+        let payload_err = AppFacadeError::InvalidPayloadType;
+        let mapped_payload = FrontendError::from(payload_err);
+        assert_eq!(
+            mapped_payload.code,
+            "error.validation.unsupportedPayloadType"
+        );
+
+        let (classified_payload, _) = classify_error("Invalid payload type in secure container.");
+        assert_eq!(
+            classified_payload,
+            "error.validation.unsupportedPayloadType"
+        );
     }
 }
