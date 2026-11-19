@@ -167,12 +167,84 @@ pub struct KnownLockHeadsState {
         std::collections::BTreeMap<String, human_money_core::models::layer2_api::LockReceipt>,
 }
 
+/// OS-level exclusive session lock for a single profile folder (`<session_locks>/<folder_name>.lock`).
+///
+/// Released automatically on `Drop` (logout, failed login rollback, or process termination).
+pub struct ProfileSessionLock {
+    folder_name: String,
+    _file: std::fs::File,
+}
+
+/// Result of attempting to acquire a profile session lock prior to login/recovery.
+pub enum PendingProfileLock {
+    None,
+    AlreadyHeld,
+    Acquired(ProfileSessionLock),
+}
+
+fn validate_lock_folder_name(folder_name: &str) -> Result<(), crate::models::FrontendError> {
+    if folder_name.is_empty() || folder_name.contains(['/', '\\']) {
+        return Err(crate::models::FrontendError::from(
+            "Invalid profile folder name".to_string(),
+        ));
+    }
+    let mut components = std::path::Path::new(folder_name).components();
+    match (components.next(), components.next()) {
+        (Some(std::path::Component::Normal(_)), None) => Ok(()),
+        _ => Err(crate::models::FrontendError::from(
+            "Invalid profile folder name".to_string(),
+        )),
+    }
+}
+
+impl ProfileSessionLock {
+    fn try_acquire(
+        lock_dir: &std::path::Path,
+        folder_name: &str,
+    ) -> Result<Self, crate::models::FrontendError> {
+        validate_lock_folder_name(folder_name)?;
+        std::fs::create_dir_all(lock_dir).map_err(|e| {
+            crate::models::FrontendError::from(format!(
+                "Failed to create session lock directory: {}",
+                e
+            ))
+        })?;
+        let lock_path = lock_dir.join(format!("{folder_name}.lock"));
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&lock_path)
+            .map_err(|e| {
+                crate::models::FrontendError::from(format!(
+                    "Failed to open profile session lock file: {}",
+                    e
+                ))
+            })?;
+        match file.try_lock() {
+            Ok(()) => Ok(Self {
+                folder_name: folder_name.to_string(),
+                _file: file,
+            }),
+            Err(std::fs::TryLockError::WouldBlock) => Err(crate::models::FrontendError::with_code(
+                "error.auth.profileAlreadyOpen",
+                "This profile is already open in another app instance.",
+            )),
+            Err(std::fs::TryLockError::Error(e)) => Err(crate::models::FrontendError::from(
+                format!("Failed to acquire profile session lock: {}", e),
+            )),
+        }
+    }
+}
+
 /// Central application state shared across Tauri commands and background workers.
 ///
 /// # Lock Ordering Invariant
 /// Whenever multiple mutexes on `AppState` must be acquired simultaneously,
 /// acquire them strictly in the following total order to prevent deadlocks:
 /// `service -> ui_preferences -> security_policy -> internal_lifecycle -> own_market_profile -> contacts -> wot -> history -> events -> media_negative_cache`.
+/// `active_profile_lock` is a leaf mutex never held while acquiring `service` or across `.await`.
 ///
 /// Never hold any `MutexGuard` across an `.await` point.
 pub struct AppState {
@@ -191,6 +263,8 @@ pub struct AppState {
     pub post_op_lock: tokio::sync::Mutex<()>,
     pub media_negative_cache: Mutex<std::collections::HashMap<String, u64>>,
     pub startup_launch_items: Mutex<Vec<String>>,
+    session_lock_dir: Option<std::path::PathBuf>,
+    active_profile_lock: Mutex<Option<ProfileSessionLock>>,
 }
 
 fn load_bytes_opt_inner(
@@ -420,6 +494,67 @@ impl AppState {
             post_op_lock: tokio::sync::Mutex::new(()),
             media_negative_cache: Mutex::new(std::collections::HashMap::new()),
             startup_launch_items: Mutex::new(Vec::new()),
+            session_lock_dir: None,
+            active_profile_lock: Mutex::new(None),
+        }
+    }
+
+    pub fn with_session_lock_dir(mut self, dir: std::path::PathBuf) -> Self {
+        self.session_lock_dir = Some(dir);
+        self
+    }
+
+    pub fn acquire_profile_lock(
+        &self,
+        folder_name: &str,
+    ) -> Result<PendingProfileLock, crate::models::FrontendError> {
+        let Some(ref lock_dir) = self.session_lock_dir else {
+            return Ok(PendingProfileLock::None);
+        };
+        {
+            let guard = self.active_profile_lock.lock().unwrap();
+            if let Some(ref existing) = *guard {
+                if existing.folder_name == folder_name {
+                    return Ok(PendingProfileLock::AlreadyHeld);
+                }
+            }
+        }
+        let lock = ProfileSessionLock::try_acquire(lock_dir, folder_name)?;
+        Ok(PendingProfileLock::Acquired(lock))
+    }
+
+    pub fn commit_profile_lock(&self, pending: PendingProfileLock) {
+        if let PendingProfileLock::Acquired(lock) = pending {
+            *self.active_profile_lock.lock().unwrap() = Some(lock);
+        }
+    }
+
+    pub fn release_profile_lock(&self) {
+        *self.active_profile_lock.lock().unwrap() = None;
+    }
+
+    pub fn ensure_profile_not_locked(
+        &self,
+        folder_name: &str,
+    ) -> Result<(), crate::models::FrontendError> {
+        let _ = self.acquire_profile_lock(folder_name)?;
+        Ok(())
+    }
+
+    pub fn cleanup_deleted_profile_lock(&self, folder_name: &str) {
+        {
+            let mut guard = self.active_profile_lock.lock().unwrap();
+            if guard
+                .as_ref()
+                .is_some_and(|existing| existing.folder_name == folder_name)
+            {
+                *guard = None;
+            }
+        }
+        if let Some(ref lock_dir) = self.session_lock_dir {
+            if validate_lock_folder_name(folder_name).is_ok() {
+                let _ = std::fs::remove_file(lock_dir.join(format!("{folder_name}.lock")));
+            }
         }
     }
 
@@ -4350,6 +4485,64 @@ mod tests {
             serde_json::to_value(&seal_after).unwrap(),
             serde_json::to_value(&seal_before).unwrap()
         );
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_profile_session_lock_cross_instance_raii_and_validation() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("humoco_session_lock_test_{}", uuid::Uuid::new_v4()));
+        let lock_dir = temp_dir.join("session_locks");
+
+        let s1 = super::AppService::new(&temp_dir.join("w1")).unwrap();
+        let s2 = super::AppService::new(&temp_dir.join("w2")).unwrap();
+        let state1 = super::AppState::new(s1).with_session_lock_dir(lock_dir.clone());
+        let state2 = super::AppState::new(s2).with_session_lock_dir(lock_dir.clone());
+
+        // 1. Instance 1 acquires and commits profile_a
+        let pending1 = state1.acquire_profile_lock("profile_a").unwrap();
+        state1.commit_profile_lock(pending1);
+
+        // 2. Instance 2 is blocked on profile_a (both acquire and ensure_profile_not_locked)
+        let err = state2.acquire_profile_lock("profile_a").err().unwrap();
+        assert_eq!(err.code, "error.auth.profileAlreadyOpen");
+        let ensure_err = state2.ensure_profile_not_locked("profile_a").unwrap_err();
+        assert_eq!(ensure_err.code, "error.auth.profileAlreadyOpen");
+
+        // 3. Instance 2 can open profile_b in parallel
+        let pending_b = state2.acquire_profile_lock("profile_b").unwrap();
+        state2.commit_profile_lock(pending_b);
+        state2.release_profile_lock();
+
+        // 4. Idempotency: Instance 1 re-acquiring its own active profile succeeds without blocking
+        let reacquire = state1.acquire_profile_lock("profile_a").unwrap();
+        assert!(matches!(reacquire, super::PendingProfileLock::AlreadyHeld));
+        state1.commit_profile_lock(reacquire);
+        assert_eq!(
+            state2.acquire_profile_lock("profile_a").err().unwrap().code,
+            "error.auth.profileAlreadyOpen"
+        );
+
+        // 5. After Instance 1 releases, Instance 2 can acquire and RAII-drop rolls back
+        state1.release_profile_lock();
+        {
+            let uncommitted = state2.acquire_profile_lock("profile_a").unwrap();
+            assert!(matches!(
+                uncommitted,
+                super::PendingProfileLock::Acquired(_)
+            ));
+            // Dropped here without commit -> lock released immediately
+        }
+        let after_rollback = state1.acquire_profile_lock("profile_a").unwrap();
+        state1.commit_profile_lock(after_rollback);
+        state1.cleanup_deleted_profile_lock("profile_a");
+        assert!(!lock_dir.join("profile_a.lock").exists());
+
+        // 6. Path traversal / invalid folder names are rejected
+        assert!(state1.acquire_profile_lock("../escape").is_err());
+        assert!(state1.acquire_profile_lock("a/b").is_err());
+        assert!(state1.acquire_profile_lock("").is_err());
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }

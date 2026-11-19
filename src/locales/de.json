@@ -892,6 +892,7 @@
   "error.auth.invalidPinFormat": "Ungültiges PIN-Format. Bitte 6 bis 8 Ziffern eingeben.",
   "error.auth.passwordRequired": "Passwort erforderlich. Bitte verwende „Passwort merken“ oder gib dein Passwort ein.",
   "error.auth.pinWipedMaxAttempts": "PIN nach 5 Fehlversuchen aus Sicherheitsgründen gelöscht. Bitte melde dich mit deinem Hauptpasswort an.",
+  "error.auth.profileAlreadyOpen": "Dieses Profil ist bereits in einer anderen App-Instanz geöffnet.",
   "error.auth.sessionNotActive": "Sitzung ist nicht aktiv. Passwort erforderlich.",
   "error.auth.sessionTimeout": "Sitzung abgelaufen. Bitte gib dein Passwort ein.",
   "error.conflict.doubleSpendBlocked": "Double-Spend-Versuch wurde für diesen Gutschein blockiert.",

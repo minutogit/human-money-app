@@ -464,37 +464,21 @@ mod tests {
     use chrono::Utc;
     use human_money_core::app_service::AppService;
     use human_money_core::models::wallet_event::{WalletEvent, WalletEventType};
-    use std::sync::Mutex;
 
     #[test]
     fn test_get_event_history_uses_cache() {
         use std::path::PathBuf;
         // Mock AppState
         let service = AppService::new(&PathBuf::from("/tmp")).unwrap();
-        let state_raw = AppState {
-            service: Mutex::new(service),
-            history: Mutex::new(None),
-            events: Mutex::new(Some(vec![WalletEvent {
-                event_id: "test_event_1".to_string(),
-                event_type: WalletEventType::VoucherActivated,
-                timestamp: Utc::now(),
-                local_instance_id: "voucher_1".to_string(),
-                voucher_id: "vid_1".to_string(),
-                bff_data: Default::default(),
-            }])),
-            contacts: Mutex::new(None),
-            ui_preferences: Mutex::new(None),
-            security_policy: Mutex::new(None),
-            internal_lifecycle: Mutex::new(None),
-            own_market_profile: Mutex::new(None),
-            wot: Mutex::new(None),
-            recovery_owner: Mutex::new(None),
-            guardian_vault: Mutex::new(None),
-            app_notices: Mutex::new(None),
-            post_op_lock: tokio::sync::Mutex::new(()),
-            media_negative_cache: Mutex::new(std::collections::HashMap::new()),
-            startup_launch_items: Mutex::new(Vec::new()),
-        };
+        let state_raw = AppState::new(service);
+        *state_raw.events.lock().unwrap() = Some(vec![WalletEvent {
+            event_id: "test_event_1".to_string(),
+            event_type: WalletEventType::VoucherActivated,
+            timestamp: Utc::now(),
+            local_instance_id: "voucher_1".to_string(),
+            voucher_id: "vid_1".to_string(),
+            bff_data: Default::default(),
+        }]);
 
         let events = state_raw.events.lock().unwrap();
         assert!(events.is_some());

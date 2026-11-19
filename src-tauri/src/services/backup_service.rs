@@ -817,6 +817,10 @@ pub(crate) async fn finalize_restored_wallet_and_reconcile_l2(
 ) -> Result<FrontendRestoreOutcomeDto, FrontendError> {
     let user_ids_by_folder = user_ids_from_metadata_dir(wallet_data_dir);
 
+    if let Some(old_folder) = replace_folder_name {
+        state.ensure_profile_not_locked(old_folder)?;
+    }
+
     let (outcome, mut profile_name, custom_standards) = {
         let mut service = state.lock_service()?;
         let (outcome, profile_name, custom_standards) = restore_backup_impl(
@@ -826,6 +830,7 @@ pub(crate) async fn finalize_restored_wallet_and_reconcile_l2(
             local_instance_id,
             &mut service,
         )?;
+        let pending_lock = state.acquire_profile_lock(&outcome.folder_name)?;
 
         let restored_identity = service
             .with_wallet_and_identity(|_, id| id.clone())
@@ -838,14 +843,18 @@ pub(crate) async fn finalize_restored_wallet_and_reconcile_l2(
                     let _ = crate::pin_keystore::remove_entry(&config_dir, &outcome.folder_name);
                 }
             }
-            replace_local_profile_with_restored(
+            let name = replace_local_profile_with_restored(
                 wallet_data_dir,
                 old_folder,
                 &outcome.folder_name,
                 &restored_identity,
                 &user_ids_by_folder,
                 profile_name,
-            )
+            );
+            if old_folder != outcome.folder_name {
+                state.cleanup_deleted_profile_lock(old_folder);
+            }
+            name
         } else {
             profile_name
         };
@@ -861,6 +870,8 @@ pub(crate) async fn finalize_restored_wallet_and_reconcile_l2(
         if let Err(e) = state.initialize_profile_session(&mut service, new_password) {
             log::warn!("Failed to initialize profile session after restore: {}", e);
         }
+        drop(service);
+        state.commit_profile_lock(pending_lock);
 
         (outcome, resolved_name, custom_standards)
     };
@@ -984,6 +995,7 @@ fn recover_local_profile_with_mnemonic(
     state: &AppState,
     app_opt: Option<&tauri::AppHandle>,
 ) -> Result<(), FrontendError> {
+    let pending_lock = state.acquire_profile_lock(target_folder_name)?;
     let mut service = state.lock_service()?;
     service
         .recover_wallet_and_set_new_password(
@@ -1007,6 +1019,8 @@ fn recover_local_profile_with_mnemonic(
     state
         .initialize_profile_session(&mut service, new_password)
         .map_err(FrontendError::from)?;
+    drop(service);
+    state.commit_profile_lock(pending_lock);
     Ok(())
 }
 
@@ -1115,8 +1129,12 @@ pub(crate) fn reset_local_password_via_backup_impl(
                 ));
             }
 
+            let pending_lock = state.acquire_profile_lock(target_folder_name)?;
             let mut service = state.lock_service()?;
             service.logout();
+            if !matches!(pending_lock, crate::state::PendingProfileLock::AlreadyHeld) {
+                state.release_profile_lock();
+            }
 
             let mut local_storage = FileStorage::new(local_dir);
             let lock_guard = WalletLockGuard::new(&local_storage)
@@ -1228,6 +1246,8 @@ pub(crate) fn reset_local_password_via_backup_impl(
             state
                 .initialize_profile_session(&mut service, new_password)
                 .map_err(FrontendError::from)?;
+            drop(service);
+            state.commit_profile_lock(pending_lock);
         }
     } else {
         return Err(FrontendError::from(format!(

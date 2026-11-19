@@ -83,6 +83,15 @@ fn setup_log_rotation(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>>
 const INSTANCE_IPC_HEADER: &[u8] = b"HUMOCO_IPC_V1\n";
 const INSTANCE_IPC_ACK: &[u8] = b"HUMOCO_IPC_OK\n";
 
+pub(crate) fn has_allow_multiple_flag<I, S>(args: I) -> bool
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    args.into_iter()
+        .any(|arg| arg.as_ref().trim() == "--allow-multiple")
+}
+
 pub(crate) fn extract_launch_items_from_args<I, S>(args: I) -> Vec<String>
 where
     I: IntoIterator<Item = S>,
@@ -91,7 +100,7 @@ where
     args.into_iter()
         .filter_map(|raw| {
             let trimmed = raw.as_ref().trim();
-            if trimmed.is_empty() {
+            if trimmed.is_empty() || trimmed.starts_with("--") {
                 return None;
             }
             let lower = trimmed.to_ascii_lowercase();
@@ -290,17 +299,32 @@ fn register_os_url_scheme_best_effort() {
 pub fn run() {
     let app = tauri::Builder::default()
         .setup(|app| {
-            // Setup log rotation. Panicking here is acceptable because logging is a critical feature.
-            if let Err(e) = setup_log_rotation(app.handle()) {
-                // We can't use the logger here yet, so we'll panic with a detailed error.
-                panic!("Failed to setup log rotation: {}", e);
-            }
+            let raw_args: Vec<String> = std::env::args().skip(1).collect();
+            let allow_multiple = has_allow_multiple_flag(&raw_args);
+            let startup_items = extract_launch_items_from_args(&raw_args);
 
             // Get the application's data directory
             let data_dir = app
                 .path()
                 .app_data_dir()
                 .expect("Failed to find app data directory");
+            let ipc_addr_path = data_dir.join("instance_ipc.addr");
+
+            if !allow_multiple {
+                if try_forward_to_running_instance(&ipc_addr_path, &startup_items) {
+                    std::process::exit(0);
+                }
+
+                // Setup log rotation. Panicking here is acceptable because logging is a critical feature.
+                if let Err(e) = setup_log_rotation(app.handle()) {
+                    // We can't use the logger here yet, so we'll panic with a detailed error.
+                    panic!("Failed to setup log rotation: {}", e);
+                }
+            } else {
+                info!(
+                    "Multi-instance mode enabled (--allow-multiple); skipping single-instance IPC forwarding and log rotation."
+                );
+            }
 
             let wallet_path = data_dir.join("wallet_data");
             if !wallet_path.exists() {
@@ -308,20 +332,17 @@ pub fn run() {
             }
             info!("Using wallet data path: {}", wallet_path.display());
 
-            let startup_items = extract_launch_items_from_args(std::env::args().skip(1));
-            let ipc_addr_path = data_dir.join("instance_ipc.addr");
-            if try_forward_to_running_instance(&ipc_addr_path, &startup_items) {
-                std::process::exit(0);
-            }
-
             let service = AppService::new(&wallet_path).expect("Failed to create AppService");
-            let app_state = AppState::new(service);
+            let app_state =
+                AppState::new(service).with_session_lock_dir(data_dir.join("session_locks"));
             if let Ok(mut guard) = app_state.startup_launch_items.lock() {
                 *guard = startup_items;
             }
             app.manage(app_state);
-            start_instance_ipc_listener(app.handle().clone(), ipc_addr_path);
-            register_os_url_scheme_best_effort();
+            if !allow_multiple {
+                start_instance_ipc_listener(app.handle().clone(), ipc_addr_path);
+                register_os_url_scheme_best_effort();
+            }
             crate::intent_reconciliation::spawn_intent_reconciliation_worker(app.handle().clone());
 
             Ok(())
@@ -552,7 +573,19 @@ pub fn run() {
 
 #[cfg(test)]
 mod launch_tests {
-    use super::extract_launch_items_from_args;
+    use super::{extract_launch_items_from_args, has_allow_multiple_flag};
+
+    #[test]
+    fn test_has_allow_multiple_flag() {
+        assert!(has_allow_multiple_flag(["--allow-multiple"]));
+        assert!(has_allow_multiple_flag([
+            "  --allow-multiple ",
+            "humoco://pay?to=did:key:abc"
+        ]));
+        assert!(!has_allow_multiple_flag(["--allow-multiple=true"]));
+        assert!(!has_allow_multiple_flag(["--other", "sample.transfer"]));
+        assert!(!has_allow_multiple_flag::<[&str; 0], &str>([]));
+    }
 
     #[test]
     fn test_extract_launch_items_accepts_humoco_links_and_file_urls() {
@@ -567,6 +600,7 @@ mod launch_tests {
             "HUMOCO://RECOVERY-REPLY?v=1&data=xyz",
             &file_url,
             file_path.to_str().unwrap(),
+            "--allow-multiple",
             "--some-flag",
             "/nonexistent/path/to/file.transfer",
         ]);

@@ -215,7 +215,6 @@ mod tests {
         use chrono::Utc;
         use human_money_core::app_service::AppService;
         use std::path::PathBuf;
-        use std::sync::Mutex;
 
         // Mock AppState with cached contacts
         let service = AppService::new(&PathBuf::from("/tmp")).unwrap();
@@ -241,23 +240,8 @@ mod tests {
             },
         );
 
-        let state_raw = AppState {
-            service: Mutex::new(service),
-            history: Mutex::new(None),
-            events: Mutex::new(None),
-            contacts: Mutex::new(Some(book)),
-            ui_preferences: Mutex::new(None),
-            security_policy: Mutex::new(None),
-            internal_lifecycle: Mutex::new(None),
-            own_market_profile: Mutex::new(None),
-            wot: Mutex::new(None),
-            recovery_owner: Mutex::new(None),
-            guardian_vault: Mutex::new(None),
-            app_notices: Mutex::new(None),
-            post_op_lock: tokio::sync::Mutex::new(()),
-            media_negative_cache: Mutex::new(std::collections::HashMap::new()),
-            startup_launch_items: Mutex::new(Vec::new()),
-        };
+        let state_raw = AppState::new(service);
+        *state_raw.contacts.lock().unwrap() = Some(book);
 
         let cache = state_raw.contacts.lock().unwrap();
         assert!(cache.is_some());

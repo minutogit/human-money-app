@@ -805,6 +805,7 @@
   "error.auth.invalidPinFormat": "Format de code PIN invalide. Veuillez saisir 6 à 8 chiffres.",
   "error.auth.passwordRequired": "Mot de passe requis. Veuillez utiliser « Se souvenir du mot de passe » ou entrer votre mot de passe.",
   "error.auth.pinWipedMaxAttempts": "Code PIN supprimé après 5 tentatives échouées par sécurité. Veuillez vous connecter avec votre mot de passe principal.",
+  "error.auth.profileAlreadyOpen": "Ce profil est déjà ouvert dans une autre instance de l'application.",
   "error.auth.sessionNotActive": "La session n'est pas active. Mot de passe requis.",
   "error.auth.sessionTimeout": "La session a expiré. Veuillez fournir votre mot de passe.",
   "error.conflict.doubleSpendBlocked": "La tentative de double dépense a été bloquée pour ce titre.",

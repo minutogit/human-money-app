@@ -892,6 +892,7 @@
   "error.auth.invalidPinFormat": "Invalid PIN format. Please enter 6 to 8 digits.",
   "error.auth.passwordRequired": "Password required. Please use 'Remember Password' or enter your password.",
   "error.auth.pinWipedMaxAttempts": "PIN removed after 5 failed attempts for your security. Please sign in with your master password.",
+  "error.auth.profileAlreadyOpen": "This profile is already open in another app instance.",
   "error.auth.sessionNotActive": "Session is not active. Password required.",
   "error.auth.sessionTimeout": "Session timed out. Please provide your password.",
   "error.conflict.doubleSpendBlocked": "Double spend attempt was blocked for this voucher.",

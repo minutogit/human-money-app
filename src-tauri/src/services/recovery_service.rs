@@ -1694,6 +1694,7 @@ pub async fn complete_social_recovery_impl(
             )
         })?;
 
+        let pending_lock = state.acquire_profile_lock(&target_folder)?;
         {
             let mut service = state.lock_service()?;
             service
@@ -1712,6 +1713,7 @@ pub async fn complete_social_recovery_impl(
                 .ok();
             let _ = record_profile_metadata_in_dir(wallet_data_dir, &target_folder, user_id);
             let _ = state.initialize_profile_session(&mut service, &new_password);
+            state.commit_profile_lock(pending_lock);
             if let Some(app) = app_opt {
                 if let Ok(config_dir) = app.path().app_config_dir() {
                     let _ = crate::pin_keystore::remove_entry(&config_dir, &target_folder);
@@ -2065,6 +2067,11 @@ pub async fn complete_social_recovery_impl(
             );
         }
         let _ = state.initialize_profile_session(&mut service, &new_password);
+        if !folder.is_empty() {
+            if let Ok(pending_lock) = state.acquire_profile_lock(&folder) {
+                state.commit_profile_lock(pending_lock);
+            }
+        }
         folder
     };
 

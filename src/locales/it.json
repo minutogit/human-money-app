@@ -805,6 +805,7 @@
   "error.auth.invalidPinFormat": "Formato PIN non valido. Inserisci da 6 a 8 cifre.",
   "error.auth.passwordRequired": "Password richiesta. Utilizza 'Ricorda Password' o inserisci la tua password.",
   "error.auth.pinWipedMaxAttempts": "PIN rimosso per sicurezza dopo 5 tentativi falliti. Accedi con la tua password principale.",
+  "error.auth.profileAlreadyOpen": "Questo profilo è già aperto in un'altra istanza dell'applicazione.",
   "error.auth.sessionNotActive": "La sessione non è attiva. Password richiesta.",
   "error.auth.sessionTimeout": "Sessione scaduta. Fornisci la tua password.",
   "error.conflict.doubleSpendBlocked": "Tentativo di doppia spesa bloccato per questo voucher.",

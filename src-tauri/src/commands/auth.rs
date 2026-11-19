@@ -8,7 +8,7 @@ use crate::settings::{
     InternalLifecycleState, SecurityPolicy, UiPreferences, INTERNAL_LIFECYCLE_STATE_KEY,
     SECURITY_POLICY_KEY, UI_PREFERENCES_KEY,
 };
-use crate::state::RequiredAccess;
+use crate::state::{PendingProfileLock, RequiredAccess};
 use crate::AppState;
 use chrono::{DateTime, Utc};
 use log::{error, info};
@@ -119,6 +119,11 @@ pub async fn create_profile(
                         .or_else(|| profiles.iter().find(|p| p.profile_name == profile_name))
                         .map(|p| p.folder_name.clone())
                 });
+                let pending_lock = if let Some(ref folder) = folder_name {
+                    state.acquire_profile_lock(folder)?
+                } else {
+                    PendingProfileLock::None
+                };
                 let user_id = service
                     .with_wallet_and_identity(|_, id| id.user_id.clone())
                     .ok();
@@ -162,6 +167,7 @@ pub async fn create_profile(
                 state
                     .initialize_profile_session(&mut service, &password)
                     .map_err(FrontendError::from)?;
+                state.commit_profile_lock(pending_lock);
                 folder_name.unwrap_or_default()
             }
             Err(e) => {
@@ -209,6 +215,7 @@ pub fn login(
     app: tauri::AppHandle,
 ) -> Result<(), FrontendError> {
     info!("Attempting to login...");
+    let pending_lock = state.acquire_profile_lock(&folder_name)?;
     let mut service = state.service.lock().unwrap();
     match service.login(&folder_name, &password, cleanup_on_login, local_instance_id) {
         Ok(()) => {
@@ -227,6 +234,8 @@ pub fn login(
             state
                 .initialize_profile_session(&mut service, &password)
                 .map_err(FrontendError::from)?;
+            drop(service);
+            state.commit_profile_lock(pending_lock);
 
             crate::services::common::spawn_pending_l2_reconciliation(&app, &password);
 
@@ -255,6 +264,7 @@ pub fn recover_wallet_and_set_new_password(
         "Attempting to recover wallet and set new password with language {:?}...",
         language
     );
+    let pending_lock = state.acquire_profile_lock(&folder_name)?;
     let mut service = state.service.lock().unwrap();
     let core_language = language.into();
     match service.recover_wallet_and_set_new_password(
@@ -281,6 +291,8 @@ pub fn recover_wallet_and_set_new_password(
             state
                 .initialize_profile_session(&mut service, &new_password)
                 .map_err(FrontendError::from)?;
+            drop(service);
+            state.commit_profile_lock(pending_lock);
 
             crate::services::common::spawn_pending_l2_reconciliation(&app, &new_password);
 
@@ -305,6 +317,7 @@ pub fn handover_to_this_device(
         "Attempting device handover for profile in folder '{}'...",
         folder_name
     );
+    let pending_lock = state.acquire_profile_lock(&folder_name)?;
     let mut service = state.service.lock().unwrap();
     match service.handover_to_this_device(&folder_name, &password, local_instance_id) {
         Ok(()) => {
@@ -323,6 +336,8 @@ pub fn handover_to_this_device(
             state
                 .initialize_profile_session(&mut service, &password)
                 .map_err(FrontendError::from)?;
+            drop(service);
+            state.commit_profile_lock(pending_lock);
 
             crate::services::common::spawn_pending_l2_reconciliation(&app, &password);
 
@@ -341,8 +356,11 @@ pub fn logout(state: tauri::State<AppState>) {
     // Leere die zwischengespeicherten Daten sicher aus dem Speicher
     state.clear_all_caches();
 
-    let mut service = state.service.lock().unwrap();
-    service.logout();
+    {
+        let mut service = state.service.lock().unwrap();
+        service.logout();
+    }
+    state.release_profile_lock();
     info!("Logout complete.");
 }
 
@@ -455,11 +473,17 @@ pub fn delete_profile(
         folder_name
     );
 
+    state.ensure_profile_not_locked(&folder_name)?;
+
     // 1. Delete in Core (this also verifies password)
-    let mut service = state.service.lock().unwrap();
-    service
-        .delete_profile(&folder_name, &password)
-        .map_err(FrontendError::from)?;
+    {
+        let mut service = state.service.lock().unwrap();
+        service
+            .delete_profile(&folder_name, &password)
+            .map_err(FrontendError::from)?;
+    }
+
+    state.cleanup_deleted_profile_lock(&folder_name);
 
     // 2. Remove metadata entry & device-local PIN keystore entry
     let _ = remove_profile_metadata_entry(&app, &folder_name);
@@ -805,6 +829,7 @@ pub fn login_with_pin_impl(
     state: &AppState,
     app: Option<&tauri::AppHandle>,
 ) -> Result<String, FrontendError> {
+    let pending_lock = state.acquire_profile_lock(folder_name)?;
     let (secret, attempt) =
         pin_keystore::begin_pin_attempt(keystore_dir, device_binding_id, folder_name, pin)
             .map_err(|msg| FrontendError {
@@ -833,6 +858,8 @@ pub fn login_with_pin_impl(
             state
                 .initialize_profile_session_with_secondary(&mut service, &secret)
                 .map_err(FrontendError::from)?;
+            drop(service);
+            state.commit_profile_lock(pending_lock);
 
             if let Some(app_handle) = app {
                 crate::services::common::spawn_pending_l2_reconciliation(app_handle, &secret);
@@ -929,7 +956,6 @@ pub fn elevate_session_with_password(
 mod tests {
     use super::*;
     use crate::services::fs_helpers::ProfileMetadata;
-    use std::sync::Mutex;
 
     #[test]
     fn test_login_ipc_parsing() {
@@ -988,23 +1014,13 @@ mod tests {
         use std::path::PathBuf;
 
         let service = AppService::new(&PathBuf::from("/tmp")).unwrap();
-        let state = AppState {
-            service: Mutex::new(service),
-            history: Mutex::new(Some(vec![])),
-            events: Mutex::new(Some(vec![])),
-            contacts: Mutex::new(Some(Default::default())),
-            ui_preferences: Mutex::new(Some(UiPreferences::default())),
-            security_policy: Mutex::new(Some(SecurityPolicy::default())),
-            internal_lifecycle: Mutex::new(Some(InternalLifecycleState::default())),
-            own_market_profile: Mutex::new(None),
-            wot: Mutex::new(None),
-            recovery_owner: Mutex::new(None),
-            guardian_vault: Mutex::new(None),
-            app_notices: Mutex::new(None),
-            post_op_lock: tokio::sync::Mutex::new(()),
-            media_negative_cache: Mutex::new(std::collections::HashMap::new()),
-            startup_launch_items: Mutex::new(Vec::new()),
-        };
+        let state = AppState::new(service);
+        *state.history.lock().unwrap() = Some(vec![]);
+        *state.events.lock().unwrap() = Some(vec![]);
+        *state.contacts.lock().unwrap() = Some(Default::default());
+        *state.ui_preferences.lock().unwrap() = Some(UiPreferences::default());
+        *state.security_policy.lock().unwrap() = Some(SecurityPolicy::default());
+        *state.internal_lifecycle.lock().unwrap() = Some(InternalLifecycleState::default());
 
         // We can't call the command directly easily because of tauri::State,
         // but we can test the logic:
