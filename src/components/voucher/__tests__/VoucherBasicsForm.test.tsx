@@ -2,7 +2,8 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { VoucherBasicsForm } from '../VoucherBasicsForm';
-import { VoucherStandardDefinition } from '../../../types';
+import { VoucherStandardDefinition, UiMode } from '../../../types';
+import { UiModeProvider } from '../../../context/UiModeContext';
 
 const mockStandardsWithNames = [
     { id: 'freetaler_v1', displayName: 'FreeTaler', content: '...' },
@@ -35,26 +36,31 @@ const mockParsedStandard: VoucherStandardDefinition = {
     },
 };
 
-function renderForm(overrides?: Partial<React.ComponentProps<typeof VoucherBasicsForm>>) {
+function renderForm(
+    overrides?: Partial<React.ComponentProps<typeof VoucherBasicsForm>>,
+    uiMode: UiMode = 'simple',
+) {
     return render(
-        <VoucherBasicsForm
-            standards={mockStandardsWithNames}
-            selectedStandardId=""
-            onStandardChange={() => {}}
-            amount=""
-            onAmountChange={() => {}}
-            validityValue={1}
-            onValidityValueChange={() => {}}
-            validityUnit="Y"
-            onValidityUnitChange={() => {}}
-            nonRedeemable={false}
-            onNonRedeemableChange={() => {}}
-            isLoading={false}
-            errors={{}}
-            standardRef={{ current: null }}
-            amountRef={{ current: null }}
-            {...overrides}
-        />
+        <UiModeProvider initialMode={uiMode}>
+            <VoucherBasicsForm
+                standards={mockStandardsWithNames}
+                selectedStandardId=""
+                onStandardChange={() => {}}
+                amount=""
+                onAmountChange={() => {}}
+                validityValue={1}
+                onValidityValueChange={() => {}}
+                validityUnit="Y"
+                onValidityUnitChange={() => {}}
+                nonRedeemable={false}
+                onNonRedeemableChange={() => {}}
+                isLoading={false}
+                errors={{}}
+                standardRef={{ current: null }}
+                amountRef={{ current: null }}
+                {...overrides}
+            />
+        </UiModeProvider>
     );
 }
 
@@ -82,8 +88,7 @@ describe('VoucherBasicsForm', () => {
         expect(screen.queryByTestId('voucher-validity-toggle')).not.toBeInTheDocument();
         unmount();
 
-        localStorage.setItem('humoco_ui_mode', 'expert');
-        renderForm({ onManageStandards });
+        renderForm({ onManageStandards }, 'expert');
 
         const manageBtn = screen.getByTestId('manage-standards-button');
         expect(manageBtn).toBeInTheDocument();

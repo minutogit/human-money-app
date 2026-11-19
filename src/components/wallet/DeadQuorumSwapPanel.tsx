@@ -47,7 +47,7 @@ export function DeadQuorumSwapPanel({
                     replacementAnchorIdHex: replAnchorHexInput.trim(),
                     password: pwd || null,
                 });
-            });
+            }, { requireFullAccess: true });
             if (offer) setSwapOfferJson(offer);
         } catch (e) {
             setSwapError(translateError(e, t));
@@ -117,7 +117,7 @@ export function DeadQuorumSwapPanel({
                     }
                 }
                 return res;
-            });
+            }, { requireFullAccess: true });
             if (adj) {
                 setSwapAdjudication(adj);
                 await onRefreshDetails();
@@ -245,6 +245,9 @@ export function DeadQuorumSwapPanel({
                                                         → {claim.replacementVoucherId.slice(0, 12)}…
                                                     </span>
                                                 )}
+                                                <span className="ml-1.5 text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-emerald-100/80 dark:bg-emerald-900/50 text-emerald-800 dark:text-emerald-200">
+                                                    {claim.status}
+                                                </span>
                                             </li>
                                         ))}
                                     </ul>

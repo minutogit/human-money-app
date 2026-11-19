@@ -10,7 +10,7 @@ import {
     AlertTriangle,
     HeartHandshake,
 } from 'lucide-react';
-import { AppSettings } from '../../types';
+import { AppConfigDto } from '../../types';
 import { normalizeSyncUrlInput } from '../../utils/humocoUri';
 import { Card } from '../ui/Card';
 import { SegmentedTabs } from '../ui/SegmentedTabs';
@@ -32,20 +32,20 @@ export {
 };
 
 export interface SyncServiceSettingsCardProps {
-    settings: AppSettings | null;
-    onSettingsUpdated?: (newSettings: AppSettings) => void;
+    config: AppConfigDto | null;
+    onConfigUpdated?: (newConfig: AppConfigDto) => void;
 }
 
 /**
  * Orchestrates connected sync endpoints, sync channel settings, and own-hosted sync administration.
  */
 export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = ({
-    settings,
-    onSettingsUpdated,
+    config,
+    onConfigUpdated,
 }) => {
     const { t } = useTranslation();
     const [activeTab, setActiveTab] = useState<'connected' | 'host'>('connected');
-    const admin = useSyncServiceAdmin({ settings, onSettingsUpdated });
+    const admin = useSyncServiceAdmin({ config, onConfigUpdated });
 
     return (
         <Card

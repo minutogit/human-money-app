@@ -5,6 +5,7 @@ pub mod fs_helpers;
 pub mod l2_anchor_service;
 pub mod market_service;
 pub mod post_service;
+pub mod preflight;
 pub mod recovery_service;
 pub mod settings_service;
 pub mod sync_engine;

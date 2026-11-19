@@ -18,7 +18,7 @@ import { Disclosure } from '../ui/Disclosure';
 import { readFromClipboard } from '../../utils/clipboard';
 import { marketService } from '../../services/marketService';
 import { profileService } from '../../services/profileService';
-import { parseContactCard } from '../../utils/humocoUri';
+import { parseHumocoInput } from '../../utils/humocoUri';
 import { isExactSameUserId } from '../../utils/userIdHelper';
 import { notifySyncStatusUpdated } from '../../utils/syncEvents';
 import { useSession } from '../../context/SessionContext';
@@ -37,41 +37,6 @@ export interface AddContactModalProps {
 }
 
 type ModalView = 'tiles' | 'qr_scanner' | 'paste_input';
-
-function extractCardPayload(raw: string): string | null {
-    const trimmed = raw.trim();
-    if (!trimmed) return null;
-
-    const cardUriMatch = trimmed.match(/humoco:\/\/card\?[^\s"'<>)]+/i);
-    if (cardUriMatch) {
-        return cardUriMatch[0].replace(/[.,;:!\]]+$/, '');
-    }
-    if (trimmed.includes('?env=')) {
-        return trimmed;
-    }
-    const firstBrace = trimmed.indexOf('{');
-    const lastBrace = trimmed.lastIndexOf('}');
-    if (firstBrace !== -1 && lastBrace > firstBrace) {
-        const candidate = trimmed.slice(firstBrace, lastBrace + 1);
-        try {
-            const parsed = JSON.parse(candidate);
-            if (
-                typeof parsed === 'object' &&
-                parsed !== null &&
-                ('card_wire' in parsed || ('card' in parsed && 'sig' in parsed) || 'envelope' in parsed)
-            ) {
-                return candidate;
-            }
-        } catch {
-            return null;
-        }
-    }
-    return null;
-}
-
-function isCardEnvelopePayload(trimmed: string): boolean {
-    return extractCardPayload(trimmed) !== null;
-}
 
 export const AddContactModal: React.FC<AddContactModalProps> = ({
     isOpen,
@@ -108,19 +73,26 @@ export const AddContactModal: React.FC<AddContactModalProps> = ({
             return;
         }
 
-        // 1. Check if it's a contact card or DID via canonical parseContactCard
-        const parsedContact = parseContactCard(trimmed);
-        if (parsedContact && parsedContact.did) {
+        // 1. Check if it's a contact URI or DID via centralized parseHumocoInput
+        const parsedInput = parseHumocoInput(trimmed);
+        if (parsedInput?.kind === 'contact' || parsedInput?.kind === 'did') {
+            const parsedDid =
+                parsedInput.kind === 'contact' ? parsedInput.contact.did : parsedInput.did;
+            const parsedName =
+                parsedInput.kind === 'contact' ? parsedInput.contact.name : undefined;
+            const parsedSyncUrls =
+                parsedInput.kind === 'contact' ? parsedInput.contact.syncUrls : undefined;
+
             const ownUid = (await Promise.resolve(profileService.getUserId?.()).catch(() => '')) || '';
-            if (isExactSameUserId(parsedContact.did, ownUid)) {
+            if (isExactSameUserId(parsedDid, ownUid)) {
                 const msg = t('contacts.selfActiveProfileHint');
                 setSmartError(msg);
                 onError(msg);
                 return;
             }
             let initialProfile: { firstName?: string; lastName?: string } | undefined;
-            if (parsedContact.name) {
-                const parts = parsedContact.name.trim().split(/\s+/);
+            if (parsedName) {
+                const parts = parsedName.trim().split(/\s+/);
                 if (parts.length > 1) {
                     initialProfile = {
                         firstName: parts.slice(0, -1).join(' '),
@@ -131,22 +103,22 @@ export const AddContactModal: React.FC<AddContactModalProps> = ({
                 }
             }
             onClose();
-            if (initialProfile || parsedContact.syncUrls) {
-                onOpenManualAdd(parsedContact.did, initialProfile, parsedContact.syncUrls);
+            if (initialProfile || parsedSyncUrls) {
+                onOpenManualAdd(parsedDid, initialProfile, parsedSyncUrls);
             } else {
-                onOpenManualAdd(parsedContact.did);
+                onOpenManualAdd(parsedDid);
             }
             return;
         }
 
         // 2. Verify that payload looks like a signed card envelope before attempting import
-        const cardPayload = extractCardPayload(trimmed);
-        if (!cardPayload) {
+        if (!parsedInput || parsedInput.kind !== 'card') {
             const msg = t('contacts.invalidContactPayload', 'Ungültiges Kontakt- oder Visitenkarten-Format.');
             setSmartError(msg);
             onError(msg);
             return;
         }
+        const cardPayload = parsedInput.payload;
 
         // 3. Import as signed card envelope (.hmcard, JSON, or card URI)
         setIsProcessing(true);
@@ -207,9 +179,8 @@ export const AddContactModal: React.FC<AddContactModalProps> = ({
                 return;
             }
             const trimmed = text.trim();
-            const parsedContact = parseContactCard(trimmed);
-            const isCard = isCardEnvelopePayload(trimmed);
-            if (!parsedContact && !isCard) {
+            const parsed = parseHumocoInput(trimmed);
+            if (!parsed || (parsed.kind !== 'contact' && parsed.kind !== 'did' && parsed.kind !== 'card')) {
                 // Clipboard does not contain a valid contact card or envelope: switch to paste input without error
                 setPasteText('');
                 setView('paste_input');

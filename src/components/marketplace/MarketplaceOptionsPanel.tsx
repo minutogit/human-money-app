@@ -6,7 +6,7 @@ import { PageOptionsPanel } from '../ui/PageOptionsPanel';
 import { Advanced } from '../ui/Advanced';
 import { Button } from '../ui/Button';
 import { ReachPresetSelector } from '../settings/ReachPresetSelector';
-import { AppSettings, FrontendMyMarketProfile } from '../../types';
+import { FrontendMyMarketProfile } from '../../types';
 import { settingsService } from '../../services/settingsService';
 import { useSession } from '../../context/SessionContext';
 import { logger } from '../../utils/log';
@@ -45,15 +45,15 @@ export function MarketplaceOptionsPanel({
     useEffect(() => {
         let isMounted = true;
         settingsService
-            .getSettings()
-            .then((s) => {
-                if (isMounted && s) {
-                    setMarketShowUnknown(s.marketShowUnknown ?? true);
-                    setMaxStoredCards(s.maxStoredCards ?? 2000);
+            .getConfig()
+            .then((cfg) => {
+                if (isMounted && cfg?.uiPreferences) {
+                    setMarketShowUnknown(cfg.uiPreferences.marketShowUnknown ?? true);
+                    setMaxStoredCards(cfg.uiPreferences.maxStoredCards ?? 2000);
                 }
             })
             .catch((err) => {
-                logger.error('Failed to load settings in MarketplaceOptionsPanel: ' + stringifyError(err));
+                logger.error('Failed to load config in MarketplaceOptionsPanel: ' + stringifyError(err));
             });
         return () => {
             isMounted = false;
@@ -79,10 +79,11 @@ export function MarketplaceOptionsPanel({
         try {
             setIsSaving(true);
             setErrorMsg(null);
-            const current = await settingsService.getSettings();
-            const updated: AppSettings = { ...current, marketShowUnknown: value };
             await protectAction(async (pwd) => {
-                await settingsService.saveSettings(updated, pwd || undefined);
+                await settingsService.patchUiPreferences(
+                    { marketShowUnknown: value },
+                    pwd || undefined,
+                );
             });
             onSettingsChanged?.();
         } catch (err) {
@@ -98,10 +99,11 @@ export function MarketplaceOptionsPanel({
         try {
             setIsSaving(true);
             setErrorMsg(null);
-            const current = await settingsService.getSettings();
-            const updated: AppSettings = { ...current, maxStoredCards: count };
             await protectAction(async (pwd) => {
-                await settingsService.saveSettings(updated, pwd || undefined);
+                await settingsService.patchUiPreferences(
+                    { maxStoredCards: count },
+                    pwd || undefined,
+                );
             });
             onSettingsChanged?.();
         } catch (err) {

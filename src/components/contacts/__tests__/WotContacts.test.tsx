@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
 import ContactDialog from '../ContactDialog';
 import AddressBook from '../AddressBook';
 import { ReceiveView } from '../../transfer/ReceiveView';
+import { UiModeProvider } from '../../../context/UiModeContext';
 import { invoke } from '@tauri-apps/api/core';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { readFile, writeFile } from '@tauri-apps/plugin-fs';
@@ -287,14 +288,17 @@ describe('WoT Contacts & Trust Ratings', () => {
     ];
 
     it('loads and displays WoT banner stats and contact card trust pills', async () => {
-      localStorage.setItem('humoco_ui_mode', 'expert');
       (invoke as unknown as Mock).mockImplementation((cmd: string) => {
         if (cmd === 'get_contacts') return Promise.resolve(mockContacts);
         if (cmd === 'get_wot_summary') return Promise.resolve(mockSummary);
         return Promise.resolve();
       });
 
-      render(<AddressBook onBack={vi.fn()} />);
+      render(
+        <UiModeProvider initialMode="expert">
+          <AddressBook onBack={vi.fn()} />
+        </UiModeProvider>
+      );
 
       // Wait for contacts to load
       await waitFor(() => {
@@ -310,11 +314,16 @@ describe('WoT Contacts & Trust Ratings', () => {
     });
 
     it('sharing WoT for a specific contact exports package with recipientDid', async () => {
-      localStorage.setItem('humoco_ui_mode', 'expert');
       (invoke as unknown as Mock).mockImplementation((cmd: string) => {
         if (cmd === 'get_contacts') return Promise.resolve(mockContacts);
         if (cmd === 'get_wot_summary') return Promise.resolve(mockSummary);
-        if (cmd === 'get_app_settings') return Promise.resolve({ lastUsedDirectory: '/tmp' });
+        if (cmd === 'get_app_config') {
+          return Promise.resolve({
+            uiPreferences: { lastUsedDirectory: '/tmp' },
+            securityPolicy: {},
+            lifecycle: {},
+          });
+        }
         if (cmd === 'export_wot_package') {
           return Promise.resolve([1, 2, 3, 4]);
         }
@@ -323,7 +332,11 @@ describe('WoT Contacts & Trust Ratings', () => {
 
       (save as unknown as Mock).mockResolvedValue('/tmp/trust-alice.wot');
 
-      render(<AddressBook onBack={vi.fn()} />);
+      render(
+        <UiModeProvider initialMode="expert">
+          <AddressBook onBack={vi.fn()} />
+        </UiModeProvider>
+      );
 
       await waitFor(() => {
         expect(screen.getByText('Alice')).toBeInTheDocument();
@@ -346,7 +359,6 @@ describe('WoT Contacts & Trust Ratings', () => {
     });
 
     it('shows 3-tier reach presets in Simple mode and hides offline trust list controls', async () => {
-      localStorage.setItem('humoco_ui_mode', 'simple');
       (invoke as unknown as Mock).mockImplementation((cmd: string) => {
         if (cmd === 'get_contacts') return Promise.resolve(mockContacts);
         if (cmd === 'get_wot_summary') return Promise.resolve({ ...mockSummary, ownListMaxHops: 2 });
@@ -400,7 +412,6 @@ describe('WoT Contacts & Trust Ratings', () => {
     });
 
     it('clicking a hop button in AddressBook (Expert mode) invokes set_wot_max_hops', async () => {
-      localStorage.setItem('humoco_ui_mode', 'expert');
       (invoke as unknown as Mock).mockImplementation((cmd: string) => {
         if (cmd === 'get_contacts') return Promise.resolve(mockContacts);
         if (cmd === 'get_wot_summary') return Promise.resolve({ ...mockSummary, ownListMaxHops: 3 });
@@ -418,7 +429,11 @@ describe('WoT Contacts & Trust Ratings', () => {
         return Promise.resolve();
       });
 
-      render(<AddressBook onBack={vi.fn()} />);
+      render(
+        <UiModeProvider initialMode="expert">
+          <AddressBook onBack={vi.fn()} />
+        </UiModeProvider>
+      );
 
       await waitFor(() => {
         expect(screen.getByText('Alice')).toBeInTheDocument();
@@ -444,19 +459,28 @@ describe('WoT Contacts & Trust Ratings', () => {
     });
 
     it('multi-recipient .wot share modal defaults to sharing with all rated contacts and invokes export_wot_package', async () => {
-      localStorage.setItem('humoco_ui_mode', 'expert');
       (invoke as unknown as Mock).mockImplementation((cmd: string) => {
         if (cmd === 'get_contacts') return Promise.resolve(mockContacts);
         if (cmd === 'get_wot_summary') return Promise.resolve({ ...mockSummary, ratedContactsCount: 5 });
         if (cmd === 'get_wot_providers') return Promise.resolve([]);
-        if (cmd === 'get_app_settings') return Promise.resolve({ lastUsedDirectory: '/tmp' });
+        if (cmd === 'get_app_config') {
+          return Promise.resolve({
+            uiPreferences: { lastUsedDirectory: '/tmp' },
+            securityPolicy: {},
+            lifecycle: {},
+          });
+        }
         if (cmd === 'export_wot_package') return Promise.resolve([1, 2, 3]);
         return Promise.resolve();
       });
 
       (save as unknown as Mock).mockResolvedValue('/tmp/trust-network.wot');
 
-      render(<AddressBook onBack={vi.fn()} />);
+      render(
+        <UiModeProvider initialMode="expert">
+          <AddressBook onBack={vi.fn()} />
+        </UiModeProvider>
+      );
 
       await waitFor(() => {
         expect(screen.getByText('Alice')).toBeInTheDocument();
@@ -521,7 +545,6 @@ describe('WoT Contacts & Trust Ratings', () => {
       unmountSimple();
 
       // Test 1 (Expert mode): Empty providers -> Tab switcher is NOT rendered
-      localStorage.setItem('humoco_ui_mode', 'expert');
       (invoke as unknown as Mock).mockImplementation((cmd: string) => {
         if (cmd === 'get_contacts') return Promise.resolve(mockContacts);
         if (cmd === 'get_wot_summary') return Promise.resolve(mockSummary);
@@ -529,7 +552,11 @@ describe('WoT Contacts & Trust Ratings', () => {
         return Promise.resolve();
       });
 
-      const { unmount } = render(<AddressBook onBack={vi.fn()} />);
+      const { unmount } = render(
+        <UiModeProvider initialMode="expert">
+          <AddressBook onBack={vi.fn()} />
+        </UiModeProvider>
+      );
 
       await waitFor(() => {
         expect(screen.getByText('Alice')).toBeInTheDocument();
@@ -592,7 +619,13 @@ describe('WoT Contacts & Trust Ratings', () => {
 
       (invoke as unknown as Mock).mockImplementation((cmd: string) => {
         if (cmd === 'get_voucher_standards') return Promise.resolve([]);
-        if (cmd === 'get_app_settings') return Promise.resolve({});
+        if (cmd === 'get_app_config') {
+          return Promise.resolve({
+            uiPreferences: {},
+            securityPolicy: {},
+            lifecycle: {},
+          });
+        }
         if (cmd === 'import_wot_package') return Promise.resolve(mockImportResult);
         return Promise.resolve();
       });

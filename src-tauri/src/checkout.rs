@@ -14,9 +14,13 @@ use human_money_core::humoco_proto::{
 use human_money_core::models::conflict::TrustStatus;
 use human_money_core::models::layer2_api::{CheckoutReleaseVerdict, L2ProcessingOutcome};
 use human_money_core::services::{bundle_processor, l2_gateway};
-use humoco_wot::canonicalize_did;
+use crate::state::canonicalize_did;
 
-use crate::{models::FrontendError, settings::AppSettings, sync_client, AppState};
+use crate::{
+    models::FrontendError,
+    settings::{InternalLifecycleState, SecurityPolicy},
+    sync_client, AppState,
+};
 
 const CHECKOUT_BATCH_TIMEOUT: Duration = Duration::from_secs(4);
 
@@ -53,8 +57,8 @@ fn format_bff_name(raw_name: &str, is_test: bool) -> String {
 }
 
 /// Resolves trusted `LockPubKey`s (`base_trusted_keys`, `independently_pinned_creator_keys`) from:
-/// - Own active Sync servers (`settings.public_syncs`) and nominated lock server
-/// - Locally assembled anchor templates (`settings.l2_anchor_templates_meta`)
+/// - Own active Sync servers (`security_policy.public_syncs`) and nominated lock server
+/// - Locally assembled anchor templates (`lifecycle.l2_anchor_templates_meta`)
 /// - Non-offender Hop-1/Hop-2 AddressBook contacts & WoT ADR-08 provider filter seals
 ///
 /// # Security (`LÜCKE-03` & Untrusted Manifest Isolation)
@@ -65,21 +69,23 @@ fn format_bff_name(raw_name: &str, is_test: bool) -> String {
 ///   merchants do not trust creator-nominated servers via contact cards alone.
 pub(crate) async fn resolve_trusted_lock_keys(
     state: &AppState,
-    settings: &AppSettings,
+    security_policy: &SecurityPolicy,
+    lifecycle: &InternalLifecycleState,
     client: &reqwest::Client,
     creator_id: Option<&str>,
     manifest: Option<&AnchorManifest>,
-) -> (Vec<LockPubKey>, Vec<LockPubKey>) {
+    password: Option<&str>,
+) -> Result<(Vec<LockPubKey>, Vec<LockPubKey>), FrontendError> {
     let mut known_url_to_key: HashMap<String, LockPubKey> = HashMap::new();
 
-    for (url, probe) in &settings.l2_probe_cache {
+    for (url, probe) in &lifecycle.l2_probe_cache {
         if probe.passed {
             if let Ok(pk) = decode_hex_fixed::<32>(&probe.lock_pub) {
                 known_url_to_key.insert(crate::services::common::normalize_sync_url(url), pk);
             }
         }
     }
-    if let Some(ref own) = settings.own_nominated_lock_server {
+    if let Some(ref own) = security_policy.own_nominated_lock_server {
         if let Ok(pk) = decode_hex_fixed::<32>(&own.lock_pub) {
             known_url_to_key.insert(
                 crate::services::common::normalize_sync_url(&own.write_url),
@@ -87,7 +93,7 @@ pub(crate) async fn resolve_trusted_lock_keys(
             );
         }
     }
-    for tmpl in &settings.l2_anchor_templates_meta {
+    for tmpl in &lifecycle.l2_anchor_templates_meta {
         for srv in &tmpl.servers {
             if let Ok(pk) = decode_hex_fixed::<32>(&srv.lock_pub) {
                 known_url_to_key.insert(
@@ -101,7 +107,7 @@ pub(crate) async fn resolve_trusted_lock_keys(
     let mut trusted_urls: HashSet<String> = HashSet::new();
     let mut trusted_keys: HashSet<LockPubKey> = HashSet::new();
 
-    for s in &settings.public_syncs {
+    for s in &security_policy.public_syncs {
         if s.enabled && s.status != "revoked" {
             let norm = crate::services::common::normalize_sync_url(&s.write_url);
             if !norm.is_empty() {
@@ -109,13 +115,13 @@ pub(crate) async fn resolve_trusted_lock_keys(
             }
         }
     }
-    if let Some(ref own) = settings.own_nominated_lock_server {
+    if let Some(ref own) = security_policy.own_nominated_lock_server {
         let norm = crate::services::common::normalize_sync_url(&own.write_url);
         if !norm.is_empty() {
             trusted_urls.insert(norm);
         }
     }
-    for tmpl in &settings.l2_anchor_templates_meta {
+    for tmpl in &lifecycle.l2_anchor_templates_meta {
         for srv in &tmpl.servers {
             let norm = crate::services::common::normalize_sync_url(&srv.write_url);
             if !norm.is_empty() {
@@ -233,11 +239,8 @@ pub(crate) async fn resolve_trusted_lock_keys(
     }
 
     let offenders = {
-        let mut svc_guard = state.service.lock().ok();
-        svc_guard
-            .as_deref_mut()
-            .map(|s| crate::l2_lifecycle::load_server_offender_list(s, None))
-            .unwrap_or_default()
+        let mut svc_guard = state.lock_service()?;
+        crate::l2_lifecycle::load_server_offender_list(&mut svc_guard, password)?
     };
 
     let mut urls_to_live_probe: Vec<String> = Vec::new();
@@ -287,7 +290,7 @@ pub(crate) async fn resolve_trusted_lock_keys(
     }
 
     let keys_vec: Vec<LockPubKey> = trusted_keys.into_iter().collect();
-    (keys_vec.clone(), keys_vec)
+    Ok((keys_vec.clone(), keys_vec))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -642,14 +645,19 @@ pub(crate) async fn checkout_bundle(
         .filter(|s| s.role.eq_ignore_ascii_case("guarantor"))
         .map(|s| s.signer_id.clone())
         .collect();
-    let settings = state.get_cached_settings().map_err(FrontendError::from)?;
+    let security_policy = state
+        .get_cached_security_policy()
+        .map_err(FrontendError::from)?;
+    let lifecycle = state
+        .get_cached_internal_lifecycle()
+        .map_err(FrontendError::from)?;
     let client = sync_client::create_sync_http_client();
     let mut pow_base_bits = opened_bundle
         .anchor_manifest
         .as_ref()
         .map(|m| {
             crate::services::common::max_pow_base_bits_for_servers(
-                &settings,
+                &lifecycle,
                 m.servers.iter().map(|s| s.write_url.as_str()),
             )
         })
@@ -672,7 +680,6 @@ pub(crate) async fn checkout_bundle(
         Err(_) => {
             let discovered = crate::l2_lifecycle::discover_anchor_manifest(
                 state,
-                &settings,
                 &client,
                 &anchor_id,
                 voucher.creator_profile.id.as_deref(),
@@ -683,7 +690,7 @@ pub(crate) async fn checkout_bundle(
             if let Some(ref m) = discovered {
                 pow_base_bits =
                     pow_base_bits.max(crate::services::common::max_pow_base_bits_for_servers(
-                        &settings,
+                        &lifecycle,
                         m.servers.iter().map(|s| s.write_url.as_str()),
                     ));
             }
@@ -704,12 +711,14 @@ pub(crate) async fn checkout_bundle(
     // 4. Resolve trusted LockPubKeys & fan out committee batches in parallel
     let (mut base_trusted_keys, mut independently_pinned_creator_keys) = resolve_trusted_lock_keys(
         state,
-        &settings,
+        &security_policy,
+        &lifecycle,
         &client,
         voucher.creator_profile.id.as_deref(),
         Some(&context.manifest),
+        password,
     )
-    .await;
+    .await?;
 
     let mut dispatch = crate::gateway_resolver::dispatch_lock_committee_batches(
         &client,
@@ -755,7 +764,6 @@ pub(crate) async fn checkout_bundle(
         {
             if let Ok(Some(discovered)) = crate::l2_lifecycle::discover_anchor_manifest(
                 state,
-                &settings,
                 &client,
                 &anchor_id,
                 voucher.creator_profile.id.as_deref(),
@@ -773,7 +781,7 @@ pub(crate) async fn checkout_bundle(
         if let Some(newer_manifest) = best_upgraded {
             pow_base_bits =
                 pow_base_bits.max(crate::services::common::max_pow_base_bits_for_servers(
-                    &settings,
+                    &lifecycle,
                     newer_manifest.servers.iter().map(|s| s.write_url.as_str()),
                 ));
             let upgraded_pair = {
@@ -796,12 +804,14 @@ pub(crate) async fn checkout_bundle(
             requests = upgraded_pair.1;
             let keys = resolve_trusted_lock_keys(
                 state,
-                &settings,
+                &security_policy,
+                &lifecycle,
                 &client,
                 voucher.creator_profile.id.as_deref(),
                 Some(&context.manifest),
+                password,
             )
-            .await;
+            .await?;
             base_trusted_keys = keys.0;
             independently_pinned_creator_keys = keys.1;
             dispatch = crate::gateway_resolver::dispatch_lock_committee_batches(
@@ -1099,7 +1109,8 @@ mod tests {
             .unwrap();
 
         let state_bob = AppState::new(svc_bob);
-        *state_bob.settings.lock().unwrap() = Some(AppSettings::default());
+        *state_bob.security_policy.lock().unwrap() = Some(SecurityPolicy::default());
+        *state_bob.internal_lifecycle.lock().unwrap() = Some(InternalLifecycleState::default());
         let completion = checkout_bundle(
             &state_bob,
             "pos-offline-1",
@@ -1330,7 +1341,8 @@ mod tests {
 
         // Case A: Bob has NO trusted servers -> Yellow verdict, NOT auto-committed
         let state_bob = AppState::new(svc_bob);
-        *state_bob.settings.lock().unwrap() = Some(AppSettings::default());
+        *state_bob.security_policy.lock().unwrap() = Some(SecurityPolicy::default());
+        *state_bob.internal_lifecycle.lock().unwrap() = Some(InternalLifecycleState::default());
         let yellow = checkout_bundle(
             &state_bob,
             "pos-yellow",
@@ -1346,8 +1358,10 @@ mod tests {
 
         // Case B: Bob trusts both servers via own public_syncs + verified probe cache -> Green Confirmed!
         {
-            let mut st = state_bob.settings.lock().unwrap();
-            let s = st.as_mut().unwrap();
+            let mut st_sec = state_bob.security_policy.lock().unwrap();
+            let s = st_sec.as_mut().unwrap();
+            let mut st_lc = state_bob.internal_lifecycle.lock().unwrap();
+            let lc = st_lc.as_mut().unwrap();
             for (port, sk) in [(p1, &sk1), (p2, &sk2)] {
                 let wurl = format!("http://127.0.0.1:{}/sync.php", port);
                 s.public_syncs.push(crate::settings::StoredPublicSync {
@@ -1363,7 +1377,7 @@ mod tests {
                     revocation_reason: None,
                     replacement: None,
                 });
-                s.l2_probe_cache.insert(
+                lc.l2_probe_cache.insert(
                     wurl.clone(),
                     sync_client::FrontendLockServerProbeResult {
                         write_url: wurl,

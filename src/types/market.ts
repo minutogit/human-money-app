@@ -341,6 +341,8 @@ export interface FrontendPostDepositResult {
     depositedTo: number;
     recipientDepositedTo: number;
     msgId: string;
+    deferredCount?: number;
+    queuedForNextFlush?: boolean;
     errors: string[];
 }
 
@@ -412,6 +414,7 @@ export interface FrontendPostSyncResult {
     newInquiries: number;
     newInquiryMessages: number;
     prunedBoxes: number;
+    deferredOutboxBoxes?: number;
     errors: string[];
     retryAfterSecs?: number | null;
 }

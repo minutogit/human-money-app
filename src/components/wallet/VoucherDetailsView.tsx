@@ -199,7 +199,7 @@ export function VoucherDetailsView() {
                         details={details}
                         guarantorSignatures={guarantorSignatures}
                         allowPartialTransfers={allowPartialTransfers}
-                        settings={state.settings}
+                        config={state.config}
                         protectAction={state.protectAction}
                         findMatchingStandardToml={state.findMatchingStandardToml}
                         onClose={() => state.setClaimPanelOpen(false)}
@@ -352,12 +352,12 @@ export function VoucherDetailsView() {
             <VoucherDetailsModals
                 voucherId={voucherId}
                 voucher={voucher}
-                settings={state.settings}
+                config={state.config}
                 contacts={state.contacts}
                 protectAction={state.protectAction}
                 showExportModal={state.showExportModal}
                 onCloseExportModal={() => state.setShowExportModal(false)}
-                onSettingsRefresh={state.setSettings}
+                onConfigRefresh={state.setConfig}
                 onAskSaved={state.setSavedAskFilePath}
                 pendingSigImport={state.pendingSigImport}
                 sigContainerPassword={state.sigContainerPassword}

@@ -25,7 +25,7 @@ import { useReceiveWotImport } from './useReceiveWotImport';
 import { useReceiveModals } from './useReceiveModals';
 import {
     VoucherStandardInfo,
-    AppSettings,
+    AppConfigDto,
     ReceiveSuccessPayload,
     VoucherDetails,
     PublicProfile,
@@ -56,7 +56,7 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseRec
     const [feedbackMsg, setFeedbackMsg] = useState('');
     const [isProcessing, setIsProcessing] = useState(false);
     const [isDragOver, setIsDragOver] = useState(false);
-    const [settings, setSettings] = useState<AppSettings | null>(null);
+    const [config, setConfig] = useState<AppConfigDto | null>(null);
     const [isCheckingPost, setIsCheckingPost] = useState(false);
     const [postCheckStatus, setPostCheckStatus] = useState<{ variant: 'info' | 'success' | 'error'; message: string } | null>(null);
     const processedDroppedFileRef = useRef<{ name: string; bytes: number[] } | null>(null);
@@ -240,10 +240,10 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseRec
         async function fetchData() {
             try {
                 logger.info('ReceiveView opened, fetching initial data.');
-                const [standards, currentSettings, userId, profile] = await Promise.all([
+                const [standards, currentConfig, userId, profile] = await Promise.all([
                     standardsService.getStandards(),
-                    settingsService.getSettings().catch((e) => {
-                        logger.warn(`Failed to fetch app settings: ${translateError(e, t)}`);
+                    settingsService.getConfig().catch((e) => {
+                        logger.warn(`Failed to fetch app config: ${translateError(e, t)}`);
                         return null;
                     }),
                     voucherService.getUserId().catch(() => ''),
@@ -251,7 +251,7 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseRec
                 ]);
                 if (!active) return;
                 setVoucherStandards(standards);
-                setSettings(currentSettings);
+                setConfig(currentConfig);
                 setOwnUserId(userId);
                 setOwnProfile(profile);
             } catch (e) {
@@ -337,13 +337,13 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseRec
         setFeedbackMsg('');
         try {
             const opened = await openFileAsBytes({
-                settings,
+                uiPreferences: config?.uiPreferences,
                 protectAction,
                 filters: getReceiveFileDialogFilters(t),
             });
             if (!opened) return;
             logger.info(`File selected via dialog: ${opened.path}`);
-            if (settings) settingsService.getSettings().then(setSettings).catch(() => {});
+            if (config) settingsService.getConfig().then(setConfig).catch(() => {});
             const fileName = opened.path.split(/[/\\]/).pop() || '';
             await processIncomingFile(fileName, opened.bytes);
         } catch (e) {
@@ -447,7 +447,7 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseRec
         postCheckStatus,
         isDragOver,
         setIsDragOver,
-        settings,
+        config,
         handleFileSelect,
         handleDrop,
         handleCheckPostNow,

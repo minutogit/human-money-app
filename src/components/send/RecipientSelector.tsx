@@ -8,6 +8,7 @@ import { Button } from '../ui/Button';
 import { QrScannerModal } from '../ui/QrScannerModal';
 import { ContactBadge } from '../ui/ContactBadge';
 import { readFromClipboard } from '../../utils/clipboard';
+import { parseHumocoInput, normalizeUserIdInput } from '../../utils/humocoUri';
 import { logger } from '../../utils/log';
 import { stringifyError } from '../../utils/errorHelper';
 import { Contact, TrustStatus } from '../../types';
@@ -62,20 +63,25 @@ export function RecipientSelector({
     const trimmed = rawVal.trim();
     const lower = trimmed.toLowerCase();
 
-    if (
-      onApplyRawCode &&
-      (lower.includes('humoco://contact') ||
-        lower.includes('humoco://card') ||
-        trimmed.includes('@did:'))
-    ) {
-      const ok = onApplyRawCode(trimmed);
+    const parsed = parseHumocoInput(rawVal);
+    if (onApplyRawCode && parsed) {
+      const ok = onApplyRawCode(rawVal);
       if (ok) {
+        const normalized = normalizeUserIdInput(rawVal);
+        if (normalized) {
+          e.target.value = normalized;
+        }
         setSearchQuery('');
         return;
       }
     }
 
-    if (lower.includes('humoco://pay') || trimmed.startsWith('did:') || Boolean(recipientId)) {
+    if (
+      lower.includes('humoco://pay') ||
+      trimmed.startsWith('did:') ||
+      trimmed.includes('@did:') ||
+      Boolean(recipientId)
+    ) {
       onRecipientChange(e);
       setSearchQuery(rawVal.replace(/\s+/g, ''));
       return;

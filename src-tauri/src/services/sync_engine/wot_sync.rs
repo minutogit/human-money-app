@@ -5,11 +5,8 @@ use sha2::{Digest, Sha256};
 
 use crate::models::{FrontendAddressBook, FrontendError, FrontendTrustChangeImpact};
 use crate::services::common::{DropChannelSigner, SyncIdentityContext};
-use crate::settings::{AppSettings, SYNC_WOT_MAX_BYTES};
-use crate::state::{
-    canonicalize_did, AppState, StoredSyncAdmin, StoredSyncState, CONTACTS_DATA_NAME,
-    MARKET_SYNC_ADMIN_KEY,
-};
+use crate::settings::{SecurityPolicy, UiPreferences, SYNC_WOT_MAX_BYTES};
+use crate::state::{canonicalize_did, AppState, StoredSyncState, CONTACTS_DATA_NAME};
 use crate::sync_client::{self, PutSlotOutcome};
 
 use super::channel_reader::{collect_upload_targets_for_channel, ensure_cached_channel_max_bytes};
@@ -62,32 +59,31 @@ pub(crate) fn import_decrypted_wot_package(
 
 fn load_wot_upload_context(
     state: &AppState,
-    settings: &AppSettings,
+    ui_prefs: &UiPreferences,
     wot_upload_targets: &[humoco_market::DropDescriptor],
     password: Option<&str>,
-) -> WotUploadContext {
-    if !settings.wot_share_via_sync && wot_upload_targets.is_empty() {
-        return WotUploadContext {
+) -> Result<WotUploadContext, FrontendError> {
+    if !ui_prefs.wot_share_via_sync && wot_upload_targets.is_empty() {
+        return Ok(WotUploadContext {
             reg_opt: None,
             zero_book_dids: Vec::new(),
             offenders: HashSet::new(),
-        };
+        });
     }
 
-    let Ok(mut service) = state.lock_service() else {
-        return WotUploadContext {
-            reg_opt: None,
-            zero_book_dids: Vec::new(),
-            offenders: HashSet::new(),
-        };
-    };
+    let mut service = state.lock_service()?;
 
-    let reg_opt = state.get_or_load_wot_register(&mut service, password).ok();
-    let address_book: FrontendAddressBook = service
-        .load_encrypted_data(CONTACTS_DATA_NAME, password)
-        .ok()
-        .and_then(|data| serde_json::from_slice(&data).ok())
-        .unwrap_or_default();
+    let reg_opt = Some(
+        state
+            .get_or_load_wot_register(&mut service, password)
+            .map_err(FrontendError::from)?,
+    );
+    let address_book: FrontendAddressBook = crate::state::load_encrypted_json_or_default(
+        &mut service,
+        CONTACTS_DATA_NAME,
+        password,
+    )
+    .map_err(FrontendError::from)?;
 
     let zero_book_dids: Vec<String> = address_book
         .contacts
@@ -96,7 +92,7 @@ fn load_wot_upload_context(
         .filter_map(|c| canonicalize_did(&c.did).ok())
         .collect();
 
-    let offenders: HashSet<String> = if settings.wot_share_via_sync {
+    let offenders: HashSet<String> = if ui_prefs.wot_share_via_sync {
         if let Some(ref r) = reg_opt {
             let mut candidate_dids: HashSet<String> = r.own_contacts.keys().cloned().collect();
             for d in &zero_book_dids {
@@ -122,11 +118,11 @@ fn load_wot_upload_context(
         HashSet::new()
     };
 
-    WotUploadContext {
+    Ok(WotUploadContext {
         reg_opt,
         zero_book_dids,
         offenders,
-    }
+    })
 }
 
 fn build_wot_tombstone_bundle(
@@ -562,7 +558,8 @@ async fn delete_unshared_wot_slots(
 pub(crate) async fn sync_wot_upload_channel(
     client: &reqwest::Client,
     state: &AppState,
-    settings: &AppSettings,
+    ui_prefs: &UiPreferences,
+    security_policy: &SecurityPolicy,
     id_ctx: &SyncIdentityContext,
     force_upload: Option<bool>,
     now_secs: u64,
@@ -571,15 +568,21 @@ pub(crate) async fn sync_wot_upload_channel(
     uploaded_to: &mut usize,
     errors: &mut Vec<String>,
 ) {
-    let wot_upload_targets = collect_upload_targets_for_channel(settings, "wot");
-    let ctx_data = load_wot_upload_context(state, settings, &wot_upload_targets, password);
+    let wot_upload_targets = collect_upload_targets_for_channel(security_policy, "wot");
+    let ctx_data = match load_wot_upload_context(state, ui_prefs, &wot_upload_targets, password) {
+        Ok(c) => c,
+        Err(e) => {
+            errors.push(format!("WoT upload context failed: {}", e.message));
+            return;
+        }
+    };
 
     let Some(mut reg) = ctx_data.reg_opt else {
         return;
     };
 
     let mut reg_modified = false;
-    let mut delete_unshared = !settings.wot_share_via_sync;
+    let mut delete_unshared = !ui_prefs.wot_share_via_sync;
 
     let mut upload_state = WotUploadState {
         client,
@@ -591,7 +594,7 @@ pub(crate) async fn sync_wot_upload_channel(
         errors,
     };
 
-    if settings.wot_share_via_sync {
+    if ui_prefs.wot_share_via_sync {
         let needs_signing =
             reg.own_list_dirty || (reg.own_signed_list.is_none() && !reg.own_contacts.is_empty());
         if needs_signing {
@@ -708,10 +711,9 @@ pub fn preview_contact_trust_change_impl(
     state: &AppState,
 ) -> Result<FrontendTrustChangeImpact, FrontendError> {
     let mut service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
-    let settings = state
-        .get_cached_settings()
-        .or_else(|_| state.load_settings(&mut service, password.as_deref()))
-        .unwrap_or_default();
+    let ui_prefs = state
+        .get_or_load_ui_preferences(&mut service, password.as_deref())
+        .map_err(FrontendError::from)?;
 
     let can_target = canonicalize_did(&did).unwrap_or_else(|_| did.clone());
 
@@ -739,8 +741,8 @@ pub fn preview_contact_trust_change_impl(
         .as_ref()
         .and_then(|r| r.own_contacts.get(&can_target).map(|e| e.level));
 
-    let can_read_my_market_before = current_level.unwrap_or(0) >= settings.share_min_level;
-    let can_read_my_market_after = new_level >= settings.share_min_level;
+    let can_read_my_market_before = current_level.unwrap_or(0) >= ui_prefs.share_min_level;
+    let can_read_my_market_after = new_level >= ui_prefs.share_min_level;
 
     let is_offender = service
         .with_wallet(|w| {
@@ -752,13 +754,10 @@ pub fn preview_contact_trust_change_impl(
         .unwrap_or(false);
 
     let can_read_my_wot_before =
-        settings.wot_share_via_sync && current_level.unwrap_or(0) >= 1 && !is_offender;
-    let can_read_my_wot_after = settings.wot_share_via_sync && new_level >= 1 && !is_offender;
+        ui_prefs.wot_share_via_sync && current_level.unwrap_or(0) >= 1 && !is_offender;
+    let can_read_my_wot_after = ui_prefs.wot_share_via_sync && new_level >= 1 && !is_offender;
 
-    let admin_opt: Option<StoredSyncAdmin> = service
-        .load_encrypted_data(MARKET_SYNC_ADMIN_KEY, password.as_deref())
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+    let admin_opt = super::admin::load_stored_sync_admin_opt(&mut service, password.as_deref())?;
 
     let (can_write_my_sync_before, can_write_my_sync_after) = if let Some(admin) = admin_opt {
         if admin
@@ -785,8 +784,8 @@ pub fn preview_contact_trust_change_impl(
     };
 
     let can_send_me_post_before =
-        settings.post_accept_from_contacts && current_level.unwrap_or(0) >= 1;
-    let can_send_me_post_after = settings.post_accept_from_contacts && new_level >= 1;
+        ui_prefs.post_accept_from_contacts && current_level.unwrap_or(0) >= 1;
+    let can_send_me_post_after = ui_prefs.post_accept_from_contacts && new_level >= 1;
 
     Ok(FrontendTrustChangeImpact {
         can_read_my_market_before,

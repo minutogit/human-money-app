@@ -14,14 +14,14 @@ import { SettingsView } from '../components/settings/SettingsView';
 import { CreateVoucher } from '../components/wallet/CreateVoucher';
 import { HelpCenterView } from '../components/support/HelpCenterView';
 import { ConflictDetailsView } from '../components/conflicts/ConflictDetailsView';
-import { UiModeProvider, UI_MODE_STORAGE_KEY } from '../context/UiModeContext';
+import { UiModeProvider } from '../context/UiModeContext';
 import { UiModeToggle } from '../components/ui/UiModeToggle';
 import { Advanced } from '../components/ui/Advanced';
 import { TechId } from '../components/ui/TechId';
 import { backupService } from '../services/backupService';
 import { contactService } from '../services/contactService';
 import { settingsService } from '../services/settingsService';
-import { FrontendMyMarketProfile, AppSettings, Contact } from '../types';
+import { AppConfigDto, FrontendMyMarketProfile, Contact } from '../types';
 
 const mockNavigate = vi.fn();
 const mockGoBack = vi.fn();
@@ -87,19 +87,56 @@ vi.mock('../services/marketService', () => ({
     },
 }));
 
+function createBeginnerConfig(backupSyncFolder: string | null = '/fake/backup/path'): AppConfigDto {
+    return {
+        uiPreferences: {
+            uiMode: 'simple',
+            lastUsedDirectory: null,
+            balanceViewMode: 'spendable',
+            marketShowUnknown: true,
+            maxStoredCards: 2000,
+            marketSendCardOnPayment: false,
+            marketSyncEnabled: true,
+            shareMinLevel: 1,
+            marketPollWifiOnly: false,
+            wotShareViaSync: true,
+            postAcceptFromContacts: true,
+            mediaAutoLoadMaxHops: 2,
+        },
+        securityPolicy: {
+            sessionTimeoutSeconds: 300,
+            privacyDefault: 'ask',
+            devModeUnlocked: false,
+            autoBackupEnabled: true,
+            syncBackupEnabled: true,
+            backupSyncFolder,
+            backupProtectionMode: null,
+            ownNominatedLockServer: null,
+            marketSelectedSyncs: [],
+            publicSyncs: [],
+        },
+        lifecycle: {
+            pendingRestoreL2Reconciliation: false,
+            backupDirty: false,
+            lastBackupAt: null,
+            lastSyncBackupAt: null,
+            l2ProbeCache: {},
+            l2AnchorTemplatesMeta: [],
+        },
+    };
+}
+
 vi.mock('../services/settingsService', () => ({
     settingsService: {
-        getSettings: vi.fn().mockResolvedValue({
-            autoLockMinutes: 15,
-            sessionTimeoutSeconds: 300,
-            devModeUnlocked: false,
-            privacyDefault: 'ask',
-            preferredLanguage: 'de',
-            l2AnchorTemplatesMeta: [],
-            ownNominatedLockServer: null,
-            backupTargetFolder: '/fake/backup/path',
-        }),
-        saveSettings: vi.fn().mockResolvedValue(undefined),
+        getConfig: vi.fn().mockImplementation(async () => createBeginnerConfig()),
+        patchUiPreferences: vi.fn().mockImplementation(async (patch: any) => ({
+            ...createBeginnerConfig().uiPreferences,
+            ...patch,
+        })),
+        patchSecurityPolicy: vi.fn().mockImplementation(async (patch: any) => ({
+            ...createBeginnerConfig().securityPolicy,
+            ...patch,
+        })),
         prewarmL2Checkout: vi.fn().mockResolvedValue(undefined),
         getReachPreset: vi.fn().mockResolvedValue('medium'),
         applyReachPreset: vi.fn().mockResolvedValue({}),
@@ -157,15 +194,7 @@ describe('Beginner User Tasks (Integration Flows)', () => {
         });
 
         // Step 2: Render BackupSettingsCard in the Security & Backup tab
-        const mockSettings: AppSettings = {
-            sessionTimeoutSeconds: 300,
-            devModeUnlocked: false,
-            privacyDefault: 'ask',
-            l2AnchorTemplatesMeta: [],
-            ownNominatedLockServer: null,
-            backupSyncFolder: '/home/user/Backups',
-            marketSyncEnabled: true,
-        };
+        const mockConfig = createBeginnerConfig('/home/user/Backups');
 
         (backupService.getBackupStatus as any).mockResolvedValue({
             status: 'ok',
@@ -188,7 +217,7 @@ describe('Beginner User Tasks (Integration Flows)', () => {
             hasAuthorizedSyncBackupTarget: true,
         });
 
-        render(<BackupSettingsCard settings={mockSettings} onSettingsUpdated={vi.fn()} />);
+        render(<BackupSettingsCard config={mockConfig} onConfigUpdated={vi.fn()} />);
 
         // Wait for backup card to load
         await waitFor(() => {
@@ -399,7 +428,6 @@ describe('Beginner User Tasks (Integration Flows)', () => {
     });
 
     it('Task 4: hides technical Advanced elements and raw did:key in Simple mode and reveals them in Expert mode', () => {
-        localStorage.removeItem(UI_MODE_STORAGE_KEY);
         const sampleDid = 'did:key:z6MkuBeginnerSampleDid987654';
 
         const { container } = render(
@@ -421,7 +449,7 @@ describe('Beginner User Tasks (Integration Flows)', () => {
         fireEvent.click(screen.getByTestId('ui-mode-expert'));
         expect(screen.getByTestId('advanced-raw-panel')).toBeInTheDocument();
         expect(screen.getByTestId('tech-id-value')).toHaveTextContent(sampleDid);
-        expect(localStorage.getItem(UI_MODE_STORAGE_KEY)).toBe('expert');
+        expect(localStorage.length).toBe(0);
 
         // Switch back to Simple mode
         fireEvent.click(screen.getByTestId('ui-mode-simple'));
@@ -430,18 +458,9 @@ describe('Beginner User Tasks (Integration Flows)', () => {
     });
 
     it('Task 5 (APP-UX-09 P3): keeps SendView and ReceiveView simple, unified, and free of raw did:key in Simple mode', async () => {
-        localStorage.removeItem(UI_MODE_STORAGE_KEY);
-
         const ownDid = 'did:key:z6MkuBeginnerOwnDid000111';
         const aliceDid = 'did:key:z6MkuBeginnerAlice222333';
-        const sampleSettings: AppSettings = {
-            sessionTimeoutSeconds: 300,
-            devModeUnlocked: false,
-            privacyDefault: 'ask',
-            l2AnchorTemplatesMeta: [],
-            ownNominatedLockServer: null,
-            backupSyncFolder: '/fake/backup/path',
-        };
+        const sampleConfig = createBeginnerConfig('/fake/backup/path');
         const sampleStandard = {
             id: 'std-minuto',
             displayName: 'Minuto (Min)',
@@ -508,7 +527,7 @@ describe('Beginner User Tasks (Integration Flows)', () => {
                 return { id: ownDid, firstName: 'Max', lastName: 'Mustermann' };
             }
             if (cmd === 'get_user_id') return ownDid;
-            if (cmd === 'get_app_settings') return sampleSettings;
+            if (cmd === 'get_app_config') return sampleConfig;
             if (cmd === 'encode_text_qr_svg') return '<svg data-testid="mock-beginner-qr"></svg>';
             return undefined;
         });
@@ -566,7 +585,16 @@ describe('Beginner User Tasks (Integration Flows)', () => {
             lastSyncBackupAt: null,
             hasAuthorizedSyncBackupTarget: true,
         } as Awaited<ReturnType<typeof backupService.getBackupStatus>>);
-        vi.mocked(settingsService.saveSettings).mockResolvedValue(undefined as never);
+        vi.mocked(settingsService.patchUiPreferences).mockResolvedValue({
+            ...createBeginnerConfig().uiPreferences,
+            postAcceptFromContacts: false,
+            marketSyncEnabled: false,
+            wotShareViaSync: false,
+        });
+        vi.mocked(settingsService.patchSecurityPolicy).mockResolvedValue({
+            ...createBeginnerConfig().securityPolicy,
+            syncBackupEnabled: false,
+        });
 
         const settingsRender = render(
             <UiModeProvider>
@@ -593,13 +621,16 @@ describe('Beginner User Tasks (Integration Flows)', () => {
         fireEvent.click(masterToggle);
 
         await waitFor(() => {
-            expect(settingsService.saveSettings).toHaveBeenCalledWith(
-                expect.objectContaining({
+            expect(settingsService.patchSecurityPolicy).toHaveBeenCalledWith(
+                { syncBackupEnabled: false },
+                undefined
+            );
+            expect(settingsService.patchUiPreferences).toHaveBeenCalledWith(
+                {
                     postAcceptFromContacts: false,
                     marketSyncEnabled: false,
                     wotShareViaSync: false,
-                    syncBackupEnabled: false,
-                }),
+                },
                 undefined
             );
         });

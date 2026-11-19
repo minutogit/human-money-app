@@ -114,6 +114,12 @@ export function useVoucherSelection(vouchers: VoucherSummary[]) {
     });
   }, [vouchers]);
 
+  const selectSingleVoucher = useCallback((localInstanceId: string, amount: string) => {
+    latestRequestId.current += 1;
+    setCurrentPlan(null);
+    setSelectedMap(new Map([[localInstanceId, amount]]));
+  }, []);
+
   const clearSelection = useCallback(() => {
     latestRequestId.current += 1;
     setSelectedMap(new Map());
@@ -207,6 +213,7 @@ export function useVoucherSelection(vouchers: VoucherSummary[]) {
   return {
     selectedMap,
     toggleVoucher,
+    selectSingleVoucher,
     setVoucherAmount,
     selectAmount,
     clearSelection,

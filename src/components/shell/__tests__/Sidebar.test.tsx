@@ -1,7 +1,7 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { Sidebar } from '../Sidebar';
-import { UI_MODE_STORAGE_KEY } from '../../../context/UiModeContext';
+import { UiModeProvider } from '../../../context/UiModeContext';
 import { integrityService } from '../../../services/integrityService';
 import { profileService } from '../../../services/profileService';
 
@@ -36,6 +36,7 @@ vi.mock('../../../context/SessionContext', () => ({
         protectAction: vi.fn(),
         lockSession: mockLockSession,
     }),
+    useOptionalSession: () => null,
 }));
 
 vi.mock('react-i18next', () => ({
@@ -93,8 +94,11 @@ describe('Sidebar Component', () => {
     });
 
     it('renders expert navigation including wallet, user TechId, and collapsible "Mehr" without duplicate help item', async () => {
-        localStorage.setItem(UI_MODE_STORAGE_KEY, 'expert');
-        render(<Sidebar openClaimsCount={0} />);
+        render(
+            <UiModeProvider initialMode="expert">
+                <Sidebar openClaimsCount={0} />
+            </UiModeProvider>
+        );
 
         expect(screen.getByText('wallet.title')).toBeInTheDocument();
         expect(screen.queryByText('common.appName')).not.toBeInTheDocument();
@@ -127,8 +131,11 @@ describe('Sidebar Component', () => {
     });
 
     it('hides top-level Konflikte when openClaimsCount is 0 in both modes', () => {
-        localStorage.setItem(UI_MODE_STORAGE_KEY, 'expert');
-        render(<Sidebar openClaimsCount={0} />);
+        render(
+            <UiModeProvider initialMode="expert">
+                <Sidebar openClaimsCount={0} />
+            </UiModeProvider>
+        );
 
         expect(screen.queryByTestId('sidebar-conflict-top-entry')).not.toBeInTheDocument();
         expect(screen.queryByTestId('sidebar-more-indicator-dot')).not.toBeInTheDocument();
@@ -148,8 +155,11 @@ describe('Sidebar Component', () => {
     });
 
     it('renders top-level Konflikte with badge and red dot on "Mehr" in expert mode when openClaimsCount > 0', () => {
-        localStorage.setItem(UI_MODE_STORAGE_KEY, 'expert');
-        render(<Sidebar openClaimsCount={3} />);
+        render(
+            <UiModeProvider initialMode="expert">
+                <Sidebar openClaimsCount={3} />
+            </UiModeProvider>
+        );
 
         // Top-level Konflikte entry visible
         const topConflictEntry = screen.getByTestId('sidebar-conflict-top-entry');

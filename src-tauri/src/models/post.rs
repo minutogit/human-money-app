@@ -9,6 +9,10 @@ pub struct FrontendPostDepositResult {
     #[serde(default)]
     pub recipient_deposited_to: usize,
     pub msg_id: String,
+    #[serde(default)]
+    pub deferred_count: usize,
+    #[serde(default)]
+    pub queued_for_next_flush: bool,
     pub errors: Vec<String>,
 }
 
@@ -96,6 +100,8 @@ pub struct FrontendPostSyncResult {
     pub new_inquiries: usize,
     pub new_inquiry_messages: usize,
     pub pruned_boxes: usize,
+    #[serde(default)]
+    pub deferred_outbox_boxes: usize,
     pub errors: Vec<String>,
     pub retry_after_secs: Option<u64>,
 }

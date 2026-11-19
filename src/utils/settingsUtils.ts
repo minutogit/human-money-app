@@ -1,6 +1,6 @@
 // src/utils/settingsUtils.ts
 import { settingsService } from "../services/settingsService";
-import { AppSettings } from "../types";
+import { UiPreferences } from "../types";
 import { logger } from "./log";
 import { stringifyError } from "./errorHelper";
 
@@ -11,32 +11,32 @@ export function getDirectoryFromPath(path: string): string {
     const parts = path.split(/[/\\]/);
     if (parts.length > 1) {
         parts.pop(); // Remove the filename
-        return parts.join('/'); 
+        return parts.join('/');
     }
     return '';
 }
 
 /**
- * Updates the last used directory in the app settings.
- * This requires the wallet password because settings are stored encrypted.
+ * Updates the last used directory in UI preferences via an atomic patch.
  */
 export async function updateLastUsedDirectory(
-    fullPath: string, 
-    currentSettings: AppSettings, 
-    protectAction: <T>(action: (password: string | null) => Promise<T>) => Promise<T | void>
-) {
+    fullPath: string,
+    currentUiPreferences: Pick<UiPreferences, 'lastUsedDirectory'> | null | undefined,
+    protectAction: <T>(action: (password: string | null) => Promise<T>) => Promise<T | void>,
+): Promise<UiPreferences | void> {
     const newDir = getDirectoryFromPath(fullPath);
     if (!newDir) return;
 
-    if (currentSettings.lastUsedDirectory === newDir) return;
+    if (currentUiPreferences?.lastUsedDirectory === newDir) return;
 
     try {
-        const updatedSettings = { ...currentSettings, lastUsedDirectory: newDir };
-        
-        await protectAction(async (password) => {
-            await settingsService.saveSettings(updatedSettings, password || undefined);
+        return await protectAction(async (password) => {
+            const updated = await settingsService.patchUiPreferences(
+                { lastUsedDirectory: newDir },
+                password || undefined,
+            );
             logger.info(`Last used directory updated to: ${newDir}`);
-            return true;
+            return updated;
         });
     } catch (e) {
         logger.error(`Failed to update last used directory: ${stringifyError(e)}`);

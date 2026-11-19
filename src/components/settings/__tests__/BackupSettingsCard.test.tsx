@@ -2,10 +2,11 @@
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { BackupSettingsCard } from '../BackupSettingsCard';
+import { UiModeProvider } from '../../../context/UiModeContext';
 import { backupService } from '../../../services/backupService';
 import { settingsService } from '../../../services/settingsService';
 import { save, open } from '@tauri-apps/plugin-dialog';
-import { AppSettings } from '../../../types';
+import { AppConfigDto, UiMode } from '../../../types';
 
 vi.mock('react-i18next', () => {
     const fs = require('fs');
@@ -61,7 +62,8 @@ vi.mock('../../../services/backupService', () => ({
 
 vi.mock('../../../services/settingsService', () => ({
     settingsService: {
-        saveSettings: vi.fn().mockResolvedValue(undefined),
+        getConfig: vi.fn(),
+        patchSecurityPolicy: vi.fn(),
     },
 }));
 
@@ -71,6 +73,7 @@ vi.mock('../../../context/SessionContext', () => ({
     useSession: () => ({
         protectAction: mockProtectAction,
     }),
+    useOptionalSession: () => null,
 }));
 
 vi.mock('../../../utils/log', () => ({
@@ -83,24 +86,66 @@ vi.mock('../../../utils/log', () => ({
 }));
 
 describe('BackupSettingsCard', () => {
-    const defaultSettings: AppSettings = {
-        sessionTimeoutSeconds: 300,
-        privacyDefault: 'public',
-        backupProtectionMode: 'mnemonic_only',
-        lastBackupAt: null,
-        backupSyncFolder: null,
-        autoBackupEnabled: true,
-        backupDirty: false,
-        marketSyncEnabled: true,
-    };
+    const createDefaultConfig = (): AppConfigDto => ({
+        uiPreferences: {
+            uiMode: 'expert',
+            lastUsedDirectory: null,
+            balanceViewMode: 'spendable',
+            marketShowUnknown: true,
+            maxStoredCards: 2000,
+            marketSendCardOnPayment: false,
+            marketSyncEnabled: true,
+            shareMinLevel: 1,
+            marketPollWifiOnly: false,
+            wotShareViaSync: true,
+            postAcceptFromContacts: true,
+            mediaAutoLoadMaxHops: 2,
+        },
+        securityPolicy: {
+            sessionTimeoutSeconds: 300,
+            privacyDefault: 'public',
+            devModeUnlocked: false,
+            autoBackupEnabled: true,
+            syncBackupEnabled: true,
+            backupSyncFolder: null,
+            backupProtectionMode: 'mnemonic_only',
+            ownNominatedLockServer: null,
+            marketSelectedSyncs: [],
+            publicSyncs: [],
+        },
+        lifecycle: {
+            pendingRestoreL2Reconciliation: false,
+            backupDirty: false,
+            lastBackupAt: null,
+            lastSyncBackupAt: null,
+            l2ProbeCache: {},
+            l2AnchorTemplatesMeta: [],
+        },
+    });
+
+    const renderCard = (
+        config: AppConfigDto,
+        onConfigUpdated?: (next: AppConfigDto) => void,
+        uiMode: UiMode = 'expert',
+    ) =>
+        render(
+            <UiModeProvider initialMode={uiMode}>
+                <BackupSettingsCard config={config} onConfigUpdated={onConfigUpdated} />
+            </UiModeProvider>
+        );
 
     beforeEach(() => {
         vi.clearAllMocks();
-        localStorage.setItem('humoco_ui_mode', 'expert');
+        const cfg = createDefaultConfig();
+        vi.mocked(settingsService.getConfig).mockResolvedValue(cfg);
+        vi.mocked(settingsService.patchSecurityPolicy).mockImplementation(async (patch) => ({
+            ...cfg.securityPolicy,
+            ...patch,
+        }));
     });
 
     it('renders card title, subtitle, and protection mode', () => {
-        render(<BackupSettingsCard settings={defaultSettings} />);
+        renderCard(createDefaultConfig());
         expect(screen.getByText(/Encrypted (Profile|Wallet) Backups/i)).toBeInTheDocument();
         expect(screen.getByText('Protection Mode')).toBeInTheDocument();
         expect(screen.getByText(/Local Backup Folder/i)).toBeInTheDocument();
@@ -109,25 +154,23 @@ describe('BackupSettingsCard', () => {
     });
 
     it('displays formatted timestamp if lastBackupAt is set', () => {
-        const settingsWithDate: AppSettings = {
-            ...defaultSettings,
-            lastBackupAt: '2026-10-30T12:00:00Z',
-        };
-        render(<BackupSettingsCard settings={settingsWithDate} />);
+        const cfg = createDefaultConfig();
+        cfg.lifecycle.lastBackupAt = '2026-10-30T12:00:00Z';
+        renderCard(cfg);
         expect(screen.queryByText(/No backup created yet/i)).not.toBeInTheDocument();
     });
 
     it('switches between mnemonic_only and custom_password protection modes', () => {
-        render(<BackupSettingsCard settings={defaultSettings} />);
+        renderCard(createDefaultConfig());
         const customModeRadio = screen.getByDisplayValue('custom_password');
         fireEvent.click(customModeRadio);
 
         expect(screen.getAllByPlaceholderText('Min. 8 characters')).toHaveLength(2);
     });
 
-    it('toggles auto-backup checkbox and saves updated settings', async () => {
-        const onSettingsUpdated = vi.fn();
-        render(<BackupSettingsCard settings={defaultSettings} onSettingsUpdated={onSettingsUpdated} />);
+    it('toggles auto-backup checkbox and patches SecurityPolicy', async () => {
+        const onConfigUpdated = vi.fn();
+        renderCard(createDefaultConfig(), onConfigUpdated);
 
         const checkboxes = screen.getAllByRole('checkbox');
         const folderAutoBackupCheckbox = checkboxes[0];
@@ -137,19 +180,24 @@ describe('BackupSettingsCard', () => {
         expect(folderAutoBackupCheckbox).not.toBeChecked();
 
         await waitFor(() => {
-            expect(settingsService.saveSettings).toHaveBeenCalledWith(
-                expect.objectContaining({ autoBackupEnabled: false }),
+            expect(settingsService.patchSecurityPolicy).toHaveBeenCalledWith(
+                { autoBackupEnabled: false },
                 'mock-wallet-pw'
             );
-            expect(onSettingsUpdated).toHaveBeenCalledWith(
-                expect.objectContaining({ autoBackupEnabled: false })
+            expect(mockProtectAction).toHaveBeenCalledWith(expect.any(Function), {
+                requireFullAccess: true,
+            });
+            expect(onConfigUpdated).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    securityPolicy: expect.objectContaining({ autoBackupEnabled: false }),
+                })
             );
         });
     });
 
-    it('toggles sync-backup checkbox and saves updated settings', async () => {
-        const onSettingsUpdated = vi.fn();
-        render(<BackupSettingsCard settings={defaultSettings} onSettingsUpdated={onSettingsUpdated} />);
+    it('toggles sync-backup checkbox and patches SecurityPolicy', async () => {
+        const onConfigUpdated = vi.fn();
+        renderCard(createDefaultConfig(), onConfigUpdated);
 
         const checkboxes = screen.getAllByRole('checkbox');
         const syncAutoBackupCheckbox = checkboxes[1];
@@ -159,18 +207,20 @@ describe('BackupSettingsCard', () => {
         expect(syncAutoBackupCheckbox).not.toBeChecked();
 
         await waitFor(() => {
-            expect(settingsService.saveSettings).toHaveBeenCalledWith(
-                expect.objectContaining({ syncBackupEnabled: false }),
+            expect(settingsService.patchSecurityPolicy).toHaveBeenCalledWith(
+                { syncBackupEnabled: false },
                 'mock-wallet-pw'
             );
-            expect(onSettingsUpdated).toHaveBeenCalledWith(
-                expect.objectContaining({ syncBackupEnabled: false })
+            expect(onConfigUpdated).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    securityPolicy: expect.objectContaining({ syncBackupEnabled: false }),
+                })
             );
         });
     });
 
     it('validates password mismatch in custom_password mode on export', async () => {
-        render(<BackupSettingsCard settings={defaultSettings} />);
+        renderCard(createDefaultConfig());
         fireEvent.click(screen.getByDisplayValue('custom_password'));
 
         const inputs = screen.getAllByPlaceholderText('Min. 8 characters');
@@ -186,8 +236,8 @@ describe('BackupSettingsCard', () => {
         expect(save).not.toHaveBeenCalled();
     });
 
-    it('exports backup file and invokes onSettingsUpdated upon success', async () => {
-        const onSettingsUpdated = vi.fn();
+    it('exports backup file and invokes onConfigUpdated upon success', async () => {
+        const onConfigUpdated = vi.fn();
         vi.mocked(save).mockResolvedValue('/tmp/backup.hmcbackup');
         vi.mocked(backupService.exportBackupFile).mockResolvedValue({
             totalBlobs: 42,
@@ -198,8 +248,12 @@ describe('BackupSettingsCard', () => {
             destinationPath: '/tmp/backup.hmcbackup',
             customStandardCount: 1,
         });
+        const refreshed = createDefaultConfig();
+        refreshed.lifecycle.lastBackupAt = '2026-10-30T14:00:00Z';
+        refreshed.securityPolicy.backupProtectionMode = 'mnemonic_only';
+        vi.mocked(settingsService.getConfig).mockResolvedValue(refreshed);
 
-        render(<BackupSettingsCard settings={defaultSettings} onSettingsUpdated={onSettingsUpdated} />);
+        renderCard(createDefaultConfig(), onConfigUpdated);
         const exportBtn = screen.getByRole('button', { name: /Export Backup File/i });
         fireEvent.click(exportBtn);
 
@@ -211,10 +265,10 @@ describe('BackupSettingsCard', () => {
                 backupPassword: null,
                 password: 'mock-wallet-pw',
             });
-            expect(onSettingsUpdated).toHaveBeenCalledWith(
+            expect(onConfigUpdated).toHaveBeenCalledWith(
                 expect.objectContaining({
-                    lastBackupAt: '2026-10-30T14:00:00Z',
-                    backupProtectionMode: 'mnemonic_only',
+                    lifecycle: expect.objectContaining({ lastBackupAt: '2026-10-30T14:00:00Z' }),
+                    securityPolicy: expect.objectContaining({ backupProtectionMode: 'mnemonic_only' }),
                 })
             );
             expect(screen.getByText(/Backup exported successfully/i)).toBeInTheDocument();
@@ -222,7 +276,7 @@ describe('BackupSettingsCard', () => {
     });
 
     it('allows folder selection and syncs differential backup with exact 1 selection button', async () => {
-        const onSettingsUpdated = vi.fn();
+        const onConfigUpdated = vi.fn();
         vi.mocked(open).mockResolvedValue('/media/usb/backups');
         vi.mocked(backupService.syncBackupFolder).mockResolvedValue({
             totalBlobs: 10,
@@ -234,9 +288,8 @@ describe('BackupSettingsCard', () => {
             customStandardCount: 0,
         });
 
-        render(<BackupSettingsCard settings={defaultSettings} onSettingsUpdated={onSettingsUpdated} />);
-        
-        // Exact 1 folder selection button: "Choose Folder" when empty
+        renderCard(createDefaultConfig(), onConfigUpdated);
+
         const chooseFolderButtons = screen.getAllByRole('button', { name: /Choose Folder/i });
         expect(chooseFolderButtons).toHaveLength(1);
         fireEvent.click(chooseFolderButtons[0]);
@@ -244,13 +297,10 @@ describe('BackupSettingsCard', () => {
         await waitFor(() => {
             expect(open).toHaveBeenCalledWith({ directory: true, multiple: false, defaultPath: undefined });
             expect(screen.getByText('/media/usb/backups')).toBeInTheDocument();
-            // Changes to Change Folder
             expect(screen.getByRole('button', { name: /Change folder/i })).toBeInTheDocument();
-            // Unlink button appears
             expect(screen.getByRole('button', { name: /Unlink folder/i })).toBeInTheDocument();
         });
 
-        // Click Sync Folder Now
         const syncNowBtn = screen.getByRole('button', { name: /Sync Folder Now/i });
         fireEvent.click(syncNowBtn);
 
@@ -267,24 +317,24 @@ describe('BackupSettingsCard', () => {
     });
 
     it('allows clearing/unlinking configured backup folder', async () => {
-        const onSettingsUpdated = vi.fn();
-        const settingsWithFolder: AppSettings = {
-            ...defaultSettings,
-            backupSyncFolder: '/media/usb/backups',
-        };
-        render(<BackupSettingsCard settings={settingsWithFolder} onSettingsUpdated={onSettingsUpdated} />);
-        
+        const onConfigUpdated = vi.fn();
+        const cfg = createDefaultConfig();
+        cfg.securityPolicy.backupSyncFolder = '/media/usb/backups';
+        renderCard(cfg, onConfigUpdated);
+
         expect(screen.getByText('/media/usb/backups')).toBeInTheDocument();
         const unlinkBtn = screen.getByRole('button', { name: /Unlink folder/i });
         fireEvent.click(unlinkBtn);
 
         await waitFor(() => {
-            expect(settingsService.saveSettings).toHaveBeenCalledWith(
-                expect.objectContaining({ backupSyncFolder: null }),
+            expect(settingsService.patchSecurityPolicy).toHaveBeenCalledWith(
+                { backupSyncFolder: null },
                 'mock-wallet-pw'
             );
-            expect(onSettingsUpdated).toHaveBeenCalledWith(
-                expect.objectContaining({ backupSyncFolder: null })
+            expect(onConfigUpdated).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    securityPolicy: expect.objectContaining({ backupSyncFolder: null }),
+                })
             );
             expect(screen.getByText('No sync folder configured.')).toBeInTheDocument();
             expect(screen.getByRole('button', { name: /Choose Folder/i })).toBeInTheDocument();
@@ -306,11 +356,9 @@ describe('BackupSettingsCard', () => {
             customStandardCount: 0,
         });
 
-        const settingsWithFolder: AppSettings = {
-            ...defaultSettings,
-            backupSyncFolder: '/media/usb/backups',
-        };
-        render(<BackupSettingsCard settings={settingsWithFolder} onSettingsUpdated={vi.fn()} />);
+        const cfg = createDefaultConfig();
+        cfg.securityPolicy.backupSyncFolder = '/media/usb/backups';
+        renderCard(cfg, vi.fn());
 
         const syncNowBtn = screen.getByRole('button', { name: /Sync Folder Now/i });
         fireEvent.click(syncNowBtn);
@@ -324,8 +372,7 @@ describe('BackupSettingsCard', () => {
     });
 
     it('hides Protection Mode behind more-options disclosure in simple mode while keeping backup button and hint visible', async () => {
-        localStorage.setItem('humoco_ui_mode', 'simple');
-        render(<BackupSettingsCard settings={defaultSettings} onSettingsUpdated={vi.fn()} />);
+        renderCard(createDefaultConfig(), vi.fn(), 'simple');
 
         expect(screen.getByTestId('backup-now-button')).toBeInTheDocument();
         expect(screen.getByTestId('backup-which-help-hint')).toBeInTheDocument();

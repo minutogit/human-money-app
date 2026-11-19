@@ -14,7 +14,7 @@ import { openFileAsBytes } from '../../utils/fileIo';
 import { logger } from '../../utils/log';
 import { translateError, stringifyError } from '../../utils/errorHelper';
 import { isExactSameUserId, truncateUserId } from '../../utils/userIdHelper';
-import { parseContactCard } from '../../utils/humocoUri';
+import { parseHumocoInput } from '../../utils/humocoUri';
 import { notifySyncStatusUpdated } from '../../utils/syncEvents';
 import { Contact, FrontendMyMarketProfile } from '../../types';
 
@@ -159,78 +159,73 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
 
         try {
             let effectivePayload = trimmed;
-            const cardUriMatch = trimmed.match(/humoco:\/\/card\?[^\s"'<>)]+/i);
-            if (cardUriMatch) {
-                effectivePayload = cardUriMatch[0].replace(/[.,;:!\]]+$/, '');
-            } else {
-                const firstBrace = trimmed.indexOf('{');
-                const lastBrace = trimmed.lastIndexOf('}');
-                if (firstBrace !== -1 && lastBrace > firstBrace) {
-                    effectivePayload = trimmed.slice(firstBrace, lastBrace + 1);
-                } else {
-                    const parsedContact = parseContactCard(trimmed);
-                    if (parsedContact && parsedContact.did) {
-                        const ownUid = (await Promise.resolve(profileService.getUserId?.()).catch(() => '')) || '';
-                        if (isExactSameUserId(parsedContact.did, ownUid)) {
-                            setResultFeedback({
-                                type: 'error',
-                                title: t('marketplace.importInvalidTitle'),
-                                message: t('contacts.selfActiveProfileHint'),
-                            });
-                            return;
-                        }
-                        const existingContacts = (await contactService.getContacts().catch(() => [])) || [];
-                        const existing = existingContacts.find(c => isExactSameUserId(c.did, parsedContact.did));
-                        hadExistingContactRef.current = Boolean(existing);
-                        lastImportedPayloadRef.current = null;
-                        let firstName = existing?.profile.firstName;
-                        let lastName = existing?.profile.lastName;
-                        if (!firstName && parsedContact.name) {
-                            const parts = parsedContact.name.trim().split(/\s+/);
-                            if (parts.length > 1) {
-                                firstName = parts.slice(0, -1).join(' ');
-                                lastName = parts[parts.length - 1];
-                            } else if (parts[0]) {
-                                firstName = parts[0];
-                            }
-                        }
-                        const mappedSyncs = (parsedContact.syncUrls || []).map((url) => ({
-                            readUrl: '',
-                            writeUrl: url,
-                            dropPub: '',
-                            status: 'unverified',
-                            failCount: 0,
-                        }));
-                        const mergedSyncs = existing?.syncs && existing.syncs.length > 0 ? existing.syncs : mappedSyncs;
-                        const contactToSave: Contact = {
-                            ...(existing || {}),
-                            did: parsedContact.did,
-                            profile: {
-                                ...(existing?.profile || {}),
-                                id: parsedContact.did,
-                                firstName: firstName || t('contacts.defaultContactName', 'Kontakt'),
-                                lastName,
-                            },
-                            tags: existing?.tags || [],
-                            notes: existing?.notes,
-                            addedAt: existing?.addedAt || new Date().toISOString(),
-                            trustLevel: existing?.trustLevel,
-                            syncs: mergedSyncs,
-                        };
-                        await protectAction(async (pwd) => {
-                            await contactService.saveContact(contactToSave, pwd || undefined);
-                        });
-                        marketService.probeContactSyncs?.(false)?.then(() => notifySyncStatusUpdated())?.catch(() => {});
-                        setPartnerName([firstName, lastName].filter(Boolean).join(' ') || null);
+            const parsedInput = parseHumocoInput(trimmed);
+            if (parsedInput?.kind === 'card') {
+                effectivePayload = parsedInput.payload;
+            } else if (parsedInput?.kind === 'contact' || parsedInput?.kind === 'did') {
+                const parsedContact =
+                    parsedInput.kind === 'contact' ? parsedInput.contact : { did: parsedInput.did };
+                if (parsedContact.did) {
+                    const ownUid = (await Promise.resolve(profileService.getUserId?.()).catch(() => '')) || '';
+                    if (isExactSameUserId(parsedContact.did, ownUid)) {
                         setResultFeedback({
-                            type: 'success',
-                            title: t('marketplace.importSuccessTitle'),
-                            message: t('contacts.contactSavedSuccess', 'Kontakt gespeichert.'),
-                            did: parsedContact.did,
+                            type: 'error',
+                            title: t('marketplace.importInvalidTitle'),
+                            message: t('contacts.selfActiveProfileHint'),
                         });
-                        onImportSuccess(parsedContact.did);
                         return;
                     }
+                    const existingContacts = (await contactService.getContacts().catch(() => [])) || [];
+                    const existing = existingContacts.find(c => isExactSameUserId(c.did, parsedContact.did));
+                    hadExistingContactRef.current = Boolean(existing);
+                    lastImportedPayloadRef.current = null;
+                    let firstName = existing?.profile.firstName;
+                    let lastName = existing?.profile.lastName;
+                    if (!firstName && parsedContact.name) {
+                        const parts = parsedContact.name.trim().split(/\s+/);
+                        if (parts.length > 1) {
+                            firstName = parts.slice(0, -1).join(' ');
+                            lastName = parts[parts.length - 1];
+                        } else if (parts[0]) {
+                            firstName = parts[0];
+                        }
+                    }
+                    const mappedSyncs = (parsedContact.syncUrls || []).map((url) => ({
+                        readUrl: '',
+                        writeUrl: url,
+                        dropPub: '',
+                        status: 'unverified',
+                        failCount: 0,
+                    }));
+                    const mergedSyncs = existing?.syncs && existing.syncs.length > 0 ? existing.syncs : mappedSyncs;
+                    const contactToSave: Contact = {
+                        ...(existing || {}),
+                        did: parsedContact.did,
+                        profile: {
+                            ...(existing?.profile || {}),
+                            id: parsedContact.did,
+                            firstName: firstName || t('contacts.defaultContactName', 'Kontakt'),
+                            lastName,
+                        },
+                        tags: existing?.tags || [],
+                        notes: existing?.notes,
+                        addedAt: existing?.addedAt || new Date().toISOString(),
+                        trustLevel: existing?.trustLevel,
+                        syncs: mergedSyncs,
+                    };
+                    await protectAction(async (pwd) => {
+                        await contactService.saveContact(contactToSave, pwd || undefined);
+                    });
+                    marketService.probeContactSyncs?.(false)?.then(() => notifySyncStatusUpdated())?.catch(() => {});
+                    setPartnerName([firstName, lastName].filter(Boolean).join(' ') || null);
+                    setResultFeedback({
+                        type: 'success',
+                        title: t('marketplace.importSuccessTitle'),
+                        message: t('contacts.contactSavedSuccess', 'Kontakt gespeichert.'),
+                        did: parsedContact.did,
+                    });
+                    onImportSuccess(parsedContact.did);
+                    return;
                 }
             }
 

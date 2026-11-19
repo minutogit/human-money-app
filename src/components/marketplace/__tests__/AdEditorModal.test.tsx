@@ -1,8 +1,10 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { AdEditorModal } from '../AdEditorModal';
+import { UiModeProvider } from '../../../context/UiModeContext';
 import { FrontendMyAd } from '../../../types';
 import { marketService } from '../../../services/marketService';
+import * as imageCompression from '../../../utils/imageCompression';
 
 describe('AdEditorModal Component', () => {
   const nowSecs = Math.floor(Date.now() / 1000);
@@ -65,17 +67,18 @@ describe('AdEditorModal Component', () => {
   });
 
   it('allows custom pricing text and duration selection in Expert mode', () => {
-    localStorage.setItem('humoco_ui_mode', 'expert');
     const onSave = vi.fn();
 
     render(
-      <AdEditorModal
-        isOpen={true}
-        onClose={vi.fn()}
-        onSave={onSave}
-        activeAdsCount={1}
-        allowInquiries={true}
-      />
+      <UiModeProvider initialMode="expert">
+        <AdEditorModal
+          isOpen={true}
+          onClose={vi.fn()}
+          onSave={onSave}
+          activeAdsCount={1}
+          allowInquiries={true}
+        />
+      </UiModeProvider>
     );
 
     fireEvent.click(screen.getByTestId('ad-kind-offer-btn'));
@@ -164,7 +167,6 @@ describe('AdEditorModal Component', () => {
   });
 
   it('renders quota status badge and loads ad image when editing ad has imageToken', async () => {
-    localStorage.setItem('humoco_ui_mode', 'expert');
     const existingAdWithImage: FrontendMyAd = {
       id: 'ad-img-1',
       kind: 'offer',
@@ -184,15 +186,17 @@ describe('AdEditorModal Component', () => {
     const onSave = vi.fn();
 
     render(
-      <AdEditorModal
-        isOpen={true}
-        onClose={vi.fn()}
-        onSave={onSave}
-        editingAd={existingAdWithImage}
-        ownerDid="did:key:z6MkuSeller"
-        mediaMaxCount={5}
-        mediaUsedCount={2}
-      />
+      <UiModeProvider initialMode="expert">
+        <AdEditorModal
+          isOpen={true}
+          onClose={vi.fn()}
+          onSave={onSave}
+          editingAd={existingAdWithImage}
+          ownerDid="did:key:z6MkuSeller"
+          mediaMaxCount={5}
+          mediaUsedCount={2}
+        />
+      </UiModeProvider>
     );
 
     // Verify quota badge
@@ -222,5 +226,259 @@ describe('AdEditorModal Component', () => {
       id: 'ad-img-1',
       imageWebpDataUri: null,
     }));
+  });
+
+  it('resets durationDays to 90 when switching from Create (30 days) through closed to Edit', () => {
+    const existingAd: FrontendMyAd = {
+      id: 'ad-reset-duration',
+      kind: 'offer',
+      title: 'Bestehendes Inserat',
+      text: 'Text',
+      publishedAt: nowSecs - 86400,
+      expiresAt: nowSecs + 86400 * 30,
+      allowInquiries: true,
+      status: 'active',
+      daysLeft: 30,
+    };
+    const onSave = vi.fn();
+
+    const { rerender } = render(
+      <UiModeProvider initialMode="expert">
+        <AdEditorModal
+          isOpen={true}
+          onClose={vi.fn()}
+          onSave={onSave}
+          activeAdsCount={1}
+        />
+      </UiModeProvider>
+    );
+
+    const tab30 = screen.getByRole('tab', { name: /30 Tage|30 days/i });
+    fireEvent.click(tab30);
+    expect(tab30).toHaveAttribute('aria-selected', 'true');
+
+    rerender(
+      <UiModeProvider initialMode="expert">
+        <AdEditorModal
+          isOpen={false}
+          onClose={vi.fn()}
+          onSave={onSave}
+          activeAdsCount={1}
+        />
+      </UiModeProvider>
+    );
+
+    rerender(
+      <UiModeProvider initialMode="expert">
+        <AdEditorModal
+          isOpen={true}
+          onClose={vi.fn()}
+          onSave={onSave}
+          activeAdsCount={1}
+        />
+      </UiModeProvider>
+    );
+
+    const tab90AfterCreate = screen.getByRole('tab', { name: /90 Tage|90 days/i });
+    expect(tab90AfterCreate).toHaveAttribute('aria-selected', 'true');
+    fireEvent.click(screen.getByRole('tab', { name: /30 Tage|30 days/i }));
+
+    rerender(
+      <UiModeProvider initialMode="expert">
+        <AdEditorModal
+          isOpen={false}
+          onClose={vi.fn()}
+          onSave={onSave}
+          activeAdsCount={1}
+        />
+      </UiModeProvider>
+    );
+
+    rerender(
+      <UiModeProvider initialMode="expert">
+        <AdEditorModal
+          isOpen={true}
+          onClose={vi.fn()}
+          onSave={onSave}
+          editingAd={existingAd}
+          activeAdsCount={1}
+        />
+      </UiModeProvider>
+    );
+
+    expect(screen.queryByRole('tab', { name: /90 Tage|90 days/i })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('ad-submit-button'));
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'ad-reset-duration',
+      durationDays: 90,
+    }));
+  });
+
+  it('preserves unsaved title and text edits when parent re-renders with new editingAd reference for same id', () => {
+    const existingAd: FrontendMyAd = {
+      id: 'ad-keep-edits',
+      kind: 'offer',
+      title: 'Alter Titel',
+      text: 'Alter Text',
+      publishedAt: nowSecs - 86400,
+      expiresAt: nowSecs + 86400 * 90,
+      allowInquiries: true,
+      status: 'active',
+      daysLeft: 90,
+    };
+    const onSave = vi.fn();
+
+    const { rerender } = render(
+      <UiModeProvider initialMode="expert">
+        <AdEditorModal
+          isOpen={true}
+          onClose={vi.fn()}
+          onSave={onSave}
+          editingAd={existingAd}
+          activeAdsCount={1}
+        />
+      </UiModeProvider>
+    );
+
+    fireEvent.change(screen.getByTestId('ad-title-input'), { target: { value: 'Bearbeiteter Titel' } });
+    fireEvent.change(screen.getByTestId('ad-text-input'), { target: { value: 'Bearbeiteter Text' } });
+
+    rerender(
+      <UiModeProvider initialMode="expert">
+        <AdEditorModal
+          isOpen={true}
+          onClose={vi.fn()}
+          onSave={onSave}
+          editingAd={{ ...existingAd }}
+          activeAdsCount={1}
+        />
+      </UiModeProvider>
+    );
+
+    expect(screen.getByTestId('ad-title-input')).toHaveValue('Bearbeiteter Titel');
+    expect(screen.getByTestId('ad-text-input')).toHaveValue('Bearbeiteter Text');
+
+    fireEvent.click(screen.getByTestId('ad-submit-button'));
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'ad-keep-edits',
+      title: 'Bearbeiteter Titel',
+      text: 'Bearbeiteter Text',
+    }));
+  });
+
+  it('ignores stale getAdImage result after user replaces image with a new upload', async () => {
+    let resolveStaleImage!: (val: string) => void;
+    vi.spyOn(marketService, 'getAdImage').mockImplementation(
+      () => new Promise<string>((resolve) => { resolveStaleImage = resolve; })
+    );
+    vi.spyOn(imageCompression, 'compressAdImageToWebpDataUri').mockResolvedValue(
+      'data:image/webp;base64,FRESH_UPLOAD'
+    );
+
+    const existingAdWithImage: FrontendMyAd = {
+      id: 'ad-stale-img',
+      kind: 'offer',
+      title: 'Stale Image Test',
+      publishedAt: nowSecs - 86400,
+      expiresAt: nowSecs + 86400 * 30,
+      allowInquiries: true,
+      status: 'active',
+      daysLeft: 30,
+      imageToken: 'tok-stale',
+    };
+
+    render(
+      <UiModeProvider initialMode="expert">
+        <AdEditorModal
+          isOpen={true}
+          onClose={vi.fn()}
+          onSave={vi.fn()}
+          editingAd={existingAdWithImage}
+          ownerDid="did:key:z6MkuSeller"
+        />
+      </UiModeProvider>
+    );
+
+    const file = new File(['img'], 'fresh.png', { type: 'image/png' });
+    fireEvent.change(screen.getByTestId('ad-image-file-input'), { target: { files: [file] } });
+
+    await waitFor(() => {
+      expect(screen.getByAltText('Ad preview')).toHaveAttribute('src', 'data:image/webp;base64,FRESH_UPLOAD');
+    });
+
+    resolveStaleImage('data:image/webp;base64,STALE_FETCHED');
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(screen.getByAltText('Ad preview')).toHaveAttribute('src', 'data:image/webp;base64,FRESH_UPLOAD');
+  });
+
+  it('ignores stale compressAdImageToWebpDataUri result after modal closes and opens for another ad', async () => {
+    let resolveStaleCompress!: (val: string) => void;
+    vi.spyOn(imageCompression, 'compressAdImageToWebpDataUri').mockImplementation(
+      () => new Promise<string>((resolve) => { resolveStaleCompress = resolve; })
+    );
+
+    const ad1: FrontendMyAd = {
+      id: 'ad-1',
+      kind: 'offer',
+      title: 'Inserat Eins',
+      publishedAt: nowSecs - 86400,
+      expiresAt: nowSecs + 86400 * 30,
+      allowInquiries: true,
+      status: 'active',
+      daysLeft: 30,
+    };
+    const ad2: FrontendMyAd = {
+      id: 'ad-2',
+      kind: 'offer',
+      title: 'Inserat Zwei',
+      publishedAt: nowSecs - 86400,
+      expiresAt: nowSecs + 86400 * 30,
+      allowInquiries: true,
+      status: 'active',
+      daysLeft: 30,
+    };
+    const onSave = vi.fn();
+
+    const { rerender } = render(
+      <UiModeProvider initialMode="expert">
+        <AdEditorModal
+          isOpen={true}
+          onClose={vi.fn()}
+          onSave={onSave}
+          editingAd={ad1}
+        />
+      </UiModeProvider>
+    );
+
+    const file = new File(['img'], 'slow.png', { type: 'image/png' });
+    fireEvent.change(screen.getByTestId('ad-image-file-input'), { target: { files: [file] } });
+    expect(screen.getByTestId('ad-submit-button')).toBeDisabled();
+
+    rerender(
+      <UiModeProvider initialMode="expert">
+        <AdEditorModal
+          isOpen={true}
+          onClose={vi.fn()}
+          onSave={onSave}
+          editingAd={ad2}
+        />
+      </UiModeProvider>
+    );
+
+    expect(screen.getByTestId('ad-title-input')).toHaveValue('Inserat Zwei');
+
+    resolveStaleCompress('data:image/webp;base64,STALE_COMPRESSED');
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(screen.queryByAltText('Ad preview')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('ad-submit-button'));
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'ad-2',
+    }));
+    expect(onSave.mock.calls[0][0]).not.toHaveProperty('imageWebpDataUri');
   });
 });

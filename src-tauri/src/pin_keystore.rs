@@ -83,10 +83,13 @@ fn keystore_path(keystore_dir: &Path) -> PathBuf {
 
 fn load_keystore_file(keystore_dir: &Path) -> Result<PinKeystoreFile, String> {
     let path = keystore_path(keystore_dir);
-    if !path.exists() {
-        return Ok(PinKeystoreFile::default());
-    }
-    let bytes = fs::read(&path).map_err(|e| format!("Failed to read PIN keystore: {}", e))?;
+    let bytes = match fs::read(&path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(PinKeystoreFile::default())
+        }
+        Err(e) => return Err(format!("Failed to read PIN keystore: {}", e)),
+    };
     serde_json::from_slice(&bytes).map_err(|e| format!("Invalid PIN keystore JSON: {}", e))
 }
 
@@ -132,7 +135,7 @@ pub fn create_and_store_pepper(
     let encrypted = crypto::encrypt_data(&wrap_key, pepper.as_ref())
         .map_err(|e| format!("Failed to encrypt device pepper: {}", e))?;
 
-    let mut store = load_keystore_file(keystore_dir).unwrap_or_default();
+    let mut store = load_keystore_file(keystore_dir)?;
     store.entries.insert(
         folder_name.to_string(),
         PinKeystoreEntry {
@@ -155,10 +158,6 @@ pub fn get_entry(
 }
 
 pub fn remove_entry(keystore_dir: &Path, folder_name: &str) -> Result<(), String> {
-    let path = keystore_path(keystore_dir);
-    if !path.exists() {
-        return Ok(());
-    }
     let mut store = load_keystore_file(keystore_dir)?;
     if store.entries.remove(folder_name).is_some() {
         save_keystore_file(keystore_dir, &store)?;
@@ -277,6 +276,21 @@ mod tests {
         // Remove entry cleans keystore slot
         remove_entry(&dir, folder).unwrap();
         assert!(get_entry(&dir, folder).unwrap().is_none());
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn test_corrupt_pin_keystore_refuses_overwrite() {
+        let dir = temp_keystore_dir("corrupt");
+        let path = keystore_path(&dir);
+        let corrupt = b"{not-valid-json";
+        fs::write(&path, corrupt).unwrap();
+
+        let err = create_and_store_pepper(&dir, "dev-1", "profile_b", "246810", SecondaryScope::DailyPay)
+            .unwrap_err();
+        assert!(err.contains("Invalid PIN keystore JSON"));
+        assert_eq!(fs::read(&path).unwrap(), corrupt);
 
         let _ = fs::remove_dir_all(dir);
     }

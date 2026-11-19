@@ -14,7 +14,7 @@ import { logger } from '../../utils/log';
 import { stringifyError, translateError } from '../../utils/errorHelper';
 import { APP_EVENTS, emitAppEvent } from '../../utils/appEvents';
 import type {
-    AppSettings,
+    AppConfigDto,
     VoucherDetails,
     Contact,
     TrustStatus,
@@ -29,7 +29,7 @@ export function useVoucherDetails(voucherId: string) {
     const { protectAction } = useSession();
 
     const [details, setDetails] = useState<VoucherDetails | null>(null);
-    const [settings, setSettings] = useState<AppSettings | null>(null);
+    const [config, setConfig] = useState<AppConfigDto | null>(null);
     const [isLoading, setIsLoading] = useState(true);
     const [errorMsg, setErrorMsg] = useState('');
     const [showJson, setShowJson] = useState(false);
@@ -90,16 +90,16 @@ export function useVoucherDetails(voucherId: string) {
             setIsLoading(true);
             setErrorMsg('');
             try {
-                const [result, currentSettings, profile, standards, uid] = await Promise.all([
+                const [result, currentConfig, profile, standards, uid] = await Promise.all([
                     voucherService.getDetails(voucherId),
-                    settingsService.getSettings().catch(() => null),
+                    settingsService.getConfig().catch(() => null),
                     profileService.getProfile().catch(() => null),
                     standardsService.getStandards().catch(() => []),
                     profileService.getUserId().catch(() => ''),
                 ]);
                 if (!active) return;
                 setDetails(result);
-                setSettings(currentSettings);
+                setConfig(currentConfig);
                 setUserProfile(profile);
                 setOwnUserId(uid || '');
 
@@ -256,7 +256,7 @@ export function useVoucherDetails(voucherId: string) {
         try {
             setSignatureImportFeedback(null);
             const opened = await openFileAsBytes({
-                settings,
+                uiPreferences: config?.uiPreferences,
                 protectAction,
                 filters: [
                     {
@@ -308,8 +308,8 @@ export function useVoucherDetails(voucherId: string) {
         appState,
         protectAction,
         details,
-        settings,
-        setSettings,
+        config,
+        setConfig,
         isLoading,
         errorMsg,
         showJson,

@@ -501,12 +501,14 @@ async fn test_asymmetry_bob_has_sync_alice_has_none() {
         .unwrap()
         .push(alice_drop_probe.access_pubkey.clone());
 
-    // Verify Alice has 0 drops in settings
+    // Verify Alice has 0 drops in security_policy
     {
         let mut s = alice_state.service.lock().unwrap();
-        let s_settings = alice_state.load_settings(&mut s, Some(password)).unwrap();
-        assert_eq!(s_settings.market_selected_syncs.len(), 0);
-        assert_eq!(s_settings.public_syncs.len(), 0);
+        let s_policy = alice_state
+            .load_security_policy(&mut s, Some(password))
+            .unwrap();
+        assert_eq!(s_policy.market_selected_syncs.len(), 0);
+        assert_eq!(s_policy.public_syncs.len(), 0);
     }
 
     // Alice has Bob in her address book with Bob's drop
@@ -738,14 +740,14 @@ async fn test_multi_device_if_match_412_merge() {
     save_post_state(&alice_state, &post_state, Some(password)).unwrap();
 
     // Flush post slots: PUT with stale ETag -> 412 Precondition Failed -> fetch remote -> merge -> retry with "etag_device_2" -> saved!
-    let (uploaded, _recipient_uploaded, errors) =
-        flush_post_slots_impl(&alice_state, &mut post_state, &[], Some(password)).await;
+    let outcome =
+        flush_post_slots_impl(&alice_state, &mut post_state, None, &[], Some(password)).await;
     assert_eq!(
-        uploaded, 1,
+        outcome.deposited_to, 1,
         "Must successfully merge and upload on 412: {:?}",
-        errors
+        outcome.errors
     );
-    assert!(errors.is_empty());
+    assert!(outcome.errors.is_empty());
 }
 
 #[tokio::test]
@@ -1639,23 +1641,19 @@ async fn test_deposit_transfer_to_post_persists_outbox_when_sync_server_unreacha
     // Configure Bob's own public sync to the dead port as well
     {
         let mut s_bob = bob_state.service.lock().unwrap();
-        let mut bob_settings = bob_state
-            .load_settings(&mut s_bob, Some(password))
-            .unwrap_or_default();
-        bob_settings
-            .public_syncs
-            .push(crate::settings::StoredPublicSync {
-                write_url: dead_write_url,
-                read_url: dead_read_url,
-                drop_pub: DROP_PUB_B.to_string(),
-                access_pubkey: "1111111111111111111111111111111111111111111111111111111111111111"
-                    .to_string(),
-                enabled: true,
-                authorized_channels: vec!["pc".to_string()],
-                ..Default::default()
-            });
         bob_state
-            .save_settings(&mut s_bob, bob_settings, Some(password))
+            .mutate_security_policy(&mut s_bob, Some(password), |policy| {
+                policy.public_syncs.push(crate::settings::StoredPublicSync {
+                    write_url: dead_write_url,
+                    read_url: dead_read_url,
+                    drop_pub: DROP_PUB_B.to_string(),
+                    access_pubkey:
+                        "1111111111111111111111111111111111111111111111111111111111111111".to_string(),
+                    enabled: true,
+                    authorized_channels: vec!["pc".to_string()],
+                    ..Default::default()
+                });
+            })
             .unwrap();
     }
 
@@ -1671,9 +1669,16 @@ async fn test_deposit_transfer_to_post_persists_outbox_when_sync_server_unreacha
     {
         let mut s_alice = alice_state.service.lock().unwrap();
         alice_state
-            .save_settings(
+            .save_ui_preferences(
                 &mut s_alice,
-                crate::settings::AppSettings::default(),
+                crate::settings::UiPreferences::default(),
+                Some(password),
+            )
+            .unwrap();
+        alice_state
+            .save_internal_lifecycle(
+                &mut s_alice,
+                crate::settings::InternalLifecycleState::default(),
                 Some(password),
             )
             .unwrap();
@@ -2095,6 +2100,161 @@ async fn test_merge_and_save_post_state_preserves_concurrent_outbox_and_auto_imp
             .with_wallet_and_identity(|w, id| w.list_vouchers(Some(id), None, None, None))
             .unwrap();
         assert_eq!(bob_vouchers.len(), 1);
+    }
+
+    let _ = std::fs::remove_dir_all(&base_dir);
+}
+
+#[tokio::test]
+async fn test_reply_detached_signature_via_post_requires_full_access() {
+    let base_dir = temp_test_dir("post_detached_sig_full_only");
+    let pw = "TestPassword123!";
+    let alice_svc = setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, pw);
+    let bob_svc = setup_test_app(&base_dir.join("bob"), "Bob", BOB_PHRASE, pw);
+    let alice_state = create_test_state(alice_svc);
+    let bob_state = create_test_state(bob_svc);
+
+    let alice_did = alice_state
+        .service
+        .lock()
+        .unwrap()
+        .with_wallet(|w| w.get_user_id().to_string())
+        .unwrap();
+
+    {
+        let mut s = bob_state.service.lock().unwrap();
+        let folder = s.list_profiles().unwrap()[0].folder_name.clone();
+        s.enable_secondary_auth(pw, "123456", human_money_core::SecondaryScope::DailyPay)
+            .unwrap();
+        s.logout();
+        let mode = s
+            .login_with_secondary(&folder, "123456", false, "device-drops-test".into())
+            .unwrap();
+        assert_eq!(mode, human_money_core::AccessMode::DailyPay);
+    }
+
+    let err_daily = reply_detached_signature_via_post_impl(
+        None,
+        alice_did,
+        b"dummy-sig-bytes".to_vec(),
+        Some("123456".to_string()),
+        &bob_state,
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(err_daily.code, "error.auth.insufficientAccessMode");
+
+    let _ = std::fs::remove_dir_all(&base_dir);
+}
+
+#[tokio::test]
+async fn test_outbox_windowed_packing_defers_overflow_past_max_bytes_and_drains_next_flush() {
+    let base_dir = temp_test_dir("post_outbox_windowed_drain");
+    let password = "TestPassword123!";
+    let alice_svc = setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
+    let bob_svc = setup_test_app(&base_dir.join("bob"), "Bob", BOB_PHRASE, password);
+    let alice_state = create_test_state(alice_svc);
+    let bob_state = create_test_state(bob_svc);
+
+    let (bob_did, bob_pk) = {
+        let s = bob_state.service.lock().unwrap();
+        s.with_wallet_and_identity(|w, id| (w.get_user_id().to_string(), id.public_key))
+            .unwrap()
+    };
+
+    let server = MockSyncServer::start("d-alice".to_string(), ADMIN_A.to_string()).await;
+    let (_write_url, _saved) = setup_test_sync(&server, DROP_PUB_A, password, &alice_state).await;
+
+    let signing_ctx = load_post_signing_context(&alice_state, Some(password)).unwrap();
+    let mut post_state = load_post_state(&alice_state, Some(password)).unwrap();
+
+    // Two 256 KB tier boxes + one 4 KB tier box queued FIFO: raw sum > DROP_POST_MAX_BYTES (512 KB).
+    enqueue_post_envelope(
+        &mut post_state,
+        &signing_ctx.sync_ctx.my_ed_sk,
+        &bob_did,
+        &bob_pk,
+        "msg-large-1".to_string(),
+        None,
+        &signing_ctx.own_reply_syncs,
+        vec![1u8; 40_000],
+        1_700_000_010,
+        None,
+    )
+    .unwrap();
+    enqueue_post_envelope(
+        &mut post_state,
+        &signing_ctx.sync_ctx.my_ed_sk,
+        &bob_did,
+        &bob_pk,
+        "msg-large-2".to_string(),
+        None,
+        &signing_ctx.own_reply_syncs,
+        vec![2u8; 40_000],
+        1_700_000_020,
+        None,
+    )
+    .unwrap();
+    enqueue_post_envelope(
+        &mut post_state,
+        &signing_ctx.sync_ctx.my_ed_sk,
+        &bob_did,
+        &bob_pk,
+        "msg-small-3".to_string(),
+        None,
+        &signing_ctx.own_reply_syncs,
+        vec![3u8; 120],
+        1_700_000_030,
+        None,
+    )
+    .unwrap();
+
+    let tag1 = post_state.outbox_entries[0].entry.tag16;
+    let tag2 = post_state.outbox_entries[1].entry.tag16;
+    let tag3 = post_state.outbox_entries[2].entry.tag16;
+
+    // 1st flush: packs msg-large-1 + msg-small-3 within 512 KB, defers msg-large-2 cleanly.
+    let outcome1 =
+        flush_post_slots_impl(&alice_state, &mut post_state, None, &[], Some(password)).await;
+    assert_eq!(outcome1.deposited_to, 1, "errors: {:?}", outcome1.errors);
+    assert!(outcome1.errors.is_empty());
+    assert_eq!(outcome1.deferred_count, 1);
+    assert!(outcome1.uploaded_tags.contains(&tag1));
+    assert!(outcome1.uploaded_tags.contains(&tag3));
+    assert!(outcome1.deferred_tags.contains(&tag2));
+    assert_eq!(post_state.outbox_entries.len(), 3);
+
+    {
+        let slots = server.slots.lock().unwrap();
+        let stored_blob = slots.values().next().expect("slot uploaded");
+        assert!(stored_blob.len() <= DROP_POST_MAX_BYTES);
+        let decoded = humoco_market::decode_post_slot(stored_blob).unwrap();
+        let decoded_tags: std::collections::HashSet<[u8; 16]> =
+            decoded.into_iter().map(|e| e.tag16).collect();
+        assert!(decoded_tags.contains(&tag1));
+        assert!(decoded_tags.contains(&tag3));
+        assert!(!decoded_tags.contains(&tag2));
+    }
+
+    // Simulate delivery-receipt pruning for msg-large-1; flush again -> msg-large-2 drains now!
+    post_state.outbox_entries.retain(|e| e.msg_id != "msg-large-1");
+    let outcome2 =
+        flush_post_slots_impl(&alice_state, &mut post_state, None, &[], Some(password)).await;
+    assert_eq!(outcome2.deposited_to, 1, "errors: {:?}", outcome2.errors);
+    assert!(outcome2.errors.is_empty());
+    assert_eq!(outcome2.deferred_count, 0);
+    assert!(outcome2.uploaded_tags.contains(&tag2));
+    assert!(outcome2.uploaded_tags.contains(&tag3));
+
+    {
+        let slots = server.slots.lock().unwrap();
+        let stored_blob = slots.values().next().expect("slot uploaded");
+        assert!(stored_blob.len() <= DROP_POST_MAX_BYTES);
+        let decoded = humoco_market::decode_post_slot(stored_blob).unwrap();
+        let decoded_tags: std::collections::HashSet<[u8; 16]> =
+            decoded.into_iter().map(|e| e.tag16).collect();
+        assert!(decoded_tags.contains(&tag2));
+        assert!(decoded_tags.contains(&tag3));
     }
 
     let _ = std::fs::remove_dir_all(&base_dir);

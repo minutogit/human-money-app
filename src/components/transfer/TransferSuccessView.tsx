@@ -8,7 +8,7 @@ import { ConfirmationModal } from '../ui/ConfirmationModal';
 import { Advanced } from '../ui/Advanced';
 import { AdvancedDisclosure } from '../ui/AdvancedDisclosure';
 import { TechId, formatShortFingerprint } from '../ui/TechId';
-import { AppSettings, IntentDispatchObservation } from '../../types';
+import { AppConfigDto, IntentDispatchObservation } from '../../types';
 import { saveBytesToFile } from '../../utils/fileIo';
 import { useSession } from '../../context/SessionContext';
 import { settingsService } from '../../services/settingsService';
@@ -59,7 +59,7 @@ export function TransferSuccessView({
     const [savedFilePath, setSavedFilePath] = useState<string | null>(null);
     const [hasExportedFile, setHasExportedFile] = useState(false);
     const [confirmUnsavedClose, setConfirmUnsavedClose] = useState(false);
-    const [settings, setSettings] = useState<AppSettings | null>(null);
+    const [config, setConfig] = useState<AppConfigDto | null>(null);
 
     // Dual-Delivery post state (§6.3): only recipientDepositedTo > 0 means recipient inbox actually received it
     const [depositedTo, setDepositedTo] = useState<number>(initialDepositedTo);
@@ -77,16 +77,16 @@ export function TransferSuccessView({
 
     useEffect(() => {
         let active = true;
-        async function fetchSettings() {
+        async function fetchConfig() {
             try {
-                const currentSettings = await settingsService.getSettings().catch(() => null);
+                const currentConfig = await settingsService.getConfig().catch(() => null);
                 if (!active) return;
-                setSettings(currentSettings);
+                setConfig(currentConfig);
             } catch (e) {
-                console.error("Failed to load settings in TransferSuccessView:", e);
+                console.error("Failed to load config in TransferSuccessView:", e);
             }
         }
-        fetchSettings();
+        fetchConfig();
         return () => { active = false; };
     }, []);
 
@@ -141,7 +141,7 @@ export function TransferSuccessView({
                     name: t('transfer.success.fileFilter'),
                     extensions: ['transfer']
                 }],
-                settings,
+                uiPreferences: config?.uiPreferences,
                 protectAction,
             });
 
@@ -150,8 +150,8 @@ export function TransferSuccessView({
                 if (saved.path) {
                     setSavedFilePath(saved.path);
                     logger.info(`Successfully saved transfer bundle to ${saved.path}`);
-                    if (settings) {
-                        settingsService.getSettings().then(setSettings).catch(() => {});
+                    if (config) {
+                        settingsService.getConfig().then(setConfig).catch(() => {});
                     }
                 }
                 setFeedback(t('transfer.success.synced'));

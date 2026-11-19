@@ -1,6 +1,7 @@
 import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
 import { MineTab } from '../MineTab';
+import { UiModeProvider } from '../../../context/UiModeContext';
 import {
   FrontendMyMarketProfile,
   FrontendPostInboxSummary,
@@ -186,20 +187,21 @@ describe('MineTab Component', () => {
     expect(onQuickRenewAd).toHaveBeenCalledWith(expect.objectContaining({ id: 'ad-active-1' }));
     unmount();
 
-    localStorage.setItem('humoco_ui_mode', 'expert');
     render(
-      <MineTab
-        myProfile={mockMyProfile}
-        inbox={mockInbox}
-        onOpenProfileEditor={vi.fn()}
-        onOpenShareCard={vi.fn()}
-        onTogglePublished={vi.fn()}
-        onCreateAd={vi.fn()}
-        onEditAd={vi.fn()}
-        onQuickRenewAd={onQuickRenewAd}
-        onRenewAd={onRenewAd}
-        onDeleteAd={vi.fn()}
-      />
+      <UiModeProvider initialMode="expert">
+        <MineTab
+          myProfile={mockMyProfile}
+          inbox={mockInbox}
+          onOpenProfileEditor={vi.fn()}
+          onOpenShareCard={vi.fn()}
+          onTogglePublished={vi.fn()}
+          onCreateAd={vi.fn()}
+          onEditAd={vi.fn()}
+          onQuickRenewAd={onQuickRenewAd}
+          onRenewAd={onRenewAd}
+          onDeleteAd={vi.fn()}
+        />
+      </UiModeProvider>
     );
 
     const customRenewBtn = screen.getByTestId('custom-renew-ad-ad-active-1');

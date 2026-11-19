@@ -10,7 +10,7 @@ import { revealItemInDir } from '@tauri-apps/plugin-opener';
 import { logger } from '../../utils/log';
 import { translateError, stringifyError } from '../../utils/errorHelper';
 import { translateRuleMessage, translateGentleHint } from '../../utils/signatureHints';
-import { VoucherDetails, VoucherStandardInfo, AppSettings, SignatureImpact, VoucherTrustDto, PublicProfile, VoucherStandardDefinition, GuarantorAnchorCheckDto } from '../../types';
+import { VoucherDetails, VoucherStandardInfo, AppConfigDto, SignatureImpact, VoucherTrustDto, PublicProfile, VoucherStandardDefinition, GuarantorAnchorCheckDto } from '../../types';
 import { saveBytesToFile } from '../../utils/fileIo';
 import { Button } from '../ui/Button';
 import { Card } from '../ui/Card';
@@ -55,7 +55,7 @@ export function SignRequestView({ voucherData, requestMsgId, senderDid, anchorMa
     const [feedbackMsg, setFeedbackMsg] = useState('');
     const [feedbackType, setFeedbackType] = useState<'error' | 'success' | null>(null);
     const [isSigning, setIsSigning] = useState(false);
-    const [settings, setSettings] = useState<AppSettings | null>(null);
+    const [config, setConfig] = useState<AppConfigDto | null>(null);
     const [standardContent, setStandardContent] = useState<string | null>(null);
     const [parsedStandard, setParsedStandard] = useState<VoucherStandardDefinition | null>(null);
     const [userProfile, setUserProfile] = useState<PublicProfile | null>(null);
@@ -101,13 +101,13 @@ export function SignRequestView({ voucherData, requestMsgId, senderDid, anchorMa
         async function fetchData() {
             try {
                 logger.info("SignRequestView opened, fetching standards and roles.");
-                const [standards, currentSettings, profile] = await Promise.all([
+                const [standards, currentConfig, profile] = await Promise.all([
                     standardsService.getStandards(),
-                    settingsService.getSettings().catch(() => null),
+                    settingsService.getConfig().catch(() => null),
                     profileService.getProfile().catch(() => null)
                 ]);
                 if (!active) return;
-                setSettings(currentSettings);
+                setConfig(currentConfig);
                 setUserProfile(profile);
                 if (profile?.gender === '1' || profile?.gender === '2') {
                     setSelectedGender(profile.gender);
@@ -305,7 +305,7 @@ export function SignRequestView({ voucherData, requestMsgId, senderDid, anchorMa
                         password: password || undefined,
                         anchorManifestJson: effectiveManifestJson ?? null,
                     });
-                });
+                }, { requireFullAccess: true });
                 if (Array.isArray(generatedBytes)) {
                     bundleBytes = generatedBytes;
                     setCachedSigBundle({ key: bundleKey, bytes: generatedBytes });
@@ -329,7 +329,7 @@ export function SignRequestView({ voucherData, requestMsgId, senderDid, anchorMa
                                 bundleBytes,
                                 password || undefined
                             );
-                        });
+                        }, { requireFullAccess: true });
                         const deliveredCount = res?.recipientDepositedTo ?? res?.depositedTo ?? 0;
                         if (deliveredCount > 0) {
                             postDeposited = true;
@@ -351,14 +351,14 @@ export function SignRequestView({ voucherData, requestMsgId, senderDid, anchorMa
                         { name: t('voucher.signRequest.signatureResponseFilter'), extensions: ['sig'] },
                         { name: t('voucher.export.allFiles'), extensions: ['*'] },
                     ],
-                    settings,
+                    uiPreferences: config?.uiPreferences,
                     protectAction,
                 });
 
                 if (saveResult) {
                     if (saveResult.path) {
-                        if (settings) {
-                            settingsService.getSettings().then(setSettings).catch(() => {});
+                        if (config) {
+                            settingsService.getConfig().then(setConfig).catch(() => {});
                         }
                         setSavedSigFilePath(saveResult.path);
                     } else if (saveResult.downloaded) {

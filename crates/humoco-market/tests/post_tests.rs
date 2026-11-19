@@ -510,3 +510,63 @@ proptest! {
         prop_assert_eq!(opened, Some(env));
     }
 }
+
+#[test]
+fn test_pack_post_slot_defers_overflow_and_isolates_oversized_entries() {
+    use humoco_market::{merge_and_pack_post_slot, pack_post_slot, POST_SLOT_HEADER_BYTES};
+
+    let alice_sk = make_key(11);
+    let bob_sk = make_key(12);
+    let bob_vk = bob_sk.verifying_key();
+    let master_seed = [22u8; 32];
+
+    // Two ~120KB JSON payloads seal into the 256 KB tier; one small payload seals into the 4 KB tier.
+    let e1 = seal_post_box(&alice_sk, &bob_vk, &sample_envelope("m1", 40_000)).unwrap();
+    let e2 = seal_post_box(&alice_sk, &bob_vk, &sample_envelope("m2", 40_000)).unwrap();
+    let e3_small = seal_post_box(&alice_sk, &bob_vk, &sample_envelope("m3", 120)).unwrap();
+
+    assert_eq!(e1.ciphertext.len(), POST_BOX_TIERS[3]);
+    assert_eq!(e2.ciphertext.len(), POST_BOX_TIERS[3]);
+    assert_eq!(e3_small.ciphertext.len(), POST_BOX_TIERS[0]);
+
+    // Total raw size exceeds 512 KB, so work-conserving FIFO packing includes e1 + e3_small and defers e2.
+    let packed = pack_post_slot(
+        &master_seed,
+        &[e1.clone(), e2.clone(), e3_small.clone()],
+        DROP_POST_MAX_BYTES,
+    )
+    .unwrap();
+    assert!(packed.blob.len() <= DROP_POST_MAX_BYTES);
+    assert_eq!(packed.included_tags, vec![e1.tag16, e3_small.tag16]);
+    assert_eq!(packed.deferred_tags, vec![e2.tag16]);
+    assert!(packed.oversized_tags.is_empty());
+
+    let decoded = decode_post_slot(&packed.blob).unwrap();
+    assert_eq!(decoded.len(), 2);
+
+    // Oversized single entry (> max_bytes) is reported in oversized_tags without blocking smaller entries.
+    let small_cap = 8_192usize;
+    let oversized_pack =
+        pack_post_slot(&master_seed, &[e1.clone(), e3_small.clone()], small_cap).unwrap();
+    assert!(oversized_pack.blob.len() <= small_cap);
+    assert!(POST_SLOT_HEADER_BYTES + 44 + e3_small.ciphertext.len() <= small_cap);
+    assert_eq!(oversized_pack.included_tags, vec![e3_small.tag16]);
+    assert_eq!(oversized_pack.oversized_tags, vec![e1.tag16]);
+    assert!(oversized_pack.deferred_tags.is_empty());
+
+    // 412 conflict merge with remote 256 KB box + local 256 KB + local 4 KB must succeed within 512 KB,
+    // prioritizing local additions and deferring the overflowing entry.
+    let remote_blob =
+        encode_post_slot(&master_seed, std::slice::from_ref(&e1), DROP_POST_MAX_BYTES).unwrap();
+    let merged = merge_and_pack_post_slot(
+        &master_seed,
+        Some(&remote_blob),
+        &[e2.clone(), e3_small.clone()],
+        &[],
+        DROP_POST_MAX_BYTES,
+    )
+    .unwrap();
+    assert!(merged.blob.len() <= DROP_POST_MAX_BYTES);
+    assert_eq!(merged.included_tags, vec![e2.tag16, e3_small.tag16]);
+    assert_eq!(merged.deferred_tags, vec![e1.tag16]);
+}

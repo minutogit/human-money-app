@@ -7,7 +7,7 @@ import { profileService } from "../../services/profileService";
 import { standardsService } from "../../services/standardsService";
 import { logger } from "../../utils/log";
 import { Button } from "../ui/Button";
-import { VoucherSummary, AppSettings, PublicProfile, VoucherStandardDefinition } from "../../types";
+import { VoucherSummary, AppConfigDto, PublicProfile, VoucherStandardDefinition } from "../../types";
 import { getMissingProfileHint } from "../../utils/signatureHints";
 import { useSession } from "../../context/SessionContext";
 import { stringifyError, translateError } from "../../utils/errorHelper";
@@ -34,7 +34,7 @@ export function WalletView() {
     const { navigate, goBack, appState } = useNavigation();
     
     const [vouchers, setVouchers] = useState<VoucherSummary[]>([]);
-    const [settings, setSettings] = useState<AppSettings | null>(null);
+    const [config, setConfig] = useState<AppConfigDto | null>(null);
     const [userProfile, setUserProfile] = useState<PublicProfile | null>(null);
     const [parsedStandards, setParsedStandards] = useState<Record<string, VoucherStandardDefinition>>({});
     const [ownUserId, setOwnUserId] = useState<string>("");
@@ -85,16 +85,16 @@ export function WalletView() {
         logger.info("WalletView component displayed");
         async function fetchData() {
             try {
-                const [voucherList, currentSettings, profile, standards, id] = await Promise.all([
+                const [voucherList, currentConfig, profile, standards, id] = await Promise.all([
                     voucherService.getSummaries(),
-                    settingsService.getSettings().catch(() => null),
+                    settingsService.getConfig().catch(() => null),
                     profileService.getProfile().catch(() => null),
                     standardsService.getStandards().catch(() => []),
                     voucherService.getUserId().catch(() => "")
                 ]);
                 if (!active) return;
                 setVouchers(voucherList || []);
-                setSettings(currentSettings);
+                setConfig(currentConfig);
                 setUserProfile(profile);
                 setOwnUserId(id || "");
 
@@ -302,9 +302,9 @@ export function WalletView() {
                 isOpen={showExportModal}
                 voucherId={exportId}
                 onClose={() => { setShowExportModal(false); setExportId(""); }}
-                settings={settings}
+                config={config}
                 protectAction={protectAction}
-                onSettingsRefresh={setSettings}
+                onConfigRefresh={setConfig}
             />
         </PageLayout>
     );

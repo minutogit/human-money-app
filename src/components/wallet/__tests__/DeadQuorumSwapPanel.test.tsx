@@ -3,7 +3,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { DeadQuorumSwapPanel } from '../DeadQuorumSwapPanel';
 import { voucherService } from '../../../services/voucherService';
 import { postService } from '../../../services/postService';
-import { UiModeProvider, UI_MODE_STORAGE_KEY } from '../../../context/UiModeContext';
+import { UiModeProvider } from '../../../context/UiModeContext';
 
 vi.mock('../../../services/voucherService', () => ({
     voucherService: {
@@ -26,7 +26,6 @@ vi.mock('../../../services/postService', () => ({
 describe('DeadQuorumSwapPanel', () => {
     beforeEach(() => {
         vi.clearAllMocks();
-        localStorage.setItem(UI_MODE_STORAGE_KEY, 'expert');
     });
 
     it('renders approved claims, rejected claims, and doubleSpendProofsCount without crashing', async () => {
@@ -39,6 +38,7 @@ describe('DeadQuorumSwapPanel', () => {
                     approvedAmount: '40.00',
                     replacementVoucherId: 'v-replacement-999',
                     replacementBundleId: 'bundle-swap-1',
+                    status: 'completed',
                 },
             ],
             rejected: [
@@ -53,7 +53,7 @@ describe('DeadQuorumSwapPanel', () => {
         });
 
         render(
-            <UiModeProvider>
+            <UiModeProvider initialMode="expert">
                 <DeadQuorumSwapPanel
                     localInstanceId="inst-1"
                     isActiveVoucher={true}

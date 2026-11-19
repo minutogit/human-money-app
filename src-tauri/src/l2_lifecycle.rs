@@ -15,7 +15,7 @@ use human_money_core::humoco_proto::{
     AnchorManifest, CommitteeSignature, ImportAck, MigrationProposal, NominatedBy, ServerEntry,
     SnapshotExport,
 };
-use human_money_core::services::{crypto::get_pubkey_from_user_id, l2_gateway, l2_rotation};
+use human_money_core::services::{l2_gateway, l2_rotation};
 use humoco_market::CardStore;
 use humoco_wot::{
     resolve_successor_chain, KeySuccessorAttestation, ServerOffenderList, ServerOffenderRecord,
@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use crate::gateway_resolver::{sybil_fold_committee, SybilServerCandidate};
 use crate::models::{FrontendAddressBook, FrontendError};
 use crate::services::common::max_pow_base_bits_for_servers;
-use crate::settings::AppSettings;
+use crate::settings::{InternalLifecycleState, SecurityPolicy};
 use crate::state::{AppState, CONTACTS_DATA_NAME, MARKET_CARD_STORE_KEY};
 use crate::sync_client::{self, SyncRevocationNotice};
 
@@ -151,9 +151,14 @@ pub struct FrontendApprovedSwapClaimDto {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replacement_voucher_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replacement_local_instance_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replacement_bundle_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replacement_bundle_bytes: Option<Vec<u8>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replacement_intent_local_id: Option<String>,
+    pub status: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -176,11 +181,14 @@ pub struct FrontendDeadQuorumAdjudicationDto {
 pub fn load_server_offender_list(
     service: &mut human_money_core::app_service::AppService,
     password: Option<&str>,
-) -> ServerOffenderList {
-    match service.load_encrypted_data(SERVER_OFFENDER_LIST_KEY, password) {
-        Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_default(),
-        Err(_) => ServerOffenderList::new(),
-    }
+) -> Result<ServerOffenderList, FrontendError> {
+    crate::state::load_encrypted_json_opt::<ServerOffenderList>(
+        service,
+        SERVER_OFFENDER_LIST_KEY,
+        password,
+    )
+    .map(|opt| opt.unwrap_or_else(ServerOffenderList::new))
+    .map_err(FrontendError::from)
 }
 
 pub fn save_server_offender_list(
@@ -188,9 +196,7 @@ pub fn save_server_offender_list(
     list: &ServerOffenderList,
     password: Option<&str>,
 ) -> Result<(), FrontendError> {
-    let bytes = serde_json::to_vec(list).map_err(|e| lifecycle_err(e.to_string()))?;
-    service
-        .save_encrypted_data(SERVER_OFFENDER_LIST_KEY, &bytes, password)
+    crate::state::save_encrypted_json(service, SERVER_OFFENDER_LIST_KEY, list, password)
         .map_err(FrontendError::from)
 }
 
@@ -234,7 +240,7 @@ pub fn record_equivocation_proof(
         receipt_b: to_wot_receipt(&proof.receipt_b),
     };
     let offending_lock = proof.receipt_a.lock_pub;
-    let mut list = load_server_offender_list(service, password);
+    let mut list = load_server_offender_list(service, password)?;
     let already = list.is_lock_pub_revoked(&offending_lock);
     let record = ServerOffenderRecord {
         proof: wot_proof,
@@ -250,11 +256,9 @@ pub fn record_equivocation_proof(
 pub fn load_key_successor_attestations(
     service: &mut human_money_core::app_service::AppService,
     password: Option<&str>,
-) -> Vec<KeySuccessorAttestation> {
-    match service.load_encrypted_data(KEY_SUCCESSOR_STORE_KEY, password) {
-        Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_default(),
-        Err(_) => Vec::new(),
-    }
+) -> Result<Vec<KeySuccessorAttestation>, FrontendError> {
+    crate::state::load_encrypted_json_or_default(service, KEY_SUCCESSOR_STORE_KEY, password)
+        .map_err(FrontendError::from)
 }
 
 pub fn save_key_successor_attestations(
@@ -262,15 +266,8 @@ pub fn save_key_successor_attestations(
     list: &[KeySuccessorAttestation],
     password: Option<&str>,
 ) -> Result<(), FrontendError> {
-    let bytes = serde_json::to_vec(list).map_err(|e| lifecycle_err(e.to_string()))?;
-    service
-        .save_encrypted_data(KEY_SUCCESSOR_STORE_KEY, &bytes, password)
+    crate::state::save_encrypted_json(service, KEY_SUCCESSOR_STORE_KEY, &list, password)
         .map_err(FrontendError::from)
-}
-
-pub(crate) fn strip_user_id_prefix(id: &str) -> &str {
-    let trimmed = id.trim();
-    trimmed.split_once('@').map_or(trimmed, |(_, did)| did)
 }
 
 pub fn resolve_current_did(
@@ -278,21 +275,20 @@ pub fn resolve_current_did(
     did: &str,
     now_secs: u64,
     password: Option<&str>,
-) -> String {
-    let attestations = load_key_successor_attestations(service, password);
-    let canonical = strip_user_id_prefix(did);
-    resolve_successor_chain(canonical, &attestations, now_secs)
-        .unwrap_or_else(|_| canonical.to_string())
+) -> Result<String, FrontendError> {
+    let attestations = load_key_successor_attestations(service, password)?;
+    let canonical = crate::state::canonicalize_did(did)
+        .map_err(|e| FrontendError::from(format!("Invalid DID '{}': {}", did.trim(), e)))?;
+    Ok(resolve_successor_chain(&canonical, &attestations, now_secs)
+        .unwrap_or(canonical))
 }
 
 pub fn load_lifecycle_state(
     service: &mut human_money_core::app_service::AppService,
     password: Option<&str>,
-) -> StoredL2LifecycleState {
-    match service.load_encrypted_data(L2_LIFECYCLE_STATE_KEY, password) {
-        Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_default(),
-        Err(_) => StoredL2LifecycleState::default(),
-    }
+) -> Result<StoredL2LifecycleState, FrontendError> {
+    crate::state::load_encrypted_json_or_default(service, L2_LIFECYCLE_STATE_KEY, password)
+        .map_err(FrontendError::from)
 }
 
 pub fn save_lifecycle_state(
@@ -300,9 +296,7 @@ pub fn save_lifecycle_state(
     lc_state: &StoredL2LifecycleState,
     password: Option<&str>,
 ) -> Result<(), FrontendError> {
-    let bytes = serde_json::to_vec(lc_state).map_err(|e| lifecycle_err(e.to_string()))?;
-    service
-        .save_encrypted_data(L2_LIFECYCLE_STATE_KEY, &bytes, password)
+    crate::state::save_encrypted_json(service, L2_LIFECYCLE_STATE_KEY, lc_state, password)
         .map_err(FrontendError::from)
 }
 
@@ -412,7 +406,7 @@ pub fn record_revoked_servers(
         return Ok(());
     }
     let anchor_hex = hex::encode(anchor_id);
-    let mut lc = load_lifecycle_state(service, password);
+    let mut lc = load_lifecycle_state(service, password)?;
     let health = lc
         .anchors
         .entry(anchor_hex.clone())
@@ -439,8 +433,8 @@ fn collect_did_drop_urls(
     out: &mut Vec<String>,
     seen: &mut HashSet<String>,
 ) {
-    if let Ok(pk) = get_pubkey_from_user_id(did) {
-        let pk_bytes: [u8; 32] = pk.to_bytes();
+    if let Ok(validated) = human_money_core::ValidatedUserId::parse(did) {
+        let pk_bytes: [u8; 32] = validated.public_key_bytes();
         if let Some(stored_card) = card_store.cards.get(&pk_bytes) {
             for drop_desc in &stored_card.card.payload.drops {
                 push_unique_url(out, seen, &drop_desc.read_url);
@@ -449,13 +443,11 @@ fn collect_did_drop_urls(
         }
     }
     if let Some(book) = address_book {
-        let can_target = humoco_wot::canonicalize_did(strip_user_id_prefix(did)).ok();
+        let can_target = crate::state::canonicalize_did(did).ok();
         for contact in book.contacts.values() {
-            let matches_did = contact.did == did
-                || strip_user_id_prefix(&contact.did) == strip_user_id_prefix(did)
+            let matches_did = contact.did.trim() == did.trim()
                 || (can_target.is_some()
-                    && humoco_wot::canonicalize_did(strip_user_id_prefix(&contact.did)).ok()
-                        == can_target);
+                    && crate::state::canonicalize_did(&contact.did).ok() == can_target);
             if matches_did {
                 for sync in &contact.syncs {
                     if sync.status != "revoked" {
@@ -478,7 +470,6 @@ fn collect_did_drop_urls(
 /// keeps the highest `revision`, and updates wallet storage via `update_l2_anchor_manifest`.
 pub async fn discover_anchor_manifest(
     state: &AppState,
-    settings: &AppSettings,
     client: &reqwest::Client,
     anchor_id: &[u8; 32],
     creator_did: Option<&str>,
@@ -495,11 +486,20 @@ pub async fn discover_anchor_manifest(
         address_book_opt,
         resolved_creator,
         resolved_guarantors,
+        security_policy,
+        lifecycle,
     ) = {
         let mut service = state
             .service
             .lock()
             .map_err(|_| lifecycle_err("Wallet service unavailable"))?;
+
+        let security_policy = state
+            .get_or_load_security_policy(&mut service, password)
+            .map_err(FrontendError::from)?;
+        let lifecycle = state
+            .get_or_load_internal_lifecycle(&mut service, password)
+            .map_err(FrontendError::from)?;
 
         let local_manifest = service
             .with_wallet(|w| w.profile.l2_anchor_manifests.get(&anchor_hex).cloned())
@@ -507,29 +507,32 @@ pub async fn discover_anchor_manifest(
         let local_manifest = local_manifest.filter(|m| m.verify_anchor_id(anchor_id).is_ok());
         let local_rev = local_manifest.as_ref().map(|m| m.revision).unwrap_or(0);
 
-        let card_store: CardStore = service
-            .load_encrypted_data(MARKET_CARD_STORE_KEY, password)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-            .unwrap_or_default();
-        let disk_contacts: Option<FrontendAddressBook> = service
-            .load_encrypted_data(CONTACTS_DATA_NAME, password)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+        let card_store: CardStore = crate::state::load_encrypted_json_or_default(
+            &mut service,
+            MARKET_CARD_STORE_KEY,
+            password,
+        )
+        .map_err(FrontendError::from)?;
+        let disk_contacts: Option<FrontendAddressBook> = crate::state::load_encrypted_json_opt(
+            &mut service,
+            CONTACTS_DATA_NAME,
+            password,
+        )
+        .map_err(FrontendError::from)?;
 
-        let resolved_creator = creator_did.map(|c| {
-            let resolved = resolve_current_did(&mut service, c, now_secs, password);
-            (c.to_string(), resolved)
-        });
-        let resolved_guarantors: Vec<(String, String)> = guarantor_dids
-            .iter()
-            .map(|g| {
-                (
-                    g.clone(),
-                    resolve_current_did(&mut service, g, now_secs, password),
-                )
-            })
-            .collect();
+        let resolved_creator = match creator_did {
+            Some(c) => {
+                let resolved = resolve_current_did(&mut service, c, now_secs, password)?;
+                Some((c.to_string(), resolved))
+            }
+            None => None,
+        };
+        let mut resolved_guarantors: Vec<(String, String)> =
+            Vec::with_capacity(guarantor_dids.len());
+        for g in guarantor_dids {
+            let resolved = resolve_current_did(&mut service, g, now_secs, password)?;
+            resolved_guarantors.push((g.clone(), resolved));
+        }
 
         (
             local_manifest,
@@ -538,6 +541,8 @@ pub async fn discover_anchor_manifest(
             disk_contacts,
             resolved_creator,
             resolved_guarantors,
+            security_policy,
+            lifecycle,
         )
     };
 
@@ -588,19 +593,19 @@ pub async fn discover_anchor_manifest(
     }
 
     // Stage 4: Regional / Community servers & locally known manifest servers
-    for s in &settings.public_syncs {
+    for s in &security_policy.public_syncs {
         if s.enabled && s.status != "revoked" {
             push_unique_url(&mut stage_urls, &mut seen, &s.read_url);
             push_unique_url(&mut stage_urls, &mut seen, &s.write_url);
         }
     }
-    for (url, probe) in &settings.l2_probe_cache {
+    for (url, probe) in &lifecycle.l2_probe_cache {
         if probe.passed {
             push_unique_url(&mut stage_urls, &mut seen, &probe.read_url);
             push_unique_url(&mut stage_urls, &mut seen, url);
         }
     }
-    if let Some(ref own) = settings.own_nominated_lock_server {
+    if let Some(ref own) = security_policy.own_nominated_lock_server {
         push_unique_url(&mut stage_urls, &mut seen, &own.read_url);
         push_unique_url(&mut stage_urls, &mut seen, &own.write_url);
     }
@@ -642,7 +647,7 @@ pub async fn discover_anchor_manifest(
 /// Mirrors a verified `revision >= 2` `AnchorManifest` onto own Sync servers for Guarantor/Creator Anchor Mirroring (§5.6 Stage 3).
 pub async fn mirror_manifest_to_own_syncs(
     client: &reqwest::Client,
-    settings: &AppSettings,
+    security_policy: &SecurityPolicy,
     anchor_id: &[u8; 32],
     manifest: &AnchorManifest,
 ) {
@@ -650,12 +655,12 @@ pub async fn mirror_manifest_to_own_syncs(
         return;
     }
     let mut urls = HashSet::new();
-    for s in &settings.public_syncs {
+    for s in &security_policy.public_syncs {
         if s.enabled && s.status != "revoked" {
             urls.insert(s.write_url.clone());
         }
     }
-    if let Some(ref own) = settings.own_nominated_lock_server {
+    if let Some(ref own) = security_policy.own_nominated_lock_server {
         urls.insert(own.write_url.clone());
     }
     for write_url in urls {
@@ -671,7 +676,7 @@ pub(crate) fn select_rotation_proposal(
     failed_lock_pubs: &HashSet<LockPubKey>,
     creator_mig_sk: Option<&SigningKey>,
     guarantor_auth: Option<(u8, &SigningKey, u64)>,
-    settings: &AppSettings,
+    lifecycle: &InternalLifecycleState,
     offenders: &ServerOffenderList,
     now_secs: u64,
 ) -> Option<MigrationProposal> {
@@ -731,7 +736,7 @@ pub(crate) fn select_rotation_proposal(
         };
         if can_pick_probe {
             let mut picked: Option<ServerEntry> = None;
-            for (url, probe) in &settings.l2_probe_cache {
+            for (url, probe) in &lifecycle.l2_probe_cache {
                 if !probe.passed || probe.max_retention_quarter < manifest.retain_until_quarter {
                     continue;
                 }
@@ -868,7 +873,7 @@ async fn check_guarantor_vetoes(
             .service
             .lock()
             .map_err(|_| lifecycle_err("Wallet service unavailable"))?;
-        let lc = load_lifecycle_state(&mut service, password);
+        let lc = load_lifecycle_state(&mut service, password)?;
         service
             .with_wallet(|w| {
                 lc.guarantor_roles
@@ -944,7 +949,7 @@ async fn check_guarantor_vetoes(
                     .service
                     .lock()
                     .map_err(|_| lifecycle_err("Wallet service unavailable"))?;
-                let mut lc = load_lifecycle_state(&mut service, password);
+                let mut lc = load_lifecycle_state(&mut service, password)?;
                 record_guarantor_veto_sent(&mut lc, reason);
                 save_lifecycle_state(&mut service, &lc, password)?;
             }
@@ -1134,7 +1139,8 @@ pub(crate) fn apply_rotation_step_outcome(
 #[derive(Clone, Copy)]
 struct RotationEnv<'a> {
     state: &'a AppState,
-    settings: &'a AppSettings,
+    security_policy: &'a SecurityPolicy,
+    lifecycle: &'a InternalLifecycleState,
     client: &'a reqwest::Client,
     now_secs: u64,
     password: Option<&'a str>,
@@ -1148,7 +1154,8 @@ async fn drive_active_rotation(
 ) -> Result<Option<StoredRotationPhase>, FrontendError> {
     let RotationEnv {
         state,
-        settings,
+        security_policy,
+        lifecycle,
         client,
         now_secs,
         password,
@@ -1211,7 +1218,7 @@ async fn drive_active_rotation(
                     .map_err(FrontendError::from)?
             };
             let pow_bits = max_pow_base_bits_for_servers(
-                settings,
+                lifecycle,
                 manifest.servers.iter().map(|srv| srv.write_url.as_str()),
             );
 
@@ -1324,7 +1331,7 @@ async fn drive_active_rotation(
             .map_err(FrontendError::from)?;
     }
 
-    mirror_manifest_to_own_syncs(client, settings, &anchor_id, &next_manifest).await;
+    mirror_manifest_to_own_syncs(client, security_policy, &anchor_id, &next_manifest).await;
     Ok(None)
 }
 
@@ -1336,7 +1343,8 @@ pub(crate) async fn run_lifecycle_tick_with_now(
     force: bool,
     password: Option<&str>,
 ) -> Result<FrontendL2LifecycleStatusDto, FrontendError> {
-    let settings = state.get_cached_settings().unwrap_or_default();
+    let security_policy = state.get_or_load_security_policy_locked(password)?;
+    let internal_lc = state.get_or_load_internal_lifecycle_locked(password)?;
 
     // 1. Online Guarantor Automatic Veto check (§5.4)
     check_guarantor_vetoes(state, client, now_secs, password).await?;
@@ -1347,7 +1355,7 @@ pub(crate) async fn run_lifecycle_tick_with_now(
             .service
             .lock()
             .map_err(|_| lifecycle_err("Wallet service unavailable"))?;
-        let mut lc = load_lifecycle_state(&mut service, password);
+        let mut lc = load_lifecycle_state(&mut service, password)?;
         if !force && now_secs.saturating_sub(lc.last_tick_secs) < HEALTH_CHECK_INTERVAL_SECS {
             return build_status_dto(&mut service, &lc, password);
         }
@@ -1366,7 +1374,7 @@ pub(crate) async fn run_lifecycle_tick_with_now(
             })
             .map_err(FrontendError::from)?;
         save_lifecycle_state(&mut service, &lc, password)?;
-        let offenders = load_server_offender_list(&mut service, password);
+        let offenders = load_server_offender_list(&mut service, password)?;
         (anchors, offenders)
     };
 
@@ -1380,7 +1388,7 @@ pub(crate) async fn run_lifecycle_tick_with_now(
                 .service
                 .lock()
                 .map_err(|_| lifecycle_err("Wallet service unavailable"))?;
-            let lc = load_lifecycle_state(&mut service, password);
+            let lc = load_lifecycle_state(&mut service, password)?;
             lc.anchors
                 .get(&anchor_hex)
                 .and_then(|h| h.active_rotation.clone())
@@ -1391,7 +1399,8 @@ pub(crate) async fn run_lifecycle_tick_with_now(
             let step_result = drive_active_rotation(
                 RotationEnv {
                     state,
-                    settings: &settings,
+                    security_policy: &security_policy,
+                    lifecycle: &internal_lc,
                     client,
                     now_secs,
                     password,
@@ -1405,7 +1414,7 @@ pub(crate) async fn run_lifecycle_tick_with_now(
                 .service
                 .lock()
                 .map_err(|_| lifecycle_err("Wallet service unavailable"))?;
-            let mut lc = load_lifecycle_state(&mut service, password);
+            let mut lc = load_lifecycle_state(&mut service, password)?;
             let entry = lc
                 .anchors
                 .entry(anchor_hex.clone())
@@ -1470,7 +1479,7 @@ pub(crate) async fn run_lifecycle_tick_with_now(
                 .service
                 .lock()
                 .map_err(|_| lifecycle_err("Wallet service unavailable"))?;
-            let mut lc = load_lifecycle_state(&mut service, password);
+            let mut lc = load_lifecycle_state(&mut service, password)?;
             let health = lc
                 .anchors
                 .entry(anchor_hex.clone())
@@ -1526,7 +1535,7 @@ pub(crate) async fn run_lifecycle_tick_with_now(
             &failed_lock_pubs,
             creator_sk_opt.as_ref(),
             guarantor_tuple,
-            &settings,
+            &internal_lc,
             &offenders,
             now_secs,
         ) else {
@@ -1565,7 +1574,7 @@ pub(crate) async fn run_lifecycle_tick_with_now(
                     .service
                     .lock()
                     .map_err(|_| lifecycle_err("Wallet service unavailable"))?;
-                let mut lc = load_lifecycle_state(&mut service, password);
+                let mut lc = load_lifecycle_state(&mut service, password)?;
                 let health = lc
                     .anchors
                     .entry(anchor_hex.clone())
@@ -1580,7 +1589,8 @@ pub(crate) async fn run_lifecycle_tick_with_now(
                 if let Ok(next_phase) = drive_active_rotation(
                     RotationEnv {
                         state,
-                        settings: &settings,
+                        security_policy: &security_policy,
+                        lifecycle: &internal_lc,
                         client,
                         now_secs,
                         password,
@@ -1595,7 +1605,7 @@ pub(crate) async fn run_lifecycle_tick_with_now(
                         .service
                         .lock()
                         .map_err(|_| lifecycle_err("Wallet service unavailable"))?;
-                    let mut lc = load_lifecycle_state(&mut service, password);
+                    let mut lc = load_lifecycle_state(&mut service, password)?;
                     let health = lc
                         .anchors
                         .entry(anchor_hex.clone())
@@ -1616,7 +1626,7 @@ pub(crate) async fn run_lifecycle_tick_with_now(
         .service
         .lock()
         .map_err(|_| lifecycle_err("Wallet service unavailable"))?;
-    let lc = load_lifecycle_state(&mut service, password);
+    let lc = load_lifecycle_state(&mut service, password)?;
     build_status_dto(&mut service, &lc, password)
 }
 
@@ -1625,7 +1635,7 @@ pub(crate) fn build_status_dto(
     lc: &StoredL2LifecycleState,
     password: Option<&str>,
 ) -> Result<FrontendL2LifecycleStatusDto, FrontendError> {
-    let offenders = load_server_offender_list(service, password);
+    let offenders = load_server_offender_list(service, password)?;
     let anchors: Vec<FrontendAnchorLifecycleDto> = service
         .with_wallet(|w| {
             w.profile
@@ -1683,7 +1693,16 @@ pub(crate) async fn maybe_run_background_lifecycle_tick(state: &AppState) {
         if !service.is_wallet_unlocked() {
             return;
         }
-        let lc = load_lifecycle_state(&mut service, None);
+        let lc = match load_lifecycle_state(&mut service, None) {
+            Ok(lc) => lc,
+            Err(e) => {
+                log::debug!(
+                    "Background L2 lifecycle tick skipped (lifecycle state load error): {}",
+                    e.message
+                );
+                return;
+            }
+        };
         let now_secs = sync_client::current_unix_timestamp();
         now_secs.saturating_sub(lc.last_tick_secs) >= HEALTH_CHECK_INTERVAL_SECS
     };
@@ -1805,8 +1824,24 @@ mod tests {
             .expect("record equivocation");
         assert!(newly);
 
-        let loaded = load_server_offender_list(&mut svc, Some(pw));
+        let loaded = load_server_offender_list(&mut svc, Some(pw)).unwrap();
         assert!(loaded.is_lock_pub_revoked(&bad_pub));
+
+        // Corrupt ServerOffenderList or L2LifecycleState must fail closed without overwriting
+        svc.save_encrypted_data(SERVER_OFFENDER_LIST_KEY, b"{corrupt-offenders", Some(pw))
+            .unwrap();
+        assert!(load_server_offender_list(&mut svc, Some(pw)).is_err());
+        assert!(record_equivocation_proof(&mut svc, None, &eq, 1_760_000_000, Some(pw)).is_err());
+        assert_eq!(
+            svc.load_encrypted_data(SERVER_OFFENDER_LIST_KEY, Some(pw))
+                .unwrap(),
+            b"{corrupt-offenders"
+        );
+
+        svc.save_encrypted_data(L2_LIFECYCLE_STATE_KEY, b"{corrupt-lifecycle", Some(pw))
+            .unwrap();
+        assert!(load_lifecycle_state(&mut svc, Some(pw)).is_err());
+
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -2016,11 +2051,11 @@ mod tests {
         let new_creator_did = ACTORS.charlie.identity.user_id.clone();
         let att = KeySuccessorAttestation::sign_dual(
             &crate::state::DidWotSigner {
-                did: strip_user_id_prefix(&old_creator_did).to_string(),
+                did: crate::state::canonicalize_did(&old_creator_did).unwrap(),
                 signing_key: ACTORS.alice.identity.signing_key.clone(),
             },
             &crate::state::DidWotSigner {
-                did: strip_user_id_prefix(&new_creator_did).to_string(),
+                did: crate::state::canonicalize_did(&new_creator_did).unwrap(),
                 signing_key: ACTORS.charlie.identity.signing_key.clone(),
             },
             KeyRotationReason::Routine,
@@ -2067,12 +2102,10 @@ mod tests {
         .unwrap();
 
         let state = AppState::new(svc);
-        let settings = AppSettings::default();
         let client = sync_client::create_sync_probe_client();
 
         let discovered = discover_anchor_manifest(
             &state,
-            &settings,
             &client,
             &anchor_id,
             Some(&old_creator_did),
@@ -2471,7 +2504,7 @@ mod tests {
 
         svc.update_l2_anchor_manifest(manifest.clone(), Some(pw))
             .unwrap();
-        let mut lc = load_lifecycle_state(&mut svc, Some(pw));
+        let mut lc = load_lifecycle_state(&mut svc, Some(pw)).unwrap();
         lc.guarantor_roles.insert(
             anchor_hex.clone(),
             StoredGuarantorRole {
@@ -2946,7 +2979,7 @@ mod tests {
         assert_eq!(adj.approved[0].approved_amount, "100.00");
 
         // 2. Partial Tx_claim (40.00 of 100.00) directly at Guarantor Bob!
-        let claim_res = svc_holder
+        let (claim_res, _) = svc_holder
             .create_guarantor_claim_bundle(
                 &holder_local_id,
                 &guar_id,
@@ -2954,6 +2987,7 @@ mod tests {
                 &ft_toml,
                 None,
                 Some("partial claim".into()),
+                human_money_core::L2TransferMode::Offline,
                 Some(pw),
             )
             .unwrap();
@@ -3201,7 +3235,7 @@ mod tests {
         let now0 = 1_760_000_100u64;
 
         // 1. select_rotation_proposal: empty failed set returns None
-        let settings = AppSettings::default();
+        let lifecycle = InternalLifecycleState::default();
         let offenders = ServerOffenderList::new();
         assert!(select_rotation_proposal(
             anchor_id,
@@ -3209,7 +3243,7 @@ mod tests {
             &HashSet::new(),
             Some(&creator_mig_sk),
             None,
-            &settings,
+            &lifecycle,
             &offenders,
             now0,
         )
@@ -3223,7 +3257,7 @@ mod tests {
             &failed,
             Some(&creator_mig_sk),
             None,
-            &settings,
+            &lifecycle,
             &offenders,
             now0,
         )
@@ -3234,8 +3268,8 @@ mod tests {
         // 3. select_rotation_proposal without standby falls back to l2_probe_cache for Creator seat
         let mut manifest_no_standby = manifest.clone();
         manifest_no_standby.successors.clear();
-        let mut settings_with_probe = AppSettings::default();
-        settings_with_probe.l2_probe_cache.insert(
+        let mut lifecycle_with_probe = InternalLifecycleState::default();
+        lifecycle_with_probe.l2_probe_cache.insert(
             "https://srv4.delta.example/sync.php".into(),
             sync_client::FrontendLockServerProbeResult {
                 write_url: "https://srv4.delta.example/sync.php".into(),
@@ -3265,7 +3299,7 @@ mod tests {
             &failed,
             Some(&creator_mig_sk),
             None,
-            &settings_with_probe,
+            &lifecycle_with_probe,
             &offenders,
             now0,
         )

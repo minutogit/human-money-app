@@ -139,14 +139,13 @@ export function useVoucherCreation() {
     useEffect(() => {
         let active = true;
         settingsService
-            .getSettings()
-            .then((s) => {
-                if (!active || !s?.l2AnchorTemplatesMeta) return;
-                const templates = s.l2AnchorTemplatesMeta;
-                setAnchorTemplates(templates);
+            .getConfig()
+            .then((cfg) => {
+                if (!active || !cfg?.lifecycle?.l2AnchorTemplatesMeta) return;
+                setAnchorTemplates(cfg.lifecycle.l2AnchorTemplatesMeta);
             })
             .catch(() => {
-                // Keep offline-only default if settings are unavailable in isolated tests
+                // Keep offline-only default if config is unavailable in isolated tests
             });
         return () => { active = false; };
     }, []);

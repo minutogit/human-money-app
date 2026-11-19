@@ -1,6 +1,9 @@
 // src-tauri/src/state.rs
 use crate::models::{FrontendAddressBook, FrontendContact, TransactionRecord};
-use crate::settings::{AppSettings, SETTINGS_KEY};
+use crate::settings::{
+    AppConfigDto, InternalLifecycleState, SecurityPolicy, UiPreferences,
+    INTERNAL_LIFECYCLE_STATE_KEY, SECURITY_POLICY_KEY, UI_PREFERENCES_KEY,
+};
 use chrono::{Duration, Utc};
 use human_money_core::app_service::{AppFacadeError, AppService};
 use log::{error, info};
@@ -147,7 +150,7 @@ pub struct StoredBackupSyncState {
 /// # Lock Ordering Invariant
 /// Whenever multiple mutexes on `AppState` must be acquired simultaneously,
 /// acquire them strictly in the following total order to prevent deadlocks:
-/// `service -> settings -> own_market_profile -> contacts -> wot -> history -> events -> media_negative_cache`.
+/// `service -> ui_preferences -> security_policy -> internal_lifecycle -> own_market_profile -> contacts -> wot -> history -> events -> media_negative_cache`.
 ///
 /// Never hold any `MutexGuard` across an `.await` point.
 pub struct AppState {
@@ -155,7 +158,9 @@ pub struct AppState {
     pub history: Mutex<Option<Vec<TransactionRecord>>>,
     pub events: Mutex<Option<Vec<human_money_core::models::wallet_event::WalletEvent>>>,
     pub contacts: Mutex<Option<crate::models::FrontendAddressBook>>,
-    pub settings: Mutex<Option<AppSettings>>,
+    pub ui_preferences: Mutex<Option<UiPreferences>>,
+    pub security_policy: Mutex<Option<SecurityPolicy>>,
+    pub internal_lifecycle: Mutex<Option<InternalLifecycleState>>,
     pub own_market_profile: Mutex<Option<crate::models::StoredOwnMarketProfile>>,
     pub wot: Mutex<Option<humoco_wot::TrustRegister>>,
     pub recovery_owner: Mutex<Option<Option<crate::models::recovery::RecoveryOwnerState>>>,
@@ -166,6 +171,21 @@ pub struct AppState {
     pub startup_launch_items: Mutex<Vec<String>>,
 }
 
+/// Loads an encrypted raw byte block, returning `Ok(None)` only on `StorageError::NotFound`.
+///
+/// Propagates lock, session, authentication, and I/O errors without silent defaults.
+pub fn load_encrypted_bytes_opt(
+    service: &mut AppService,
+    key: &str,
+    password: Option<&str>,
+) -> Result<Option<Vec<u8>>, AppFacadeError> {
+    match service.load_encrypted_data(key, password) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(AppFacadeError::Storage(human_money_core::StorageError::NotFound)) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
 /// Loads and deserializes an encrypted JSON block, returning `Ok(None)` only on `StorageError::NotFound`.
 ///
 /// Propagates lock, session, authentication, I/O, and JSON parse errors without silent defaults.
@@ -174,12 +194,11 @@ pub fn load_encrypted_json_opt<T: serde::de::DeserializeOwned>(
     key: &str,
     password: Option<&str>,
 ) -> Result<Option<T>, AppFacadeError> {
-    match service.load_encrypted_data(key, password) {
-        Ok(bytes) => serde_json::from_slice(&bytes)
+    match load_encrypted_bytes_opt(service, key, password)? {
+        Some(bytes) => serde_json::from_slice(&bytes)
             .map(Some)
             .map_err(|e| AppFacadeError::Json(format!("Failed to parse {}: {}", key, e))),
-        Err(AppFacadeError::Storage(human_money_core::StorageError::NotFound)) => Ok(None),
-        Err(e) => Err(e),
+        None => Ok(None),
     }
 }
 
@@ -195,6 +214,16 @@ pub fn load_encrypted_json_or_default<T: serde::de::DeserializeOwned + Default>(
     Ok(load_encrypted_json_opt(service, key, password)?.unwrap_or_default())
 }
 
+/// Saves raw encrypted bytes under `key`.
+pub fn save_encrypted_bytes(
+    service: &mut AppService,
+    key: &str,
+    bytes: &[u8],
+    password: Option<&str>,
+) -> Result<(), AppFacadeError> {
+    service.save_encrypted_data(key, bytes, password)
+}
+
 /// Serializes `value` as JSON and saves it to the encrypted store under `key`.
 pub fn save_encrypted_json<T: serde::Serialize>(
     service: &mut AppService,
@@ -204,7 +233,7 @@ pub fn save_encrypted_json<T: serde::Serialize>(
 ) -> Result<(), AppFacadeError> {
     let bytes = serde_json::to_vec(value)
         .map_err(|e| AppFacadeError::Json(format!("Failed to serialize {}: {}", key, e)))?;
-    service.save_encrypted_data(key, &bytes, password)
+    save_encrypted_bytes(service, key, &bytes, password)
 }
 
 fn endpoints_overlap(a_read: &str, a_write: &str, b_read: &str, b_write: &str) -> bool {
@@ -222,7 +251,9 @@ impl AppState {
             history: Mutex::new(None),
             events: Mutex::new(None),
             contacts: Mutex::new(None),
-            settings: Mutex::new(None),
+            ui_preferences: Mutex::new(None),
+            security_policy: Mutex::new(None),
+            internal_lifecycle: Mutex::new(None),
             own_market_profile: Mutex::new(None),
             wot: Mutex::new(None),
             recovery_owner: Mutex::new(None),
@@ -284,66 +315,374 @@ impl AppState {
         Ok(())
     }
 
-    // 2. Settings Helpers
-    pub fn get_cached_settings(&self) -> Result<AppSettings, AppFacadeError> {
-        let cache = self.settings.lock().unwrap();
+    // 2. Settings Helpers (Split into UiPreferences, SecurityPolicy, InternalLifecycleState)
+    fn get_cached_store<T: Clone>(
+        cache: &Mutex<Option<T>>,
+        name: &str,
+    ) -> Result<T, AppFacadeError> {
         cache
+            .lock()
+            .unwrap()
             .as_ref()
             .cloned()
-            .ok_or_else(|| AppFacadeError::Generic("Settings not loaded".to_string()))
+            .ok_or_else(|| AppFacadeError::Generic(format!("{} not loaded", name)))
     }
 
-    pub fn load_settings(
+    fn load_store<T>(
+        service: &mut AppService,
+        cache: &Mutex<Option<T>>,
+        key: &str,
+        password: Option<&str>,
+    ) -> Result<T, AppFacadeError>
+    where
+        T: serde::Serialize + serde::de::DeserializeOwned + Default + Clone,
+    {
+        let value: T = match load_encrypted_json_opt::<T>(service, key, password)? {
+            Some(loaded) => loaded,
+            None => {
+                info!("No {} file found, creating default.", key);
+                let default_value = T::default();
+                save_encrypted_json(service, key, &default_value, password).map_err(|e| {
+                    AppFacadeError::Generic(format!("Failed to save default {}: {}", key, e))
+                })?;
+                default_value
+            }
+        };
+        *cache.lock().unwrap() = Some(value.clone());
+        Ok(value)
+    }
+
+    fn get_or_load_store<T>(
+        service: &mut AppService,
+        cache: &Mutex<Option<T>>,
+        key: &str,
+        name: &str,
+        password: Option<&str>,
+    ) -> Result<T, AppFacadeError>
+    where
+        T: serde::Serialize + serde::de::DeserializeOwned + Default + Clone,
+    {
+        if let Ok(cached) = Self::get_cached_store(cache, name) {
+            return Ok(cached);
+        }
+        Self::load_store(service, cache, key, password)
+    }
+
+    fn get_or_load_store_locked<T>(
+        &self,
+        cache: &Mutex<Option<T>>,
+        key: &str,
+        name: &str,
+        password: Option<&str>,
+    ) -> Result<T, crate::models::FrontendError>
+    where
+        T: serde::Serialize + serde::de::DeserializeOwned + Default + Clone,
+    {
+        if let Ok(cached) = Self::get_cached_store(cache, name) {
+            return Ok(cached);
+        }
+        let mut service = self.lock_service()?;
+        Self::load_store(&mut service, cache, key, password)
+            .map_err(crate::models::FrontendError::from)
+    }
+
+    fn save_store<T>(
+        service: &mut AppService,
+        cache: &Mutex<Option<T>>,
+        key: &str,
+        value: T,
+        password: Option<&str>,
+    ) -> Result<(), AppFacadeError>
+    where
+        T: serde::Serialize + Clone,
+    {
+        save_encrypted_json(service, key, &value, password)?;
+        *cache.lock().unwrap() = Some(value);
+        Ok(())
+    }
+
+    fn mutate_store_for_owner<T>(
+        &self,
+        expected_owner_did: &str,
+        cache: &Mutex<Option<T>>,
+        key: &str,
+        name: &str,
+        password: Option<&str>,
+        f: impl FnOnce(&mut T) -> bool,
+    ) -> Result<Option<T>, crate::models::FrontendError>
+    where
+        T: serde::Serialize + serde::de::DeserializeOwned + Default + Clone,
+    {
+        let mut service = self.lock_service()?;
+        let Ok(current_did) = service.with_wallet(|w| w.get_user_id().to_string()) else {
+            return Ok(None);
+        };
+        if current_did != expected_owner_did {
+            return Ok(None);
+        }
+        let mut value = Self::get_or_load_store(&mut service, cache, key, name, password)
+            .map_err(crate::models::FrontendError::from)?;
+        if f(&mut value) {
+            Self::save_store(&mut service, cache, key, value.clone(), password)
+                .map_err(crate::models::FrontendError::from)?;
+        }
+        Ok(Some(value))
+    }
+
+    pub fn get_cached_ui_preferences(&self) -> Result<UiPreferences, AppFacadeError> {
+        Self::get_cached_store(&self.ui_preferences, "UiPreferences")
+    }
+
+    pub fn get_or_load_ui_preferences(
         &self,
         service: &mut AppService,
         password: Option<&str>,
-    ) -> Result<AppSettings, AppFacadeError> {
-        let settings: AppSettings =
-            match load_encrypted_json_opt::<AppSettings>(service, SETTINGS_KEY, password)? {
-                Some(loaded) => loaded,
-                None => {
-                    info!("No settings file found, creating default settings.");
-                    let default_settings = AppSettings::default();
-                    save_encrypted_json(service, SETTINGS_KEY, &default_settings, password)
-                        .map_err(|e| {
-                            AppFacadeError::Generic(format!(
-                                "Failed to save default settings: {}",
-                                e
-                            ))
-                        })?;
-                    default_settings
-                }
-            };
-
-        *self.settings.lock().unwrap() = Some(settings.clone());
-        Ok(settings)
+    ) -> Result<UiPreferences, AppFacadeError> {
+        Self::get_or_load_store(
+            service,
+            &self.ui_preferences,
+            UI_PREFERENCES_KEY,
+            "UiPreferences",
+            password,
+        )
     }
 
-    pub fn save_settings(
+    pub fn get_or_load_ui_preferences_locked(
+        &self,
+        password: Option<&str>,
+    ) -> Result<UiPreferences, crate::models::FrontendError> {
+        self.get_or_load_store_locked(
+            &self.ui_preferences,
+            UI_PREFERENCES_KEY,
+            "UiPreferences",
+            password,
+        )
+    }
+
+    pub fn load_ui_preferences(
         &self,
         service: &mut AppService,
-        settings: AppSettings,
+        password: Option<&str>,
+    ) -> Result<UiPreferences, AppFacadeError> {
+        Self::load_store(service, &self.ui_preferences, UI_PREFERENCES_KEY, password)
+    }
+
+    pub fn save_ui_preferences(
+        &self,
+        service: &mut AppService,
+        prefs: UiPreferences,
         password: Option<&str>,
     ) -> Result<(), AppFacadeError> {
-        let prev_min = {
-            let guard = self.settings.lock().unwrap();
-            guard.as_ref().map(|s| s.share_min_level)
-        }
-        .or_else(|| {
-            load_encrypted_json_opt::<AppSettings>(service, SETTINGS_KEY, password)
-                .ok()
-                .flatten()
-                .map(|s| s.share_min_level)
-        });
-        let new_min = settings.share_min_level;
-        save_encrypted_json(service, SETTINGS_KEY, &settings, password)?;
-        *self.settings.lock().unwrap() = Some(settings);
+        let prev_min = match self
+            .ui_preferences
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|p| p.share_min_level)
+        {
+            Some(v) => Some(v),
+            None => load_encrypted_json_opt::<UiPreferences>(
+                service,
+                UI_PREFERENCES_KEY,
+                password,
+            )?
+            .map(|p| p.share_min_level),
+        };
+        let new_min = prefs.share_min_level;
+        Self::save_store(service, &self.ui_preferences, UI_PREFERENCES_KEY, prefs, password)?;
         if prev_min.is_some_and(|prev| new_min > prev) {
             crate::services::market_service::bump_own_card_version_for_eviction(
                 self, service, password,
             );
         }
         Ok(())
+    }
+
+    pub fn mutate_ui_preferences(
+        &self,
+        service: &mut AppService,
+        password: Option<&str>,
+        f: impl FnOnce(&mut UiPreferences),
+    ) -> Result<UiPreferences, AppFacadeError> {
+        let mut prefs = self.get_or_load_ui_preferences(service, password)?;
+        f(&mut prefs);
+        self.save_ui_preferences(service, prefs.clone(), password)?;
+        Ok(prefs)
+    }
+
+    pub fn get_cached_security_policy(&self) -> Result<SecurityPolicy, AppFacadeError> {
+        Self::get_cached_store(&self.security_policy, "SecurityPolicy")
+    }
+
+    pub fn get_or_load_security_policy(
+        &self,
+        service: &mut AppService,
+        password: Option<&str>,
+    ) -> Result<SecurityPolicy, AppFacadeError> {
+        Self::get_or_load_store(
+            service,
+            &self.security_policy,
+            SECURITY_POLICY_KEY,
+            "SecurityPolicy",
+            password,
+        )
+    }
+
+    pub fn get_or_load_security_policy_locked(
+        &self,
+        password: Option<&str>,
+    ) -> Result<SecurityPolicy, crate::models::FrontendError> {
+        self.get_or_load_store_locked(
+            &self.security_policy,
+            SECURITY_POLICY_KEY,
+            "SecurityPolicy",
+            password,
+        )
+    }
+
+    pub fn load_security_policy(
+        &self,
+        service: &mut AppService,
+        password: Option<&str>,
+    ) -> Result<SecurityPolicy, AppFacadeError> {
+        Self::load_store(service, &self.security_policy, SECURITY_POLICY_KEY, password)
+    }
+
+    pub fn save_security_policy(
+        &self,
+        service: &mut AppService,
+        policy: SecurityPolicy,
+        password: Option<&str>,
+    ) -> Result<(), AppFacadeError> {
+        Self::save_store(
+            service,
+            &self.security_policy,
+            SECURITY_POLICY_KEY,
+            policy,
+            password,
+        )
+    }
+
+    pub fn mutate_security_policy(
+        &self,
+        service: &mut AppService,
+        password: Option<&str>,
+        f: impl FnOnce(&mut SecurityPolicy),
+    ) -> Result<SecurityPolicy, AppFacadeError> {
+        let mut policy = self.get_or_load_security_policy(service, password)?;
+        f(&mut policy);
+        self.save_security_policy(service, policy.clone(), password)?;
+        Ok(policy)
+    }
+
+    pub fn mutate_security_policy_for_owner(
+        &self,
+        expected_owner_did: &str,
+        password: Option<&str>,
+        f: impl FnOnce(&mut SecurityPolicy) -> bool,
+    ) -> Result<Option<SecurityPolicy>, crate::models::FrontendError> {
+        self.mutate_store_for_owner(
+            expected_owner_did,
+            &self.security_policy,
+            SECURITY_POLICY_KEY,
+            "SecurityPolicy",
+            password,
+            f,
+        )
+    }
+
+    pub fn get_cached_internal_lifecycle(&self) -> Result<InternalLifecycleState, AppFacadeError> {
+        Self::get_cached_store(&self.internal_lifecycle, "InternalLifecycleState")
+    }
+
+    pub fn get_or_load_internal_lifecycle(
+        &self,
+        service: &mut AppService,
+        password: Option<&str>,
+    ) -> Result<InternalLifecycleState, AppFacadeError> {
+        Self::get_or_load_store(
+            service,
+            &self.internal_lifecycle,
+            INTERNAL_LIFECYCLE_STATE_KEY,
+            "InternalLifecycleState",
+            password,
+        )
+    }
+
+    pub fn get_or_load_internal_lifecycle_locked(
+        &self,
+        password: Option<&str>,
+    ) -> Result<InternalLifecycleState, crate::models::FrontendError> {
+        self.get_or_load_store_locked(
+            &self.internal_lifecycle,
+            INTERNAL_LIFECYCLE_STATE_KEY,
+            "InternalLifecycleState",
+            password,
+        )
+    }
+
+    pub fn load_internal_lifecycle(
+        &self,
+        service: &mut AppService,
+        password: Option<&str>,
+    ) -> Result<InternalLifecycleState, AppFacadeError> {
+        Self::load_store(
+            service,
+            &self.internal_lifecycle,
+            INTERNAL_LIFECYCLE_STATE_KEY,
+            password,
+        )
+    }
+
+    pub fn save_internal_lifecycle(
+        &self,
+        service: &mut AppService,
+        lifecycle: InternalLifecycleState,
+        password: Option<&str>,
+    ) -> Result<(), AppFacadeError> {
+        Self::save_store(
+            service,
+            &self.internal_lifecycle,
+            INTERNAL_LIFECYCLE_STATE_KEY,
+            lifecycle,
+            password,
+        )
+    }
+
+    pub fn mutate_internal_lifecycle(
+        &self,
+        service: &mut AppService,
+        password: Option<&str>,
+        f: impl FnOnce(&mut InternalLifecycleState),
+    ) -> Result<InternalLifecycleState, AppFacadeError> {
+        let mut lifecycle = self.get_or_load_internal_lifecycle(service, password)?;
+        f(&mut lifecycle);
+        self.save_internal_lifecycle(service, lifecycle.clone(), password)?;
+        Ok(lifecycle)
+    }
+
+    pub fn mutate_internal_lifecycle_for_owner(
+        &self,
+        expected_owner_did: &str,
+        password: Option<&str>,
+        f: impl FnOnce(&mut InternalLifecycleState) -> bool,
+    ) -> Result<Option<InternalLifecycleState>, crate::models::FrontendError> {
+        self.mutate_store_for_owner(
+            expected_owner_did,
+            &self.internal_lifecycle,
+            INTERNAL_LIFECYCLE_STATE_KEY,
+            "InternalLifecycleState",
+            password,
+            f,
+        )
+    }
+
+    pub fn get_cached_app_config(&self) -> Result<AppConfigDto, AppFacadeError> {
+        Ok(AppConfigDto {
+            ui_preferences: self.get_cached_ui_preferences()?,
+            security_policy: self.get_cached_security_policy()?,
+            lifecycle: self.get_cached_internal_lifecycle()?,
+        })
     }
 
     // 3. Contacts Helpers
@@ -402,7 +741,9 @@ impl AppState {
         mut contact: FrontendContact,
         password: Option<&str>,
     ) -> Result<(), AppFacadeError> {
-        contact.did = contact.did.trim().to_string();
+        let validated_did = human_money_core::ValidatedUserId::parse(&contact.did)
+            .map_err(|e| AppFacadeError::Generic(format!("Invalid contact DID: {}", e)))?;
+        contact.did = validated_did.into_string();
         let mut address_book: FrontendAddressBook =
             load_encrypted_json_or_default(service, CONTACTS_DATA_NAME, password)?;
 
@@ -822,7 +1163,9 @@ impl AppState {
         *self.history.lock().unwrap() = None;
         *self.events.lock().unwrap() = None;
         *self.contacts.lock().unwrap() = None;
-        *self.settings.lock().unwrap() = None;
+        *self.ui_preferences.lock().unwrap() = None;
+        *self.security_policy.lock().unwrap() = None;
+        *self.internal_lifecycle.lock().unwrap() = None;
         *self.own_market_profile.lock().unwrap() = None;
         *self.wot.lock().unwrap() = None;
         *self.recovery_owner.lock().unwrap() = None;
@@ -857,15 +1200,20 @@ impl AppState {
     ) -> Result<(), AppFacadeError> {
         info!("Initializing profile session and member caches...");
 
-        // 1. Load or create settings
-        let settings = self.load_settings(service, Some(credential))?;
+        // 1. Load or create split configuration stores
+        let _ui_prefs = self.load_ui_preferences(service, Some(credential))?;
+        let security_policy = self.load_security_policy(service, Some(credential))?;
+        let _lifecycle = self.load_internal_lifecycle(service, Some(credential))?;
 
         // 2. Start session timer if configured
-        if settings.session_timeout_seconds > 0 {
+        if security_policy.session_timeout_seconds > 0 {
             if is_secondary {
-                service.unlock_secondary_session(credential, settings.session_timeout_seconds)?;
+                service.unlock_secondary_session(
+                    credential,
+                    security_policy.session_timeout_seconds,
+                )?;
             } else {
-                service.unlock_session(credential, settings.session_timeout_seconds)?;
+                service.unlock_session(credential, security_policy.session_timeout_seconds)?;
             }
         }
 
@@ -1328,11 +1676,17 @@ impl AppState {
             }
         };
 
-        let settings = self
-            .get_cached_settings()
-            .or_else(|_| self.load_settings(service, password))
-            .unwrap_or_default();
-        let max_stored_cards = settings.max_stored_cards.clamp(100, 10_000);
+        let ui_prefs = match self.get_or_load_ui_preferences(service, password) {
+            Ok(p) => p,
+            Err(e) => {
+                log::warn!(
+                    "Failed to load ui_preferences for piggybacked contact card: {}",
+                    e
+                );
+                return;
+            }
+        };
+        let max_stored_cards = ui_prefs.max_stored_cards.clamp(100, 10_000);
         let now = Utc::now().timestamp().max(0) as u64;
 
         let mut store: humoco_market::CardStore =
@@ -1486,8 +1840,16 @@ impl AppState {
                 }
             };
 
-        let settings_res = self.load_settings(service, password);
-        let settings_opt = settings_res.ok();
+        let policy_opt = match self.get_or_load_security_policy(service, password) {
+            Ok(p) => Some(p),
+            Err(e) => {
+                log::warn!(
+                    "Failed to load security policy during record_contact_sync_health_batch: {}",
+                    e
+                );
+                None
+            }
+        };
 
         let mut updated = false;
         for (url, success) in results {
@@ -1515,7 +1877,7 @@ impl AppState {
                                 if sync_ep.status == "active" {
                                     // remains active
                                 } else if sync_ep.status == "unreachable" {
-                                    let is_selected = settings_opt
+                                    let is_selected = policy_opt
                                         .as_ref()
                                         .map(|s| {
                                             s.market_selected_syncs.iter().any(|sel| {
@@ -1558,14 +1920,14 @@ impl AppState {
             *self.contacts.lock().unwrap() = Some(address_book);
         }
 
-        if let Some(mut settings) = settings_opt {
-            let mut settings_updated = false;
+        if let Some(mut policy) = policy_opt {
+            let mut policy_updated = false;
             for (url, success) in results {
                 let norm_target = crate::services::common::normalize_sync_url(url);
                 if norm_target.is_empty() {
                     continue;
                 }
-                for sel in &mut settings.market_selected_syncs {
+                for sel in &mut policy.market_selected_syncs {
                     let norm_read = crate::services::common::normalize_sync_url(&sel.read_url);
                     let norm_write = crate::services::common::normalize_sync_url(&sel.write_url);
                     if norm_read == norm_target || norm_write == norm_target {
@@ -1589,12 +1951,12 @@ impl AppState {
                                 sel.status = "unreachable".to_string();
                             }
                         }
-                        settings_updated = true;
+                        policy_updated = true;
                     }
                 }
             }
-            if settings_updated {
-                let _ = self.save_settings(service, settings, password);
+            if policy_updated {
+                let _ = self.save_security_policy(service, policy, password);
             }
         }
         updated
@@ -1611,21 +1973,21 @@ impl AppState {
             return;
         }
 
-        let mut settings = match self.load_settings(service, password) {
-            Ok(s) => s,
+        let mut policy = match self.get_or_load_security_policy(service, password) {
+            Ok(p) => p,
             Err(_) => return,
         };
 
-        if settings.market_selected_syncs.is_empty() {
+        if policy.market_selected_syncs.is_empty() {
             return;
         }
 
-        let admin_opt: Option<StoredSyncAdmin> = match load_encrypted_json_opt::<StoredSyncAdmin>(
+        let admin_opt: Option<StoredSyncAdmin> = match load_encrypted_json_opt::<Option<StoredSyncAdmin>>(
             service,
             MARKET_SYNC_ADMIN_KEY,
             password,
         ) {
-            Ok(opt) => opt,
+            Ok(opt) => opt.flatten(),
             Err(e) => {
                 log::warn!(
                     "Failed to load {} during prune_orphaned_market_selected_syncs: {}",
@@ -1636,8 +1998,8 @@ impl AppState {
             }
         };
 
-        let initial_count = settings.market_selected_syncs.len();
-        settings.market_selected_syncs.retain(|sel| {
+        let initial_count = policy.market_selected_syncs.len();
+        policy.market_selected_syncs.retain(|sel| {
             let sr = crate::services::common::normalize_sync_url(&sel.read_url);
             let sw = crate::services::common::normalize_sync_url(&sel.write_url);
             if sr.is_empty() && sw.is_empty() {
@@ -1672,16 +2034,16 @@ impl AppState {
                 return true;
             }
 
-            // 3. Matches any settings.public_syncs?
-            settings
+            // 3. Matches any policy.public_syncs?
+            policy
                 .public_syncs
                 .iter()
                 .any(|ps| endpoints_overlap(&ps.read_url, &ps.write_url, &sr, &sw))
         });
 
-        if settings.market_selected_syncs.len() != initial_count {
-            let updated_syncs = settings.market_selected_syncs.clone();
-            let _ = self.save_settings(service, settings, password);
+        if policy.market_selected_syncs.len() != initial_count {
+            let updated_syncs = policy.market_selected_syncs.clone();
+            let _ = self.save_security_policy(service, policy, password);
             crate::services::market_service::sync_own_card_drops_on_settings_change(
                 self,
                 service,
@@ -1709,13 +2071,9 @@ impl AppState {
 }
 
 pub fn canonicalize_did(input: &str) -> Result<String, humoco_wot::WotError> {
-    let trimmed = input.trim();
-    let did_part = if let Some((_, did)) = trimmed.split_once('@') {
-        did
-    } else {
-        trimmed
-    };
-    humoco_wot::canonicalize_did(did_part)
+    let validated = human_money_core::ValidatedUserId::parse(input)
+        .map_err(|e| humoco_wot::WotError::InvalidDid(format!("{input}: {e}")))?;
+    humoco_wot::canonicalize_did(validated.canonical_did())
 }
 
 pub struct DidWotSigner {
@@ -2523,21 +2881,21 @@ mod tests {
         );
 
         // 5. If sync is in market_selected_syncs, unreachable transitions to "active" on recovery
-        let mut settings = state.load_settings(&mut service, Some(password)).unwrap();
-        settings.market_selected_syncs = vec![FrontendSyncDescriptor {
-            read_url: "https://sync-endpoint.org/sync.php".to_string(),
-            write_url: "https://sync-endpoint.org/sync.php".to_string(),
-            drop_pub: "pub123".to_string(),
-            slot_id: None,
-            last_seen_at: None,
-            last_error_at: None,
-            fail_count: 0,
-            status: "active".to_string(),
-            last_probed_at: None,
-            ..Default::default()
-        }];
         state
-            .save_settings(&mut service, settings, Some(password))
+            .mutate_security_policy(&mut service, Some(password), |policy| {
+                policy.market_selected_syncs = vec![FrontendSyncDescriptor {
+                    read_url: "https://sync-endpoint.org/sync.php".to_string(),
+                    write_url: "https://sync-endpoint.org/sync.php".to_string(),
+                    drop_pub: "pub123".to_string(),
+                    slot_id: None,
+                    last_seen_at: None,
+                    last_error_at: None,
+                    fail_count: 0,
+                    status: "active".to_string(),
+                    last_probed_at: None,
+                    ..Default::default()
+                }];
+            })
             .unwrap();
 
         // Mark contact as unreachable again
@@ -2626,21 +2984,25 @@ mod tests {
             .save_contact(&mut service, contact.clone(), Some(password))
             .unwrap();
 
-        // Put Bob's sync into settings.market_selected_syncs
-        let mut settings = state.load_settings(&mut service, Some(password)).unwrap();
-        settings.market_selected_syncs = vec![bob_sync];
+        // Put Bob's sync into security_policy.market_selected_syncs
+        let mut policy = state
+            .load_security_policy(&mut service, Some(password))
+            .unwrap();
+        policy.market_selected_syncs = vec![bob_sync];
         state
-            .save_settings(&mut service, settings, Some(password))
+            .save_security_policy(&mut service, policy, Some(password))
             .unwrap();
 
-        // 1. Updating contact to remove sync should prune it from settings.market_selected_syncs
+        // 1. Updating contact to remove sync should prune it from security_policy.market_selected_syncs
         let mut updated_contact = contact.clone();
         updated_contact.syncs = vec![];
         state
             .save_contact(&mut service, updated_contact, Some(password))
             .unwrap();
 
-        let s_after = state.load_settings(&mut service, Some(password)).unwrap();
+        let s_after = state
+            .load_security_policy(&mut service, Some(password))
+            .unwrap();
         assert_eq!(
             s_after.market_selected_syncs.len(),
             0,
@@ -2651,8 +3013,10 @@ mod tests {
         state
             .save_contact(&mut service, contact, Some(password))
             .unwrap();
-        let mut settings2 = state.load_settings(&mut service, Some(password)).unwrap();
-        settings2.market_selected_syncs = vec![FrontendSyncDescriptor {
+        let mut policy2 = state
+            .load_security_policy(&mut service, Some(password))
+            .unwrap();
+        policy2.market_selected_syncs = vec![FrontendSyncDescriptor {
             read_url: "https://bob-sync.org/sync.php".to_string(),
             write_url: "https://bob-sync.org/sync.php".to_string(),
             drop_pub: "pub_bob".to_string(),
@@ -2665,13 +3029,15 @@ mod tests {
             ..Default::default()
         }];
         state
-            .save_settings(&mut service, settings2, Some(password))
+            .save_security_policy(&mut service, policy2, Some(password))
             .unwrap();
 
         state
             .delete_contact(&mut service, &bob_did, Some(password))
             .unwrap();
-        let s_after_del = state.load_settings(&mut service, Some(password)).unwrap();
+        let s_after_del = state
+            .load_security_policy(&mut service, Some(password))
+            .unwrap();
         assert_eq!(
             s_after_del.market_selected_syncs.len(),
             0,
@@ -2924,12 +3290,10 @@ mod tests {
             .save_contact(&mut service, contact, Some(password))
             .unwrap();
 
-        let mut settings = state
-            .load_settings(&mut service, Some(password))
-            .unwrap_or_default();
-        settings.market_selected_syncs = vec![dep_ep.clone(), rev_ep.clone()];
         state
-            .save_settings(&mut service, settings, Some(password))
+            .mutate_security_policy(&mut service, Some(password), |policy| {
+                policy.market_selected_syncs = vec![dep_ep.clone(), rev_ep.clone()];
+            })
             .unwrap();
 
         // 1. Before sunset (now = 1800 < 2000): success=true keeps deprecating, failure=false keeps revoked
@@ -2950,9 +3314,11 @@ mod tests {
         assert_eq!(bob_1.syncs[1].status, "revoked");
         assert_eq!(bob_1.syncs[1].fail_count, 1);
 
-        let settings_1 = state.load_settings(&mut service, Some(password)).unwrap();
-        assert_eq!(settings_1.market_selected_syncs[0].status, "deprecating");
-        assert_eq!(settings_1.market_selected_syncs[1].status, "revoked");
+        let policy_1 = state
+            .load_security_policy(&mut service, Some(password))
+            .unwrap();
+        assert_eq!(policy_1.market_selected_syncs[0].status, "deprecating");
+        assert_eq!(policy_1.market_selected_syncs[1].status, "revoked");
 
         // 2. Failure on deprecating before sunset preserves deprecating (not "unreachable")
         state.record_contact_sync_health_batch(
@@ -2977,8 +3343,10 @@ mod tests {
         let bob_3 = contacts_3.iter().find(|c| c.did == bob_did).unwrap();
         assert_eq!(bob_3.syncs[0].status, "revoked");
 
-        let settings_3 = state.load_settings(&mut service, Some(password)).unwrap();
-        assert_eq!(settings_3.market_selected_syncs[0].status, "revoked");
+        let policy_3 = state
+            .load_security_policy(&mut service, Some(password))
+            .unwrap();
+        assert_eq!(policy_3.market_selected_syncs[0].status, "revoked");
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
@@ -3150,11 +3518,19 @@ mod tests {
         )
         .unwrap();
         assert!(book.contacts.is_empty());
-        assert!(state.load_settings(&mut service, Some(password)).is_ok());
+        assert!(state.load_ui_preferences(&mut service, Some(password)).is_ok());
+        assert!(state.load_security_policy(&mut service, Some(password)).is_ok());
+        assert!(state
+            .load_internal_lifecycle(&mut service, Some(password))
+            .is_ok());
 
         // Missing session / wrong auth propagates error instead of silent fallback
         assert!(matches!(
-            state.load_settings(&mut service, None),
+            state.load_ui_preferences(&mut service, None),
+            Err(AppFacadeError::SessionNotActive(_))
+        ));
+        assert!(matches!(
+            state.load_security_policy(&mut service, None),
             Err(AppFacadeError::SessionNotActive(_))
         ));
         assert!(matches!(
@@ -3166,7 +3542,9 @@ mod tests {
 
         // Corrupt JSON on disk MUST return AppFacadeError::Json (never silent default)
         for key in [
-            crate::settings::SETTINGS_KEY,
+            crate::settings::UI_PREFERENCES_KEY,
+            crate::settings::SECURITY_POLICY_KEY,
+            crate::settings::INTERNAL_LIFECYCLE_STATE_KEY,
             super::CONTACTS_DATA_NAME,
             super::WOT_DATA_NAME,
             super::TRANSACTION_HISTORY_KEY,
@@ -3176,7 +3554,15 @@ mod tests {
                 .unwrap();
         }
         assert!(matches!(
-            state.load_settings(&mut service, Some(password)),
+            state.load_ui_preferences(&mut service, Some(password)),
+            Err(AppFacadeError::Json(_))
+        ));
+        assert!(matches!(
+            state.load_security_policy(&mut service, Some(password)),
+            Err(AppFacadeError::Json(_))
+        ));
+        assert!(matches!(
+            state.load_internal_lifecycle(&mut service, Some(password)),
             Err(AppFacadeError::Json(_))
         ));
         assert!(matches!(
@@ -3231,5 +3617,116 @@ mod tests {
         assert!(super::clear_revocation(&mut pub_sync, "active"));
         assert_eq!(pub_sync.status, "active");
         assert!(pub_sync.sunset_at.is_none());
+    }
+
+    #[test]
+    fn test_split_config_stores_isolation_and_owner_checked_mutator() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("humoco_split_cfg_test_{}", uuid::Uuid::new_v4()));
+        let pw = "split-cfg-pw-2026";
+        let alice_svc = crate::test_support::setup_test_app(
+            &temp_dir.join("alice"),
+            "Alice",
+            crate::test_support::ALICE_PHRASE,
+            pw,
+        );
+        let alice_did = alice_svc
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
+        let state = crate::test_support::create_test_state(alice_svc);
+
+        {
+            let mut s = state.lock_service().unwrap();
+            state
+                .mutate_ui_preferences(&mut s, Some(pw), |p| {
+                    p.ui_mode = "expert".to_string();
+                })
+                .unwrap();
+            state
+                .mutate_security_policy(&mut s, Some(pw), |p| {
+                    p.session_timeout_seconds = 900;
+                })
+                .unwrap();
+            state
+                .mutate_internal_lifecycle(&mut s, Some(pw), |lc| {
+                    lc.pending_restore_l2_reconciliation = true;
+                })
+                .unwrap();
+        }
+
+        // Same owner: clears flag without clobbering UiPreferences or SecurityPolicy
+        let updated = state
+            .mutate_internal_lifecycle_for_owner(&alice_did, Some(pw), |lc| {
+                lc.pending_restore_l2_reconciliation = false;
+                lc.last_sync_backup_at = Some("2026-11-19T12:00:00Z".to_string());
+                true
+            })
+            .unwrap()
+            .expect("matching owner must mutate lifecycle");
+        assert!(!updated.pending_restore_l2_reconciliation);
+        assert_eq!(
+            updated.last_sync_backup_at.as_deref(),
+            Some("2026-11-19T12:00:00Z")
+        );
+
+        let cfg = state.get_cached_app_config().unwrap();
+        assert_eq!(cfg.ui_preferences.ui_mode, "expert");
+        assert_eq!(cfg.security_policy.session_timeout_seconds, 900);
+
+        // Stale owner DID: returns Ok(None) and does NOT touch store
+        let stale = state
+            .mutate_internal_lifecycle_for_owner("did:key:zStaleOwner", Some(pw), |lc| {
+                lc.backup_dirty = true;
+                true
+            })
+            .unwrap();
+        assert!(stale.is_none());
+        assert!(!state
+            .get_cached_internal_lifecycle()
+            .unwrap()
+            .backup_dirty);
+
+        // Logged-out / locked wallet: returns Ok(None) and does NOT touch store
+        state.lock_service().unwrap().logout();
+        let locked = state
+            .mutate_internal_lifecycle_for_owner(&alice_did, Some(pw), |lc| {
+                lc.backup_dirty = true;
+                true
+            })
+            .unwrap();
+        assert!(locked.is_none());
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_canonicalize_did_rejects_malformed_prefixes_and_checksums() {
+        let kp = human_money_core::test_utils::ACTORS.bob.identity.clone();
+        let root_did = human_money_core::crypto::create_user_id(&kp.public_key, None).unwrap();
+        let valid_sai =
+            human_money_core::crypto::create_user_id(&kp.public_key, Some("shop-1")).unwrap();
+
+        assert_eq!(super::canonicalize_did(&root_did).unwrap(), root_did);
+        assert_eq!(
+            super::canonicalize_did(&format!("  {} \n", valid_sai)).unwrap(),
+            root_did
+        );
+
+        let broken_variants = [
+            format!("fake@{}", root_did),
+            format!("shop-1:BAD@{}", root_did),
+            format!(":abc@{}", root_did),
+            format!("@{}", root_did),
+            format!("a@b:abc@{}", root_did),
+            format!("Shop:abc@{}", root_did),
+            format!("{}\n{}", &root_did[..12], &root_did[12..]),
+        ];
+        for invalid in &broken_variants {
+            assert!(
+                super::canonicalize_did(invalid).is_err(),
+                "canonicalize_did must reject malformed input '{}'",
+                invalid
+            );
+        }
     }
 }

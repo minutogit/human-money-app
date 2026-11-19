@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { RefreshCw, ShieldCheck, Trash2, CheckCircle2, XCircle } from 'lucide-react';
-import { AppSettings, LockServerProbeResult } from '../../../types';
+import { LockServerProbeResult, NominatedLockServerMeta } from '../../../types';
 import { settingsService } from '../../../services/settingsService';
 import { useSession } from '../../../context/SessionContext';
 import { Button } from '../../ui/Button';
@@ -28,26 +28,26 @@ export function formatAgeLabel(tsSecs: number | null | undefined): string {
 }
 
 export interface LockServerProbeSectionProps {
-    settings: AppSettings | null;
+    ownNominatedLockServer?: NominatedLockServerMeta | null;
     probeList: LockServerProbeResult[];
     passingProbes: LockServerProbeResult[];
     onSuccess: (message: string) => void;
     onError: (message: string) => void;
     onClearFeedback: () => void;
-    onRefreshSettings: () => Promise<void>;
+    onRefreshConfig: () => Promise<void>;
 }
 
 /**
  * Verifies external lock servers and manages the user's own nominated guarantor lock server.
  */
 export const LockServerProbeSection: React.FC<LockServerProbeSectionProps> = ({
-    settings,
+    ownNominatedLockServer,
     probeList,
     passingProbes,
     onSuccess,
     onError,
     onClearFeedback,
-    onRefreshSettings,
+    onRefreshConfig,
 }) => {
     const { t } = useTranslation();
     const { protectAction } = useSession();
@@ -57,14 +57,14 @@ export const LockServerProbeSection: React.FC<LockServerProbeSectionProps> = ({
     const [isProbing, setIsProbing] = useState(false);
     const [lastProbe, setLastProbe] = useState<LockServerProbeResult | null>(null);
 
-    const [ownServerUrl, setOwnServerUrl] = useState(settings?.ownNominatedLockServer?.writeUrl || '');
-    const [ownServerAsn, setOwnServerAsn] = useState(settings?.ownNominatedLockServer?.asn || '');
+    const [ownServerUrl, setOwnServerUrl] = useState(ownNominatedLockServer?.writeUrl || '');
+    const [ownServerAsn, setOwnServerAsn] = useState(ownNominatedLockServer?.asn || '');
     const [isSavingOwn, setIsSavingOwn] = useState(false);
 
     useEffect(() => {
-        setOwnServerUrl(settings?.ownNominatedLockServer?.writeUrl || '');
-        setOwnServerAsn(settings?.ownNominatedLockServer?.asn || '');
-    }, [settings?.ownNominatedLockServer]);
+        setOwnServerUrl(ownNominatedLockServer?.writeUrl || '');
+        setOwnServerAsn(ownNominatedLockServer?.asn || '');
+    }, [ownNominatedLockServer]);
 
     const handleProbe = async () => {
         const trimmed = normalizeSyncUrlInput(probeUrl.trim()) || probeUrl.trim();
@@ -87,7 +87,7 @@ export const LockServerProbeSection: React.FC<LockServerProbeSectionProps> = ({
                 } else if (res.passed) {
                     onSuccess(t('settings.lockProbePassedMsg', 'Server passed external verification.'));
                 }
-                await onRefreshSettings();
+                await onRefreshConfig();
             }
         } catch (e) {
             onError(translateError(e, t));
@@ -116,7 +116,7 @@ export const LockServerProbeSection: React.FC<LockServerProbeSectionProps> = ({
                         ? t('settings.ownLockClearedMsg', 'Own nominated lock server removed.')
                         : t('settings.ownLockSavedMsg', 'Own nominated lock server saved.')
                 );
-                await onRefreshSettings();
+                await onRefreshConfig();
             }
         } catch (e) {
             onError(translateError(e, t));
@@ -284,7 +284,7 @@ export const LockServerProbeSection: React.FC<LockServerProbeSectionProps> = ({
                     />
                 </div>
                 <div className="flex items-center justify-between gap-2">
-                    {settings?.ownNominatedLockServer ? (
+                    {ownNominatedLockServer ? (
                         <Button
                             type="button"
                             size="sm"

@@ -1,14 +1,14 @@
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { Dashboard } from '../Dashboard';
-import { UiModeProvider, UI_MODE_STORAGE_KEY } from '../../../context/UiModeContext';
+import { UiModeProvider } from '../../../context/UiModeContext';
 import { profileService } from '../../../services/profileService';
 import { voucherService } from '../../../services/voucherService';
 import { settingsService } from '../../../services/settingsService';
 import { transferService } from '../../../services/transferService';
 import { contactService } from '../../../services/contactService';
 import { marketService } from '../../../services/marketService';
-import { AggregatedBalance, VoucherSummary, AppSettings, IntegrityReport } from '../../../types';
+import { AggregatedBalance, VoucherSummary, AppConfigDto, IntegrityReport } from '../../../types';
 
 vi.mock('../../../services/profileService');
 vi.mock('../../../services/voucherService');
@@ -95,11 +95,41 @@ const mockVouchers: VoucherSummary[] = [
     }
 ];
 
-const mockSettings: AppSettings = {
-    sessionTimeoutSeconds: 600,
-    privacyDefault: 'ask',
-    balanceViewMode: 'spendable',
-    marketSyncEnabled: true,
+const mockConfig: AppConfigDto = {
+    uiPreferences: {
+        uiMode: 'simple',
+        lastUsedDirectory: null,
+        balanceViewMode: 'spendable',
+        marketShowUnknown: true,
+        maxStoredCards: 2000,
+        marketSendCardOnPayment: false,
+        marketSyncEnabled: true,
+        shareMinLevel: 1,
+        marketPollWifiOnly: false,
+        wotShareViaSync: true,
+        postAcceptFromContacts: true,
+        mediaAutoLoadMaxHops: 2,
+    },
+    securityPolicy: {
+        sessionTimeoutSeconds: 600,
+        privacyDefault: 'ask',
+        devModeUnlocked: false,
+        autoBackupEnabled: true,
+        syncBackupEnabled: true,
+        backupSyncFolder: null,
+        backupProtectionMode: null,
+        ownNominatedLockServer: null,
+        marketSelectedSyncs: [],
+        publicSyncs: [],
+    },
+    lifecycle: {
+        pendingRestoreL2Reconciliation: false,
+        backupDirty: false,
+        lastBackupAt: null,
+        lastSyncBackupAt: null,
+        l2ProbeCache: {},
+        l2AnchorTemplatesMeta: [],
+    },
 };
 
 describe('Dashboard Component', () => {
@@ -123,17 +153,16 @@ describe('Dashboard Component', () => {
         });
         vi.mocked(voucherService.getTotalBalanceByCurrency).mockResolvedValue(mockBalances);
         vi.mocked(voucherService.getSummaries).mockResolvedValue(mockVouchers);
-        vi.mocked(settingsService.getSettings).mockResolvedValue(mockSettings);
-        vi.mocked(settingsService.saveSettings).mockResolvedValue(undefined as never);
+        vi.mocked(settingsService.getConfig).mockResolvedValue(mockConfig);
+        vi.mocked(settingsService.patchUiPreferences).mockResolvedValue(mockConfig.uiPreferences);
         vi.mocked(transferService.getHistory).mockResolvedValue([]);
         vi.mocked(transferService.getEventHistory).mockResolvedValue([]);
         vi.mocked(contactService.getContacts).mockResolvedValue([]);
     });
 
     it('renders spendable balance by default and toggles to net balance mode in expert mode', async () => {
-        localStorage.setItem(UI_MODE_STORAGE_KEY, 'expert');
         render(
-            <UiModeProvider>
+            <UiModeProvider initialMode="expert">
                 <Dashboard />
             </UiModeProvider>
         );
@@ -159,9 +188,8 @@ describe('Dashboard Component', () => {
     });
 
     it('hides net balance toggle and user ID pill in simple mode', async () => {
-        localStorage.setItem(UI_MODE_STORAGE_KEY, 'simple');
         render(
-            <UiModeProvider>
+            <UiModeProvider initialMode="simple">
                 <Dashboard />
             </UiModeProvider>
         );
@@ -213,9 +241,8 @@ describe('Dashboard Component', () => {
     });
 
     it('provides copyable TechId in expert mode', async () => {
-        localStorage.setItem(UI_MODE_STORAGE_KEY, 'expert');
         render(
-            <UiModeProvider>
+            <UiModeProvider initialMode="expert">
                 <Dashboard />
             </UiModeProvider>
         );
@@ -288,9 +315,8 @@ describe('Dashboard Component', () => {
     });
 
     it('shows collapsible voucher overview with issuer and expiry, hiding full wallet button in simple mode and showing it in expert mode', async () => {
-        localStorage.setItem(UI_MODE_STORAGE_KEY, 'simple');
         const simpleRender = render(
-            <UiModeProvider>
+            <UiModeProvider initialMode="simple">
                 <Dashboard />
             </UiModeProvider>
         );
@@ -320,9 +346,8 @@ describe('Dashboard Component', () => {
         simpleRender.unmount();
 
         // Expert mode exposes button to open full voucher list with filters
-        localStorage.setItem(UI_MODE_STORAGE_KEY, 'expert');
         render(
-            <UiModeProvider>
+            <UiModeProvider initialMode="expert">
                 <Dashboard />
             </UiModeProvider>
         );

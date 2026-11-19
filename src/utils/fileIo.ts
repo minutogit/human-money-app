@@ -1,7 +1,7 @@
 // src/utils/fileIo.ts
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { readFile, writeFile } from '@tauri-apps/plugin-fs';
-import type { AppSettings } from '../types';
+import type { UiPreferences } from '../types';
 import { stringifyError } from './errorHelper';
 import { logger } from './log';
 import { updateLastUsedDirectory } from './settingsUtils';
@@ -13,12 +13,13 @@ export interface FileDialogFilter {
 
 export type ProtectActionFn = <T>(
     action: (password: string | null) => Promise<T>,
+    options?: { requireFullAccess?: boolean },
 ) => Promise<T | void>;
 
 export interface SaveFileOptions {
     defaultFilename: string;
     filters?: FileDialogFilter[];
-    settings?: AppSettings | null;
+    uiPreferences?: Pick<UiPreferences, 'lastUsedDirectory'> | null;
     protectAction?: ProtectActionFn;
     mimeType?: string;
 }
@@ -30,7 +31,7 @@ export interface SaveFileResult {
 
 export interface OpenFileOptions {
     filters?: FileDialogFilter[];
-    settings?: AppSettings | null;
+    uiPreferences?: Pick<UiPreferences, 'lastUsedDirectory'> | null;
     protectAction?: ProtectActionFn;
 }
 
@@ -39,9 +40,12 @@ export interface OpenFileResult {
     bytes: number[];
 }
 
-function buildDefaultPath(defaultFilename: string, settings?: AppSettings | null): string {
-    return settings?.lastUsedDirectory
-        ? `${settings.lastUsedDirectory}/${defaultFilename}`
+function buildDefaultPath(
+    defaultFilename: string,
+    uiPreferences?: Pick<UiPreferences, 'lastUsedDirectory'> | null,
+): string {
+    return uiPreferences?.lastUsedDirectory
+        ? `${uiPreferences.lastUsedDirectory}/${defaultFilename}`
         : defaultFilename;
 }
 
@@ -72,13 +76,15 @@ function triggerBrowserDownload(
 
 async function persistLastUsedDirectory(
     filePath: string,
-    settings?: AppSettings | null,
+    uiPreferences?: Pick<UiPreferences, 'lastUsedDirectory'> | null,
     protectAction?: ProtectActionFn,
 ): Promise<void> {
-    if (!settings || !protectAction) {
+    if (!uiPreferences || !protectAction) {
         return;
     }
-    await Promise.resolve(updateLastUsedDirectory(filePath, settings, protectAction)).catch(() => {});
+    await Promise.resolve(updateLastUsedDirectory(filePath, uiPreferences, protectAction)).catch(
+        () => {},
+    );
 }
 
 /**
@@ -88,10 +94,10 @@ async function persistLastUsedDirectory(
 export async function pickSaveFilePath(options: {
     defaultFilename: string;
     filters?: FileDialogFilter[];
-    settings?: AppSettings | null;
+    uiPreferences?: Pick<UiPreferences, 'lastUsedDirectory'> | null;
 }): Promise<string | null> {
     const selected = await save({
-        defaultPath: buildDefaultPath(options.defaultFilename, options.settings),
+        defaultPath: buildDefaultPath(options.defaultFilename, options.uiPreferences),
         filters: options.filters,
     });
     return typeof selected === 'string' && selected.length > 0 ? selected : null;
@@ -125,7 +131,7 @@ export async function saveBytesToFile(
 
     try {
         const selected = await save({
-            defaultPath: buildDefaultPath(options.defaultFilename, options.settings),
+            defaultPath: buildDefaultPath(options.defaultFilename, options.uiPreferences),
             filters: options.filters,
         });
         filePath = typeof selected === 'string' && selected.length > 0 ? selected : null;
@@ -136,7 +142,7 @@ export async function saveBytesToFile(
 
     if (filePath) {
         await writeFile(filePath, bytes);
-        await persistLastUsedDirectory(filePath, options.settings, options.protectAction);
+        await persistLastUsedDirectory(filePath, options.uiPreferences, options.protectAction);
         return { path: filePath, downloaded: false };
     }
 
@@ -152,19 +158,19 @@ export async function saveBytesToFile(
 
 /**
  * Opens a single file via Tauri's open dialog + fs `readFile`, updating
- * `lastUsedDirectory` when settings and `protectAction` are provided.
+ * `lastUsedDirectory` when preferences and `protectAction` are provided.
  * Returns `null` when cancelled.
  */
 export async function openFileAsBytes(options: OpenFileOptions = {}): Promise<OpenFileResult | null> {
     const selectedPath = await open({
         multiple: false,
-        defaultPath: options.settings?.lastUsedDirectory,
+        defaultPath: options.uiPreferences?.lastUsedDirectory ?? undefined,
         filters: options.filters,
     });
     if (typeof selectedPath !== 'string' || selectedPath.length === 0) {
         return null;
     }
-    await persistLastUsedDirectory(selectedPath, options.settings, options.protectAction);
+    await persistLastUsedDirectory(selectedPath, options.uiPreferences, options.protectAction);
     const fileUint8Array = await readFile(selectedPath);
     return {
         path: selectedPath,

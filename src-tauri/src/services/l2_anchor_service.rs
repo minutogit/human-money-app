@@ -56,7 +56,12 @@ pub(crate) async fn probe_lock_server_cmd_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendLockServerProbeResult, FrontendError> {
-    state.authorize(crate::state::RequiredAccess::Unlocked, None)?;
+    let owner_did = {
+        let service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
+        service
+            .with_wallet(|w| w.get_user_id().to_string())
+            .map_err(FrontendError::from)?
+    };
     let client = sync_client::create_sync_probe_client();
     let mut result = sync_client::probe_lock_server(
         &client,
@@ -70,9 +75,10 @@ pub(crate) async fn probe_lock_server_cmd_impl(
 
     let norm_url = normalize_sync_url(&result.write_url);
     if !norm_url.is_empty() {
-        let mut service = state.lock_service()?;
-        let offenders =
-            crate::l2_lifecycle::load_server_offender_list(&mut service, password.as_deref());
+        let offenders = {
+            let mut service = state.lock_service()?;
+            crate::l2_lifecycle::load_server_offender_list(&mut service, password.as_deref())?
+        };
         if let Ok(lock_pk) = decode_hex_fixed::<32>(&result.lock_pub) {
             let admin_pk = decode_hex_fixed::<32>(&result.admin_pub).ok();
             if crate::l2_lifecycle::is_server_key_revoked(&offenders, &lock_pk, admin_pk.as_ref()) {
@@ -83,9 +89,10 @@ pub(crate) async fn probe_lock_server_cmd_impl(
                 );
             }
         }
-        let mut settings = state.get_cached_settings().unwrap_or_default();
-        settings.l2_probe_cache.insert(norm_url, result.clone());
-        let _ = state.save_settings(&mut service, settings, password.as_deref());
+        state.mutate_internal_lifecycle_for_owner(&owner_did, password.as_deref(), |lc| {
+            lc.l2_probe_cache.insert(norm_url.clone(), result.clone());
+            true
+        })?;
     }
 
     Ok(result)
@@ -97,8 +104,11 @@ pub(crate) fn set_own_nominated_lock_server_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<Option<NominatedLockServerMeta>, FrontendError> {
-    state.authorize(crate::state::RequiredAccess::Full, password.as_deref())?;
-    let mut settings = state.get_cached_settings().unwrap_or_default();
+    let mut service =
+        state.authorize_and_lock(crate::state::RequiredAccess::Full, password.as_deref())?;
+    let lifecycle = state
+        .get_or_load_internal_lifecycle(&mut service, password.as_deref())
+        .map_err(FrontendError::from)?;
 
     let updated = match write_url
         .as_deref()
@@ -109,7 +119,7 @@ pub(crate) fn set_own_nominated_lock_server_impl(
         Some(url) => {
             sync_client::validate_sync_url(url).map_err(FrontendError::from)?;
             let norm = normalize_sync_url(url);
-            let probe = settings
+            let probe = lifecycle
                 .l2_probe_cache
                 .get(&norm)
                 .filter(|p| p.passed)
@@ -123,10 +133,8 @@ pub(crate) fn set_own_nominated_lock_server_impl(
             let lock_pk = decode_hex_fixed::<32>(&probe.lock_pub)
                 .map_err(|e| FrontendError::from(e.to_string()))?;
             let admin_pk = decode_hex_fixed::<32>(&probe.admin_pub).ok();
-            let offenders = {
-                let mut service = state.lock_service()?;
-                crate::l2_lifecycle::load_server_offender_list(&mut service, password.as_deref())
-            };
+            let offenders =
+                crate::l2_lifecycle::load_server_offender_list(&mut service, password.as_deref())?;
             if crate::l2_lifecycle::is_server_key_revoked(&offenders, &lock_pk, admin_pk.as_ref()) {
                 return Err(FrontendError::from(
                     "Server steht auf der lokalen Server-Sanktionsliste (ServerOffenderList) und kann nicht gewählt werden."
@@ -146,10 +154,10 @@ pub(crate) fn set_own_nominated_lock_server_impl(
         }
     };
 
-    settings.own_nominated_lock_server = updated.clone();
-    let mut service = state.lock_service()?;
     state
-        .save_settings(&mut service, settings, password.as_deref())
+        .mutate_security_policy(&mut service, password.as_deref(), |policy| {
+            policy.own_nominated_lock_server = updated.clone();
+        })
         .map_err(FrontendError::from)?;
     Ok(updated)
 }
@@ -164,26 +172,53 @@ pub(crate) async fn assemble_anchor_template_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<StoredAnchorTemplateMeta, FrontendError> {
-    state.authorize(crate::state::RequiredAccess::Full, password.as_deref())?;
-    if servers.is_empty() || servers.len() > human_money_core::humoco_proto::MAX_COMMITTEE_SIZE {
-        return Err(FrontendError::from(
-            "Anker-Vorlage benötigt 1 bis 5 geprüfte Lock-Server.".to_string(),
-        ));
-    }
-    if guarantor_mig_pubs_hex.len() > MAX_GUARANTORS {
-        return Err(FrontendError::from(
-            "Too many guarantor authority keys".to_string(),
-        ));
-    }
+    let (owner_did, lifecycle, offenders, creator_mig_pub, signing_key_clone, anchor_nonce) = {
+        let mut service =
+            state.authorize_and_lock(crate::state::RequiredAccess::Full, password.as_deref())?;
+        if servers.is_empty() || servers.len() > human_money_core::humoco_proto::MAX_COMMITTEE_SIZE
+        {
+            return Err(FrontendError::from(
+                "Anker-Vorlage benötigt 1 bis 5 geprüfte Lock-Server.".to_string(),
+            ));
+        }
+        if guarantor_mig_pubs_hex.len() > MAX_GUARANTORS {
+            return Err(FrontendError::from(
+                "Too many guarantor authority keys".to_string(),
+            ));
+        }
+        let owner_did = service
+            .with_wallet(|w| w.get_user_id().to_string())
+            .map_err(FrontendError::from)?;
+        let lifecycle = state
+            .get_or_load_internal_lifecycle(&mut service, password.as_deref())
+            .map_err(FrontendError::from)?;
+        let offenders =
+            crate::l2_lifecycle::load_server_offender_list(&mut service, password.as_deref())?;
+        let mut anchor_nonce = [0u8; 32];
+        rand::rngs::OsRng.fill_bytes(&mut anchor_nonce);
+        let (creator_mig_pub, signing_key_clone) = service
+            .with_wallet_and_identity(|_, id| {
+                let mig_sk = l2_gateway::derive_anchor_mig_signing_key(id, &anchor_nonce)?;
+                Ok::<_, human_money_core::Error>((
+                    mig_sk.verifying_key().to_bytes(),
+                    id.signing_key.clone(),
+                ))
+            })
+            .map_err(FrontendError::from)?
+            .map_err(FrontendError::from)?;
+        (
+            owner_did,
+            lifecycle,
+            offenders,
+            creator_mig_pub,
+            signing_key_clone,
+            anchor_nonce,
+        )
+    };
 
     let retain_until_quarter = parse_quarter(retain_until_quarter_str.trim())
         .map_err(|e| FrontendError::from(format!("Invalid retain_until_quarter: {}", e)))?;
 
-    let settings = state.get_cached_settings().unwrap_or_default();
-    let offenders = {
-        let mut service = state.lock_service()?;
-        crate::l2_lifecycle::load_server_offender_list(&mut service, password.as_deref())
-    };
     let mut server_entries = Vec::with_capacity(servers.len());
     let mut stored_metas = Vec::with_capacity(servers.len());
     let mut sybil_candidates = Vec::with_capacity(servers.len());
@@ -191,7 +226,7 @@ pub(crate) async fn assemble_anchor_template_impl(
 
     for input in &servers {
         let norm = normalize_sync_url(&input.write_url);
-        let probe = settings
+        let probe = lifecycle
             .l2_probe_cache
             .get(&norm)
             .filter(|p| p.passed)
@@ -286,23 +321,6 @@ pub(crate) async fn assemble_anchor_template_impl(
     let min_q = (n / 2) + 1;
     let q = threshold.unwrap_or(min_q).max(min_q).min(n);
 
-    let mut anchor_nonce = [0u8; 32];
-    rand::rngs::OsRng.fill_bytes(&mut anchor_nonce);
-
-    let (creator_mig_pub, signing_key_clone) = {
-        let service = state.lock_service()?;
-        service
-            .with_wallet_and_identity(|_, id| {
-                let mig_sk = l2_gateway::derive_anchor_mig_signing_key(id, &anchor_nonce)?;
-                Ok::<_, human_money_core::Error>((
-                    mig_sk.verifying_key().to_bytes(),
-                    id.signing_key.clone(),
-                ))
-            })
-            .map_err(FrontendError::from)?
-            .map_err(FrontendError::from)?
-    };
-
     let now_secs = sync_client::current_unix_timestamp();
     let manifest = AnchorManifest {
         revision: 1,
@@ -353,6 +371,14 @@ pub(crate) async fn assemble_anchor_template_impl(
 
     {
         let mut service = state.lock_service()?;
+        let current_owner = service
+            .with_wallet(|w| w.get_user_id().to_string())
+            .map_err(FrontendError::from)?;
+        if current_owner != owner_did {
+            return Err(FrontendError::from(
+                "Active wallet changed before anchor template could be saved".to_string(),
+            ));
+        }
         service
             .register_l2_anchor_template_with_nonce(
                 manifest,
@@ -377,38 +403,30 @@ pub(crate) async fn assemble_anchor_template_impl(
         servers: stored_metas,
     };
 
-    {
-        let mut updated_settings = state.get_cached_settings().unwrap_or_default();
-        updated_settings
-            .l2_anchor_templates_meta
+    state.mutate_internal_lifecycle_for_owner(&owner_did, password.as_deref(), |lc| {
+        lc.l2_anchor_templates_meta
             .retain(|t| t.anchor_id != anchor_hex);
-        updated_settings
-            .l2_anchor_templates_meta
-            .push(tmpl_meta.clone());
-        let mut service = state.lock_service()?;
-        state
-            .save_settings(&mut service, updated_settings, password.as_deref())
-            .map_err(FrontendError::from)?;
-    }
+        lc.l2_anchor_templates_meta.push(tmpl_meta.clone());
+        true
+    })?;
 
     Ok(tmpl_meta)
 }
 
 pub(crate) async fn prewarm_l2_checkout_impl(state: &AppState) -> Result<(), FrontendError> {
     state.authorize(crate::state::RequiredAccess::Unlocked, None)?;
-    let Ok(settings) = state.get_cached_settings() else {
-        return Ok(());
-    };
+    let policy = state.get_or_load_security_policy_locked(None)?;
+    let lifecycle = state.get_or_load_internal_lifecycle_locked(None)?;
     let mut urls = Vec::new();
-    for s in &settings.public_syncs {
+    for s in &policy.public_syncs {
         if s.enabled && s.status != "revoked" {
             urls.push(s.write_url.clone());
         }
     }
-    if let Some(ref own) = settings.own_nominated_lock_server {
+    if let Some(ref own) = policy.own_nominated_lock_server {
         urls.push(own.write_url.clone());
     }
-    for t in &settings.l2_anchor_templates_meta {
+    for t in &lifecycle.l2_anchor_templates_meta {
         for srv in &t.servers {
             urls.push(srv.write_url.clone());
         }
@@ -422,7 +440,8 @@ pub(crate) fn check_l2_lock_status_impl(
     state: &AppState,
 ) -> Result<FrontendL2LockStatusDto, FrontendError> {
     state.authorize(crate::state::RequiredAccess::Unlocked, None)?;
-    let settings = state.get_cached_settings().unwrap_or_default();
+    let policy = state.get_or_load_security_policy_locked(None)?;
+    let lifecycle = state.get_or_load_internal_lifecycle_locked(None)?;
     let unresolved_intents_count = {
         let service = state.lock_service()?;
         service
@@ -436,7 +455,7 @@ pub(crate) fn check_l2_lock_status_impl(
     let mut stale_servers_count = 0usize;
     let mut max_probe_age_secs: Option<u64> = None;
 
-    for probe in settings.l2_probe_cache.values() {
+    for probe in lifecycle.l2_probe_cache.values() {
         let age = now_secs.saturating_sub(probe.probed_at_secs);
         max_probe_age_secs = Some(max_probe_age_secs.map(|m| m.max(age)).unwrap_or(age));
         if age > max_age_limit_secs || !probe.passed || probe.inode_warning {
@@ -444,14 +463,14 @@ pub(crate) fn check_l2_lock_status_impl(
         }
     }
 
-    let templates_count = settings.l2_anchor_templates_meta.len();
-    let has_own_nominated_server = settings.own_nominated_lock_server.is_some();
-    let has_any_sync = settings
+    let templates_count = lifecycle.l2_anchor_templates_meta.len();
+    let has_own_nominated_server = policy.own_nominated_lock_server.is_some();
+    let has_any_sync = policy
         .public_syncs
         .iter()
         .any(|s| s.enabled && s.status != "revoked");
 
-    let status = if settings.pending_restore_l2_reconciliation || unresolved_intents_count > 0 {
+    let status = if lifecycle.pending_restore_l2_reconciliation || unresolved_intents_count > 0 {
         "Syncing".to_string()
     } else if templates_count == 0 && !has_own_nominated_server && !has_any_sync {
         "NoServers".to_string()
@@ -464,7 +483,7 @@ pub(crate) fn check_l2_lock_status_impl(
     Ok(FrontendL2LockStatusDto {
         status,
         unresolved_intents_count,
-        pending_restore_reconciliation: settings.pending_restore_l2_reconciliation,
+        pending_restore_reconciliation: lifecycle.pending_restore_l2_reconciliation,
         templates_count,
         has_own_nominated_server,
         stale_servers_count,
@@ -477,7 +496,7 @@ pub(crate) async fn reconcile_vouchers_via_static_locks(
     filter_ids: Option<&[String]>,
     password: Option<&str>,
 ) -> Result<StaticReconcileSummary, FrontendError> {
-    let settings = state.get_cached_settings().unwrap_or_default();
+    let lifecycle = state.get_or_load_internal_lifecycle_locked(password)?;
     let filter_set: Option<HashSet<&str>> =
         filter_ids.map(|ids| ids.iter().map(|s| s.as_str()).collect());
 
@@ -503,7 +522,7 @@ pub(crate) async fn reconcile_vouchers_via_static_locks(
                     match wallet.build_voucher_read_targets(identity, id, None) {
                         Ok(target) => {
                             let pow_bits = max_pow_base_bits_for_servers(
-                                &settings,
+                                &lifecycle,
                                 target
                                     .server_paths
                                     .iter()
@@ -594,22 +613,26 @@ pub(crate) async fn reconcile_restored_wallet_if_pending(
     state: &AppState,
     password: Option<&str>,
 ) -> Result<bool, FrontendError> {
-    let settings = match state.get_cached_settings() {
-        Ok(s) => s,
-        Err(_) => return Ok(false),
+    let owner_did = {
+        let mut service = state.lock_service()?;
+        let lifecycle = state
+            .get_or_load_internal_lifecycle(&mut service, password)
+            .map_err(FrontendError::from)?;
+        if !lifecycle.pending_restore_l2_reconciliation {
+            return Ok(false);
+        }
+        service
+            .with_wallet(|w| w.get_user_id().to_string())
+            .map_err(FrontendError::from)?
     };
-    if !settings.pending_restore_l2_reconciliation {
-        return Ok(false);
-    }
 
     let summary = reconcile_vouchers_via_static_locks(state, None, password).await?;
     if summary.all_responded || summary.active_anchored_count == 0 {
-        let mut updated = settings;
-        updated.pending_restore_l2_reconciliation = false;
-        if let Ok(mut service) = state.lock_service() {
-            let _ = state.save_settings(&mut service, updated, password);
-        }
-        return Ok(true);
+        let updated = state.mutate_internal_lifecycle_for_owner(&owner_did, password, |lc| {
+            lc.pending_restore_l2_reconciliation = false;
+            true
+        })?;
+        return Ok(updated.is_some());
     }
     Ok(false)
 }
@@ -620,7 +643,7 @@ pub(crate) async fn check_voucher_l2_status_impl(
     state: &AppState,
 ) -> Result<FrontendVoucherL2StatusDto, FrontendError> {
     state.authorize(crate::state::RequiredAccess::Unlocked, None)?;
-    let settings = state.get_cached_settings().unwrap_or_default();
+    let lifecycle = state.get_or_load_internal_lifecycle_locked(password.as_deref())?;
 
     let (target_opt, is_currently_archived, pow_bits, reduced_protection, manifest_rev) = {
         let service = state.lock_service()?;
@@ -665,7 +688,7 @@ pub(crate) async fn check_voucher_l2_status_impl(
                 let target =
                     wallet.build_voucher_read_targets(identity, &local_instance_id, None)?;
                 let bits = max_pow_base_bits_for_servers(
-                    &settings,
+                    &lifecycle,
                     target
                         .server_paths
                         .iter()

@@ -1,19 +1,19 @@
 // src/components/settings/ConnectionTab.tsx
 import React from 'react';
-import { AppSettings } from '../../types';
+import { AppConfigDto, UiPreferencesPatch } from '../../types';
 import { AutoSyncSummaryCard } from './AutoSyncSummaryCard';
 import { SyncServiceSettingsCard } from './SyncServiceSettingsCard';
 
 export interface ConnectionTabProps {
-    settings: AppSettings | null;
-    onPersistSettings: (updater: (prev: AppSettings | null) => AppSettings | null) => void;
-    onSettingsSynced?: (newSettings: AppSettings) => void;
+    config: AppConfigDto | null;
+    onPatchUiPreferences: (patch: UiPreferencesPatch) => Promise<void> | void;
+    onConfigUpdated?: (newConfig: AppConfigDto) => void;
 }
 
 export const ConnectionTab: React.FC<ConnectionTabProps> = ({
-    settings,
-    onPersistSettings,
-    onSettingsSynced,
+    config,
+    onPatchUiPreferences,
+    onConfigUpdated,
 }) => {
     return (
         <div
@@ -21,15 +21,15 @@ export const ConnectionTab: React.FC<ConnectionTabProps> = ({
             className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500"
         >
             <AutoSyncSummaryCard
-                settings={settings}
-                onPersistSettings={onPersistSettings}
-                onSettingsSynced={onSettingsSynced}
+                config={config}
+                onPatchUiPreferences={onPatchUiPreferences}
+                onConfigUpdated={onConfigUpdated}
                 showQuickConnect={false}
             />
             <div id="settings-connection-section">
                 <SyncServiceSettingsCard
-                    settings={settings}
-                    onSettingsUpdated={onSettingsSynced}
+                    config={config}
+                    onConfigUpdated={onConfigUpdated}
                 />
             </div>
         </div>

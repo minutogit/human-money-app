@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
 import { SignRequestView } from '../SignRequestView';
 import { invoke } from '@tauri-apps/api/core';
 import { save } from '@tauri-apps/plugin-dialog';
-import { VoucherDetails, VoucherStandardInfo, AppSettings, SignatureImpact } from '../../../types';
+import { VoucherDetails, VoucherStandardInfo, AppConfigDto, SignatureImpact } from '../../../types';
 
 // Mock the Tauri API
 vi.mock('@tauri-apps/api/core', () => ({
@@ -33,9 +33,11 @@ vi.mock('../../../utils/settingsUtils', () => ({
   updateLastUsedDirectory: vi.fn().mockResolvedValue(undefined),
 }));
 
+const mockProtectAction = vi.fn((callback, _opts?: { requireFullAccess?: boolean }) => callback('test-password'));
+
 vi.mock('../../../context/SessionContext', () => ({
   useSession: () => ({
-    protectAction: vi.fn((callback) => callback('test-password')),
+    protectAction: mockProtectAction,
   }),
 }));
 
@@ -88,10 +90,41 @@ uuid = "minuto-uuid-123"`,
     },
   ];
 
-  const mockSettings: AppSettings = {
-    sessionTimeoutSeconds: 300,
-    privacyDefault: 'public',
-    marketSyncEnabled: true,
+  const mockConfig: AppConfigDto = {
+    uiPreferences: {
+      uiMode: 'simple',
+      lastUsedDirectory: null,
+      balanceViewMode: 'spendable',
+      marketShowUnknown: true,
+      maxStoredCards: 2000,
+      marketSendCardOnPayment: false,
+      marketSyncEnabled: true,
+      shareMinLevel: 1,
+      marketPollWifiOnly: false,
+      wotShareViaSync: true,
+      postAcceptFromContacts: true,
+      mediaAutoLoadMaxHops: 2,
+    },
+    securityPolicy: {
+      sessionTimeoutSeconds: 300,
+      privacyDefault: 'public',
+      devModeUnlocked: false,
+      autoBackupEnabled: true,
+      syncBackupEnabled: true,
+      backupSyncFolder: null,
+      backupProtectionMode: null,
+      ownNominatedLockServer: null,
+      marketSelectedSyncs: [],
+      publicSyncs: [],
+    },
+    lifecycle: {
+      pendingRestoreL2Reconciliation: false,
+      backupDirty: false,
+      lastBackupAt: null,
+      lastSyncBackupAt: null,
+      l2ProbeCache: {},
+      l2AnchorTemplatesMeta: [],
+    },
   };
 
   const mockSignatureImpact: SignatureImpact = {
@@ -109,8 +142,8 @@ uuid = "minuto-uuid-123"`,
       if (cmd === 'get_voucher_standards') {
         return Promise.resolve(mockStandards);
       }
-      if (cmd === 'get_app_settings') {
-        return Promise.resolve(mockSettings);
+      if (cmd === 'get_app_config') {
+        return Promise.resolve(mockConfig);
       }
       if (cmd === 'get_profile') {
         return Promise.resolve({ id: 'did:key:signer', firstName: 'Alice' });
@@ -167,7 +200,7 @@ uuid = "minuto-uuid-123"`,
   it('shows inline gender selection when gender is required and profile lacks valid gender', async () => {
     (invoke as Mock).mockImplementation((cmd: string) => {
       if (cmd === 'get_voucher_standards') return Promise.resolve(mockStandards);
-      if (cmd === 'get_app_settings') return Promise.resolve(mockSettings);
+      if (cmd === 'get_app_config') return Promise.resolve(mockConfig);
       if (cmd === 'get_profile') return Promise.resolve({ id: 'did:key:signer', firstName: 'Alice' });
       if (cmd === 'parse_standard_toml') {
         return Promise.resolve({
@@ -195,7 +228,7 @@ uuid = "minuto-uuid-123"`,
   it('shows gender warning when gender is required and includeDetails is unchecked', async () => {
     (invoke as Mock).mockImplementation((cmd: string) => {
       if (cmd === 'get_voucher_standards') return Promise.resolve(mockStandards);
-      if (cmd === 'get_app_settings') return Promise.resolve(mockSettings);
+      if (cmd === 'get_app_config') return Promise.resolve(mockConfig);
       if (cmd === 'get_profile') return Promise.resolve({ id: 'did:key:signer', firstName: 'Alice', gender: '1' });
       if (cmd === 'parse_standard_toml') {
         return Promise.resolve({
@@ -277,6 +310,7 @@ uuid = "minuto-uuid-123"`,
     fireEvent.click(signButton);
 
     await waitFor(() => {
+      expect(mockProtectAction).toHaveBeenCalledWith(expect.any(Function), { requireFullAccess: true });
       expect(replyMock).toHaveBeenCalledWith(
         'msg-req-123',
         'did:key:z6Mku7...alice',

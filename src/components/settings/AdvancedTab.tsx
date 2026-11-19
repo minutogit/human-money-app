@@ -2,7 +2,7 @@
 import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ShieldCheck, Copy, CheckCircle2 } from 'lucide-react';
-import { AppSettings } from '../../types';
+import { AppConfigDto } from '../../types';
 import { NetworkProtectionCard } from './NetworkProtectionCard';
 import { StandardsManager } from '../standards/StandardsManager';
 import { HelpIcon } from '../ui/HelpIcon';
@@ -10,9 +10,8 @@ import { Disclosure } from '../ui/Disclosure';
 import { copyToClipboard } from '../../utils/clipboard';
 
 export interface AdvancedTabProps {
-    settings: AppSettings | null;
-    onSettingsUpdated: (updater: AppSettings | ((prev: AppSettings | null) => AppSettings | null)) => void;
-    onSettingsSynced?: (updater: AppSettings | ((prev: AppSettings | null) => AppSettings | null)) => void;
+    config: AppConfigDto | null;
+    onConfigUpdated?: (newConfig: AppConfigDto) => void;
     localInstanceId: string;
     appVersion: string;
     isDevUnlocked: boolean;
@@ -22,9 +21,8 @@ export interface AdvancedTabProps {
 }
 
 export const AdvancedTab: React.FC<AdvancedTabProps> = ({
-    settings,
-    onSettingsUpdated,
-    onSettingsSynced,
+    config,
+    onConfigUpdated,
     localInstanceId,
     appVersion,
     isDevUnlocked,
@@ -39,9 +37,8 @@ export const AdvancedTab: React.FC<AdvancedTabProps> = ({
         <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
             {/* Network & L2 Protection */}
             <NetworkProtectionCard
-                settings={settings}
-                onSettingsUpdated={onSettingsUpdated}
-                onSettingsSynced={onSettingsSynced}
+                config={config}
+                onConfigUpdated={onConfigUpdated}
                 isDevUnlocked={isDevUnlocked}
                 initialOpen={initialOpenSection === 'network'}
             />

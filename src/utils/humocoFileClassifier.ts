@@ -1,7 +1,9 @@
 // src/utils/humocoFileClassifier.ts
 import type { TFunction } from 'i18next';
 import type { FileDialogFilter } from './fileIo';
-import { isWrappedUriContinuationLine } from './humocoUri';
+import { extractHumocoDeepLink } from './humocoUri';
+
+export { extractHumocoDeepLink };
 
 export type HumocoFileKind =
     | 'transfer'
@@ -85,11 +87,6 @@ const CONTAINER_TYPE_MAP: Record<string, HumocoFileKind> = {
     VoucherStandardDefinition: 'standard',
 };
 
-const DEEPLINK_PATTERN =
-    /humoco:\/\/(recovery-reply|kit|recovery-req|card|pay|contact)[^\s"'<>)]+/i;
-
-const TRAILING_PUNCTUATION_REGEX = /[.,;:!?)\]"'>]+$/;
-
 function decodeUtf8Text(bytes?: Uint8Array | number[], maxBytes: number = 8 * 1024 * 1024): string | null {
     if (!bytes) return null;
     const len = bytes instanceof Uint8Array ? bytes.byteLength : bytes.length;
@@ -100,42 +97,6 @@ function decodeUtf8Text(bytes?: Uint8Array | number[], maxBytes: number = 8 * 10
     } catch {
         return null;
     }
-}
-
-/**
- * Extracts a supported `humoco://` deep link from raw dropped/pasted text,
- * unwrapping hard email line breaks and stripping trailing chat punctuation.
- */
-export function extractHumocoDeepLink(rawText?: string | null): string | null {
-    if (!rawText || typeof rawText !== 'string') return null;
-    const trimmed = rawText.trim();
-    if (!trimmed) return null;
-
-    const lower = trimmed.toLowerCase();
-    const startIdx = lower.search(/humoco:\/\/(recovery-reply|kit|recovery-req|card|pay|contact)\b/);
-    let candidate = trimmed;
-    if (startIdx >= 0) {
-        const lines = trimmed.slice(startIdx).split(/\r?\n/);
-        let joined = (lines[0] || '').trim();
-        let prevLineLen = joined.length;
-        for (let i = 1; i < lines.length; i++) {
-            const line = lines[i].trim();
-            if (isWrappedUriContinuationLine(line, prevLineLen)) {
-                joined += line;
-                prevLineLen = line.length;
-            } else {
-                break;
-            }
-        }
-        candidate = joined;
-    }
-
-    const match = candidate.match(DEEPLINK_PATTERN);
-    if (match?.[0]) {
-        return match[0].replace(TRAILING_PUNCTUATION_REGEX, '');
-    }
-
-    return null;
 }
 
 /**

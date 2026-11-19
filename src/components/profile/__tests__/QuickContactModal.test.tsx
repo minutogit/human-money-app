@@ -4,6 +4,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { save } from '@tauri-apps/plugin-dialog';
 import { writeFile } from '@tauri-apps/plugin-fs';
 import { QuickContactModal } from '../QuickContactModal';
+import { UiModeProvider } from '../../../context/UiModeContext';
 import { profileService } from '../../../services/profileService';
 import { marketService } from '../../../services/marketService';
 import * as clipboard from '../../../utils/clipboard';
@@ -66,12 +67,13 @@ describe('QuickContactModal Component', () => {
         expect(screen.getByTestId('quick-contact-copy-button')).toBeInTheDocument();
         unmount();
 
-        localStorage.setItem('humoco_ui_mode', 'expert');
         render(
-            <QuickContactModal
-                isOpen={true}
-                onClose={vi.fn()}
-            />
+            <UiModeProvider initialMode="expert">
+                <QuickContactModal
+                    isOpen={true}
+                    onClose={vi.fn()}
+                />
+            </UiModeProvider>
         );
 
         await waitFor(() => {

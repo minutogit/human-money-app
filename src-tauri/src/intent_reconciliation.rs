@@ -9,7 +9,7 @@ use human_money_core::models::l2_intent::L2SendIntent;
 use rand::RngCore;
 use tauri::Manager;
 
-use crate::{models::FrontendError, settings::AppSettings, sync_client, AppState};
+use crate::{models::FrontendError, settings::InternalLifecycleState, sync_client, AppState};
 
 const RECONCILIATION_DELAY_MS: u64 = 30_000;
 const TERMINAL_RETENTION_MS: u64 = 60_000;
@@ -33,7 +33,7 @@ fn random_non_zero_nonce() -> [u8; 32] {
 
 async fn reconcile_due_intent(
     state: &AppState,
-    settings: &AppSettings,
+    lifecycle: &InternalLifecycleState,
     intent: &L2SendIntent,
     owner: &str,
     now: u64,
@@ -120,7 +120,7 @@ async fn reconcile_due_intent(
     }
 
     let pow_base_bits = crate::services::common::max_pow_base_bits_for_servers(
-        settings,
+        lifecycle,
         intent.manifest.servers.iter().map(|s| s.write_url.as_str()),
     );
     let mut service = state.lock_service()?;
@@ -195,7 +195,9 @@ pub async fn reconcile_due_intents(
         return Ok(0);
     }
 
-    let settings = state.get_cached_settings().map_err(FrontendError::from)?;
+    let lifecycle = state
+        .get_cached_internal_lifecycle()
+        .map_err(FrontendError::from)?;
     let mut handled = 0usize;
 
     for intent in intents {
@@ -226,7 +228,7 @@ pub async fn reconcile_due_intents(
             }
         }
 
-        let result = reconcile_due_intent(state, &settings, &intent, &owner, now).await;
+        let result = reconcile_due_intent(state, &lifecycle, &intent, &owner, now).await;
 
         if let Ok(mut in_flight_guard) = in_flight.lock() {
             in_flight_guard.remove(&local_id);
@@ -295,9 +297,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(path);
     }
 
-    fn state_with(service: AppService, settings: Option<AppSettings>) -> AppState {
+    fn state_with(service: AppService, lifecycle: Option<InternalLifecycleState>) -> AppState {
         let state = AppState::new(service);
-        *state.settings.lock().unwrap() = settings;
+        *state.internal_lifecycle.lock().unwrap() = lifecycle;
         state
     }
 
@@ -393,7 +395,7 @@ mod tests {
             .prepare_l2_send_intent(&local_id, DEFAULT_LOCK_POW_BASE_BITS, Some(password))
             .unwrap();
 
-        (state_with(service, Some(AppSettings::default())), local_id)
+        (state_with(service, Some(InternalLifecycleState::default())), local_id)
     }
 
     #[tokio::test]

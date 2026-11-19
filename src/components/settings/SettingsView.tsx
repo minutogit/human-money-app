@@ -34,7 +34,7 @@ import { ViewAndLockCard } from './ViewAndLockCard';
 import { DangerZoneCard } from './DangerZoneCard';
 import { NetworkProtectionCard } from './NetworkProtectionCard';
 import { profileService } from '../../services/profileService';
-import { AppSettings } from '../../types';
+import { AppConfigDto, SecurityPolicyPatch, UiPreferencesPatch } from '../../types';
 
 import { User, Shield, ShieldCheck, Cloud, Settings as SettingsIcon, Radio } from 'lucide-react';
 
@@ -46,12 +46,12 @@ interface SettingsViewProps {
 
 export function SettingsView({ onBack }: SettingsViewProps) {
     const { t } = useTranslation();
-    const { protectAction } = useSession();
+    const { protectAction, clearLocks } = useSession();
     const nav = useOptionalNavigation();
     const appVersion = nav?.appVersion || '0.3.0';
 
-    const [settings, setSettings] = useState<AppSettings | null>(null);
-    const settingsRef = useRef<AppSettings | null>(null);
+    const [config, setConfig] = useState<AppConfigDto | null>(null);
+    const configRef = useRef<AppConfigDto | null>(null);
     const [localInstanceId, setLocalInstanceId] = useState('');
     const [userId, setUserId] = useState('');
     const [isLoading, setIsLoading] = useState(true);
@@ -64,38 +64,81 @@ export function SettingsView({ onBack }: SettingsViewProps) {
     );
     const [devClickCount, setDevClickCount] = useState(0);
 
-    const updateSettingsState = useCallback(
-        (updater: AppSettings | ((prev: AppSettings | null) => AppSettings | null)) => {
+    const updateConfigState = useCallback(
+        (updater: AppConfigDto | ((prev: AppConfigDto | null) => AppConfigDto | null)) => {
             const next =
-                typeof updater === 'function' ? updater(settingsRef.current) : updater;
-            settingsRef.current = next;
-            setSettings(next);
+                typeof updater === 'function' ? updater(configRef.current) : updater;
+            configRef.current = next;
+            setConfig(next);
             return next;
         },
         []
     );
 
-    const persistSettingsUpdate = useCallback(
-        (updater: AppSettings | ((prev: AppSettings | null) => AppSettings | null)) => {
-            const prevSettings = settingsRef.current;
-            const next = updateSettingsState(updater);
-            if (!next) return;
+    const handlePatchUiPreferences = useCallback(
+        async (patch: UiPreferencesPatch) => {
+            const prevConfig = configRef.current;
+            if (prevConfig) {
+                updateConfigState({
+                    ...prevConfig,
+                    uiPreferences: { ...prevConfig.uiPreferences, ...patch },
+                });
+            }
             setError('');
-            void (async () => {
-                try {
-                    await protectAction(async (password) => {
-                        await settingsService.saveSettings(next, password || undefined);
-                    });
-                } catch (e) {
-                    settingsRef.current = prevSettings;
-                    setSettings(prevSettings);
-                    const msg = t('settings.saveFailed', { error: translateError(e, t) });
-                    logger.error(`Failed to save settings: ${stringifyError(e)}`);
-                    setError(msg);
+            try {
+                const updatedUi = await protectAction(async (password) => {
+                    return await settingsService.patchUiPreferences(patch, password || undefined);
+                });
+                if (updatedUi) {
+                    updateConfigState((cur) => (cur ? { ...cur, uiPreferences: updatedUi } : cur));
                 }
-            })();
+            } catch (e) {
+                configRef.current = prevConfig;
+                setConfig(prevConfig);
+                const msg = t('settings.saveFailed', { error: translateError(e, t) });
+                logger.error(`Failed to save settings: ${stringifyError(e)}`);
+                setError(msg);
+            }
         },
-        [protectAction, t, updateSettingsState]
+        [protectAction, t, updateConfigState]
+    );
+
+    const handlePatchSecurityPolicy = useCallback(
+        async (patch: SecurityPolicyPatch): Promise<boolean> => {
+            const prevConfig = configRef.current;
+            setError('');
+            try {
+                const updatedPolicy = await protectAction(
+                    async (password) => {
+                        return await settingsService.patchSecurityPolicy(
+                            patch,
+                            password || undefined,
+                        );
+                    },
+                    { requireFullAccess: true },
+                );
+                if (!updatedPolicy) {
+                    return false;
+                }
+                updateConfigState((cur) =>
+                    cur
+                        ? { ...cur, securityPolicy: updatedPolicy }
+                        : cur,
+                );
+                if (updatedPolicy.sessionTimeoutSeconds === 0) {
+                    clearLocks?.();
+                }
+                return true;
+            } catch (e) {
+                configRef.current = prevConfig;
+                setConfig(prevConfig);
+                const msg = t('settings.saveFailed', { error: translateError(e, t) });
+                logger.error(`Failed to save settings: ${stringifyError(e)}`);
+                setError(msg);
+                return false;
+            }
+        },
+        [clearLocks, protectAction, t, updateConfigState]
     );
 
     // Deep link section mapping
@@ -164,10 +207,10 @@ export function SettingsView({ onBack }: SettingsViewProps) {
         let active = true;
         async function fetchSettings() {
             try {
-                logger.info('SettingsView: Fetching current settings.');
-                const currentSettings = await settingsService.getSettings();
+                logger.info('SettingsView: Fetching current config.');
+                const currentConfig = await settingsService.getConfig();
                 if (!active) return;
-                updateSettingsState(currentSettings);
+                updateConfigState(currentConfig);
 
                 const deviceId = await authService.getLocalInstanceId().catch(() => '');
                 if (!active) return;
@@ -190,21 +233,25 @@ export function SettingsView({ onBack }: SettingsViewProps) {
         return () => {
             active = false;
         };
-    }, [t, updateSettingsState]);
+    }, [t, updateConfigState]);
 
     const handleDevModeClick = () => {
-        if (settingsRef.current?.devModeUnlocked) return;
+        if (configRef.current?.securityPolicy.devModeUnlocked) return;
         const nextCount = devClickCount + 1;
         setDevClickCount(nextCount);
         if (nextCount >= 7) {
-            persistSettingsUpdate((s) => (s ? { ...s, devModeUnlocked: true } : s));
-            logger.info('SettingsView: Dev mode unlocked via 7 clicks.');
-            setDevFeedback(t('settings.devModeUnlockedToast'));
-            setTimeout(() => setDevFeedback(''), 3000);
+            void (async () => {
+                const ok = await handlePatchSecurityPolicy({ devModeUnlocked: true });
+                if (ok) {
+                    logger.info('SettingsView: Dev mode unlocked via 7 clicks.');
+                    setDevFeedback(t('settings.devModeUnlockedToast'));
+                    setTimeout(() => setDevFeedback(''), 3000);
+                }
+            })();
         }
     };
 
-    const isDevUnlocked = !!settings?.devModeUnlocked;
+    const isDevUnlocked = !!config?.securityPolicy.devModeUnlocked;
 
     if (isLoading) {
         return (
@@ -244,8 +291,8 @@ export function SettingsView({ onBack }: SettingsViewProps) {
             <div id="settings-security-section" className="space-y-6">
                 <div id="settings-backup-section">
                     <BackupSettingsCard
-                        settings={settings}
-                        onSettingsUpdated={updateSettingsState}
+                        config={config}
+                        onConfigUpdated={updateConfigState}
                     />
                 </div>
                 <IdentityRecoveryCard />
@@ -278,9 +325,9 @@ export function SettingsView({ onBack }: SettingsViewProps) {
             <div id="settings-sync-section" className="space-y-4">
                 <div id="settings-connection-section">
                     <AutoSyncSummaryCard
-                        settings={settings}
-                        onPersistSettings={persistSettingsUpdate}
-                        onSettingsSynced={updateSettingsState}
+                        config={config}
+                        onPatchUiPreferences={handlePatchUiPreferences}
+                        onConfigUpdated={updateConfigState}
                     />
                 </div>
                 <Disclosure
@@ -289,8 +336,8 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                     toggleTestId="simple-manage-syncs-toggle"
                 >
                     <SyncServiceSettingsCard
-                        settings={settings}
-                        onSettingsUpdated={updateSettingsState}
+                        config={config}
+                        onConfigUpdated={updateConfigState}
                     />
                 </Disclosure>
             </div>
@@ -298,16 +345,15 @@ export function SettingsView({ onBack }: SettingsViewProps) {
             {/* Block 5: Ansicht & Automatische Sperre */}
             <div id="settings-view-section">
                 <ViewAndLockCard
-                    settings={settings}
-                    onPersistSettings={persistSettingsUpdate}
+                    config={config}
+                    onPatchSecurityPolicy={handlePatchSecurityPolicy}
                 />
             </div>
 
             {initialOpenSection === 'network' && (
                 <NetworkProtectionCard
-                    settings={settings}
-                    onSettingsUpdated={persistSettingsUpdate}
-                    onSettingsSynced={updateSettingsState}
+                    config={config}
+                    onConfigUpdated={updateConfigState}
                     isDevUnlocked={isDevUnlocked}
                     initialOpen={true}
                 />
@@ -355,32 +401,31 @@ export function SettingsView({ onBack }: SettingsViewProps) {
             {activeTab === 'profile' && (
                 <ProfileTab
                     userId={userId}
-                    settings={settings}
-                    onSettingsUpdated={updateSettingsState}
+                    config={config}
+                    onConfigUpdated={updateConfigState}
                 />
             )}
 
             {activeTab === 'security' && (
                 <SecurityBackupTab
-                    settings={settings}
-                    onPersistSettings={persistSettingsUpdate}
-                    onSettingsSynced={updateSettingsState}
+                    config={config}
+                    onPatchSecurityPolicy={handlePatchSecurityPolicy}
+                    onConfigUpdated={updateConfigState}
                 />
             )}
 
             {activeTab === 'connection' && (
                 <ConnectionTab
-                    settings={settings}
-                    onPersistSettings={persistSettingsUpdate}
-                    onSettingsSynced={updateSettingsState}
+                    config={config}
+                    onPatchUiPreferences={handlePatchUiPreferences}
+                    onConfigUpdated={updateConfigState}
                 />
             )}
 
             {activeTab === 'advanced' && (
                 <AdvancedTab
-                    settings={settings}
-                    onSettingsUpdated={persistSettingsUpdate}
-                    onSettingsSynced={updateSettingsState}
+                    config={config}
+                    onConfigUpdated={updateConfigState}
                     localInstanceId={localInstanceId}
                     appVersion={appVersion}
                     isDevUnlocked={isDevUnlocked}

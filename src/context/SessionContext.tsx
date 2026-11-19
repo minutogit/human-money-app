@@ -379,8 +379,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         };
 
         try {
-            const settings = await settingsService.getSettings();
-            const timeout = settings.sessionTimeoutSeconds;
+            const config = await settingsService.getConfig();
+            const timeout = config.securityPolicy.sessionTimeoutSeconds;
             const needsStepUp = Boolean(options?.requireFullAccess && accessModeRef.current !== 'full');
             const sessionCredentialKind: 'password' | 'pin' =
                 baseAccessModeRef.current === 'dailyPay' ? 'pin' : 'password';
@@ -463,8 +463,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
                 let timeout = 0;
                 try {
-                    const settings = await settingsService.getSettings();
-                    timeout = settings.sessionTimeoutSeconds;
+                    const config = await settingsService.getConfig();
+                    timeout = config.securityPolicy.sessionTimeoutSeconds;
                 } catch {
                     timeout = 0;
                 }
@@ -494,8 +494,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
             let timeout = 0;
             try {
-                const settings = await settingsService.getSettings();
-                timeout = settings.sessionTimeoutSeconds;
+                const config = await settingsService.getConfig();
+                timeout = config.securityPolicy.sessionTimeoutSeconds;
             } catch (err) {
                 isModalSubmittingRef.current = false;
                 setModalErrorMsg(translateError(err, t));

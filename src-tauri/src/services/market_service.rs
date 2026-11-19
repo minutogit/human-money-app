@@ -5,7 +5,7 @@ use crate::models::{
     FrontendTrustTier, StoredAppNotices, StoredOwnMarketProfile,
 };
 use crate::services::common::DropChannelSigner;
-use crate::settings::{AppSettings, StoredPublicSync, SETTINGS_KEY};
+use crate::settings::StoredPublicSync;
 use crate::state::{AppState, CONTACTS_DATA_NAME, MARKET_CARD_STORE_KEY, MARKET_OWN_PROFILE_KEY};
 use crate::sync_client;
 use human_money_core::app_service::AppService;
@@ -87,24 +87,24 @@ pub(crate) fn build_card_drops(
 }
 
 pub(crate) fn load_drops_from_settings(
+    state: &AppState,
     service: &mut AppService,
     selected_override: Option<&[FrontendSyncDescriptor]>,
     password: Option<&str>,
-) -> Option<Vec<humoco_market::DropDescriptor>> {
-    let settings: AppSettings = service
-        .load_encrypted_data(SETTINGS_KEY, password)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())?;
+) -> Result<Vec<humoco_market::DropDescriptor>, FrontendError> {
+    let security_policy = state
+        .get_or_load_security_policy(service, password)
+        .map_err(FrontendError::from)?;
     let my_prefix = service
         .with_wallet_and_identity(|_w, id| {
             human_money_core::crypto::get_prefix_from_user_id(&id.user_id).map(|s| s.to_string())
         })
         .ok()
         .flatten();
-    let selected = selected_override.unwrap_or(&settings.market_selected_syncs);
-    Some(build_card_drops(
+    let selected = selected_override.unwrap_or(&security_policy.market_selected_syncs);
+    Ok(build_card_drops(
         selected,
-        &settings.public_syncs,
+        &security_policy.public_syncs,
         my_prefix.as_deref(),
     ))
 }
@@ -164,11 +164,7 @@ fn save_own_market_profile_state(
     stored: &StoredOwnMarketProfile,
     password: Option<&str>,
 ) -> Result<(), FrontendError> {
-    let bytes = serde_json::to_vec(stored).map_err(|e| {
-        FrontendError::from(format!("Failed to serialize StoredOwnMarketProfile: {}", e))
-    })?;
-    service
-        .save_encrypted_data(MARKET_OWN_PROFILE_KEY, &bytes, password)
+    crate::state::save_encrypted_json(service, MARKET_OWN_PROFILE_KEY, stored, password)
         .map_err(FrontendError::from)?;
     *state.own_market_profile.lock().unwrap() = Some(stored.clone());
     Ok(())
@@ -184,7 +180,8 @@ fn cleanup_unused_own_media(
         .iter()
         .any(|a| a.image_token.as_deref() == Some(old_token));
     if !is_used {
-        let _ = service.save_encrypted_data(
+        let _ = crate::state::save_encrypted_bytes(
+            service,
             &crate::state::own_media_storage_key(old_token),
             &[],
             password,
@@ -203,10 +200,16 @@ fn try_load_cached_media(
     service: &mut AppService,
     storage_key: &str,
     password: Option<&str>,
-) -> Option<String> {
-    let media_bytes = service.load_encrypted_data(storage_key, password).ok()?;
-    humoco_market::validate_ad_media(&media_bytes).ok()?;
-    Some(encode_media_data_uri(&media_bytes))
+) -> Result<Option<String>, FrontendError> {
+    let Some(media_bytes) = crate::state::load_encrypted_bytes_opt(service, storage_key, password)
+        .map_err(FrontendError::from)?
+    else {
+        return Ok(None);
+    };
+    if media_bytes.is_empty() || humoco_market::validate_ad_media(&media_bytes).is_err() {
+        return Ok(None);
+    }
+    Ok(Some(encode_media_data_uri(&media_bytes)))
 }
 
 pub(crate) fn get_own_card_max_hops_inner(
@@ -300,8 +303,10 @@ pub(crate) fn bump_own_card_version_for_eviction(
     }
     let now = chrono::Utc::now().timestamp().max(0) as u64;
     let res = if stored.published {
-        let drops_opt = load_drops_from_settings(service, None, password);
-        rebuild_and_sign_own_card_with_drops(service, &mut stored, now, drops_opt)
+        let Ok(drops) = load_drops_from_settings(state, service, None, password) else {
+            return;
+        };
+        rebuild_and_sign_own_card_with_drops(service, &mut stored, now, Some(drops))
     } else {
         sign_unpublish_tombstone_card(service, &mut stored, now)
     };
@@ -326,8 +331,8 @@ pub(crate) fn set_own_card_max_hops_inner(
     update_shrink_window(&mut stored, clamped, now);
     stored.max_hops = clamped;
     if stored.published {
-        let drops_opt = load_drops_from_settings(service, None, password);
-        rebuild_and_sign_own_card_with_drops(service, &mut stored, now, drops_opt)?;
+        let drops = load_drops_from_settings(state, service, None, password)?;
+        rebuild_and_sign_own_card_with_drops(service, &mut stored, now, Some(drops))?;
     }
 
     save_own_market_profile_state(state, service, &stored, password)?;
@@ -344,15 +349,9 @@ pub fn sync_own_card_drops_on_settings_change(
     if let Ok(mut existing) = load_own_market_profile_for_write(service, password) {
         if existing.published {
             let now_unix = chrono::Utc::now().timestamp().max(0) as u64;
-            let drops =
-                load_drops_from_settings(service, Some(syncs), password).unwrap_or_else(|| {
-                    syncs
-                        .iter()
-                        .take(humoco_market::MAX_CARD_DROPS)
-                        .cloned()
-                        .map(Into::into)
-                        .collect()
-                });
+            let Ok(drops) = load_drops_from_settings(state, service, Some(syncs), password) else {
+                return;
+            };
             let _ =
                 rebuild_and_sign_own_card_with_drops(service, &mut existing, now_unix, Some(drops));
             let _ = save_own_market_profile_state(state, service, &existing, password);
@@ -625,12 +624,12 @@ async fn delete_remote_card_slots(state: &AppState, password: Option<&str>) {
             Err(_) => return,
         };
         let master_seed = my_ed_sk.to_bytes();
-        let settings = state
-            .get_cached_settings()
-            .or_else(|_| state.load_settings(&mut service, password))
-            .unwrap_or_default();
-        let mut drops = settings.market_selected_syncs;
-        for pd in settings.public_syncs {
+        let security_policy = match state.get_or_load_security_policy(&mut service, password) {
+            Ok(p) => p,
+            Err(_) => return,
+        };
+        let mut drops = security_policy.market_selected_syncs;
+        for pd in security_policy.public_syncs {
             if pd.enabled {
                 drops.push(FrontendSyncDescriptor {
                     write_url: pd.write_url,
@@ -838,8 +837,8 @@ pub fn save_my_market_profile_impl(
     }
 
     if stored.published {
-        let drops_opt = load_drops_from_settings(&mut service, None, password.as_deref());
-        rebuild_and_sign_own_card_with_drops(&mut service, &mut stored, now, drops_opt)?;
+        let drops = load_drops_from_settings(state, &mut service, None, password.as_deref())?;
+        rebuild_and_sign_own_card_with_drops(&mut service, &mut stored, now, Some(drops))?;
     }
 
     save_own_market_profile_state(state, &mut service, &stored, password.as_deref())?;
@@ -862,8 +861,8 @@ pub async fn set_card_published_impl(
 
         if published {
             stored.published = true;
-            let drops_opt = load_drops_from_settings(&mut service, None, password.as_deref());
-            rebuild_and_sign_own_card_with_drops(&mut service, &mut stored, now, drops_opt)?;
+            let drops = load_drops_from_settings(state, &mut service, None, password.as_deref())?;
+            rebuild_and_sign_own_card_with_drops(&mut service, &mut stored, now, Some(drops))?;
         } else {
             stored.published = false;
             if delete_remote {
@@ -957,22 +956,23 @@ pub fn upsert_ad_impl(
             let raw_id = service
                 .with_wallet(|w| w.get_user_id().to_string())
                 .map_err(FrontendError::from)?;
-            let pk = human_money_core::crypto::get_pubkey_from_user_id(&raw_id)
+            let validated_raw = human_money_core::ValidatedUserId::parse(&raw_id)
                 .map_err(|e| FrontendError::from(format!("Failed to parse wallet DID: {}", e)))?;
-            let root_did = human_money_core::crypto::create_user_id(&pk, None)
+            let pk = validated_raw.public_key();
+            let root_did = human_money_core::crypto::create_user_id(pk, None)
                 .map_err(|e| FrontendError::from(format!("Failed to recreate root DID: {}", e)))?;
 
             let (token, _blob_id, _ciphertext) =
                 humoco_market::seal_media_blob(&root_did, &media_bytes)
                     .map_err(|e| FrontendError::from(e.to_string()))?;
 
-            service
-                .save_encrypted_data(
-                    &crate::state::own_media_storage_key(&token),
-                    &media_bytes,
-                    password.as_deref(),
-                )
-                .map_err(FrontendError::from)?;
+            crate::state::save_encrypted_bytes(
+                &mut service,
+                &crate::state::own_media_storage_key(&token),
+                &media_bytes,
+                password.as_deref(),
+            )
+            .map_err(FrontendError::from)?;
 
             Some(token)
         }
@@ -1145,42 +1145,43 @@ pub async fn get_ad_image_impl(
         };
 
         let own_key = crate::state::own_media_storage_key(&image_token);
-        if let Some(uri) = try_load_cached_media(&mut service, &own_key, password.as_deref()) {
+        if let Some(uri) = try_load_cached_media(&mut service, &own_key, password.as_deref())? {
             return Ok(Some(uri));
         }
 
         let cache_key = crate::state::cached_media_storage_key(&blob_id);
-        if let Some(uri) = try_load_cached_media(&mut service, &cache_key, password.as_deref()) {
+        if let Some(uri) = try_load_cached_media(&mut service, &cache_key, password.as_deref())? {
             return Ok(Some(uri));
         }
 
         let mut candidate_urls = Vec::new();
 
-        if let Ok(bytes) = service.load_encrypted_data(MARKET_CARD_STORE_KEY, password.as_deref()) {
-            if let Ok(card_store) = serde_json::from_slice::<humoco_market::CardStore>(&bytes) {
-                if let Ok(pk) = human_money_core::crypto::get_pubkey_from_user_id(&owner_did) {
-                    if let Some(stored_card) = card_store.cards.get(&pk.to_bytes()) {
-                        for d in &stored_card.card.payload.drops {
-                            if !d.read_url.trim().is_empty() {
-                                candidate_urls.push(d.read_url.clone());
-                            }
-                        }
+        let card_store: humoco_market::CardStore = crate::state::load_encrypted_json_or_default(
+            &mut service,
+            MARKET_CARD_STORE_KEY,
+            password.as_deref(),
+        )
+        .map_err(FrontendError::from)?;
+        if let Ok(pk) = human_money_core::crypto::get_pubkey_from_user_id(&owner_did) {
+            if let Some(stored_card) = card_store.cards.get(&pk.to_bytes()) {
+                for d in &stored_card.card.payload.drops {
+                    if !d.read_url.trim().is_empty() {
+                        candidate_urls.push(d.read_url.clone());
                     }
                 }
             }
         }
 
-        let settings = state
-            .get_cached_settings()
-            .or_else(|_| state.load_settings(&mut service, password.as_deref()))
-            .unwrap_or_default();
+        let security_policy = state
+            .get_or_load_security_policy(&mut service, password.as_deref())
+            .map_err(FrontendError::from)?;
 
-        for s in &settings.market_selected_syncs {
+        for s in &security_policy.market_selected_syncs {
             if !s.read_url.trim().is_empty() {
                 candidate_urls.push(s.read_url.clone());
             }
         }
-        for p in &settings.public_syncs {
+        for p in &security_policy.public_syncs {
             if p.enabled && !p.read_url.trim().is_empty() {
                 candidate_urls.push(p.read_url.clone());
             }
@@ -1214,8 +1215,12 @@ pub async fn get_ad_image_impl(
             if let Ok(media_bytes) = humoco_market::open_media_blob(&image_token, &ciphertext) {
                 let cache_key = crate::state::cached_media_storage_key(&blob_id);
                 if let Ok(mut service) = state.service.lock() {
-                    let _ =
-                        service.save_encrypted_data(&cache_key, &media_bytes, password.as_deref());
+                    let _ = crate::state::save_encrypted_bytes(
+                        &mut service,
+                        &cache_key,
+                        &media_bytes,
+                        password.as_deref(),
+                    );
                 }
                 return Ok(Some(encode_media_data_uri(&media_bytes)));
             }
@@ -1268,55 +1273,57 @@ pub fn get_market_view_impl(
         }
     }
 
-    let settings = state
-        .get_cached_settings()
-        .or_else(|_| state.load_settings(&mut service, password.as_deref()))
-        .unwrap_or_default();
+    let ui_prefs = state
+        .get_or_load_ui_preferences(&mut service, password.as_deref())
+        .map_err(FrontendError::from)?;
 
     let reg = state
         .get_or_load_wot_register(&mut service, password.as_deref())
         .ok();
 
-    let mut store: humoco_market::CardStore = service
-        .load_encrypted_data(MARKET_CARD_STORE_KEY, password.as_deref())
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or_default();
+    let mut store: humoco_market::CardStore = crate::state::load_encrypted_json_or_default(
+        &mut service,
+        MARKET_CARD_STORE_KEY,
+        password.as_deref(),
+    )
+    .map_err(FrontendError::from)?;
 
     let before_count = store.cards.len();
     store.cards.retain(|_, c| c.card.payload.valid_until > now);
     if store.cards.len() != before_count {
-        if let Ok(bytes) = serde_json::to_vec(&store) {
-            let _ = service.save_encrypted_data(MARKET_CARD_STORE_KEY, &bytes, password.as_deref());
-        }
+        crate::state::save_encrypted_json(
+            &mut service,
+            MARKET_CARD_STORE_KEY,
+            &store,
+            password.as_deref(),
+        )
+        .map_err(FrontendError::from)?;
     }
 
     let cards_vec: Vec<humoco_market::StoredCard> = store.cards.values().cloned().collect();
 
-    let sync_state: crate::state::StoredSyncState = service
-        .load_encrypted_data(crate::state::MARKET_SYNC_KEY, password.as_deref())
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or_default();
+    let sync_state: crate::state::StoredSyncState = crate::state::load_encrypted_json_or_default(
+        &mut service,
+        crate::state::MARKET_SYNC_KEY,
+        password.as_deref(),
+    )
+    .map_err(FrontendError::from)?;
 
     let known_contact_dids: std::collections::HashSet<String> = {
         let cached = state.contacts.lock().unwrap().clone();
-        let ab_opt = cached.or_else(|| {
-            service
-                .load_encrypted_data(CONTACTS_DATA_NAME, password.as_deref())
-                .ok()
-                .and_then(|bytes| {
-                    serde_json::from_slice::<crate::models::FrontendAddressBook>(&bytes).ok()
-                })
-        });
-        ab_opt
-            .map(|ab| {
-                ab.contacts
-                    .keys()
-                    .map(|k| crate::state::canonicalize_did(k).unwrap_or_else(|_| k.clone()))
-                    .collect()
-            })
-            .unwrap_or_default()
+        let ab = match cached {
+            Some(ab) => ab,
+            None => crate::state::load_encrypted_json_or_default::<crate::models::FrontendAddressBook>(
+                &mut service,
+                CONTACTS_DATA_NAME,
+                password.as_deref(),
+            )
+            .map_err(FrontendError::from)?,
+        };
+        ab.contacts
+            .keys()
+            .map(|k| crate::state::canonicalize_did(k).unwrap_or_else(|_| k.clone()))
+            .collect()
     };
 
     let (raw_persons, own_did, wallet_owner_name) = service
@@ -1379,7 +1386,7 @@ pub fn get_market_view_impl(
 
     let mut board: Vec<FrontendBoardItem> = raw_board
         .into_iter()
-        .filter(|bi| settings.market_show_unknown || bi.trust == humoco_market::TrustTier::Trusted)
+        .filter(|bi| ui_prefs.market_show_unknown || bi.trust == humoco_market::TrustTier::Trusted)
         .map(|bi| FrontendBoardItem::from_board_item(bi, now))
         .collect();
 
@@ -1415,7 +1422,7 @@ pub fn get_market_view_impl(
             if p.trust == humoco_market::TrustTier::Hidden {
                 return false;
             }
-            if settings.market_show_unknown || p.trust == humoco_market::TrustTier::Trusted {
+            if ui_prefs.market_show_unknown || p.trust == humoco_market::TrustTier::Trusted {
                 return true;
             }
             let can_did = crate::state::canonicalize_did(&p.did).unwrap_or_else(|_| p.did.clone());
@@ -1456,18 +1463,19 @@ pub fn export_forward_card_impl(
 ) -> Result<FrontendForwardCardExport, FrontendError> {
     let mut service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
 
-    let store: humoco_market::CardStore = service
-        .load_encrypted_data(MARKET_CARD_STORE_KEY, password.as_deref())
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or_default();
+    let store: humoco_market::CardStore = crate::state::load_encrypted_json_or_default(
+        &mut service,
+        MARKET_CARD_STORE_KEY,
+        password.as_deref(),
+    )
+    .map_err(FrontendError::from)?;
 
-    let pk = human_money_core::crypto::get_pubkey_from_user_id(&did)
+    let validated_did = human_money_core::ValidatedUserId::parse(&did)
         .map_err(|e| FrontendError::from(format!("Invalid DID: {}", e)))?;
 
     let stored = store
         .cards
-        .get(pk.as_bytes())
+        .get(&validated_did.public_key_bytes())
         .ok_or_else(|| FrontendError::from("Card not found in store".to_string()))?;
 
     let env = humoco_market::forward_envelope(stored)
@@ -1530,18 +1538,18 @@ pub fn import_contact_card_impl(
     let env: humoco_market::CardEnvelope = serde_json::from_str(json_trimmed)
         .map_err(|e| FrontendError::from(format!("Failed to parse CardEnvelope: {}", e)))?;
 
-    let settings = state
-        .get_cached_settings()
-        .or_else(|_| state.load_settings(&mut service, password.as_deref()))
-        .unwrap_or_default();
-    let max_stored_cards = settings.max_stored_cards.clamp(100, 10_000);
+    let ui_prefs = state
+        .get_or_load_ui_preferences(&mut service, password.as_deref())
+        .map_err(FrontendError::from)?;
+    let max_stored_cards = ui_prefs.max_stored_cards.clamp(100, 10_000);
     let now = chrono::Utc::now().timestamp().max(0) as u64;
 
-    let mut store: humoco_market::CardStore = service
-        .load_encrypted_data(MARKET_CARD_STORE_KEY, password.as_deref())
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or_default();
+    let mut store: humoco_market::CardStore = crate::state::load_encrypted_json_or_default(
+        &mut service,
+        MARKET_CARD_STORE_KEY,
+        password.as_deref(),
+    )
+    .map_err(FrontendError::from)?;
 
     let outcome = service
         .with_wallet(|wallet| {
@@ -1567,12 +1575,13 @@ pub fn import_contact_card_impl(
 
     match outcome {
         humoco_market::AcceptOutcome::Accepted { did, replaced } => {
-            let bytes = serde_json::to_vec(&store).map_err(|e| {
-                FrontendError::from(format!("Failed to serialize CardStore: {}", e))
-            })?;
-            service
-                .save_encrypted_data(MARKET_CARD_STORE_KEY, &bytes, password.as_deref())
-                .map_err(FrontendError::from)?;
+            crate::state::save_encrypted_json(
+                &mut service,
+                MARKET_CARD_STORE_KEY,
+                &store,
+                password.as_deref(),
+            )
+            .map_err(FrontendError::from)?;
             if let Some(stored) = store.cards.values().find(|sc| sc.card.payload.did == did) {
                 let card_syncs: Vec<FrontendSyncDescriptor> = stored
                     .card
@@ -1601,15 +1610,13 @@ pub fn import_contact_card_impl(
                     let is_own_root = own_ids
                         .as_ref()
                         .is_some_and(|(_, own_can)| *own_can == can_card_did);
-                    let mut address_book = match service
-                        .load_encrypted_data(CONTACTS_DATA_NAME, password.as_deref())
-                    {
-                        Ok(data) => {
-                            serde_json::from_slice::<crate::models::FrontendAddressBook>(&data)
-                                .unwrap_or_default()
-                        }
-                        Err(_) => crate::models::FrontendAddressBook::default(),
-                    };
+                    let mut address_book: crate::models::FrontendAddressBook =
+                        crate::state::load_encrypted_json_or_default(
+                            &mut service,
+                            CONTACTS_DATA_NAME,
+                            password.as_deref(),
+                        )
+                        .map_err(FrontendError::from)?;
 
                     let exists = if is_own_root {
                         address_book.contacts.keys().any(|k| k.trim() == did.trim())
@@ -1645,13 +1652,13 @@ pub fn import_contact_card_impl(
                                     changed = true;
                                 }
                                 if changed {
-                                    if let Ok(bytes) = serde_json::to_vec(&address_book) {
-                                        let _ = service.save_encrypted_data(
-                                            CONTACTS_DATA_NAME,
-                                            &bytes,
-                                            password.as_deref(),
-                                        );
-                                    }
+                                    crate::state::save_encrypted_json(
+                                        &mut service,
+                                        CONTACTS_DATA_NAME,
+                                        &address_book,
+                                        password.as_deref(),
+                                    )
+                                    .map_err(FrontendError::from)?;
                                     *state.contacts.lock().unwrap() = Some(address_book);
                                 }
                             }
@@ -1709,21 +1716,24 @@ pub fn delete_foreign_contact_card_impl(
     let mut service =
         state.authorize_and_lock(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
 
-    let mut store: humoco_market::CardStore = service
-        .load_encrypted_data(MARKET_CARD_STORE_KEY, password.as_deref())
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or_default();
+    let mut store: humoco_market::CardStore = crate::state::load_encrypted_json_or_default(
+        &mut service,
+        MARKET_CARD_STORE_KEY,
+        password.as_deref(),
+    )
+    .map_err(FrontendError::from)?;
 
-    let pk = human_money_core::crypto::get_pubkey_from_user_id(&did)
+    let validated_did = human_money_core::ValidatedUserId::parse(&did)
         .map_err(|e| FrontendError::from(format!("Invalid DID: {}", e)))?;
 
-    if store.cards.remove(pk.as_bytes()).is_some() {
-        let bytes = serde_json::to_vec(&store)
-            .map_err(|e| FrontendError::from(format!("Failed to serialize CardStore: {}", e)))?;
-        service
-            .save_encrypted_data(MARKET_CARD_STORE_KEY, &bytes, password.as_deref())
-            .map_err(FrontendError::from)?;
+    if store.cards.remove(&validated_did.public_key_bytes()).is_some() {
+        crate::state::save_encrypted_json(
+            &mut service,
+            MARKET_CARD_STORE_KEY,
+            &store,
+            password.as_deref(),
+        )
+        .map_err(FrontendError::from)?;
     }
 
     Ok(())
@@ -2035,10 +2045,13 @@ mod tests {
 
         let mut stored = {
             let mut s = alice_state.service.lock().unwrap();
-            let bytes = s
-                .load_encrypted_data(MARKET_OWN_PROFILE_KEY, Some(password))
-                .unwrap();
-            serde_json::from_slice::<StoredOwnMarketProfile>(&bytes).unwrap()
+            crate::state::load_encrypted_json_opt::<StoredOwnMarketProfile>(
+                &mut s,
+                MARKET_OWN_PROFILE_KEY,
+                Some(password),
+            )
+            .unwrap()
+            .unwrap()
         };
 
         let now = chrono::Utc::now().timestamp().max(0) as u64;
@@ -2509,8 +2522,8 @@ mod tests {
 
         // Valid syntax token but unknown and drops configured -> tries network, fails, inserts into negative cache
         {
-            let mut s = alice_state.settings.lock().unwrap();
-            *s = Some(crate::settings::AppSettings {
+            let mut s = alice_state.security_policy.lock().unwrap();
+            *s = Some(crate::settings::SecurityPolicy {
                 market_selected_syncs: vec![FrontendSyncDescriptor {
                     write_url: "http://127.0.0.1:9999".to_string(),
                     read_url: "http://127.0.0.1:9999".to_string(),

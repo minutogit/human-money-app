@@ -1,6 +1,7 @@
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import ContactDialog from '../ContactDialog';
+import { UiModeProvider } from '../../../context/UiModeContext';
 import { marketService } from '../../../services/marketService';
 import { profileService } from '../../../services/profileService';
 import { Contact } from '../../../types';
@@ -80,7 +81,6 @@ describe('ContactDialog Component', () => {
   });
 
   it('renders existing contact with drops in Expert mode', () => {
-    localStorage.setItem('humoco_ui_mode', 'expert');
     const existing: Contact = {
       did: 'did:key:z12345',
       profile: {
@@ -102,12 +102,14 @@ describe('ContactDialog Component', () => {
     };
 
     render(
-      <ContactDialog
-        isOpen={true}
-        onClose={mockOnClose}
-        onSave={mockOnSave}
-        existingContact={existing}
-      />
+      <UiModeProvider initialMode="expert">
+        <ContactDialog
+          isOpen={true}
+          onClose={mockOnClose}
+          onSave={mockOnSave}
+          existingContact={existing}
+        />
+      </UiModeProvider>
     );
 
     expect(screen.getByDisplayValue('Alice')).toBeInTheDocument();
@@ -115,7 +117,6 @@ describe('ContactDialog Component', () => {
   });
 
   it('probes and adds a new sync service', async () => {
-    localStorage.setItem('humoco_ui_mode', 'expert');
     vi.mocked(marketService.probePublicSync).mockResolvedValue({
       writeUrl: 'https://new-sync.example.com/sync.php',
       readUrl: 'https://new-sync.example.com/sync.php',
@@ -126,11 +127,13 @@ describe('ContactDialog Component', () => {
     });
 
     render(
-      <ContactDialog
-        isOpen={true}
-        onClose={mockOnClose}
-        onSave={mockOnSave}
-      />
+      <UiModeProvider initialMode="expert">
+        <ContactDialog
+          isOpen={true}
+          onClose={mockOnClose}
+          onSave={mockOnSave}
+        />
+      </UiModeProvider>
     );
 
     const didInput = screen.getByPlaceholderText(/did:key:z\.\.\.|Enter User ID|Benutzer-ID/i);
@@ -167,7 +170,6 @@ describe('ContactDialog Component', () => {
   });
 
   it('confirms and deletes a configured sync service', async () => {
-    localStorage.setItem('humoco_ui_mode', 'expert');
     const existing: Contact = {
       did: 'did:key:z12345',
       profile: {
@@ -186,12 +188,14 @@ describe('ContactDialog Component', () => {
     };
 
     render(
-      <ContactDialog
-        isOpen={true}
-        onClose={mockOnClose}
-        onSave={mockOnSave}
-        existingContact={existing}
-      />
+      <UiModeProvider initialMode="expert">
+        <ContactDialog
+          isOpen={true}
+          onClose={mockOnClose}
+          onSave={mockOnSave}
+          existingContact={existing}
+        />
+      </UiModeProvider>
     );
 
     expect(screen.getByText('sync1.example.com')).toBeInTheDocument();
@@ -225,7 +229,6 @@ describe('ContactDialog Component', () => {
   });
 
   it('rejects adding duplicate sync service', async () => {
-    localStorage.setItem('humoco_ui_mode', 'expert');
     const existing: Contact = {
       did: 'did:key:z12345',
       profile: { id: 'did:key:z12345' },
@@ -241,12 +244,14 @@ describe('ContactDialog Component', () => {
     };
 
     render(
-      <ContactDialog
-        isOpen={true}
-        onClose={mockOnClose}
-        onSave={mockOnSave}
-        existingContact={existing}
-      />
+      <UiModeProvider initialMode="expert">
+        <ContactDialog
+          isOpen={true}
+          onClose={mockOnClose}
+          onSave={mockOnSave}
+          existingContact={existing}
+        />
+      </UiModeProvider>
     );
 
     const syncInput = screen.getByPlaceholderText(/https:\/\/sync-server\./i);
@@ -260,7 +265,6 @@ describe('ContactDialog Component', () => {
   });
 
   it('enforces limit of max 2 sync services', () => {
-    localStorage.setItem('humoco_ui_mode', 'expert');
     const existing: Contact = {
       did: 'did:key:z12345',
       profile: { id: 'did:key:z12345' },
@@ -281,12 +285,14 @@ describe('ContactDialog Component', () => {
     };
 
     render(
-      <ContactDialog
-        isOpen={true}
-        onClose={mockOnClose}
-        onSave={mockOnSave}
-        existingContact={existing}
-      />
+      <UiModeProvider initialMode="expert">
+        <ContactDialog
+          isOpen={true}
+          onClose={mockOnClose}
+          onSave={mockOnSave}
+          existingContact={existing}
+        />
+      </UiModeProvider>
     );
 
     expect(screen.getByText('sync1.example.com')).toBeInTheDocument();

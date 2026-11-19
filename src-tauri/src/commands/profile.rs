@@ -27,7 +27,7 @@ fn compact_sync_url_for_contact_uri(raw: &str) -> String {
 }
 
 pub fn get_my_quick_contact_impl(state: &AppState) -> Result<FrontendQuickContact, FrontendError> {
-    let service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
+    let mut service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
     let (raw_did, full_name) = service
         .with_wallet(|w| {
             let did = w.get_user_id().to_string();
@@ -66,9 +66,11 @@ pub fn get_my_quick_contact_impl(state: &AppState) -> Result<FrontendQuickContac
         can_did
     };
 
-    let settings = state.get_cached_settings().unwrap_or_default();
+    let policy = state
+        .get_or_load_security_policy(&mut service, None)
+        .map_err(FrontendError::from)?;
     let mut sync_urls = Vec::new();
-    for s in settings.market_selected_syncs {
+    for s in policy.market_selected_syncs {
         if !s.write_url.is_empty()
             && (s.write_url.starts_with("https://") || s.write_url.starts_with("http://"))
         {
@@ -82,7 +84,7 @@ pub fn get_my_quick_contact_impl(state: &AppState) -> Result<FrontendQuickContac
         }
     }
     if sync_urls.len() < 2 {
-        for ps in settings.public_syncs {
+        for ps in policy.public_syncs {
             if ps.enabled
                 && !ps.write_url.is_empty()
                 && (ps.write_url.starts_with("https://") || ps.write_url.starts_with("http://"))
@@ -172,8 +174,8 @@ mod tests {
 
         // Add both a selected friend/own sync and a public sync with distinct read_url vs write_url
         {
-            let mut s = state.settings.lock().unwrap();
-            *s = Some(crate::settings::AppSettings {
+            let mut s = state.security_policy.lock().unwrap();
+            *s = Some(crate::settings::SecurityPolicy {
                 market_selected_syncs: vec![crate::models::FrontendSyncDescriptor {
                     write_url: "https://own.example.com/sync.php".to_string(),
                     read_url: "https://own.example.com/d-own12345".to_string(),

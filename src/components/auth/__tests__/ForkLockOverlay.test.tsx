@@ -2,7 +2,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
 import { ForkLockOverlay } from '../ForkLockOverlay';
 import { invoke } from '@tauri-apps/api/core';
-import { UiModeProvider, UI_MODE_STORAGE_KEY } from '../../../context/UiModeContext';
+import { UiModeProvider } from '../../../context/UiModeContext';
 
 const mockNavigate = vi.fn();
 vi.mock('../../../context/NavigationContext', () => ({
@@ -39,7 +39,6 @@ describe('ForkLockOverlay Component', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    window.localStorage.removeItem(UI_MODE_STORAGE_KEY);
     mockLockdownKind = 'handover';
     mockLockdownDetails = { targetEpoch: 5 };
 
@@ -86,9 +85,8 @@ describe('ForkLockOverlay Component', () => {
   });
 
   it('reveals epoch detail inside handover view in expert mode', async () => {
-    window.localStorage.setItem(UI_MODE_STORAGE_KEY, 'expert');
     render(
-      <UiModeProvider>
+      <UiModeProvider initialMode="expert">
         <ForkLockOverlay onStartRecovery={mockOnStartRecovery} />
       </UiModeProvider>
     );

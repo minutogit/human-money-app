@@ -5,17 +5,17 @@ import type { ProtectActionFn } from '../../utils/fileIo';
 import { ConfirmationModal } from '../ui/ConfirmationModal';
 import ContactDialog from '../contacts/ContactDialog';
 import { ExportSigningRequestModal } from '../voucher/ExportSigningRequestModal';
-import type { AppSettings, Contact, Voucher } from '../../types';
+import type { AppConfigDto, Contact, Voucher } from '../../types';
 
 interface VoucherDetailsModalsProps {
     voucherId: string;
     voucher: Voucher;
-    settings: AppSettings | null;
+    config: AppConfigDto | null;
     contacts: Contact[];
     protectAction: ProtectActionFn;
     showExportModal: boolean;
     onCloseExportModal: () => void;
-    onSettingsRefresh: (settings: AppSettings) => void;
+    onConfigRefresh: (config: AppConfigDto) => void;
     onAskSaved: (savedPath: string) => void;
     pendingSigImport: { fileBytes: Uint8Array; standardToml: string } | null;
     sigContainerPassword: string;
@@ -43,12 +43,12 @@ interface VoucherDetailsModalsProps {
 export function VoucherDetailsModals({
     voucherId,
     voucher,
-    settings,
+    config,
     contacts,
     protectAction,
     showExportModal,
     onCloseExportModal,
-    onSettingsRefresh,
+    onConfigRefresh,
     onAskSaved,
     pendingSigImport,
     sigContainerPassword,
@@ -76,9 +76,9 @@ export function VoucherDetailsModals({
                 isOpen={showExportModal}
                 voucherId={voucherId}
                 onClose={onCloseExportModal}
-                settings={settings}
+                config={config}
                 protectAction={protectAction}
-                onSettingsRefresh={onSettingsRefresh}
+                onConfigRefresh={onConfigRefresh}
                 contacts={contacts}
                 onSuccess={onAskSaved}
             />

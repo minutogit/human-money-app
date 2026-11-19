@@ -1,8 +1,10 @@
 import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
 import { MarketplaceView } from '../MarketplaceView';
+import { UiModeProvider } from '../../../context/UiModeContext';
 import { invoke } from '@tauri-apps/api/core';
 import {
+  AppConfigDto,
   FrontendMarketSnapshot,
   FrontendMarketPerson,
   FrontendBoardItem,
@@ -33,6 +35,7 @@ vi.mock('../../../context/SessionContext', () => ({
     isAuthenticated: true,
     hasCachedSession: true,
   }),
+  useOptionalSession: () => null,
 }));
 
 vi.mock('@tauri-apps/plugin-opener', () => ({
@@ -225,8 +228,43 @@ describe('MarketplaceView Component', () => {
         case 'get_contacts':
           return Promise.resolve([]);
         case 'get_settings':
-        case 'get_app_settings':
-          return Promise.resolve({ marketSelectedSyncs: [{ id: 'sync-1' }] });
+        case 'get_app_config':
+          return Promise.resolve({
+            uiPreferences: {
+              uiMode: 'simple',
+              lastUsedDirectory: null,
+              balanceViewMode: 'spendable',
+              marketShowUnknown: true,
+              maxStoredCards: 2000,
+              marketSendCardOnPayment: false,
+              marketSyncEnabled: true,
+              shareMinLevel: 1,
+              marketPollWifiOnly: false,
+              wotShareViaSync: true,
+              postAcceptFromContacts: true,
+              mediaAutoLoadMaxHops: 2,
+            },
+            securityPolicy: {
+              sessionTimeoutSeconds: 600,
+              privacyDefault: 'ask',
+              devModeUnlocked: false,
+              autoBackupEnabled: true,
+              syncBackupEnabled: true,
+              backupSyncFolder: null,
+              backupProtectionMode: null,
+              ownNominatedLockServer: null,
+              marketSelectedSyncs: [{ id: 'sync-1' } as any],
+              publicSyncs: [],
+            },
+            lifecycle: {
+              pendingRestoreL2Reconciliation: false,
+              backupDirty: false,
+              lastBackupAt: null,
+              lastSyncBackupAt: null,
+              l2ProbeCache: {},
+              l2AnchorTemplatesMeta: [],
+            },
+          } satisfies AppConfigDto);
         case 'set_card_published':
           return Promise.resolve({
             ...mockMyProfile,
@@ -474,14 +512,45 @@ describe('MarketplaceView Component', () => {
   });
 
   it('shows 3-tier reach presets in Simple mode and hides expert storage controls', async () => {
-    localStorage.setItem('humoco_ui_mode', 'simple');
     (invoke as Mock).mockImplementation((cmd: string) => {
       if (cmd === 'get_market_view') return Promise.resolve(mockSnapshot);
       if (cmd === 'get_my_market_profile') return Promise.resolve(mockMyProfile);
-      if (cmd === 'get_app_settings') {
+      if (cmd === 'get_app_config') {
         return Promise.resolve({
-          marketShowUnknown: true,
-          maxStoredCards: 2000,
+          uiPreferences: {
+            uiMode: 'simple',
+            lastUsedDirectory: null,
+            balanceViewMode: 'spendable',
+            marketShowUnknown: true,
+            maxStoredCards: 2000,
+            marketSendCardOnPayment: false,
+            marketSyncEnabled: true,
+            shareMinLevel: 1,
+            marketPollWifiOnly: false,
+            wotShareViaSync: true,
+            postAcceptFromContacts: true,
+            mediaAutoLoadMaxHops: 2,
+          },
+          securityPolicy: {
+            sessionTimeoutSeconds: 600,
+            privacyDefault: 'ask',
+            devModeUnlocked: false,
+            autoBackupEnabled: true,
+            syncBackupEnabled: true,
+            backupSyncFolder: null,
+            backupProtectionMode: null,
+            ownNominatedLockServer: null,
+            marketSelectedSyncs: [],
+            publicSyncs: [],
+          },
+          lifecycle: {
+            pendingRestoreL2Reconciliation: false,
+            backupDirty: false,
+            lastBackupAt: null,
+            lastSyncBackupAt: null,
+            l2ProbeCache: {},
+            l2AnchorTemplatesMeta: [],
+          },
         });
       }
       if (cmd === 'get_reach_preset') {
@@ -496,7 +565,11 @@ describe('MarketplaceView Component', () => {
       return Promise.resolve({});
     });
 
-    render(<MarketplaceView />);
+    render(
+      <UiModeProvider initialMode="simple">
+        <MarketplaceView />
+      </UiModeProvider>
+    );
 
     await waitFor(() => {
       expect(screen.getByRole('heading', { level: 1, name: /Marktplatz|Marketplace/i })).toBeInTheDocument();
@@ -516,14 +589,45 @@ describe('MarketplaceView Component', () => {
   });
 
   it('toggles marketplace options panel and allows changing market settings (Expert mode)', async () => {
-    localStorage.setItem('humoco_ui_mode', 'expert');
     (invoke as Mock).mockImplementation((cmd: string) => {
       if (cmd === 'get_market_view') return Promise.resolve(mockSnapshot);
       if (cmd === 'get_my_market_profile') return Promise.resolve(mockMyProfile);
-      if (cmd === 'get_app_settings') {
+      if (cmd === 'get_app_config') {
         return Promise.resolve({
-          marketShowUnknown: true,
-          maxStoredCards: 2000,
+          uiPreferences: {
+            uiMode: 'expert',
+            lastUsedDirectory: null,
+            balanceViewMode: 'spendable',
+            marketShowUnknown: true,
+            maxStoredCards: 2000,
+            marketSendCardOnPayment: false,
+            marketSyncEnabled: true,
+            shareMinLevel: 1,
+            marketPollWifiOnly: false,
+            wotShareViaSync: true,
+            postAcceptFromContacts: true,
+            mediaAutoLoadMaxHops: 2,
+          },
+          securityPolicy: {
+            sessionTimeoutSeconds: 600,
+            privacyDefault: 'ask',
+            devModeUnlocked: false,
+            autoBackupEnabled: true,
+            syncBackupEnabled: true,
+            backupSyncFolder: null,
+            backupProtectionMode: null,
+            ownNominatedLockServer: null,
+            marketSelectedSyncs: [],
+            publicSyncs: [],
+          },
+          lifecycle: {
+            pendingRestoreL2Reconciliation: false,
+            backupDirty: false,
+            lastBackupAt: null,
+            lastSyncBackupAt: null,
+            l2ProbeCache: {},
+            l2AnchorTemplatesMeta: [],
+          },
         });
       }
       if (cmd === 'get_reach_preset') {
@@ -535,12 +639,16 @@ describe('MarketplaceView Component', () => {
           mediaAutoLoadMaxHops: 2,
         });
       }
-      if (cmd === 'save_app_settings') return Promise.resolve();
+      if (cmd === 'patch_ui_preferences') return Promise.resolve({});
       if (cmd === 'save_my_market_profile') return Promise.resolve({ ...mockMyProfile, maxHops: 3 });
       return Promise.resolve({});
     });
 
-    render(<MarketplaceView />);
+    render(
+      <UiModeProvider initialMode="expert">
+        <MarketplaceView />
+      </UiModeProvider>
+    );
 
     await waitFor(() => {
       expect(screen.getByRole('heading', { level: 1, name: /Marktplatz|Marketplace/i })).toBeInTheDocument();

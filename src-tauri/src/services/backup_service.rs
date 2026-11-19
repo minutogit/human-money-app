@@ -176,11 +176,12 @@ pub(crate) fn export_wallet_backup_file_impl(
         custom_standards,
     )?;
 
-    if let Ok(mut settings) = state.get_cached_settings() {
-        settings.last_backup_at = Some(Utc::now().to_rfc3339());
-        settings.backup_dirty = false;
-        let _ = state.save_settings(&mut service, settings, password);
-    }
+    state
+        .mutate_internal_lifecycle(&mut service, password, |lc| {
+            lc.last_backup_at = Some(Utc::now().to_rfc3339());
+            lc.backup_dirty = false;
+        })
+        .map_err(FrontendError::from)?;
 
     Ok(summary)
 }
@@ -283,13 +284,18 @@ pub(crate) fn sync_wallet_backup_folder_impl(
         custom_standards,
     )?;
 
-    if let Ok(mut settings) = state.get_cached_settings() {
-        settings.backup_sync_folder = Some(folder_path);
-        settings.backup_protection_mode = Some(protection_mode.as_str().to_string());
-        settings.last_backup_at = Some(Utc::now().to_rfc3339());
-        settings.backup_dirty = false;
-        let _ = state.save_settings(&mut service, settings, password);
-    }
+    state
+        .mutate_security_policy(&mut service, password, |policy| {
+            policy.backup_sync_folder = Some(folder_path);
+            policy.backup_protection_mode = Some(protection_mode.as_str().to_string());
+        })
+        .map_err(FrontendError::from)?;
+    state
+        .mutate_internal_lifecycle(&mut service, password, |lc| {
+            lc.last_backup_at = Some(Utc::now().to_rfc3339());
+            lc.backup_dirty = false;
+        })
+        .map_err(FrontendError::from)?;
 
     Ok(summary)
 }
@@ -879,11 +885,13 @@ pub(crate) async fn finalize_restored_wallet_and_reconcile_l2(
 
     // Mandatory SST-V4 offline-spend lock (§5)
     let pending_restore_l2 = active_voucher_queries_count > 0 && !summary.all_responded;
-    if let Ok(mut settings) = state.get_cached_settings() {
-        settings.pending_restore_l2_reconciliation = pending_restore_l2;
-        if let Ok(mut service) = state.service.lock() {
-            let _ = state.save_settings(&mut service, settings, Some(new_password));
-        }
+    {
+        let mut service = state.lock_service()?;
+        state
+            .mutate_internal_lifecycle(&mut service, Some(new_password), |lc| {
+                lc.pending_restore_l2_reconciliation = pending_restore_l2;
+            })
+            .map_err(FrontendError::from)?;
     }
 
     // Clean up temporary staged file if source_path was from drop/sync staging
@@ -1268,21 +1276,22 @@ pub(crate) fn is_older_than_14_days(last_backup_at: &Option<String>) -> bool {
 }
 
 pub fn compute_backup_status_dto(
-    settings: &crate::settings::AppSettings,
+    security_policy: &crate::settings::SecurityPolicy,
+    lifecycle: &crate::settings::InternalLifecycleState,
     has_own_sync: bool,
 ) -> FrontendAutoBackupStatusDto {
-    let sync_backup_enabled = settings.sync_backup_enabled;
-    let last_sync_backup_at = settings.last_sync_backup_at.clone();
+    let sync_backup_enabled = security_policy.sync_backup_enabled;
+    let last_sync_backup_at = lifecycle.last_sync_backup_at.clone();
 
-    let has_friend_syncs = !settings.market_selected_syncs.is_empty();
-    let has_public_syncs = settings
+    let has_friend_syncs = !security_policy.market_selected_syncs.is_empty();
+    let has_public_syncs = security_policy
         .public_syncs
         .iter()
         .any(|d| d.enabled && !d.write_url.is_empty());
     let has_authorized_sync_backup_target =
         has_friend_syncs || has_public_syncs || has_own_sync || last_sync_backup_at.is_some();
 
-    let folder_str_opt = settings
+    let folder_str_opt = security_policy
         .backup_sync_folder
         .as_ref()
         .filter(|f| !f.trim().is_empty());
@@ -1297,11 +1306,11 @@ pub fn compute_backup_status_dto(
 
     let local_current = local_configured
         && local_connected
-        && !settings.backup_dirty
-        && !is_older_than_14_days(&settings.last_backup_at);
+        && !lifecycle.backup_dirty
+        && !is_older_than_14_days(&lifecycle.last_backup_at);
     let sync_current = sync_backup_enabled
         && has_authorized_sync_backup_target
-        && !settings.backup_dirty
+        && !lifecycle.backup_dirty
         && last_sync_backup_at.is_some()
         && !is_older_than_14_days(&last_sync_backup_at);
 
@@ -1313,7 +1322,7 @@ pub fn compute_backup_status_dto(
         "ok"
     } else if local_configured && !local_connected && !sync_current {
         "disconnected"
-    } else if settings.backup_dirty {
+    } else if lifecycle.backup_dirty {
         "pending"
     } else {
         "warning"
@@ -1321,8 +1330,8 @@ pub fn compute_backup_status_dto(
 
     FrontendAutoBackupStatusDto {
         status: status.to_string(),
-        last_backup_at: settings.last_backup_at.clone(),
-        backup_dirty: settings.backup_dirty,
+        last_backup_at: lifecycle.last_backup_at.clone(),
+        backup_dirty: lifecycle.backup_dirty,
         sync_folder: folder_str,
         changed_blobs: None,
         sync_backup_enabled,
@@ -1331,45 +1340,21 @@ pub fn compute_backup_status_dto(
     }
 }
 
-fn not_configured_backup_status() -> FrontendAutoBackupStatusDto {
-    FrontendAutoBackupStatusDto {
-        status: "notConfigured".to_string(),
-        last_backup_at: None,
-        backup_dirty: false,
-        sync_folder: None,
-        changed_blobs: None,
-        sync_backup_enabled: false,
-        last_sync_backup_at: None,
-        has_authorized_sync_backup_target: false,
-    }
-}
-
-fn has_own_sync_target(state: &AppState) -> bool {
-    state
-        .service
-        .lock()
-        .ok()
-        .and_then(|mut service| {
-            service
-                .load_encrypted_data(crate::state::MARKET_SYNC_ADMIN_KEY, None)
-                .ok()
-                .and_then(|bytes| {
-                    serde_json::from_slice::<crate::state::StoredSyncAdmin>(&bytes).ok()
-                })
-        })
-        .map(|admin| !admin.descriptor.write_url.is_empty())
-        .unwrap_or(false)
+fn has_own_sync_target(state: &AppState) -> Result<bool, FrontendError> {
+    let mut service = state.lock_service()?;
+    let admin =
+        crate::services::sync_engine::admin::load_stored_sync_admin_opt(&mut service, None)?;
+    Ok(admin.is_some_and(|a| !a.descriptor.write_url.is_empty()))
 }
 
 pub(crate) fn get_backup_status_impl(
     state: &AppState,
 ) -> Result<FrontendAutoBackupStatusDto, FrontendError> {
     state.authorize(crate::state::RequiredAccess::Unlocked, None)?;
-    let Ok(settings) = state.get_cached_settings() else {
-        return Ok(not_configured_backup_status());
-    };
-    let has_own_sync = has_own_sync_target(state);
-    Ok(compute_backup_status_dto(&settings, has_own_sync))
+    let security_policy = state.get_or_load_security_policy_locked(None)?;
+    let lifecycle = state.get_or_load_internal_lifecycle_locked(None)?;
+    let has_own_sync = has_own_sync_target(state)?;
+    Ok(compute_backup_status_dto(&security_policy, &lifecycle, has_own_sync))
 }
 
 pub(crate) fn run_auto_backup_sync_impl(
@@ -1377,35 +1362,37 @@ pub(crate) fn run_auto_backup_sync_impl(
     app: &tauri::AppHandle,
 ) -> Result<FrontendAutoBackupStatusDto, FrontendError> {
     state.authorize(crate::state::RequiredAccess::DailyPay, None)?;
-    let Ok(mut settings) = state.get_cached_settings() else {
-        return Ok(not_configured_backup_status());
-    };
+    let security_policy = state.get_or_load_security_policy_locked(None)?;
+    let mut lifecycle = state.get_or_load_internal_lifecycle_locked(None)?;
 
-    let has_own_sync = has_own_sync_target(state);
+    let has_own_sync = has_own_sync_target(state)?;
 
-    let folder_str = match &settings.backup_sync_folder {
+    let folder_str = match &security_policy.backup_sync_folder {
         Some(f) if !f.trim().is_empty() => f.clone(),
         _ => {
-            return Ok(compute_backup_status_dto(&settings, has_own_sync));
+            return Ok(compute_backup_status_dto(&security_policy, &lifecycle, has_own_sync));
         }
     };
 
-    if !settings.auto_backup_enabled
-        || settings.backup_protection_mode.as_deref() == Some("custom_password")
+    if !security_policy.auto_backup_enabled
+        || security_policy.backup_protection_mode.as_deref() == Some("custom_password")
     {
-        return Ok(compute_backup_status_dto(&settings, has_own_sync));
+        return Ok(compute_backup_status_dto(&security_policy, &lifecycle, has_own_sync));
     }
 
     let folder_path = Path::new(&folder_str);
     // Crucial USB safety check: verify is_dir(), NEVER call fs::create_dir_all if the folder is missing.
     if !folder_path.is_dir() {
-        if !settings.backup_dirty {
-            settings.backup_dirty = true;
+        if !lifecycle.backup_dirty {
             if let Ok(mut service) = state.service.lock() {
-                let _ = state.save_settings(&mut service, settings.clone(), None);
+                if let Ok(updated) = state.mutate_internal_lifecycle(&mut service, None, |lc| {
+                    lc.backup_dirty = true;
+                }) {
+                    lifecycle = updated;
+                }
             }
         }
-        return Ok(compute_backup_status_dto(&settings, has_own_sync));
+        return Ok(compute_backup_status_dto(&security_policy, &lifecycle, has_own_sync));
     }
 
     let mut service = state.authorize_and_lock(crate::state::RequiredAccess::DailyPay, None)?;
@@ -1421,10 +1408,13 @@ pub(crate) fn run_auto_backup_sync_impl(
         custom_standards,
     ) {
         Ok(summary) => {
-            settings.last_backup_at = Some(summary.timestamp.clone());
-            settings.backup_dirty = false;
-            let _ = state.save_settings(&mut service, settings.clone(), None);
-            let mut dto = compute_backup_status_dto(&settings, has_own_sync);
+            if let Ok(updated) = state.mutate_internal_lifecycle(&mut service, None, |lc| {
+                lc.last_backup_at = Some(summary.timestamp.clone());
+                lc.backup_dirty = false;
+            }) {
+                lifecycle = updated;
+            }
+            let mut dto = compute_backup_status_dto(&security_policy, &lifecycle, has_own_sync);
             dto.changed_blobs = Some(summary.changed_blobs);
             Ok(dto)
         }
@@ -1434,13 +1424,14 @@ pub(crate) fn run_auto_backup_sync_impl(
                 || e.message.to_lowercase().contains("locked")
                 || e.message.to_lowercase().contains("session");
             if is_locked {
-                let mut dto = compute_backup_status_dto(&settings, has_own_sync);
+                let mut dto = compute_backup_status_dto(&security_policy, &lifecycle, has_own_sync);
                 dto.status = "locked".to_string();
                 Ok(dto)
             } else {
-                if !settings.backup_dirty {
-                    settings.backup_dirty = true;
-                    let _ = state.save_settings(&mut service, settings.clone(), None);
+                if !lifecycle.backup_dirty {
+                    let _ = state.mutate_internal_lifecycle(&mut service, None, |lc| {
+                        lc.backup_dirty = true;
+                    });
                 }
                 Err(e)
             }
@@ -1588,8 +1579,8 @@ pub(crate) async fn sync_backup_with_standards_impl(
     state: &AppState,
 ) -> Result<FrontendBackupSyncResult, FrontendError> {
     state.authorize(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
-    let settings = state.get_cached_settings().map_err(FrontendError::from)?;
-    if !settings.sync_backup_enabled {
+    let security_policy = state.get_or_load_security_policy_locked(password.as_deref())?;
+    if !security_policy.sync_backup_enabled {
         return Ok(FrontendBackupSyncResult {
             uploaded_to: 0,
             authorized_targets: 0,
@@ -1600,25 +1591,25 @@ pub(crate) async fn sync_backup_with_standards_impl(
         });
     }
 
-    let (my_ed_sk, master_seed, my_prefix, own_admin_opt) = {
+    let (owner_did, my_ed_sk, master_seed, my_prefix, own_admin_opt) = {
         let mut service = state.lock_service()?;
-        let (my_ed_sk, my_prefix) = service
-            .with_wallet_and_identity(|_w, id| {
+        let (owner_did, my_ed_sk, my_prefix) = service
+            .with_wallet_and_identity(|w, id| {
                 let pfx = human_money_core::crypto::get_prefix_from_user_id(&id.user_id)
                     .map(|s| s.to_string());
-                (id.signing_key.clone(), pfx)
+                (w.get_user_id().to_string(), id.signing_key.clone(), pfx)
             })
             .map_err(FrontendError::from)?;
         let master_seed = my_ed_sk.to_bytes();
-        let own_admin_opt = service
-            .load_encrypted_data(crate::state::MARKET_SYNC_ADMIN_KEY, password.as_deref())
-            .ok()
-            .and_then(|bytes| serde_json::from_slice::<crate::state::StoredSyncAdmin>(&bytes).ok());
-        (my_ed_sk, master_seed, my_prefix, own_admin_opt)
+        let own_admin_opt = crate::services::sync_engine::admin::load_stored_sync_admin_opt(
+            &mut service,
+            password.as_deref(),
+        )?;
+        (owner_did, my_ed_sk, master_seed, my_prefix, own_admin_opt)
     };
 
     // Gather candidate backup drops: selected friend drops + own drop + enabled public drops
-    let mut candidate_targets: Vec<humoco_market::DropDescriptor> = settings
+    let mut candidate_targets: Vec<humoco_market::DropDescriptor> = security_policy
         .market_selected_syncs
         .iter()
         .cloned()
@@ -1635,7 +1626,7 @@ pub(crate) async fn sync_backup_with_standards_impl(
         }
     }
 
-    for pd in &settings.public_syncs {
+    for pd in &security_policy.public_syncs {
         if pd.enabled
             && !pd.write_url.is_empty()
             && !candidate_targets
@@ -1741,11 +1732,13 @@ pub(crate) async fn sync_backup_with_standards_impl(
             })
             .and_then(|seal| seal.compute_hash().ok());
 
-        let stored_state: crate::state::StoredBackupSyncState = service
-            .load_encrypted_data(crate::state::BACKUP_SYNC_STATE_KEY, password.as_deref())
-            .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-            .unwrap_or_default();
+        let stored_state: crate::state::StoredBackupSyncState =
+            crate::state::load_encrypted_json_or_default(
+                &mut service,
+                crate::state::BACKUP_SYNC_STATE_KEY,
+                password.as_deref(),
+            )
+            .map_err(FrontendError::from)?;
 
         // Try building a delta against the stored Base manifest (if one exists)
         let delta_attempt = if let (Some(prev_manifest), Some(prev_sha256)) = (
@@ -1826,7 +1819,6 @@ pub(crate) async fn sync_backup_with_standards_impl(
     let mut uploaded_to = 0;
     let mut last_uploaded_bytes = 0usize;
     let mut errors = Vec::new();
-    let mut current_settings = settings;
     let mut state_dirty = false;
     let mut base_uploaded_any = false;
 
@@ -1969,38 +1961,40 @@ pub(crate) async fn sync_backup_with_standards_impl(
                 backup_sync_state.base_manifest_sha256 = Some(new_sha);
             }
         }
-        if let Ok(encoded_state) = serde_json::to_vec(&backup_sync_state) {
-            if let Ok(mut service) = state.service.lock() {
-                let _ = service.save_encrypted_data(
-                    crate::state::BACKUP_SYNC_STATE_KEY,
-                    &encoded_state,
-                    password.as_deref(),
-                );
-            }
-        }
+        let mut service = state.lock_service()?;
+        crate::state::save_encrypted_json(
+            &mut service,
+            crate::state::BACKUP_SYNC_STATE_KEY,
+            &backup_sync_state,
+            password.as_deref(),
+        )
+        .map_err(FrontendError::from)?;
     }
 
-    let settings_updated;
     let timestamp_str = if uploaded_to > 0 {
         let ts = Utc::now().to_rfc3339();
-        current_settings.last_sync_backup_at = Some(ts.clone());
-        current_settings.backup_dirty = false;
-        settings_updated = true;
-        Some(ts)
-    } else {
-        settings_updated = false;
-        None
-    };
-
-    if settings_updated {
-        let mut service = state.lock_service()?;
-        let _ = state.save_settings(&mut service, current_settings, password.as_deref());
-        if let Some(ref seal_hash) = pending_seal_hash {
-            if let Err(err) = service.acknowledge_seal_sync(seal_hash, password.as_deref()) {
-                log::warn!("Post-sync seal acknowledgement deferred: {}", err);
+        let ts_clone = ts.clone();
+        let mutated = state
+            .mutate_internal_lifecycle_for_owner(&owner_did, password.as_deref(), |lc| {
+                lc.last_sync_backup_at = Some(ts_clone);
+                lc.backup_dirty = false;
+                true
+            })
+            .ok()
+            .flatten()
+            .is_some();
+        if mutated {
+            if let Some(ref seal_hash) = pending_seal_hash {
+                let mut service = state.lock_service()?;
+                if let Err(err) = service.acknowledge_seal_sync(seal_hash, password.as_deref()) {
+                    log::warn!("Post-sync seal acknowledgement deferred: {}", err);
+                }
             }
         }
-    }
+        Some(ts)
+    } else {
+        None
+    };
 
     let mut retry_after_secs: Option<u64> = None;
     for e in &errors {
@@ -2550,7 +2544,13 @@ pub(crate) async fn reconcile_restored_wallet_l2_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendRestoreReconcileResultDto, FrontendError> {
-    state.authorize(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
+    let owner_did = {
+        let service =
+            state.authorize_and_lock(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
+        service
+            .with_wallet(|w| w.get_user_id().to_string())
+            .map_err(FrontendError::from)?
+    };
     let summary = crate::services::l2_anchor_service::reconcile_vouchers_via_static_locks(
         state,
         None,
@@ -2562,14 +2562,20 @@ pub(crate) async fn reconcile_restored_wallet_l2_impl(
     let reconciled_spent_count = summary.reconciled_spent_count;
     let l2_reconciliation_status = summary.status;
 
-    let settings = state.get_cached_settings().map_err(FrontendError::from)?;
-    let mut pending_restore_l2 = settings.pending_restore_l2_reconciliation;
+    let mut pending_restore_l2 = state
+        .get_or_load_internal_lifecycle_locked(password.as_deref())?
+        .pending_restore_l2_reconciliation;
     if summary.all_responded || active_voucher_queries_count == 0 {
-        pending_restore_l2 = false;
-        let mut new_settings = settings;
-        new_settings.pending_restore_l2_reconciliation = false;
-        if let Ok(mut service) = state.service.lock() {
-            let _ = state.save_settings(&mut service, new_settings, password.as_deref());
+        let updated = state.mutate_internal_lifecycle_for_owner(
+            &owner_did,
+            password.as_deref(),
+            |lc| {
+                lc.pending_restore_l2_reconciliation = false;
+                true
+            },
+        )?;
+        if let Some(lc) = updated {
+            pending_restore_l2 = lc.pending_restore_l2_reconciliation;
         }
     }
 
@@ -2927,62 +2933,63 @@ mod tests {
 
     #[test]
     fn test_pending_restore_l2_reconciliation_setting_flag() {
-        let mut settings = crate::settings::AppSettings::default();
-        assert!(!settings.pending_restore_l2_reconciliation);
+        let mut lifecycle = crate::settings::InternalLifecycleState::default();
+        assert!(!lifecycle.pending_restore_l2_reconciliation);
 
         // Simulate restore with active vouchers and offline status
         let active_voucher_queries_count = 3;
         let l2_reconciliation_status = "no_servers";
         if active_voucher_queries_count > 0 && l2_reconciliation_status != "reconciled" {
-            settings.pending_restore_l2_reconciliation = true;
+            lifecycle.pending_restore_l2_reconciliation = true;
         }
-        assert!(settings.pending_restore_l2_reconciliation);
+        assert!(lifecycle.pending_restore_l2_reconciliation);
 
         // Simulate successful online reconciliation
         let l2_reconciled = true;
         if l2_reconciled {
-            settings.pending_restore_l2_reconciliation = false;
+            lifecycle.pending_restore_l2_reconciliation = false;
         }
-        assert!(!settings.pending_restore_l2_reconciliation);
+        assert!(!lifecycle.pending_restore_l2_reconciliation);
     }
 
     #[test]
     fn test_compute_backup_status_dto_combined() {
-        let mut settings = crate::settings::AppSettings {
+        let mut policy = crate::settings::SecurityPolicy {
             backup_sync_folder: None,
             sync_backup_enabled: false,
             ..Default::default()
         };
+        let mut lifecycle = crate::settings::InternalLifecycleState::default();
 
         // 1. Not configured
-        let dto = super::compute_backup_status_dto(&settings, false);
+        let dto = super::compute_backup_status_dto(&policy, &lifecycle, false);
         assert_eq!(dto.status, "notConfigured");
         assert!(!dto.has_authorized_sync_backup_target);
 
         // 2. Sync backup only, up to date (< 14 days)
-        settings.sync_backup_enabled = true;
-        settings.last_sync_backup_at = Some(chrono::Utc::now().to_rfc3339());
-        settings.backup_dirty = false;
-        let dto = super::compute_backup_status_dto(&settings, false);
+        policy.sync_backup_enabled = true;
+        lifecycle.last_sync_backup_at = Some(chrono::Utc::now().to_rfc3339());
+        lifecycle.backup_dirty = false;
+        let dto = super::compute_backup_status_dto(&policy, &lifecycle, false);
         assert_eq!(dto.status, "ok");
         assert!(dto.sync_backup_enabled);
         assert!(dto.has_authorized_sync_backup_target);
 
         // 3. Pending dirty changes
-        settings.backup_dirty = true;
-        let dto = super::compute_backup_status_dto(&settings, false);
+        lifecycle.backup_dirty = true;
+        let dto = super::compute_backup_status_dto(&policy, &lifecycle, false);
         assert_eq!(dto.status, "pending");
 
         // 4. Warning: outdated (> 14 days)
-        settings.backup_dirty = false;
-        settings.last_sync_backup_at = Some("2020-01-01T00:00:00Z".to_string());
-        let dto = super::compute_backup_status_dto(&settings, true);
+        lifecycle.backup_dirty = false;
+        lifecycle.last_sync_backup_at = Some("2020-01-01T00:00:00Z".to_string());
+        let dto = super::compute_backup_status_dto(&policy, &lifecycle, true);
         assert_eq!(dto.status, "warning");
 
         // 5. Local folder disconnected
-        settings.backup_sync_folder = Some("/non/existent/path/for/humoco/test".to_string());
-        settings.sync_backup_enabled = false;
-        let dto = super::compute_backup_status_dto(&settings, false);
+        policy.backup_sync_folder = Some("/non/existent/path/for/humoco/test".to_string());
+        policy.sync_backup_enabled = false;
+        let dto = super::compute_backup_status_dto(&policy, &lifecycle, false);
         assert_eq!(dto.status, "disconnected");
     }
 
@@ -3077,16 +3084,16 @@ mod tests {
 
         {
             let mut s = state.service.lock().unwrap();
-            let mut settings = state.get_cached_settings().unwrap_or_default();
-            settings.sync_backup_enabled = true;
-            settings.market_selected_syncs = vec![crate::models::FrontendSyncDescriptor {
-                write_url: write_url.clone(),
-                read_url: read_url.clone(),
-                drop_pub: drop_pub.clone(),
-                ..Default::default()
-            }];
             state
-                .save_settings(&mut s, settings, Some(password))
+                .mutate_security_policy(&mut s, Some(password), |policy| {
+                    policy.sync_backup_enabled = true;
+                    policy.market_selected_syncs = vec![crate::models::FrontendSyncDescriptor {
+                        write_url: write_url.clone(),
+                        read_url: read_url.clone(),
+                        drop_pub: drop_pub.clone(),
+                        ..Default::default()
+                    }];
+                })
                 .unwrap();
         }
 
@@ -3312,16 +3319,16 @@ mod tests {
 
         {
             let mut s = state.service.lock().unwrap();
-            let mut settings = state.get_cached_settings().unwrap_or_default();
-            settings.sync_backup_enabled = true;
-            settings.market_selected_syncs = vec![crate::models::FrontendSyncDescriptor {
-                write_url: write_url.clone(),
-                read_url: read_url.clone(),
-                drop_pub: drop_pub.clone(),
-                ..Default::default()
-            }];
             state
-                .save_settings(&mut s, settings, Some(password))
+                .mutate_security_policy(&mut s, Some(password), |policy| {
+                    policy.sync_backup_enabled = true;
+                    policy.market_selected_syncs = vec![crate::models::FrontendSyncDescriptor {
+                        write_url: write_url.clone(),
+                        read_url: read_url.clone(),
+                        drop_pub: drop_pub.clone(),
+                        ..Default::default()
+                    }];
+                })
                 .unwrap();
         }
 

@@ -3,7 +3,12 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Cloud, RefreshCw, CheckCircle2, AlertTriangle, Wifi, Image, ExternalLink, Copy } from 'lucide-react';
 import { openUrl } from '@tauri-apps/plugin-opener';
-import { AppSettings, FrontendDiscoveredSync, StoredPublicSync } from '../../types';
+import {
+    AppConfigDto,
+    FrontendDiscoveredSync,
+    StoredPublicSync,
+    UiPreferencesPatch,
+} from '../../types';
 import { marketService } from '../../services/marketService';
 import { settingsService } from '../../services/settingsService';
 import { useOptionalSession } from '../../context/SessionContext';
@@ -26,16 +31,16 @@ function extractHostname(rawUrl?: string | null): string | null {
 }
 
 export interface AutoSyncSummaryCardProps {
-    settings: AppSettings | null;
-    onPersistSettings: (updater: (prev: AppSettings | null) => AppSettings | null) => void;
-    onSettingsSynced?: (newSettings: AppSettings) => void;
+    config: AppConfigDto | null;
+    onPatchUiPreferences?: (patch: UiPreferencesPatch) => Promise<void> | void;
+    onConfigUpdated?: (newConfig: AppConfigDto) => void;
     showQuickConnect?: boolean;
 }
 
 export const AutoSyncSummaryCard: React.FC<AutoSyncSummaryCardProps> = ({
-    settings,
-    onPersistSettings,
-    onSettingsSynced,
+    config,
+    onPatchUiPreferences,
+    onConfigUpdated,
     showQuickConnect = true,
 }) => {
     const { t } = useTranslation();
@@ -77,7 +82,7 @@ export const AutoSyncSummaryCard: React.FC<AutoSyncSummaryCardProps> = ({
             }
         };
 
-        for (const pub of settings?.publicSyncs || []) {
+        for (const pub of config?.securityPolicy.publicSyncs || []) {
             if (pub.enabled !== false && pub.status !== 'revoked') {
                 addHost(pub.readUrl || pub.writeUrl);
             }
@@ -91,43 +96,87 @@ export const AutoSyncSummaryCard: React.FC<AutoSyncSummaryCardProps> = ({
         }
 
         return hosts;
-    }, [settings?.publicSyncs, discoveredSyncs]);
+    }, [config?.securityPolicy.publicSyncs, discoveredSyncs]);
 
-    const postEnabled = settings?.postAcceptFromContacts ?? true;
-    const marketEnabled = settings?.marketSyncEnabled ?? true;
-    const wotEnabled = settings?.wotShareViaSync ?? true;
-    const backupEnabled = settings?.syncBackupEnabled ?? true;
+    const postEnabled = config?.uiPreferences.postAcceptFromContacts ?? true;
+    const marketEnabled = config?.uiPreferences.marketSyncEnabled ?? true;
+    const wotEnabled = config?.uiPreferences.wotShareViaSync ?? true;
+    const backupEnabled = config?.securityPolicy.syncBackupEnabled ?? true;
 
     const allChannelsOn = postEnabled && marketEnabled && wotEnabled && backupEnabled;
     const anyChannelOn = postEnabled || marketEnabled || wotEnabled || backupEnabled;
     const isPartiallyActive = anyChannelOn && !allChannelsOn;
 
-    const handleMasterToggle = (enabled: boolean) => {
-        onPersistSettings((prev) =>
-            prev
-                ? {
-                      ...prev,
-                      postAcceptFromContacts: enabled,
-                      marketSyncEnabled: enabled,
-                      wotShareViaSync: enabled,
-                      syncBackupEnabled: enabled,
-                  }
-                : prev
-        );
-        notifySyncStatusUpdated();
+    const handlePatchUi = async (patch: UiPreferencesPatch) => {
+        if (onPatchUiPreferences) {
+            await onPatchUiPreferences(patch);
+            return;
+        }
+        setFeedback(null);
+        try {
+            const runPatch = async (pwd?: string | null) =>
+                await settingsService.patchUiPreferences(patch, pwd || undefined);
+            const updatedUi = session?.protectAction
+                ? await session.protectAction((pwd) => runPatch(pwd))
+                : await runPatch();
+            if (updatedUi && config && onConfigUpdated) {
+                onConfigUpdated({ ...config, uiPreferences: updatedUi });
+            }
+        } catch (err) {
+            setFeedback({ type: 'error', message: translateError(err, t) });
+        }
+    };
+
+    const handleMasterToggle = async (enabled: boolean) => {
+        setFeedback(null);
+        try {
+            const runToggle = async (pwd?: string | null) => {
+                const updatedSec = await settingsService.patchSecurityPolicy(
+                    { syncBackupEnabled: enabled },
+                    pwd || undefined,
+                );
+                const updatedUi = await settingsService.patchUiPreferences(
+                    {
+                        postAcceptFromContacts: enabled,
+                        marketSyncEnabled: enabled,
+                        wotShareViaSync: enabled,
+                    },
+                    pwd || undefined,
+                );
+                return { updatedSec, updatedUi };
+            };
+            const result = session?.protectAction
+                ? await session.protectAction((pwd) => runToggle(pwd), { requireFullAccess: true })
+                : await runToggle();
+            if (result && onConfigUpdated) {
+                if (config) {
+                    onConfigUpdated({
+                        ...config,
+                        securityPolicy: result.updatedSec,
+                        uiPreferences: result.updatedUi,
+                    });
+                } else {
+                    const fresh = await settingsService.getConfig().catch(() => null);
+                    if (fresh) onConfigUpdated(fresh);
+                }
+            }
+            notifySyncStatusUpdated();
+        } catch (err) {
+            setFeedback({ type: 'error', message: translateError(err, t) });
+        }
     };
 
     const pendingPublicSyncs = useMemo(() => {
-        return (settings?.publicSyncs || []).filter(
+        return (config?.securityPolicy.publicSyncs || []).filter(
             (pub) =>
                 pub.status !== 'revoked' &&
                 (!pub.enabled || pub.status === 'pending_auth' || (pub.authorizedChannels?.length ?? 0) === 0)
         );
-    }, [settings?.publicSyncs]);
+    }, [config?.securityPolicy.publicSyncs]);
 
     const revokedNotices = useMemo(
-        () => collectRevokedNotices(discoveredSyncs, settings?.publicSyncs || []),
-        [discoveredSyncs, settings?.publicSyncs]
+        () => collectRevokedNotices(discoveredSyncs, config?.securityPolicy.publicSyncs || []),
+        [discoveredSyncs, config?.securityPolicy.publicSyncs]
     );
 
     const handleAdoptReplacementUrl = async (url: string) => {
@@ -155,9 +204,9 @@ export const AutoSyncSummaryCard: React.FC<AutoSyncSummaryCardProps> = ({
                 ? await session.protectAction((pwd) => runSave(pwd))
                 : await runSave();
             if (hasAuth !== null && hasAuth !== undefined) {
-                const fresh = await settingsService.getSettings().catch(() => null);
+                const fresh = await settingsService.getConfig().catch(() => null);
                 if (fresh) {
-                    onSettingsSynced?.(fresh);
+                    onConfigUpdated?.(fresh);
                 }
                 await loadDiscovered();
                 notifySyncStatusUpdated();
@@ -220,9 +269,9 @@ export const AutoSyncSummaryCard: React.FC<AutoSyncSummaryCardProps> = ({
                 } else {
                     await saveAction(null);
                 }
-                const fresh = await settingsService.getSettings().catch(() => null);
+                const fresh = await settingsService.getConfig().catch(() => null);
                 if (fresh) {
-                    onSettingsSynced?.(fresh);
+                    onConfigUpdated?.(fresh);
                 }
                 await loadDiscovered();
                 notifySyncStatusUpdated();
@@ -263,9 +312,9 @@ export const AutoSyncSummaryCard: React.FC<AutoSyncSummaryCardProps> = ({
                 } else {
                     await saveAction(null);
                 }
-                const fresh = await settingsService.getSettings().catch(() => null);
+                const fresh = await settingsService.getConfig().catch(() => null);
                 if (fresh) {
-                    onSettingsSynced?.(fresh);
+                    onConfigUpdated?.(fresh);
                 }
                 await loadDiscovered();
                 notifySyncStatusUpdated();
@@ -487,12 +536,8 @@ export const AutoSyncSummaryCard: React.FC<AutoSyncSummaryCardProps> = ({
                     <input
                         type="checkbox"
                         data-testid="settings-wifi-only-toggle"
-                        checked={settings?.marketPollWifiOnly ?? false}
-                        onChange={(e) =>
-                            onPersistSettings((prev) =>
-                                prev ? { ...prev, marketPollWifiOnly: e.target.checked } : prev
-                            )
-                        }
+                        checked={config?.uiPreferences.marketPollWifiOnly ?? false}
+                        onChange={(e) => void handlePatchUi({ marketPollWifiOnly: e.target.checked })}
                         className="mt-0.5 rounded border-theme-subtle text-theme-primary focus:ring-theme-primary cursor-pointer"
                     />
                     <div className="flex-1">
@@ -518,12 +563,10 @@ export const AutoSyncSummaryCard: React.FC<AutoSyncSummaryCardProps> = ({
                     <select
                         id="settingsMediaAutoLoadSelect"
                         data-testid="settings-media-auto-load-select"
-                        value={settings?.mediaAutoLoadMaxHops ?? 2}
+                        value={config?.uiPreferences.mediaAutoLoadMaxHops ?? 2}
                         onChange={(e) => {
                             const maxHops = Number(e.target.value);
-                            onPersistSettings((prev) =>
-                                prev ? { ...prev, mediaAutoLoadMaxHops: maxHops } : prev
-                            );
+                            void handlePatchUi({ mediaAutoLoadMaxHops: maxHops });
                         }}
                         className="h-8 px-2.5 bg-white dark:bg-slate-900 border border-theme-subtle rounded-lg text-xs font-semibold text-theme-secondary outline-none focus:ring-2 focus:ring-theme-primary/20 cursor-pointer shrink-0"
                     >

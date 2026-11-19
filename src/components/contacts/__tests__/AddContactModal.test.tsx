@@ -2,6 +2,7 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach, Mock } from 'vitest';
 import { AddContactModal } from '../AddContactModal';
+import { UiModeProvider } from '../../../context/UiModeContext';
 import { readFromClipboard } from '../../../utils/clipboard';
 import { marketService } from '../../../services/marketService';
 import { open } from '@tauri-apps/plugin-dialog';
@@ -22,6 +23,7 @@ vi.mock('../../../context/SessionContext', () => ({
   useSession: () => ({
     protectAction: vi.fn(async (action) => await action(undefined)),
   }),
+  useOptionalSession: () => null,
 }));
 
 vi.mock('../../../utils/log', () => ({
@@ -101,16 +103,17 @@ describe('AddContactModal Component', () => {
   });
 
   it('renders all 4 tiles in initial selection view (Expert mode)', () => {
-    localStorage.setItem('humoco_ui_mode', 'expert');
     render(
-      <AddContactModal
-        isOpen={true}
-        onClose={mockOnClose}
-        onOpenManualAdd={mockOnOpenManualAdd}
-        onContactAdded={mockOnContactAdded}
-        onSuccess={mockOnSuccess}
-        onError={mockOnError}
-      />
+      <UiModeProvider initialMode="expert">
+        <AddContactModal
+          isOpen={true}
+          onClose={mockOnClose}
+          onOpenManualAdd={mockOnOpenManualAdd}
+          onContactAdded={mockOnContactAdded}
+          onSuccess={mockOnSuccess}
+          onError={mockOnError}
+        />
+      </UiModeProvider>
     );
 
     expect(screen.getByTestId('add-contact-tiles')).toBeInTheDocument();
@@ -121,16 +124,17 @@ describe('AddContactModal Component', () => {
   });
 
   it('switches to QR scanner view when clicking QR tile', () => {
-    localStorage.setItem('humoco_ui_mode', 'expert');
     render(
-      <AddContactModal
-        isOpen={true}
-        onClose={mockOnClose}
-        onOpenManualAdd={mockOnOpenManualAdd}
-        onContactAdded={mockOnContactAdded}
-        onSuccess={mockOnSuccess}
-        onError={mockOnError}
-      />
+      <UiModeProvider initialMode="expert">
+        <AddContactModal
+          isOpen={true}
+          onClose={mockOnClose}
+          onOpenManualAdd={mockOnOpenManualAdd}
+          onContactAdded={mockOnContactAdded}
+          onSuccess={mockOnSuccess}
+          onError={mockOnError}
+        />
+      </UiModeProvider>
     );
 
     fireEvent.click(screen.getByTestId('add-tile-qr'));
@@ -139,18 +143,19 @@ describe('AddContactModal Component', () => {
   });
 
   it('handles DID in clipboard by delegating directly to manual add with prefilled DID', async () => {
-    localStorage.setItem('humoco_ui_mode', 'expert');
     (readFromClipboard as Mock).mockResolvedValue({ text: 'did:key:z6MkhaXGzCsKoDbKyW3' });
 
     render(
-      <AddContactModal
-        isOpen={true}
-        onClose={mockOnClose}
-        onOpenManualAdd={mockOnOpenManualAdd}
-        onContactAdded={mockOnContactAdded}
-        onSuccess={mockOnSuccess}
-        onError={mockOnError}
-      />
+      <UiModeProvider initialMode="expert">
+        <AddContactModal
+          isOpen={true}
+          onClose={mockOnClose}
+          onOpenManualAdd={mockOnOpenManualAdd}
+          onContactAdded={mockOnContactAdded}
+          onSuccess={mockOnSuccess}
+          onError={mockOnError}
+        />
+      </UiModeProvider>
     );
 
     fireEvent.click(screen.getByTestId('add-tile-clipboard'));
@@ -162,18 +167,19 @@ describe('AddContactModal Component', () => {
   });
 
   it('switches to paste input view if clipboard read fails or is empty', async () => {
-    localStorage.setItem('humoco_ui_mode', 'expert');
     (readFromClipboard as Mock).mockResolvedValue({ text: '', error: 'denied' });
 
     render(
-      <AddContactModal
-        isOpen={true}
-        onClose={mockOnClose}
-        onOpenManualAdd={mockOnOpenManualAdd}
-        onContactAdded={mockOnContactAdded}
-        onSuccess={mockOnSuccess}
-        onError={mockOnError}
-      />
+      <UiModeProvider initialMode="expert">
+        <AddContactModal
+          isOpen={true}
+          onClose={mockOnClose}
+          onOpenManualAdd={mockOnOpenManualAdd}
+          onContactAdded={mockOnContactAdded}
+          onSuccess={mockOnSuccess}
+          onError={mockOnError}
+        />
+      </UiModeProvider>
     );
 
     fireEvent.click(screen.getByTestId('add-tile-clipboard'));
@@ -184,20 +190,21 @@ describe('AddContactModal Component', () => {
   });
 
   it('imports business card from file when clicking file tile', async () => {
-    localStorage.setItem('humoco_ui_mode', 'expert');
     (open as unknown as Mock).mockResolvedValue('/path/to/contact.hmcard');
     (readFile as unknown as Mock).mockResolvedValue(new TextEncoder().encode('{"envelope":"test"}'));
     vi.mocked(marketService.importContactCard).mockResolvedValue({ status: 'accepted', did: 'did:key:zTest', replaced: false });
 
     render(
-      <AddContactModal
-        isOpen={true}
-        onClose={mockOnClose}
-        onOpenManualAdd={mockOnOpenManualAdd}
-        onContactAdded={mockOnContactAdded}
-        onSuccess={mockOnSuccess}
-        onError={mockOnError}
-      />
+      <UiModeProvider initialMode="expert">
+        <AddContactModal
+          isOpen={true}
+          onClose={mockOnClose}
+          onOpenManualAdd={mockOnOpenManualAdd}
+          onContactAdded={mockOnContactAdded}
+          onSuccess={mockOnSuccess}
+          onError={mockOnError}
+        />
+      </UiModeProvider>
     );
 
     fireEvent.click(screen.getByTestId('add-tile-file'));
@@ -212,16 +219,17 @@ describe('AddContactModal Component', () => {
   });
 
   it('delegates to manual entry dialog when clicking manual tile', () => {
-    localStorage.setItem('humoco_ui_mode', 'expert');
     render(
-      <AddContactModal
-        isOpen={true}
-        onClose={mockOnClose}
-        onOpenManualAdd={mockOnOpenManualAdd}
-        onContactAdded={mockOnContactAdded}
-        onSuccess={mockOnSuccess}
-        onError={mockOnError}
-      />
+      <UiModeProvider initialMode="expert">
+        <AddContactModal
+          isOpen={true}
+          onClose={mockOnClose}
+          onOpenManualAdd={mockOnOpenManualAdd}
+          onContactAdded={mockOnContactAdded}
+          onSuccess={mockOnSuccess}
+          onError={mockOnError}
+        />
+      </UiModeProvider>
     );
 
     fireEvent.click(screen.getByTestId('add-tile-manual'));
@@ -231,18 +239,19 @@ describe('AddContactModal Component', () => {
   });
 
   it('switches to paste input without error if clipboard has invalid/unrelated content', async () => {
-    localStorage.setItem('humoco_ui_mode', 'expert');
     (readFromClipboard as Mock).mockResolvedValue({ text: 'https://random-website.example.org' });
 
     render(
-      <AddContactModal
-        isOpen={true}
-        onClose={mockOnClose}
-        onOpenManualAdd={mockOnOpenManualAdd}
-        onContactAdded={mockOnContactAdded}
-        onSuccess={mockOnSuccess}
-        onError={mockOnError}
-      />
+      <UiModeProvider initialMode="expert">
+        <AddContactModal
+          isOpen={true}
+          onClose={mockOnClose}
+          onOpenManualAdd={mockOnOpenManualAdd}
+          onContactAdded={mockOnContactAdded}
+          onSuccess={mockOnSuccess}
+          onError={mockOnError}
+        />
+      </UiModeProvider>
     );
 
     fireEvent.click(screen.getByTestId('add-tile-clipboard'));
@@ -254,16 +263,17 @@ describe('AddContactModal Component', () => {
   });
 
   it('shows error when submitting invalid content in paste input view', async () => {
-    localStorage.setItem('humoco_ui_mode', 'expert');
     render(
-      <AddContactModal
-        isOpen={true}
-        onClose={mockOnClose}
-        onOpenManualAdd={mockOnOpenManualAdd}
-        onContactAdded={mockOnContactAdded}
-        onSuccess={mockOnSuccess}
-        onError={mockOnError}
-      />
+      <UiModeProvider initialMode="expert">
+        <AddContactModal
+          isOpen={true}
+          onClose={mockOnClose}
+          onOpenManualAdd={mockOnOpenManualAdd}
+          onContactAdded={mockOnContactAdded}
+          onSuccess={mockOnSuccess}
+          onError={mockOnError}
+        />
+      </UiModeProvider>
     );
 
     // Switch to paste view

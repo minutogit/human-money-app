@@ -2,7 +2,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
-    AppSettings,
+    AppConfigDto,
     FrontendDiscoveredSync,
     FrontendMemberPolicyDto,
     FrontendSyncAdminStatus,
@@ -32,14 +32,14 @@ import {
 } from './syncHelpers';
 
 export interface UseSyncServiceAdminOptions {
-    settings: AppSettings | null;
-    onSettingsUpdated?: (newSettings: AppSettings) => void;
+    config: AppConfigDto | null;
+    onConfigUpdated?: (newConfig: AppConfigDto) => void;
 }
 
 /**
  * Manages sync drop discovery, channel settings, public sync registration, and active hosted sync admin actions.
  */
-export function useSyncServiceAdmin({ settings, onSettingsUpdated }: UseSyncServiceAdminOptions) {
+export function useSyncServiceAdmin({ config, onConfigUpdated }: UseSyncServiceAdminOptions) {
     const { t } = useTranslation();
     const { protectAction, accessMode = 'full', requireFullAccess } = useSession();
 
@@ -55,7 +55,7 @@ export function useSyncServiceAdmin({ settings, onSettingsUpdated }: UseSyncServ
     const { cooldownSeconds, isCoolingDown, checkAndTriggerCooldown } = useRateLimitCooldown();
 
     const [channelSettings, setChannelSettings] = useState<ChannelSettingsState>(() =>
-        buildChannelSettings(settings)
+        buildChannelSettings(config?.uiPreferences)
     );
     const [isDeletingPublicDrop, setIsDeletingPublicDrop] = useState(false);
     const [checkingPublicUrl, setCheckingPublicUrl] = useState<string | null>(null);
@@ -79,20 +79,20 @@ export function useSyncServiceAdmin({ settings, onSettingsUpdated }: UseSyncServ
     const [isRevokingServer, setIsRevokingServer] = useState(false);
 
     useEffect(() => {
-        if (!settings) return;
-        setChannelSettings(buildChannelSettings(settings));
-        if (Array.isArray(settings.publicSyncs)) {
-            setConfiguredPublicDrops(settings.publicSyncs);
+        if (!config) return;
+        setChannelSettings(buildChannelSettings(config.uiPreferences));
+        if (Array.isArray(config.securityPolicy.publicSyncs)) {
+            setConfiguredPublicDrops(config.securityPolicy.publicSyncs);
         }
-    }, [settings]);
+    }, [config]);
 
     const loadData = useCallback(async () => {
         setIsLoading(true);
         try {
-            const [discovered, admin, s] = await Promise.all([
+            const [discovered, admin, freshConfig] = await Promise.all([
                 marketService.discoverAvailableSyncs().catch(() => []),
                 marketService.getSyncAdminStatus().catch(() => null),
-                settingsService.getSettings().catch(() => null),
+                settingsService.getConfig().catch(() => null),
             ]);
             const discList = Array.isArray(discovered) ? discovered : [];
             setDiscoveredDrops(discList);
@@ -105,9 +105,9 @@ export function useSyncServiceAdmin({ settings, onSettingsUpdated }: UseSyncServ
                     maxUserStorageMb: admin.maxUserStorageMb || 25,
                 });
             }
-            if (Array.isArray(s?.publicSyncs)) {
-                setConfiguredPublicDrops(s.publicSyncs);
-            } else if (!settings?.publicSyncs) {
+            if (Array.isArray(freshConfig?.securityPolicy.publicSyncs)) {
+                setConfiguredPublicDrops(freshConfig.securityPolicy.publicSyncs);
+            } else if (!config?.securityPolicy.publicSyncs) {
                 setConfiguredPublicDrops([]);
             }
 
@@ -123,7 +123,7 @@ export function useSyncServiceAdmin({ settings, onSettingsUpdated }: UseSyncServ
         } finally {
             setIsLoading(false);
         }
-    }, [settings]);
+    }, [config]);
 
     useEffect(() => {
         loadData();
@@ -184,12 +184,15 @@ export function useSyncServiceAdmin({ settings, onSettingsUpdated }: UseSyncServ
     ) => {
         setChannelSettings((prev) => ({ ...prev, [key]: value }));
         try {
-            const current = settings || await settingsService.getSettings();
-            const updated: AppSettings = { ...current, [key]: value };
-            await protectAction(async (pwd) => {
-                await settingsService.saveSettings(updated, pwd || undefined);
+            const updatedUi = await protectAction(async (pwd) => {
+                return await settingsService.patchUiPreferences(
+                    { [key]: value },
+                    pwd || undefined,
+                );
             });
-            onSettingsUpdated?.(updated);
+            if (updatedUi && config) {
+                onConfigUpdated?.({ ...config, uiPreferences: updatedUi });
+            }
             notifySyncStatusUpdated();
         } catch (err) {
             setFeedback({ type: 'error', message: translateError(err, t) });
@@ -197,9 +200,11 @@ export function useSyncServiceAdmin({ settings, onSettingsUpdated }: UseSyncServ
     };
 
     const refreshPublicSyncSettings = async () => {
-        const s = await settingsService.getSettings();
-        if (s.publicSyncs) setConfiguredPublicDrops(s.publicSyncs);
-        onSettingsUpdated?.(s);
+        const freshConfig = await settingsService.getConfig();
+        if (freshConfig.securityPolicy.publicSyncs) {
+            setConfiguredPublicDrops(freshConfig.securityPolicy.publicSyncs);
+        }
+        onConfigUpdated?.(freshConfig);
         notifySyncStatusUpdated();
     };
 

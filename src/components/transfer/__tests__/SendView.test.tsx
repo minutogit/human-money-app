@@ -2,8 +2,8 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
 import { SendView } from '../SendView';
 import { invoke } from '@tauri-apps/api/core';
-import { VoucherSummary, VoucherStandardInfo, Contact, AppSettings } from '../../../types';
-import { UI_MODE_STORAGE_KEY } from '../../../context/UiModeContext';
+import { VoucherSummary, VoucherStandardInfo, Contact, AppConfigDto } from '../../../types';
+import { UiModeProvider } from '../../../context/UiModeContext';
 
 const { mockNavigate } = vi.hoisted(() => ({
   mockNavigate: vi.fn(),
@@ -87,17 +87,45 @@ amount_decimal_places = 4`,
     },
   ];
 
-  const mockSettings: AppSettings = {
-    sessionTimeoutSeconds: 300,
-    privacyDefault: 'public',
-    marketSyncEnabled: true,
+  const mockConfig: AppConfigDto = {
+    uiPreferences: {
+      uiMode: 'expert',
+      lastUsedDirectory: null,
+      balanceViewMode: 'spendable',
+      marketShowUnknown: true,
+      maxStoredCards: 2000,
+      marketSendCardOnPayment: false,
+      marketSyncEnabled: true,
+      shareMinLevel: 1,
+      marketPollWifiOnly: false,
+      wotShareViaSync: true,
+      postAcceptFromContacts: true,
+      mediaAutoLoadMaxHops: 2,
+    },
+    securityPolicy: {
+      sessionTimeoutSeconds: 300,
+      privacyDefault: 'public',
+      devModeUnlocked: false,
+      autoBackupEnabled: true,
+      syncBackupEnabled: true,
+      backupSyncFolder: null,
+      backupProtectionMode: null,
+      ownNominatedLockServer: null,
+      marketSelectedSyncs: [],
+      publicSyncs: [],
+    },
+    lifecycle: {
+      pendingRestoreL2Reconciliation: false,
+      backupDirty: false,
+      lastBackupAt: null,
+      lastSyncBackupAt: null,
+      l2ProbeCache: {},
+      l2AnchorTemplatesMeta: [],
+    },
   };
-
-
 
   beforeEach(() => {
     vi.clearAllMocks();
-    localStorage.setItem(UI_MODE_STORAGE_KEY, 'expert');
     (invoke as Mock).mockImplementation((cmd: string) => {
       if (cmd === 'get_voucher_summaries') {
         return Promise.resolve(mockVouchers);
@@ -108,8 +136,8 @@ amount_decimal_places = 4`,
       if (cmd === 'get_voucher_standards') {
         return Promise.resolve(mockStandards);
       }
-      if (cmd === 'get_app_settings') {
-        return Promise.resolve(mockSettings);
+      if (cmd === 'get_app_config') {
+        return Promise.resolve(mockConfig);
       }
       if (cmd === 'get_contacts') {
         return Promise.resolve(mockContacts);
@@ -136,7 +164,7 @@ amount_decimal_places = 4`,
   });
 
   it('renders form fields for sending', async () => {
-    render(<SendView />);
+    render(<UiModeProvider initialMode="expert"><SendView /></UiModeProvider>);
 
     await waitFor(() => {
       expect(screen.getByRole('textbox', { name: /User ID/i })).toBeInTheDocument();
@@ -145,7 +173,7 @@ amount_decimal_places = 4`,
   });
 
   it('loads vouchers and contacts on mount', async () => {
-    render(<SendView />);
+    render(<UiModeProvider initialMode="expert"><SendView /></UiModeProvider>);
 
     await waitFor(() => {
       expect(invoke).toHaveBeenCalled();
@@ -170,7 +198,7 @@ amount_decimal_places = 4`,
       if (cmd === 'get_voucher_summaries') return Promise.resolve([customVoucher]);
       if (cmd === 'get_voucher_standards') return Promise.resolve([customStandard]);
       if (cmd === 'get_user_id') return Promise.resolve('did:key:z789');
-      if (cmd === 'get_app_settings') return Promise.resolve(mockSettings);
+      if (cmd === 'get_app_config') return Promise.resolve(mockConfig);
       if (cmd === 'get_contacts') return Promise.resolve(mockContacts);
       if (cmd === 'get_active_asset_classes') return Promise.resolve([{
         standardUuid: 'uuid-2',
@@ -182,7 +210,7 @@ amount_decimal_places = 4`,
       return Promise.resolve(undefined);
     });
 
-    render(<SendView />);
+    render(<UiModeProvider initialMode="expert"><SendView /></UiModeProvider>);
 
     await waitFor(() => expect(screen.getAllByText(/PrecisionStd/i).length).toBeGreaterThan(0));
     fireEvent.click(screen.getByTestId('manual-voucher-selection-toggle'));
@@ -204,7 +232,7 @@ amount_decimal_places = 4`,
       if (cmd === 'get_voucher_summaries') return Promise.resolve(mockVouchers);
       if (cmd === 'get_user_id') return Promise.resolve('did:key:z789');
       if (cmd === 'get_voucher_standards') return Promise.resolve(mockStandards);
-      if (cmd === 'get_app_settings') return Promise.resolve(mockSettings);
+      if (cmd === 'get_app_config') return Promise.resolve(mockConfig);
       if (cmd === 'get_contacts') return Promise.resolve(mockContacts);
       if (cmd === 'get_active_asset_classes') {
         return Promise.resolve([
@@ -229,7 +257,7 @@ amount_decimal_places = 4`,
       return Promise.resolve(undefined);
     });
 
-    render(<SendView />);
+    render(<UiModeProvider initialMode="expert"><SendView /></UiModeProvider>);
 
     // Type recipient ID
     const recipientInput = await screen.findByRole('textbox', { name: /User ID/i });
@@ -263,7 +291,7 @@ amount_decimal_places = 4`,
   });
 
   it('should strip whitespace from recipient ID on input', async () => {
-    render(<SendView />);
+    render(<UiModeProvider initialMode="expert"><SendView /></UiModeProvider>);
     await waitFor(() => expect(screen.getByRole('textbox', { name: /User ID/i })).toBeInTheDocument());
     const recipientInput = screen.getByRole('textbox', { name: /User ID/i });
     fireEvent.change(recipientInput, { target: { value: 'did:key:z456 \t\n' } });
@@ -278,7 +306,7 @@ amount_decimal_places = 4`,
       if (cmd === 'get_voucher_summaries') return Promise.resolve(mockVouchers);
       if (cmd === 'get_user_id') return Promise.resolve('did:key:z789');
       if (cmd === 'get_voucher_standards') return Promise.resolve(mockStandards);
-      if (cmd === 'get_app_settings') return Promise.resolve(mockSettings);
+      if (cmd === 'get_app_config') return Promise.resolve(mockConfig);
       if (cmd === 'get_contacts') return Promise.resolve(mockContacts);
       if (cmd === 'get_active_asset_classes') return Promise.resolve([]);
       if (cmd === 'get_user_profile') return Promise.resolve(null);
@@ -294,7 +322,7 @@ amount_decimal_places = 4`,
       return Promise.resolve(undefined);
     });
 
-    render(<SendView />);
+    render(<UiModeProvider initialMode="expert"><SendView /></UiModeProvider>);
 
     await waitFor(() => {
       expect(parsedTomlContent).toContain('name = "FreeTaler"');
@@ -302,7 +330,7 @@ amount_decimal_places = 4`,
   });
 
   it('applies payment request from recipient input preserving target amount', async () => {
-    render(<SendView />);
+    render(<UiModeProvider initialMode="expert"><SendView /></UiModeProvider>);
     await waitFor(() => expect(screen.getByRole('textbox', { name: /User ID/i })).toBeInTheDocument());
 
     const recipientInput = screen.getByRole('textbox', { name: /User ID/i });
@@ -319,7 +347,7 @@ amount_decimal_places = 4`,
   });
 
   it('sets target amount when initialVoucherId is provided', async () => {
-    render(<SendView initialVoucherId="voucher1" />);
+    render(<UiModeProvider initialMode="expert"><SendView initialVoucherId="voucher1" /></UiModeProvider>);
     await waitFor(() => {
       const targetAmountInput = screen.getByPlaceholderText('0.00');
       expect(targetAmountInput).toHaveValue(100);
@@ -327,7 +355,7 @@ amount_decimal_places = 4`,
   });
 
   it('shows error feedback on invalid payment request in recipient input', async () => {
-    render(<SendView />);
+    render(<UiModeProvider initialMode="expert"><SendView /></UiModeProvider>);
     await waitFor(() => expect(screen.getByRole('textbox', { name: /User ID/i })).toBeInTheDocument());
 
     const recipientInput = screen.getByRole('textbox', { name: /User ID/i });
@@ -343,7 +371,7 @@ amount_decimal_places = 4`,
       if (cmd === 'get_voucher_summaries') return Promise.resolve(mockVouchers);
       if (cmd === 'get_user_id') return Promise.resolve('did:key:z789');
       if (cmd === 'get_voucher_standards') return Promise.resolve(mockStandards);
-      if (cmd === 'get_app_settings') return Promise.resolve(mockSettings);
+      if (cmd === 'get_app_config') return Promise.resolve(mockConfig);
       if (cmd === 'get_contacts') return Promise.resolve(mockContacts);
       if (cmd === 'get_active_asset_classes') {
         return Promise.resolve([
@@ -361,7 +389,7 @@ amount_decimal_places = 4`,
       return Promise.resolve(undefined);
     });
 
-    render(<SendView />);
+    render(<UiModeProvider initialMode="expert"><SendView /></UiModeProvider>);
 
     fireEvent.click(await screen.findByTestId('edit-sender-name-btn'));
 
@@ -386,7 +414,7 @@ amount_decimal_places = 4`,
       if (cmd === 'get_voucher_summaries') return Promise.resolve(mockVouchers);
       if (cmd === 'get_user_id') return Promise.resolve('did:key:z789');
       if (cmd === 'get_voucher_standards') return Promise.resolve(mockStandards);
-      if (cmd === 'get_app_settings') return Promise.resolve(mockSettings);
+      if (cmd === 'get_app_config') return Promise.resolve(mockConfig);
       if (cmd === 'get_contacts') return Promise.resolve(mockContacts);
       if (cmd === 'get_active_asset_classes') {
         return Promise.resolve([
@@ -419,7 +447,7 @@ amount_decimal_places = 4`,
       return Promise.resolve(undefined);
     });
 
-    render(<SendView />);
+    render(<UiModeProvider initialMode="expert"><SendView /></UiModeProvider>);
 
     // Fixed sender display is shown by default until pencil icon is clicked
     await waitFor(() => {
@@ -473,7 +501,7 @@ amount_decimal_places = 4`,
   });
 
   it('keeps #target-amount visible even when "All" standard filter is active and auto-selects when typing', async () => {
-    render(<SendView />);
+    render(<UiModeProvider initialMode="expert"><SendView /></UiModeProvider>);
 
     await waitFor(() => {
       expect(screen.getAllByText('FreeTaler').length).toBeGreaterThan(0);
@@ -515,7 +543,7 @@ amount_decimal_places = 4`,
       if (cmd === 'get_voucher_summaries') return Promise.resolve(mixedVouchers);
       if (cmd === 'get_user_id') return Promise.resolve('did:key:z789');
       if (cmd === 'get_voucher_standards') return Promise.resolve(mockStandards);
-      if (cmd === 'get_app_settings') return Promise.resolve(mockSettings);
+      if (cmd === 'get_app_config') return Promise.resolve(mockConfig);
       if (cmd === 'get_contacts') return Promise.resolve(mockContacts);
       if (cmd === 'get_active_asset_classes') {
         return Promise.resolve([
@@ -537,7 +565,7 @@ amount_decimal_places = 4`,
       return Promise.resolve(undefined);
     });
 
-    render(<SendView />);
+    render(<UiModeProvider initialMode="expert"><SendView /></UiModeProvider>);
 
     await waitFor(() => {
       expect(document.getElementById('target-amount')).toBeInTheDocument();
@@ -556,9 +584,7 @@ amount_decimal_places = 4`,
   });
 
   it('APP-UX-09 P3 Simple Mode: hides sender card, raw recipient DID input, and collapses manual voucher selection', async () => {
-    localStorage.setItem(UI_MODE_STORAGE_KEY, 'simple');
-
-    const { container } = render(<SendView />);
+    const { container } = render(<UiModeProvider initialMode="simple"><SendView /></UiModeProvider>);
 
     await waitFor(() => {
       expect(screen.getByTestId('quick-contact-did:key:z456')).toBeInTheDocument();
@@ -574,8 +600,6 @@ amount_decimal_places = 4`,
   });
 
   it('APP-UX-09 P3 Simple Mode: quick contact + amount sends with profile senderProfileName', async () => {
-    localStorage.setItem(UI_MODE_STORAGE_KEY, 'simple');
-
     const baseImpl = (invoke as Mock).getMockImplementation();
     (invoke as Mock).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
       if (cmd === 'create_transfer_bundle') {
@@ -594,7 +618,7 @@ amount_decimal_places = 4`,
       return baseImpl ? baseImpl(cmd, args) : Promise.resolve(undefined);
     });
 
-    render(<SendView />);
+    render(<UiModeProvider initialMode="simple"><SendView /></UiModeProvider>);
 
     const janeBtn = await screen.findByTestId('quick-contact-did:key:z456');
     fireEvent.click(janeBtn);
@@ -623,7 +647,7 @@ amount_decimal_places = 4`,
   });
 
   it('warns instead of applying target amount when requested standard UUID is missing locally', async () => {
-    render(<SendView />);
+    render(<UiModeProvider initialMode="expert"><SendView /></UiModeProvider>);
     await waitFor(() => expect(screen.getByRole('textbox', { name: /User ID/i })).toBeInTheDocument());
 
     const recipientInput = screen.getByRole('textbox', { name: /User ID/i });
@@ -664,7 +688,7 @@ amount_decimal_places = 4`,
       return baseImpl ? baseImpl(cmd, args) : Promise.resolve(undefined);
     });
 
-    render(<SendView />);
+    render(<UiModeProvider initialMode="expert"><SendView /></UiModeProvider>);
 
     await waitFor(() => expect(screen.getByRole('textbox', { name: /User ID/i })).toBeInTheDocument());
     fireEvent.change(screen.getByRole('textbox', { name: /User ID/i }), {
@@ -716,7 +740,7 @@ amount_decimal_places = 4`,
       return baseImpl ? baseImpl(cmd, args) : Promise.resolve(undefined);
     });
 
-    render(<SendView />);
+    render(<UiModeProvider initialMode="expert"><SendView /></UiModeProvider>);
 
     await waitFor(() => expect(screen.getByRole('textbox', { name: /User ID/i })).toBeInTheDocument());
     fireEvent.change(screen.getByRole('textbox', { name: /User ID/i }), {
@@ -776,7 +800,7 @@ amount_decimal_places = 4`,
       return baseImpl ? baseImpl(cmd, args) : Promise.resolve(undefined);
     });
 
-    render(<SendView />);
+    render(<UiModeProvider initialMode="expert"><SendView /></UiModeProvider>);
 
     await waitFor(() => {
       expect(screen.getByText('Alice Card')).toBeInTheDocument();
@@ -806,6 +830,142 @@ amount_decimal_places = 4`,
       );
       expect(screen.getByText(/Recipient knows issuer \(85%\)/i)).toBeInTheDocument();
     });
+  });
+
+  it('clears auto-selected vouchers immediately when target amount is cleared', async () => {
+    render(<UiModeProvider initialMode="expert"><SendView /></UiModeProvider>);
+    await waitFor(() => expect(screen.getByPlaceholderText('0.00')).toBeInTheDocument());
+
+    const targetAmountInput = screen.getByPlaceholderText('0.00');
+    fireEvent.change(targetAmountInput, { target: { value: '25' } });
+
+    await waitFor(() => {
+      expect(screen.getByText(/1 Vouchers Selected/i)).toBeInTheDocument();
+      expect(screen.queryByText('0.00')).not.toBeInTheDocument();
+    });
+
+    fireEvent.change(targetAmountInput, { target: { value: '' } });
+
+    expect(screen.queryByText(/1 Vouchers Selected/i)).not.toBeInTheDocument();
+    expect(screen.getByText('0.00')).toBeInTheDocument();
+  });
+
+  it('allows humoco://pay URI to override initialVoucherId selection cleanly', async () => {
+    const baseImpl = (invoke as Mock).getMockImplementation();
+    (invoke as Mock).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === 'prepare_transfer_plan') {
+        return Promise.resolve({
+          selected: [
+            {
+              localInstanceId: 'voucher1',
+              score: 5000,
+              breakdown: {
+                sBoomerang: 0,
+                sEigen: 0,
+                sCorridor: 0,
+                sAge: 0,
+                sChain: 0,
+                sFit: 0,
+                sWot: 5000,
+              },
+              reason: 'greedy',
+              amount: '42.50',
+              standardUuid: 'a1b2c3d4-e5f6-4789-8012-3456789abcde',
+            },
+          ],
+          totalSelected: '42.50',
+          target: '42.50',
+          needsSplit: true,
+          planReason: 'greedy',
+          minRecipientTrustPercent: 60,
+        });
+      }
+      return baseImpl ? baseImpl(cmd, args) : Promise.resolve(undefined);
+    });
+
+    render(<UiModeProvider initialMode="expert"><SendView initialVoucherId="voucher1" /></UiModeProvider>);
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText('0.00')).toHaveValue(100);
+      expect(screen.getByText(/100[.,]00/)).toBeInTheDocument();
+    });
+
+    const recipientInput = screen.getByTestId('recipient-search-input');
+    fireEvent.change(recipientInput, {
+      target: { value: 'humoco://pay?to=did:key:z999999999999&amount=42.50&std=FreeTaler&note=Honey' },
+    });
+
+    await waitFor(() => {
+      expect(recipientInput).toHaveValue('did:key:z999999999999');
+    });
+    expect(screen.getByPlaceholderText('0.00')).toHaveValue(42.5);
+    expect(screen.getByPlaceholderText(/note or reference/i)).toHaveValue('Honey');
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith(
+        'prepare_transfer_plan',
+        expect.objectContaining({
+          recipientId: 'did:key:z999999999999',
+          targetAmount: '42.50',
+        })
+      );
+      expect(screen.getByText(/42[.,]50/)).toBeInTheDocument();
+    });
+  });
+
+  it('normalizes chat-embedded DID, humoco://contact, and humoco://card in recipient input', async () => {
+    render(<UiModeProvider initialMode="expert"><SendView /></UiModeProvider>);
+    const recipientInput = await screen.findByTestId('recipient-search-input');
+
+    const chatDid = 'did:key:z6MkuT52y5aBqB9R5e6v18c8P4h5M8Z7v';
+    fireEvent.change(recipientInput, {
+      target: { value: `Hallo! Bitte an ${chatDid} senden.` },
+    });
+    expect(recipientInput).toHaveValue(chatDid);
+
+    const contactDid = 'did:key:z6MkvContactUser11111111111111111';
+    fireEvent.change(recipientInput, {
+      target: { value: `Kontakt:\nhumoco://contact?did=${encodeURIComponent(contactDid)}&name=Bob` },
+    });
+    expect(recipientInput).toHaveValue(contactDid);
+
+    const cardDid = 'did:key:z6MkwCardUser22222222222222222222';
+    const cardB64 = Buffer.from(JSON.stringify({ did: cardDid, card_wire: 'a.b.c' }), 'utf8')
+      .toString('base64')
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '');
+    fireEvent.change(recipientInput, {
+      target: { value: `humoco://card?env=${cardB64}` },
+    });
+    expect(recipientInput).toHaveValue(cardDid);
+  });
+
+  it('clears knownOffender trust alert immediately on recipient change before debounce settles', async () => {
+    const baseImpl = (invoke as Mock).getMockImplementation();
+    const offenderDid = 'did:key:z6MkuBadOffender1111111111111111';
+    const cleanDid = 'did:key:z6MkuCleanUser222222222222222222';
+    (invoke as Mock).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === 'check_reputation') {
+        if (args?.offenderId === offenderDid) {
+          return Promise.resolve({ knownOffender: 'proof-double-spend-1' });
+        }
+        return Promise.resolve('clean');
+      }
+      return baseImpl ? baseImpl(cmd, args) : Promise.resolve(undefined);
+    });
+
+    render(<UiModeProvider initialMode="expert"><SendView /></UiModeProvider>);
+    const recipientInput = await screen.findByTestId('recipient-search-input');
+
+    fireEvent.change(recipientInput, { target: { value: offenderDid } });
+
+    await waitFor(() => {
+      expect(screen.getByText(/Trust Alert|Vertrauenswarnung/i)).toBeInTheDocument();
+    });
+
+    fireEvent.change(recipientInput, { target: { value: cleanDid } });
+    expect(screen.queryByText(/Trust Alert|Vertrauenswarnung/i)).not.toBeInTheDocument();
   });
 });
 

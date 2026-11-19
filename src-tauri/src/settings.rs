@@ -1,13 +1,26 @@
 // src-tauri/src/settings.rs
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
-pub const SETTINGS_KEY: &str = "app_settings";
+pub const UI_PREFERENCES_KEY: &str = "ui_preferences";
+pub const SECURITY_POLICY_KEY: &str = "security_policy";
+pub const INTERNAL_LIFECYCLE_STATE_KEY: &str = "internal_lifecycle_state";
+
 pub const MAX_POLLED_SYNCS: usize = 10;
 pub const SYNC_HEARTBEAT_SECS: u64 = 7 * 86_400;
 pub const SYNC_BASE_MAX_AGE_SECS: u64 = 7 * 86_400;
 pub const SYNC_MARKET_POLL_COOLDOWN_SECS: u64 = 1_200;
 pub const SYNC_CARD_MAX_BYTES: usize = 524_288;
 pub const SYNC_WOT_MAX_BYTES: usize = 131_072;
+
+/// Distinguishes an omitted optional JSON key (`None`) from an explicit `null` (`Some(None)`).
+fn deserialize_double_option<'de, T, D>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    T: Deserialize<'de>,
+    D: serde::Deserializer<'de>,
+{
+    Deserialize::deserialize(deserializer).map(Some)
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -51,66 +64,6 @@ pub struct NominatedLockServerMeta {
     pub probed_at_secs: u64,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(default, rename_all = "camelCase")]
-pub struct AppSettings {
-    pub session_timeout_seconds: u64,
-    pub last_used_directory: Option<String>,
-    #[serde(default = "default_privacy_default")]
-    pub privacy_default: String,
-    #[serde(default)]
-    pub dev_mode_unlocked: bool,
-    #[serde(default)]
-    pub l2_anchor_templates_meta: Vec<StoredAnchorTemplateMeta>,
-    #[serde(default)]
-    pub own_nominated_lock_server: Option<NominatedLockServerMeta>,
-    #[serde(default)]
-    pub l2_probe_cache:
-        std::collections::BTreeMap<String, crate::sync_client::FrontendLockServerProbeResult>,
-    #[serde(default)]
-    pub backup_sync_folder: Option<String>,
-    #[serde(default)]
-    pub backup_protection_mode: Option<String>,
-    #[serde(default)]
-    pub last_backup_at: Option<String>,
-    #[serde(default = "default_balance_view_mode")]
-    pub balance_view_mode: String,
-    #[serde(default = "default_auto_backup_enabled")]
-    pub auto_backup_enabled: bool,
-    #[serde(default)]
-    pub backup_dirty: bool,
-    #[serde(default = "default_market_show_unknown")]
-    pub market_show_unknown: bool,
-    #[serde(default = "default_max_stored_cards")]
-    pub max_stored_cards: usize,
-    #[serde(default)]
-    pub market_send_card_on_payment: bool,
-    #[serde(default = "default_true")]
-    pub market_sync_enabled: bool,
-    #[serde(default = "default_share_min_level")]
-    pub share_min_level: u8,
-    #[serde(default)]
-    pub market_poll_wifi_only: bool,
-    #[serde(default)]
-    pub market_selected_syncs: Vec<crate::models::FrontendSyncDescriptor>,
-    #[serde(default)]
-    pub public_syncs: Vec<StoredPublicSync>,
-    #[serde(default = "default_true")]
-    pub wot_share_via_sync: bool,
-    #[serde(default = "default_true")]
-    pub sync_backup_enabled: bool,
-    #[serde(default)]
-    pub last_sync_backup_at: Option<String>,
-    #[serde(default)]
-    pub pending_restore_l2_reconciliation: bool,
-    #[serde(default = "default_true")]
-    pub post_accept_from_contacts: bool,
-    #[serde(default = "default_ui_mode")]
-    pub ui_mode: String,
-    #[serde(default = "default_media_auto_load_max_hops")]
-    pub media_auto_load_max_hops: u8,
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct StoredPublicSync {
@@ -120,7 +73,7 @@ pub struct StoredPublicSync {
     #[serde(default)]
     pub register_url: Option<String>,
     pub access_pubkey: String, // R_hex64
-    #[serde(default = "default_is_active")]
+    #[serde(default = "default_true")]
     pub enabled: bool,
     #[serde(default)]
     pub authorized_channels: Vec<String>,
@@ -160,7 +113,7 @@ impl Default for StoredPublicSync {
             drop_pub: String::new(),
             register_url: None,
             access_pubkey: String::new(),
-            enabled: default_is_active(),
+            enabled: true,
             authorized_channels: Vec::new(),
             status: crate::models::default_sync_status(),
             sunset_at: None,
@@ -170,20 +123,245 @@ impl Default for StoredPublicSync {
     }
 }
 
+/// UI and market/sync usability preferences editable under `DailyPay`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct UiPreferences {
+    #[serde(default = "default_ui_mode")]
+    pub ui_mode: String,
+    #[serde(default)]
+    pub last_used_directory: Option<String>,
+    #[serde(default = "default_balance_view_mode")]
+    pub balance_view_mode: String,
+    #[serde(default = "default_true")]
+    pub market_show_unknown: bool,
+    #[serde(default = "default_max_stored_cards")]
+    pub max_stored_cards: usize,
+    #[serde(default)]
+    pub market_send_card_on_payment: bool,
+    #[serde(default = "default_true")]
+    pub market_sync_enabled: bool,
+    #[serde(default = "default_share_min_level")]
+    pub share_min_level: u8,
+    #[serde(default)]
+    pub market_poll_wifi_only: bool,
+    #[serde(default = "default_true")]
+    pub wot_share_via_sync: bool,
+    #[serde(default = "default_true")]
+    pub post_accept_from_contacts: bool,
+    #[serde(default = "default_media_auto_load_max_hops")]
+    pub media_auto_load_max_hops: u8,
+}
+
+impl Default for UiPreferences {
+    fn default() -> Self {
+        Self {
+            ui_mode: default_ui_mode(),
+            last_used_directory: None,
+            balance_view_mode: default_balance_view_mode(),
+            market_show_unknown: true,
+            max_stored_cards: default_max_stored_cards(),
+            market_send_card_on_payment: false,
+            market_sync_enabled: true,
+            share_min_level: default_share_min_level(),
+            market_poll_wifi_only: false,
+            wot_share_via_sync: true,
+            post_accept_from_contacts: true,
+            media_auto_load_max_hops: default_media_auto_load_max_hops(),
+        }
+    }
+}
+
+/// Security-critical policies and network endpoints editable only under `Full` access.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct SecurityPolicy {
+    #[serde(default = "default_session_timeout_seconds")]
+    pub session_timeout_seconds: u64,
+    #[serde(default = "default_privacy_default")]
+    pub privacy_default: String,
+    #[serde(default)]
+    pub dev_mode_unlocked: bool,
+    #[serde(default = "default_true")]
+    pub auto_backup_enabled: bool,
+    #[serde(default = "default_true")]
+    pub sync_backup_enabled: bool,
+    #[serde(default)]
+    pub backup_sync_folder: Option<String>,
+    #[serde(default)]
+    pub backup_protection_mode: Option<String>,
+    #[serde(default)]
+    pub own_nominated_lock_server: Option<NominatedLockServerMeta>,
+    #[serde(default)]
+    pub market_selected_syncs: Vec<crate::models::FrontendSyncDescriptor>,
+    #[serde(default)]
+    pub public_syncs: Vec<StoredPublicSync>,
+}
+
+impl Default for SecurityPolicy {
+    fn default() -> Self {
+        Self {
+            session_timeout_seconds: default_session_timeout_seconds(),
+            privacy_default: default_privacy_default(),
+            dev_mode_unlocked: false,
+            auto_backup_enabled: true,
+            sync_backup_enabled: true,
+            backup_sync_folder: None,
+            backup_protection_mode: None,
+            own_nominated_lock_server: None,
+            market_selected_syncs: Vec::new(),
+            public_syncs: Vec::new(),
+        }
+    }
+}
+
+/// Backend-managed lifecycle flags and L2 probe/template metadata; never writable via patch commands.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct InternalLifecycleState {
+    #[serde(default)]
+    pub pending_restore_l2_reconciliation: bool,
+    #[serde(default)]
+    pub backup_dirty: bool,
+    #[serde(default)]
+    pub last_backup_at: Option<String>,
+    #[serde(default)]
+    pub last_sync_backup_at: Option<String>,
+    #[serde(default)]
+    pub l2_probe_cache: BTreeMap<String, crate::sync_client::FrontendLockServerProbeResult>,
+    #[serde(default)]
+    pub l2_anchor_templates_meta: Vec<StoredAnchorTemplateMeta>,
+}
+
+/// Read-only composite view of all three stores exposed to the UI via `get_app_config`.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AppConfigDto {
+    pub ui_preferences: UiPreferences,
+    pub security_policy: SecurityPolicy,
+    pub lifecycle: InternalLifecycleState,
+}
+
+/// Partial update for `UiPreferences` (authorized with `RequiredAccess::DailyPay`).
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct UiPreferencesPatch {
+    pub ui_mode: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub last_used_directory: Option<Option<String>>,
+    pub balance_view_mode: Option<String>,
+    pub market_show_unknown: Option<bool>,
+    pub max_stored_cards: Option<usize>,
+    pub market_send_card_on_payment: Option<bool>,
+    pub market_sync_enabled: Option<bool>,
+    pub share_min_level: Option<u8>,
+    pub market_poll_wifi_only: Option<bool>,
+    pub wot_share_via_sync: Option<bool>,
+    pub post_accept_from_contacts: Option<bool>,
+    pub media_auto_load_max_hops: Option<u8>,
+}
+
+impl UiPreferencesPatch {
+    pub fn apply_to(&self, target: &mut UiPreferences) {
+        if let Some(ref mode) = self.ui_mode {
+            target.ui_mode = if mode.trim().eq_ignore_ascii_case("expert") {
+                "expert".to_string()
+            } else {
+                "simple".to_string()
+            };
+        }
+        if let Some(ref dir_opt) = self.last_used_directory {
+            target.last_used_directory = dir_opt.clone();
+        }
+        if let Some(ref view_mode) = self.balance_view_mode {
+            target.balance_view_mode = if view_mode.trim().eq_ignore_ascii_case("net") {
+                "net".to_string()
+            } else {
+                "spendable".to_string()
+            };
+        }
+        if let Some(v) = self.market_show_unknown {
+            target.market_show_unknown = v;
+        }
+        if let Some(v) = self.max_stored_cards {
+            target.max_stored_cards = v;
+        }
+        if let Some(v) = self.market_send_card_on_payment {
+            target.market_send_card_on_payment = v;
+        }
+        if let Some(v) = self.market_sync_enabled {
+            target.market_sync_enabled = v;
+        }
+        if let Some(v) = self.share_min_level {
+            target.share_min_level = v.min(3);
+        }
+        if let Some(v) = self.market_poll_wifi_only {
+            target.market_poll_wifi_only = v;
+        }
+        if let Some(v) = self.wot_share_via_sync {
+            target.wot_share_via_sync = v;
+        }
+        if let Some(v) = self.post_accept_from_contacts {
+            target.post_accept_from_contacts = v;
+        }
+        if let Some(v) = self.media_auto_load_max_hops {
+            target.media_auto_load_max_hops = v.min(3);
+        }
+    }
+}
+
+/// Partial update for `SecurityPolicy` scalar/backup policy fields (`RequiredAccess::Full`).
+/// Lock server nominations and sync endpoints use dedicated validated commands.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct SecurityPolicyPatch {
+    pub session_timeout_seconds: Option<u64>,
+    pub privacy_default: Option<String>,
+    pub dev_mode_unlocked: Option<bool>,
+    pub auto_backup_enabled: Option<bool>,
+    pub sync_backup_enabled: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub backup_sync_folder: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub backup_protection_mode: Option<Option<String>>,
+}
+
+impl SecurityPolicyPatch {
+    pub fn apply_to(&self, target: &mut SecurityPolicy) {
+        if let Some(v) = self.session_timeout_seconds {
+            target.session_timeout_seconds = v;
+        }
+        if let Some(ref v) = self.privacy_default {
+            target.privacy_default = v.clone();
+        }
+        if let Some(v) = self.dev_mode_unlocked {
+            target.dev_mode_unlocked = v;
+        }
+        if let Some(v) = self.auto_backup_enabled {
+            target.auto_backup_enabled = v;
+        }
+        if let Some(v) = self.sync_backup_enabled {
+            target.sync_backup_enabled = v;
+        }
+        if let Some(ref v) = self.backup_sync_folder {
+            target.backup_sync_folder = v.clone();
+        }
+        if let Some(ref v) = self.backup_protection_mode {
+            target.backup_protection_mode = v.clone();
+        }
+    }
+}
+
+fn default_session_timeout_seconds() -> u64 {
+    600
+}
+
 fn default_share_min_level() -> u8 {
     1
 }
 
 fn default_max_stored_cards() -> usize {
     2000
-}
-
-fn default_market_show_unknown() -> bool {
-    true
-}
-
-fn default_auto_backup_enabled() -> bool {
-    true
 }
 
 fn default_balance_view_mode() -> String {
@@ -202,47 +380,8 @@ fn default_ui_mode() -> String {
     "simple".to_string()
 }
 
-fn default_is_active() -> bool {
-    true
-}
-
 fn default_media_auto_load_max_hops() -> u8 {
     2
-}
-
-impl Default for AppSettings {
-    fn default() -> Self {
-        Self {
-            session_timeout_seconds: 600, // Standard: 10 Minuten
-            last_used_directory: None,
-            privacy_default: "ask".to_string(),
-            dev_mode_unlocked: false,
-            backup_sync_folder: None,
-            backup_protection_mode: None,
-            last_backup_at: None,
-            balance_view_mode: default_balance_view_mode(),
-            auto_backup_enabled: true,
-            backup_dirty: false,
-            market_show_unknown: true,
-            max_stored_cards: default_max_stored_cards(),
-            market_send_card_on_payment: false,
-            market_sync_enabled: true,
-            share_min_level: default_share_min_level(),
-            market_poll_wifi_only: false,
-            market_selected_syncs: Vec::new(),
-            public_syncs: Vec::new(),
-            wot_share_via_sync: true,
-            sync_backup_enabled: true,
-            last_sync_backup_at: None,
-            pending_restore_l2_reconciliation: false,
-            post_accept_from_contacts: true,
-            ui_mode: default_ui_mode(),
-            media_auto_load_max_hops: default_media_auto_load_max_hops(),
-            l2_anchor_templates_meta: Vec::new(),
-            own_nominated_lock_server: None,
-            l2_probe_cache: std::collections::BTreeMap::new(),
-        }
-    }
 }
 
 #[cfg(test)]
@@ -250,58 +389,69 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_app_settings_default_max_stored_cards() {
-        let settings = AppSettings::default();
-        assert_eq!(settings.max_stored_cards, 2000);
-    }
+    fn test_ui_preferences_defaults_and_roundtrip() {
+        let prefs = UiPreferences::default();
+        assert_eq!(prefs.max_stored_cards, 2000);
+        assert_eq!(prefs.ui_mode, "simple");
+        assert_eq!(prefs.media_auto_load_max_hops, 2);
+        assert!(prefs.market_show_unknown);
+        assert!(!prefs.market_send_card_on_payment);
 
-    #[test]
-    fn test_app_settings_deserialize_default() {
-        let json = r#"{}"#;
-        let settings: AppSettings = serde_json::from_str(json).unwrap();
-        assert_eq!(settings.max_stored_cards, 2000);
-    }
+        let from_empty: UiPreferences = serde_json::from_str(r#"{}"#).unwrap();
+        assert_eq!(from_empty, prefs);
 
-    #[test]
-    fn test_app_settings_deserialize_custom_max_stored_cards() {
-        let json = r#"{"maxStoredCards": 500}"#;
-        let settings: AppSettings = serde_json::from_str(json).unwrap();
-        assert_eq!(settings.max_stored_cards, 500);
-    }
+        let custom: UiPreferences = serde_json::from_str(
+            r#"{"maxStoredCards": 500, "uiMode": "expert", "mediaAutoLoadMaxHops": 1}"#,
+        )
+        .unwrap();
+        assert_eq!(custom.max_stored_cards, 500);
+        assert_eq!(custom.ui_mode, "expert");
+        assert_eq!(custom.media_auto_load_max_hops, 1);
 
-    #[test]
-    fn test_app_settings_default_and_roundtrip_ui_mode() {
-        let settings = AppSettings::default();
-        assert_eq!(settings.ui_mode, "simple");
-
-        let deserialized_missing: AppSettings = serde_json::from_str(r#"{}"#).unwrap();
-        assert_eq!(deserialized_missing.ui_mode, "simple");
-
-        let expert = AppSettings {
-            ui_mode: "expert".to_string(),
-            ..Default::default()
-        };
-        let serialized = serde_json::to_string(&expert).unwrap();
-        assert!(serialized.contains(r#""uiMode":"expert""#));
-        let roundtrip: AppSettings = serde_json::from_str(&serialized).unwrap();
-        assert_eq!(roundtrip.ui_mode, "expert");
-    }
-
-    #[test]
-    fn test_app_settings_default_and_roundtrip_media_auto_load_max_hops() {
-        let settings = AppSettings::default();
-        assert_eq!(settings.media_auto_load_max_hops, 2);
-
-        let deserialized_missing: AppSettings = serde_json::from_str(r#"{}"#).unwrap();
-        assert_eq!(deserialized_missing.media_auto_load_max_hops, 2);
-
-        let custom = AppSettings {
-            media_auto_load_max_hops: 1,
-            ..Default::default()
-        };
         let serialized = serde_json::to_string(&custom).unwrap();
-        assert!(serialized.contains(r#""mediaAutoLoadMaxHops":1"#));
-        let roundtrip: AppSettings = serde_json::from_str(&serialized).unwrap();
-        assert_eq!(roundtrip.media_auto_load_max_hops, 1);
+        let roundtrip: UiPreferences = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(roundtrip, custom);
+    }
+
+    #[test]
+    fn test_security_policy_defaults_and_patch_double_option() {
+        let mut policy = SecurityPolicy {
+            session_timeout_seconds: 900,
+            backup_sync_folder: Some("/tmp/backup".to_string()),
+            backup_protection_mode: Some("custom_password".to_string()),
+            ..Default::default()
+        };
+
+        // Omitted fields must preserve existing values.
+        let omitted_patch: SecurityPolicyPatch =
+            serde_json::from_str(r#"{"sessionTimeoutSeconds": 300}"#).unwrap();
+        assert!(omitted_patch.backup_sync_folder.is_none());
+        omitted_patch.apply_to(&mut policy);
+        assert_eq!(policy.session_timeout_seconds, 300);
+        assert_eq!(policy.backup_sync_folder.as_deref(), Some("/tmp/backup"));
+
+        // Explicit JSON null must clear nullable fields to None.
+        let clear_patch: SecurityPolicyPatch =
+            serde_json::from_str(r#"{"backupSyncFolder": null, "backupProtectionMode": null}"#)
+                .unwrap();
+        assert_eq!(clear_patch.backup_sync_folder, Some(None));
+        assert_eq!(clear_patch.backup_protection_mode, Some(None));
+        clear_patch.apply_to(&mut policy);
+        assert_eq!(policy.backup_sync_folder, None);
+        assert_eq!(policy.backup_protection_mode, None);
+    }
+
+    #[test]
+    fn test_ui_preferences_patch_clamps_values() {
+        let mut prefs = UiPreferences::default();
+        let patch: UiPreferencesPatch = serde_json::from_str(
+            r#"{"uiMode": "EXPERT", "shareMinLevel": 9, "mediaAutoLoadMaxHops": 7, "lastUsedDirectory": "/tmp/exports"}"#,
+        )
+        .unwrap();
+        patch.apply_to(&mut prefs);
+        assert_eq!(prefs.ui_mode, "expert");
+        assert_eq!(prefs.share_min_level, 3);
+        assert_eq!(prefs.media_auto_load_max_hops, 3);
+        assert_eq!(prefs.last_used_directory.as_deref(), Some("/tmp/exports"));
     }
 }

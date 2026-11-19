@@ -1,5 +1,5 @@
 use ed25519_dalek::{SigningKey, VerifyingKey};
-use human_money_core::crypto::get_pubkey_from_user_id;
+use human_money_core::ValidatedUserId;
 use human_money_core::models::profile::UserIdentity;
 use human_money_core::models::secure_container::{
     ContainerConfig, PayloadType, PrivacyMode, SecureContainer,
@@ -9,7 +9,7 @@ use log::warn;
 
 use crate::models::{FrontendError, FrontendSyncDescriptor};
 use crate::services::common::{are_dids_equal, SyncIdentityContext};
-use crate::settings::AppSettings;
+use crate::settings::SecurityPolicy;
 use crate::state::{
     AppState, PostOutboxEntry, StoredPostState, MARKET_CARD_STORE_KEY, MARKET_POST_STATE_KEY,
 };
@@ -222,10 +222,7 @@ pub(crate) fn merge_and_save_post_state(
         }
     }
 
-    let bytes = serde_json::to_vec(working)
-        .map_err(|e| FrontendError::from(format!("Failed to serialize post state: {}", e)))?;
-    service
-        .save_encrypted_data(MARKET_POST_STATE_KEY, &bytes, password)
+    crate::state::save_encrypted_json(&mut service, MARKET_POST_STATE_KEY, working, password)
         .map_err(FrontendError::from)
 }
 
@@ -236,26 +233,23 @@ pub(crate) fn save_post_state(
     post_state: &StoredPostState,
     password: Option<&str>,
 ) -> Result<(), FrontendError> {
-    let bytes = serde_json::to_vec(post_state)
-        .map_err(|e| FrontendError::from(format!("Failed to serialize post state: {}", e)))?;
     let mut service = state.service.lock().unwrap();
-    service
-        .save_encrypted_data(MARKET_POST_STATE_KEY, &bytes, password)
+    crate::state::save_encrypted_json(&mut service, MARKET_POST_STATE_KEY, post_state, password)
         .map_err(FrontendError::from)
 }
 
 /// Collects all readable Sync endpoints for our own identity so peers know where to send replies.
 pub(crate) fn collect_own_reply_syncs(
-    settings: &AppSettings,
+    security_policy: &SecurityPolicy,
     my_prefix: Option<&str>,
 ) -> Vec<FrontendSyncDescriptor> {
     let mut reply_syncs = Vec::new();
-    for d in &settings.market_selected_syncs {
+    for d in &security_policy.market_selected_syncs {
         if !d.read_url.is_empty() {
             reply_syncs.push(d.clone());
         }
     }
-    for pd in &settings.public_syncs {
+    for pd in &security_policy.public_syncs {
         if pd.enabled && !pd.read_url.is_empty() {
             let slot_id = humoco_market::format_slot_id(&pd.access_pubkey, my_prefix)
                 .unwrap_or_else(|_| pd.access_pubkey.clone());
@@ -276,17 +270,17 @@ pub(crate) fn collect_own_reply_syncs(
     reply_syncs
 }
 
-/// Collects all own writable Post Sync drop targets from user settings.
+/// Collects all own writable Post Sync drop targets from user security policy.
 pub(crate) fn collect_post_upload_targets(
-    settings: &AppSettings,
+    security_policy: &SecurityPolicy,
 ) -> Vec<humoco_market::DropDescriptor> {
     let mut targets = Vec::new();
-    for d in &settings.market_selected_syncs {
+    for d in &security_policy.market_selected_syncs {
         if !d.write_url.is_empty() {
             targets.push(d.clone().into());
         }
     }
-    for pd in &settings.public_syncs {
+    for pd in &security_policy.public_syncs {
         if pd.enabled
             && !pd.write_url.is_empty()
             && (pd.authorized_channels.is_empty()
@@ -303,7 +297,7 @@ pub(crate) fn collect_post_upload_targets(
     targets
 }
 
-/// Loads identity, signing context, and own reply sync descriptors under `service -> settings`.
+/// Loads identity, signing context, and own reply sync descriptors under `service -> security_policy`.
 pub(crate) fn load_post_signing_context(
     state: &AppState,
     password: Option<&str>,
@@ -313,11 +307,10 @@ pub(crate) fn load_post_signing_context(
         .with_wallet_and_identity(|_w, id| id.clone())
         .map_err(FrontendError::from)?;
     let sync_ctx = SyncIdentityContext::from_service(&service)?;
-    let settings = state
-        .get_cached_settings()
-        .or_else(|_| state.load_settings(&mut service, password))
-        .unwrap_or_default();
-    let own_reply_syncs = collect_own_reply_syncs(&settings, sync_ctx.my_prefix.as_deref());
+    let security_policy = state
+        .get_or_load_security_policy(&mut service, password)
+        .map_err(FrontendError::from)?;
+    let own_reply_syncs = collect_own_reply_syncs(&security_policy, sync_ctx.my_prefix.as_deref());
     Ok(PostSigningContext {
         identity,
         sync_ctx,
@@ -347,9 +340,9 @@ fn find_card_in_store<'a>(
     card_store: &'a humoco_market::CardStore,
     did: &str,
 ) -> Option<&'a humoco_market::StoredCard> {
-    get_pubkey_from_user_id(did.trim())
+    ValidatedUserId::parse(did)
         .ok()
-        .and_then(|pk| card_store.cards.get(&pk.to_bytes()))
+        .and_then(|v| card_store.cards.get(&v.public_key_bytes()))
         .or_else(|| {
             card_store
                 .cards
@@ -394,8 +387,12 @@ pub(crate) fn resolve_counterparty_info(
     }
 
     if !is_contact || name.is_none() || picture_url.is_none() {
-        if let Ok(bytes) = service.load_encrypted_data(MARKET_CARD_STORE_KEY, password) {
-            if let Ok(card_store) = serde_json::from_slice::<humoco_market::CardStore>(&bytes) {
+        match crate::state::load_encrypted_json_opt::<humoco_market::CardStore>(
+            &mut service,
+            MARKET_CARD_STORE_KEY,
+            password,
+        ) {
+            Ok(Some(card_store)) => {
                 if let Some(stored) = find_card_in_store(&card_store, trimmed) {
                     let card_prof = humoco_market::extract_public_profile(&stored.card);
                     if name.is_none() {
@@ -414,6 +411,10 @@ pub(crate) fn resolve_counterparty_info(
                             .map(str::to_string);
                     }
                 }
+            }
+            Ok(None) => {}
+            Err(e) => {
+                log::warn!("Failed to load CardStore in resolve_counterparty_info: {}", e);
             }
         }
     }
@@ -435,11 +436,19 @@ pub(crate) fn lookup_counterparty_syncs(
         }
     }
     if result.is_empty() {
-        if let Ok(bytes) = service.load_encrypted_data(MARKET_CARD_STORE_KEY, password) {
-            if let Ok(card_store) = serde_json::from_slice::<humoco_market::CardStore>(&bytes) {
+        match crate::state::load_encrypted_json_opt::<humoco_market::CardStore>(
+            &mut service,
+            MARKET_CARD_STORE_KEY,
+            password,
+        ) {
+            Ok(Some(card_store)) => {
                 if let Some(stored) = find_card_in_store(&card_store, did) {
                     result.extend(stored.card.payload.drops.iter().cloned().map(Into::into));
                 }
+            }
+            Ok(None) => {}
+            Err(e) => {
+                log::warn!("Failed to load CardStore in lookup_counterparty_syncs: {}", e);
             }
         }
     }
@@ -543,9 +552,11 @@ pub(crate) fn queue_sealed_reply<T: serde::Serialize>(
     now_secs: u64,
     label: &str,
 ) {
-    let Ok(recipient_pk) = get_pubkey_from_user_id(recipient_did) else {
+    let Ok(validated_recipient) = ValidatedUserId::parse(recipient_did) else {
         return;
     };
+    let recipient_did = validated_recipient.as_str();
+    let recipient_pk = validated_recipient.public_key();
     let Ok(container_bytes) =
         seal_post_container_bytes(my_identity, recipient_did, payload_type, payload, label)
     else {
@@ -555,7 +566,7 @@ pub(crate) fn queue_sealed_reply<T: serde::Serialize>(
         post_state,
         my_ed_sk,
         recipient_did,
-        &recipient_pk,
+        recipient_pk,
         msg_id,
         None,
         own_reply_syncs,
@@ -597,18 +608,20 @@ pub(crate) fn queue_receipt(
             return;
         }
     };
-    let recipient_pk = match get_pubkey_from_user_id(sender_did) {
-        Ok(pk) => pk,
+    let validated_sender = match ValidatedUserId::parse(sender_did) {
+        Ok(v) => v,
         Err(e) => {
             warn!("Invalid recipient DID for delivery receipt: {}", e);
             return;
         }
     };
+    let sender_did = validated_sender.as_str();
+    let recipient_pk = validated_sender.public_key();
     if let Err(e) = enqueue_post_envelope(
         post_state,
         my_ed_sk,
         sender_did,
-        &recipient_pk,
+        recipient_pk,
         uuid::Uuid::new_v4().to_string(),
         None,
         own_reply_syncs,

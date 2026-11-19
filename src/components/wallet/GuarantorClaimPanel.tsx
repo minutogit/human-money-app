@@ -10,13 +10,19 @@ import { translateError } from '../../utils/errorHelper';
 import { Button } from '../ui/Button';
 import { Card } from '../ui/Card';
 import { ConfirmationModal } from '../ui/ConfirmationModal';
-import type { AppSettings, ClaimBundleDto, FrontendPostDepositResult, VoucherDetails, VoucherSignature } from '../../types';
+import type {
+    AppConfigDto,
+    ClaimBundleDto,
+    FrontendPostDepositResult,
+    VoucherDetails,
+    VoucherSignature,
+} from '../../types';
 
 interface GuarantorClaimPanelProps {
     details: VoucherDetails;
     guarantorSignatures: VoucherSignature[];
     allowPartialTransfers: boolean;
-    settings: AppSettings | null;
+    config: AppConfigDto | null;
     protectAction: ProtectActionFn;
     findMatchingStandardToml: () => Promise<string>;
     onClose: () => void;
@@ -28,7 +34,7 @@ export function GuarantorClaimPanel({
     details,
     guarantorSignatures,
     allowPartialTransfers,
-    settings,
+    config,
     protectAction,
     findMatchingStandardToml,
     onClose,
@@ -50,7 +56,8 @@ export function GuarantorClaimPanel({
     const [isReconcilingL2, setIsReconcilingL2] = useState(false);
     const [reconciledLocally, setReconciledLocally] = useState(false);
 
-    const needsL2Reconcile = Boolean(settings?.pendingRestoreL2Reconciliation) && !reconciledLocally;
+    const needsL2Reconcile =
+        Boolean(config?.lifecycle.pendingRestoreL2Reconciliation) && !reconciledLocally;
 
     useEffect(() => {
         if (!selectedGuarantorId && guarantorSignatures.length > 0) {
@@ -75,7 +82,7 @@ export function GuarantorClaimPanel({
             filters: [
                 { name: t('voucher.export.allFiles'), extensions: ['hmcbundle', '*'] },
             ],
-            settings,
+            uiPreferences: config?.uiPreferences,
             protectAction,
         });
         if (saved) {
@@ -143,7 +150,7 @@ export function GuarantorClaimPanel({
                     filters: [
                         { name: t('voucher.export.allFiles'), extensions: ['hmcbundle', '*'] },
                     ],
-                    settings,
+                    uiPreferences: config?.uiPreferences,
                     protectAction,
                 });
                 const deliveredToPost = postRes?.recipientDepositedTo ?? 0;

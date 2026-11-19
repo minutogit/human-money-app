@@ -6,6 +6,12 @@ import {
   buildPaymentRequestText,
   parsePaymentRequest,
   parseCardUri,
+  parseHumocoInput,
+  normalizeUserIdInput,
+  extractCardPayload,
+  extractDidFromCardEnvelopeJson,
+  isValidUserIdFormat,
+  extractHumocoDeepLink,
 } from '../humocoUri';
 
 describe('humocoUri Utilities', () => {
@@ -267,6 +273,114 @@ describe('humocoUri Utilities', () => {
       ].join('\n');
       const parsedCard = parseCardUri(cardText);
       expect(parsedCard?.envBase64).toBe(sampleB64);
+    });
+  });
+
+  describe('centralized normalizer & validators', () => {
+    const toBase64Url = (obj: unknown) =>
+      Buffer.from(JSON.stringify(obj), 'utf8')
+        .toString('base64')
+        .replace(/\+/g, '-')
+        .replace(/\//g, '_')
+        .replace(/=+$/, '');
+
+    it('isValidUserIdFormat accepts valid DIDs and SAIs and rejects malformed inputs', () => {
+      expect(isValidUserIdFormat(sampleDid)).toBe(true);
+      expect(isValidUserIdFormat(sampleSai)).toBe(true);
+      expect(isValidUserIdFormat('kasse:7x9@did:key:z6MkuT52y5aBqB9R5e6v18c8P4h5M8Z7v')).toBe(true);
+
+      expect(isValidUserIdFormat('')).toBe(false);
+      expect(isValidUserIdFormat('did:key:short')).toBe(false);
+      expect(isValidUserIdFormat(`kasse@${sampleDid}`)).toBe(false);
+      expect(isValidUserIdFormat(`alice:work@did:key: z6MkuT52y5aBqB9R5e6v18c8P4h5M8Z7v`)).toBe(false);
+    });
+
+    it('extractHumocoDeepLink unwraps hard line breaks and strips trailing punctuation', () => {
+      const wrapped = `Hier mein Link:\nhumoco://contact?did=${encodeURIComponent(sampleDid)}\n&name=Alice.`;
+      expect(extractHumocoDeepLink(wrapped)).toBe(
+        `humoco://contact?did=${encodeURIComponent(sampleDid)}&name=Alice`
+      );
+      expect(extractHumocoDeepLink('no humoco scheme here')).toBeNull();
+      expect(extractHumocoDeepLink(null)).toBeNull();
+    });
+
+    it('extractDidFromCardEnvelopeJson extracts DID from direct did and card_wire JWT payload', () => {
+      expect(extractDidFromCardEnvelopeJson(JSON.stringify({ did: sampleDid }))).toBe(sampleDid);
+
+      const header = toBase64Url({ alg: 'EdDSA' });
+      const payload = toBase64Url({ did: sampleSai });
+      const envelopeJson = JSON.stringify({ card_wire: `${header}.${payload}.sig` });
+      expect(extractDidFromCardEnvelopeJson(envelopeJson)).toBe(sampleSai);
+
+      const invalidPrefixEnvelope = JSON.stringify({ did: `badprefix@${sampleDid}` });
+      expect(extractDidFromCardEnvelopeJson(invalidPrefixEnvelope)).toBeNull();
+      expect(extractDidFromCardEnvelopeJson('{not-json')).toBeNull();
+    });
+
+    it('extractCardPayload extracts card URIs and JSON envelopes while rejecting arbitrary HTTP env links', () => {
+      const envJson = JSON.stringify({ card_wire: 'hdr.payload.sig', did: sampleDid });
+      const envB64Url = toBase64Url(JSON.parse(envJson));
+      const multilineUri = `Bitte öffnen:\nhumoco://card?env=${envB64Url.slice(0, 20)}\n${envB64Url.slice(20)}!`;
+      expect(extractCardPayload(multilineUri)).toBe(`humoco://card?env=${envB64Url}`);
+
+      const wrappedJson = `Kontaktkarte:\n${envJson}\nDanke!`;
+      expect(extractCardPayload(wrappedJson)).toBe(envJson);
+
+      expect(extractCardPayload('https://example.com/card?env=123')).toBeNull();
+    });
+
+    it('parseHumocoInput discriminates payment, card, contact, and embedded DID inputs', () => {
+      const payRes = parseHumocoInput(`Bitte zahlen: humoco://pay?to=${encodeURIComponent(sampleDid)}&amount=12.50&note=Honig`);
+      expect(payRes?.kind).toBe('payment');
+      if (payRes?.kind === 'payment') {
+        expect(payRes.payment.to).toBe(sampleDid);
+        expect(payRes.payment.amount).toBe('12.50');
+      }
+
+      const contactRes = parseHumocoInput(`humoco://contact?did=${encodeURIComponent(sampleDid)}&name=Alice`);
+      expect(contactRes?.kind).toBe('contact');
+      if (contactRes?.kind === 'contact') {
+        expect(contactRes.contact.did).toBe(sampleDid);
+        expect(contactRes.contact.name).toBe('Alice');
+      }
+
+      const didRes = parseHumocoInput(`Meine ID im Chat lautet "${sampleSai}", bitte melden.`);
+      expect(didRes).toEqual({ kind: 'did', did: sampleSai });
+
+      const header = toBase64Url({ alg: 'EdDSA' });
+      const payload = toBase64Url({ did: sampleDid });
+      const cardJson = JSON.stringify({ card_wire: `${header}.${payload}.sig` });
+      const cardB64 = toBase64Url(JSON.parse(cardJson));
+      const cardUriRes = parseHumocoInput(`humoco://card?env=${cardB64}`);
+      expect(cardUriRes?.kind).toBe('card');
+      if (cardUriRes?.kind === 'card') {
+        expect(cardUriRes.did).toBe(sampleDid);
+        expect(cardUriRes.payload).toBe(`humoco://card?env=${cardB64}`);
+      }
+
+      const cardJsonRes = parseHumocoInput(cardJson);
+      expect(cardJsonRes?.kind).toBe('card');
+      if (cardJsonRes?.kind === 'card') {
+        expect(cardJsonRes.did).toBe(sampleDid);
+        expect(cardJsonRes.payload).toBe(cardJson);
+      }
+
+      expect(parseHumocoInput('plain text without humoco uri')).toBeNull();
+      expect(parseHumocoInput(`invalid@${sampleDid}`)).toBeNull();
+    });
+
+    it('normalizeUserIdInput extracts canonical user IDs across all input formats', () => {
+      const header = toBase64Url({ alg: 'EdDSA' });
+      const payload = toBase64Url({ did: sampleDid });
+      const cardJson = JSON.stringify({ card_wire: `${header}.${payload}.sig` });
+      const cardB64 = toBase64Url(JSON.parse(cardJson));
+
+      expect(normalizeUserIdInput(`humoco://pay?to=${encodeURIComponent(sampleDid)}&amount=5`)).toBe(sampleDid);
+      expect(normalizeUserIdInput(`humoco://contact?did=${encodeURIComponent(sampleSai)}`)).toBe(sampleSai);
+      expect(normalizeUserIdInput(`humoco://card?env=${cardB64}`)).toBe(sampleDid);
+      expect(normalizeUserIdInput(cardJson)).toBe(sampleDid);
+      expect(normalizeUserIdInput(`Sende an ${sampleDid}!`)).toBe(sampleDid);
+      expect(normalizeUserIdInput(`kasse@${sampleDid}`)).toBeNull();
     });
   });
 });

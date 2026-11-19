@@ -141,14 +141,22 @@ export interface ClaimBundleDto {
     claimedAmount: string;
 }
 
+export type DeadQuorumSwapStatus =
+    | 'awaiting_guarantor_signatures'
+    | 'pending_l2_lock'
+    | 'completed';
+
 export interface ApprovedSwapClaimDto {
     claimantDid: string;
     voucherId: string;
     tipTId: string;
     approvedAmount: string;
     replacementVoucherId?: string | null;
+    replacementLocalInstanceId?: string | null;
     replacementBundleId?: string | null;
     replacementBundleBytes?: number[] | null;
+    replacementIntentLocalId?: string | null;
+    status: DeadQuorumSwapStatus;
 }
 
 export interface RejectedSwapClaimDto {
@@ -164,35 +172,72 @@ export interface DeadQuorumAdjudicationDto {
     doubleSpendProofsCount: number;
 }
 
-export interface AppSettings {
+export interface UiPreferences {
+    uiMode: UiMode;
+    lastUsedDirectory?: string | null;
+    balanceViewMode: 'spendable' | 'net';
+    marketShowUnknown: boolean;
+    maxStoredCards: number;
+    marketSendCardOnPayment: boolean;
+    marketSyncEnabled: boolean;
+    shareMinLevel: number;
+    marketPollWifiOnly: boolean;
+    wotShareViaSync: boolean;
+    postAcceptFromContacts: boolean;
+    mediaAutoLoadMaxHops: number;
+}
+
+export interface SecurityPolicy {
     sessionTimeoutSeconds: number;
-    lastUsedDirectory?: string;
     privacyDefault: PrivacyDefault;
-    devModeUnlocked?: boolean;
-    l2AnchorTemplatesMeta?: StoredAnchorTemplateMeta[];
+    devModeUnlocked: boolean;
+    autoBackupEnabled: boolean;
+    syncBackupEnabled: boolean;
+    backupSyncFolder?: string | null;
+    backupProtectionMode?: string | null;
     ownNominatedLockServer?: NominatedLockServerMeta | null;
-    l2ProbeCache?: Record<string, LockServerProbeResult>;
+    marketSelectedSyncs: FrontendSyncDescriptor[];
+    publicSyncs: StoredPublicSync[];
+}
+
+export interface InternalLifecycleState {
+    pendingRestoreL2Reconciliation: boolean;
+    backupDirty: boolean;
+    lastBackupAt?: string | null;
+    lastSyncBackupAt?: string | null;
+    l2ProbeCache: Record<string, LockServerProbeResult>;
+    l2AnchorTemplatesMeta: StoredAnchorTemplateMeta[];
+}
+
+export interface AppConfigDto {
+    uiPreferences: UiPreferences;
+    securityPolicy: SecurityPolicy;
+    lifecycle: InternalLifecycleState;
+}
+
+export interface UiPreferencesPatch {
+    uiMode?: UiMode;
+    lastUsedDirectory?: string | null;
+    balanceViewMode?: 'spendable' | 'net';
     marketShowUnknown?: boolean;
     maxStoredCards?: number;
     marketSendCardOnPayment?: boolean;
     marketSyncEnabled?: boolean;
     shareMinLevel?: number;
     marketPollWifiOnly?: boolean;
-    marketSelectedSyncs?: FrontendSyncDescriptor[];
-    publicSyncs?: StoredPublicSync[];
     wotShareViaSync?: boolean;
-    syncBackupEnabled?: boolean;
-    lastSyncBackupAt?: string | null;
-    pendingRestoreL2Reconciliation?: boolean;
-    balanceViewMode?: 'spendable' | 'net';
+    postAcceptFromContacts?: boolean;
+    mediaAutoLoadMaxHops?: number;
+}
+
+export interface SecurityPolicyPatch {
+    sessionTimeoutSeconds?: number;
+    privacyDefault?: PrivacyDefault;
+    devModeUnlocked?: boolean;
     autoBackupEnabled?: boolean;
-    backupDirty?: boolean;
+    syncBackupEnabled?: boolean;
     backupSyncFolder?: string | null;
     backupProtectionMode?: string | null;
-    lastBackupAt?: string | null;
-    postAcceptFromContacts?: boolean;
-    uiMode?: UiMode;
-    mediaAutoLoadMaxHops?: number;
 }
 
 export type ReachPresetId = 'near' | 'medium' | 'far';

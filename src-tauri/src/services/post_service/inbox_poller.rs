@@ -14,7 +14,7 @@ use crate::models::{
     FrontendAppNotice, FrontendError, FrontendPostInboxSummary, FrontendPostSyncResult,
     FrontendSyncDescriptor,
 };
-use crate::settings::AppSettings;
+use crate::settings::{SecurityPolicy, UiPreferences};
 use crate::state::{AppState, StoredPostState, MARKET_CARD_STORE_KEY};
 use crate::sync_client;
 
@@ -160,7 +160,7 @@ struct AuthorizedSenders {
 
 fn collect_candidate_slot_sources(
     state: &AppState,
-    settings: &AppSettings,
+    security_policy: &SecurityPolicy,
     my_did: &str,
     my_prefix: Option<&str>,
     post_state: &StoredPostState,
@@ -173,11 +173,11 @@ fn collect_candidate_slot_sources(
     push_sync_slot_targets(
         &mut direct,
         &mut index_urls,
-        &settings.market_selected_syncs,
+        &security_policy.market_selected_syncs,
         my_prefix,
     );
 
-    for pd in &settings.public_syncs {
+    for pd in &security_policy.public_syncs {
         if pd.enabled && !pd.read_url.is_empty() {
             direct.push((
                 pd.read_url.clone(),
@@ -193,7 +193,7 @@ fn collect_candidate_slot_sources(
             let c_prefix = human_money_core::crypto::get_prefix_from_user_id(&c.did);
             if own_can_did.is_some() && crate::state::canonicalize_did(&c.did).ok() == own_can_did {
                 // Also poll sibling own-subaccount compartments on configured O(1) public syncs.
-                for pd in &settings.public_syncs {
+                for pd in &security_policy.public_syncs {
                     if pd.enabled && !pd.read_url.is_empty() {
                         direct.push((
                             pd.read_url.clone(),
@@ -207,8 +207,12 @@ fn collect_candidate_slot_sources(
         }
     }
 
-    if let Ok(bytes) = service.load_encrypted_data(MARKET_CARD_STORE_KEY, password) {
-        if let Ok(store) = serde_json::from_slice::<humoco_market::CardStore>(&bytes) {
+    match crate::state::load_encrypted_json_opt::<humoco_market::CardStore>(
+        &mut service,
+        MARKET_CARD_STORE_KEY,
+        password,
+    ) {
+        Ok(Some(store)) => {
             for sc in store.cards.values() {
                 for d in &sc.card.payload.drops {
                     if !d.read_url.is_empty() {
@@ -220,6 +224,10 @@ fn collect_candidate_slot_sources(
                     }
                 }
             }
+        }
+        Ok(None) => {}
+        Err(e) => {
+            log::warn!("Failed to load CardStore in collect_post_poll_targets: {}", e);
         }
     }
 
@@ -240,7 +248,7 @@ fn collect_candidate_slot_sources(
 
 fn collect_authorized_post_senders(
     state: &AppState,
-    settings: &AppSettings,
+    ui_prefs: &UiPreferences,
     post_state: &StoredPostState,
     now_secs: u64,
     password: Option<&str>,
@@ -250,7 +258,7 @@ fn collect_authorized_post_senders(
     let mut card_signers = Vec::new();
     let mut inquiry = Vec::new();
 
-    if settings.post_accept_from_contacts {
+    if ui_prefs.post_accept_from_contacts {
         if let Ok(contacts) = state.load_contacts(&mut service, password) {
             for c in contacts {
                 // Allow all explicitly saved AddressBook contacts (including unrated)
@@ -287,11 +295,15 @@ fn collect_authorized_post_senders(
             })
             .unwrap_or(false);
 
-    if let Ok(bytes) = service.load_encrypted_data(MARKET_CARD_STORE_KEY, password) {
-        if let Ok(cs) = serde_json::from_slice::<humoco_market::CardStore>(&bytes) {
+    match crate::state::load_encrypted_json_opt::<humoco_market::CardStore>(
+        &mut service,
+        MARKET_CARD_STORE_KEY,
+        password,
+    ) {
+        Ok(Some(cs)) => {
             for sc in cs.cards.values() {
                 if let Ok(vk) = get_pubkey_from_user_id(&sc.card.payload.did) {
-                    if settings.post_accept_from_contacts && sc.hops <= 2 {
+                    if ui_prefs.post_accept_from_contacts && sc.hops <= 2 {
                         card_signers.push((sc.card.payload.did.clone(), vk));
                     }
                     if has_inquiry_listing {
@@ -299,6 +311,10 @@ fn collect_authorized_post_senders(
                     }
                 }
             }
+        }
+        Ok(None) => {}
+        Err(e) => {
+            log::warn!("Failed to load CardStore in collect_authorized_post_senders: {}", e);
         }
     }
 
@@ -535,15 +551,18 @@ pub async fn sync_post_channels_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendPostSyncResult, FrontendError> {
-    let settings = {
+    let (ui_prefs, security_policy) = {
         let mut service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
-        state
-            .get_cached_settings()
-            .or_else(|_| state.load_settings(&mut service, password.as_deref()))
-            .unwrap_or_default()
+        let ui_prefs = state
+            .get_or_load_ui_preferences(&mut service, password.as_deref())
+            .map_err(FrontendError::from)?;
+        let security_policy = state
+            .get_or_load_security_policy(&mut service, password.as_deref())
+            .map_err(FrontendError::from)?;
+        (ui_prefs, security_policy)
     };
 
-    if settings.market_poll_wifi_only && is_wifi == Some(false) {
+    if ui_prefs.market_poll_wifi_only && is_wifi == Some(false) {
         return Ok(FrontendPostSyncResult {
             uploaded_to: 0,
             polled_syncs: 0,
@@ -555,6 +574,7 @@ pub async fn sync_post_channels_impl(
             new_inquiries: 0,
             new_inquiry_messages: 0,
             pruned_boxes: 0,
+            deferred_outbox_boxes: 0,
             errors: Vec::new(),
             retry_after_secs: None,
         });
@@ -581,7 +601,7 @@ pub async fn sync_post_channels_impl(
     // 2. Build candidate direct fetches and index URLs
     let (direct_slot_fetches, candidate_read_urls) = collect_candidate_slot_sources(
         state,
-        &settings,
+        &security_policy,
         &signing_ctx.identity.user_id,
         signing_ctx.sync_ctx.my_prefix.as_deref(),
         &post_state,
@@ -591,7 +611,7 @@ pub async fn sync_post_channels_impl(
     // 3. Build authorized_senders, card_signers, and inquiry_only_senders
     let authorized_groups = collect_authorized_post_senders(
         state,
-        &settings,
+        &ui_prefs,
         &post_state,
         now_secs,
         password.as_deref(),
@@ -780,9 +800,10 @@ pub async fn sync_post_channels_impl(
     )?;
     baseline_post_state = post_state.clone();
 
-    let (uploaded_to, _recipient_deposited_to, flush_errors) =
-        flush_post_slots_impl(state, &mut post_state, &[], password.as_deref()).await;
-    stats.errors.extend(flush_errors);
+    let flush_outcome =
+        flush_post_slots_impl(state, &mut post_state, None, &[], password.as_deref()).await;
+    let uploaded_to = flush_outcome.deposited_to;
+    stats.errors.extend(flush_outcome.errors);
 
     merge_and_save_post_state(
         state,
@@ -822,6 +843,7 @@ pub async fn sync_post_channels_impl(
         new_inquiries: stats.new_inquiries,
         new_inquiry_messages: stats.new_inquiry_messages,
         pruned_boxes: stats.pruned_boxes,
+        deferred_outbox_boxes: flush_outcome.deferred_count,
         errors: stats.errors,
         retry_after_secs,
     })

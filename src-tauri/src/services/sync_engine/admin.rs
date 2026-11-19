@@ -50,26 +50,26 @@ fn validate_admin_quotas(
 pub(crate) fn load_stored_sync_admin_opt(
     service: &mut AppService,
     password: Option<&str>,
-) -> Option<StoredSyncAdmin> {
-    service
-        .load_encrypted_data(MARKET_SYNC_ADMIN_KEY, password)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<StoredSyncAdmin>(&bytes).ok())
+) -> Result<Option<StoredSyncAdmin>, FrontendError> {
+    crate::state::load_encrypted_json_opt::<Option<StoredSyncAdmin>>(
+        service,
+        MARKET_SYNC_ADMIN_KEY,
+        password,
+    )
+    .map(Option::flatten)
+    .map_err(FrontendError::from)
 }
 
 fn load_admin_with_signing_key(
     state: &AppState,
     password: Option<&str>,
-) -> Result<(StoredSyncAdmin, ed25519_dalek::SigningKey, Vec<u8>), FrontendError> {
+) -> Result<(StoredSyncAdmin, ed25519_dalek::SigningKey, StoredSyncAdmin), FrontendError> {
     let mut service = state.authorize_and_lock(crate::state::RequiredAccess::Full, password)?;
-    let bytes = service
-        .load_encrypted_data(MARKET_SYNC_ADMIN_KEY, password)
-        .map_err(FrontendError::from)?;
-    let admin = serde_json::from_slice::<StoredSyncAdmin>(&bytes)
-        .map_err(|e| FrontendError::from(format!("Failed to parse StoredSyncAdmin: {}", e)))?;
+    let admin = load_stored_sync_admin_opt(&mut service, password)?
+        .ok_or_else(|| FrontendError::from("Sync admin not configured".to_string()))?;
     let master_seed = get_wallet_master_seed(&mut service)?;
     let (admin_sk, _, _) = humoco_market::derive_drop_admin_keypair(&master_seed, admin.sync_index);
-    Ok((admin, admin_sk, bytes))
+    Ok((admin.clone(), admin_sk, admin))
 }
 
 fn save_stored_sync_admin(
@@ -77,10 +77,7 @@ fn save_stored_sync_admin(
     admin: &StoredSyncAdmin,
     password: Option<&str>,
 ) -> Result<(), FrontendError> {
-    let bytes = serde_json::to_vec(admin)
-        .map_err(|e| FrontendError::from(format!("Failed to serialize StoredSyncAdmin: {}", e)))?;
-    service
-        .save_encrypted_data(MARKET_SYNC_ADMIN_KEY, &bytes, password)
+    crate::state::save_encrypted_json(service, MARKET_SYNC_ADMIN_KEY, admin, password)
         .map_err(FrontendError::from)
 }
 
@@ -94,17 +91,29 @@ fn remove_sync_from_selected_settings(
     if norm_target.is_empty() {
         return;
     }
-    let mut settings = state
-        .get_cached_settings()
-        .or_else(|_| state.load_settings(service, password))
-        .unwrap_or_default();
-    let initial_len = settings.market_selected_syncs.len();
-    settings
+    let mut policy = match state.get_or_load_security_policy(service, password) {
+        Ok(p) => p,
+        Err(e) => {
+            log::warn!(
+                "Failed to load security policy in remove_sync_from_selected_settings: {}",
+                e
+            );
+            return;
+        }
+    };
+    let initial_len = policy.market_selected_syncs.len();
+    policy
         .market_selected_syncs
         .retain(|d| normalize_sync_url(&d.read_url) != norm_target);
-    if settings.market_selected_syncs.len() != initial_len {
-        let selected_clone = settings.market_selected_syncs.clone();
-        let _ = state.save_settings(service, settings, password);
+    if policy.market_selected_syncs.len() != initial_len {
+        let selected_clone = policy.market_selected_syncs.clone();
+        if let Err(e) = state.save_security_policy(service, policy, password) {
+            log::warn!(
+                "Failed to save security policy in remove_sync_from_selected_settings: {}",
+                e
+            );
+            return;
+        }
         sync_own_card_drops_on_settings_change(state, service, &selected_clone, password);
     }
 }
@@ -337,16 +346,24 @@ pub(crate) async fn refresh_own_admin_members(
         let Ok(mut service) = state.lock_service() else {
             return;
         };
-        if let Some(admin) = load_stored_sync_admin_opt(&mut service, password) {
-            if let Ok(seed) = get_wallet_master_seed(&mut service) {
-                let (admin_sk, _, _) =
-                    humoco_market::derive_drop_admin_keypair(&seed, admin.sync_index);
-                Some((admin, admin_sk))
-            } else {
+        match load_stored_sync_admin_opt(&mut service, password) {
+            Ok(Some(admin)) => {
+                if let Ok(seed) = get_wallet_master_seed(&mut service) {
+                    let (admin_sk, _, _) =
+                        humoco_market::derive_drop_admin_keypair(&seed, admin.sync_index);
+                    Some((admin, admin_sk))
+                } else {
+                    None
+                }
+            }
+            Ok(None) => None,
+            Err(e) => {
+                log::warn!(
+                    "Failed to load StoredSyncAdmin in refresh_own_admin_members: {}",
+                    e.message
+                );
                 None
             }
-        } else {
-            None
         }
     };
 
@@ -361,7 +378,7 @@ pub async fn sync_channel_members_impl(
 ) -> Result<usize, FrontendError> {
     let (mut admin, admin_sk) = {
         let mut service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
-        let Some(admin) = load_stored_sync_admin_opt(&mut service, password) else {
+        let Some(admin) = load_stored_sync_admin_opt(&mut service, password)? else {
             return Ok(0);
         };
         let master_seed = get_wallet_master_seed(&mut service)?;
@@ -467,7 +484,7 @@ pub fn get_rust_sync_config_impl(
 ) -> Result<String, FrontendError> {
     let mut service =
         state.authorize_and_lock(crate::state::RequiredAccess::Full, password.as_deref())?;
-    if let Some(admin) = load_stored_sync_admin_opt(&mut service, password.as_deref()) {
+    if let Some(admin) = load_stored_sync_admin_opt(&mut service, password.as_deref())? {
         return Ok(crate::sync_zip::generate_rust_sync_config_toml(
             &admin.descriptor.drop_pub,
             &admin.data_dir,
@@ -500,13 +517,8 @@ pub fn save_sync_setup_zip_impl(
 ) -> Result<(), FrontendError> {
     let mut service =
         state.authorize_and_lock(crate::state::RequiredAccess::Full, password.as_deref())?;
-    let admin: StoredSyncAdmin = service
-        .load_encrypted_data(MARKET_SYNC_ADMIN_KEY, password.as_deref())
-        .map_err(FrontendError::from)
-        .and_then(|bytes| {
-            serde_json::from_slice(&bytes)
-                .map_err(|e| FrontendError::from(format!("Failed to parse StoredSyncAdmin: {}", e)))
-        })?;
+    let admin = load_stored_sync_admin_opt(&mut service, password.as_deref())?
+        .ok_or_else(|| FrontendError::from("Sync admin not configured".to_string()))?;
 
     let zip_bytes = crate::sync_zip::build_sync_zip_bytes(
         &admin.descriptor.drop_pub,
@@ -532,8 +544,14 @@ pub async fn finalize_sync_setup_impl(
         .map_err(|e| FrontendError::from(e.to_string()))?;
     sync_client::validate_sync_url(&write_url).map_err(FrontendError::from)?;
 
-    let (mut admin, admin_sk, original_admin_bytes) =
+    let (mut admin, admin_sk, original_admin) =
         load_admin_with_signing_key(state, password.as_deref())?;
+    let owner_did = {
+        let service = state.lock_service()?;
+        service
+            .with_wallet(|w| w.get_user_id().to_string())
+            .map_err(FrontendError::from)?
+    };
 
     let client = sync_client::create_sync_http_client();
 
@@ -644,11 +662,7 @@ pub async fn finalize_sync_setup_impl(
         Ok(st) => st,
         Err(err) => {
             let mut service = state.lock_service()?;
-            let _ = service.save_encrypted_data(
-                MARKET_SYNC_ADMIN_KEY,
-                &original_admin_bytes,
-                password.as_deref(),
-            );
+            let _ = save_stored_sync_admin(&mut service, &original_admin, password.as_deref());
             return Err(FrontendError::from(err));
         }
     };
@@ -657,46 +671,48 @@ pub async fn finalize_sync_setup_impl(
         push_all_channel_members(&client, state, &mut admin, &admin_sk, password.as_deref()).await
     {
         let mut service = state.lock_service()?;
-        let _ = service.save_encrypted_data(
-            MARKET_SYNC_ADMIN_KEY,
-            &original_admin_bytes,
-            password.as_deref(),
-        );
+        let _ = save_stored_sync_admin(&mut service, &original_admin, password.as_deref());
         return Err(err);
     }
 
-    // Add own drop to settings.market_selected_syncs if < 3 and cache lock probe if available
+    // Add own drop to security_policy.market_selected_syncs if < 3 and cache lock probe if available
     {
-        let mut service = state.lock_service()?;
-        let mut settings = state
-            .get_cached_settings()
-            .or_else(|_| state.load_settings(&mut service, password.as_deref()))
-            .unwrap_or_default();
-
-        let mut settings_dirty = false;
         let desc_dto: FrontendSyncDescriptor = admin.descriptor.clone().into();
         let norm_desc_read = normalize_sync_url(&desc_dto.read_url);
-        if settings.market_selected_syncs.len() < 3
-            && !settings
-                .market_selected_syncs
-                .iter()
-                .any(|d| normalize_sync_url(&d.read_url) == norm_desc_read)
-        {
-            settings.market_selected_syncs.push(desc_dto);
-            settings_dirty = true;
-        }
+        state.mutate_security_policy_for_owner(&owner_did, password.as_deref(), |policy| {
+            if policy.market_selected_syncs.len() < 3
+                && !policy
+                    .market_selected_syncs
+                    .iter()
+                    .any(|d| normalize_sync_url(&d.read_url) == norm_desc_read)
+            {
+                policy.market_selected_syncs.push(desc_dto);
+                true
+            } else {
+                false
+            }
+        })?;
         if let Some(probe) = lock_probe_result {
             let norm_write = normalize_sync_url(&probe.write_url);
             if !norm_write.is_empty() {
-                settings.l2_probe_cache.insert(norm_write, probe);
-                settings_dirty = true;
+                state.mutate_internal_lifecycle_for_owner(
+                    &owner_did,
+                    password.as_deref(),
+                    |lc| {
+                        lc.l2_probe_cache.insert(norm_write, probe);
+                        true
+                    },
+                )?;
             }
         }
-        if settings_dirty {
-            let _ = state.save_settings(&mut service, settings, password.as_deref());
-        }
 
-        save_stored_sync_admin(&mut service, &admin, password.as_deref())?;
+        let mut service = state.lock_service()?;
+        let current_did = service
+            .with_wallet(|w| w.get_user_id().to_string())
+            .map_err(FrontendError::from)?;
+        if current_did == owner_did {
+            save_stored_sync_admin(&mut service, &admin, password.as_deref())?;
+        }
     }
 
     let (stats, active_slot_ids) = {
@@ -743,14 +759,9 @@ pub async fn test_sync_connection_impl(
 
     let (admin, admin_sk) = {
         let mut service = state.lock_service()?;
-        let admin = match service
-            .load_encrypted_data(MARKET_SYNC_ADMIN_KEY, password.as_deref())
-            .map_err(FrontendError::from)
-            .and_then(|bytes| {
-                serde_json::from_slice::<StoredSyncAdmin>(&bytes).map_err(|e| {
-                    FrontendError::from(format!("Failed to parse StoredSyncAdmin: {}", e))
-                })
-            }) {
+        let admin = match load_stored_sync_admin_opt(&mut service, password.as_deref())
+            .and_then(|opt| opt.ok_or_else(|| FrontendError::from("Not configured".to_string())))
+        {
             Ok(a) => a,
             Err(e) => {
                 return Ok(fail_result(
@@ -851,7 +862,7 @@ pub async fn get_sync_admin_status_impl(
 ) -> Result<Option<FrontendSyncAdminStatus>, FrontendError> {
     let (admin, admin_sk) = {
         let mut service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
-        let Some(admin) = load_stored_sync_admin_opt(&mut service, password.as_deref()) else {
+        let Some(admin) = load_stored_sync_admin_opt(&mut service, password.as_deref())? else {
             return Ok(None);
         };
         if admin.descriptor.write_url.trim().is_empty() {
@@ -975,14 +986,8 @@ pub async fn block_sync_slot_impl(
     let blocked = {
         let mut service =
             state.authorize_and_lock(crate::state::RequiredAccess::Full, password.as_deref())?;
-        let admin: StoredSyncAdmin = service
-            .load_encrypted_data(MARKET_SYNC_ADMIN_KEY, password.as_deref())
-            .map_err(FrontendError::from)
-            .and_then(|bytes| {
-                serde_json::from_slice(&bytes).map_err(|e| {
-                    FrontendError::from(format!("Failed to parse StoredSyncAdmin: {}", e))
-                })
-            })?;
+        let admin = load_stored_sync_admin_opt(&mut service, password.as_deref())?
+            .ok_or_else(|| FrontendError::from("Sync admin not configured".to_string()))?;
         let mut blocked = admin.blocked_pubkeys;
         if !blocked.contains(&pubkey_hex64) {
             blocked.push(pubkey_hex64);
@@ -1004,11 +1009,15 @@ pub fn delete_sync_admin_impl(
 ) -> Result<(), FrontendError> {
     let mut service =
         state.authorize_and_lock(crate::state::RequiredAccess::Full, password.as_deref())?;
-    let admin_opt = load_stored_sync_admin_opt(&mut service, password.as_deref());
+    let admin_opt = load_stored_sync_admin_opt(&mut service, password.as_deref())?;
 
-    service
-        .save_encrypted_data(MARKET_SYNC_ADMIN_KEY, b"null", password.as_deref())
-        .map_err(FrontendError::from)?;
+    crate::state::save_encrypted_json(
+        &mut service,
+        MARKET_SYNC_ADMIN_KEY,
+        &Option::<StoredSyncAdmin>::None,
+        password.as_deref(),
+    )
+    .map_err(FrontendError::from)?;
 
     if let Some(admin) = admin_opt {
         remove_sync_from_selected_settings(

@@ -11,7 +11,7 @@ import { logger } from '../../utils/log';
 import { stringifyError } from '../../utils/errorHelper';
 import { formatProfileDisplayName } from './sendTransferHelpers';
 import type {
-    AppSettings,
+    AppConfigDto,
     AssetClassSummary,
     Contact,
     VoucherStandardDefinition,
@@ -28,7 +28,7 @@ export interface LoadedSendData {
     availableVouchers: VoucherSummary[];
     voucherStandards: VoucherStandardInfo[];
     ownUserId: string;
-    appSettings: AppSettings;
+    appConfig: AppConfigDto;
     contacts: Contact[];
     activeAssetClasses: AssetClassSummary[];
 }
@@ -39,7 +39,7 @@ export async function loadSendInitialData(): Promise<LoadedSendData> {
         userId,
         profile,
         standards,
-        settings,
+        config,
         fetchedContacts,
         activeClasses,
         marketProfile,
@@ -48,7 +48,7 @@ export async function loadSendInitialData(): Promise<LoadedSendData> {
         profileService.getUserId(),
         profileService.getProfile().catch(() => null),
         standardsService.getStandards(),
-        settingsService.getSettings(),
+        settingsService.getConfig(),
         contactService.getContacts(),
         transferService.getActiveAssetClasses(),
         marketService.getMyMarketProfile().catch(() => null),
@@ -106,7 +106,7 @@ export async function loadSendInitialData(): Promise<LoadedSendData> {
         availableVouchers,
         voucherStandards: standards,
         ownUserId: userId,
-        appSettings: settings,
+        appConfig: config,
         contacts: fetchedContacts,
         activeAssetClasses: activeClasses || [],
     };

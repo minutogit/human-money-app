@@ -1,11 +1,12 @@
 use chrono::Utc;
-use human_money_core::crypto::get_pubkey_from_user_id;
 use human_money_core::models::secure_container::PayloadType;
+use human_money_core::ValidatedUserId;
 use humoco_market::{
-    merge_post_slot, validate_market_inquiry, validate_market_inquiry_message,
-    validate_wot_handshake_assertion, DropDescriptor, MarketInquiry, MarketInquiryDecision,
-    MarketInquiryMessage, PostBoxEntry, WotHandshakeAssertion, DROP_POST_MAX_BYTES,
-    MAX_INQUIRY_MESSAGES_PER_THREAD, PAYLOAD_MARKET_INQUIRY_MESSAGE_V1, PAYLOAD_MARKET_INQUIRY_V1,
+    merge_and_pack_post_slot, pack_post_slot, validate_market_inquiry,
+    validate_market_inquiry_message, validate_wot_handshake_assertion, DropDescriptor,
+    MarketInquiry, MarketInquiryDecision, MarketInquiryMessage, PostBoxEntry, WotHandshakeAssertion,
+    DROP_POST_MAX_BYTES, MAX_INQUIRY_MESSAGES_PER_THREAD, PAYLOAD_MARKET_INQUIRY_MESSAGE_V1,
+    PAYLOAD_MARKET_INQUIRY_V1,
 };
 use log::warn;
 
@@ -28,31 +29,90 @@ use super::{
 struct FlushContext {
     id_ctx: SyncIdentityContext,
     upload_targets: Vec<DropDescriptor>,
+    own_write_urls: std::collections::HashSet<String>,
     recipient_write_urls: std::collections::HashSet<String>,
+    recipient_dids_by_write_url:
+        std::collections::HashMap<String, std::collections::HashSet<String>>,
     now_secs: u64,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct FlushPostSlotsOutcome {
+    pub deposited_to: usize,
+    pub recipient_deposited_to: usize,
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub uploaded_tags: std::collections::HashSet<[u8; 16]>,
+    pub recipient_uploaded_tags: std::collections::HashSet<[u8; 16]>,
+    pub deferred_tags: std::collections::HashSet<[u8; 16]>,
+    pub deferred_count: usize,
+    pub errors: Vec<String>,
+}
+
+fn record_recipient_target(
+    recipient_write_urls: &mut std::collections::HashSet<String>,
+    recipient_dids_by_write_url: &mut std::collections::HashMap<
+        String,
+        std::collections::HashSet<String>,
+    >,
+    targets: &mut Vec<DropDescriptor>,
+    canonical_did: &str,
+    descriptor: DropDescriptor,
+) {
+    let norm = normalize_sync_url(&descriptor.write_url);
+    if !norm.is_empty() {
+        recipient_write_urls.insert(norm.clone());
+        recipient_dids_by_write_url
+            .entry(norm)
+            .or_default()
+            .insert(canonical_did.to_string());
+        targets.push(descriptor);
+    }
 }
 
 fn collect_flush_context(
     state: &AppState,
     post_state: &StoredPostState,
+    extra_recipient_did: Option<&str>,
     extra_recipient_syncs: &[FrontendSyncDescriptor],
     password: Option<&str>,
 ) -> Result<FlushContext, String> {
     let mut service = state.service.lock().unwrap();
     let id_ctx = SyncIdentityContext::from_service(&service)
         .map_err(|e| format!("Failed to access wallet signing key: {}", e.message))?;
-    let settings = state
-        .get_cached_settings()
-        .or_else(|_| state.load_settings(&mut service, password))
-        .unwrap_or_default();
-    let mut targets = collect_post_upload_targets(&settings);
+    let security_policy = state
+        .get_or_load_security_policy(&mut service, password)
+        .map_err(|e| format!("Failed to load security policy: {}", e))?;
+    let mut targets = collect_post_upload_targets(&security_policy);
+    let own_write_urls: std::collections::HashSet<String> = targets
+        .iter()
+        .map(|d| normalize_sync_url(&d.write_url))
+        .filter(|u| !u.is_empty())
+        .collect();
     let mut recipient_write_urls = std::collections::HashSet::new();
+    let mut recipient_dids_by_write_url: std::collections::HashMap<
+        String,
+        std::collections::HashSet<String>,
+    > = std::collections::HashMap::new();
 
-    for d in extra_recipient_syncs {
-        let norm = normalize_sync_url(&d.write_url);
-        if !norm.is_empty() {
-            recipient_write_urls.insert(norm);
-            targets.push(d.clone().into());
+    if !extra_recipient_syncs.is_empty() {
+        let extra_can = extra_recipient_did
+            .map(|d| crate::state::canonicalize_did(d).unwrap_or_else(|_| d.to_string()));
+        for d in extra_recipient_syncs {
+            if let Some(ref can_did) = extra_can {
+                record_recipient_target(
+                    &mut recipient_write_urls,
+                    &mut recipient_dids_by_write_url,
+                    &mut targets,
+                    can_did,
+                    d.clone().into(),
+                );
+            } else {
+                let norm = normalize_sync_url(&d.write_url);
+                if !norm.is_empty() {
+                    recipient_write_urls.insert(norm);
+                    targets.push(d.clone().into());
+                }
+            }
         }
     }
 
@@ -72,11 +132,13 @@ fn collect_flush_context(
                 crate::state::canonicalize_did(&c.did).unwrap_or_else(|_| c.did.clone());
             if recipient_dids.contains(&can_c_did) {
                 for d in c.syncs {
-                    let norm = normalize_sync_url(&d.write_url);
-                    if !norm.is_empty() {
-                        recipient_write_urls.insert(norm);
-                        targets.push(d.into());
-                    }
+                    record_recipient_target(
+                        &mut recipient_write_urls,
+                        &mut recipient_dids_by_write_url,
+                        &mut targets,
+                        &can_c_did,
+                        d.into(),
+                    );
                 }
             }
         }
@@ -87,11 +149,13 @@ fn collect_flush_context(
             .unwrap_or_else(|_| inq.counterparty_did.clone());
         if recipient_dids.contains(&can_inq_did) {
             for d in &inq.reply_syncs {
-                let norm = normalize_sync_url(&d.write_url);
-                if !norm.is_empty() {
-                    recipient_write_urls.insert(norm);
-                    targets.push(d.clone().into());
-                }
+                record_recipient_target(
+                    &mut recipient_write_urls,
+                    &mut recipient_dids_by_write_url,
+                    &mut targets,
+                    &can_inq_did,
+                    d.clone().into(),
+                );
             }
         }
     }
@@ -101,30 +165,42 @@ fn collect_flush_context(
             .unwrap_or_else(|_| req.sender_did.clone());
         if recipient_dids.contains(&can_req_did) {
             for d in &req.reply_syncs {
-                let norm = normalize_sync_url(&d.write_url);
-                if !norm.is_empty() {
-                    recipient_write_urls.insert(norm);
-                    targets.push(d.clone().into());
-                }
+                record_recipient_target(
+                    &mut recipient_write_urls,
+                    &mut recipient_dids_by_write_url,
+                    &mut targets,
+                    &can_req_did,
+                    d.clone().into(),
+                );
             }
         }
     }
 
-    if let Ok(bytes) = service.load_encrypted_data(crate::state::MARKET_CARD_STORE_KEY, password) {
-        if let Ok(card_store) = serde_json::from_slice::<humoco_market::CardStore>(&bytes) {
+    match crate::state::load_encrypted_json_opt::<humoco_market::CardStore>(
+        &mut service,
+        crate::state::MARKET_CARD_STORE_KEY,
+        password,
+    ) {
+        Ok(Some(card_store)) => {
             for sc in card_store.cards.values() {
                 let can_card_did = crate::state::canonicalize_did(&sc.card.payload.did)
                     .unwrap_or_else(|_| sc.card.payload.did.clone());
                 if recipient_dids.contains(&can_card_did) {
                     for d in &sc.card.payload.drops {
-                        let norm = normalize_sync_url(&d.write_url);
-                        if !norm.is_empty() {
-                            recipient_write_urls.insert(norm);
-                            targets.push(d.clone());
-                        }
+                        record_recipient_target(
+                            &mut recipient_write_urls,
+                            &mut recipient_dids_by_write_url,
+                            &mut targets,
+                            &can_card_did,
+                            d.clone(),
+                        );
                     }
                 }
             }
+        }
+        Ok(None) => {}
+        Err(e) => {
+            return Err(format!("Failed to load CardStore in collect_flush_context: {}", e));
         }
     }
 
@@ -141,20 +217,48 @@ fn collect_flush_context(
     Ok(FlushContext {
         id_ctx,
         upload_targets: deduped_targets,
+        own_write_urls,
         recipient_write_urls,
+        recipient_dids_by_write_url,
         now_secs: sync_client::current_unix_timestamp(),
     })
 }
+
+fn select_prioritized_entries_for_target(
+    post_state: &StoredPostState,
+    is_own_target: bool,
+    target_recipient_dids: Option<&std::collections::HashSet<String>>,
+) -> Vec<PostBoxEntry> {
+    let mut selected: Vec<&crate::state::PostOutboxEntry> = post_state
+        .outbox_entries
+        .iter()
+        .filter(|entry| {
+            if is_own_target {
+                return true;
+            }
+            let Some(recipients) = target_recipient_dids else {
+                return true;
+            };
+            let can_recipient = crate::state::canonicalize_did(&entry.recipient_did)
+                .unwrap_or_else(|_| entry.recipient_did.clone());
+            recipients.contains(&can_recipient)
+        })
+        .collect();
+    selected.sort_by(|a, b| (a.created_at, a.msg_id.as_str()).cmp(&(b.created_at, b.msg_id.as_str())));
+    selected.into_iter().map(|e| e.entry.clone()).collect()
+}
+
+type UploadSlotResult = (Option<String>, Vec<[u8; 16]>, Vec<[u8; 16]>, Vec<[u8; 16]>);
 
 async fn upload_single_post_target(
     client: &reqwest::Client,
     id_ctx: &SyncIdentityContext,
     sync_desc: &DropDescriptor,
     local_entries: &[PostBoxEntry],
-    initial_blob: &[u8],
+    packed: humoco_market::PackedPostSlot,
     if_match: Option<&str>,
     now_secs: u64,
-) -> Result<Option<String>, String> {
+) -> Result<UploadSlotResult, String> {
     let signer = DropChannelSigner {
         is_public: sync_desc.slot_id.is_some(),
         master_seed: &id_ctx.master_seed,
@@ -169,7 +273,7 @@ async fn upload_single_post_target(
         id_ctx.my_prefix.as_deref(),
         now_secs,
         &nonce,
-        initial_blob,
+        &packed.blob,
     )?;
 
     match sync_client::put_slot(
@@ -177,14 +281,19 @@ async fn upload_single_post_target(
         &sync_desc.write_url,
         &signed,
         "post",
-        initial_blob,
+        &packed.blob,
         if_match,
     )
     .await
     {
-        Ok(PutSlotOutcome::Saved { etag, .. }) => Ok(etag),
+        Ok(PutSlotOutcome::Saved { etag, .. }) => Ok((
+            etag,
+            packed.included_tags,
+            packed.deferred_tags,
+            packed.oversized_tags,
+        )),
         Ok(PutSlotOutcome::PreconditionFailed { current_etag }) => {
-            // Multi-device conflict: fetch remote slot, merge local additions, and retry once.
+            // Multi-device conflict: fetch remote slot, priority-merge local additions, and retry once.
             let remote_bytes = match sync_client::get_slot(
                 client,
                 &sync_desc.read_url,
@@ -208,7 +317,7 @@ async fn upload_single_post_target(
                 }
             };
 
-            let merged_blob = merge_post_slot(
+            let merged = merge_and_pack_post_slot(
                 &id_ctx.master_seed,
                 remote_bytes.as_deref(),
                 local_entries,
@@ -224,7 +333,7 @@ async fn upload_single_post_target(
                 id_ctx.my_prefix.as_deref(),
                 now_secs,
                 &retry_nonce,
-                &merged_blob,
+                &merged.blob,
             )?;
 
             match sync_client::put_slot(
@@ -232,12 +341,17 @@ async fn upload_single_post_target(
                 &sync_desc.write_url,
                 &retry_signed,
                 "post",
-                &merged_blob,
+                &merged.blob,
                 current_etag.as_deref(),
             )
             .await
             {
-                Ok(PutSlotOutcome::Saved { etag, .. }) => Ok(etag),
+                Ok(PutSlotOutcome::Saved { etag, .. }) => Ok((
+                    etag,
+                    merged.included_tags,
+                    merged.deferred_tags,
+                    merged.oversized_tags,
+                )),
                 Ok(PutSlotOutcome::PreconditionFailed { .. }) => Err(format!(
                     "Upload to {} failed 412 Precondition Failed twice",
                     sync_desc.write_url
@@ -252,45 +366,45 @@ async fn upload_single_post_target(
     }
 }
 
-/// Encodes local outbox entries and uploads them across own and recipient Post slots,
-/// performing an automatic 412 read-merge-retry on multi-device ETag conflicts.
-/// Returns `(total_deposited_to, recipient_deposited_to, errors)`.
+/// Encodes local outbox entries using priority-windowed packing up to `DROP_POST_MAX_BYTES`
+/// and uploads them across own and recipient Post slots, performing an automatic 412 read-merge-retry
+/// on multi-device ETag conflicts.
 pub(crate) async fn flush_post_slots_impl(
     state: &AppState,
     post_state: &mut StoredPostState,
+    extra_recipient_did: Option<&str>,
     extra_recipient_syncs: &[FrontendSyncDescriptor],
     password: Option<&str>,
-) -> (usize, usize, Vec<String>) {
-    let flush_ctx = match collect_flush_context(state, post_state, extra_recipient_syncs, password)
-    {
+) -> FlushPostSlotsOutcome {
+    let flush_ctx = match collect_flush_context(
+        state,
+        post_state,
+        extra_recipient_did,
+        extra_recipient_syncs,
+        password,
+    ) {
         Ok(ctx) => ctx,
-        Err(err) => return (0, 0, vec![err]),
+        Err(err) => {
+            return FlushPostSlotsOutcome {
+                errors: vec![err],
+                ..Default::default()
+            };
+        }
     };
 
     if flush_ctx.upload_targets.is_empty() {
-        return (0, 0, Vec::new());
+        return FlushPostSlotsOutcome::default();
     }
-
-    let local_entries: Vec<PostBoxEntry> = post_state
-        .outbox_entries
-        .iter()
-        .map(|e| e.entry.clone())
-        .collect();
-
-    let initial_blob = match humoco_market::encode_post_slot(
-        &flush_ctx.id_ctx.master_seed,
-        &local_entries,
-        DROP_POST_MAX_BYTES,
-    ) {
-        Ok(b) => b,
-        Err(e) => return (0, 0, vec![format!("Failed to encode post slot: {}", e)]),
-    };
 
     let client = sync_client::create_sync_http_client();
     let mut deposited_to = 0;
     let mut recipient_deposited_to = 0;
     let mut errors = Vec::new();
     let mut health_updates: Vec<(String, bool)> = Vec::new();
+    let mut uploaded_tags = std::collections::HashSet::new();
+    let mut recipient_uploaded_tags = std::collections::HashSet::new();
+    let mut all_deferred_tags = std::collections::HashSet::new();
+    let mut reported_oversize_tags = std::collections::HashSet::new();
 
     for sync_desc in &flush_ctx.upload_targets {
         let if_match = post_state
@@ -298,22 +412,77 @@ pub(crate) async fn flush_post_slots_impl(
             .get(&sync_desc.write_url)
             .cloned();
         let norm_url = normalize_sync_url(&sync_desc.write_url);
+        let is_own_target = flush_ctx.own_write_urls.contains(&norm_url);
         let is_recipient_target = flush_ctx.recipient_write_urls.contains(&norm_url);
+        let target_entries = select_prioritized_entries_for_target(
+            post_state,
+            is_own_target,
+            flush_ctx.recipient_dids_by_write_url.get(&norm_url),
+        );
+
+        let packed = match pack_post_slot(
+            &flush_ctx.id_ctx.master_seed,
+            &target_entries,
+            DROP_POST_MAX_BYTES,
+        ) {
+            Ok(p) => p,
+            Err(e) => {
+                errors.push(format!("Failed to encode post slot: {}", e));
+                continue;
+            }
+        };
+
+        for t in &packed.oversized_tags {
+            if reported_oversize_tags.insert(*t) {
+                errors.push(format!(
+                    "Post outbox entry {} exceeds {} byte slot limit and cannot be deposited",
+                    hex::encode(t),
+                    DROP_POST_MAX_BYTES
+                ));
+            }
+        }
+        if !packed.deferred_tags.is_empty() {
+            warn!(
+                "Post slot headroom reached for {}: packed={}, deferred={}",
+                sync_desc.write_url,
+                packed.included_tags.len(),
+                packed.deferred_tags.len()
+            );
+        }
+
         match upload_single_post_target(
             &client,
             &flush_ctx.id_ctx,
             sync_desc,
-            &local_entries,
-            &initial_blob,
+            &target_entries,
+            packed,
             if_match.as_deref(),
             flush_ctx.now_secs,
         )
         .await
         {
-            Ok(etag) => {
+            Ok((etag, included_tags, deferred_tags, oversized_tags)) => {
                 deposited_to += 1;
                 if is_recipient_target {
                     recipient_deposited_to += 1;
+                }
+                for t in &included_tags {
+                    uploaded_tags.insert(*t);
+                    if is_recipient_target {
+                        recipient_uploaded_tags.insert(*t);
+                    }
+                }
+                for t in deferred_tags {
+                    all_deferred_tags.insert(t);
+                }
+                for t in &oversized_tags {
+                    if reported_oversize_tags.insert(*t) {
+                        errors.push(format!(
+                            "Post outbox entry {} exceeds {} byte slot limit after merge",
+                            hex::encode(t),
+                            DROP_POST_MAX_BYTES
+                        ));
+                    }
                 }
                 health_updates.push((sync_desc.write_url.clone(), true));
                 if let Some(et) = etag {
@@ -339,7 +508,21 @@ pub(crate) async fn flush_post_slots_impl(
         );
     }
 
-    (deposited_to, recipient_deposited_to, errors)
+    let deferred_tags: std::collections::HashSet<[u8; 16]> = all_deferred_tags
+        .into_iter()
+        .filter(|t| !uploaded_tags.contains(t))
+        .collect();
+    let deferred_count = deferred_tags.len();
+
+    FlushPostSlotsOutcome {
+        deposited_to,
+        recipient_deposited_to,
+        uploaded_tags,
+        recipient_uploaded_tags,
+        deferred_tags,
+        deferred_count,
+        errors,
+    }
 }
 
 async fn persist_and_flush_post_box(
@@ -349,28 +532,38 @@ async fn persist_and_flush_post_box(
     msg_id: String,
     password: Option<&str>,
 ) -> Result<FrontendPostDepositResult, FrontendError> {
+    let target_tag16 = post_state
+        .outbox_entries
+        .iter()
+        .find(|e| e.msg_id == msg_id)
+        .map(|e| e.entry.tag16);
+
     // Persist the sealed outbox entry BEFORE network flush so slow or unreachable
     // sync servers never lose an outgoing transfer box if the app closes.
     merge_and_save_post_state(state, baseline, post_state, password)?;
     let mid_baseline = post_state.clone();
 
-    let (deposited_to, recipient_deposited_to, errors) =
-        flush_post_slots_impl(state, post_state, &[], password).await;
-    if !errors.is_empty() {
+    let outcome = flush_post_slots_impl(state, post_state, None, &[], password).await;
+    if !outcome.errors.is_empty() || outcome.deferred_count > 0 {
         warn!(
-            "Post deposit degraded: deposited={}, recipient_deposited={}, failed={}",
-            deposited_to,
-            recipient_deposited_to,
-            errors.len()
+            "Post deposit status: deposited={}, recipient_deposited={}, deferred={}, failed={}",
+            outcome.deposited_to,
+            outcome.recipient_deposited_to,
+            outcome.deferred_count,
+            outcome.errors.len()
         );
     }
     merge_and_save_post_state(state, &mid_baseline, post_state, password)?;
 
+    let queued_for_next_flush = target_tag16.is_some_and(|t| outcome.deferred_tags.contains(&t));
+
     Ok(FrontendPostDepositResult {
-        deposited_to,
-        recipient_deposited_to,
+        deposited_to: outcome.deposited_to,
+        recipient_deposited_to: outcome.recipient_deposited_to,
         msg_id,
-        errors,
+        deferred_count: outcome.deferred_count,
+        queued_for_next_flush,
+        errors: outcome.errors,
     })
 }
 
@@ -413,8 +606,9 @@ pub async fn deposit_transfer_to_post_impl(
     }) {
         existing.msg_id.clone()
     } else {
-        let recipient_ed_pk =
-            get_pubkey_from_user_id(&record.recipient_id).map_err(FrontendError::from)?;
+        let validated_recipient =
+            ValidatedUserId::parse(&record.recipient_id).map_err(FrontendError::from)?;
+        let recipient_ed_pk = validated_recipient.public_key();
         let signing_ctx = load_post_signing_context(state, password.as_deref())?;
         let now_secs = sync_client::current_unix_timestamp();
         let fresh_msg_id = uuid::Uuid::new_v4().to_string();
@@ -422,8 +616,8 @@ pub async fn deposit_transfer_to_post_impl(
         enqueue_post_envelope(
             &mut post_state,
             &signing_ctx.sync_ctx.my_ed_sk,
-            &record.recipient_id,
-            &recipient_ed_pk,
+            validated_recipient.as_str(),
+            recipient_ed_pk,
             fresh_msg_id.clone(),
             Some(record.bundle_id),
             &signing_ctx.own_reply_syncs,
@@ -482,7 +676,10 @@ pub async fn send_signing_request_via_post_impl(
     state: &AppState,
 ) -> Result<FrontendPostDepositResult, FrontendError> {
     state.authorize(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
-    let recipient_ed_pk = get_pubkey_from_user_id(&recipient_did).map_err(FrontendError::from)?;
+    let validated_recipient =
+        ValidatedUserId::parse(&recipient_did).map_err(FrontendError::from)?;
+    let recipient_did = validated_recipient.as_str().to_string();
+    let recipient_ed_pk = validated_recipient.public_key();
     let signing_ctx = load_post_signing_context(state, password.as_deref())?;
     let anchor_manifest_json =
         resolve_signing_request_anchor_manifest(state, local_instance_id.as_deref());
@@ -496,7 +693,7 @@ pub async fn send_signing_request_via_post_impl(
         &mut post_state,
         &signing_ctx.sync_ctx.my_ed_sk,
         &recipient_did,
-        &recipient_ed_pk,
+        recipient_ed_pk,
         msg_id.clone(),
         None,
         &signing_ctx.own_reply_syncs,
@@ -516,8 +713,11 @@ pub async fn reply_detached_signature_via_post_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendPostDepositResult, FrontendError> {
-    state.authorize(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
-    let recipient_ed_pk = get_pubkey_from_user_id(&recipient_did).map_err(FrontendError::from)?;
+    state.authorize(crate::state::RequiredAccess::Full, password.as_deref())?;
+    let validated_recipient =
+        ValidatedUserId::parse(&recipient_did).map_err(FrontendError::from)?;
+    let recipient_did = validated_recipient.as_str().to_string();
+    let recipient_ed_pk = validated_recipient.public_key();
     let signing_ctx = load_post_signing_context(state, password.as_deref())?;
     let now_secs = sync_client::current_unix_timestamp();
 
@@ -529,7 +729,7 @@ pub async fn reply_detached_signature_via_post_impl(
         &mut post_state,
         &signing_ctx.sync_ctx.my_ed_sk,
         &recipient_did,
-        &recipient_ed_pk,
+        recipient_ed_pk,
         msg_id.clone(),
         None,
         &signing_ctx.own_reply_syncs,
@@ -537,14 +737,20 @@ pub async fn reply_detached_signature_via_post_impl(
         now_secs,
         None,
     )?;
+    let target_tag16 = post_state
+        .outbox_entries
+        .iter()
+        .find(|e| e.msg_id == msg_id)
+        .map(|e| e.entry.tag16);
 
     merge_and_save_post_state(state, &baseline, &mut post_state, password.as_deref())?;
     let mid_baseline = post_state.clone();
 
-    let (deposited_to, recipient_deposited_to, errors) =
-        flush_post_slots_impl(state, &mut post_state, &[], password.as_deref()).await;
+    let outcome = flush_post_slots_impl(state, &mut post_state, None, &[], password.as_deref()).await;
+    let delivered_to_recipient = target_tag16
+        .is_some_and(|t| outcome.recipient_uploaded_tags.contains(&t));
 
-    if recipient_deposited_to > 0 {
+    if delivered_to_recipient {
         if let Some(ref req_id) = request_msg_id {
             if let Some(idx) = post_state
                 .pending_sign_requests
@@ -568,11 +774,15 @@ pub async fn reply_detached_signature_via_post_impl(
 
     merge_and_save_post_state(state, &mid_baseline, &mut post_state, password.as_deref())?;
 
+    let queued_for_next_flush = target_tag16.is_some_and(|t| outcome.deferred_tags.contains(&t));
+
     Ok(FrontendPostDepositResult {
-        deposited_to,
-        recipient_deposited_to,
+        deposited_to: outcome.deposited_to,
+        recipient_deposited_to: outcome.recipient_deposited_to,
         msg_id,
-        errors,
+        deferred_count: outcome.deferred_count,
+        queued_for_next_flush,
+        errors: outcome.errors,
     })
 }
 
@@ -592,7 +802,10 @@ pub async fn send_wot_handshake_via_post_impl(
         )));
     }
 
-    let recipient_ed_pk = get_pubkey_from_user_id(&recipient_did).map_err(FrontendError::from)?;
+    let validated_recipient =
+        ValidatedUserId::parse(&recipient_did).map_err(FrontendError::from)?;
+    let recipient_did = validated_recipient.as_str().to_string();
+    let recipient_ed_pk = validated_recipient.public_key();
 
     let (my_identity, my_ed_sk, own_reply_syncs, assertion, now_secs) = {
         let mut service = state.service.lock().unwrap();
@@ -628,12 +841,11 @@ pub async fn send_wot_handshake_via_post_impl(
         let wot_sync_json = serde_json::to_string(&pkg)
             .map_err(|e| FrontendError::from(format!("Failed to serialize sync package: {}", e)))?;
 
-        let settings = state
-            .get_cached_settings()
-            .or_else(|_| state.load_settings(&mut service, password.as_deref()))
-            .unwrap_or_default();
+        let security_policy = state
+            .get_or_load_security_policy(&mut service, password.as_deref())
+            .map_err(FrontendError::from)?;
         let reply_syncs = collect_own_reply_syncs(
-            &settings,
+            &security_policy,
             human_money_core::crypto::get_prefix_from_user_id(&my_did),
         );
         let now_secs = sync_client::current_unix_timestamp();
@@ -667,7 +879,7 @@ pub async fn send_wot_handshake_via_post_impl(
         &mut post_state,
         &my_ed_sk,
         &recipient_did,
-        &recipient_ed_pk,
+        recipient_ed_pk,
         msg_id.clone(),
         None,
         &own_reply_syncs,
@@ -766,6 +978,8 @@ pub async fn accept_wot_handshake_impl(
             deposited_to: 0,
             recipient_deposited_to: 0,
             msg_id,
+            deferred_count: 0,
+            queued_for_next_flush: false,
             errors: Vec::new(),
         })
     }
@@ -781,6 +995,10 @@ pub async fn send_market_inquiry_via_post_impl(
     state: &AppState,
 ) -> Result<FrontendMarketInquiryItem, FrontendError> {
     state.authorize(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
+    let validated_recipient =
+        ValidatedUserId::parse(&recipient_did).map_err(FrontendError::from)?;
+    let recipient_did = validated_recipient.as_str().to_string();
+    let recipient_ed_pk = validated_recipient.public_key();
     let now_secs = sync_client::current_unix_timestamp();
     let inquiry_id = uuid::Uuid::new_v4().to_string();
 
@@ -803,7 +1021,6 @@ pub async fn send_market_inquiry_via_post_impl(
         );
     }
 
-    let recipient_ed_pk = get_pubkey_from_user_id(&recipient_did).map_err(FrontendError::from)?;
     let signing_ctx = load_post_signing_context(state, password.as_deref())?;
 
     let container_bytes = seal_post_container_bytes(
@@ -822,7 +1039,7 @@ pub async fn send_market_inquiry_via_post_impl(
         &mut post_state,
         &signing_ctx.sync_ctx.my_ed_sk,
         &recipient_did,
-        &recipient_ed_pk,
+        recipient_ed_pk,
         msg_id.clone(),
         None,
         &signing_ctx.own_reply_syncs,
@@ -830,20 +1047,26 @@ pub async fn send_market_inquiry_via_post_impl(
         now_secs,
         None,
     )?;
+    let target_tag16 = post_state
+        .outbox_entries
+        .iter()
+        .find(|e| e.msg_id == msg_id)
+        .map(|e| e.entry.tag16);
 
-    let (_deposited_to, recipient_deposited_to, errors) = flush_post_slots_impl(
+    let flush_outcome = flush_post_slots_impl(
         state,
         &mut post_state,
+        Some(&recipient_did),
         &recipient_syncs,
         password.as_deref(),
     )
     .await;
-    if recipient_deposited_to == 0 {
+    if !target_tag16.is_some_and(|t| flush_outcome.recipient_uploaded_tags.contains(&t)) {
         return Err(FrontendError::with_code(
             "error.post.recipientUnreachable",
             format!(
                 "Recipient sync inbox unreachable for marketplace inquiry. Errors: {:?}",
-                errors
+                flush_outcome.errors
             ),
         ));
     }
@@ -979,16 +1202,20 @@ pub async fn send_market_inquiry_message_via_post_impl(
     };
     validate_market_inquiry_message(&msg_payload).map_err(FrontendError::from)?;
 
+    let validated_counterparty =
+        ValidatedUserId::parse(&counterparty_did).map_err(FrontendError::from)?;
+    let counterparty_did = validated_counterparty.as_str().to_string();
+    let recipient_ed_pk = validated_counterparty.public_key();
+
     if dec.is_some() {
-        if let Ok(sender_vk) = get_pubkey_from_user_id(&counterparty_did) {
-            post_state
-                .inquiry_rate_tracker
-                .resolve_inquiry(&hex::encode(sender_vk.as_bytes()), &target.target_key());
-        }
+        post_state
+            .inquiry_rate_tracker
+            .resolve_inquiry(
+                &hex::encode(recipient_ed_pk.as_bytes()),
+                &target.target_key(),
+            );
     }
 
-    let recipient_ed_pk =
-        get_pubkey_from_user_id(&counterparty_did).map_err(FrontendError::from)?;
     let signing_ctx = load_post_signing_context(state, password.as_deref())?;
 
     let container_bytes = seal_post_container_bytes(
@@ -1003,7 +1230,7 @@ pub async fn send_market_inquiry_message_via_post_impl(
         &mut post_state,
         &signing_ctx.sync_ctx.my_ed_sk,
         &counterparty_did,
-        &recipient_ed_pk,
+        recipient_ed_pk,
         msg_id.clone(),
         None,
         &signing_ctx.own_reply_syncs,
@@ -1011,15 +1238,20 @@ pub async fn send_market_inquiry_message_via_post_impl(
         now_secs,
         None,
     )?;
+    let target_tag16 = post_state
+        .outbox_entries
+        .iter()
+        .find(|e| e.msg_id == msg_id)
+        .map(|e| e.entry.tag16);
 
-    let (_deposited_to, recipient_deposited_to, errors) =
-        flush_post_slots_impl(state, &mut post_state, &[], password.as_deref()).await;
-    if recipient_deposited_to == 0 {
+    let flush_outcome =
+        flush_post_slots_impl(state, &mut post_state, None, &[], password.as_deref()).await;
+    if !target_tag16.is_some_and(|t| flush_outcome.recipient_uploaded_tags.contains(&t)) {
         return Err(FrontendError::with_code(
             "error.post.recipientUnreachable",
             format!(
                 "Recipient sync inbox unreachable for inquiry message. Errors: {:?}",
-                errors
+                flush_outcome.errors
             ),
         ));
     }

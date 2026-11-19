@@ -7,7 +7,7 @@ import { settingsService } from '../../../services/settingsService';
 import { save } from '@tauri-apps/plugin-dialog';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { copyToClipboard } from '../../../utils/clipboard';
-import { AppSettings, FrontendSyncAdminStatus } from '../../../types';
+import { AppConfigDto, FrontendSyncAdminStatus } from '../../../types';
 
 vi.mock('react-i18next', () => {
     const fs = require('fs');
@@ -75,8 +75,8 @@ vi.mock('../../../services/marketService', () => ({
 
 vi.mock('../../../services/settingsService', () => ({
     settingsService: {
-        getSettings: vi.fn(),
-        saveSettings: vi.fn().mockResolvedValue(undefined),
+        getConfig: vi.fn(),
+        patchUiPreferences: vi.fn(),
     },
 }));
 
@@ -89,29 +89,60 @@ vi.mock('../../../context/SessionContext', () => ({
 }));
 
 describe('SyncServiceSettingsCard Component', () => {
-    const defaultSettings: AppSettings = {
-        sessionTimeoutSeconds: 300,
-        privacyDefault: 'public',
-        postAcceptFromContacts: true,
-        marketSendCardOnPayment: false,
-        marketSyncEnabled: true,
-        wotShareViaSync: true,
-        syncBackupEnabled: true,
-        publicSyncs: [],
-    };
+    const createDefaultConfig = (): AppConfigDto => ({
+        uiPreferences: {
+            uiMode: 'expert',
+            lastUsedDirectory: null,
+            balanceViewMode: 'spendable',
+            marketShowUnknown: true,
+            maxStoredCards: 2000,
+            marketSendCardOnPayment: false,
+            marketSyncEnabled: true,
+            shareMinLevel: 1,
+            marketPollWifiOnly: false,
+            wotShareViaSync: true,
+            postAcceptFromContacts: true,
+            mediaAutoLoadMaxHops: 2,
+        },
+        securityPolicy: {
+            sessionTimeoutSeconds: 300,
+            privacyDefault: 'public',
+            devModeUnlocked: false,
+            autoBackupEnabled: true,
+            syncBackupEnabled: true,
+            backupSyncFolder: null,
+            backupProtectionMode: null,
+            ownNominatedLockServer: null,
+            marketSelectedSyncs: [],
+            publicSyncs: [],
+        },
+        lifecycle: {
+            pendingRestoreL2Reconciliation: false,
+            backupDirty: false,
+            lastBackupAt: null,
+            lastSyncBackupAt: null,
+            l2ProbeCache: {},
+            l2AnchorTemplatesMeta: [],
+        },
+    });
 
     beforeEach(() => {
         vi.clearAllMocks();
+        const cfg = createDefaultConfig();
         vi.mocked(marketService.discoverAvailableSyncs).mockResolvedValue([]);
         vi.mocked(marketService.getSyncAdminStatus).mockResolvedValue(null);
-        vi.mocked(settingsService.getSettings).mockResolvedValue(defaultSettings);
+        vi.mocked(settingsService.getConfig).mockResolvedValue(cfg);
+        vi.mocked(settingsService.patchUiPreferences).mockImplementation(async (patch) => ({
+            ...cfg.uiPreferences,
+            ...patch,
+        }));
     });
 
     it('renders card header and default connected tab with channel toggles', async () => {
         render(
             <SyncServiceSettingsCard
-                settings={defaultSettings}
-                onSettingsUpdated={vi.fn()}
+                config={createDefaultConfig()}
+                onConfigUpdated={vi.fn()}
             />
         );
 
@@ -126,12 +157,12 @@ describe('SyncServiceSettingsCard Component', () => {
         expect(screen.queryByText(/Backups erlauben|Cloud-Sicherung nutzen|Allow Backups|Use Cloud Backup/i)).not.toBeInTheDocument();
     });
 
-    it('toggles channel switch and calls settingsService.saveSettings', async () => {
+    it('toggles channel switch and calls settingsService.patchUiPreferences', async () => {
         const onUpdated = vi.fn();
         render(
             <SyncServiceSettingsCard
-                settings={defaultSettings}
-                onSettingsUpdated={onUpdated}
+                config={createDefaultConfig()}
+                onConfigUpdated={onUpdated}
             />
         );
 
@@ -141,10 +172,8 @@ describe('SyncServiceSettingsCard Component', () => {
         fireEvent.click(mailboxToggle);
 
         await waitFor(() => {
-            expect(settingsService.saveSettings).toHaveBeenCalledWith(
-                expect.objectContaining({
-                    postAcceptFromContacts: false,
-                }),
+            expect(settingsService.patchUiPreferences).toHaveBeenCalledWith(
+                { postAcceptFromContacts: false },
                 'mock-wallet-pw'
             );
             expect(onUpdated).toHaveBeenCalled();
@@ -163,8 +192,8 @@ describe('SyncServiceSettingsCard Component', () => {
 
         render(
             <SyncServiceSettingsCard
-                settings={defaultSettings}
-                onSettingsUpdated={vi.fn()}
+                config={createDefaultConfig()}
+                onConfigUpdated={vi.fn()}
             />
         );
 
@@ -193,8 +222,8 @@ describe('SyncServiceSettingsCard Component', () => {
 
         render(
             <SyncServiceSettingsCard
-                settings={defaultSettings}
-                onSettingsUpdated={vi.fn()}
+                config={createDefaultConfig()}
+                onConfigUpdated={vi.fn()}
             />
         );
 
@@ -259,8 +288,8 @@ describe('SyncServiceSettingsCard Component', () => {
 
         render(
             <SyncServiceSettingsCard
-                settings={defaultSettings}
-                onSettingsUpdated={vi.fn()}
+                config={createDefaultConfig()}
+                onConfigUpdated={vi.fn()}
             />
         );
 
@@ -318,8 +347,8 @@ describe('SyncServiceSettingsCard Component', () => {
 
         render(
             <SyncServiceSettingsCard
-                settings={defaultSettings}
-                onSettingsUpdated={vi.fn()}
+                config={createDefaultConfig()}
+                onConfigUpdated={vi.fn()}
             />
         );
 
@@ -372,8 +401,8 @@ describe('SyncServiceSettingsCard Component', () => {
 
         render(
             <SyncServiceSettingsCard
-                settings={defaultSettings}
-                onSettingsUpdated={vi.fn()}
+                config={createDefaultConfig()}
+                onConfigUpdated={vi.fn()}
             />
         );
 
@@ -467,8 +496,8 @@ describe('SyncServiceSettingsCard Component', () => {
 
         render(
             <SyncServiceSettingsCard
-                settings={defaultSettings}
-                onSettingsUpdated={vi.fn()}
+                config={createDefaultConfig()}
+                onConfigUpdated={vi.fn()}
             />
         );
 
@@ -486,22 +515,20 @@ describe('SyncServiceSettingsCard Component', () => {
     });
 
     it('opens registration URL with key and re-checks authorization for public syncs', async () => {
-        const publicSettings: AppSettings = {
-            ...defaultSettings,
-            publicSyncs: [
-                {
-                    writeUrl: 'https://community.example.org/sync.php',
-                    readUrl: 'https://community.example.org/data',
-                    dropPub: 'a'.repeat(64),
-                    registerUrl: 'https://community.example.org/register',
-                    accessPubkey: 'b'.repeat(64),
-                    enabled: false,
-                    authorizedChannels: [],
-                    status: 'pending_auth',
-                },
-            ],
-        };
-        vi.mocked(settingsService.getSettings).mockResolvedValue(publicSettings);
+        const publicConfig = createDefaultConfig();
+        publicConfig.securityPolicy.publicSyncs = [
+            {
+                writeUrl: 'https://community.example.org/sync.php',
+                readUrl: 'https://community.example.org/data',
+                dropPub: 'a'.repeat(64),
+                registerUrl: 'https://community.example.org/register',
+                accessPubkey: 'b'.repeat(64),
+                enabled: false,
+                authorizedChannels: [],
+                status: 'pending_auth',
+            },
+        ];
+        vi.mocked(settingsService.getConfig).mockResolvedValue(publicConfig);
         vi.mocked(marketService.probePublicSync).mockResolvedValue({
             writeUrl: 'https://community.example.org/sync.php',
             readUrl: 'https://community.example.org/data',
@@ -521,8 +548,8 @@ describe('SyncServiceSettingsCard Component', () => {
 
         render(
             <SyncServiceSettingsCard
-                settings={publicSettings}
-                onSettingsUpdated={vi.fn()}
+                config={publicConfig}
+                onConfigUpdated={vi.fn()}
             />
         );
 
@@ -555,33 +582,34 @@ describe('SyncServiceSettingsCard Component', () => {
     });
 
     it('opens delete confirmation dialog for public syncs and respects deleteRemoteSlots checkbox', async () => {
-        const publicSettings: AppSettings = {
-            ...defaultSettings,
-            publicSyncs: [
-                {
-                    writeUrl: 'https://community.example.org/sync.php',
-                    readUrl: 'https://community.example.org/data',
-                    dropPub: 'a'.repeat(64),
-                    accessPubkey: 'b'.repeat(64),
-                    enabled: true,
-                    authorizedChannels: ['card', 'post'],
-                    status: 'active',
-                },
-            ],
-        };
-        let currentSettings: AppSettings = publicSettings;
-        vi.mocked(settingsService.getSettings).mockImplementation(async () => currentSettings);
+        const publicConfig = createDefaultConfig();
+        publicConfig.securityPolicy.publicSyncs = [
+            {
+                writeUrl: 'https://community.example.org/sync.php',
+                readUrl: 'https://community.example.org/data',
+                dropPub: 'a'.repeat(64),
+                accessPubkey: 'b'.repeat(64),
+                enabled: true,
+                authorizedChannels: ['card', 'post'],
+                status: 'active',
+            },
+        ];
+        let currentConfig: AppConfigDto = publicConfig;
+        vi.mocked(settingsService.getConfig).mockImplementation(async () => currentConfig);
         vi.mocked(marketService.removePublicSync).mockImplementation(async () => {
-            currentSettings = {
-                ...publicSettings,
-                publicSyncs: [],
+            currentConfig = {
+                ...publicConfig,
+                securityPolicy: {
+                    ...publicConfig.securityPolicy,
+                    publicSyncs: [],
+                },
             };
         });
 
         render(
             <SyncServiceSettingsCard
-                settings={publicSettings}
-                onSettingsUpdated={vi.fn()}
+                config={publicConfig}
+                onConfigUpdated={vi.fn()}
             />
         );
 
@@ -635,8 +663,8 @@ describe('SyncServiceSettingsCard Component', () => {
 
         render(
             <SyncServiceSettingsCard
-                settings={defaultSettings}
-                onSettingsUpdated={vi.fn()}
+                config={createDefaultConfig()}
+                onConfigUpdated={vi.fn()}
             />
         );
 
@@ -655,8 +683,8 @@ describe('SyncServiceSettingsCard Component', () => {
     it('renders concise PHP ZIP and Rust config.toml setup instructions in host wizard', async () => {
         render(
             <SyncServiceSettingsCard
-                settings={defaultSettings}
-                onSettingsUpdated={vi.fn()}
+                config={createDefaultConfig()}
+                onConfigUpdated={vi.fn()}
             />
         );
 

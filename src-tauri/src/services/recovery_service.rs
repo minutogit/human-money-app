@@ -5,7 +5,7 @@ use tauri::Manager;
 
 use chrono::Utc;
 use human_money_core::app_service::AppService;
-use human_money_core::crypto::get_pubkey_from_user_id;
+use human_money_core::ValidatedUserId;
 use human_money_core::models::backup::BackupRestoreCredentials;
 use human_money_core::models::secure_container::{
     ContainerConfig, PayloadType, PrivacyMode, SecureContainer,
@@ -60,17 +60,8 @@ pub fn load_recovery_owner_state(
     service: &mut AppService,
     password: Option<&str>,
 ) -> Result<Option<RecoveryOwnerState>, FrontendError> {
-    match service.load_encrypted_data(RECOVERY_OWNER_STATE_KEY, password) {
-        Ok(bytes) => serde_json::from_slice::<RecoveryOwnerState>(&bytes)
-            .map(Some)
-            .map_err(|e| {
-                FrontendError::from(format!("Failed to parse recovery owner state: {}", e))
-            }),
-        Err(human_money_core::app_service::AppFacadeError::Storage(
-            human_money_core::StorageError::NotFound,
-        )) => Ok(None),
-        Err(e) => Err(FrontendError::from(e)),
-    }
+    crate::state::load_encrypted_json_opt(service, RECOVERY_OWNER_STATE_KEY, password)
+        .map_err(FrontendError::from)
 }
 
 pub fn save_recovery_owner_state(
@@ -78,11 +69,7 @@ pub fn save_recovery_owner_state(
     owner_state: &RecoveryOwnerState,
     password: Option<&str>,
 ) -> Result<(), FrontendError> {
-    let bytes = serde_json::to_vec(owner_state).map_err(|e| {
-        FrontendError::from(format!("Failed to serialize recovery owner state: {}", e))
-    })?;
-    service
-        .save_encrypted_data(RECOVERY_OWNER_STATE_KEY, &bytes, password)
+    crate::state::save_encrypted_json(service, RECOVERY_OWNER_STATE_KEY, owner_state, password)
         .map_err(FrontendError::from)
 }
 
@@ -90,14 +77,8 @@ pub fn load_guardian_vault(
     service: &mut AppService,
     password: Option<&str>,
 ) -> Result<GuardianVaultStore, FrontendError> {
-    match service.load_encrypted_data(RECOVERY_GUARDIAN_VAULT_KEY, password) {
-        Ok(bytes) => serde_json::from_slice::<GuardianVaultStore>(&bytes)
-            .map_err(|e| FrontendError::from(format!("Failed to parse guardian vault: {}", e))),
-        Err(human_money_core::app_service::AppFacadeError::Storage(
-            human_money_core::StorageError::NotFound,
-        )) => Ok(GuardianVaultStore::new()),
-        Err(e) => Err(FrontendError::from(e)),
-    }
+    crate::state::load_encrypted_json_or_default(service, RECOVERY_GUARDIAN_VAULT_KEY, password)
+        .map_err(FrontendError::from)
 }
 
 pub fn save_guardian_vault(
@@ -105,10 +86,7 @@ pub fn save_guardian_vault(
     vault: &GuardianVaultStore,
     password: Option<&str>,
 ) -> Result<(), FrontendError> {
-    let bytes = serde_json::to_vec(vault)
-        .map_err(|e| FrontendError::from(format!("Failed to serialize guardian vault: {}", e)))?;
-    service
-        .save_encrypted_data(RECOVERY_GUARDIAN_VAULT_KEY, &bytes, password)
+    crate::state::save_encrypted_json(service, RECOVERY_GUARDIAN_VAULT_KEY, vault, password)
         .map_err(FrontendError::from)
 }
 
@@ -186,27 +164,12 @@ fn is_same_account_id(a: &str, b: &str) -> bool {
     }
 }
 
-pub(crate) fn get_or_load_settings_from_state(
-    state: &AppState,
-    password: Option<&str>,
-) -> crate::settings::AppSettings {
-    state.get_cached_settings().unwrap_or_else(|_| {
-        if let Ok(mut service) = state.service.lock() {
-            state
-                .load_settings(&mut service, password)
-                .unwrap_or_default()
-        } else {
-            Default::default()
-        }
-    })
-}
-
 pub fn collect_candidate_backup_sync_descriptors(
     state: &AppState,
     password: Option<&str>,
 ) -> Result<Vec<DropDescriptor>, FrontendError> {
-    let settings = get_or_load_settings_from_state(state, password);
-    let mut candidate_targets: Vec<DropDescriptor> = settings
+    let security_policy = state.get_or_load_security_policy_locked(password)?;
+    let mut candidate_targets: Vec<DropDescriptor> = security_policy
         .market_selected_syncs
         .iter()
         .cloned()
@@ -221,10 +184,20 @@ pub fn collect_candidate_backup_sync_descriptors(
             })
             .ok()
             .flatten();
-        let admin = service
-            .load_encrypted_data(crate::state::MARKET_SYNC_ADMIN_KEY, password)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice::<crate::state::StoredSyncAdmin>(&bytes).ok());
+        let admin = match crate::services::sync_engine::admin::load_stored_sync_admin_opt(
+            &mut service,
+            password,
+        ) {
+            Ok(admin) => admin,
+            Err(err)
+                if password.is_none()
+                    && (err.code == "error.auth.sessionNotActive"
+                        || err.code == "error.auth.sessionExpired") =>
+            {
+                None
+            }
+            Err(err) => return Err(err),
+        };
         (admin, pfx)
     };
     if let Some(admin) = admin_opt {
@@ -237,7 +210,7 @@ pub fn collect_candidate_backup_sync_descriptors(
         }
     }
 
-    for pd in &settings.public_syncs {
+    for pd in &security_policy.public_syncs {
         if pd.enabled
             && !pd.write_url.is_empty()
             && !candidate_targets
@@ -290,10 +263,12 @@ fn enqueue_recovery_container_to_outbox(
         reply_drops.to_vec(),
         container_bytes,
     );
-    let recipient_pk = get_pubkey_from_user_id(recipient_did)
+    let validated_recipient = ValidatedUserId::parse(recipient_did)
         .map_err(|e| FrontendError::from(format!("Invalid guardian DID: {}", e)))?;
+    let recipient_did = validated_recipient.as_str();
+    let recipient_pk = validated_recipient.public_key();
     let box_entry =
-        seal_post_box(my_signing_key, &recipient_pk, &envelope).map_err(FrontendError::from)?;
+        seal_post_box(my_signing_key, recipient_pk, &envelope).map_err(FrontendError::from)?;
 
     post_state.processed_msg_ids.insert(msg_id.clone());
     post_state.outbox_entries.push(PostOutboxEntry {
@@ -363,9 +338,9 @@ pub async fn enqueue_guardian_locator_updates_if_configured(
 
     let candidate_descriptors =
         collect_candidate_backup_sync_descriptors(state, password.as_deref())?;
-    let settings = get_or_load_settings_from_state(state, password.as_deref());
+    let security_policy = state.get_or_load_security_policy_locked(password.as_deref())?;
     let reply_drops: Vec<DropDescriptor> = collect_own_reply_syncs(
-        &settings,
+        &security_policy,
         human_money_core::crypto::get_prefix_from_user_id(&my_identity.user_id),
     )
     .into_iter()
@@ -414,7 +389,8 @@ pub async fn enqueue_guardian_locator_updates_if_configured(
     if enqueued > 0 {
         merge_and_save_post_state(state, &baseline, &mut post_state, password.as_deref())?;
         baseline = post_state.clone();
-        let _ = flush_post_slots_impl(state, &mut post_state, &[], password.as_deref()).await;
+        let _ =
+            flush_post_slots_impl(state, &mut post_state, None, &[], password.as_deref()).await;
         merge_and_save_post_state(state, &baseline, &mut post_state, password.as_deref())?;
     }
 
@@ -823,11 +799,13 @@ pub fn get_recovery_protection_status_impl(
         && required_threshold >= 2)
         || emergency_sheet_confirmed_at.is_some();
 
-    let settings = get_or_load_settings_from_state(state, password);
+    let security_policy = state.get_or_load_security_policy_locked(password)?;
+    let lifecycle = state.get_or_load_internal_lifecycle_locked(password)?;
     let candidate_syncs = collect_candidate_backup_sync_descriptors(state, password)?;
     let sync_backup_count = candidate_syncs.len();
-    let has_sync_backup = settings.sync_backup_enabled && settings.last_sync_backup_at.is_some();
-    let has_local_backup = settings
+    let has_sync_backup =
+        security_policy.sync_backup_enabled && lifecycle.last_sync_backup_at.is_some();
+    let has_local_backup = security_policy
         .backup_sync_folder
         .as_ref()
         .is_some_and(|f| !f.trim().is_empty() && Path::new(f).is_dir());
@@ -1144,9 +1122,9 @@ pub async fn setup_social_recovery_guardians_with_params(
     let new_epoch = old_epoch + 1;
     let now_secs = Utc::now().timestamp() as u64;
 
-    let settings = get_or_load_settings_from_state(state, Some(password.as_str()));
+    let security_policy = state.get_or_load_security_policy_locked(Some(password.as_str()))?;
     let reply_drops: Vec<DropDescriptor> = collect_own_reply_syncs(
-        &settings,
+        &security_policy,
         human_money_core::crypto::get_prefix_from_user_id(&my_identity.user_id),
     )
     .into_iter()
@@ -1324,9 +1302,9 @@ pub async fn revoke_social_recovery_impl(
 
     let new_epoch = old_epoch + 1;
     let now_secs = Utc::now().timestamp() as u64;
-    let settings = get_or_load_settings_from_state(state, password.as_deref());
+    let security_policy = state.get_or_load_security_policy_locked(password.as_deref())?;
     let reply_drops: Vec<DropDescriptor> = collect_own_reply_syncs(
-        &settings,
+        &security_policy,
         human_money_core::crypto::get_prefix_from_user_id(&my_identity.user_id),
     )
     .into_iter()
@@ -1578,10 +1556,10 @@ pub fn approve_guardian_recovery_request_impl(
 
         // Collect extra known sync descriptors from own hosted sync
         let mut extras = Vec::new();
-        if let Ok(Some(admin)) = service
-            .load_encrypted_data(crate::state::MARKET_SYNC_ADMIN_KEY, password)
-            .map(|bytes| serde_json::from_slice::<crate::state::StoredSyncAdmin>(&bytes).ok())
-        {
+        if let Some(admin) = crate::services::sync_engine::admin::load_stored_sync_admin_opt(
+            &mut service,
+            password,
+        )? {
             if !admin.descriptor.write_url.is_empty() {
                 extras.push(admin.descriptor.clone());
             }
@@ -2030,14 +2008,24 @@ pub async fn complete_social_recovery_impl(
             })
             .unwrap_or_default();
 
-        let default_settings = crate::settings::AppSettings::default();
-        if let Ok(settings_bytes) = serde_json::to_vec(&default_settings) {
-            let _ = service.save_encrypted_data(
-                crate::settings::SETTINGS_KEY,
-                &settings_bytes,
-                Some(&new_password),
-            );
-        }
+        let _ = crate::state::save_encrypted_json(
+            &mut service,
+            crate::settings::UI_PREFERENCES_KEY,
+            &crate::settings::UiPreferences::default(),
+            Some(&new_password),
+        );
+        let _ = crate::state::save_encrypted_json(
+            &mut service,
+            crate::settings::SECURITY_POLICY_KEY,
+            &crate::settings::SecurityPolicy::default(),
+            Some(&new_password),
+        );
+        let _ = crate::state::save_encrypted_json(
+            &mut service,
+            crate::settings::INTERNAL_LIFECYCLE_STATE_KEY,
+            &crate::settings::InternalLifecycleState::default(),
+            Some(&new_password),
+        );
 
         let initial_state = RecoveryOwnerState {
             rotation_epoch,
@@ -3531,9 +3519,11 @@ mod tests {
         // Finding 11: Simulate timeout = 0 (unlocked session absent after initialize_profile_session)
         {
             let mut s = laden_state.service.lock().unwrap();
-            let mut settings = laden_state.load_settings(&mut s, Some(pass)).unwrap();
-            settings.session_timeout_seconds = 0;
-            laden_state.save_settings(&mut s, settings, Some(pass)).unwrap();
+            let mut policy = laden_state.load_security_policy(&mut s, Some(pass)).unwrap();
+            policy.session_timeout_seconds = 0;
+            laden_state
+                .save_security_policy(&mut s, policy, Some(pass))
+                .unwrap();
         }
         let mut reloaded_svc = AppService::new(&laden_dir).unwrap();
         let folder_name = reloaded_svc.list_profiles().unwrap()[0].folder_name.clone();

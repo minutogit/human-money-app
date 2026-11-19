@@ -1,7 +1,12 @@
 // src/components/BackupSettingsCard.tsx
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { AppSettings, BackupSummaryDto, FrontendAutoBackupStatusDto, RecoveryProtectionStatusDto } from '../../types';
+import {
+    AppConfigDto,
+    BackupSummaryDto,
+    FrontendAutoBackupStatusDto,
+    RecoveryProtectionStatusDto,
+} from '../../types';
 import { backupService } from '../../services/backupService';
 import { settingsService } from '../../services/settingsService';
 import { recoveryService } from '../../services/recoveryService';
@@ -32,11 +37,14 @@ import {
 } from 'lucide-react';
 
 interface BackupSettingsCardProps {
-    settings: AppSettings | null;
-    onSettingsUpdated?: (newSettings: AppSettings) => void;
+    config: AppConfigDto | null;
+    onConfigUpdated?: (newConfig: AppConfigDto) => void;
 }
 
-export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings, onSettingsUpdated }) => {
+export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({
+    config,
+    onConfigUpdated,
+}) => {
     const { t } = useTranslation();
     const { protectAction, accessMode = 'full', requireFullAccess } = useSession();
 
@@ -50,13 +58,19 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
     };
 
     const [protectionMode, setProtectionMode] = useState<'mnemonic_only' | 'custom_password'>(
-        settings?.backupProtectionMode === 'custom_password' ? 'custom_password' : 'mnemonic_only'
+        config?.securityPolicy.backupProtectionMode === 'custom_password'
+            ? 'custom_password'
+            : 'mnemonic_only',
     );
     const [backupPassword, setBackupPassword] = useState('');
     const [confirmBackupPassword, setConfirmBackupPassword] = useState('');
-    const [syncFolder, setSyncFolder] = useState<string>(settings?.backupSyncFolder || '');
-    const [autoBackupEnabled, setAutoBackupEnabled] = useState<boolean>(settings?.autoBackupEnabled ?? true);
-    const [syncBackupEnabled, setSyncBackupEnabled] = useState<boolean>(settings?.syncBackupEnabled ?? true);
+    const [syncFolder, setSyncFolder] = useState<string>(config?.securityPolicy.backupSyncFolder || '');
+    const [autoBackupEnabled, setAutoBackupEnabled] = useState<boolean>(
+        config?.securityPolicy.autoBackupEnabled ?? true,
+    );
+    const [syncBackupEnabled, setSyncBackupEnabled] = useState<boolean>(
+        config?.securityPolicy.syncBackupEnabled ?? true,
+    );
     const [backupStatus, setBackupStatus] = useState<FrontendAutoBackupStatusDto | null>(null);
     const [recoveryProtectionStatus, setRecoveryProtectionStatus] = useState<RecoveryProtectionStatusDto | null>(null);
 
@@ -74,13 +88,13 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
     }, []);
 
     useEffect(() => {
-        if (settings?.autoBackupEnabled !== undefined) {
-            setAutoBackupEnabled(settings.autoBackupEnabled);
+        if (config?.securityPolicy.autoBackupEnabled !== undefined) {
+            setAutoBackupEnabled(config.securityPolicy.autoBackupEnabled);
         }
-        if (settings?.syncBackupEnabled !== undefined) {
-            setSyncBackupEnabled(settings.syncBackupEnabled);
+        if (config?.securityPolicy.syncBackupEnabled !== undefined) {
+            setSyncBackupEnabled(config.securityPolicy.syncBackupEnabled);
         }
-    }, [settings?.autoBackupEnabled, settings?.syncBackupEnabled]);
+    }, [config?.securityPolicy.autoBackupEnabled, config?.securityPolicy.syncBackupEnabled]);
 
     const [isExporting, setIsExporting] = useState(false);
     const [isSyncing, setIsSyncing] = useState(false);
@@ -107,20 +121,28 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
         }
         const prev = autoBackupEnabled;
         setAutoBackupEnabled(enabled);
-        if (settings) {
-            const updated: AppSettings = {
-                ...settings,
-                autoBackupEnabled: enabled,
-            };
-            try {
-                await protectAction(async (walletPassword) => {
-                    await settingsService.saveSettings(updated, walletPassword || undefined);
+        try {
+            const updatedSec = await protectAction(
+                async (walletPassword) => {
+                    return await settingsService.patchSecurityPolicy(
+                        { autoBackupEnabled: enabled },
+                        walletPassword || undefined,
+                    );
+                },
+                { requireFullAccess: true },
+            );
+            if (config && onConfigUpdated) {
+                onConfigUpdated({
+                    ...config,
+                    securityPolicy: updatedSec ?? {
+                        ...config.securityPolicy,
+                        autoBackupEnabled: enabled,
+                    },
                 });
-                if (onSettingsUpdated) onSettingsUpdated(updated);
-            } catch (err) {
-                setAutoBackupEnabled(prev);
-                setFeedback({ type: 'error', message: translateError(err, t) });
             }
+        } catch (err) {
+            setAutoBackupEnabled(prev);
+            setFeedback({ type: 'error', message: translateError(err, t) });
         }
     };
 
@@ -131,20 +153,28 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
         }
         const prev = syncBackupEnabled;
         setSyncBackupEnabled(enabled);
-        if (settings) {
-            const updated: AppSettings = {
-                ...settings,
-                syncBackupEnabled: enabled,
-            };
-            try {
-                await protectAction(async (walletPassword) => {
-                    await settingsService.saveSettings(updated, walletPassword || undefined);
+        try {
+            const updatedSec = await protectAction(
+                async (walletPassword) => {
+                    return await settingsService.patchSecurityPolicy(
+                        { syncBackupEnabled: enabled },
+                        walletPassword || undefined,
+                    );
+                },
+                { requireFullAccess: true },
+            );
+            if (config && onConfigUpdated) {
+                onConfigUpdated({
+                    ...config,
+                    securityPolicy: updatedSec ?? {
+                        ...config.securityPolicy,
+                        syncBackupEnabled: enabled,
+                    },
                 });
-                if (onSettingsUpdated) onSettingsUpdated(updated);
-            } catch (err) {
-                setSyncBackupEnabled(prev);
-                setFeedback({ type: 'error', message: translateError(err, t) });
             }
+        } catch (err) {
+            setSyncBackupEnabled(prev);
+            setFeedback({ type: 'error', message: translateError(err, t) });
         }
     };
 
@@ -153,17 +183,32 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
         setIsSyncingBackup(true);
         setFeedback(null);
         try {
-            const res = await protectAction(async (walletPassword) => {
-                return await backupService.syncBackup(walletPassword || undefined);
-            });
+            const res = await protectAction(
+                async (walletPassword) => {
+                    return await backupService.syncBackup(walletPassword || undefined);
+                },
+                { requireFullAccess: true },
+            );
             if (!res) return;
             if (res.uploadedTo > 0) {
                 setFeedback({
                     type: 'success',
                     message: t('settings.syncBackupSuccess', { count: res.uploadedTo, size: Math.round(res.paddedBytes / 1024) }),
                 });
-                if (settings && onSettingsUpdated) {
-                    onSettingsUpdated({ ...settings, lastSyncBackupAt: res.timestamp ?? new Date().toISOString() });
+                const fresh =
+                    typeof settingsService.getConfig === 'function'
+                        ? await settingsService.getConfig().catch(() => null)
+                        : null;
+                if (fresh && onConfigUpdated) {
+                    onConfigUpdated(fresh);
+                } else if (config && onConfigUpdated) {
+                    onConfigUpdated({
+                        ...config,
+                        lifecycle: {
+                            ...config.lifecycle,
+                            lastSyncBackupAt: res.timestamp ?? new Date().toISOString(),
+                        },
+                    });
                 }
                 const updatedStatus = await backupService.getBackupStatus().catch(() => null);
                 if (updatedStatus) {
@@ -194,19 +239,27 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
         if (!(await ensureFullAccess())) return;
         setFeedback(null);
         setSyncFolder('');
-        if (settings) {
-            const updated: AppSettings = {
-                ...settings,
-                backupSyncFolder: null,
-            };
-            try {
-                await protectAction(async (walletPassword) => {
-                    await settingsService.saveSettings(updated, walletPassword || undefined);
+        try {
+            const updatedSec = await protectAction(
+                async (walletPassword) => {
+                    return await settingsService.patchSecurityPolicy(
+                        { backupSyncFolder: null },
+                        walletPassword || undefined,
+                    );
+                },
+                { requireFullAccess: true },
+            );
+            if (config && onConfigUpdated) {
+                onConfigUpdated({
+                    ...config,
+                    securityPolicy: updatedSec ?? {
+                        ...config.securityPolicy,
+                        backupSyncFolder: null,
+                    },
                 });
-                if (onSettingsUpdated) onSettingsUpdated(updated);
-            } catch (err) {
-                logger.error(`Clear backup folder failed: ${stringifyError(err)}`);
             }
+        } catch (err) {
+            logger.error(`Clear backup folder failed: ${stringifyError(err)}`);
         }
     };
 
@@ -220,28 +273,45 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
             const selectedPath = await pickSaveFilePath({
                 defaultFilename: defaultName,
                 filters: [{ name: 'HuMoCo Backup', extensions: ['hmcbackup'] }],
+                uiPreferences: config?.uiPreferences,
             });
 
             if (!selectedPath) return;
 
             setIsExporting(true);
-            const summary = await protectAction(async (walletPassword) => {
-                return await backupService.exportBackupFile({
-                    destinationPath: selectedPath,
-                    protectionMode,
-                    backupPassword: protectionMode === 'custom_password' ? backupPassword : null,
-                    password: walletPassword,
-                });
-            }) as BackupSummaryDto | undefined;
+            const summary = (await protectAction(
+                async (walletPassword) => {
+                    return await backupService.exportBackupFile({
+                        destinationPath: selectedPath,
+                        protectionMode,
+                        backupPassword: protectionMode === 'custom_password' ? backupPassword : null,
+                        password: walletPassword,
+                    });
+                },
+                { requireFullAccess: true },
+            )) as BackupSummaryDto | undefined;
 
             if (summary) {
-                const updatedSettings: AppSettings = {
-                    ...(settings || { sessionTimeoutSeconds: 300, privacyDefault: 'public' }),
-                    lastBackupAt: summary.timestamp,
-                    backupProtectionMode: protectionMode,
-                    backupDirty: false,
-                };
-                if (onSettingsUpdated) onSettingsUpdated(updatedSettings);
+                const fresh =
+                    typeof settingsService.getConfig === 'function'
+                        ? await settingsService.getConfig().catch(() => null)
+                        : null;
+                if (fresh && onConfigUpdated) {
+                    onConfigUpdated(fresh);
+                } else if (config && onConfigUpdated) {
+                    onConfigUpdated({
+                        ...config,
+                        securityPolicy: {
+                            ...config.securityPolicy,
+                            backupProtectionMode: protectionMode,
+                        },
+                        lifecycle: {
+                            ...config.lifecycle,
+                            lastBackupAt: summary.timestamp,
+                            backupDirty: false,
+                        },
+                    });
+                }
 
                 const updatedStatus = await backupService.getBackupStatus().catch(() => null);
                 if (updatedStatus) {
@@ -272,21 +342,33 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
 
             if (selected) {
                 setSyncFolder(selected);
-                if (settings) {
-                    const updated: AppSettings = {
-                        ...settings,
-                        backupSyncFolder: selected,
-                        autoBackupEnabled,
-                        backupProtectionMode: protectionMode,
-                    };
-                    try {
-                        await protectAction(async (walletPassword) => {
-                            await settingsService.saveSettings(updated, walletPassword || undefined);
+                try {
+                    const updatedSec = await protectAction(
+                        async (walletPassword) => {
+                            return await settingsService.patchSecurityPolicy(
+                                {
+                                    backupSyncFolder: selected,
+                                    autoBackupEnabled,
+                                    backupProtectionMode: protectionMode,
+                                },
+                                walletPassword || undefined,
+                            );
+                        },
+                        { requireFullAccess: true },
+                    );
+                    if (config && onConfigUpdated) {
+                        onConfigUpdated({
+                            ...config,
+                            securityPolicy: updatedSec ?? {
+                                ...config.securityPolicy,
+                                backupSyncFolder: selected,
+                                autoBackupEnabled,
+                                backupProtectionMode: protectionMode,
+                            },
                         });
-                        if (onSettingsUpdated) onSettingsUpdated(updated);
-                    } catch {
-                        // ignore
                     }
+                } catch {
+                    // ignore
                 }
             }
         } catch (err) {
@@ -306,26 +388,42 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
 
         setIsSyncing(true);
         try {
-            const summary = await protectAction(async (walletPassword) => {
-                return await backupService.syncBackupFolder({
-                    folderPath: syncFolder,
-                    protectionMode,
-                    backupPassword: protectionMode === 'custom_password' ? backupPassword : null,
-                    password: walletPassword,
-                    forceFull: false,
-                });
-            }) as BackupSummaryDto | undefined;
+            const summary = (await protectAction(
+                async (walletPassword) => {
+                    return await backupService.syncBackupFolder({
+                        folderPath: syncFolder,
+                        protectionMode,
+                        backupPassword: protectionMode === 'custom_password' ? backupPassword : null,
+                        password: walletPassword,
+                        forceFull: false,
+                    });
+                },
+                { requireFullAccess: true },
+            )) as BackupSummaryDto | undefined;
 
             if (summary) {
-                const updatedSettings: AppSettings = {
-                    ...(settings || { sessionTimeoutSeconds: 300, privacyDefault: 'public' }),
-                    backupSyncFolder: syncFolder,
-                    backupProtectionMode: protectionMode,
-                    autoBackupEnabled,
-                    lastBackupAt: summary.timestamp,
-                    backupDirty: false,
-                };
-                if (onSettingsUpdated) onSettingsUpdated(updatedSettings);
+                const fresh =
+                    typeof settingsService.getConfig === 'function'
+                        ? await settingsService.getConfig().catch(() => null)
+                        : null;
+                if (fresh && onConfigUpdated) {
+                    onConfigUpdated(fresh);
+                } else if (config && onConfigUpdated) {
+                    onConfigUpdated({
+                        ...config,
+                        securityPolicy: {
+                            ...config.securityPolicy,
+                            backupSyncFolder: syncFolder,
+                            backupProtectionMode: protectionMode,
+                            autoBackupEnabled,
+                        },
+                        lifecycle: {
+                            ...config.lifecycle,
+                            lastBackupAt: summary.timestamp,
+                            backupDirty: false,
+                        },
+                    });
+                }
 
                 const updatedStatus = await backupService.getBackupStatus().catch(() => null);
                 if (updatedStatus) {
@@ -363,7 +461,10 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
         }
     };
 
-    const effectiveBackupAt = [settings?.lastBackupAt, settings?.lastSyncBackupAt]
+    const effectiveBackupAt = [
+        config?.lifecycle.lastBackupAt,
+        config?.lifecycle.lastSyncBackupAt,
+    ]
         .filter((d): d is string => Boolean(d) && !isNaN(new Date(d as string).getTime()))
         .sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0] ?? null;
 
@@ -676,10 +777,10 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({ settings
                                         {t('settings.syncBackupTitle')}
                                     </h4>
                                 </div>
-                                {settings?.lastSyncBackupAt && (
+                                {config?.lifecycle.lastSyncBackupAt && (
                                     <span className="text-[10px] text-theme-light flex items-center gap-1 font-mono">
                                         <Clock size={12} />
-                                        {new Date(settings.lastSyncBackupAt).toLocaleString()}
+                                        {new Date(config.lifecycle.lastSyncBackupAt).toLocaleString()}
                                     </span>
                                 )}
                             </div>

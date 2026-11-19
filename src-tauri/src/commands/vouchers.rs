@@ -6,12 +6,11 @@ use crate::{
 use human_money_core::{models::secure_container::ContainerConfig, NewVoucherData};
 use log::{error, info};
 
-#[tauri::command]
-pub fn create_new_voucher(
+pub(crate) fn create_new_voucher_impl(
     standard_toml_content: String,
     data: FrontendNewVoucherData,
     password: Option<String>,
-    state: tauri::State<AppState>,
+    state: &AppState,
 ) -> Result<crate::models::FrontendVoucherDetails, FrontendError> {
     info!("Attempting to create a new voucher...");
     let mut service =
@@ -32,6 +31,19 @@ pub fn create_new_voucher(
         ),
         None => None,
     };
+
+    let preflight = crate::services::preflight::ValueOutflowPreflight {
+        require_restore_reconciled: true,
+        check_known_offender_dids: &[],
+        check_blocking_intent_local_ids: &[],
+        check_anchor_id_quorum_health: anchor_bytes,
+    };
+    crate::services::preflight::run_value_outflow_preflight(
+        state,
+        &mut service,
+        password.as_deref(),
+        &preflight,
+    )?;
 
     let voucher_data = NewVoucherData {
         nominal_value: human_money_core::models::voucher::ValueDefinition {
@@ -183,6 +195,16 @@ pub fn create_new_voucher(
         .map_err(FrontendError::from)?;
 
     Ok(details_res)
+}
+
+#[tauri::command]
+pub fn create_new_voucher(
+    standard_toml_content: String,
+    data: FrontendNewVoucherData,
+    password: Option<String>,
+    state: tauri::State<AppState>,
+) -> Result<crate::models::FrontendVoucherDetails, FrontendError> {
+    create_new_voucher_impl(standard_toml_content, data, password, &state)
 }
 
 pub(crate) fn create_signing_request_bundle_impl(
@@ -356,7 +378,7 @@ pub(crate) fn create_detached_signature_response_bundle_impl(
         "Creating detached signature response for role {} with config {:?}",
         role, config
     );
-    state.authorize(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
+    state.authorize(crate::state::RequiredAccess::Full, password.as_deref())?;
 
     let core_voucher_preview = human_money_core::models::voucher::Voucher::from(voucher.clone());
     if role.trim().eq_ignore_ascii_case("guarantor") && core_voucher_preview.layer2_anchor.is_some()
@@ -373,7 +395,8 @@ pub(crate) fn create_detached_signature_response_bundle_impl(
         let check = evaluate_guarantor_anchor_check_impl(
             voucher,
             std_toml.clone(),
-            anchor_manifest_json,
+            anchor_manifest_json.clone(),
+            password.as_deref(),
             state,
         )?;
         if check.required && !check.passed {
@@ -388,7 +411,53 @@ pub(crate) fn create_detached_signature_response_bundle_impl(
     }
 
     let mut service =
-        state.authorize_and_lock(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
+        state.authorize_and_lock(crate::state::RequiredAccess::Full, password.as_deref())?;
+
+    if let (Some(aid), Some(raw_manifest)) = (
+        core_voucher_preview.layer2_anchor,
+        anchor_manifest_json.as_deref(),
+    ) {
+        if let Ok(manifest) = serde_json::from_str::<human_money_core::humoco_proto::AnchorManifest>(
+            raw_manifest.trim(),
+        ) {
+            if manifest.rev1_anchor_id().ok() == Some(aid)
+                && manifest.verify_anchor_id(&aid).is_ok()
+            {
+                let anchor_hex = hex::encode(aid);
+                let should_cache = service
+                    .with_wallet(|w| {
+                        w.profile
+                            .l2_anchor_manifests
+                            .get(&anchor_hex)
+                            .is_none_or(|existing| manifest.revision > existing.revision)
+                    })
+                    .unwrap_or(false);
+                if should_cache {
+                    let _ = service.update_l2_anchor_manifest(manifest, password.as_deref());
+                }
+            }
+        }
+    }
+
+    let own_did = service
+        .with_wallet(|w| w.get_user_id().to_string())
+        .map_err(FrontendError::from)?;
+    let mut offender_dids = vec![own_did.as_str()];
+    if let Some(creator_id) = core_voucher_preview.creator_profile.id.as_deref() {
+        offender_dids.push(creator_id);
+    }
+    let preflight = crate::services::preflight::ValueOutflowPreflight {
+        require_restore_reconciled: true,
+        check_known_offender_dids: &offender_dids,
+        check_blocking_intent_local_ids: &[],
+        check_anchor_id_quorum_health: core_voucher_preview.layer2_anchor,
+    };
+    crate::services::preflight::run_value_outflow_preflight(
+        state,
+        &mut service,
+        password.as_deref(),
+        &preflight,
+    )?;
 
     service
         .create_detached_signature_response_bundle(
@@ -487,6 +556,7 @@ pub(crate) fn evaluate_guarantor_anchor_check_impl(
     voucher: crate::models::FrontendVoucher,
     standard_toml_content: String,
     manifest_json: Option<String>,
+    password: Option<&str>,
     state: &AppState,
 ) -> Result<FrontendGuarantorAnchorCheckDto, FrontendError> {
     state.authorize(crate::state::RequiredAccess::Unlocked, None)?;
@@ -589,7 +659,7 @@ pub(crate) fn evaluate_guarantor_anchor_check_impl(
                 })
                 .unwrap_or(false);
             if should_cache {
-                let _ = service.update_l2_anchor_manifest(manifest.clone(), None);
+                let _ = service.update_l2_anchor_manifest(manifest.clone(), password);
             }
         }
     }
@@ -607,8 +677,8 @@ pub(crate) fn evaluate_guarantor_anchor_check_impl(
         issues.push("retention_does_not_cover_deletable_at".to_string());
     }
 
-    let settings = state.get_cached_settings().unwrap_or_default();
-    let own_server_present = if let Some(ref own) = settings.own_nominated_lock_server {
+    let security_policy = state.get_or_load_security_policy_locked(password)?;
+    let own_server_present = if let Some(ref own) = security_policy.own_nominated_lock_server {
         let own_norm = crate::services::common::normalize_sync_url(&own.write_url);
         let present = manifest.servers.iter().any(|s| {
             crate::services::common::normalize_sync_url(&s.write_url) == own_norm
@@ -632,7 +702,7 @@ pub(crate) fn evaluate_guarantor_anchor_check_impl(
         .iter()
         .map(|s| {
             let norm = crate::services::common::normalize_sync_url(&s.write_url);
-            let asn = settings
+            let asn = security_policy
                 .own_nominated_lock_server
                 .as_ref()
                 .filter(|o| crate::services::common::normalize_sync_url(&o.write_url) == norm)
@@ -652,6 +722,26 @@ pub(crate) fn evaluate_guarantor_anchor_check_impl(
     let folded = crate::gateway_resolver::sybil_fold_committee(&candidates);
     if folded.len() < manifest.threshold as usize {
         issues.push("sybil_independent_servers_below_threshold".to_string());
+    }
+
+    let offenders = {
+        let mut service = state.lock_service()?;
+        match crate::l2_lifecycle::load_server_offender_list(&mut service, password) {
+            Ok(list) => list,
+            Err(err)
+                if password.is_none()
+                    && (err.code == "error.auth.sessionNotActive"
+                        || err.code == "error.auth.sessionExpired") =>
+            {
+                humoco_wot::ServerOffenderList::new()
+            }
+            Err(err) => return Err(err),
+        }
+    };
+    if manifest.servers.iter().any(|s| {
+        crate::l2_lifecycle::is_server_key_revoked(&offenders, &s.lock_pub, Some(&s.admin_pub))
+    }) {
+        issues.push("banned_lock_server_in_manifest".to_string());
     }
 
     let passed = issues.is_empty();
@@ -678,13 +768,21 @@ pub fn evaluate_guarantor_anchor_check(
     manifest_json: Option<String>,
     state: tauri::State<AppState>,
 ) -> Result<FrontendGuarantorAnchorCheckDto, FrontendError> {
-    evaluate_guarantor_anchor_check_impl(voucher, standard_toml_content, manifest_json, &state)
+    evaluate_guarantor_anchor_check_impl(
+        voucher,
+        standard_toml_content,
+        manifest_json,
+        None,
+        &state,
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::settings::{AppSettings, NominatedLockServerMeta};
+    use crate::settings::{
+        InternalLifecycleState, NominatedLockServerMeta, SecurityPolicy,
+    };
     use ed25519_dalek::SigningKey;
     use human_money_core::{
         humoco_proto::{encode_quarter, AnchorAuthority, AnchorManifest, NominatedBy, ServerEntry},
@@ -781,7 +879,7 @@ mod tests {
         );
         assert_eq!(details.manifest_revision, Some(1));
 
-        let guar_settings = AppSettings {
+        let guar_policy = SecurityPolicy {
             own_nominated_lock_server: Some(NominatedLockServerMeta {
                 write_url: "https://sync2.example/sync.php".into(),
                 read_url: "https://sync2.example/d".into(),
@@ -794,7 +892,8 @@ mod tests {
             ..Default::default()
         };
         let guar_state = AppState::new(svc_guarantor);
-        *guar_state.settings.lock().unwrap() = Some(guar_settings);
+        *guar_state.security_policy.lock().unwrap() = Some(guar_policy);
+        *guar_state.internal_lifecycle.lock().unwrap() = Some(InternalLifecycleState::default());
 
         // Backend signing command MUST reject guarantor signing without valid anchor verification
         let creator_id_for_cfg = creator_id.clone();
@@ -815,6 +914,7 @@ mod tests {
             details.voucher,
             minuto_toml,
             details.anchor_manifest_json,
+            None,
             &guar_state,
         )
         .unwrap();
@@ -825,6 +925,184 @@ mod tests {
         );
         assert_eq!(check.own_server_present, Some(true));
         assert_eq!(check.sybil_independent_count, 2);
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn test_restore_reconcile_and_daily_pay_access_gates_for_issuance_and_detached_signing() {
+        let dir = crate::test_support::temp_test_dir("vouchers_phase2_gates");
+        let pw = "TestPassword123!";
+        let svc_creator =
+            crate::test_support::setup_test_app(&dir.join("creator"), "Alice", crate::test_support::ALICE_PHRASE, pw);
+        let creator_state = AppState::new(svc_creator);
+        let svc_signer =
+            crate::test_support::setup_test_app(&dir.join("signer"), "Bob", crate::test_support::BOB_PHRASE, pw);
+        let signer_state = AppState::new(svc_signer);
+
+        let (creator_id, creator_profile) = {
+            let mut s = creator_state.service.lock().unwrap();
+            let id = s.with_wallet(|w| w.get_user_id().to_string()).unwrap();
+            let p = s.with_wallet(|w| w.profile.to_public_profile()).unwrap();
+            creator_state
+                .save_internal_lifecycle(
+                    &mut s,
+                    InternalLifecycleState {
+                        pending_restore_l2_reconciliation: true,
+                        ..Default::default()
+                    },
+                    Some(pw),
+                )
+                .unwrap();
+            (id, p)
+        };
+
+        let ft_toml =
+            test_utils::generate_signed_standard_toml("voucher_standards/freetaler_v1/standard.toml");
+        let minuto_toml =
+            test_utils::generate_signed_standard_toml("voucher_standards/minuto_v1/standard.toml");
+
+        let new_voucher_data = FrontendNewVoucherData {
+            nominal_value: crate::models::NominalValueData {
+                amount: "50.00".into(),
+                unit: "FT".into(),
+            },
+            creator: crate::models::FrontendCreatorData::from(creator_profile.clone()),
+            validity_duration: Some("P1Y".into()),
+            non_redeemable_test_voucher: false,
+            collateral: crate::models::FrontendCollateralData {
+                amount: "50.00".into(),
+                unit: "FT".into(),
+                abbreviation: "FT".into(),
+            },
+            layer2_anchor: None,
+        };
+        let issue_err = create_new_voucher_impl(
+            ft_toml.clone(),
+            new_voucher_data,
+            Some(pw.into()),
+            &creator_state,
+        )
+        .unwrap_err();
+        assert!(
+            issue_err.message.contains("Sicherheitsabgleich"),
+            "unexpected issuance err: {:?}",
+            issue_err
+        );
+
+        // Clear restore flag on creator and issue offline Minuto draft voucher
+        {
+            let mut s = creator_state.service.lock().unwrap();
+            creator_state
+                .save_internal_lifecycle(&mut s, InternalLifecycleState::default(), Some(pw))
+                .unwrap();
+        }
+        let minuto_voucher: crate::models::FrontendVoucher = {
+            let mut s = creator_state.service.lock().unwrap();
+            let v = s
+                .create_new_voucher(
+                    &minuto_toml,
+                    human_money_core::NewVoucherData {
+                        creator_profile: human_money_core::models::profile::PublicProfile {
+                            id: Some(creator_id.clone()),
+                            first_name: Some("Alice".into()),
+                            last_name: Some("Tester".into()),
+                            ..Default::default()
+                        },
+                        nominal_value: human_money_core::models::voucher::ValueDefinition {
+                            amount: "60".into(),
+                            ..Default::default()
+                        },
+                        validity_duration: Some("P3Y".into()),
+                        ..Default::default()
+                    },
+                    Some(pw),
+                )
+                .unwrap();
+            v.into()
+        };
+
+        // Signer with pending_restore_l2_reconciliation = true MUST block detached signing
+        {
+            let mut s = signer_state.service.lock().unwrap();
+            signer_state
+                .save_security_policy(
+                    &mut s,
+                    SecurityPolicy {
+                        session_timeout_seconds: 300,
+                        ..Default::default()
+                    },
+                    Some(pw),
+                )
+                .unwrap();
+            signer_state
+                .save_internal_lifecycle(
+                    &mut s,
+                    InternalLifecycleState {
+                        pending_restore_l2_reconciliation: true,
+                        ..Default::default()
+                    },
+                    Some(pw),
+                )
+                .unwrap();
+        }
+        let sign_restore_err = create_detached_signature_response_bundle_impl(
+            minuto_voucher.clone(),
+            "guarantor".into(),
+            false,
+            ContainerConfig::TargetDid(creator_id.clone(), PrivacyMode::TrialDecryption),
+            Some(pw.into()),
+            None,
+            None,
+            &signer_state,
+        )
+        .unwrap_err();
+        assert!(
+            sign_restore_err.message.contains("Sicherheitsabgleich"),
+            "unexpected sign restore err: {:?}",
+            sign_restore_err
+        );
+
+        // Clear restore flag and log signer in with DailyPay secondary PIN -> MUST be rejected (Full required)
+        {
+            let mut s = signer_state.service.lock().unwrap();
+            signer_state
+                .save_internal_lifecycle(&mut s, InternalLifecycleState::default(), Some(pw))
+                .unwrap();
+            let folder = s.list_profiles().unwrap()[0].folder_name.clone();
+            s.enable_secondary_auth(pw, "123456", human_money_core::SecondaryScope::DailyPay)
+                .unwrap();
+            s.logout();
+            let mode = s
+                .login_with_secondary(&folder, "123456", false, "device-drops-test".into())
+                .unwrap();
+            assert_eq!(mode, human_money_core::AccessMode::DailyPay);
+        }
+        let daily_sign_err = create_detached_signature_response_bundle_impl(
+            minuto_voucher.clone(),
+            "guarantor".into(),
+            false,
+            ContainerConfig::TargetDid(creator_id.clone(), PrivacyMode::TrialDecryption),
+            Some("123456".into()),
+            None,
+            None,
+            &signer_state,
+        )
+        .unwrap_err();
+        assert_eq!(daily_sign_err.code, "error.auth.insufficientAccessMode");
+
+        // Providing master password steps up to Full and succeeds!
+        let ok_sig = create_detached_signature_response_bundle_impl(
+            minuto_voucher,
+            "guarantor".into(),
+            false,
+            ContainerConfig::TargetDid(creator_id, PrivacyMode::TrialDecryption),
+            Some(pw.into()),
+            None,
+            None,
+            &signer_state,
+        );
+        assert!(ok_sig.is_ok(), "Full access detached sign should succeed: {:?}", ok_sig.err());
 
         let _ = std::fs::remove_dir_all(dir);
     }

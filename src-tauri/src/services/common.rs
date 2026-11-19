@@ -1,9 +1,9 @@
 use crate::models::FrontendError;
 use crate::services::fs_helpers::collect_custom_standards;
-use crate::settings::AppSettings;
+use crate::settings::InternalLifecycleState;
 use crate::AppState;
 use human_money_core::app_service::AppService;
-use human_money_core::crypto::{get_prefix_from_user_id, get_pubkey_from_user_id};
+use human_money_core::crypto::get_prefix_from_user_id;
 use human_money_core::humoco_proto::crypto::DEFAULT_LOCK_POW_BASE_BITS;
 use human_money_core::models::voucher_standard_definition::VoucherStandardDefinition;
 use human_money_core::FileVoucherArchive;
@@ -101,18 +101,13 @@ impl<'a> DropChannelSigner<'a> {
     }
 }
 
-/// Compares two DIDs by exact string match or underlying Ed25519 public key equality (ignoring prefix).
+/// Compares two User IDs after strict syntax/checksum validation via their underlying root public key.
 pub(crate) fn are_dids_equal(a: &str, b: &str) -> bool {
-    let a_trim = a.trim();
-    let b_trim = b.trim();
-    if a_trim == b_trim {
-        return true;
-    }
     match (
-        get_pubkey_from_user_id(a_trim),
-        get_pubkey_from_user_id(b_trim),
+        human_money_core::ValidatedUserId::parse(a),
+        human_money_core::ValidatedUserId::parse(b),
     ) {
-        (Ok(pk_a), Ok(pk_b)) => pk_a.as_bytes() == pk_b.as_bytes(),
+        (Ok(va), Ok(vb)) => va.same_root_identity(&vb),
         _ => false,
     }
 }
@@ -160,13 +155,13 @@ pub(crate) fn normalize_sync_url(raw: &str) -> String {
 
 /// Computes the maximum `pow_base_bits` across probed lock servers for a committee.
 pub(crate) fn max_pow_base_bits_for_servers<'a>(
-    settings: &AppSettings,
+    lifecycle: &InternalLifecycleState,
     write_urls: impl IntoIterator<Item = &'a str>,
 ) -> u32 {
     let mut bits = DEFAULT_LOCK_POW_BASE_BITS;
     for url in write_urls {
         let norm = normalize_sync_url(url);
-        if let Some(probe) = settings.l2_probe_cache.get(&norm) {
+        if let Some(probe) = lifecycle.l2_probe_cache.get(&norm) {
             bits = bits.max(probe.pow_base_bits);
         }
     }
@@ -201,11 +196,10 @@ pub(crate) fn ensure_restore_l2_reconciled(
     service: &mut AppService,
     password: Option<&str>,
 ) -> Result<(), FrontendError> {
-    let settings = state
-        .get_cached_settings()
-        .or_else(|_| state.load_settings(service, password))
+    let lifecycle = state
+        .get_or_load_internal_lifecycle(service, password)
         .map_err(FrontendError::from)?;
-    if settings.pending_restore_l2_reconciliation {
+    if lifecycle.pending_restore_l2_reconciliation {
         return Err(FrontendError::from(
             "Nach einer Wiederherstellung aus der Sicherung ist vor dem Ausgeben von Gutscheinen ein einmaliger Online-Sicherheitsabgleich erforderlich.".to_string(),
         ));

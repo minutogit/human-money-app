@@ -1,10 +1,12 @@
 use crate::{
     models::{FrontendError, ReachPresetDto},
     services::settings_service::{
-        apply_reach_preset_impl, get_app_settings_impl, get_reach_preset_impl,
-        save_app_settings_impl, set_conflict_local_override_impl,
+        apply_reach_preset_impl, get_app_config_impl, get_reach_preset_impl,
+        patch_security_policy_impl, patch_ui_preferences_impl, set_conflict_local_override_impl,
     },
-    settings::AppSettings,
+    settings::{
+        AppConfigDto, SecurityPolicy, SecurityPolicyPatch, UiPreferences, UiPreferencesPatch,
+    },
     AppState,
 };
 
@@ -26,17 +28,26 @@ pub fn apply_reach_preset(
 }
 
 #[tauri::command]
-pub fn get_app_settings(state: tauri::State<AppState>) -> Result<AppSettings, FrontendError> {
-    get_app_settings_impl(&state)
+pub fn get_app_config(state: tauri::State<AppState>) -> Result<AppConfigDto, FrontendError> {
+    get_app_config_impl(&state)
 }
 
 #[tauri::command]
-pub async fn save_app_settings(
-    settings: AppSettings,
+pub fn patch_ui_preferences(
+    patch: UiPreferencesPatch,
     password: Option<String>,
-    state: tauri::State<'_, AppState>,
-) -> Result<(), FrontendError> {
-    save_app_settings_impl(settings, password, &state)
+    state: tauri::State<AppState>,
+) -> Result<UiPreferences, FrontendError> {
+    patch_ui_preferences_impl(patch, password, &state)
+}
+
+#[tauri::command]
+pub fn patch_security_policy(
+    patch: SecurityPolicyPatch,
+    password: Option<String>,
+    state: tauri::State<AppState>,
+) -> Result<SecurityPolicy, FrontendError> {
+    patch_security_policy_impl(patch, password, &state)
 }
 
 #[tauri::command]

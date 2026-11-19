@@ -65,9 +65,10 @@ const GREETING_WORDS = new Set([
 ]);
 
 export function isWrappedUriContinuationLine(line: string, prevLineLength: number): boolean {
-  if (!line || /[!?]$/.test(line)) return false;
+  if (!line) return false;
   const stripped = line.replace(TRAILING_PUNCT_REGEX, '');
   if (!stripped || !CONTINUATION_LINE_REGEX.test(stripped)) return false;
+  if (/[!?]$/.test(line) && /^[A-Za-z.]+$/.test(stripped) && stripped.length < 32) return false;
   if (/^[A-Za-z]+$/.test(stripped)) {
     const lower = stripped.toLowerCase();
     if (GREETING_WORDS.has(lower)) return false;
@@ -88,7 +89,7 @@ function stripTrailingPunctuation(query: string): string {
   return query.replace(TRAILING_PUNCT_REGEX, '');
 }
 
-function unwrapHumocoUriLines(input: string, schemePrefix: string): string {
+export function unwrapHumocoUriLines(input: string, schemePrefix: string): string {
   const lower = input.toLowerCase();
   const idx = lower.indexOf(schemePrefix.toLowerCase());
   if (idx === -1) return input;
@@ -112,6 +113,15 @@ export interface ParsedCardUri {
   envBase64: string;
   envelopeJson?: string;
 }
+
+export type ParsedHumocoInput =
+  | { kind: 'payment'; payment: ParsedPaymentRequest; uri: string }
+  | { kind: 'card'; card: ParsedCardUri; payload: string; did?: string }
+  | { kind: 'contact'; contact: ParsedContactCard }
+  | { kind: 'did'; did: string };
+
+const DEEPLINK_PATTERN =
+  /humoco:\/\/(recovery-reply|kit|recovery-req|card|pay|contact)[^\s"'<>)]+/i;
 
 function compactSyncUrlForUri(raw: string): string {
   const trimmed = raw.trim();
@@ -154,7 +164,7 @@ function stripSurroundingWrappers(value: string): string {
     .trim();
 }
 
-function isValidUserIdFormat(id: string): boolean {
+export function isValidUserIdFormat(id: string): boolean {
   if (/^did:key:z[a-zA-Z0-9]+$/.test(id)) return true;
   const atIdx = id.indexOf('@');
   if (atIdx <= 0) return false;
@@ -340,9 +350,48 @@ export function parsePaymentRequest(input: string): ParsedPaymentRequest | null 
   }
 }
 
+function decodeBase64UrlToUtf8(rawBase64: string): string | undefined {
+  try {
+    const b64 = rawBase64.replace(/-/g, '+').replace(/_/g, '/');
+    const padLen = (4 - (b64.length % 4)) % 4;
+    const padded = b64 + '='.repeat(padLen);
+    const binStr = typeof globalThis.atob === 'function' ? globalThis.atob(padded) : '';
+    if (!binStr) return undefined;
+    const bytes = new Uint8Array(binStr.length);
+    for (let i = 0; i < binStr.length; i++) {
+      bytes[i] = binStr.charCodeAt(i);
+    }
+    return new TextDecoder().decode(bytes);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Extracts a supported `humoco://` deep link from raw dropped/pasted text,
+ * unwrapping hard email line breaks and stripping trailing chat punctuation.
+ */
+export function extractHumocoDeepLink(rawText?: string | null): string | null {
+  if (!rawText || typeof rawText !== 'string') return null;
+  const trimmed = rawText.trim();
+  if (!trimmed) return null;
+
+  const lower = trimmed.toLowerCase();
+  const schemeMatch = lower.match(/humoco:\/\/(recovery-reply|kit|recovery-req|card|pay|contact)\b/);
+  const candidate = schemeMatch
+    ? unwrapHumocoUriLines(trimmed, schemeMatch[0])
+    : trimmed;
+
+  const match = candidate.match(DEEPLINK_PATTERN);
+  if (match?.[0]) {
+    return stripTrailingPunctuation(match[0]);
+  }
+  return null;
+}
+
 /**
  * Parses a humoco://card URI from arbitrary text.
- * 
+ *
  * Extracts humoco://card?env=... and decodes the CardEnvelope JSON if possible.
  */
 export function parseCardUri(input: string): ParsedCardUri | null {
@@ -357,20 +406,7 @@ export function parseCardUri(input: string): ParsedCardUri | null {
     const env = searchParams.get('env')?.trim();
     if (!env) return null;
 
-    let envelopeJson: string | undefined;
-    try {
-      const b64 = env.replace(/-/g, '+').replace(/_/g, '/');
-      const binStr = typeof window !== 'undefined' ? window.atob(b64) : '';
-      if (binStr) {
-        const bytes = new Uint8Array(binStr.length);
-        for (let i = 0; i < binStr.length; i++) {
-          bytes[i] = binStr.charCodeAt(i);
-        }
-        envelopeJson = new TextDecoder().decode(bytes);
-      }
-    } catch {
-      // Decode fallback
-    }
+    const envelopeJson = decodeBase64UrlToUtf8(env);
 
     return {
       envBase64: env,
@@ -378,6 +414,134 @@ export function parseCardUri(input: string): ParsedCardUri | null {
     };
   } catch {
     return null;
+  }
+}
+
+/**
+ * Extracts a canonical CardEnvelope payload string (`humoco://card?env=...` or JSON envelope)
+ * from raw text, email messages, or file contents.
+ */
+export function extractCardPayload(raw: string): string | null {
+  if (!raw || typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+
+  const parsedCard = parseCardUri(trimmed);
+  if (parsedCard?.envBase64) {
+    return `humoco://card?env=${parsedCard.envBase64}`;
+  }
+
+  const firstBrace = trimmed.indexOf('{');
+  const lastBrace = trimmed.lastIndexOf('}');
+  if (firstBrace !== -1 && lastBrace > firstBrace) {
+    const candidate = trimmed.slice(firstBrace, lastBrace + 1);
+    try {
+      const parsed = JSON.parse(candidate) as Record<string, unknown> | null;
+      if (
+        typeof parsed === 'object' &&
+        parsed !== null &&
+        ('card_wire' in parsed || ('card' in parsed && 'sig' in parsed) || 'envelope' in parsed)
+      ) {
+        return candidate;
+      }
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+/**
+ * Extracts and validates the subject DID from a decoded CardEnvelope JSON string.
+ */
+export function extractDidFromCardEnvelopeJson(envelopeJson: string): string | null {
+  try {
+    const env = JSON.parse(envelopeJson) as Record<string, unknown>;
+    let candidate = typeof env.did === 'string' ? stripSurroundingWrappers(env.did) : '';
+    if (!candidate && typeof env.card_wire === 'string') {
+      const seg = env.card_wire.split('.')[1];
+      if (seg) {
+        const payloadText = decodeBase64UrlToUtf8(seg);
+        if (payloadText) {
+          const payload = JSON.parse(payloadText) as { did?: unknown };
+          if (typeof payload.did === 'string') {
+            candidate = stripSurroundingWrappers(payload.did);
+          }
+        }
+      }
+    }
+    if (candidate && isValidUserIdFormat(candidate)) {
+      return candidate;
+    }
+  } catch {
+    // Malformed envelope JSON
+  }
+  return null;
+}
+
+/**
+ * Central input normalizer/parser for Human Money URIs (`humoco://pay`, `humoco://card`,
+ * `humoco://contact`), raw JSON CardEnvelopes, and standalone or chat-embedded User IDs.
+ */
+export function parseHumocoInput(raw: string): ParsedHumocoInput | null {
+  if (!raw || typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+
+  const payment = parsePaymentRequest(trimmed);
+  if (payment) {
+    const deepLink = extractHumocoDeepLink(trimmed) || buildPaymentRequestUri(payment);
+    return { kind: 'payment', payment, uri: deepLink };
+  }
+
+  const parsedCardUri = parseCardUri(trimmed);
+  if (parsedCardUri) {
+    const payload = `humoco://card?env=${parsedCardUri.envBase64}`;
+    const did = parsedCardUri.envelopeJson
+      ? extractDidFromCardEnvelopeJson(parsedCardUri.envelopeJson) ?? undefined
+      : undefined;
+    return { kind: 'card', card: parsedCardUri, payload, did };
+  }
+
+  const cardJsonPayload = extractCardPayload(trimmed);
+  if (cardJsonPayload && cardJsonPayload.startsWith('{')) {
+    const did = extractDidFromCardEnvelopeJson(cardJsonPayload) ?? undefined;
+    return {
+      kind: 'card',
+      card: { envBase64: '', envelopeJson: cardJsonPayload },
+      payload: cardJsonPayload,
+      did,
+    };
+  }
+
+  const contact = parseContactCard(trimmed);
+  if (contact) {
+    const hasContactUri = CONTACT_URI_REGEX.test(unwrapHumocoUriLines(trimmed, 'humoco://contact?'));
+    if (hasContactUri) {
+      return { kind: 'contact', contact };
+    }
+    return { kind: 'did', did: contact.did };
+  }
+
+  return null;
+}
+
+/**
+ * Extracts and validates a canonical User ID (`did:key:z...` or `prefix:checksum@did:key:z...`)
+ * from any supported Humoco URI, card envelope, or chat/email paste.
+ */
+export function normalizeUserIdInput(raw: string): string | null {
+  const parsed = parseHumocoInput(raw);
+  if (!parsed) return null;
+  switch (parsed.kind) {
+    case 'payment':
+      return parsed.payment.to;
+    case 'contact':
+      return parsed.contact.did;
+    case 'card':
+      return parsed.did ?? null;
+    case 'did':
+      return parsed.did;
   }
 }
 

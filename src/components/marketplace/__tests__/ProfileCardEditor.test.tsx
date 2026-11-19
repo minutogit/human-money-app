@@ -1,6 +1,7 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ProfileCardEditor } from '../ProfileCardEditor';
+import { UiModeProvider } from '../../../context/UiModeContext';
 import { FrontendMyMarketProfile } from '../../../types';
 
 vi.mock('../../../utils/geoUtils', async () => {
@@ -202,19 +203,20 @@ describe('ProfileCardEditor Component', () => {
   });
 
   it('supports GPS location lookup, guards public precision >= ~1 km, and restricts street off everyone in Expert mode', async () => {
-    localStorage.setItem('humoco_ui_mode', 'expert');
     const onSave = vi.fn();
     render(
-      <ProfileCardEditor
-        isOpen={true}
-        onClose={vi.fn()}
-        myProfile={{
-          ...mockMyProfile,
-          profile: { ...mockMyProfile.profile, coordinates: undefined },
-          visibility: { ...mockMyProfile.visibility, coordinates: 'nobody', street: 'contacts' },
-        }}
-        onSave={onSave}
-      />
+      <UiModeProvider initialMode="expert">
+        <ProfileCardEditor
+          isOpen={true}
+          onClose={vi.fn()}
+          myProfile={{
+            ...mockMyProfile,
+            profile: { ...mockMyProfile.profile, coordinates: undefined },
+            visibility: { ...mockMyProfile.visibility, coordinates: 'nobody', street: 'contacts' },
+          }}
+          onSave={onSave}
+        />
+      </UiModeProvider>
     );
 
     // Recommended hint should be shown when coordinates are empty

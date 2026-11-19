@@ -80,8 +80,8 @@ export function Dashboard() {
 
                 <FirstStepsChecklist
                     hasBackup={Boolean(
-                        data.appSettings?.lastBackupAt ||
-                            data.appSettings?.backupSyncFolder ||
+                        data.appConfig?.lifecycle.lastBackupAt ||
+                            data.appConfig?.securityPolicy.backupSyncFolder ||
                             data.protectionStatus?.hasVoucherBackup,
                     )}
                     hasContact={data.contactsCount > 0}

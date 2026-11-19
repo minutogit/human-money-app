@@ -48,15 +48,21 @@ pub async fn sync_market_channels_with_options(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendMarketSyncResult, FrontendError> {
-    let mut settings = {
+    let (owner_did, ui_prefs, mut security_policy) = {
         let mut service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
-        state
-            .get_cached_settings()
-            .or_else(|_| state.load_settings(&mut service, password.as_deref()))
-            .unwrap_or_default()
+        let owner_did = service
+            .with_wallet(|w| w.get_user_id().to_string())
+            .map_err(FrontendError::from)?;
+        let ui_prefs = state
+            .get_or_load_ui_preferences(&mut service, password.as_deref())
+            .map_err(FrontendError::from)?;
+        let security_policy = state
+            .get_or_load_security_policy(&mut service, password.as_deref())
+            .map_err(FrontendError::from)?;
+        (owner_did, ui_prefs, security_policy)
     };
 
-    if settings.market_poll_wifi_only && is_wifi == Some(false) {
+    if ui_prefs.market_poll_wifi_only && is_wifi == Some(false) {
         return Ok(FrontendMarketSyncResult {
             skipped_wifi_only: true,
             uploaded_to: 0,
@@ -88,19 +94,23 @@ pub async fn sync_market_channels_with_options(
     let (id_ctx, mut sync_state) = {
         let mut service = state.lock_service()?;
         let id_ctx = SyncIdentityContext::from_service(&service)?;
-        let sync_state: StoredSyncState = service
-            .load_encrypted_data(MARKET_SYNC_KEY, password.as_deref())
-            .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-            .unwrap_or_default();
+        let sync_state: StoredSyncState = crate::state::load_encrypted_json_or_default(
+            &mut service,
+            MARKET_SYNC_KEY,
+            password.as_deref(),
+        )
+        .map_err(FrontendError::from)?;
         (id_ctx, sync_state)
     };
 
     // 2a. Upload card channel + ad media blobs and garbage-collect orphaned media blobs
-    let active_media_blob_ids = card_sync::sync_card_upload_channel(
+    let card_upload_targets =
+        channel_reader::collect_upload_targets_for_channel(&security_policy, "card");
+    if let Some(active_media_blob_ids) = card_sync::sync_card_upload_channel(
         &client,
         state,
-        &settings,
+        &ui_prefs,
+        &security_policy,
         &id_ctx,
         force_upload,
         now_secs,
@@ -109,24 +119,25 @@ pub async fn sync_market_channels_with_options(
         &mut uploaded_to,
         &mut errors,
     )
-    .await;
-
-    let card_upload_targets = channel_reader::collect_upload_targets_for_channel(&settings, "card");
-    media_sync::gc_orphaned_media_blobs(
-        &client,
-        &id_ctx,
-        &card_upload_targets,
-        &active_media_blob_ids,
-        now_secs,
-        &mut sync_state,
-    )
-    .await;
+    .await
+    {
+        media_sync::gc_orphaned_media_blobs(
+            &client,
+            &id_ctx,
+            &card_upload_targets,
+            &active_media_blob_ids,
+            now_secs,
+            &mut sync_state,
+        )
+        .await;
+    }
 
     // 2b. Upload WoT channel
     wot_sync::sync_wot_upload_channel(
         &client,
         state,
-        &settings,
+        &ui_prefs,
+        &security_policy,
         &id_ctx,
         force_upload,
         now_secs,
@@ -141,7 +152,8 @@ pub async fn sync_market_channels_with_options(
     let revoked_own_syncs = channel_reader::check_revocations(
         &client,
         state,
-        &mut settings,
+        &owner_did,
+        &mut security_policy,
         &mut sync_state,
         now_secs,
         password.as_deref(),
@@ -162,7 +174,8 @@ pub async fn sync_market_channels_with_options(
         let poll = channel_reader::poll_sync_channels(
             &client,
             state,
-            &settings,
+            &ui_prefs,
+            &security_policy,
             &id_ctx,
             now_secs,
             password.as_deref(),
@@ -176,20 +189,29 @@ pub async fn sync_market_channels_with_options(
         new_ads = poll.new_ads;
         imported_wot_lists = poll.imported_wot_lists;
         sync_health_updates = poll.sync_health_updates;
-        updated_card_store = Some(poll.updated_card_store);
+        updated_card_store = poll.updated_card_store;
     }
 
     // 4. Persist updated CardStore, StoredSyncState, and contact health updates
     {
         let mut service = state.lock_service()?;
         if let Some(ref store) = updated_card_store {
-            if let Ok(bytes) = serde_json::to_vec(store) {
-                let _ =
-                    service.save_encrypted_data(MARKET_CARD_STORE_KEY, &bytes, password.as_deref());
+            if let Err(e) = crate::state::save_encrypted_json(
+                &mut service,
+                MARKET_CARD_STORE_KEY,
+                store,
+                password.as_deref(),
+            ) {
+                log::warn!("Failed to save CardStore after sync poll: {}", e);
             }
         }
-        if let Ok(bytes) = serde_json::to_vec(&sync_state) {
-            let _ = service.save_encrypted_data(MARKET_SYNC_KEY, &bytes, password.as_deref());
+        if let Err(e) = crate::state::save_encrypted_json(
+            &mut service,
+            MARKET_SYNC_KEY,
+            &sync_state,
+            password.as_deref(),
+        ) {
+            log::warn!("Failed to save StoredSyncState after sync: {}", e);
         }
         if !sync_health_updates.is_empty() {
             state.record_contact_sync_health_batch(
@@ -251,12 +273,11 @@ pub fn get_sync_overview_status_impl(
     state: &AppState,
 ) -> Result<FrontendSyncOverviewStatus, FrontendError> {
     let mut service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
-    let settings = state
-        .get_cached_settings()
-        .or_else(|_| state.load_settings(&mut service, password.as_deref()))
-        .unwrap_or_default();
+    let security_policy = state
+        .get_or_load_security_policy(&mut service, password.as_deref())
+        .map_err(FrontendError::from)?;
 
-    let admin_opt = admin::load_stored_sync_admin_opt(&mut service, password.as_deref());
+    let admin_opt = admin::load_stored_sync_admin_opt(&mut service, password.as_deref())?;
 
     let has_own_sync = admin_opt
         .as_ref()
@@ -269,7 +290,7 @@ pub fn get_sync_overview_status_impl(
         .map(|a| a.descriptor.read_url.as_str())
         .unwrap_or("");
 
-    let friend_syncs = settings
+    let friend_syncs = security_policy
         .market_selected_syncs
         .iter()
         .filter(|d| {
@@ -281,13 +302,13 @@ pub fn get_sync_overview_status_impl(
         })
         .count();
 
-    let public_syncs = settings
+    let public_syncs = security_policy
         .public_syncs
         .iter()
         .filter(|d| d.enabled && !d.authorized_channels.is_empty())
         .count();
 
-    let pending_public_syncs = settings
+    let pending_public_syncs = security_policy
         .public_syncs
         .iter()
         .filter(|d| d.authorized_channels.is_empty())
@@ -307,7 +328,7 @@ pub fn get_sync_overview_status_impl(
             }
         }
     }
-    for sel in &settings.market_selected_syncs {
+    for sel in &security_policy.market_selected_syncs {
         if sel.status == "pending_auth" {
             let key = sync_endpoint_key(sel);
             if !key.is_empty() {
@@ -317,7 +338,7 @@ pub fn get_sync_overview_status_impl(
     }
     let pending_auth_count = pending_keys.len();
 
-    let failing_count = settings
+    let failing_count = security_policy
         .market_selected_syncs
         .iter()
         .filter(|d| d.fail_count > 0 || d.status == "unreachable")
@@ -326,10 +347,12 @@ pub fn get_sync_overview_status_impl(
     let connected_count = (if has_own_sync { 1 } else { 0 }) + friend_syncs + public_syncs;
     let pending_count = (if pending_own_sync { 1 } else { 0 }) + pending_public_syncs;
 
-    let sync_state: Option<StoredSyncState> = service
-        .load_encrypted_data(MARKET_SYNC_KEY, password.as_deref())
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+    let sync_state: Option<StoredSyncState> = crate::state::load_encrypted_json_opt(
+        &mut service,
+        MARKET_SYNC_KEY,
+        password.as_deref(),
+    )
+    .map_err(FrontendError::from)?;
 
     let last_sync_at =
         sync_state.and_then(|s| s.last_upload_at.into_iter().chain(s.last_poll_at).max());
@@ -728,10 +751,10 @@ pub(crate) mod tests {
         // 7. Unauthorized reader L2 gets 0 decrypted slots
         {
             let mut s = l2_state.service.lock().unwrap();
-            let mut settings = l2_state.get_cached_settings().unwrap_or_default();
-            settings.market_selected_syncs = vec![finalize_status.descriptor.clone()];
             l2_state
-                .save_settings(&mut s, settings, Some(password))
+                .mutate_security_policy(&mut s, Some(password), |policy| {
+                    policy.market_selected_syncs = vec![finalize_status.descriptor.clone()];
+                })
                 .unwrap();
         }
 
@@ -824,21 +847,19 @@ pub(crate) mod tests {
         // 2. Add public drop with empty authorized_channels (pending / unauthorized)
         {
             let mut s = state.service.lock().unwrap();
-            let mut settings = state.load_settings(&mut s, Some(password)).unwrap();
-            settings
-                .public_syncs
-                .push(crate::settings::StoredPublicSync {
-                    write_url: "https://sync.example.com/sync.php".to_string(),
-                    read_url: "https://sync.example.com/data".to_string(),
-                    drop_pub: "a".repeat(64),
-                    register_url: None,
-                    access_pubkey: "b".repeat(64),
-                    enabled: false,
-                    authorized_channels: vec![],
-                    ..Default::default()
-                });
             state
-                .save_settings(&mut s, settings, Some(password))
+                .mutate_security_policy(&mut s, Some(password), |policy| {
+                    policy.public_syncs.push(crate::settings::StoredPublicSync {
+                        write_url: "https://sync.example.com/sync.php".to_string(),
+                        read_url: "https://sync.example.com/data".to_string(),
+                        drop_pub: "a".repeat(64),
+                        register_url: None,
+                        access_pubkey: "b".repeat(64),
+                        enabled: false,
+                        authorized_channels: vec![],
+                        ..Default::default()
+                    });
+                })
                 .unwrap();
         }
 
@@ -851,12 +872,12 @@ pub(crate) mod tests {
         // 3. Mark public drop as authorized and enabled
         {
             let mut s = state.service.lock().unwrap();
-            let mut settings = state.load_settings(&mut s, Some(password)).unwrap();
-            settings.public_syncs[0].enabled = true;
-            settings.public_syncs[0].authorized_channels =
-                vec!["card".to_string(), "wot".to_string()];
             state
-                .save_settings(&mut s, settings, Some(password))
+                .mutate_security_policy(&mut s, Some(password), |policy| {
+                    policy.public_syncs[0].enabled = true;
+                    policy.public_syncs[0].authorized_channels =
+                        vec!["card".to_string(), "wot".to_string()];
+                })
                 .unwrap();
         }
 
@@ -878,11 +899,13 @@ pub(crate) mod tests {
         let server =
             MockSyncServer::start("alice_data".to_string(), server_admin_pub.clone()).await;
 
-        // 1. Initially Bob has no syncs in settings
+        // 1. Initially Bob has no syncs in security_policy
         {
             let mut s = bob_state.service.lock().unwrap();
-            let settings = bob_state.load_settings(&mut s, Some(password)).unwrap();
-            assert!(settings.market_selected_syncs.is_empty());
+            let policy = bob_state
+                .load_security_policy(&mut s, Some(password))
+                .unwrap();
+            assert!(policy.market_selected_syncs.is_empty());
         }
 
         // 2. Add Alice contact with unverified sync
@@ -927,11 +950,13 @@ pub(crate) mod tests {
         assert_eq!(probed[0].drop_pub, server_admin_pub);
         assert!(probed[0].last_probed_at.is_some());
 
-        // Verify settings still empty (no auto-activation for pending_auth)
+        // Verify security_policy still empty (no auto-activation for pending_auth)
         {
             let mut s = bob_state.service.lock().unwrap();
-            let settings = bob_state.load_settings(&mut s, Some(password)).unwrap();
-            assert!(settings.market_selected_syncs.is_empty());
+            let policy = bob_state
+                .load_security_policy(&mut s, Some(password))
+                .unwrap();
+            assert!(policy.market_selected_syncs.is_empty());
         }
 
         // 4. Backoff check: immediate re-probe with force=false skips pending_auth
@@ -962,10 +987,12 @@ pub(crate) mod tests {
 
         {
             let mut s = bob_state.service.lock().unwrap();
-            let settings = bob_state.load_settings(&mut s, Some(password)).unwrap();
-            assert_eq!(settings.market_selected_syncs.len(), 1);
-            assert_eq!(settings.market_selected_syncs[0].status, "active");
-            assert_eq!(settings.market_selected_syncs[0].drop_pub, server_admin_pub);
+            let policy = bob_state
+                .load_security_policy(&mut s, Some(password))
+                .unwrap();
+            assert_eq!(policy.market_selected_syncs.len(), 1);
+            assert_eq!(policy.market_selected_syncs[0].status, "active");
+            assert_eq!(policy.market_selected_syncs[0].drop_pub, server_admin_pub);
         }
 
         // 7. Test unreachable handling with invalid endpoint
@@ -1048,10 +1075,10 @@ pub(crate) mod tests {
         };
         {
             let mut s = bob_state.service.lock().unwrap();
-            let mut settings = bob_state.load_settings(&mut s, Some(password)).unwrap();
-            settings.market_selected_syncs.push(healthy_sync);
             bob_state
-                .save_settings(&mut s, settings, Some(password))
+                .mutate_security_policy(&mut s, Some(password), |policy| {
+                    policy.market_selected_syncs.push(healthy_sync);
+                })
                 .unwrap();
         }
 
@@ -1312,29 +1339,12 @@ pub(crate) mod tests {
         .unwrap();
 
         // Configure Alice's drop as target drop for Alice, Bob, and Carol
-        {
-            let mut s = alice_state.service.lock().unwrap();
-            let mut set = alice_state.load_settings(&mut s, Some(password)).unwrap();
-            set.market_selected_syncs = vec![finalize_status.descriptor.clone()];
-            alice_state
-                .save_settings(&mut s, set, Some(password))
-                .unwrap();
-        }
-        {
-            let mut s = bob_state.service.lock().unwrap();
-            let mut set = bob_state.load_settings(&mut s, Some(password)).unwrap();
-            set.market_selected_syncs = vec![finalize_status.descriptor.clone()];
-            bob_state
-                .save_settings(&mut s, set, Some(password))
-                .unwrap();
-        }
-        {
-            let mut s = carol_state.service.lock().unwrap();
-            let mut set = carol_state.load_settings(&mut s, Some(password)).unwrap();
-            set.market_selected_syncs = vec![finalize_status.descriptor.clone()];
-            carol_state
-                .save_settings(&mut s, set, Some(password))
-                .unwrap();
+        for st in [&alice_state, &bob_state, &carol_state] {
+            let mut s = st.service.lock().unwrap();
+            st.mutate_security_policy(&mut s, Some(password), |policy| {
+                policy.market_selected_syncs = vec![finalize_status.descriptor.clone()];
+            })
+            .unwrap();
         }
 
         // 3. Establish Trust Network:
@@ -1945,10 +1955,10 @@ pub(crate) mod tests {
         // Bob trusts Reader 1 initially and disables WoT share so we assert pure card upload counts cleanly
         {
             let mut s = bob_state.service.lock().unwrap();
-            let mut settings = bob_state.get_cached_settings().unwrap_or_default();
-            settings.wot_share_via_sync = false;
             bob_state
-                .save_settings(&mut s, settings, Some(password))
+                .mutate_ui_preferences(&mut s, Some(password), |prefs| {
+                    prefs.wot_share_via_sync = false;
+                })
                 .unwrap();
             bob_state
                 .save_contact(
@@ -2061,10 +2071,10 @@ pub(crate) mod tests {
         // 3. Reader 1 syncs and gets both Base and Delta (including updated_v), and subsequent background poll hits 20m cooldown
         {
             let mut s = r1_state.service.lock().unwrap();
-            let mut settings = r1_state.get_cached_settings().unwrap_or_default();
-            settings.market_selected_syncs = vec![finalize_status.descriptor.clone()];
             r1_state
-                .save_settings(&mut s, settings, Some(password))
+                .mutate_security_policy(&mut s, Some(password), |policy| {
+                    policy.market_selected_syncs = vec![finalize_status.descriptor.clone()];
+                })
                 .unwrap();
         }
         let r1_res = sync_market_channels_impl(None, None, Some(password.to_string()), &r1_state)
@@ -2152,10 +2162,10 @@ pub(crate) mod tests {
         // Reader 2 decrypts consolidated Base and receives all 18 cards incl. updated_v
         {
             let mut s = r2_state.service.lock().unwrap();
-            let mut settings = r2_state.get_cached_settings().unwrap_or_default();
-            settings.market_selected_syncs = vec![finalize_status.descriptor.clone()];
             r2_state
-                .save_settings(&mut s, settings, Some(password))
+                .mutate_security_policy(&mut s, Some(password), |policy| {
+                    policy.market_selected_syncs = vec![finalize_status.descriptor.clone()];
+                })
                 .unwrap();
         }
         let r2_res = sync_market_channels_impl(None, None, Some(password.to_string()), &r2_state)
@@ -2287,10 +2297,10 @@ pub(crate) mod tests {
         // Bob syncs and receives the forwarded card with hops == 2
         {
             let mut s = bob_state.service.lock().unwrap();
-            let mut settings = bob_state.get_cached_settings().unwrap_or_default();
-            settings.market_selected_syncs = vec![finalize_status.descriptor.clone()];
             bob_state
-                .save_settings(&mut s, settings, Some(password))
+                .mutate_security_policy(&mut s, Some(password), |policy| {
+                    policy.market_selected_syncs = vec![finalize_status.descriptor.clone()];
+                })
                 .unwrap();
         }
         let bob_sync =
@@ -2500,16 +2510,16 @@ pub(crate) mod tests {
         // to prove recovered unverified endpoints are still probed when force=false.
         {
             let mut s = bob_state.service.lock().unwrap();
-            let mut settings = bob_state.load_settings(&mut s, Some(password)).unwrap();
-            settings.market_selected_syncs.push(FrontendSyncDescriptor {
-                write_url: "https://healthy.example.org/sync.php".to_string(),
-                read_url: "https://healthy.example.org/d-ok".to_string(),
-                drop_pub: "33".repeat(32),
-                status: "active".to_string(),
-                ..Default::default()
-            });
             bob_state
-                .save_settings(&mut s, settings, Some(password))
+                .mutate_security_policy(&mut s, Some(password), |policy| {
+                    policy.market_selected_syncs.push(FrontendSyncDescriptor {
+                        write_url: "https://healthy.example.org/sync.php".to_string(),
+                        read_url: "https://healthy.example.org/d-ok".to_string(),
+                        drop_pub: "33".repeat(32),
+                        status: "active".to_string(),
+                        ..Default::default()
+                    });
+                })
                 .unwrap();
 
             let contact = FrontendContact {
@@ -2699,10 +2709,14 @@ pub(crate) mod tests {
 
         for st in [&alice_state, &eve_state, &bob_state, &carol_state] {
             let mut s = st.service.lock().unwrap();
-            let mut set = st.load_settings(&mut s, Some(password)).unwrap();
-            set.market_selected_syncs = vec![fin.descriptor.clone()];
-            set.wot_share_via_sync = true;
-            st.save_settings(&mut s, set, Some(password)).unwrap();
+            st.mutate_security_policy(&mut s, Some(password), |policy| {
+                policy.market_selected_syncs = vec![fin.descriptor.clone()];
+            })
+            .unwrap();
+            st.mutate_ui_preferences(&mut s, Some(password), |prefs| {
+                prefs.wot_share_via_sync = true;
+            })
+            .unwrap();
         }
 
         let mk_contact = |did: String, name: &str, level: u8| FrontendContact {

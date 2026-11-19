@@ -4,7 +4,10 @@ use crate::services::fs_helpers::{
     load_profile_metadata, load_profile_metadata_map_from_dir, record_profile_metadata,
     remove_profile_metadata_entry, resolve_or_create_local_instance_id,
 };
-use crate::settings::{AppSettings, SETTINGS_KEY};
+use crate::settings::{
+    InternalLifecycleState, SecurityPolicy, UiPreferences, INTERNAL_LIFECYCLE_STATE_KEY,
+    SECURITY_POLICY_KEY, UI_PREFERENCES_KEY,
+};
 use crate::state::RequiredAccess;
 use crate::AppState;
 use chrono::{DateTime, Utc};
@@ -126,16 +129,34 @@ pub async fn create_profile(
                     }
                 }
 
-                // 1. Initialize and save default settings for the new profile
-                let default_settings = AppSettings::default();
-                let settings_bytes = serde_json::to_vec(&default_settings)
-                    .map_err(|e| FrontendError::from(e.to_string()))?;
-
-                service
-                    .save_encrypted_data(SETTINGS_KEY, &settings_bytes, Some(&password))
-                    .map_err(|e| {
-                        FrontendError::from(format!("Failed to save default settings: {}", e))
-                    })?;
+                // 1. Initialize and save split default configuration stores for the new profile
+                crate::state::save_encrypted_json(
+                    &mut service,
+                    UI_PREFERENCES_KEY,
+                    &UiPreferences::default(),
+                    Some(&password),
+                )
+                .map_err(|e| {
+                    FrontendError::from(format!("Failed to save default uiPreferences: {}", e))
+                })?;
+                crate::state::save_encrypted_json(
+                    &mut service,
+                    SECURITY_POLICY_KEY,
+                    &SecurityPolicy::default(),
+                    Some(&password),
+                )
+                .map_err(|e| {
+                    FrontendError::from(format!("Failed to save default securityPolicy: {}", e))
+                })?;
+                crate::state::save_encrypted_json(
+                    &mut service,
+                    INTERNAL_LIFECYCLE_STATE_KEY,
+                    &InternalLifecycleState::default(),
+                    Some(&password),
+                )
+                .map_err(|e| {
+                    FrontendError::from(format!("Failed to save default lifecycle state: {}", e))
+                })?;
 
                 // 2. Initialize session and cache
                 state
@@ -880,11 +901,12 @@ pub fn elevate_session_with_password_impl(
     master_password: &str,
     state: &AppState,
 ) -> Result<SessionStatusDto, FrontendError> {
-    let timeout_seconds = state
-        .get_cached_settings()
-        .map(|s| s.session_timeout_seconds)
-        .unwrap_or(0);
     let mut service = state.authorize_and_lock(RequiredAccess::Unlocked, None)?;
+    // Fail-closed: if cached security policy is absent, do not elevate with a non-zero cache timeout.
+    let timeout_seconds = state
+        .get_cached_security_policy()
+        .map(|p| p.session_timeout_seconds)
+        .unwrap_or(0);
     service
         .elevate_session(master_password, timeout_seconds)
         .map_err(FrontendError::from)?;
@@ -967,7 +989,9 @@ mod tests {
             history: Mutex::new(Some(vec![])),
             events: Mutex::new(Some(vec![])),
             contacts: Mutex::new(Some(Default::default())),
-            settings: Mutex::new(Some(AppSettings::default())),
+            ui_preferences: Mutex::new(Some(UiPreferences::default())),
+            security_policy: Mutex::new(Some(SecurityPolicy::default())),
+            internal_lifecycle: Mutex::new(Some(InternalLifecycleState::default())),
             own_market_profile: Mutex::new(None),
             wot: Mutex::new(None),
             recovery_owner: Mutex::new(None),
@@ -984,13 +1008,17 @@ mod tests {
             *state.history.lock().unwrap() = None;
             *state.events.lock().unwrap() = None;
             *state.contacts.lock().unwrap() = None;
-            *state.settings.lock().unwrap() = None;
+            *state.ui_preferences.lock().unwrap() = None;
+            *state.security_policy.lock().unwrap() = None;
+            *state.internal_lifecycle.lock().unwrap() = None;
         }
 
         assert!(state.history.lock().unwrap().is_none());
         assert!(state.events.lock().unwrap().is_none());
         assert!(state.contacts.lock().unwrap().is_none());
-        assert!(state.settings.lock().unwrap().is_none());
+        assert!(state.ui_preferences.lock().unwrap().is_none());
+        assert!(state.security_policy.lock().unwrap().is_none());
+        assert!(state.internal_lifecycle.lock().unwrap().is_none());
     }
 
     #[test]
@@ -1111,8 +1139,8 @@ mod tests {
         assert_eq!(st.access_mode, "dailyPay");
         assert_eq!(st.base_access_mode, "dailyPay");
 
-        // Fail-closed elevation when cached settings are cleared -> timeout 0, no cache, base mode stays dailyPay
-        *app_state.settings.lock().unwrap() = None;
+        // Fail-closed elevation when cached security policy is cleared -> timeout 0, no cache, base mode stays dailyPay
+        *app_state.security_policy.lock().unwrap() = None;
         let fail_closed = elevate_session_with_password_impl(master_pw, &app_state).unwrap();
         assert!(fail_closed.is_unlocked);
         assert!(!fail_closed.has_cached_session);
@@ -1120,11 +1148,11 @@ mod tests {
         assert_eq!(fail_closed.base_access_mode, "dailyPay");
 
         // Elevate session with active timeout -> grants temporary Full access, lock_session demotes back to dailyPay
-        let timed_settings = AppSettings {
+        let timed_policy = SecurityPolicy {
             session_timeout_seconds: 300,
             ..Default::default()
         };
-        *app_state.settings.lock().unwrap() = Some(timed_settings);
+        *app_state.security_policy.lock().unwrap() = Some(timed_policy);
         let elevated = elevate_session_with_password_impl(master_pw, &app_state).unwrap();
         assert_eq!(
             elevated,

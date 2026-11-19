@@ -15,6 +15,7 @@ import { PrivacyToggle } from '../send/PrivacyToggle';
 import { AssetInventory } from '../send/AssetInventory';
 import { useSendTransfer } from './useSendTransfer';
 import { SendConfirmPanel } from './SendConfirmPanel';
+import { parseHumocoInput } from '../../utils/humocoUri';
 
 export interface SendViewProps {
     initialRecipientId?: string;
@@ -65,7 +66,7 @@ export function SendView({
                     <AlertBanner variant="error">{state.feedbackMsg}</AlertBanner>
                 )}
 
-                {flow.appSettings?.pendingRestoreL2Reconciliation && (
+                {flow.appConfig?.lifecycle.pendingRestoreL2Reconciliation && (
                     <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 text-xs space-y-2 mb-4">
                         <div className="flex items-center gap-2 font-bold text-amber-800">
                             <AlertTriangle size={16} className="shrink-0" />
@@ -204,14 +205,16 @@ export function SendView({
                         recipientId={state.recipientId}
                         onRecipientChange={(e) => {
                             const rawVal = e.target.value;
+                            const parsed = parseHumocoInput(rawVal);
+                            if (parsed) {
+                                flow.handleApplyRawCode(rawVal);
+                                return;
+                            }
                             if (rawVal.toLowerCase().includes('humoco://pay')) {
-                                const ok = flow.applyPaymentRequest(rawVal);
-                                if (!ok) {
-                                    dispatch({
-                                        type: 'SET_FEEDBACK',
-                                        msg: t('transfer.invalidPaymentRequest'),
-                                    });
-                                }
+                                dispatch({
+                                    type: 'SET_FEEDBACK',
+                                    msg: t('transfer.invalidPaymentRequest'),
+                                });
                                 return;
                             }
                             const val = rawVal.replace(/\s+/g, '');
@@ -293,7 +296,7 @@ export function SendView({
                                         checked={
                                             flow.sendCardOverride !== null
                                                 ? flow.sendCardOverride
-                                                : (flow.appSettings?.marketSendCardOnPayment ?? false)
+                                                : (flow.appConfig?.uiPreferences.marketSendCardOnPayment ?? false)
                                         }
                                         onChange={(e) => flow.setSendCardOverride(e.target.checked)}
                                         className="mt-0.5 rounded border-theme-subtle text-theme-primary focus:ring-theme-primary"

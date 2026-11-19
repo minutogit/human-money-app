@@ -12,7 +12,7 @@ import { TechId } from '../ui/TechId';
 import { ModalShell } from '../ui/ModalShell';
 import { TrustLevelRadioCards } from './TrustLevelRadioCards';
 import { readFromClipboard } from '../../utils/clipboard';
-import { parseContactCard, normalizeSyncUrlInput } from '../../utils/humocoUri';
+import { parseContactCard, parseHumocoInput, normalizeSyncUrlInput } from '../../utils/humocoUri';
 import { isExactSameUserId, isSameRootIdentity } from '../../utils/userIdHelper';
 import { notifySyncStatusUpdated } from '../../utils/syncEvents';
 import { Clipboard, CheckCircle2, AlertCircle, Server, Trash2 } from 'lucide-react';
@@ -383,13 +383,17 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                                     value={did}
                                     onChange={(e) => {
                                         const rawVal = e.target.value;
-                                        if (rawVal.includes('humoco://contact')) {
+                                        const parsed = parseHumocoInput(rawVal);
+                                        if (parsed?.kind === 'contact') {
                                             applyContactCard(rawVal);
                                             return;
                                         }
-                                        const parsedDid = parseContactCard(rawVal);
-                                        if (parsedDid?.did && /\s/.test(rawVal.trim())) {
-                                            setDid(parsedDid.did);
+                                        if (parsed?.kind === 'card' && parsed.did) {
+                                            setDid(parsed.did);
+                                            return;
+                                        }
+                                        if (parsed?.kind === 'did' && /\s/.test(rawVal.trim())) {
+                                            setDid(parsed.did);
                                             return;
                                         }
                                         const val = rawVal.replace(/\s+/g, '');

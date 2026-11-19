@@ -9,7 +9,7 @@ import {
     WifiOff,
     CheckCircle2,
 } from 'lucide-react';
-import { AppSettings } from '../../types';
+import { AppConfigDto } from '../../types';
 import { settingsService } from '../../services/settingsService';
 import { Card } from '../ui/Card';
 import { HelpIcon } from '../ui/HelpIcon';
@@ -21,20 +21,18 @@ import { AnchorTemplateBuilder } from './network/AnchorTemplateBuilder';
 import { L2LifecycleSection } from './network/L2LifecycleSection';
 
 export interface NetworkProtectionCardProps {
-    settings: AppSettings | null;
-    onSettingsUpdated: (updater: AppSettings | ((prev: AppSettings | null) => AppSettings | null)) => void;
-    onSettingsSynced?: (updater: AppSettings | ((prev: AppSettings | null) => AppSettings | null)) => void;
+    config: AppConfigDto | null;
+    onConfigUpdated?: (newConfig: AppConfigDto) => void;
     isDevUnlocked: boolean;
     initialOpen?: boolean;
 }
 
 /**
- * Orchestrates L2 lock protection overview, PoS mode toggle, server probing, anchor templates, and lifecycle status.
+ * Orchestrates L2 lock protection overview, server probing, anchor templates, and lifecycle status.
  */
 export const NetworkProtectionCard: React.FC<NetworkProtectionCardProps> = ({
-    settings,
-    onSettingsUpdated,
-    onSettingsSynced,
+    config,
+    onConfigUpdated,
     isDevUnlocked,
     initialOpen = false,
 }) => {
@@ -58,23 +56,24 @@ export const NetworkProtectionCard: React.FC<NetworkProtectionCardProps> = ({
         setActionSuccess(message);
     }, []);
 
-    const refreshSettings = useCallback(async () => {
+    const refreshConfig = useCallback(async () => {
         try {
-            const fresh = await settingsService.getSettings();
+            const fresh = await settingsService.getConfig();
             if (fresh) {
-                (onSettingsSynced ?? onSettingsUpdated)(fresh);
+                onConfigUpdated?.(fresh);
             }
         } catch (e) {
-            logger.warn(`Failed to reload settings after lock update: ${stringifyError(e)}`);
+            logger.warn(`Failed to reload config after lock update: ${stringifyError(e)}`);
         }
-    }, [onSettingsSynced, onSettingsUpdated]);
+    }, [onConfigUpdated]);
 
-    const probeList = Object.values(settings?.l2ProbeCache || {}).sort(
+    const probeList = Object.values(config?.lifecycle.l2ProbeCache || {}).sort(
         (a, b) => (b.probedAtSecs || 0) - (a.probedAtSecs || 0)
     );
     const passingProbes = probeList.filter((p) => p.passed);
-    const templates = settings?.l2AnchorTemplatesMeta || [];
-    const hasActiveLockConfig = Boolean(templates.length > 0 || settings?.ownNominatedLockServer);
+    const templates = config?.lifecycle.l2AnchorTemplatesMeta || [];
+    const ownNominatedLockServer = config?.securityPolicy.ownNominatedLockServer ?? null;
+    const hasActiveLockConfig = Boolean(templates.length > 0 || ownNominatedLockServer);
 
     return (
         <div id="settings-network-section">
@@ -160,23 +159,23 @@ export const NetworkProtectionCard: React.FC<NetworkProtectionCardProps> = ({
                         contentClassName="p-4 space-y-6 border-t border-theme-subtle"
                     >
                         <LockServerProbeSection
-                            settings={settings}
+                            ownNominatedLockServer={ownNominatedLockServer}
                             probeList={probeList}
                             passingProbes={passingProbes}
                             onSuccess={handleSuccess}
                             onError={handleError}
                             onClearFeedback={clearFeedback}
-                            onRefreshSettings={refreshSettings}
+                            onRefreshConfig={refreshConfig}
                         />
 
                         <AnchorTemplateBuilder
                             passingProbes={passingProbes}
                             templates={templates}
-                            ownNominatedLockServer={settings?.ownNominatedLockServer}
+                            ownNominatedLockServer={ownNominatedLockServer}
                             onSuccess={handleSuccess}
                             onError={handleError}
                             onClearFeedback={clearFeedback}
-                            onRefreshSettings={refreshSettings}
+                            onRefreshSettings={refreshConfig}
                         />
 
                         <L2LifecycleSection

@@ -15,9 +15,9 @@ import { logger } from '../../../utils/log';
 import { stringifyError, translateError } from '../../../utils/errorHelper';
 import type {
     AggregatedBalance,
+    AppConfigDto,
     VoucherSummary,
     WalletEvent,
-    AppSettings,
     FrontendPendingSignRequest,
     FrontendPendingWotHandshake,
     RecoveryProtectionStatusDto,
@@ -55,7 +55,7 @@ export function useDashboardData() {
     const [voucherCountsByStandard, setVoucherCountsByStandard] = useState<Record<string, number>>({});
     const [showBackupReminder, setShowBackupReminder] = useState(false);
     const [rehearsalSnoozed, setRehearsalSnoozed] = useState(false);
-    const [appSettings, setAppSettings] = useState<AppSettings | null>(null);
+    const [appConfig, setAppConfig] = useState<AppConfigDto | null>(null);
     const [protectionStatus, setProtectionStatus] = useState<RecoveryProtectionStatusDto | null>(null);
     const [contactsCount, setContactsCount] = useState(0);
     const [syncConnectedCount, setSyncConnectedCount] = useState(0);
@@ -86,7 +86,7 @@ export function useDashboardData() {
                     profileService.getProfile().catch(() => null),
                     contactService.getContacts().catch(() => []),
                     transferService.getEventHistory(0, 5).catch(() => []),
-                    settingsService.getSettings().catch(() => null),
+                    settingsService.getConfig().catch(() => null),
                     marketService.getSyncOverviewStatus().catch(() => null),
                     recoveryService.getRecoveryProtectionStatus().catch(() => null),
                 ]);
@@ -143,9 +143,9 @@ export function useDashboardData() {
                     }).length,
                 );
 
-                setAppSettings(userSettings);
+                setAppConfig(userSettings);
                 const initialMode =
-                    (userSettings?.balanceViewMode as 'spendable' | 'net') ||
+                    (userSettings?.uiPreferences.balanceViewMode as 'spendable' | 'net') ||
                     (localStorage.getItem('hmc_balance_view_mode') as 'spendable' | 'net') ||
                     'spendable';
                 setBalanceViewMode(initialMode);
@@ -154,7 +154,7 @@ export function useDashboardData() {
                     (v: VoucherSummary) => v.status === 'active' && !v.isTestVoucher,
                 );
                 const effectiveBackupAt =
-                    [userSettings?.lastBackupAt, userSettings?.lastSyncBackupAt]
+                    [userSettings?.lifecycle.lastBackupAt, userSettings?.lifecycle.lastSyncBackupAt]
                         .filter((d): d is string => Boolean(d) && !isNaN(new Date(d as string).getTime()))
                         .sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0] ?? null;
                 const isBackupOutdatedOrMissing =
@@ -167,7 +167,7 @@ export function useDashboardData() {
                     })();
                 setShowBackupReminder(
                     hasRealActiveVouchers &&
-                        !userSettings?.backupSyncFolder &&
+                        !userSettings?.securityPolicy.backupSyncFolder &&
                         isBackupOutdatedOrMissing,
                 );
             } catch (e) {
@@ -254,16 +254,17 @@ export function useDashboardData() {
             setBalanceViewMode(mode);
             try {
                 localStorage.setItem('hmc_balance_view_mode', mode);
-                if (appSettings) {
-                    const updated = { ...appSettings, balanceViewMode: mode };
-                    setAppSettings(updated);
-                    await settingsService.saveSettings(updated).catch(() => {});
+                const updatedUi = await settingsService
+                    .patchUiPreferences({ balanceViewMode: mode })
+                    .catch(() => null);
+                if (updatedUi && appConfig) {
+                    setAppConfig({ ...appConfig, uiPreferences: updatedUi });
                 }
             } catch {
                 // Ignore best-effort persistence errors
             }
         },
-        [appSettings],
+        [appConfig],
     );
 
     const handleProtectedNavigate = useCallback(
@@ -296,7 +297,7 @@ export function useDashboardData() {
         showBackupReminder,
         rehearsalSnoozed,
         setRehearsalSnoozed,
-        appSettings,
+        appConfig,
         protectionStatus,
         setProtectionStatus,
         contactsCount,

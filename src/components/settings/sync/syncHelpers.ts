@@ -2,10 +2,10 @@
 import { useState, useCallback } from 'react';
 import type { TFunction } from 'i18next';
 import {
-    AppSettings,
     FrontendDiscoveredSync,
     FrontendSyncReplacementTarget,
     StoredPublicSync,
+    UiPreferences,
 } from '../../../types';
 import { normalizeSyncUrlInput } from '../../../utils/humocoUri';
 
@@ -32,15 +32,17 @@ export interface ChannelSettingsState {
 }
 
 /**
- * Derives channel toggle state from persisted app settings with defaults.
+ * Derives channel toggle state from persisted UI preferences with defaults.
  */
-export function buildChannelSettings(settings: AppSettings | null): ChannelSettingsState {
+export function buildChannelSettings(
+    uiPreferences: UiPreferences | null | undefined,
+): ChannelSettingsState {
     return {
-        postAcceptFromContacts: settings?.postAcceptFromContacts ?? true,
-        marketSyncEnabled: settings?.marketSyncEnabled ?? true,
-        wotShareViaSync: settings?.wotShareViaSync ?? true,
-        shareMinLevel: settings?.shareMinLevel ?? 1,
-        marketPollWifiOnly: settings?.marketPollWifiOnly ?? false,
+        postAcceptFromContacts: uiPreferences?.postAcceptFromContacts ?? true,
+        marketSyncEnabled: uiPreferences?.marketSyncEnabled ?? true,
+        wotShareViaSync: uiPreferences?.wotShareViaSync ?? true,
+        shareMinLevel: uiPreferences?.shareMinLevel ?? 1,
+        marketPollWifiOnly: uiPreferences?.marketPollWifiOnly ?? false,
     };
 }
 

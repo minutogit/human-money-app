@@ -12,7 +12,49 @@ import { startPostSyncLoop, stopPostSyncLoop } from '../../sync/postSync';
 import { startMarketSyncLoop, stopMarketSyncLoop } from '../../sync/marketSync';
 import { channelMembersSyncManager } from '../../sync/channelMembersSyncManager';
 import { rateLimitManager } from '../../sync/rateLimitManager';
-import { AppState } from '../../types';
+import { AppConfigDto, AppState } from '../../types';
+
+function makeAppConfig(
+  sessionTimeoutSeconds = 300,
+  privacyDefault: 'ask' | 'stealth' | 'public' = 'public',
+): AppConfigDto {
+  return {
+    uiPreferences: {
+      uiMode: 'simple',
+      lastUsedDirectory: null,
+      balanceViewMode: 'spendable',
+      marketShowUnknown: true,
+      maxStoredCards: 2000,
+      marketSendCardOnPayment: false,
+      marketSyncEnabled: true,
+      shareMinLevel: 1,
+      marketPollWifiOnly: false,
+      wotShareViaSync: true,
+      postAcceptFromContacts: true,
+      mediaAutoLoadMaxHops: 2,
+    },
+    securityPolicy: {
+      sessionTimeoutSeconds,
+      privacyDefault,
+      devModeUnlocked: false,
+      autoBackupEnabled: true,
+      syncBackupEnabled: true,
+      backupSyncFolder: null,
+      backupProtectionMode: null,
+      ownNominatedLockServer: null,
+      marketSelectedSyncs: [],
+      publicSyncs: [],
+    },
+    lifecycle: {
+      pendingRestoreL2Reconciliation: false,
+      backupDirty: false,
+      lastBackupAt: null,
+      lastSyncBackupAt: null,
+      l2ProbeCache: {},
+      l2AnchorTemplatesMeta: [],
+    },
+  };
+}
 
 // Mock Tauri APIs
 vi.mock('@tauri-apps/api/app', () => ({
@@ -24,10 +66,7 @@ vi.mock('@tauri-apps/api/core', () => ({
     if (cmd === 'list_profiles') return Promise.resolve([]);
     if (cmd === 'has_profiles') return Promise.resolve(true);
     if (cmd === 'get_user_id') return Promise.resolve('did:key:z123');
-    if (cmd === 'get_app_settings') return Promise.resolve({
-      sessionTimeoutSeconds: 300,
-      privacyDefault: 'public',
-    });
+    if (cmd === 'get_app_config') return Promise.resolve(makeAppConfig(300, 'public'));
     return Promise.resolve(undefined);
   }),
 }));
@@ -46,10 +85,7 @@ vi.mock('../../services/authService', () => ({
 
 vi.mock('../../services/settingsService', () => ({
   settingsService: {
-    getSettings: vi.fn().mockResolvedValue({
-      sessionTimeoutSeconds: 300,
-      privacyDefault: 'public',
-    }),
+    getConfig: vi.fn(),
   },
 }));
 
@@ -187,10 +223,7 @@ function dailyPayStatus(hasCachedSession: boolean, elevated = false) {
 describe('SessionContext and Session Timeout UX (APP-017)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    (settingsService.getSettings as Mock).mockReset().mockResolvedValue({
-      sessionTimeoutSeconds: 300,
-      privacyDefault: 'public',
-    });
+    (settingsService.getConfig as Mock).mockReset().mockResolvedValue(makeAppConfig(300, 'public'));
     (authService.lockSession as Mock).mockReset().mockResolvedValue(undefined);
     (authService.unlockSession as Mock).mockReset().mockResolvedValue(fullStatus(true));
     (authService.unlockSessionWithPin as Mock).mockReset().mockResolvedValue(dailyPayStatus(true));
@@ -235,10 +268,7 @@ describe('SessionContext and Session Timeout UX (APP-017)', () => {
 
   it('keeps user authenticated when sessionTimeoutSeconds === 0 and disables silent repair', async () => {
     (authService.getSessionStatus as Mock).mockResolvedValue(fullStatus(false));
-    (settingsService.getSettings as Mock).mockResolvedValue({
-      sessionTimeoutSeconds: 0,
-      privacyDefault: 'public',
-    });
+    (settingsService.getConfig as Mock).mockResolvedValue(makeAppConfig(0, 'public'));
 
     render(
       <SessionProvider>
@@ -506,7 +536,7 @@ describe('SessionContext and Session Timeout UX (APP-017)', () => {
 
   it('re-unlocks expired dailyPay session via PIN on timeout > 0 and rejects on wrong PIN', async () => {
     (authService.getSessionStatus as Mock).mockResolvedValue(dailyPayStatus(false));
-    (settingsService.getSettings as Mock).mockResolvedValue({ sessionTimeoutSeconds: 300 });
+    (settingsService.getConfig as Mock).mockResolvedValue(makeAppConfig(300));
     (authService.unlockSessionWithPin as Mock)
       .mockRejectedValueOnce({ code: 'error.auth.invalidPin', message: 'Invalid PIN (4 attempts remaining).' })
       .mockResolvedValueOnce(dailyPayStatus(true));
@@ -555,7 +585,7 @@ describe('SessionContext and Session Timeout UX (APP-017)', () => {
 
   it('switches PIN modal to master password automatically on 5-strike wipe and completes via elevateSession', async () => {
     (authService.getSessionStatus as Mock).mockResolvedValue(dailyPayStatus(false));
-    (settingsService.getSettings as Mock).mockResolvedValue({ sessionTimeoutSeconds: 300 });
+    (settingsService.getConfig as Mock).mockResolvedValue(makeAppConfig(300));
     (authService.unlockSessionWithPin as Mock).mockRejectedValueOnce({
       code: 'error.auth.pinWipedMaxAttempts',
       message: 'PIN wiped after 5 failed attempts',
@@ -602,7 +632,7 @@ describe('SessionContext and Session Timeout UX (APP-017)', () => {
 
   it('handles timeout=0 dailyPay action via ephemeral PIN unlock+lock and passes null instead of raw PIN', async () => {
     (authService.getSessionStatus as Mock).mockResolvedValue(dailyPayStatus(false));
-    (settingsService.getSettings as Mock).mockResolvedValue({ sessionTimeoutSeconds: 0 });
+    (settingsService.getConfig as Mock).mockResolvedValue(makeAppConfig(0));
     (authService.unlockSessionWithPin as Mock).mockResolvedValue(dailyPayStatus(false));
 
     let sessionCtx!: ReturnType<typeof useSession>;
@@ -643,7 +673,7 @@ describe('SessionContext and Session Timeout UX (APP-017)', () => {
 
   it('verifies and passes entered password in timeout=0 full mode without caching session', async () => {
     (authService.getSessionStatus as Mock).mockResolvedValue(fullStatus(false));
-    (settingsService.getSettings as Mock).mockResolvedValue({ sessionTimeoutSeconds: 0 });
+    (settingsService.getConfig as Mock).mockResolvedValue(makeAppConfig(0));
     (authService.unlockSession as Mock)
       .mockRejectedValueOnce(new Error('Invalid password'))
       .mockResolvedValueOnce(fullStatus(false));
@@ -697,7 +727,7 @@ describe('SessionContext and Session Timeout UX (APP-017)', () => {
 
   it('steps up from dailyPay PIN session on timeout=0 without leaving a persistent session cache', async () => {
     (authService.getSessionStatus as Mock).mockResolvedValue(dailyPayStatus(false));
-    (settingsService.getSettings as Mock).mockResolvedValue({ sessionTimeoutSeconds: 0 });
+    (settingsService.getConfig as Mock).mockResolvedValue(makeAppConfig(0));
     (authService.elevateSessionWithPassword as Mock).mockResolvedValue(dailyPayStatus(false));
 
     let sessionCtx!: ReturnType<typeof useSession>;
@@ -738,7 +768,7 @@ describe('SessionContext and Session Timeout UX (APP-017)', () => {
 
   it('re-enqueues action in stepUp modal if PIN unlock in session modal hits insufficientAccessMode', async () => {
     (authService.getSessionStatus as Mock).mockResolvedValue(dailyPayStatus(false));
-    (settingsService.getSettings as Mock).mockResolvedValue({ sessionTimeoutSeconds: 300 });
+    (settingsService.getConfig as Mock).mockResolvedValue(makeAppConfig(300));
     (authService.unlockSessionWithPin as Mock).mockResolvedValue(dailyPayStatus(true));
     (authService.elevateSessionWithPassword as Mock).mockResolvedValue(dailyPayStatus(true, true));
 
@@ -792,7 +822,7 @@ describe('SessionContext and Session Timeout UX (APP-017)', () => {
 
   it('allows switching from PIN modal to master password via switch button', async () => {
     (authService.getSessionStatus as Mock).mockResolvedValue(dailyPayStatus(false));
-    (settingsService.getSettings as Mock).mockResolvedValue({ sessionTimeoutSeconds: 300 });
+    (settingsService.getConfig as Mock).mockResolvedValue(makeAppConfig(300));
     (authService.elevateSessionWithPassword as Mock).mockResolvedValue(dailyPayStatus(true, true));
 
     let sessionCtx!: ReturnType<typeof useSession>;

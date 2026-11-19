@@ -44,7 +44,6 @@ const parsePricingPreset = (raw?: string | null): { mode: PriceMode; amount: str
 export interface AdEditorModalProps {
     isOpen: boolean;
     onClose: () => void;
-    initialAd?: Ad | FrontendMyAd | null;
     editingAd?: Ad | FrontendMyAd | null;
     activeAdsCount?: number;
     maxAds?: number;
@@ -59,7 +58,6 @@ export interface AdEditorModalProps {
 export const AdEditorModal: React.FC<AdEditorModalProps> = ({
     isOpen,
     onClose,
-    initialAd,
     editingAd,
     activeAdsCount,
     maxAds = 5,
@@ -72,7 +70,7 @@ export const AdEditorModal: React.FC<AdEditorModalProps> = ({
 }) => {
     const { t } = useTranslation();
 
-    const targetAd = editingAd !== undefined ? editingAd : initialAd;
+    const targetAd = editingAd ?? null;
     const isEditMode = !!targetAd;
     const isLimitReached = !isEditMode && activeAdsCount !== undefined && activeAdsCount >= maxAds;
 
@@ -85,14 +83,35 @@ export const AdEditorModal: React.FC<AdEditorModalProps> = ({
     const [durationDays, setDurationDays] = useState<number>(90);
     const [isRemote, setIsRemote] = useState<boolean>(false);
     const [isSaving, setIsSaving] = useState(false);
+    const [isCompressingImage, setIsCompressingImage] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
     const [imagePreviewUri, setImagePreviewUri] = useState<string | null>(null);
     const [imageWebpDataUri, setImageWebpDataUri] = useState<string | null | undefined>(undefined);
     const fileInputRef = useRef<HTMLInputElement | null>(null);
+    const sessionSeqRef = useRef(0);
+    const imageOpSeqRef = useRef(0);
+    const prevSessionKeyRef = useRef<string | null>(null);
+
+    const sessionKey = isOpen ? (targetAd ? `edit:${targetAd.id}` : 'create') : null;
 
     useEffect(() => {
-        if (targetAd) {
+        if (sessionKey === prevSessionKeyRef.current) return;
+        prevSessionKeyRef.current = sessionKey;
+
+        sessionSeqRef.current += 1;
+        const opSeq = ++imageOpSeqRef.current;
+
+        if (fileInputRef.current) {
+            fileInputRef.current.value = '';
+        }
+        setIsSaving(false);
+        setIsCompressingImage(false);
+        setError(null);
+        setImageWebpDataUri(undefined);
+        setImagePreviewUri(null);
+
+        if (isOpen && targetAd) {
             const parsed = parsePricingPreset(targetAd.pricing);
             setKind(targetAd.kind);
             setTitle(targetAd.title);
@@ -100,8 +119,23 @@ export const AdEditorModal: React.FC<AdEditorModalProps> = ({
             setPricing(targetAd.pricing || '');
             setPriceMode(parsed.mode);
             setPriceAmount(parsed.amount);
+            setDurationDays(90);
             setIsRemote(targetAd.isRemote ?? false);
-            setError(null);
+
+            if (targetAd.imageToken) {
+                marketService
+                    .getAdImage(ownerDid || '', targetAd.imageToken)
+                    .then((uri) => {
+                        if (imageOpSeqRef.current === opSeq) {
+                            setImagePreviewUri(uri);
+                        }
+                    })
+                    .catch(() => {
+                        if (imageOpSeqRef.current === opSeq) {
+                            setImagePreviewUri(null);
+                        }
+                    });
+            }
         } else {
             setKind('offer');
             setTitle('');
@@ -111,49 +145,39 @@ export const AdEditorModal: React.FC<AdEditorModalProps> = ({
             setPriceAmount('');
             setDurationDays(90);
             setIsRemote(false);
-            setError(null);
         }
-    }, [targetAd, isOpen]);
-
-    useEffect(() => {
-        setImageWebpDataUri(undefined);
-        const token = targetAd?.imageToken;
-        if (isOpen && token) {
-            let isMounted = true;
-            marketService
-                .getAdImage(ownerDid || '', token)
-                .then((uri) => {
-                    if (isMounted) setImagePreviewUri(uri);
-                })
-                .catch(() => {
-                    if (isMounted) setImagePreviewUri(null);
-                });
-            return () => {
-                isMounted = false;
-            };
-        } else {
-            setImagePreviewUri(null);
-        }
-    }, [isOpen, targetAd, ownerDid]);
+    }, [sessionKey, isOpen, targetAd, ownerDid]);
 
     const handleImageFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (!file) return;
+        const opSeq = ++imageOpSeqRef.current;
+        setIsCompressingImage(true);
         try {
             const maxBytes = mediaMaxBytes || 102400;
             const webpDataUri = await compressAdImageToWebpDataUri(file, maxBytes);
+            if (imageOpSeqRef.current !== opSeq) return;
             setImagePreviewUri(webpDataUri);
             setImageWebpDataUri(webpDataUri);
         } catch (err) {
+            if (imageOpSeqRef.current !== opSeq) return;
             setError(err instanceof Error ? err.message : String(err));
         } finally {
             e.target.value = '';
+            if (imageOpSeqRef.current === opSeq) {
+                setIsCompressingImage(false);
+            }
         }
     };
 
     const handleRemoveImage = () => {
+        imageOpSeqRef.current += 1;
+        setIsCompressingImage(false);
         setImagePreviewUri(null);
         setImageWebpDataUri(null);
+        if (fileInputRef.current) {
+            fileInputRef.current.value = '';
+        }
     };
 
     const titleCharCount = title.trim().length;
@@ -182,6 +206,7 @@ export const AdEditorModal: React.FC<AdEditorModalProps> = ({
             return;
         }
 
+        const submitSession = sessionSeqRef.current;
         setIsSaving(true);
         try {
             await onSave({
@@ -195,8 +220,11 @@ export const AdEditorModal: React.FC<AdEditorModalProps> = ({
                 isRemote,
                 ...(imageWebpDataUri !== undefined ? { imageWebpDataUri } : {}),
             });
-            onClose();
+            if (sessionSeqRef.current === submitSession) {
+                onClose();
+            }
         } catch (err) {
+            if (sessionSeqRef.current !== submitSession) return;
             const msg = err instanceof Error ? err.message : String(err);
             if (msg.includes('market.adLimitReached')) {
                 setError(t('marketplace.adLimitReached', 'Das Limit von 5 aktiven Inseraten ist erreicht.'));
@@ -204,7 +232,9 @@ export const AdEditorModal: React.FC<AdEditorModalProps> = ({
                 setError(msg);
             }
         } finally {
-            setIsSaving(false);
+            if (sessionSeqRef.current === submitSession) {
+                setIsSaving(false);
+            }
         }
     };
 
@@ -657,7 +687,7 @@ export const AdEditorModal: React.FC<AdEditorModalProps> = ({
                     <Button variant="secondary" type="button" onClick={onClose} disabled={isSaving}>
                         {t('common.cancel', 'Abbrechen')}
                     </Button>
-                    <Button variant="primary" type="submit" data-testid="ad-submit-button" disabled={isSaving || !title.trim() || isLimitReached}>
+                    <Button variant="primary" type="submit" data-testid="ad-submit-button" disabled={isSaving || isCompressingImage || !title.trim() || isLimitReached}>
                         {isSaving ? t('common.saving', 'Speichern...') : t('common.save', 'Speichern')}
                     </Button>
                 </div>

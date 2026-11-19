@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import {
     AnchorDiscoveryDto,
     AnchorServerInputDto,
-    AppSettings,
+    AppConfigDto,
     L2LifecycleStatusDto,
     L2LockStatusDto,
     LockServerProbeResult,
@@ -10,7 +10,11 @@ import {
     NominatedLockServerMeta,
     ReachPresetDto,
     ReachPresetId,
+    SecurityPolicy,
+    SecurityPolicyPatch,
     StoredAnchorTemplateMeta,
+    UiPreferences,
+    UiPreferencesPatch,
     VoucherL2StatusDto,
 } from "../types";
 
@@ -26,12 +30,22 @@ export interface AssembleAnchorTemplateArgs {
 }
 
 export const settingsService = {
-    getSettings: async () => {
-        return await invoke<AppSettings>("get_app_settings");
+    getConfig: async (): Promise<AppConfigDto> => {
+        return await invoke<AppConfigDto>("get_app_config");
     },
 
-    saveSettings: async (settings: AppSettings, password?: string) => {
-        return await invoke<void>("save_app_settings", { settings, password });
+    patchUiPreferences: async (
+        patch: UiPreferencesPatch,
+        password?: string,
+    ): Promise<UiPreferences> => {
+        return await invoke<UiPreferences>("patch_ui_preferences", { patch, password });
+    },
+
+    patchSecurityPolicy: async (
+        patch: SecurityPolicyPatch,
+        password?: string,
+    ): Promise<SecurityPolicy> => {
+        return await invoke<SecurityPolicy>("patch_security_policy", { patch, password });
     },
 
     getReachPreset: async (password?: string): Promise<ReachPresetDto> => {

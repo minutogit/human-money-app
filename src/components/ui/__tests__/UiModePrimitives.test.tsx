@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
-import { UiModeProvider, UI_MODE_STORAGE_KEY, useUiMode } from '../../../context/UiModeContext';
+import { UiModeProvider, useUiMode } from '../../../context/UiModeContext';
 import { Advanced } from '../Advanced';
 import { AdvancedDisclosure } from '../AdvancedDisclosure';
 import { TechId } from '../TechId';
@@ -41,12 +41,12 @@ describe('UI Mode Primitives', () => {
         fireEvent.click(screen.getByTestId('ui-mode-card-expert'));
 
         expect(screen.getByTestId('mode-reader')).toHaveTextContent('expert:true');
-        expect(localStorage.getItem(UI_MODE_STORAGE_KEY)).toBe('expert');
         expect(screen.getByTestId('ui-mode-expert')).toHaveAttribute('aria-pressed', 'true');
+        expect(localStorage.length).toBe(0);
 
         fireEvent.click(screen.getByTestId('ui-mode-simple'));
         expect(screen.getByTestId('mode-reader')).toHaveTextContent('simple:false');
-        expect(localStorage.getItem(UI_MODE_STORAGE_KEY)).toBe('simple');
+        expect(localStorage.length).toBe(0);
     });
 
     it('renders <Advanced> children only in expert mode', () => {

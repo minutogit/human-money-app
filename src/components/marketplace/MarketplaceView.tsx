@@ -126,18 +126,18 @@ export function MarketplaceView({
 
     const refreshSyncStatus = useCallback(async () => {
         try {
-            const [settings, overview] = await Promise.all([
-                settingsService.getSettings(),
+            const [config, overview] = await Promise.all([
+                settingsService.getConfig(),
                 typeof marketService?.getSyncOverviewStatus === 'function'
                     ? marketService.getSyncOverviewStatus().catch(() => null)
                     : Promise.resolve(null),
             ]);
             const count = overview
                 ? overview.connectedCount
-                : (settings.marketSelectedSyncs || []).length;
+                : (config.securityPolicy.marketSelectedSyncs || []).length;
             setConnectedSyncCount(count);
-            setMediaAutoLoadMaxHops(settings.mediaAutoLoadMaxHops ?? 2);
-            setMarketPollWifiOnly(Boolean(settings.marketPollWifiOnly));
+            setMediaAutoLoadMaxHops(config.uiPreferences.mediaAutoLoadMaxHops ?? 2);
+            setMarketPollWifiOnly(Boolean(config.uiPreferences.marketPollWifiOnly));
         } catch (err) {
             logger.debug('Failed to check sync settings in marketplace: ' + stringifyError(err));
             setConnectedSyncCount(0);

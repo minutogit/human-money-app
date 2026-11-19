@@ -3,7 +3,7 @@ import type { TFunction } from 'i18next';
 import { transferService, CreateBundleResult } from '../../services/transferService';
 import { postService } from '../../services/postService';
 import { runPostSyncPass } from '../../sync/postSync';
-import { parseCardUri, parseContactCard, parsePaymentRequest } from '../../utils/humocoUri';
+import { parsePaymentRequest } from '../../utils/humocoUri';
 import { logger } from '../../utils/log';
 import { stringifyError, translateError } from '../../utils/errorHelper';
 import type { ProtectActionFn } from '../../utils/fileIo';
@@ -40,7 +40,8 @@ export type SendAction =
     | { type: 'SET_FEEDBACK'; msg: string }
     | { type: 'TOGGLE_CONFIRM'; value: boolean }
     | { type: 'SET_RECIPIENT_ERROR'; value: boolean }
-    | { type: 'SET_PRIVACY_ERROR'; value: boolean };
+    | { type: 'SET_PRIVACY_ERROR'; value: boolean }
+    | { type: 'RESET'; recipientId?: string; notes?: string };
 
 export const initialSendState: SendState = {
     recipientId: '',
@@ -89,6 +90,12 @@ export function sendReducer(state: SendState, action: SendAction): SendState {
             return { ...state, recipientError: action.value };
         case 'SET_PRIVACY_ERROR':
             return { ...state, privacyError: action.value };
+        case 'RESET':
+            return {
+                ...initialSendState,
+                recipientId: action.recipientId ? action.recipientId.replace(/\s+/g, '') : '',
+                notes: action.notes ?? '',
+            };
         default:
             return state;
     }
@@ -174,30 +181,6 @@ export function resolvePaymentRequestInput(
         isTest: matchedStandardId ? (parsed.isTest ?? false) : parsed.isTest,
         amount: parsed.amount,
     };
-}
-
-export function extractRecipientDidFromRawCode(trimmed: string): string | null {
-    const parsedCard = parseCardUri(trimmed);
-    if (parsedCard?.envelopeJson) {
-        try {
-            const env = JSON.parse(parsedCard.envelopeJson) as Record<string, unknown>;
-            let cardDid = typeof env.did === 'string' ? env.did : '';
-            if (!cardDid && typeof env.card_wire === 'string') {
-                const seg = env.card_wire.split('.')[1];
-                if (seg) {
-                    const payload = JSON.parse(
-                        window.atob(seg.replace(/-/g, '+').replace(/_/g, '/')),
-                    ) as { did?: string };
-                    if (typeof payload.did === 'string') cardDid = payload.did;
-                }
-            }
-            if (cardDid) return cardDid.replace(/\s+/g, '');
-        } catch {
-            // Fall through to parseContactCard
-        }
-    }
-    const parsedContact = parseContactCard(trimmed);
-    return parsedContact?.did ? parsedContact.did.replace(/\s+/g, '') : null;
 }
 
 export interface CommitTransferParams {

@@ -10,44 +10,49 @@ import { TechId } from '../ui/TechId';
 import { ReachPresetSelector } from './ReachPresetSelector';
 import { MyProfileCard } from '../profile/MyProfileCard';
 import { useSession } from '../../context/SessionContext';
-import { AppSettings } from '../../types';
+import { AppConfigDto } from '../../types';
 import { settingsService } from '../../services/settingsService';
 import { logger } from '../../utils/log';
 import { stringifyError, translateError } from '../../utils/errorHelper';
 
 export interface ProfileTabProps {
     userId: string;
-    settings?: AppSettings | null;
-    onSettingsUpdated?: (newSettings: AppSettings) => void;
+    config?: AppConfigDto | null;
+    onConfigUpdated?: (newConfig: AppConfigDto) => void;
 }
 
-export const ProfileTab: React.FC<ProfileTabProps> = ({ 
+export const ProfileTab: React.FC<ProfileTabProps> = ({
     userId,
-    settings,
-    onSettingsUpdated,
+    config,
+    onConfigUpdated,
 }) => {
     const { t } = useTranslation();
     const { protectAction } = useSession();
-    const [marketSendCardOnPayment, setMarketSendCardOnPayment] = useState<boolean>(settings?.marketSendCardOnPayment ?? false);
+    const [marketSendCardOnPayment, setMarketSendCardOnPayment] = useState<boolean>(
+        config?.uiPreferences.marketSendCardOnPayment ?? false,
+    );
     const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
     useEffect(() => {
-        if (settings) {
-            setMarketSendCardOnPayment(settings.marketSendCardOnPayment ?? false);
+        if (config) {
+            setMarketSendCardOnPayment(config.uiPreferences.marketSendCardOnPayment ?? false);
         }
-    }, [settings]);
+    }, [config]);
 
     const handleSaveSendCardToggle = async (val: boolean) => {
         const prev = marketSendCardOnPayment;
         setMarketSendCardOnPayment(val);
         setErrorMsg(null);
         try {
-            const current = settings || await settingsService.getSettings();
-            const updated: AppSettings = { ...current, marketSendCardOnPayment: val };
-            await protectAction(async (pwd) => {
-                await settingsService.saveSettings(updated, pwd || undefined);
+            const updatedUi = await protectAction(async (pwd) => {
+                return await settingsService.patchUiPreferences(
+                    { marketSendCardOnPayment: val },
+                    pwd || undefined,
+                );
             });
-            if (onSettingsUpdated) onSettingsUpdated(updated);
+            if (updatedUi && config && onConfigUpdated) {
+                onConfigUpdated({ ...config, uiPreferences: updatedUi });
+            }
         } catch (err) {
             logger.error(`Failed to save marketSendCardOnPayment: ${stringifyError(err)}`);
             setMarketSendCardOnPayment(prev);

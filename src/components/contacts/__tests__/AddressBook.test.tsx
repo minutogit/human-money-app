@@ -1,6 +1,7 @@
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
 import AddressBook from '../AddressBook';
+import { UiModeProvider } from '../../../context/UiModeContext';
 import { invoke } from '@tauri-apps/api/core';
 import { writeText } from '@tauri-apps/plugin-clipboard-manager';
 import { Contact } from '../../../types';
@@ -201,7 +202,6 @@ describe('AddressBook Component', () => {
   });
 
   it('displays "Hat eine Ablage" badge when contact has drops configured', async () => {
-    localStorage.setItem('humoco_ui_mode', 'expert');
     const contactsWithDrops: Contact[] = [
       {
         did: 'did:key:zWithDrop',
@@ -229,7 +229,11 @@ describe('AddressBook Component', () => {
       return Promise.resolve(undefined);
     });
 
-    render(<AddressBook onBack={mockOnBack} />);
+    render(
+      <UiModeProvider initialMode="expert">
+        <AddressBook onBack={mockOnBack} />
+      </UiModeProvider>
+    );
 
     await waitFor(() => {
       expect(screen.getByText(/Alice DropHost/i)).toBeInTheDocument();
@@ -278,7 +282,6 @@ describe('AddressBook Component', () => {
   });
 
   it('adaptive trust network banner defaults to collapsed when rated contacts exist, expands on toggle', async () => {
-    localStorage.setItem('humoco_ui_mode', 'expert');
     (invoke as Mock).mockImplementation((cmd: string) => {
       if (cmd === 'get_contacts') return Promise.resolve(mockContacts);
       if (cmd === 'get_wot_summary') {
@@ -294,7 +297,11 @@ describe('AddressBook Component', () => {
       return Promise.resolve(undefined);
     });
 
-    render(<AddressBook onBack={mockOnBack} />);
+    render(
+      <UiModeProvider initialMode="expert">
+        <AddressBook onBack={mockOnBack} />
+      </UiModeProvider>
+    );
 
     await waitFor(() => {
       expect(screen.getByText(/John Doe/i)).toBeInTheDocument();
@@ -353,7 +360,6 @@ describe('AddressBook Component', () => {
   });
 
   it('displays sync service recommendation card when no sync service is connected and navigates to sync settings on click', async () => {
-    localStorage.setItem('humoco_ui_mode', 'expert');
     mockNavigateToSettingsSection.mockClear();
     (invoke as Mock).mockImplementation((cmd: string) => {
       if (cmd === 'get_contacts') return Promise.resolve(mockContacts);
@@ -369,7 +375,11 @@ describe('AddressBook Component', () => {
       return Promise.resolve(undefined);
     });
 
-    render(<AddressBook onBack={mockOnBack} />);
+    render(
+      <UiModeProvider initialMode="expert">
+        <AddressBook onBack={mockOnBack} />
+      </UiModeProvider>
+    );
 
     await waitFor(() => {
       expect(screen.getByText(/John Doe/i)).toBeInTheDocument();
@@ -393,7 +403,6 @@ describe('AddressBook Component', () => {
   });
 
   it('hides sync service recommendation card when a sync service is connected', async () => {
-    localStorage.setItem('humoco_ui_mode', 'expert');
     (invoke as Mock).mockImplementation((cmd: string) => {
       if (cmd === 'get_contacts') return Promise.resolve(mockContacts);
       if (cmd === 'get_sync_overview_status') {
@@ -409,7 +418,11 @@ describe('AddressBook Component', () => {
       return Promise.resolve(undefined);
     });
 
-    render(<AddressBook onBack={mockOnBack} />);
+    render(
+      <UiModeProvider initialMode="expert">
+        <AddressBook onBack={mockOnBack} />
+      </UiModeProvider>
+    );
 
     await waitFor(() => {
       expect(screen.getByText(/John Doe/i)).toBeInTheDocument();
@@ -423,7 +436,6 @@ describe('AddressBook Component', () => {
   });
 
   it('displays configured drops with passive health status badges', async () => {
-    localStorage.setItem('humoco_ui_mode', 'expert');
     const contactsWithHealthDrops: Contact[] = [
       {
         did: 'did:key:zHealth',
@@ -458,7 +470,11 @@ describe('AddressBook Component', () => {
       return Promise.resolve(undefined);
     });
 
-    render(<AddressBook onBack={mockOnBack} />);
+    render(
+      <UiModeProvider initialMode="expert">
+        <AddressBook onBack={mockOnBack} />
+      </UiModeProvider>
+    );
 
     await waitFor(() => {
       expect(screen.getByText(/Charlie HealthTester/i)).toBeInTheDocument();
@@ -471,7 +487,6 @@ describe('AddressBook Component', () => {
   });
 
   it('displays error feedback when syncMarketChannels returns HTTP 429 error', async () => {
-    localStorage.setItem('humoco_ui_mode', 'expert');
     (invoke as Mock).mockImplementation((cmd: string) => {
       if (cmd === 'get_contacts') return Promise.resolve(mockContacts);
       if (cmd === 'sync_market_channels') {
@@ -488,7 +503,11 @@ describe('AddressBook Component', () => {
       return Promise.resolve(undefined);
     });
 
-    render(<AddressBook onBack={mockOnBack} />);
+    render(
+      <UiModeProvider initialMode="expert">
+        <AddressBook onBack={mockOnBack} />
+      </UiModeProvider>
+    );
 
     await waitFor(() => {
       expect(screen.getByText(/John Doe/i)).toBeInTheDocument();
@@ -506,7 +525,6 @@ describe('AddressBook Component', () => {
   });
 
   it('displays warning feedback when syncing with no sync services configured', async () => {
-    localStorage.setItem('humoco_ui_mode', 'expert');
     (invoke as Mock).mockImplementation((cmd: string) => {
       if (cmd === 'get_contacts') return Promise.resolve(mockContacts);
       if (cmd === 'get_sync_overview_status') {
@@ -547,7 +565,11 @@ describe('AddressBook Component', () => {
       return Promise.resolve(undefined);
     });
 
-    render(<AddressBook onBack={mockOnBack} />);
+    render(
+      <UiModeProvider initialMode="expert">
+        <AddressBook onBack={mockOnBack} />
+      </UiModeProvider>
+    );
 
     await waitFor(() => {
       expect(screen.getByText(/John Doe/i)).toBeInTheDocument();
@@ -595,15 +617,19 @@ describe('AddressBook Component', () => {
           qrSvg: '<svg></svg>',
         });
       }
-      if (cmd === 'get_app_settings') {
+      if (cmd === 'get_app_config') {
         return Promise.resolve({
-          marketSelectedSyncs: [
-            {
-              writeUrl: 'https://sync1.domain.org/sync.php',
-              readUrl: 'https://sync1.domain.org/sync.php',
-              dropPub: 'Pub1',
-            },
-          ],
+          uiPreferences: {},
+          securityPolicy: {
+            marketSelectedSyncs: [
+              {
+                writeUrl: 'https://sync1.domain.org/sync.php',
+                readUrl: 'https://sync1.domain.org/sync.php',
+                dropPub: 'Pub1',
+              },
+            ],
+          },
+          lifecycle: {},
         });
       }
       return Promise.resolve(undefined);
@@ -658,8 +684,11 @@ describe('AddressBook Component', () => {
   });
 
   it('renders 4-tile Add Contact modal when clicking primary button (Expert mode)', async () => {
-    localStorage.setItem('humoco_ui_mode', 'expert');
-    render(<AddressBook onBack={mockOnBack} />);
+    render(
+      <UiModeProvider initialMode="expert">
+        <AddressBook onBack={mockOnBack} />
+      </UiModeProvider>
+    );
 
     await waitFor(() => {
       expect(screen.getByText(/John Doe/i)).toBeInTheDocument();
@@ -676,7 +705,6 @@ describe('AddressBook Component', () => {
   });
 
   it('displays 3-tier reach presets in simple mode and custom granular controls in expert mode', async () => {
-    localStorage.setItem('humoco_ui_mode', 'expert');
     (invoke as Mock).mockImplementation((cmd: string) => {
       if (cmd === 'get_contacts') return Promise.resolve(mockContacts);
       if (cmd === 'get_wot_summary') {
@@ -692,7 +720,11 @@ describe('AddressBook Component', () => {
       return Promise.resolve(undefined);
     });
 
-    render(<AddressBook onBack={mockOnBack} />);
+    render(
+      <UiModeProvider initialMode="expert">
+        <AddressBook onBack={mockOnBack} />
+      </UiModeProvider>
+    );
 
     await waitFor(() => {
       expect(screen.getByText(/John Doe/i)).toBeInTheDocument();

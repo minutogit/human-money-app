@@ -239,9 +239,8 @@ export function ReachPresetSelector({
         setErrorMsg(null);
         try {
             await runProtected(async (pwd) => {
-                const current = await settingsService.getSettings();
-                await settingsService.saveSettings(
-                    { ...current, shareMinLevel: level },
+                await settingsService.patchUiPreferences(
+                    { shareMinLevel: level },
                     pwd || undefined
                 );
             });
@@ -265,9 +264,8 @@ export function ReachPresetSelector({
         setErrorMsg(null);
         try {
             await runProtected(async (pwd) => {
-                const current = await settingsService.getSettings();
-                await settingsService.saveSettings(
-                    { ...current, mediaAutoLoadMaxHops: maxHops },
+                await settingsService.patchUiPreferences(
+                    { mediaAutoLoadMaxHops: maxHops },
                     pwd || undefined
                 );
             });

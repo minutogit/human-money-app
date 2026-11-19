@@ -15,9 +15,9 @@ use uuid::Uuid;
 use crate::l2_lifecycle::{
     build_status_dto, discover_anchor_manifest, lifecycle_err, load_key_successor_attestations,
     load_lifecycle_state, run_lifecycle_tick_with_now, save_key_successor_attestations,
-    save_lifecycle_state, strip_user_id_prefix, FrontendAnchorDiscoveryDto,
-    FrontendApprovedSwapClaimDto, FrontendClaimBundleDto, FrontendDeadQuorumAdjudicationDto,
-    FrontendL2LifecycleStatusDto, FrontendRejectedSwapClaimDto, StoredGuarantorRole,
+    save_lifecycle_state, FrontendAnchorDiscoveryDto, FrontendApprovedSwapClaimDto,
+    FrontendClaimBundleDto, FrontendDeadQuorumAdjudicationDto, FrontendL2LifecycleStatusDto,
+    FrontendRejectedSwapClaimDto, StoredGuarantorRole,
 };
 use crate::models::{
     AnchorServerInputDto, FrontendError, FrontendL2LockStatusDto, FrontendVoucherL2StatusDto,
@@ -104,7 +104,7 @@ pub fn get_l2_lifecycle_status(
     state: tauri::State<AppState>,
 ) -> Result<FrontendL2LifecycleStatusDto, FrontendError> {
     let mut service = state.authorize_and_lock(RequiredAccess::Unlocked, None)?;
-    let lc = load_lifecycle_state(&mut service, password.as_deref());
+    let lc = load_lifecycle_state(&mut service, password.as_deref())?;
     build_status_dto(&mut service, &lc, password.as_deref())
 }
 
@@ -130,11 +130,9 @@ pub async fn discover_anchor_manifest_cmd(
 ) -> Result<Option<FrontendAnchorDiscoveryDto>, FrontendError> {
     state.authorize(RequiredAccess::Unlocked, None)?;
     let anchor_id = decode_hex_fixed::<32>(anchor_id_hex.trim()).map_err(lifecycle_err)?;
-    let settings = state.get_cached_settings().unwrap_or_default();
     let client = sync_client::create_sync_probe_client();
     let found = discover_anchor_manifest(
         state.inner(),
-        &settings,
         &client,
         &anchor_id,
         creator_did.as_deref(),
@@ -192,7 +190,7 @@ pub fn register_guarantor_anchor_role(
         .map_err(FrontendError::from)?
         .map_err(FrontendError::from)?;
 
-    let mut lc = load_lifecycle_state(&mut service, password.as_deref());
+    let mut lc = load_lifecycle_state(&mut service, password.as_deref())?;
     lc.guarantor_roles.insert(
         key.clone(),
         StoredGuarantorRole {
@@ -239,17 +237,22 @@ pub fn create_key_successor_attestation_cmd(
         None => None,
     };
 
+    let new_can_did = crate::state::canonicalize_did(&new_did)
+        .map_err(|e| lifecycle_err(format!("Invalid new_did: {}", e)))?;
+
     let now_secs = sync_client::current_unix_timestamp().max(1);
     let mut service = state.authorize_and_lock(RequiredAccess::Full, password.as_deref())?;
 
     let att = service
         .with_wallet_and_identity(|w, id| {
+            let old_can_did = crate::state::canonicalize_did(w.get_user_id())
+                .map_err(|e| lifecycle_err(format!("Invalid wallet user_id: {}", e)))?;
             let old_signer = DidWotSigner {
-                did: strip_user_id_prefix(w.get_user_id()).to_string(),
+                did: old_can_did,
                 signing_key: id.signing_key.clone(),
             };
             let new_signer = DidWotSigner {
-                did: strip_user_id_prefix(&new_did).to_string(),
+                did: new_can_did,
                 signing_key: new_sk.clone(),
             };
             KeySuccessorAttestation::sign_dual(
@@ -259,11 +262,11 @@ pub fn create_key_successor_attestation_cmd(
                 new_mig_pub,
                 now_secs,
             )
+            .map_err(|e| lifecycle_err(e.to_string()))
         })
-        .map_err(FrontendError::from)?
-        .map_err(|e| lifecycle_err(e.to_string()))?;
+        .map_err(FrontendError::from)??;
 
-    let mut store = load_key_successor_attestations(&mut service, password.as_deref());
+    let mut store = load_key_successor_attestations(&mut service, password.as_deref())?;
     if !store.contains(&att) {
         store.push(att.clone());
         save_key_successor_attestations(&mut service, &store, password.as_deref())?;
@@ -285,7 +288,7 @@ pub fn import_key_successor_attestation_cmd(
         .map_err(|e| lifecycle_err(format!("Attestation verification failed: {}", e)))?;
 
     let mut service = state.authorize_and_lock(RequiredAccess::Full, password.as_deref())?;
-    let mut store = load_key_successor_attestations(&mut service, password.as_deref());
+    let mut store = load_key_successor_attestations(&mut service, password.as_deref())?;
     if !store.contains(&att) {
         store.push(att.clone());
         save_key_successor_attestations(&mut service, &store, password.as_deref())?;
@@ -293,44 +296,66 @@ pub fn import_key_successor_attestation_cmd(
     Ok(att.new_did)
 }
 
-#[tauri::command]
-pub async fn create_guarantor_claim_bundle(
+pub(crate) async fn create_guarantor_claim_bundle_impl(
     local_instance_id: String,
     guarantor_id: String,
     amount: String,
     standard_toml: String,
     notes: Option<String>,
     password: Option<String>,
-    state: tauri::State<'_, AppState>,
+    state: &AppState,
 ) -> Result<FrontendClaimBundleDto, FrontendError> {
+    let validated_guarantor = human_money_core::ValidatedUserId::parse(&guarantor_id)
+        .map_err(FrontendError::from)?;
+    let guarantor_id = validated_guarantor.into_string();
     let normalized_amount = amount.trim().replace(',', ".");
-    let (res, l2_requests) = {
+    let (res, intents, pow_bits) = {
         let mut service =
             state.authorize_and_lock(RequiredAccess::DailyPay, password.as_deref())?;
 
-        crate::services::common::ensure_restore_l2_reconciled(
-            &state,
+        let preflight = crate::services::preflight::ValueOutflowPreflight {
+            require_restore_reconciled: true,
+            check_known_offender_dids: &[],
+            check_blocking_intent_local_ids: &[local_instance_id.as_str()],
+            check_anchor_id_quorum_health: None,
+        };
+        crate::services::preflight::run_value_outflow_preflight(
+            state,
             &mut service,
             password.as_deref(),
+            &preflight,
         )?;
 
-        let (sender_id, source_voucher_id) = service
+        let lifecycle = state
+            .get_or_load_internal_lifecycle(&mut service, password.as_deref())
+            .map_err(FrontendError::from)?;
+
+        let (sender_id, pow_bits) = service
             .with_wallet(|w| {
-                let vid = w
+                let bits = w
                     .get_voucher_instance(&local_instance_id)
-                    .map(|inst| inst.voucher.voucher_id.clone());
-                (w.get_user_id().to_string(), vid)
+                    .and_then(|inst| inst.voucher.layer2_anchor)
+                    .and_then(|aid| w.profile.l2_anchor_manifests.get(&hex::encode(aid)))
+                    .map(|m| {
+                        crate::services::common::max_pow_base_bits_for_servers(
+                            &lifecycle,
+                            m.servers.iter().map(|s| s.write_url.as_str()),
+                        )
+                    })
+                    .unwrap_or(human_money_core::humoco_proto::crypto::DEFAULT_LOCK_POW_BASE_BITS);
+                (w.get_user_id().to_string(), bits)
             })
             .map_err(FrontendError::from)?;
 
-        let res = service
+        let (res, intent_opt) = service
             .create_guarantor_claim_bundle(
                 &local_instance_id,
-                guarantor_id.trim(),
+                &guarantor_id,
                 &normalized_amount,
                 &standard_toml,
                 None,
                 notes.clone(),
+                human_money_core::L2TransferMode::DurableIntent(pow_bits),
                 password.as_deref(),
             )
             .map_err(FrontendError::from)?;
@@ -346,7 +371,7 @@ pub async fn create_guarantor_claim_bundle(
         let record = TransactionRecord {
             id: Uuid::new_v4().to_string(),
             direction: "sent".to_string(),
-            recipient_id: guarantor_id.trim().to_string(),
+            recipient_id: guarantor_id.clone(),
             sender_id,
             timestamp: Utc::now().to_rfc3339(),
             summable_amounts,
@@ -367,117 +392,48 @@ pub async fn create_guarantor_claim_bundle(
         let _ = state.append_to_history(&mut service, record, password.as_deref());
         let _ = state.refresh_events_cache(&mut service, password.as_deref());
 
-        let settings = state.get_cached_settings().unwrap_or_default();
-        let l2_requests = source_voucher_id
-            .and_then(|vid| {
-                service
-                    .with_wallet(|w| {
-                        let claimed = w
-                            .voucher_store
-                            .vouchers
-                            .values()
-                            .filter(|inst| {
-                                inst.voucher.voucher_id == vid
-                                    && inst
-                                        .voucher
-                                        .transactions
-                                        .last()
-                                        .is_some_and(|t| t.t_type == "claim")
-                            })
-                            .max_by_key(|inst| inst.voucher.transactions.len())
-                            .or_else(|| w.get_voucher_instance(&local_instance_id))?;
-                        let aid = claimed.voucher.layer2_anchor?;
-                        let anchor_hex = hex::encode(aid);
-                        let manifest = w.profile.l2_anchor_manifests.get(&anchor_hex)?;
-                        let genesis_tickets = w
-                            .profile
-                            .l2_genesis_tickets
-                            .get(&anchor_hex)
-                            .map(|v| v.as_slice())
-                            .unwrap_or(&[]);
-                        let root_tid = claimed
-                            .voucher
-                            .transactions
-                            .first()
-                            .map(|t| t.t_id.as_str())
-                            .unwrap_or("");
-                        let qcs = w
-                            .profile
-                            .l2_quorum_certificates
-                            .get(root_tid)
-                            .map(|v| v.as_slice())
-                            .unwrap_or(&[]);
-                        let root_mig_sig = w
-                            .profile
-                            .l2_root_mig_sigs
-                            .get(root_tid)
-                            .and_then(|h| decode_hex_fixed::<64>(h).ok());
-                        let first_unconfirmed =
-                            human_money_core::services::l2_gateway::first_unconfirmed_hop_index(
-                                &claimed.voucher,
-                                manifest,
-                                qcs,
-                            )
-                            .ok()?;
-                        let pow_bits = crate::services::common::max_pow_base_bits_for_servers(
-                            &settings,
-                            manifest.servers.iter().map(|s| s.write_url.as_str()),
-                        );
-                        let entries =
-                            human_money_core::services::l2_gateway::build_voucher_lock_batch(
-                                &claimed.voucher,
-                                first_unconfirmed,
-                                &w.profile.l2_causal_outputs,
-                                root_mig_sig,
-                                pow_bits,
-                            )
-                            .ok()?;
-                        let mut nonce = [0u8; 32];
-                        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut nonce);
-                        if nonce == [0u8; 32] {
-                            nonce[0] = 1;
-                        }
-                        human_money_core::services::l2_gateway::build_committee_batch_requests(
-                            &aid,
-                            manifest,
-                            genesis_tickets,
-                            &entries,
-                            &nonce,
-                            &std::collections::HashMap::new(),
-                        )
-                        .ok()
-                    })
-                    .ok()
-                    .flatten()
-            })
-            .unwrap_or_default();
-
-        (res, l2_requests)
+        let intents = intent_opt.into_iter().collect::<Vec<_>>();
+        (res, intents, pow_bits)
     };
 
-    if !l2_requests.is_empty() {
-        let client = sync_client::create_sync_http_client();
-        let dispatch = crate::gateway_resolver::dispatch_lock_committee_batches(
-            &client,
-            &l2_requests,
-            std::time::Duration::from_secs(4),
+    if !intents.is_empty() {
+        let _ = crate::services::preflight::dispatch_l2_send_intents(
+            state,
+            &intents,
+            pow_bits,
+            password.as_deref(),
         )
-        .await;
-        if !dispatch.transport_errors.is_empty() || !dispatch.rejected_errors.is_empty() {
-            log::warn!(
-                "Best-effort guarantor claim L2 lock dispatch incomplete: transport_errors={}, rejected_errors={}",
-                dispatch.transport_errors.len(),
-                dispatch.rejected_errors.len()
-            );
-        }
+        .await?;
     }
 
     Ok(FrontendClaimBundleDto {
         bundle_data: res.bundle_bytes,
         bundle_id: res.bundle_id,
-        guarantor_id: guarantor_id.trim().to_string(),
+        guarantor_id,
         claimed_amount: normalized_amount,
     })
+}
+
+#[tauri::command]
+pub async fn create_guarantor_claim_bundle(
+    local_instance_id: String,
+    guarantor_id: String,
+    amount: String,
+    standard_toml: String,
+    notes: Option<String>,
+    password: Option<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<FrontendClaimBundleDto, FrontendError> {
+    create_guarantor_claim_bundle_impl(
+        local_instance_id,
+        guarantor_id,
+        amount,
+        standard_toml,
+        notes,
+        password,
+        &state,
+    )
+    .await
 }
 
 #[allow(unused_variables)]
@@ -591,13 +547,22 @@ pub async fn create_dead_quorum_swap_claim_cmd(
     serde_json::to_string_pretty(&submission).map_err(|e| lifecycle_err(e.to_string()))
 }
 
-#[tauri::command]
-pub fn adjudicate_dead_quorum_swap_cmd(
+fn swap_status_to_str(status: human_money_core::DeadQuorumSwapStatus) -> String {
+    match status {
+        human_money_core::DeadQuorumSwapStatus::AwaitingGuarantorSignatures => {
+            "awaiting_guarantor_signatures".to_string()
+        }
+        human_money_core::DeadQuorumSwapStatus::PendingL2Lock => "pending_l2_lock".to_string(),
+        human_money_core::DeadQuorumSwapStatus::Completed => "completed".to_string(),
+    }
+}
+
+pub(crate) async fn adjudicate_dead_quorum_swap_impl(
     offer_json: String,
     submissions_json: Vec<String>,
     standard_toml: String,
     password: Option<String>,
-    state: tauri::State<AppState>,
+    state: &AppState,
 ) -> Result<FrontendDeadQuorumAdjudicationDto, FrontendError> {
     let offer: DeadQuorumSwapOffer = serde_json::from_str(offer_json.trim())
         .map_err(|e| lifecycle_err(format!("Invalid DeadQuorumSwapOffer JSON: {}", e)))?;
@@ -613,67 +578,129 @@ pub fn adjudicate_dead_quorum_swap_cmd(
 
     let now_secs = sync_client::current_unix_timestamp();
 
-    let mut service = state.authorize_and_lock(RequiredAccess::Full, password.as_deref())?;
+    let (mut adj, staged_intents, pow_bits, offer_digest_hex) = {
+        let mut service = state.authorize_and_lock(RequiredAccess::Full, password.as_deref())?;
 
-    let sender_id = service
-        .with_wallet(|w| w.get_user_id().to_string())
-        .map_err(FrontendError::from)?;
+        let preflight = crate::services::preflight::ValueOutflowPreflight {
+            require_restore_reconciled: true,
+            check_known_offender_dids: &[],
+            check_blocking_intent_local_ids: &[],
+            check_anchor_id_quorum_health: Some(offer.replacement_anchor_id),
+        };
+        crate::services::preflight::run_value_outflow_preflight(
+            state,
+            &mut service,
+            password.as_deref(),
+            &preflight,
+        )?;
 
-    let adj = service
-        .execute_dead_quorum_swap(
-            &offer,
-            &standard_toml,
-            &submissions,
-            now_secs,
+        let lifecycle = state
+            .get_or_load_internal_lifecycle(&mut service, password.as_deref())
+            .map_err(FrontendError::from)?;
+        let repl_anchor_hex = hex::encode(offer.replacement_anchor_id);
+        let pow_bits = service
+            .with_wallet(|w| {
+                w.profile
+                    .l2_anchor_manifests
+                    .get(&repl_anchor_hex)
+                    .map(|m| {
+                        crate::services::common::max_pow_base_bits_for_servers(
+                            &lifecycle,
+                            m.servers.iter().map(|s| s.write_url.as_str()),
+                        )
+                    })
+                    .unwrap_or(human_money_core::humoco_proto::crypto::DEFAULT_LOCK_POW_BASE_BITS)
+            })
+            .map_err(FrontendError::from)?;
+
+        let sender_id = service
+            .with_wallet(|w| w.get_user_id().to_string())
+            .map_err(FrontendError::from)?;
+
+        let (adj, staged_intents) = service
+            .execute_dead_quorum_swap(
+                &offer,
+                &standard_toml,
+                &submissions,
+                now_secs,
+                human_money_core::L2TransferMode::DurableIntent(pow_bits),
+                password.as_deref(),
+            )
+            .map_err(FrontendError::from)?;
+
+        for proof in &adj.double_spend_proofs {
+            let _ = service.import_proof(proof.clone(), password.as_deref());
+        }
+
+        for approved in &adj.approved {
+            if let (Some(ref bundle_id), Some(ref bundle_bytes)) = (
+                &approved.replacement_bundle_id,
+                &approved.replacement_bundle_bytes,
+            ) {
+                let is_test = submissions
+                    .iter()
+                    .find(|s| {
+                        s.voucher.voucher_id == approved.voucher_id
+                            && s.claimant_did == approved.claimant_did
+                    })
+                    .is_some_and(|s| s.voucher.non_redeemable_test_voucher);
+                let raw_unit = &std_def.immutable.blueprint.unit;
+                let display_currency = if is_test && !raw_unit.starts_with("TEST-") {
+                    format!("TEST-{}", raw_unit)
+                } else {
+                    raw_unit.clone()
+                };
+                let mut summable_amounts = std::collections::HashMap::new();
+                summable_amounts.insert(display_currency, approved.approved_amount.clone());
+                let record = TransactionRecord {
+                    id: Uuid::new_v4().to_string(),
+                    direction: "sent".to_string(),
+                    recipient_id: approved.claimant_did.clone(),
+                    sender_id: sender_id.clone(),
+                    timestamp: Utc::now().to_rfc3339(),
+                    summable_amounts,
+                    countable_items: std::collections::HashMap::new(),
+                    involved_vouchers: approved.replacement_voucher_id.iter().cloned().collect(),
+                    involved_sources_details: None,
+                    bundle_data: bundle_bytes.clone(),
+                    bundle_id: bundle_id.clone(),
+                    notes: Some(format!("swap:{}", approved.voucher_id)),
+                    sender_profile_name: None,
+                };
+                // `append_to_history` deduplicates by `(bundle_id, direction)`.
+                let _ = state.append_to_history(&mut service, record, password.as_deref());
+            }
+        }
+        let _ = state.refresh_events_cache(&mut service, password.as_deref());
+
+        let offer_digest_hex = hex::encode(offer.digest());
+        (adj, staged_intents, pow_bits, offer_digest_hex)
+    };
+
+    if !staged_intents.is_empty() {
+        let _ = crate::services::preflight::dispatch_l2_send_intents(
+            state,
+            &staged_intents,
+            pow_bits,
             password.as_deref(),
         )
-        .map_err(FrontendError::from)?;
+        .await?;
+
+        let service = state.lock_service()?;
+        let _ = service.with_wallet(|w| {
+            for approved in &mut adj.approved {
+                let swap_key = format!(
+                    "{offer_digest_hex}:{}:{}:{}",
+                    approved.voucher_id, approved.tip_t_id, approved.claimant_did
+                );
+                if let Some(rec) = w.profile.l2_dead_quorum_swaps.get(&swap_key) {
+                    approved.status = rec.status;
+                }
+            }
+        });
+    }
 
     let proofs_count = adj.double_spend_proofs.len();
-    for proof in adj.double_spend_proofs {
-        let _ = service.import_proof(proof, password.as_deref());
-    }
-
-    for approved in &adj.approved {
-        if let (Some(ref bundle_id), Some(ref bundle_bytes)) = (
-            &approved.replacement_bundle_id,
-            &approved.replacement_bundle_bytes,
-        ) {
-            let is_test = submissions
-                .iter()
-                .find(|s| {
-                    s.voucher.voucher_id == approved.voucher_id
-                        && s.claimant_did == approved.claimant_did
-                })
-                .is_some_and(|s| s.voucher.non_redeemable_test_voucher);
-            let raw_unit = &std_def.immutable.blueprint.unit;
-            let display_currency = if is_test && !raw_unit.starts_with("TEST-") {
-                format!("TEST-{}", raw_unit)
-            } else {
-                raw_unit.clone()
-            };
-            let mut summable_amounts = std::collections::HashMap::new();
-            summable_amounts.insert(display_currency, approved.approved_amount.clone());
-            let record = TransactionRecord {
-                id: Uuid::new_v4().to_string(),
-                direction: "sent".to_string(),
-                recipient_id: approved.claimant_did.clone(),
-                sender_id: sender_id.clone(),
-                timestamp: Utc::now().to_rfc3339(),
-                summable_amounts,
-                countable_items: std::collections::HashMap::new(),
-                involved_vouchers: approved.replacement_voucher_id.iter().cloned().collect(),
-                involved_sources_details: None,
-                bundle_data: bundle_bytes.clone(),
-                bundle_id: bundle_id.clone(),
-                notes: Some(format!("swap:{}", approved.voucher_id)),
-                sender_profile_name: None,
-            };
-            let _ = state.append_to_history(&mut service, record, password.as_deref());
-        }
-    }
-    let _ = state.refresh_events_cache(&mut service, password.as_deref());
-
     Ok(FrontendDeadQuorumAdjudicationDto {
         approved: adj
             .approved
@@ -684,8 +711,11 @@ pub fn adjudicate_dead_quorum_swap_cmd(
                 tip_t_id: a.tip_t_id,
                 approved_amount: a.approved_amount,
                 replacement_voucher_id: a.replacement_voucher_id,
+                replacement_local_instance_id: a.replacement_local_instance_id,
                 replacement_bundle_id: a.replacement_bundle_id,
                 replacement_bundle_bytes: a.replacement_bundle_bytes,
+                replacement_intent_local_id: a.replacement_intent_local_id,
+                status: swap_status_to_str(a.status),
             })
             .collect(),
         rejected: adj
@@ -700,4 +730,137 @@ pub fn adjudicate_dead_quorum_swap_cmd(
             .collect(),
         double_spend_proofs_count: proofs_count,
     })
+}
+
+#[tauri::command]
+pub async fn adjudicate_dead_quorum_swap_cmd(
+    offer_json: String,
+    submissions_json: Vec<String>,
+    standard_toml: String,
+    password: Option<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<FrontendDeadQuorumAdjudicationDto, FrontendError> {
+    adjudicate_dead_quorum_swap_impl(offer_json, submissions_json, standard_toml, password, &state)
+        .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::settings::{InternalLifecycleState, SecurityPolicy};
+    use crate::test_support::{create_test_state, setup_test_app, temp_test_dir, ALICE_PHRASE, BOB_PHRASE};
+    use human_money_core::{test_utils, MnemonicLanguage, SecondaryScope};
+
+    #[tokio::test]
+    async fn test_restore_reconcile_blocks_claim_and_dead_quorum_swap() {
+        let base_dir = temp_test_dir("l2_preflight_blocks_claim_and_swap");
+        let pw = "TestPassword123!";
+        let svc_alice = setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, pw);
+        let alice_state = create_test_state(svc_alice);
+        let svc_bob = setup_test_app(&base_dir.join("bob"), "Bob", BOB_PHRASE, pw);
+        let bob_state = create_test_state(svc_bob);
+
+        let bob_did = bob_state
+            .service
+            .lock()
+            .unwrap()
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
+        let ft_toml =
+            test_utils::generate_signed_standard_toml("voucher_standards/freetaler_v1/standard.toml");
+
+        let offer = {
+            let mut s = alice_state.service.lock().unwrap();
+            alice_state
+                .save_security_policy(
+                    &mut s,
+                    SecurityPolicy {
+                        session_timeout_seconds: 300,
+                        ..Default::default()
+                    },
+                    Some(pw),
+                )
+                .unwrap();
+            alice_state
+                .save_internal_lifecycle(
+                    &mut s,
+                    InternalLifecycleState {
+                        pending_restore_l2_reconciliation: true,
+                        ..Default::default()
+                    },
+                    Some(pw),
+                )
+                .unwrap();
+            s.with_wallet_and_identity(|_, id| {
+                DeadQuorumSwapOffer::create_and_sign(
+                    id,
+                    [0x11; 32],
+                    [0x22; 32],
+                    1_795_000_000,
+                    DEAD_QUORUM_CLAIM_WINDOW_SECS,
+                    4,
+                )
+                .unwrap()
+            })
+            .unwrap()
+        };
+        let offer_json = serde_json::to_string(&offer).unwrap();
+
+        let claim_err = create_guarantor_claim_bundle_impl(
+            "nonexistent-lid".into(),
+            bob_did,
+            "10.00".into(),
+            ft_toml.clone(),
+            None,
+            Some(pw.into()),
+            &alice_state,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            claim_err.message.contains("Sicherheitsabgleich"),
+            "unexpected claim err: {:?}",
+            claim_err
+        );
+
+        let swap_err = adjudicate_dead_quorum_swap_impl(
+            offer_json.clone(),
+            Vec::new(),
+            ft_toml.clone(),
+            Some(pw.into()),
+            &alice_state,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            swap_err.message.contains("Sicherheitsabgleich"),
+            "unexpected swap err: {:?}",
+            swap_err
+        );
+
+        // DailyPay secondary session MUST be rejected by adjudicate_dead_quorum_swap_impl (Full required)
+        {
+            let mut s = bob_state.service.lock().unwrap();
+            let folder = s.list_profiles().unwrap()[0].folder_name.clone();
+            s.enable_secondary_auth(pw, "123456", SecondaryScope::DailyPay)
+                .unwrap();
+            s.logout();
+            let mode = s
+                .login_with_secondary(&folder, "123456", false, "device-drops-test".into())
+                .unwrap();
+            assert_eq!(mode, human_money_core::AccessMode::DailyPay);
+        }
+        let daily_swap_err = adjudicate_dead_quorum_swap_impl(
+            offer_json,
+            Vec::new(),
+            ft_toml,
+            Some("123456".into()),
+            &bob_state,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(daily_swap_err.code, "error.auth.insufficientAccessMode");
+
+        let _ = (MnemonicLanguage::English, std::fs::remove_dir_all(&base_dir));
+    }
 }

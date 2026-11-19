@@ -3,7 +3,9 @@ use log::info;
 use crate::{
     models::{FrontendError, ReachPresetDto},
     services::market_service::{get_own_card_max_hops_inner, set_own_card_max_hops_inner},
-    settings::AppSettings,
+    settings::{
+        AppConfigDto, SecurityPolicy, SecurityPolicyPatch, UiPreferences, UiPreferencesPatch,
+    },
     state::RequiredAccess,
     AppState,
 };
@@ -47,12 +49,14 @@ pub fn get_reach_preset_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<ReachPresetDto, FrontendError> {
-    let settings = {
+    let prefs = {
         let _service = state.authorize_and_lock(RequiredAccess::Unlocked, None)?;
-        state.get_cached_settings().map_err(FrontendError::from)?
+        state
+            .get_cached_ui_preferences()
+            .map_err(FrontendError::from)?
     };
-    let media_auto_load_max_hops = settings.media_auto_load_max_hops.min(3);
-    let share_min_level = settings.share_min_level.min(3);
+    let media_auto_load_max_hops = prefs.media_auto_load_max_hops.min(3);
+    let share_min_level = prefs.share_min_level.min(3);
 
     let (own_list_max_hops, card_max_hops) = {
         let mut service = state.authorize_and_lock(RequiredAccess::Unlocked, None)?;
@@ -99,14 +103,11 @@ pub fn apply_reach_preset_impl(
         let mut service = state.authorize_and_lock(RequiredAccess::DailyPay, password.as_deref())?;
         set_own_card_max_hops_inner(state, &mut service, card_max_hops, password.as_deref())?;
 
-        let mut settings = state
-            .get_cached_settings()
-            .or_else(|_| state.load_settings(&mut service, password.as_deref()))
-            .unwrap_or_default();
-        settings.share_min_level = share_min_level;
-        settings.media_auto_load_max_hops = media_auto_load_max_hops;
         state
-            .save_settings(&mut service, settings, password.as_deref())
+            .mutate_ui_preferences(&mut service, password.as_deref(), |prefs| {
+                prefs.share_min_level = share_min_level.min(3);
+                prefs.media_auto_load_max_hops = media_auto_load_max_hops.min(3);
+            })
             .map_err(FrontendError::from)?;
     }
 
@@ -119,56 +120,42 @@ pub fn apply_reach_preset_impl(
     })
 }
 
-pub fn get_app_settings_impl(state: &AppState) -> Result<AppSettings, FrontendError> {
-    info!("Getting app settings from cache...");
+pub fn get_app_config_impl(state: &AppState) -> Result<AppConfigDto, FrontendError> {
+    info!("Getting split app config from cache...");
     state.authorize(RequiredAccess::Unlocked, None)?;
-    state.get_cached_settings().map_err(FrontendError::from)
+    state.get_cached_app_config().map_err(FrontendError::from)
 }
 
-fn is_security_setting_changed(next: &AppSettings, existing: &AppSettings) -> bool {
-    next.session_timeout_seconds != existing.session_timeout_seconds
-        || next.auto_backup_enabled != existing.auto_backup_enabled
-        || next.backup_sync_folder != existing.backup_sync_folder
-        || next.backup_protection_mode != existing.backup_protection_mode
-        || next.sync_backup_enabled != existing.sync_backup_enabled
-        || next.dev_mode_unlocked != existing.dev_mode_unlocked
-        || next.own_nominated_lock_server != existing.own_nominated_lock_server
-        || next.l2_anchor_templates_meta != existing.l2_anchor_templates_meta
-        || next.public_syncs != existing.public_syncs
-        || next.market_selected_syncs != existing.market_selected_syncs
-}
-
-pub fn save_app_settings_impl(
-    mut settings: AppSettings,
+pub fn patch_ui_preferences_impl(
+    patch: UiPreferencesPatch,
     password: Option<String>,
     state: &AppState,
-) -> Result<(), FrontendError> {
-    settings.media_auto_load_max_hops = settings.media_auto_load_max_hops.min(3);
-    settings.share_min_level = settings.share_min_level.min(3);
-    info!("Saving app settings to disk...");
+) -> Result<UiPreferences, FrontendError> {
+    info!("Patching UiPreferences...");
     let mut service = state.authorize_and_lock(RequiredAccess::DailyPay, password.as_deref())?;
-    let existing = match state.get_cached_settings() {
-        Ok(cached) => cached,
-        Err(_) => state
-            .load_settings(&mut service, password.as_deref())
-            .map_err(FrontendError::from)?,
-    };
-    if existing.pending_restore_l2_reconciliation {
-        settings.pending_restore_l2_reconciliation = true;
-    }
-    if is_security_setting_changed(&settings, &existing) {
-        service
-            .require_access_mode(human_money_core::AccessMode::Full, password.as_deref())
-            .map_err(FrontendError::from)?;
-    }
-    let timeout_zero = settings.session_timeout_seconds == 0;
     state
-        .save_settings(&mut service, settings, password.as_deref())
+        .mutate_ui_preferences(&mut service, password.as_deref(), |prefs| {
+            patch.apply_to(prefs);
+        })
+        .map_err(FrontendError::from)
+}
+
+pub fn patch_security_policy_impl(
+    patch: SecurityPolicyPatch,
+    password: Option<String>,
+    state: &AppState,
+) -> Result<SecurityPolicy, FrontendError> {
+    info!("Patching SecurityPolicy...");
+    let mut service = state.authorize_and_lock(RequiredAccess::Full, password.as_deref())?;
+    let updated = state
+        .mutate_security_policy(&mut service, password.as_deref(), |policy| {
+            patch.apply_to(policy);
+        })
         .map_err(FrontendError::from)?;
-    if timeout_zero {
+    if updated.session_timeout_seconds == 0 {
         service.lock_session();
     }
-    Ok(())
+    Ok(updated)
 }
 
 pub fn set_conflict_local_override_impl(
@@ -192,6 +179,10 @@ pub fn set_conflict_local_override_impl(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::settings::{
+        InternalLifecycleState, INTERNAL_LIFECYCLE_STATE_KEY, SECURITY_POLICY_KEY,
+        UI_PREFERENCES_KEY,
+    };
 
     #[test]
     fn test_reach_preset_values_and_detection() {
@@ -212,7 +203,7 @@ mod tests {
     }
 
     #[test]
-    fn test_settings_security_field_guard_timeout_zero_and_restore_flag_preservation() {
+    fn test_split_patch_role_isolation_timeout_zero_double_option_and_lifecycle_intact() {
         let dir = crate::test_support::temp_test_dir("settings_guard_test");
         let keystore_dir = dir.join("keystore");
         let master_pw = "MasterPass-Settings-2026!";
@@ -259,62 +250,126 @@ mod tests {
         )
         .unwrap();
 
-        let base = AppSettings {
+        let ui_base = UiPreferences::default();
+        let sec_base = SecurityPolicy {
             session_timeout_seconds: 300,
+            backup_sync_folder: Some("/tmp/initial-backup".to_string()),
+            ..Default::default()
+        };
+        let lc_base = InternalLifecycleState {
             pending_restore_l2_reconciliation: true,
             ..Default::default()
         };
-        *state.settings.lock().unwrap() = Some(base.clone());
         {
             let mut svc = state.service.lock().unwrap();
+            crate::state::save_encrypted_json(&mut svc, UI_PREFERENCES_KEY, &ui_base, Some(master_pw))
+                .unwrap();
+            crate::state::save_encrypted_json(&mut svc, SECURITY_POLICY_KEY, &sec_base, Some(master_pw))
+                .unwrap();
             crate::state::save_encrypted_json(
                 &mut svc,
-                crate::settings::SETTINGS_KEY,
-                &base,
+                INTERNAL_LIFECYCLE_STATE_KEY,
+                &lc_base,
                 Some(master_pw),
             )
             .unwrap();
         }
+        *state.ui_preferences.lock().unwrap() = Some(ui_base);
+        *state.security_policy.lock().unwrap() = Some(sec_base);
+        *state.internal_lifecycle.lock().unwrap() = Some(lc_base);
 
-        // 1. DailyPay can save pure UI preference while keeping pending_restore_l2_reconciliation = true
-        let mut ui_only = base.clone();
-        ui_only.ui_mode = "expert".to_string();
-        ui_only.pending_restore_l2_reconciliation = false;
-        save_app_settings_impl(ui_only, None, &state).unwrap();
-        let saved_ui = get_app_settings_impl(&state).unwrap();
-        assert_eq!(saved_ui.ui_mode, "expert");
-        assert!(saved_ui.pending_restore_l2_reconciliation);
+        // 1. DailyPay can patch UiPreferences (clamping works) while InternalLifecycleState stays intact
+        let updated_ui = patch_ui_preferences_impl(
+            UiPreferencesPatch {
+                ui_mode: Some("expert".to_string()),
+                share_min_level: Some(9),
+                media_auto_load_max_hops: Some(7),
+                ..Default::default()
+            },
+            None,
+            &state,
+        )
+        .unwrap();
+        assert_eq!(updated_ui.ui_mode, "expert");
+        assert_eq!(updated_ui.share_min_level, 3);
+        assert_eq!(updated_ui.media_auto_load_max_hops, 3);
+        let cfg = get_app_config_impl(&state).unwrap();
+        assert_eq!(cfg.ui_preferences.ui_mode, "expert");
+        assert!(cfg.lifecycle.pending_restore_l2_reconciliation);
 
-        // 2. DailyPay is rejected when changing security settings without master password
-        for mutate_security in [
-            |s: &mut AppSettings| s.auto_backup_enabled = false,
-            |s: &mut AppSettings| s.session_timeout_seconds = 60,
-            |s: &mut AppSettings| s.dev_mode_unlocked = true,
-            |s: &mut AppSettings| s.backup_sync_folder = Some("/tmp/backup".to_string()),
+        // 2. DailyPay is rejected when patching SecurityPolicy without master password
+        for patch in [
+            SecurityPolicyPatch {
+                auto_backup_enabled: Some(false),
+                ..Default::default()
+            },
+            SecurityPolicyPatch {
+                session_timeout_seconds: Some(60),
+                ..Default::default()
+            },
+            SecurityPolicyPatch {
+                dev_mode_unlocked: Some(true),
+                ..Default::default()
+            },
+            SecurityPolicyPatch {
+                backup_sync_folder: Some(Some("/tmp/other".to_string())),
+                ..Default::default()
+            },
         ] {
-            let mut attempt = saved_ui.clone();
-            mutate_security(&mut attempt);
-            let err = save_app_settings_impl(attempt, None, &state).unwrap_err();
+            let err = patch_security_policy_impl(patch, None, &state).unwrap_err();
             assert_eq!(err.code, "error.auth.insufficientAccessMode");
         }
 
-        // 3. Security change succeeds with valid master password override
-        let mut with_override = saved_ui.clone();
-        with_override.auto_backup_enabled = false;
-        save_app_settings_impl(with_override.clone(), Some(master_pw.to_string()), &state)
-            .unwrap();
-        assert!(!get_app_settings_impl(&state).unwrap().auto_backup_enabled);
+        // 3. Full access succeeds; omitted backup_sync_folder preserves existing, explicit Some(None) clears it
+        let sec_after_omit = patch_security_policy_impl(
+            SecurityPolicyPatch {
+                auto_backup_enabled: Some(false),
+                ..Default::default()
+            },
+            Some(master_pw.to_string()),
+            &state,
+        )
+        .unwrap();
+        assert!(!sec_after_omit.auto_backup_enabled);
+        assert_eq!(
+            sec_after_omit.backup_sync_folder.as_deref(),
+            Some("/tmp/initial-backup")
+        );
+
+        let sec_after_clear = patch_security_policy_impl(
+            SecurityPolicyPatch {
+                backup_sync_folder: Some(None),
+                ..Default::default()
+            },
+            Some(master_pw.to_string()),
+            &state,
+        )
+        .unwrap();
+        assert_eq!(sec_after_clear.backup_sync_folder, None);
+        assert!(get_app_config_impl(&state)
+            .unwrap()
+            .lifecycle
+            .pending_restore_l2_reconciliation);
 
         // 4. Saving session_timeout_seconds == 0 immediately clears active session cache & demotes timed elevation
         crate::commands::auth::elevate_session_with_password_impl(master_pw, &state).unwrap();
         assert!(state.service.lock().unwrap().is_session_active());
-        let mut timeout_zero = get_app_settings_impl(&state).unwrap();
-        timeout_zero.session_timeout_seconds = 0;
-        save_app_settings_impl(timeout_zero, Some(master_pw.to_string()), &state).unwrap();
+        let sec_zero = patch_security_policy_impl(
+            SecurityPolicyPatch {
+                session_timeout_seconds: Some(0),
+                ..Default::default()
+            },
+            Some(master_pw.to_string()),
+            &state,
+        )
+        .unwrap();
+        assert_eq!(sec_zero.session_timeout_seconds, 0);
 
         let status_after = crate::commands::auth::get_session_status_impl(&state).unwrap();
         assert!(!status_after.has_cached_session);
         assert_eq!(status_after.access_mode, "dailyPay");
         assert_eq!(status_after.base_access_mode, "dailyPay");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

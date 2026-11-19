@@ -3,7 +3,8 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { TransferSuccessView } from '../TransferSuccessView';
 import { postService } from '../../../services/postService';
 import { invoke } from '@tauri-apps/api/core';
-import { UI_MODE_STORAGE_KEY } from '../../../context/UiModeContext';
+import { UiModeProvider } from '../../../context/UiModeContext';
+import type { AppConfigDto } from '../../../types';
 
 // Mock dependencies
 vi.mock('@tauri-apps/api/core', () => ({
@@ -24,9 +25,42 @@ vi.mock('@tauri-apps/plugin-opener', () => ({
 
 vi.mock('../../../services/settingsService', () => ({
   settingsService: {
-    getSettings: vi.fn().mockResolvedValue({
-      lastUsedDirectory: '/tmp',
-    }),
+    getConfig: vi.fn().mockResolvedValue({
+      uiPreferences: {
+        uiMode: 'simple',
+        lastUsedDirectory: '/tmp',
+        balanceViewMode: 'spendable',
+        marketShowUnknown: true,
+        maxStoredCards: 2000,
+        marketSendCardOnPayment: false,
+        marketSyncEnabled: true,
+        shareMinLevel: 1,
+        marketPollWifiOnly: false,
+        wotShareViaSync: true,
+        postAcceptFromContacts: true,
+        mediaAutoLoadMaxHops: 2,
+      },
+      securityPolicy: {
+        sessionTimeoutSeconds: 600,
+        privacyDefault: 'ask',
+        devModeUnlocked: false,
+        autoBackupEnabled: true,
+        syncBackupEnabled: true,
+        backupSyncFolder: null,
+        backupProtectionMode: null,
+        ownNominatedLockServer: null,
+        marketSelectedSyncs: [],
+        publicSyncs: [],
+      },
+      lifecycle: {
+        pendingRestoreL2Reconciliation: false,
+        backupDirty: false,
+        lastBackupAt: null,
+        lastSyncBackupAt: null,
+        l2ProbeCache: {},
+        l2AnchorTemplatesMeta: [],
+      },
+    } satisfies AppConfigDto),
   },
 }));
 
@@ -51,7 +85,6 @@ describe('TransferSuccessView Component (Dual-Delivery & SST-V4 Retry)', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    localStorage.setItem(UI_MODE_STORAGE_KEY, 'expert');
     vi.mocked(invoke).mockImplementation(async (cmd: string) => {
       if (cmd === 'get_contacts') return [];
       return undefined;
@@ -60,14 +93,16 @@ describe('TransferSuccessView Component (Dual-Delivery & SST-V4 Retry)', () => {
 
   it('renders emerald success card when initially deposited to 1 or more sync endpoints', async () => {
     render(
-      <TransferSuccessView
-        bundleData={dummyBundleData}
-        recipientId={recipientId}
-        summary="10.00 Minuto"
-        bundleId={bundleId}
-        initialDepositedTo={2}
-        onDone={vi.fn()}
-      />
+      <UiModeProvider initialMode="expert">
+        <TransferSuccessView
+          bundleData={dummyBundleData}
+          recipientId={recipientId}
+          summary="10.00 Minuto"
+          bundleId={bundleId}
+          initialDepositedTo={2}
+          onDone={vi.fn()}
+        />
+      </UiModeProvider>
     );
 
     // Emerald card is visible
@@ -98,7 +133,6 @@ describe('TransferSuccessView Component (Dual-Delivery & SST-V4 Retry)', () => {
   });
 
   it('CRITICAL SST-V4 RETRY INVARIANT: clicking retry calls depositTransferToPost and NEVER create_transfer_bundle', async () => {
-    localStorage.setItem(UI_MODE_STORAGE_KEY, 'simple');
     const depositMock = vi.mocked(postService.depositTransferToPost).mockResolvedValue({
       msgId: 'msg-deposit-123',
       depositedTo: 1,
@@ -107,14 +141,16 @@ describe('TransferSuccessView Component (Dual-Delivery & SST-V4 Retry)', () => {
     });
 
     render(
-      <TransferSuccessView
-        bundleData={dummyBundleData}
-        recipientId={recipientId}
-        summary="10.00 Minuto"
-        bundleId={bundleId}
-        initialDepositedTo={0}
-        onDone={vi.fn()}
-      />
+      <UiModeProvider initialMode="simple">
+        <TransferSuccessView
+          bundleData={dummyBundleData}
+          recipientId={recipientId}
+          summary="10.00 Minuto"
+          bundleId={bundleId}
+          initialDepositedTo={0}
+          onDone={vi.fn()}
+        />
+      </UiModeProvider>
     );
 
     const retryBtn = screen.getByRole('button', { name: /Redeposit into Post/i });
@@ -139,17 +175,17 @@ describe('TransferSuccessView Component (Dual-Delivery & SST-V4 Retry)', () => {
   });
 
   it('APP-UX-09 P3 Simple Mode: shows clear delivered-to heading without raw did:key and collapses direct handover buttons', async () => {
-    localStorage.setItem(UI_MODE_STORAGE_KEY, 'simple');
-
     const { container } = render(
-      <TransferSuccessView
-        bundleData={dummyBundleData}
-        recipientId={recipientId}
-        summary="10.00 Minuto"
-        bundleId={bundleId}
-        initialDepositedTo={2}
-        onDone={vi.fn()}
-      />
+      <UiModeProvider initialMode="simple">
+        <TransferSuccessView
+          bundleData={dummyBundleData}
+          recipientId={recipientId}
+          summary="10.00 Minuto"
+          bundleId={bundleId}
+          initialDepositedTo={2}
+          onDone={vi.fn()}
+        />
+      </UiModeProvider>
     );
 
     await waitFor(() => {

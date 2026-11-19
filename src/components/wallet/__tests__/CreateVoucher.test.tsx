@@ -2,6 +2,7 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
 import { CreateVoucher } from '../CreateVoucher';
+import { UiModeProvider } from '../../../context/UiModeContext';
 import { invoke } from '@tauri-apps/api/core';
 import { VoucherStandardInfo } from '../../../types';
 
@@ -26,6 +27,7 @@ vi.mock('../../../context/SessionContext', () => ({
   useSession: () => ({
     protectAction: vi.fn((callback) => callback('test-password')),
   }),
+  useOptionalSession: () => null,
 }));
 
 // Mock scrollIntoView as it's not implemented in JSDOM
@@ -195,9 +197,10 @@ amount_decimal_places = 4`,
   });
 
   it('updates validity duration when standard is selected', async () => {
-    localStorage.setItem('humoco_ui_mode', 'expert');
     render(
-      <CreateVoucher onVoucherCreated={mockOnVoucherCreated} onCancel={mockOnCancel} />
+      <UiModeProvider initialMode="expert">
+        <CreateVoucher onVoucherCreated={mockOnVoucherCreated} onCancel={mockOnCancel} />
+      </UiModeProvider>
     );
 
     // Wait for standards to load

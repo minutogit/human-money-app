@@ -3,8 +3,8 @@ import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
 import { ReceiveView } from '../ReceiveView';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
-import { VoucherStandardInfo, AppSettings } from '../../../types';
-import { UI_MODE_STORAGE_KEY } from '../../../context/UiModeContext';
+import { VoucherStandardInfo, AppConfigDto } from '../../../types';
+import { UiModeProvider } from '../../../context/UiModeContext';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -116,10 +116,41 @@ amount_decimal_places = 4`,
     },
   ];
 
-  const mockSettings: AppSettings = {
-    sessionTimeoutSeconds: 300,
-    privacyDefault: 'public',
-    marketSyncEnabled: true,
+  const mockConfig: AppConfigDto = {
+    uiPreferences: {
+      uiMode: 'simple',
+      lastUsedDirectory: null,
+      balanceViewMode: 'spendable',
+      marketShowUnknown: true,
+      maxStoredCards: 2000,
+      marketSendCardOnPayment: false,
+      marketSyncEnabled: true,
+      shareMinLevel: 1,
+      marketPollWifiOnly: false,
+      wotShareViaSync: true,
+      postAcceptFromContacts: true,
+      mediaAutoLoadMaxHops: 2,
+    },
+    securityPolicy: {
+      sessionTimeoutSeconds: 300,
+      privacyDefault: 'public',
+      devModeUnlocked: false,
+      autoBackupEnabled: true,
+      syncBackupEnabled: true,
+      backupSyncFolder: null,
+      backupProtectionMode: null,
+      ownNominatedLockServer: null,
+      marketSelectedSyncs: [],
+      publicSyncs: [],
+    },
+    lifecycle: {
+      pendingRestoreL2Reconciliation: false,
+      backupDirty: false,
+      lastBackupAt: null,
+      lastSyncBackupAt: null,
+      l2ProbeCache: {},
+      l2AnchorTemplatesMeta: [],
+    },
   };
 
   const mockOnBack = vi.fn();
@@ -132,8 +163,8 @@ amount_decimal_places = 4`,
       if (cmd === 'get_voucher_standards') {
         return Promise.resolve(mockStandards);
       }
-      if (cmd === 'get_app_settings') {
-        return Promise.resolve(mockSettings);
+      if (cmd === 'get_app_config') {
+        return Promise.resolve(mockConfig);
       }
       if (cmd === 'get_user_id') {
         return Promise.resolve('did:key:z789');
@@ -207,8 +238,8 @@ amount_decimal_places = 4`,
       if (cmd === 'get_voucher_standards') {
         return Promise.resolve(mockStandards);
       }
-      if (cmd === 'get_app_settings') {
-        return Promise.resolve(mockSettings);
+      if (cmd === 'get_app_config') {
+        return Promise.resolve(mockConfig);
       }
       if (cmd === 'receive_bundle') {
         return Promise.reject(new Error('MacError'));
@@ -250,8 +281,8 @@ amount_decimal_places = 4`,
       if (cmd === 'get_voucher_standards') {
         return Promise.resolve(mockStandards);
       }
-      if (cmd === 'get_app_settings') {
-        return Promise.resolve(mockSettings);
+      if (cmd === 'get_app_config') {
+        return Promise.resolve(mockConfig);
       }
       if (cmd === 'receive_bundle') {
         rejectCount++;
@@ -326,8 +357,8 @@ amount_decimal_places = 4`,
           }
         ]);
       }
-      if (cmd === 'get_app_settings') {
-        return Promise.resolve(mockSettings);
+      if (cmd === 'get_app_config') {
+        return Promise.resolve(mockConfig);
       }
       if (cmd === 'get_voucher_summaries') {
         return Promise.resolve([
@@ -368,10 +399,10 @@ amount_decimal_places = 4`,
   });
 
   it('APP-UX-09 P3 Simple Mode: renders unified My Code QR + Select File without tabs, PoS toggle, or technical file guides', async () => {
-    localStorage.setItem(UI_MODE_STORAGE_KEY, 'simple');
-
     const { container } = render(
-      <ReceiveView onBack={mockOnBack} onReceiveSuccess={mockOnReceiveSuccess} />
+      <UiModeProvider initialMode="simple">
+        <ReceiveView onBack={mockOnBack} onReceiveSuccess={mockOnReceiveSuccess} />
+      </UiModeProvider>
     );
 
     await waitFor(() => {

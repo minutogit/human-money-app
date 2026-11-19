@@ -17,7 +17,9 @@ pub async fn save_contact(
     state: tauri::State<'_, AppState>,
 ) -> Result<(), FrontendError> {
     let mut contact = contact;
-    contact.did = contact.did.trim().to_string();
+    let validated_did = human_money_core::ValidatedUserId::parse(&contact.did)
+        .map_err(FrontendError::from)?;
+    contact.did = validated_did.into_string();
     let contact_did = contact.did.clone();
     let trust_level = contact.trust_level;
     let needs_sync_probe = contact
@@ -244,7 +246,9 @@ mod tests {
             history: Mutex::new(None),
             events: Mutex::new(None),
             contacts: Mutex::new(Some(book)),
-            settings: Mutex::new(None),
+            ui_preferences: Mutex::new(None),
+            security_policy: Mutex::new(None),
+            internal_lifecycle: Mutex::new(None),
             own_market_profile: Mutex::new(None),
             wot: Mutex::new(None),
             recovery_owner: Mutex::new(None),
@@ -334,9 +338,11 @@ mod tests {
             .save_contact(&mut service, initial_contact, Some(password))
             .unwrap();
 
-        // Check settings: saving contact does not blindly auto-activate unverified syncs
-        let settings = state.load_settings(&mut service, Some(password)).unwrap();
-        assert_eq!(settings.market_selected_syncs.len(), 0);
+        // Check security policy: saving contact does not blindly auto-activate unverified syncs
+        let policy = state
+            .load_security_policy(&mut service, Some(password))
+            .unwrap();
+        assert_eq!(policy.market_selected_syncs.len(), 0);
 
         // 2. Overwrite contact with EMPTY drops (user deleted drop)
         let updated_contact = FrontendContact {

@@ -278,11 +278,11 @@ export function useAddressBook({
 
     const saveWotPackageBytes = async (bytes: number[] | undefined, defaultFilename: string) => {
         if (!bytes || bytes.length === 0) return;
-        const settings = await settingsService.getSettings().catch(() => null);
+        const config = await settingsService.getConfig().catch(() => null);
         const saveResult = await saveBytesToFile(bytes, {
             defaultFilename,
             filters: [{ name: t('transfer.importFile.wotFilter'), extensions: ['wot'] }],
-            settings,
+            uiPreferences: config?.uiPreferences,
             protectAction,
         });
         if (saveResult) {
@@ -394,10 +394,10 @@ export function useAddressBook({
 
     const handleImportWot = async () => {
         try {
-            const settings = await settingsService.getSettings().catch(() => null);
+            const config = await settingsService.getConfig().catch(() => null);
             const fileResult = await openFileAsBytes({
                 filters: [{ name: t('transfer.importFile.wotFilter'), extensions: ['wot'] }],
-                settings,
+                uiPreferences: config?.uiPreferences,
                 protectAction,
             });
             if (fileResult) {

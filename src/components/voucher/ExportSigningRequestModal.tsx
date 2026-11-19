@@ -9,17 +9,18 @@ import { logger } from "../../utils/log";
 import { translateError } from "../../utils/errorHelper";
 import { ConfirmationModal } from "../ui/ConfirmationModal";
 import { Button } from "../ui/Button";
-import { AppSettings, Contact } from "../../types";
+import { AppConfigDto, Contact } from "../../types";
 import { updateLastUsedDirectory } from "../../utils/settingsUtils";
+import { normalizeUserIdInput } from "../../utils/humocoUri";
 import { RefreshCw, UploadCloud, CheckCircle2 } from "lucide-react";
 
 interface ExportSigningRequestModalProps {
     isOpen: boolean;
     voucherId: string;
     onClose: () => void;
-    settings: AppSettings | null;
+    config: AppConfigDto | null;
     protectAction: <T>(action: (password: string | null) => Promise<T>) => Promise<T | void>;
-    onSettingsRefresh: (settings: AppSettings) => void;
+    onConfigRefresh: (config: AppConfigDto) => void;
     contacts?: Contact[];
     onSuccess?: (savedFilePath: string) => void;
 }
@@ -28,9 +29,9 @@ export function ExportSigningRequestModal({
     isOpen,
     voucherId,
     onClose,
-    settings,
+    config,
     protectAction,
-    onSettingsRefresh,
+    onConfigRefresh,
     contacts,
     onSuccess
 }: ExportSigningRequestModalProps) {
@@ -62,14 +63,15 @@ export function ExportSigningRequestModal({
         setIsExporting(true);
         setExportError("");
         try {
-            let config;
+            let requestConfig: SigningRequestConfig;
             if (encryptToDid) {
-                if (!recipientId.trim()) {
+                const normalizedDid = normalizeUserIdInput(recipientId) ?? recipientId.trim();
+                if (!normalizedDid) {
                     setExportError(t('voucher.errorEnterRecipientDid'));
                     setIsExporting(false);
                     return;
                 }
-                config = { type: "TargetDid", value: [recipientId.trim(), "TrialDecryption"] };
+                requestConfig = { type: "TargetDid", value: [normalizedDid, "TrialDecryption"] };
             } else if (protectWithPassword) {
                 if (!exportPassword) {
                     setExportError(t('voucher.errorEnterPassword'));
@@ -86,16 +88,16 @@ export function ExportSigningRequestModal({
                     setIsExporting(false);
                     return;
                 }
-                config = { type: "Password", value: exportPassword };
+                requestConfig = { type: "Password", value: exportPassword };
             } else {
-                config = { type: "Cleartext" };
+                requestConfig = { type: "Cleartext" };
             }
 
-            const bundleBytes = await voucherService.createSigningRequest(voucherId, config as SigningRequestConfig);
+            const bundleBytes = await voucherService.createSigningRequest(voucherId, requestConfig);
 
             const filePath = await save({
-                defaultPath: settings?.lastUsedDirectory 
-                    ? `${settings.lastUsedDirectory}/signature-request-${voucherId.slice(0, 8)}.ask`
+                defaultPath: config?.uiPreferences.lastUsedDirectory
+                    ? `${config.uiPreferences.lastUsedDirectory}/signature-request-${voucherId.slice(0, 8)}.ask`
                     : `signature-request-${voucherId.slice(0, 8)}.ask`,
                 filters: [
                     { name: t('voucher.export.fileFilter'), extensions: ['ask'] },
@@ -107,11 +109,13 @@ export function ExportSigningRequestModal({
                 const uint8Array = new Uint8Array(bundleBytes);
                 const { writeFile } = await import("@tauri-apps/plugin-fs");
                 await writeFile(filePath, uint8Array);
-                
-                if (settings) {
-                    await updateLastUsedDirectory(filePath, settings, protectAction);
-                    const newSettings = await settingsService.getSettings();
-                    onSettingsRefresh(newSettings);
+
+                if (config) {
+                    await updateLastUsedDirectory(filePath, config.uiPreferences, protectAction);
+                    const freshConfig = await settingsService.getConfig().catch(() => null);
+                    if (freshConfig) {
+                        onConfigRefresh(freshConfig);
+                    }
                 }
 
                 if (onSuccess) {
@@ -131,7 +135,8 @@ export function ExportSigningRequestModal({
 
     const handleSendSigningRequestViaPost = async () => {
         if (!voucherId) return;
-        if (!recipientId.trim()) {
+        const normalizedDid = normalizeUserIdInput(recipientId) ?? recipientId.trim();
+        if (!normalizedDid) {
             setExportError(t('voucher.errorEnterRecipientDid'));
             return;
         }
@@ -141,12 +146,12 @@ export function ExportSigningRequestModal({
         try {
             const config: SigningRequestConfig = {
                 type: "TargetDid",
-                value: [recipientId.trim(), "TrialDecryption"]
+                value: [normalizedDid, "TrialDecryption"]
             };
             const bundleBytes = await voucherService.createSigningRequest(voucherId, config);
             const res = await protectAction(async (pwd) => {
                 return await postService.sendSigningRequestViaPost(
-                    recipientId.trim(),
+                    normalizedDid,
                     bundleBytes,
                     pwd || undefined,
                     voucherId,
@@ -229,7 +234,10 @@ export function ExportSigningRequestModal({
                                 <input
                                     type="text"
                                     value={recipientId}
-                                    onChange={(e) => setRecipientId(e.target.value)}
+                                    onChange={(e) => {
+                                        const normalized = normalizeUserIdInput(e.target.value);
+                                        setRecipientId(normalized ?? e.target.value);
+                                    }}
                                     placeholder={t('contacts.didPlaceholder')}
                                     className="w-full px-4 py-3 border border-theme-subtle rounded-xl bg-bg-input text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary/20 focus:border-theme-primary shadow-inner-soft transition-all"
                                     autoFocus

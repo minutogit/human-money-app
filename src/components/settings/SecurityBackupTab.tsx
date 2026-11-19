@@ -9,35 +9,36 @@ import {
     CheckCircle2,
     Clock,
 } from 'lucide-react';
-import { AppSettings, PrivacyDefault } from '../../types';
+import { AppConfigDto, PrivacyDefault, SecurityPolicyPatch } from '../../types';
 import { BackupSettingsCard } from './BackupSettingsCard';
 import { QuickPinCard } from './QuickPinCard';
 import { IdentityRecoveryCard } from './IdentityRecoveryCard';
 import { DangerZoneCard } from './DangerZoneCard';
+import { SessionTimeoutControl } from './ViewAndLockCard';
 import { Card } from '../ui/Card';
-import { Input } from '../ui/Input';
 import { HelpIcon } from '../ui/HelpIcon';
 
 export interface SecurityBackupTabProps {
-    settings: AppSettings | null;
-    onPersistSettings: (updater: AppSettings | ((prev: AppSettings | null) => AppSettings | null)) => void;
-    onSettingsSynced: (newSettings: AppSettings) => void;
+    config: AppConfigDto | null;
+    onPatchSecurityPolicy: (patch: SecurityPolicyPatch) => Promise<boolean | void> | void;
+    onConfigUpdated: (newConfig: AppConfigDto) => void;
 }
 
 export const SecurityBackupTab: React.FC<SecurityBackupTabProps> = ({
-    settings,
-    onPersistSettings,
-    onSettingsSynced,
+    config,
+    onPatchSecurityPolicy,
+    onConfigUpdated,
 }) => {
     const { t } = useTranslation();
+    const privacyDefault = config?.securityPolicy.privacyDefault;
 
     return (
         <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
             {/* Encrypted Profile Backups */}
             <div id="settings-backup-section">
                 <BackupSettingsCard
-                    settings={settings}
-                    onSettingsUpdated={onSettingsSynced}
+                    config={config}
+                    onConfigUpdated={onConfigUpdated}
                 />
             </div>
 
@@ -92,7 +93,7 @@ export const SecurityBackupTab: React.FC<SecurityBackupTabProps> = ({
                                 <label
                                     key={mode.id}
                                     className={`relative flex flex-col p-4 rounded-2xl border-2 transition-all cursor-pointer group ${
-                                        settings?.privacyDefault === mode.id
+                                        privacyDefault === mode.id
                                             ? 'bg-theme-primary/5 border-theme-primary shadow-sm'
                                             : 'bg-white border-theme-subtle hover:border-theme-primary/30'
                                     }`}
@@ -101,19 +102,17 @@ export const SecurityBackupTab: React.FC<SecurityBackupTabProps> = ({
                                         type="radio"
                                         name="privacyDefault"
                                         value={mode.id}
-                                        checked={settings?.privacyDefault === mode.id}
+                                        checked={privacyDefault === mode.id}
                                         onChange={(e) =>
-                                            onPersistSettings((s) =>
-                                                s
-                                                    ? { ...s, privacyDefault: e.target.value as PrivacyDefault }
-                                                    : null
-                                            )
+                                            void onPatchSecurityPolicy({
+                                                privacyDefault: e.target.value as PrivacyDefault,
+                                            })
                                         }
                                         className="absolute opacity-0"
                                     />
                                     <mode.icon
                                         className={`mb-3 transition-colors ${
-                                            settings?.privacyDefault === mode.id
+                                            privacyDefault === mode.id
                                                 ? 'text-theme-primary'
                                                 : 'text-theme-light group-hover:text-theme-secondary'
                                         }`}
@@ -121,7 +120,7 @@ export const SecurityBackupTab: React.FC<SecurityBackupTabProps> = ({
                                     />
                                     <span
                                         className={`text-sm font-black tracking-tight ${
-                                            settings?.privacyDefault === mode.id
+                                            privacyDefault === mode.id
                                                 ? 'text-theme-primary'
                                                 : 'text-theme-secondary'
                                         }`}
@@ -131,7 +130,7 @@ export const SecurityBackupTab: React.FC<SecurityBackupTabProps> = ({
                                     <span className="text-[10px] font-medium text-theme-light mt-1">
                                         {mode.desc}
                                     </span>
-                                    {settings?.privacyDefault === mode.id && (
+                                    {privacyDefault === mode.id && (
                                         <div className="absolute top-3 right-3 text-theme-primary">
                                             <CheckCircle2 size={16} />
                                         </div>
@@ -154,30 +153,13 @@ export const SecurityBackupTab: React.FC<SecurityBackupTabProps> = ({
                     </div>
                 }
             >
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                    <div className="space-y-1">
-                        <label className="text-xs font-bold text-theme-secondary">
-                            {t('settings.timeoutIntervalLabel')}
-                        </label>
-                        <p className="text-[11px] text-theme-light/80 font-medium leading-relaxed">
-                            {t('settings.timeoutIntervalDescription')}
-                        </p>
-                    </div>
-                    <div className="w-full sm:w-36 shrink-0">
-                        <Input
-                            type="number"
-                            value={settings ? Math.floor((settings.sessionTimeoutSeconds || 0) / 60) : 10}
-                            onChange={(e) => {
-                                const minutes = parseInt(e.target.value, 10);
-                                onPersistSettings((s) =>
-                                    s ? { ...s, sessionTimeoutSeconds: isNaN(minutes) ? 0 : minutes * 60 } : null
-                                );
-                            }}
-                            min="0"
-                            className="font-bold"
-                        />
-                    </div>
-                </div>
+                <SessionTimeoutControl
+                    inputId="securityBackupTimeoutInput"
+                    sessionTimeoutSeconds={config?.securityPolicy.sessionTimeoutSeconds ?? 600}
+                    onSaveTimeout={(seconds) =>
+                        onPatchSecurityPolicy({ sessionTimeoutSeconds: seconds })
+                    }
+                />
             </Card>
 
             {/* Danger Zone */}

@@ -5,7 +5,7 @@ import { ConflictListView } from '../ConflictListView';
 import { invoke } from '@tauri-apps/api/core';
 import { save, open } from '@tauri-apps/plugin-dialog';
 import { readFile, writeFile } from '@tauri-apps/plugin-fs';
-import { UiModeProvider, UI_MODE_STORAGE_KEY } from '../../../context/UiModeContext';
+import { UiModeProvider } from '../../../context/UiModeContext';
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(),
@@ -46,7 +46,6 @@ describe('Conflict Views (.hmcproof export and import)', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    window.localStorage.removeItem(UI_MODE_STORAGE_KEY);
   });
 
   describe('ConflictDetailsView', () => {
@@ -139,7 +138,6 @@ describe('Conflict Views (.hmcproof export and import)', () => {
     });
 
     it('reveals SST attribution, evidence portfolio, and local override in expert mode', async () => {
-      window.localStorage.setItem(UI_MODE_STORAGE_KEY, 'expert');
       (invoke as Mock).mockImplementation((cmd: string) => {
         if (cmd === 'get_proof_of_double_spend') {
           return Promise.resolve({
@@ -164,7 +162,7 @@ describe('Conflict Views (.hmcproof export and import)', () => {
       });
 
       render(
-        <UiModeProvider>
+        <UiModeProvider initialMode="expert">
           <ConflictDetailsView proofId={mockProofId} onBack={mockOnBack} />
         </UiModeProvider>
       );

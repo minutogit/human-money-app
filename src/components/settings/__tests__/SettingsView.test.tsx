@@ -3,9 +3,11 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, it, expect, beforeEach, vi, Mock, MockInstance } from 'vitest';
 import { SettingsView } from '../SettingsView';
+import { UiModeProvider } from '../../../context/UiModeContext';
 import { settingsService } from '../../../services/settingsService';
 import { authService } from '../../../services/authService';
 import { profileService } from '../../../services/profileService';
+import { AppConfigDto, UiMode } from '../../../types';
 
 const { mockChangeLanguage, mockNavigate } = vi.hoisted(() => ({
   mockChangeLanguage: vi.fn(),
@@ -70,8 +72,9 @@ vi.mock('react-i18next', () => {
 // Mock dependencies
 vi.mock('../../../services/settingsService', () => ({
   settingsService: {
-    getSettings: vi.fn(),
-    saveSettings: vi.fn(),
+    getConfig: vi.fn(),
+    patchUiPreferences: vi.fn(),
+    patchSecurityPolicy: vi.fn(),
     probeLockServer: vi.fn(),
     setOwnNominatedLockServer: vi.fn(),
     assembleAnchorTemplate: vi.fn(),
@@ -142,15 +145,17 @@ vi.mock('../../../services/backupService', () => ({
   },
 }));
 
+const mockProtectAction = vi.fn((callback: any) => callback('test-password'));
+
 vi.mock('../../../context/SessionContext', () => ({
   useSession: vi.fn(() => ({
-    protectAction: vi.fn((callback) => callback('test-password')),
+    protectAction: mockProtectAction,
     profileName: 'Alice',
     notifyLogout: vi.fn(),
     clearLocks: vi.fn(),
   })),
   useOptionalSession: vi.fn(() => ({
-    protectAction: vi.fn((callback) => callback('test-password')),
+    protectAction: mockProtectAction,
     profileName: 'Alice',
     notifyLogout: vi.fn(),
     clearLocks: vi.fn(),
@@ -169,16 +174,53 @@ vi.mock('../../../utils/log', () => ({
 }));
 
 describe('SettingsView Component', () => {
-  const mockSettings = {
-    sessionTimeoutSeconds: 600, // 10 minutes
-    privacyDefault: 'ask',
-    l2AnchorTemplatesMeta: [],
-    ownNominatedLockServer: null,
-    l2ProbeCache: {},
-  };
+  const createMockConfig = (): AppConfigDto => ({
+    uiPreferences: {
+      uiMode: 'expert',
+      lastUsedDirectory: null,
+      balanceViewMode: 'spendable',
+      marketShowUnknown: true,
+      maxStoredCards: 2000,
+      marketSendCardOnPayment: false,
+      marketSyncEnabled: true,
+      shareMinLevel: 1,
+      marketPollWifiOnly: false,
+      wotShareViaSync: true,
+      postAcceptFromContacts: true,
+      mediaAutoLoadMaxHops: 2,
+    },
+    securityPolicy: {
+      sessionTimeoutSeconds: 600,
+      privacyDefault: 'ask',
+      devModeUnlocked: false,
+      autoBackupEnabled: true,
+      syncBackupEnabled: true,
+      backupSyncFolder: null,
+      backupProtectionMode: null,
+      ownNominatedLockServer: null,
+      marketSelectedSyncs: [],
+      publicSyncs: [],
+    },
+    lifecycle: {
+      pendingRestoreL2Reconciliation: false,
+      backupDirty: false,
+      lastBackupAt: null,
+      lastSyncBackupAt: null,
+      l2ProbeCache: {},
+      l2AnchorTemplatesMeta: [],
+    },
+  });
 
   const mockOnBack = vi.fn();
   let writeTextSpy: MockInstance;
+  let currentConfig: AppConfigDto;
+
+  const renderSettingsView = (initialMode: UiMode = 'expert') =>
+    render(
+      <UiModeProvider initialMode={initialMode}>
+        <SettingsView onBack={mockOnBack} />
+      </UiModeProvider>
+    );
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -186,8 +228,8 @@ describe('SettingsView Component', () => {
     mockNavigate.mockClear();
     mockAppState = { view: 'settings' };
     localStorage.clear();
-    localStorage.setItem('humoco_ui_mode', 'expert');
-    
+    currentConfig = createMockConfig();
+
     if (!navigator.clipboard) {
       Object.defineProperty(navigator, 'clipboard', {
         value: {
@@ -197,11 +239,28 @@ describe('SettingsView Component', () => {
         writable: true,
       });
     }
-    
+
     writeTextSpy = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined);
-    
-    (settingsService.getSettings as Mock).mockResolvedValue({ ...mockSettings });
-    (settingsService.saveSettings as Mock).mockResolvedValue(undefined);
+
+    (settingsService.getConfig as Mock).mockImplementation(async () => ({
+      uiPreferences: { ...currentConfig.uiPreferences },
+      securityPolicy: { ...currentConfig.securityPolicy },
+      lifecycle: { ...currentConfig.lifecycle },
+    }));
+    (settingsService.patchUiPreferences as Mock).mockImplementation(async (patch: any) => {
+      currentConfig = {
+        ...currentConfig,
+        uiPreferences: { ...currentConfig.uiPreferences, ...patch },
+      };
+      return currentConfig.uiPreferences;
+    });
+    (settingsService.patchSecurityPolicy as Mock).mockImplementation(async (patch: any) => {
+      currentConfig = {
+        ...currentConfig,
+        securityPolicy: { ...currentConfig.securityPolicy, ...patch },
+      };
+      return currentConfig.securityPolicy;
+    });
     (authService.getLocalInstanceId as Mock).mockResolvedValue('test-device-id-1234');
     (authService.listProfiles as Mock).mockResolvedValue([
       { folderName: 'alice-folder', profileName: 'Alice', isEncrypted: true },
@@ -211,12 +270,12 @@ describe('SettingsView Component', () => {
   });
 
   it('renders loading state initially', () => {
-    render(<SettingsView onBack={mockOnBack} />);
+    renderSettingsView();
     expect(screen.getByText(/Configuring Environment\.\.\./i)).toBeInTheDocument();
   });
 
   it('renders 4 tabs and starts on Profile tab', async () => {
-    render(<SettingsView onBack={mockOnBack} />);
+    renderSettingsView();
 
     await waitFor(() => {
       expect(screen.queryByText(/Configuring Environment\.\.\./i)).not.toBeInTheDocument();
@@ -233,7 +292,7 @@ describe('SettingsView Component', () => {
 
   it('clicking each of the 4 tabs displays its respective components', async () => {
     const user = userEvent.setup();
-    render(<SettingsView onBack={mockOnBack} />);
+    renderSettingsView();
 
     await screen.findByText('Profile');
     expect(screen.getByRole('button', { name: /Edit business card|Visitenkarte bearbeiten/i })).toBeInTheDocument();
@@ -264,7 +323,7 @@ describe('SettingsView Component', () => {
 
   it('switches to Security & Backup tab and displays privacy and backup options', async () => {
     const user = userEvent.setup();
-    render(<SettingsView onBack={mockOnBack} />);
+    renderSettingsView();
 
     await screen.findByText('Profile');
     const securityTab = screen.getByText('Security & Backup');
@@ -278,7 +337,7 @@ describe('SettingsView Component', () => {
 
   it('allows copying device ID to clipboard in Advanced tab', async () => {
     const user = userEvent.setup();
-    render(<SettingsView onBack={mockOnBack} />);
+    renderSettingsView();
 
     await screen.findByText('Profile');
     const advancedTab = screen.getByText('Advanced');
@@ -290,9 +349,9 @@ describe('SettingsView Component', () => {
     expect(writeTextSpy).toHaveBeenCalledWith('test-device-id-1234');
   });
 
-  it('auto-saves privacy and session timeout changes immediately without a save button', async () => {
+  it('saves privacy immediately and saves session timeout only on explicit save click with Full access', async () => {
     const user = userEvent.setup();
-    render(<SettingsView onBack={mockOnBack} />);
+    renderSettingsView();
 
     await screen.findByText('Profile');
     const securityTab = screen.getByText('Security & Backup');
@@ -300,39 +359,47 @@ describe('SettingsView Component', () => {
 
     expect(screen.queryByRole('button', { name: /Save System Changes/i })).not.toBeInTheDocument();
 
-    // Select "Stealth" option triggers immediate auto-save
     const stealthRadio = screen.getByLabelText(/Stealth/i);
     await user.click(stealthRadio);
 
     await waitFor(() => {
-      expect(settingsService.saveSettings).toHaveBeenCalledWith(
-        expect.objectContaining({
-          privacyDefault: 'stealth',
-        }),
+      expect(settingsService.patchSecurityPolicy).toHaveBeenCalledWith(
+        { privacyDefault: 'stealth' },
         'test-password'
       );
+      expect(mockProtectAction).toHaveBeenCalledWith(expect.any(Function), {
+        requireFullAccess: true,
+      });
     });
 
-    // Edit session timeout field triggers immediate auto-save preserving stealth
+    (settingsService.patchSecurityPolicy as Mock).mockClear();
+
+    // Typing session timeout does NOT save automatically
     const inputs = screen.getAllByRole('spinbutton');
     expect(inputs.length).toBeGreaterThanOrEqual(1);
     fireEvent.change(inputs[0], { target: { value: '15' } });
+    expect(settingsService.patchSecurityPolicy).not.toHaveBeenCalled();
+
+    // Clicking explicit save commits sessionTimeoutSeconds with Full access
+    const saveTimeoutBtn = screen.getByTestId('save-timeout-button');
+    expect(saveTimeoutBtn).not.toBeDisabled();
+    await user.click(saveTimeoutBtn);
 
     await waitFor(() => {
-      expect(settingsService.saveSettings).toHaveBeenCalledWith(
-        expect.objectContaining({
-          sessionTimeoutSeconds: 900, // 15 minutes * 60 seconds
-          privacyDefault: 'stealth',
-        }),
+      expect(settingsService.patchSecurityPolicy).toHaveBeenCalledWith(
+        { sessionTimeoutSeconds: 900 },
         'test-password'
       );
+      expect(mockProtectAction).toHaveBeenLastCalledWith(expect.any(Function), {
+        requireFullAccess: true,
+      });
     });
   });
 
   it('displays error message on failed auto-save', async () => {
     const user = userEvent.setup();
-    (settingsService.saveSettings as Mock).mockRejectedValue(new Error('Save failed'));
-    render(<SettingsView onBack={mockOnBack} />);
+    (settingsService.patchSecurityPolicy as Mock).mockRejectedValue(new Error('Save failed'));
+    renderSettingsView();
 
     await screen.findByText('Profile');
     const securityTab = screen.getByText('Security & Backup');
@@ -346,7 +413,7 @@ describe('SettingsView Component', () => {
 
   it('calls onBack prop when back button clicked', async () => {
     const user = userEvent.setup();
-    render(<SettingsView onBack={mockOnBack} />);
+    renderSettingsView();
 
     await screen.findByText('Profile');
     
@@ -360,7 +427,7 @@ describe('SettingsView Component', () => {
   it('renders language selector card on Profile tab and allows changing language', async () => {
     const user = userEvent.setup();
     const setItemSpy = vi.spyOn(Storage.prototype, 'setItem');
-    render(<SettingsView onBack={mockOnBack} />);
+    renderSettingsView();
 
     await screen.findByText('Profile');
 
@@ -384,7 +451,7 @@ describe('SettingsView Component', () => {
 
   it('opens confirmation modal and purges profile in Gefahrenzone', async () => {
     const user = userEvent.setup();
-    render(<SettingsView onBack={mockOnBack} />);
+    renderSettingsView();
 
     await screen.findByText('Profile');
     const securityTab = screen.getByText('Security & Backup');
@@ -412,7 +479,7 @@ describe('SettingsView Component', () => {
 
   it('deep-links to Security & Backup when initialSection is backup', async () => {
     mockAppState = { view: 'settings', initialSection: 'backup' };
-    render(<SettingsView onBack={mockOnBack} />);
+    renderSettingsView();
 
     await waitFor(() => {
       expect(screen.queryByText(/Configuring Environment\.\.\./i)).not.toBeInTheDocument();
@@ -424,7 +491,7 @@ describe('SettingsView Component', () => {
 
   it('deep-links to Sync Service when initialSection is sync', async () => {
     mockAppState = { view: 'settings', initialSection: 'sync' };
-    render(<SettingsView onBack={mockOnBack} />);
+    renderSettingsView();
 
     await waitFor(() => {
       expect(screen.queryByText(/Configuring Environment\.\.\./i)).not.toBeInTheDocument();
@@ -436,7 +503,7 @@ describe('SettingsView Component', () => {
 
   it('deep-links to Advanced when initialSection is network', async () => {
     mockAppState = { view: 'settings', initialSection: 'network' };
-    render(<SettingsView onBack={mockOnBack} />);
+    renderSettingsView();
 
     await waitFor(() => {
       expect(screen.queryByText(/Configuring Environment\.\.\./i)).not.toBeInTheDocument();
@@ -447,8 +514,7 @@ describe('SettingsView Component', () => {
   });
 
   it('renders unified 6-block layout without 4-tab bar or save button in simple mode', async () => {
-    localStorage.setItem('humoco_ui_mode', 'simple');
-    render(<SettingsView onBack={mockOnBack} />);
+    renderSettingsView('simple');
 
     await waitFor(() => {
       expect(screen.queryByText(/Configuring Environment\.\.\./i)).not.toBeInTheDocument();
@@ -468,9 +534,8 @@ describe('SettingsView Component', () => {
   });
 
   it('toggles all 4 sync channels via auto-sync-master-toggle in simple mode', async () => {
-    localStorage.setItem('humoco_ui_mode', 'simple');
     const user = userEvent.setup();
-    render(<SettingsView onBack={mockOnBack} />);
+    renderSettingsView('simple');
 
     const masterToggle = await screen.findByTestId('auto-sync-master-toggle');
     expect(masterToggle).toBeChecked();
@@ -478,27 +543,36 @@ describe('SettingsView Component', () => {
     await user.click(masterToggle);
 
     await waitFor(() => {
-      expect(settingsService.saveSettings).toHaveBeenCalledWith(
-        expect.objectContaining({
+      expect(settingsService.patchSecurityPolicy).toHaveBeenCalledWith(
+        { syncBackupEnabled: false },
+        'test-password'
+      );
+      expect(settingsService.patchUiPreferences).toHaveBeenCalledWith(
+        {
           postAcceptFromContacts: false,
           marketSyncEnabled: false,
           wotShareViaSync: false,
-          syncBackupEnabled: false,
-        }),
+        },
         'test-password'
       );
+      expect(mockProtectAction).toHaveBeenCalledWith(expect.any(Function), {
+        requireFullAccess: true,
+      });
     });
 
     await user.click(screen.getByTestId('auto-sync-master-toggle'));
 
     await waitFor(() => {
-      expect(settingsService.saveSettings).toHaveBeenCalledWith(
-        expect.objectContaining({
+      expect(settingsService.patchSecurityPolicy).toHaveBeenCalledWith(
+        { syncBackupEnabled: true },
+        'test-password'
+      );
+      expect(settingsService.patchUiPreferences).toHaveBeenCalledWith(
+        {
           postAcceptFromContacts: true,
           marketSyncEnabled: true,
           wotShareViaSync: true,
-          syncBackupEnabled: true,
-        }),
+        },
         'test-password'
       );
     });

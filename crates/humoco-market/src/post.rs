@@ -5,7 +5,6 @@ use chacha20poly1305::{XChaCha20Poly1305, XNonce};
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
-use human_money_core::crypto::get_pubkey_from_user_id;
 use human_money_core::services::crypto::dh::{ed25519_pub_to_x25519, ed25519_sk_to_x25519_sk};
 use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
@@ -18,7 +17,23 @@ use crate::model::{DropDescriptor, MAX_AD_TITLE_CHARS, MAX_SKILL_TITLE_CHARS};
 type HmacSha256 = Hmac<Sha256>;
 
 pub const POST_SLOT_MAGIC: &[u8; 8] = b"HMPOST01";
+pub const POST_SLOT_HEADER_BYTES: usize = 10;
+pub const POST_ENTRY_HEADER_BYTES: usize = 44;
 pub const DROP_POST_MAX_BYTES: usize = 524_288; // 512 KB (§2)
+
+/// Wire size (header + ciphertext) of a single `PostBoxEntry` inside an `HMPOST01` frame.
+pub fn post_entry_wire_len(entry: &PostBoxEntry) -> usize {
+    POST_ENTRY_HEADER_BYTES + entry.ciphertext.len()
+}
+
+/// Outcome of priority-windowed packing of `PostBoxEntry` items into a bounded `post` slot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackedPostSlot {
+    pub blob: Vec<u8>,
+    pub included_tags: Vec<[u8; 16]>,
+    pub deferred_tags: Vec<[u8; 16]>,
+    pub oversized_tags: Vec<[u8; 16]>,
+}
 pub const POST_TTL_SECS: u64 = 21 * 86_400; // 21 days (§2)
 pub const POST_BOX_TIERS: [usize; 4] = [4_096, 16_384, 65_536, 262_144]; // 4 KB / 16 KB / 64 KB / 256 KB (§6.1)
 
@@ -486,6 +501,101 @@ pub fn merge_post_slot(
     encode_post_slot(master_seed, &retained_entries, max_bytes)
 }
 
+/// Work-conserving priority packing of ordered real `PostBoxEntry` items into a size-bounded `post` slot (§6.1).
+///
+/// Strips own dummy boxes, deduplicates by `tag16` while preserving caller priority order, packs entries
+/// fitting within `max_bytes`, isolates entries that exceed `max_bytes` even alone into `oversized_tags`
+/// so they never block smaller queued entries, and records skipped overflowing items in `deferred_tags`.
+pub fn pack_post_slot(
+    master_seed: &[u8; 32],
+    ordered_entries: &[PostBoxEntry],
+    max_bytes: usize,
+) -> Result<PackedPostSlot, MarketError> {
+    let mut deduped: Vec<PostBoxEntry> = Vec::with_capacity(ordered_entries.len());
+    let mut seen_tags: BTreeSet<[u8; 16]> = BTreeSet::new();
+    for entry in ordered_entries {
+        if is_own_dummy_post_box(master_seed, entry) {
+            continue;
+        }
+        if seen_tags.insert(entry.tag16) {
+            deduped.push(entry.clone());
+        }
+    }
+
+    let mut used_bytes = POST_SLOT_HEADER_BYTES;
+    let mut included_entries: Vec<PostBoxEntry> = Vec::new();
+    let mut included_tags: Vec<[u8; 16]> = Vec::new();
+    let mut deferred_tags: Vec<[u8; 16]> = Vec::new();
+    let mut oversized_tags: Vec<[u8; 16]> = Vec::new();
+
+    for entry in deduped {
+        let wire_len = post_entry_wire_len(&entry);
+        if POST_SLOT_HEADER_BYTES.saturating_add(wire_len) > max_bytes {
+            oversized_tags.push(entry.tag16);
+        } else if used_bytes.saturating_add(wire_len) <= max_bytes
+            && included_entries.len() < u16::MAX as usize
+        {
+            used_bytes += wire_len;
+            included_tags.push(entry.tag16);
+            included_entries.push(entry);
+        } else {
+            deferred_tags.push(entry.tag16);
+        }
+    }
+
+    let blob = encode_post_slot(master_seed, &included_entries, max_bytes)?;
+    Ok(PackedPostSlot {
+        blob,
+        included_tags,
+        deferred_tags,
+        oversized_tags,
+    })
+}
+
+/// Merges remote slot entries with higher-priority local additions (removing own dummies and
+/// acknowledged `remove_tags`) and packs the result within `max_bytes` via `pack_post_slot`.
+pub fn merge_and_pack_post_slot(
+    master_seed: &[u8; 32],
+    remote_slot_bytes: Option<&[u8]>,
+    local_additions: &[PostBoxEntry],
+    remove_tags: &[[u8; 16]],
+    max_bytes: usize,
+) -> Result<PackedPostSlot, MarketError> {
+    let mut merged: Vec<PostBoxEntry> = Vec::new();
+    let mut seen_tags: BTreeSet<[u8; 16]> = BTreeSet::new();
+
+    for addition in local_additions {
+        if is_own_dummy_post_box(master_seed, addition) {
+            continue;
+        }
+        if remove_tags.iter().any(|t| t == &addition.tag16) {
+            continue;
+        }
+        if seen_tags.insert(addition.tag16) {
+            merged.push(addition.clone());
+        }
+    }
+
+    if let Some(bytes) = remote_slot_bytes {
+        if !bytes.is_empty() {
+            let remote_entries = decode_post_slot(bytes)?;
+            for entry in remote_entries {
+                if is_own_dummy_post_box(master_seed, &entry) {
+                    continue;
+                }
+                if remove_tags.iter().any(|t| t == &entry.tag16) {
+                    continue;
+                }
+                if seen_tags.insert(entry.tag16) {
+                    merged.push(entry);
+                }
+            }
+        }
+    }
+
+    pack_post_slot(master_seed, &merged, max_bytes)
+}
+
 /// Delivery receipt payload (§6.2).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PostDeliveryReceipt {
@@ -532,7 +642,7 @@ pub fn validate_wot_handshake_assertion(
             "sender_did cannot be empty".to_string(),
         ));
     }
-    get_pubkey_from_user_id(&assertion.sender_did)
+    human_money_core::ValidatedUserId::parse(&assertion.sender_did)
         .map_err(|e| MarketError::Identity(format!("Invalid sender_did: {}", e)))?;
 
     if assertion.proposed_level > 1 {

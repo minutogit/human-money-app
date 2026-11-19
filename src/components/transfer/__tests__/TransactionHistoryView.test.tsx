@@ -2,7 +2,7 @@
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { TransactionHistoryView } from '../TransactionHistoryView';
-import { UiModeProvider, UI_MODE_STORAGE_KEY } from '../../../context/UiModeContext';
+import { UiModeProvider } from '../../../context/UiModeContext';
 import { transferService } from '../../../services/transferService';
 import { contactService } from '../../../services/contactService';
 import { TransactionRecord, Contact, WalletEvent } from '../../../types';
@@ -110,9 +110,8 @@ describe('TransactionHistoryView', () => {
     });
 
     const renderWithMode = (mode: 'simple' | 'expert') => {
-        localStorage.setItem(UI_MODE_STORAGE_KEY, mode);
         return render(
-            <UiModeProvider>
+            <UiModeProvider initialMode={mode}>
                 <TransactionHistoryView />
             </UiModeProvider>
         );

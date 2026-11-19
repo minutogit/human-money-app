@@ -90,20 +90,16 @@ pub(crate) fn dispatch_post_payload(
             true
         }
         PayloadType::Generic(ref s) if s == humoco_market::PAYLOAD_GUARDIAN_ASSIGN_V1 => {
-            handle_guardian_assign(ctx, post_state, stats);
-            true
+            handle_guardian_assign(ctx, post_state, stats)
         }
         PayloadType::Generic(ref s) if s == humoco_market::PAYLOAD_GUARDIAN_ACK_V1 => {
-            handle_guardian_ack(ctx, post_state, stats);
-            true
+            handle_guardian_ack(ctx, post_state, stats)
         }
         PayloadType::Generic(ref s) if s == humoco_market::PAYLOAD_GUARDIAN_LOCATOR_V1 => {
-            handle_guardian_locator(ctx, post_state, stats);
-            true
+            handle_guardian_locator(ctx, post_state, stats)
         }
         PayloadType::Generic(ref s) if s == humoco_market::PAYLOAD_GUARDIAN_REVOKE_V1 => {
-            handle_guardian_revoke(ctx, post_state, stats);
-            true
+            handle_guardian_revoke(ctx, post_state, stats)
         }
         _ => true,
     }
@@ -705,7 +701,7 @@ fn handle_guardian_assign(
     ctx: &PostEnvelopeContext<'_>,
     post_state: &mut StoredPostState,
     stats: &mut PostDispatchStats,
-) {
+) -> bool {
     let entry =
         match serde_json::from_slice::<humoco_market::GuardianVaultEntry>(ctx.decrypted_bytes) {
             Ok(e) => e,
@@ -713,7 +709,7 @@ fn handle_guardian_assign(
                 stats
                     .errors
                     .push(format!("Failed to parse GuardianVaultEntry: {}", e));
-                return;
+                return true;
             }
         };
     if !are_dids_equal(ctx.sender_did, &entry.owner_did) {
@@ -721,7 +717,7 @@ fn handle_guardian_assign(
             "Guardian assign sender DID mismatch: {} != {}",
             ctx.sender_did, entry.owner_did
         ));
-        return;
+        return true;
     }
 
     let is_trusted_non_offender = {
@@ -753,26 +749,30 @@ fn handle_guardian_assign(
             "Guardian assign from untrusted sender or known offender: {}",
             ctx.sender_did
         ));
-        return;
+        return true;
     }
 
     if let Err(e) = humoco_market::verify_guardian_vault_entry(&entry) {
         stats
             .errors
             .push(format!("Invalid guardian vault entry: {}", e));
-        return;
+        return true;
     }
 
-    let save_res = {
+    let save_res: Result<(), (String, bool)> = {
         let mut service = ctx.state.service.lock().unwrap();
-        let mut vault = load_guardian_vault_with_cache(ctx.state, &mut service, ctx.password)
-            .unwrap_or_else(|_| humoco_market::GuardianVaultStore::new());
-        match vault.upsert_ward(entry.clone()) {
-            Ok(()) => {
-                save_guardian_vault_with_cache(ctx.state, &mut service, &vault, ctx.password)
-                    .map_err(|e| format!("Failed to save guardian vault: {:?}", e))
-            }
-            Err(e) => Err(format!("Failed to upsert guardian ward: {}", e)),
+        match load_guardian_vault_with_cache(ctx.state, &mut service, ctx.password) {
+            Ok(mut vault) => match vault.upsert_ward(entry.clone()) {
+                Ok(()) => save_guardian_vault_with_cache(
+                    ctx.state,
+                    &mut service,
+                    &vault,
+                    ctx.password,
+                )
+                .map_err(|e| (format!("Failed to save guardian vault: {}", e.message), false)),
+                Err(e) => Err((format!("Failed to upsert guardian ward: {}", e), true)),
+            },
+            Err(e) => Err((format!("Failed to load guardian vault: {}", e.message), false)),
         }
     };
 
@@ -796,8 +796,12 @@ fn handle_guardian_assign(
                 "guardian ack",
             );
             queue_ack_receipt(ctx, post_state, None);
+            true
         }
-        Err(err_msg) => stats.errors.push(err_msg),
+        Err((err_msg, mark_processed)) => {
+            stats.errors.push(err_msg);
+            mark_processed
+        }
     }
 }
 
@@ -805,21 +809,29 @@ fn handle_guardian_ack(
     ctx: &PostEnvelopeContext<'_>,
     post_state: &mut StoredPostState,
     stats: &mut PostDispatchStats,
-) {
+) -> bool {
     let ack = match serde_json::from_slice::<humoco_market::GuardianVaultAck>(ctx.decrypted_bytes) {
         Ok(a) => a,
         Err(e) => {
             stats
                 .errors
                 .push(format!("Failed to parse GuardianVaultAck: {}", e));
-            return;
+            return true;
         }
     };
     {
         let mut service = ctx.state.service.lock().unwrap();
-        if let Ok(Some(mut owner_state)) =
-            load_recovery_owner_state_with_cache(ctx.state, &mut service, ctx.password)
-        {
+        let owner_opt =
+            match load_recovery_owner_state_with_cache(ctx.state, &mut service, ctx.password) {
+                Ok(opt) => opt,
+                Err(e) => {
+                    stats
+                        .errors
+                        .push(format!("Failed to load recovery owner state: {}", e.message));
+                    return false;
+                }
+            };
+        if let Some(mut owner_state) = owner_opt {
             let same_account = matches!(
                 (
                     humoco_market::canonicalize_owner_account_id(&ack.owner_did),
@@ -838,24 +850,30 @@ fn handle_guardian_ack(
                     }
                 }
                 if modified {
-                    let _ = save_recovery_owner_state_with_cache(
+                    if let Err(e) = save_recovery_owner_state_with_cache(
                         ctx.state,
                         &mut service,
                         &owner_state,
                         ctx.password,
-                    );
+                    ) {
+                        stats
+                            .errors
+                            .push(format!("Failed to save recovery owner state: {}", e.message));
+                        return false;
+                    }
                 }
             }
         }
     }
     queue_ack_receipt(ctx, post_state, None);
+    true
 }
 
 fn handle_guardian_locator(
     ctx: &PostEnvelopeContext<'_>,
     post_state: &mut StoredPostState,
     stats: &mut PostDispatchStats,
-) {
+) -> bool {
     let update =
         match serde_json::from_slice::<humoco_market::GuardianLocatorUpdate>(ctx.decrypted_bytes) {
             Ok(u) => u,
@@ -863,7 +881,7 @@ fn handle_guardian_locator(
                 stats
                     .errors
                     .push(format!("Failed to parse GuardianLocatorUpdate: {}", e));
-                return;
+                return true;
             }
         };
     if !are_dids_equal(ctx.sender_did, &update.owner_did) {
@@ -871,32 +889,43 @@ fn handle_guardian_locator(
             "Guardian locator update sender mismatch: {} != {}",
             ctx.sender_did, update.owner_did
         ));
-        return;
+        return true;
     }
 
-    let update_res = {
+    let update_res: Result<(), (String, bool)> = {
         let mut service = ctx.state.service.lock().unwrap();
-        let mut vault = load_guardian_vault_with_cache(ctx.state, &mut service, ctx.password)
-            .unwrap_or_else(|_| humoco_market::GuardianVaultStore::new());
-        match vault.update_locator(&update) {
-            Ok(updated) => {
-                if updated {
-                    let _ = save_guardian_vault_with_cache(
-                        ctx.state,
-                        &mut service,
-                        &vault,
-                        ctx.password,
-                    );
+        match load_guardian_vault_with_cache(ctx.state, &mut service, ctx.password) {
+            Ok(mut vault) => match vault.update_locator(&update) {
+                Ok(updated) => {
+                    if updated {
+                        save_guardian_vault_with_cache(
+                            ctx.state,
+                            &mut service,
+                            &vault,
+                            ctx.password,
+                        )
+                        .map_err(|e| {
+                            (format!("Failed to save guardian vault: {}", e.message), false)
+                        })
+                    } else {
+                        Ok(())
+                    }
                 }
-                Ok(())
-            }
-            Err(e) => Err(format!("Failed to update guardian locator: {}", e)),
+                Err(e) => Err((format!("Failed to update guardian locator: {}", e), true)),
+            },
+            Err(e) => Err((format!("Failed to load guardian vault: {}", e.message), false)),
         }
     };
 
     match update_res {
-        Ok(()) => queue_ack_receipt(ctx, post_state, None),
-        Err(err_msg) => stats.errors.push(err_msg),
+        Ok(()) => {
+            queue_ack_receipt(ctx, post_state, None);
+            true
+        }
+        Err((err_msg, mark_processed)) => {
+            stats.errors.push(err_msg);
+            mark_processed
+        }
     }
 }
 
@@ -904,7 +933,7 @@ fn handle_guardian_revoke(
     ctx: &PostEnvelopeContext<'_>,
     post_state: &mut StoredPostState,
     stats: &mut PostDispatchStats,
-) {
+) -> bool {
     let revoke = match serde_json::from_slice::<humoco_market::GuardianRevoke>(ctx.decrypted_bytes)
     {
         Ok(r) => r,
@@ -912,7 +941,7 @@ fn handle_guardian_revoke(
             stats
                 .errors
                 .push(format!("Failed to parse GuardianRevoke: {}", e));
-            return;
+            return true;
         }
     };
     if !are_dids_equal(ctx.sender_did, &revoke.owner_did) {
@@ -920,31 +949,129 @@ fn handle_guardian_revoke(
             "Guardian revoke sender mismatch: {} != {}",
             ctx.sender_did, revoke.owner_did
         ));
-        return;
+        return true;
     }
 
-    let revoke_res = {
+    let revoke_res: Result<(), (String, bool)> = {
         let mut service = ctx.state.service.lock().unwrap();
-        let mut vault = load_guardian_vault_with_cache(ctx.state, &mut service, ctx.password)
-            .unwrap_or_else(|_| humoco_market::GuardianVaultStore::new());
-        match vault.revoke_ward(&revoke) {
-            Ok(revoked) => {
-                if revoked {
-                    let _ = save_guardian_vault_with_cache(
-                        ctx.state,
-                        &mut service,
-                        &vault,
-                        ctx.password,
-                    );
+        match load_guardian_vault_with_cache(ctx.state, &mut service, ctx.password) {
+            Ok(mut vault) => match vault.revoke_ward(&revoke) {
+                Ok(revoked) => {
+                    if revoked {
+                        save_guardian_vault_with_cache(
+                            ctx.state,
+                            &mut service,
+                            &vault,
+                            ctx.password,
+                        )
+                        .map_err(|e| {
+                            (format!("Failed to save guardian vault: {}", e.message), false)
+                        })
+                    } else {
+                        Ok(())
+                    }
                 }
-                Ok(())
-            }
-            Err(e) => Err(format!("Failed to revoke ward from guardian vault: {}", e)),
+                Err(e) => Err((
+                    format!("Failed to revoke ward from guardian vault: {}", e),
+                    true,
+                )),
+            },
+            Err(e) => Err((format!("Failed to load guardian vault: {}", e.message), false)),
         }
     };
 
     match revoke_res {
-        Ok(()) => queue_ack_receipt(ctx, post_state, None),
-        Err(err_msg) => stats.errors.push(err_msg),
+        Ok(()) => {
+            queue_ack_receipt(ctx, post_state, None);
+            true
+        }
+        Err((err_msg, mark_processed)) => {
+            stats.errors.push(err_msg);
+            mark_processed
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::RECOVERY_GUARDIAN_VAULT_KEY;
+    use crate::test_support::{create_test_state, setup_test_app, temp_test_dir, ALICE_PHRASE};
+
+    #[test]
+    fn test_corrupt_guardian_vault_returns_false_and_preserves_bytes() {
+        let base_dir = temp_test_dir("handlers_corrupt_guardian_vault");
+        let password = "TestPassword123!";
+        let service = setup_test_app(&base_dir, "Alice", ALICE_PHRASE, password);
+        let state = create_test_state(service);
+
+        let (my_identity, sender_did) = {
+            let mut s = state.service.lock().unwrap();
+            crate::state::save_encrypted_bytes(
+                &mut s,
+                RECOVERY_GUARDIAN_VAULT_KEY,
+                b"{corrupt-vault",
+                Some(password),
+            )
+            .unwrap();
+            let id = s.with_wallet_and_identity(|_, id| id.clone()).unwrap();
+            let did = id.user_id.clone();
+            (id, did)
+        };
+
+        let update = humoco_market::GuardianLocatorUpdate {
+            owner_did: sender_did.clone(),
+            rotation_epoch: 1,
+            backup_sync_descriptors: Vec::new(),
+            updated_at: 1_750_000_000,
+        };
+        let payload_bytes = serde_json::to_vec(&update).unwrap();
+        let envelope = humoco_market::PostEnvelope::new(
+            "msg-corrupt-vault-1",
+            1_750_000_000,
+            Vec::new(),
+            Vec::new(),
+        );
+        let tag16 = [7u8; 16];
+        let my_ed_sk = my_identity.signing_key.clone();
+        let ctx = PostEnvelopeContext {
+            state: &state,
+            app: None,
+            extra_standards: None,
+            password: Some(password),
+            my_identity: &my_identity,
+            my_ed_sk: &my_ed_sk,
+            own_reply_syncs: &[],
+            sender_did: &sender_did,
+            envelope: &envelope,
+            tag16: &tag16,
+            decrypted_bytes: &payload_bytes,
+            now_secs: 1_750_000_000,
+        };
+
+        let mut post_state = StoredPostState::default();
+        let mut stats = PostDispatchStats::default();
+        let mark_processed = dispatch_post_payload(
+            &ctx,
+            &PayloadType::Generic(humoco_market::PAYLOAD_GUARDIAN_LOCATOR_V1.to_string()),
+            &mut post_state,
+            &mut stats,
+        );
+
+        assert!(
+            !mark_processed,
+            "Corrupt guardian vault store must return false so msg_id stays retryable"
+        );
+        assert!(!stats.errors.is_empty());
+
+        let stored_raw = {
+            let mut s = state.service.lock().unwrap();
+            crate::state::load_encrypted_bytes_opt(&mut s, RECOVERY_GUARDIAN_VAULT_KEY, Some(password))
+                .unwrap()
+                .unwrap()
+        };
+        assert_eq!(stored_raw, b"{corrupt-vault");
+
+        let _ = std::fs::remove_dir_all(&base_dir);
     }
 }

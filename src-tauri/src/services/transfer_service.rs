@@ -11,20 +11,8 @@ use human_money_core::{
     wallet::{MultiTransferRequest, SourceTransfer},
 };
 use log::{error, info};
-use rand::RngCore;
 use std::collections::HashMap;
-use std::time::Duration;
 use uuid::Uuid;
-
-fn random_non_zero_nonce() -> [u8; 32] {
-    loop {
-        let mut nonce = [0u8; 32];
-        rand::rngs::OsRng.fill_bytes(&mut nonce);
-        if nonce != [0u8; 32] {
-            return nonce;
-        }
-    }
-}
 
 #[allow(clippy::too_many_arguments)]
 pub async fn create_transfer_bundle_impl(
@@ -39,16 +27,30 @@ pub async fn create_transfer_bundle_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<CreateBundleResult, FrontendError> {
-    let recipient_id = recipient_id.trim().to_string();
+    let validated_recipient =
+        human_money_core::ValidatedUserId::parse(&recipient_id).map_err(FrontendError::from)?;
+    let recipient_pk_bytes = validated_recipient.public_key_bytes();
+    let recipient_id = validated_recipient.into_string();
     log::debug!("Creating transfer bundle (sources={})", sources.len());
 
     {
         let mut service = state
             .authorize_and_lock(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
-        crate::services::common::ensure_restore_l2_reconciled(
+        let blocking_ids: Vec<&str> = sources
+            .iter()
+            .map(|s| s.local_instance_id.as_str())
+            .collect();
+        let preflight = crate::services::preflight::ValueOutflowPreflight {
+            require_restore_reconciled: true,
+            check_known_offender_dids: &[recipient_id.as_str()],
+            check_blocking_intent_local_ids: &blocking_ids,
+            check_anchor_id_quorum_health: None,
+        };
+        crate::services::preflight::run_value_outflow_preflight(
             state,
             &mut service,
             password.as_deref(),
+            &preflight,
         )?;
     }
 
@@ -60,7 +62,7 @@ pub async fn create_transfer_bundle_impl(
         })
         .collect();
 
-    let (result, intents, is_durable, pow_base_bits) = {
+    let (result, intents, pow_base_bits) = {
         let mut service = state.lock_service()?;
 
         let mut wot_sync_json: Option<String> = None;
@@ -69,13 +71,15 @@ pub async fn create_transfer_bundle_impl(
         let mut contact_card_json: Option<String> = None;
         let mut pending_card_sent: Option<([u8; 32], u64)> = None;
 
-        let loaded_settings = state
-            .get_cached_settings()
-            .or_else(|_| state.load_settings(&mut service, password.as_deref()))
-            .unwrap_or_default();
+        let loaded_ui_prefs = state
+            .get_or_load_ui_preferences(&mut service, password.as_deref())
+            .map_err(FrontendError::from)?;
+        let loaded_lifecycle = state
+            .get_or_load_internal_lifecycle(&mut service, password.as_deref())
+            .map_err(FrontendError::from)?;
 
         let should_send_card =
-            send_card_override.unwrap_or(loaded_settings.market_send_card_on_payment);
+            send_card_override.unwrap_or(loaded_ui_prefs.market_send_card_on_payment);
         if should_send_card {
             let now_secs = chrono::Utc::now().timestamp().max(0) as u64;
             let own_profile_opt: Option<crate::models::StoredOwnMarketProfile> =
@@ -90,50 +94,56 @@ pub async fn create_transfer_bundle_impl(
                 if own_profile.published {
                     if let Some(card) = own_profile.last_card {
                         if now_secs < card.payload.valid_until {
-                            if let Ok(peer_pk) =
-                                human_money_core::crypto::get_pubkey_from_user_id(&recipient_id)
                             {
-                                let peer_pk_bytes = *peer_pk.as_bytes();
-                                let store: humoco_market::CardStore = service
-                                    .load_encrypted_data(
-                                        crate::state::MARKET_CARD_STORE_KEY,
-                                        password.as_deref(),
-                                    )
-                                    .ok()
-                                    .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-                                    .unwrap_or_default();
-
-                                if humoco_market::should_attach_card(
-                                    &store,
-                                    &peer_pk_bytes,
-                                    card.payload.v,
-                                ) {
-                                    let wire_opt = match humoco_market::render_wire(
-                                        &card,
-                                        1,
-                                        humoco_market::WireFilter::NoAds,
-                                    ) {
-                                        Some(wire)
-                                            if wire.len()
-                                                <= humoco_market::MAX_BUNDLE_CARD_WIRE_BYTES =>
-                                        {
-                                            Some(wire)
+                                let peer_pk_bytes = recipient_pk_bytes;
+                                let store_res = crate::state::load_encrypted_json_or_default::<
+                                    humoco_market::CardStore,
+                                >(
+                                    &mut service,
+                                    crate::state::MARKET_CARD_STORE_KEY,
+                                    password.as_deref(),
+                                );
+                                match store_res {
+                                    Ok(store) => {
+                                        if humoco_market::should_attach_card(
+                                            &store,
+                                            &peer_pk_bytes,
+                                            card.payload.v,
+                                        ) {
+                                            let wire_opt = match humoco_market::render_wire(
+                                                &card,
+                                                1,
+                                                humoco_market::WireFilter::NoAds,
+                                            ) {
+                                                Some(wire)
+                                                    if wire.len()
+                                                        <= humoco_market::MAX_BUNDLE_CARD_WIRE_BYTES =>
+                                                {
+                                                    Some(wire)
+                                                }
+                                                _ => humoco_market::render_wire(
+                                                    &card,
+                                                    1,
+                                                    humoco_market::WireFilter::FitBytes(
+                                                        humoco_market::MAX_BUNDLE_CARD_WIRE_BYTES,
+                                                    ),
+                                                ),
+                                            };
+                                            if let Some(wire) = wire_opt {
+                                                let env = humoco_market::own_envelope(wire);
+                                                if let Ok(json) = serde_json::to_string(&env) {
+                                                    contact_card_json = Some(json);
+                                                    pending_card_sent =
+                                                        Some((peer_pk_bytes, card.payload.v));
+                                                }
+                                            }
                                         }
-                                        _ => humoco_market::render_wire(
-                                            &card,
-                                            1,
-                                            humoco_market::WireFilter::FitBytes(
-                                                humoco_market::MAX_BUNDLE_CARD_WIRE_BYTES,
-                                            ),
-                                        ),
-                                    };
-                                    if let Some(wire) = wire_opt {
-                                        let env = humoco_market::own_envelope(wire);
-                                        if let Ok(json) = serde_json::to_string(&env) {
-                                            contact_card_json = Some(json);
-                                            pending_card_sent =
-                                                Some((peer_pk_bytes, card.payload.v));
-                                        }
+                                    }
+                                    Err(e) => {
+                                        log::warn!(
+                                            "Failed to load CardStore before attaching card: {}",
+                                            e
+                                        );
                                     }
                                 }
                             }
@@ -170,36 +180,28 @@ pub async fn create_transfer_bundle_impl(
             }
         }
 
-        let (all_anchored, pow_bits) = service
+        let pow_bits = service
             .with_wallet(|wallet| {
-                let mut all_anchored = !source_transfers.is_empty();
                 let mut write_urls: Vec<&str> = Vec::new();
                 for src in &source_transfers {
-                    match wallet
+                    if let Some(anchor_id) = wallet
                         .get_voucher_instance(&src.local_instance_id)
                         .and_then(|inst| inst.voucher.layer2_anchor)
                     {
-                        Some(anchor_id) => {
-                            let anchor_hex = hex::encode(anchor_id);
-                            if let Some(manifest) =
-                                wallet.profile.l2_anchor_manifests.get(&anchor_hex)
-                            {
-                                write_urls
-                                    .extend(manifest.servers.iter().map(|s| s.write_url.as_str()));
-                            }
-                        }
-                        None => {
-                            all_anchored = false;
+                        let anchor_hex = hex::encode(anchor_id);
+                        if let Some(manifest) = wallet.profile.l2_anchor_manifests.get(&anchor_hex)
+                        {
+                            write_urls
+                                .extend(manifest.servers.iter().map(|s| s.write_url.as_str()));
                         }
                     }
                 }
-                let bits = crate::services::common::max_pow_base_bits_for_servers(
-                    &loaded_settings,
+                crate::services::common::max_pow_base_bits_for_servers(
+                    &loaded_lifecycle,
                     write_urls,
-                );
-                (all_anchored, bits)
+                )
             })
-            .unwrap_or((!source_transfers.is_empty(), DEFAULT_LOCK_POW_BASE_BITS));
+            .unwrap_or(DEFAULT_LOCK_POW_BASE_BITS);
         let source_count = source_transfers.len();
         let record_recipient_id = recipient_id.clone();
         let record_notes = notes.clone();
@@ -215,62 +217,51 @@ pub async fn create_transfer_bundle_impl(
         };
 
         let archive = app.and_then(|a| crate::services::common::open_wallet_archive(a, &service));
-        let (result, intents) = if all_anchored {
-            let result = service
-                .create_transfer_bundle_with_l2_intents(
-                    request,
-                    &standard_definitions_toml,
-                    archive.as_ref(),
-                    password.as_deref(),
-                    pow_bits,
-                )
-                .map_err(|e| {
-                    error!(
-                        "create_transfer_bundle failed (durable_sync_lock, sources={}): {}",
-                        source_count, e
-                    );
-                    FrontendError::from(e)
-                })?;
+        let result = service
+            .create_transfer_bundle_with_l2_intents(
+                request,
+                &standard_definitions_toml,
+                archive.as_ref(),
+                password.as_deref(),
+                pow_bits,
+            )
+            .map_err(|e| {
+                error!(
+                    "create_transfer_bundle failed (durable_sync_lock, sources={}): {}",
+                    source_count, e
+                );
+                FrontendError::from(e)
+            })?;
 
-            let mut intents = Vec::with_capacity(result.involved_sources_details.len());
-            for source in &result.involved_sources_details {
-                if let Ok(intent) = service.pending_l2_send_intent(&source.local_instance_id) {
-                    intents.push(intent);
-                }
+        let mut intents = Vec::with_capacity(result.involved_sources_details.len());
+        for source in &result.involved_sources_details {
+            if let Ok(intent) = service.pending_l2_send_intent(&source.local_instance_id) {
+                intents.push(intent);
             }
-            (result, intents)
-        } else {
-            service
-                .create_transfer_bundle_with_best_effort_l2(
-                    request,
-                    &standard_definitions_toml,
-                    archive.as_ref(),
-                    password.as_deref(),
-                    pow_bits,
-                )
-                .map_err(|e| {
-                    error!(
-                        "create_transfer_bundle failed (offline_or_mixed, sources={}): {}",
-                        source_count, e
-                    );
-                    FrontendError::from(e)
-                })?
-        };
+        }
 
         if let Some((peer_pk_bytes, own_v)) = pending_card_sent {
-            let mut store: humoco_market::CardStore = service
-                .load_encrypted_data(crate::state::MARKET_CARD_STORE_KEY, password.as_deref())
-                .ok()
-                .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-                .unwrap_or_default();
-            humoco_market::mark_sent(&mut store, peer_pk_bytes, own_v);
-            if let Ok(bytes) = serde_json::to_vec(&store) {
-                if let Err(e) = service.save_encrypted_data(
-                    crate::state::MARKET_CARD_STORE_KEY,
-                    &bytes,
-                    password.as_deref(),
-                ) {
-                    log::warn!("Failed to save CardStore after sending card: {}", e);
+            match crate::state::load_encrypted_json_or_default::<humoco_market::CardStore>(
+                &mut service,
+                crate::state::MARKET_CARD_STORE_KEY,
+                password.as_deref(),
+            ) {
+                Ok(mut store) => {
+                    humoco_market::mark_sent(&mut store, peer_pk_bytes, own_v);
+                    if let Err(e) = crate::state::save_encrypted_json(
+                        &mut service,
+                        crate::state::MARKET_CARD_STORE_KEY,
+                        &store,
+                        password.as_deref(),
+                    ) {
+                        log::warn!("Failed to save CardStore after sending card: {}", e);
+                    }
+                }
+                Err(e) => {
+                    log::warn!(
+                        "Skipping CardStore mark_sent after transfer because load failed: {}",
+                        e
+                    );
                 }
             }
         }
@@ -358,83 +349,17 @@ pub async fn create_transfer_bundle_impl(
             }
         }
 
-        (result, intents, all_anchored, pow_bits)
+        (result, intents, pow_bits)
     };
 
     // Service mutex released; L1 + durable L2 intents are committed before network fan-out.
-    let client = crate::sync_client::create_sync_http_client();
-    let now_ms = u64::try_from(Utc::now().timestamp_millis())
-        .map_err(|_| FrontendError::from("Invalid verification time".to_string()))?;
-    let mut l2_dispatch = Vec::with_capacity(intents.len());
-
-    for intent in &intents {
-        let nonce = random_non_zero_nonce();
-        let reqs_res = if is_durable {
-            let service = state.lock_service()?;
-            service
-                .build_intent_committee_requests(
-                    &intent.local_instance_id,
-                    &nonce,
-                    &HashMap::new(),
-                    true,
-                )
-                .map_err(FrontendError::from)
-        } else {
-            human_money_core::services::l2_gateway::build_committee_batch_requests(
-                &intent.anchor_id,
-                &intent.manifest,
-                &intent.genesis_tickets,
-                &intent.entries,
-                &nonce,
-                &HashMap::new(),
-            )
-            .map_err(FrontendError::from)
-        };
-
-        let Ok(requests) = reqs_res else {
-            l2_dispatch.push(crate::gateway_resolver::IntentDispatchObservation {
-                local_instance_id: intent.local_instance_id.clone(),
-                status: "pending".into(),
-                http_status: None,
-            });
-            continue;
-        };
-
-        let dispatch = crate::gateway_resolver::dispatch_lock_committee_batches(
-            &client,
-            &requests,
-            Duration::from_secs(4),
-        )
-        .await;
-
-        let target_slot = intent.entries.last().map(|e| e.slot);
-        let target_receipts: Vec<_> = dispatch
-            .receipts
-            .iter()
-            .filter(|r| target_slot == Some(r.slot))
-            .cloned()
-            .collect();
-
-        if is_durable && (!target_receipts.is_empty() || !dispatch.competing_entries.is_empty()) {
-            let mut service = state.lock_service()?;
-            if let Err(err) = service.record_intent_server_receipts(
-                &intent.local_instance_id,
-                &nonce,
-                &target_receipts,
-                dispatch.competing_entries.first(),
-                pow_base_bits,
-                now_ms,
-                password.as_deref(),
-            ) {
-                log::warn!("Recording L2 send intent receipts failed: {}", err);
-            }
-        }
-
-        l2_dispatch.push(crate::gateway_resolver::summarize_intent_dispatch(
-            &intent.local_instance_id,
-            &dispatch,
-        ));
-    }
+    let l2_dispatch = crate::services::preflight::dispatch_l2_send_intents(
+        state,
+        &intents,
+        pow_base_bits,
+        password.as_deref(),
+    )
+    .await?;
 
     Ok(CreateBundleResult {
         bundle_data: result.bundle_bytes,
@@ -860,7 +785,7 @@ pub async fn checkout_received_bundle_impl(
 #[cfg(test)]
 mod offline_and_degraded_transfer_tests {
     use super::*;
-    use crate::settings::AppSettings;
+    use crate::settings::{InternalLifecycleState, UiPreferences, UI_PREFERENCES_KEY};
     use crate::test_support::{
         create_test_state, setup_test_app, temp_test_dir, ALICE_PHRASE, BOB_PHRASE,
     };
@@ -891,9 +816,14 @@ mod offline_and_degraded_transfer_tests {
 
     fn issue_100_voucher(state: &AppState, standard_toml: &str, password: &str) -> String {
         let mut s = state.service.lock().unwrap();
-        if state.get_cached_settings().is_err() {
+        if state.get_cached_ui_preferences().is_err() {
             state
-                .save_settings(&mut s, AppSettings::default(), Some(password))
+                .save_ui_preferences(&mut s, UiPreferences::default(), Some(password))
+                .unwrap();
+        }
+        if state.get_cached_internal_lifecycle().is_err() {
+            state
+                .save_internal_lifecycle(&mut s, InternalLifecycleState::default(), Some(password))
                 .unwrap();
         }
         let user_id = s.with_wallet(|w| w.get_user_id().to_string()).unwrap();
@@ -1069,7 +999,10 @@ mod offline_and_degraded_transfer_tests {
         let anchor_id = {
             let mut s = alice_state.service.lock().unwrap();
             alice_state
-                .save_settings(&mut s, AppSettings::default(), Some(password))
+                .save_ui_preferences(&mut s, UiPreferences::default(), Some(password))
+                .unwrap();
+            alice_state
+                .save_internal_lifecycle(&mut s, InternalLifecycleState::default(), Some(password))
                 .unwrap();
             let mig_pub = s
                 .with_wallet_and_identity(|_, id| {
@@ -1290,7 +1223,10 @@ mod offline_and_degraded_transfer_tests {
         {
             let mut s = carol_clone_state.service.lock().unwrap();
             carol_clone_state
-                .load_settings(&mut s, Some(password))
+                .load_ui_preferences(&mut s, Some(password))
+                .unwrap();
+            carol_clone_state
+                .load_internal_lifecycle(&mut s, Some(password))
                 .unwrap();
         }
 
@@ -1397,6 +1333,153 @@ mod offline_and_degraded_transfer_tests {
             Some(1),
             "Clean payment must report unrelated unresolved conflict separately"
         );
+
+        let _ = std::fs::remove_dir_all(base_dir);
+    }
+
+    #[tokio::test]
+    async fn test_corrupt_card_store_and_settings_fail_closed_without_overwrite() {
+        let base_dir = temp_test_dir("transfer_corrupt_stores");
+        let password = "TestPassword123!";
+        let alice_svc = setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
+        let alice_state = create_test_state(alice_svc);
+        let bob_svc = setup_test_app(&base_dir.join("bob"), "Bob", BOB_PHRASE, password);
+        let bob_state = create_test_state(bob_svc);
+
+        let bob_did = bob_state
+            .service
+            .lock()
+            .unwrap()
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
+
+        let (std_map, standard_toml) = std_map();
+        let v1_id = issue_100_voucher(&alice_state, &standard_toml, password);
+
+        // Publish Alice's own market card so create_transfer_bundle_impl reads MARKET_CARD_STORE_KEY.
+        crate::services::market_service::save_my_market_profile_impl(
+            crate::models::FrontendSaveMyMarketProfileRequest {
+                profile: crate::models::FrontendUserProfile {
+                    first_name: Some("Alice".to_string()),
+                    ..Default::default()
+                },
+                visibility: Default::default(),
+                skills: Vec::new(),
+                max_hops: 2,
+                validity_years: 2,
+                allow_inquiries: true,
+                published: None,
+            },
+            Some(password.to_string()),
+            &alice_state,
+        )
+        .unwrap();
+        crate::services::market_service::set_card_published_impl(
+            true,
+            false,
+            Some(password.to_string()),
+            &alice_state,
+        )
+        .await
+        .unwrap();
+
+        // 1. Corrupt MARKET_CARD_STORE_KEY: transfer still works, but corrupt store is NOT overwritten.
+        {
+            let mut s = alice_state.service.lock().unwrap();
+            crate::state::save_encrypted_bytes(
+                &mut s,
+                crate::state::MARKET_CARD_STORE_KEY,
+                b"{corrupt-card-store",
+                Some(password),
+            )
+            .unwrap();
+        }
+        let ok_res = create_transfer_bundle_impl(
+            None,
+            bob_did.clone(),
+            vec![FrontendSourceTransfer {
+                local_instance_id: v1_id.clone(),
+                amount_to_send: "25".into(),
+            }],
+            None,
+            None,
+            std_map.clone(),
+            Some(true),
+            Some(false),
+            Some(password.to_string()),
+            &alice_state,
+        )
+        .await;
+        assert!(ok_res.is_ok(), "Transfer should proceed: {:?}", ok_res.err());
+
+        let raw_card_store = {
+            let mut s = alice_state.service.lock().unwrap();
+            crate::state::load_encrypted_bytes_opt(
+                &mut s,
+                crate::state::MARKET_CARD_STORE_KEY,
+                Some(password),
+            )
+            .unwrap()
+            .unwrap()
+        };
+        assert_eq!(raw_card_store, b"{corrupt-card-store");
+
+        // 2. Corrupt UI_PREFERENCES_KEY with cleared cache: transfer MUST abort fail-closed and not overwrite settings.
+        {
+            let mut s = alice_state.service.lock().unwrap();
+            crate::state::save_encrypted_bytes(
+                &mut s,
+                UI_PREFERENCES_KEY,
+                b"{corrupt-settings",
+                Some(password),
+            )
+            .unwrap();
+        }
+        *alice_state.ui_preferences.lock().unwrap() = None;
+
+        let remaining_id = alice_state
+            .service
+            .lock()
+            .unwrap()
+            .with_wallet(|w| {
+                w.voucher_store
+                    .vouchers
+                    .iter()
+                    .find(|(_, inst)| matches!(inst.status, VoucherStatus::Active))
+                    .map(|(id, _)| id.clone())
+            })
+            .unwrap()
+            .unwrap();
+
+        let err_res = create_transfer_bundle_impl(
+            None,
+            bob_did,
+            vec![FrontendSourceTransfer {
+                local_instance_id: remaining_id,
+                amount_to_send: "10".into(),
+            }],
+            None,
+            None,
+            std_map,
+            Some(false),
+            Some(false),
+            Some(password.to_string()),
+            &alice_state,
+        )
+        .await;
+        assert!(err_res.is_err(), "Corrupt settings must abort transfer");
+
+        let raw_settings = {
+            let mut s = alice_state.service.lock().unwrap();
+            crate::state::load_encrypted_bytes_opt(
+                &mut s,
+                UI_PREFERENCES_KEY,
+                Some(password),
+            )
+            .unwrap()
+            .unwrap()
+        };
+        assert_eq!(raw_settings, b"{corrupt-settings");
 
         let _ = std::fs::remove_dir_all(base_dir);
     }
