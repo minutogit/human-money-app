@@ -279,8 +279,7 @@ pub fn resolve_current_did(
     let attestations = load_key_successor_attestations(service, password)?;
     let canonical = crate::state::canonicalize_did(did)
         .map_err(|e| FrontendError::from(format!("Invalid DID '{}': {}", did.trim(), e)))?;
-    Ok(resolve_successor_chain(&canonical, &attestations, now_secs)
-        .unwrap_or(canonical))
+    Ok(resolve_successor_chain(&canonical, &attestations, now_secs).unwrap_or(canonical))
 }
 
 pub fn load_lifecycle_state(
@@ -435,10 +434,16 @@ fn collect_did_drop_urls(
 ) {
     if let Ok(validated) = human_money_core::ValidatedUserId::parse(did) {
         let pk_bytes: [u8; 32] = validated.public_key_bytes();
-        if let Some(stored_card) = card_store.cards.get(&pk_bytes) {
-            for drop_desc in &stored_card.card.payload.drops {
-                push_unique_url(out, seen, &drop_desc.read_url);
-                push_unique_url(out, seen, &drop_desc.write_url);
+        for stored_card in card_store.cards.values() {
+            if human_money_core::crypto::get_pubkey_from_user_id(&stored_card.card.payload.did)
+                .ok()
+                .map(|k| k.to_bytes())
+                == Some(pk_bytes)
+            {
+                for drop_desc in &stored_card.card.payload.drops {
+                    push_unique_url(out, seen, &drop_desc.read_url);
+                    push_unique_url(out, seen, &drop_desc.write_url);
+                }
             }
         }
     }
@@ -513,12 +518,9 @@ pub async fn discover_anchor_manifest(
             password,
         )
         .map_err(FrontendError::from)?;
-        let disk_contacts: Option<FrontendAddressBook> = crate::state::load_encrypted_json_opt(
-            &mut service,
-            CONTACTS_DATA_NAME,
-            password,
-        )
-        .map_err(FrontendError::from)?;
+        let disk_contacts: Option<FrontendAddressBook> =
+            crate::state::load_encrypted_json_opt(&mut service, CONTACTS_DATA_NAME, password)
+                .map_err(FrontendError::from)?;
 
         let resolved_creator = match creator_did {
             Some(c) => {

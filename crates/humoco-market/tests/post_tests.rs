@@ -47,6 +47,7 @@ fn test_direct_crypto_derivations_and_constants() {
 fn sample_envelope(msg_id: &str, byte_len: usize) -> PostEnvelope {
     PostEnvelope {
         msg_id: msg_id.to_string(),
+        sender_did: "did:key:zSenderPlaceholder".to_string(),
         created_at: 1700000000,
         reply_drops: vec![DropDescriptor {
             write_url: "https://drop.example.com/write".to_string(),

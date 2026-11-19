@@ -1,7 +1,7 @@
 // src/components/marketplace/ProfileCardVisibilitySection.tsx
 import React from 'react';
 import { useTranslation } from 'react-i18next';
-import { Eye, EyeOff, Users } from 'lucide-react';
+import { Eye, EyeOff, Info, Users } from 'lucide-react';
 import { CardFieldVisibility, FieldAudience } from '../../types';
 import { Advanced } from '../ui/Advanced';
 import { InfoHint } from '../ui/InfoHint';
@@ -73,6 +73,7 @@ export interface ProfileCardVisibilitySectionProps {
     onPublishedChange: (published: boolean) => void;
     visibility: CardFieldVisibility;
     onApplyPreset: (presetId: CardPresetId) => void;
+    activePrefix?: string | null;
 }
 
 export const ProfileCardVisibilitySection: React.FC<ProfileCardVisibilitySectionProps> = ({
@@ -80,6 +81,7 @@ export const ProfileCardVisibilitySection: React.FC<ProfileCardVisibilitySection
     onPublishedChange,
     visibility,
     onApplyPreset,
+    activePrefix,
 }) => {
     const { t } = useTranslation();
 
@@ -105,6 +107,22 @@ export const ProfileCardVisibilitySection: React.FC<ProfileCardVisibilitySection
                     </span>
                 </div>
             </label>
+
+            {activePrefix && (
+                <div
+                    data-testid="prefix-card-limit-notice"
+                    className="p-3 rounded-2xl bg-sky-50 border border-sky-200 text-xs text-sky-900 flex items-start gap-2.5 leading-relaxed"
+                >
+                    <Info size={16} className="shrink-0 mt-0.5 text-sky-600" />
+                    <span>
+                        {t('marketplace.prefixCardLimitHint', {
+                            prefix: activePrefix,
+                            defaultValue:
+                                'Hinweis zu Unterkonten (Präfix {{prefix}}): Mit derselben Wiederherstellungsphrase lassen sich über alle Profile und Geräte zusammen maximal 3 Visitenkarten gleichzeitig veröffentlichen. Ab einer 4. Visitenkarte verdrängt die neueste eine ältere.',
+                        })}
+                    </span>
+                </div>
+            )}
 
             <div className="p-4 rounded-2xl bg-bg-app border border-theme-subtle space-y-3">
                 <PresetOrCustom<CardPresetId>

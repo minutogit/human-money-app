@@ -30,6 +30,7 @@ pub const MAX_QR_SHARE_BYTES: usize = 2900;
 
 pub const DEFAULT_MAX_HOPS: u8 = 2;
 pub const MAX_CARD_DROPS: usize = 3;
+pub const MAX_CARDS_PER_PUBKEY: usize = 3;
 pub const MAX_STORED_CARDS: usize = 2000;
 pub const MAX_SLOT_RECIPIENTS: usize = 256;
 
@@ -156,8 +157,7 @@ pub mod hex_key_map {
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 pub struct CardStore {
-    #[serde(with = "hex_key_map")]
-    pub cards: BTreeMap<[u8; 32], StoredCard>,
+    pub cards: BTreeMap<String, StoredCard>,
     #[serde(with = "hex_key_map")]
     pub sent_log: BTreeMap<[u8; 32], u64>,
 }

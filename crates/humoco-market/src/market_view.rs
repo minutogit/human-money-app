@@ -134,8 +134,8 @@ pub fn build_market_view<'a>(
 ) -> Vec<MarketPerson> {
     let own_pk = get_pubkey_from_user_id(own_did.trim()).ok();
 
-    let mut merged: HashMap<[u8; 32], MergedEntry> = HashMap::new();
-    let mut key_order: Vec<[u8; 32]> = Vec::new();
+    let mut merged: HashMap<String, MergedEntry> = HashMap::new();
+    let mut key_order: Vec<String> = Vec::new();
 
     // 1. Process vouchers
     for voucher in vouchers {
@@ -165,6 +165,8 @@ pub fn build_market_view<'a>(
             Ok(did) => did,
             Err(_) => continue,
         };
+        let account_key = crate::recovery::canonicalize_owner_account_id(creator_id)
+            .unwrap_or_else(|_| canonical_did.clone());
 
         let as_of = DateTime::parse_from_rfc3339(&voucher.creation_date)
             .map(|dt| dt.timestamp().max(0) as u64)
@@ -175,7 +177,7 @@ pub fn build_market_view<'a>(
             uuid: voucher.voucher_standard.uuid.clone(),
         };
 
-        if let Some(entry) = merged.get_mut(&pk_bytes) {
+        if let Some(entry) = merged.get_mut(&account_key) {
             if let Some(ref mut vd) = entry.voucher_data {
                 if !vd.standards.iter().any(|s| s.uuid == standard.uuid) {
                     vd.standards.push(standard);
@@ -192,9 +194,9 @@ pub fn build_market_view<'a>(
                 });
             }
         } else {
-            key_order.push(pk_bytes);
+            key_order.push(account_key.clone());
             merged.insert(
-                pk_bytes,
+                account_key,
                 MergedEntry {
                     canonical_did,
                     voucher_data: Some(VoucherData {
@@ -230,8 +232,9 @@ pub fn build_market_view<'a>(
             Ok(did) => did,
             Err(_) => continue,
         };
+        let account_key = stored.card.payload.recipient_id().to_string();
 
-        if let Some(entry) = merged.get_mut(&pk_bytes) {
+        if let Some(entry) = merged.get_mut(&account_key) {
             if let Some(ref existing_card) = entry.card_data {
                 if stored.card.payload.v > existing_card.card.payload.v {
                     entry.card_data = Some(stored.clone());
@@ -240,9 +243,9 @@ pub fn build_market_view<'a>(
                 entry.card_data = Some(stored.clone());
             }
         } else {
-            key_order.push(pk_bytes);
+            key_order.push(account_key.clone());
             merged.insert(
-                pk_bytes,
+                account_key,
                 MergedEntry {
                     canonical_did,
                     voucher_data: None,
@@ -381,6 +384,7 @@ pub fn build_market_view<'a>(
             .cmp(&tier_rank(b.trust))
             .then_with(|| b.as_of.cmp(&a.as_of))
             .then_with(|| a.did.cmp(&b.did))
+            .then_with(|| a.recipient_did.cmp(&b.recipient_did))
     });
 
     persons

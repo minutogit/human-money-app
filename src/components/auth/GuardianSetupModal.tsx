@@ -9,6 +9,7 @@ import { contactService } from '../../services/contactService';
 import { recoveryService } from '../../services/recoveryService';
 import { Contact } from '../../types';
 import { translateError } from '../../utils/errorHelper';
+import { extractCanonicalDid } from '../../utils/userIdHelper';
 import { RECOVERY_QUESTION_CATALOG } from '../../constants/recoveryQuestions';
 import { ShieldCheck, Users, CheckCircle2, AlertTriangle, KeyRound } from 'lucide-react';
 
@@ -96,12 +97,22 @@ export const GuardianSetupModal: React.FC<GuardianSetupModalProps> = ({
             try {
                 const list = await contactService.getContacts();
                 if (!active) return;
-                // Filter eligible contacts: trustLevel >= 1 (Acquaintance / Bekannt)
-                const eligible = (list || []).filter(
+                const { initialGuardianDids: initDids, initialThresholdM: initM } = initialPropsRef.current;
+                // Filter eligible contacts: trustLevel >= 1 and at most one profile per canonical root identity
+                const eligibleRaw = (list || []).filter(
                     (c) => (c.trustLevel ?? 0) >= 1
                 );
+                const initSet = new Set((initDids || []).map((d) => d.trim()));
+                const byRoot = new Map<string, Contact>();
+                for (const c of eligibleRaw) {
+                    const rootKey = extractCanonicalDid(c.did) || c.did.trim();
+                    const prev = byRoot.get(rootKey);
+                    if (!prev || (initSet.has(c.did.trim()) && !initSet.has(prev.did.trim()))) {
+                        byRoot.set(rootKey, c);
+                    }
+                }
+                const eligible = Array.from(byRoot.values());
                 setContacts(eligible);
-                const { initialGuardianDids: initDids, initialThresholdM: initM } = initialPropsRef.current;
                 setSelectedDids((prev) => {
                     if (prev.length > 0) return prev;
                     const preselected = (initDids || []).filter((did) =>

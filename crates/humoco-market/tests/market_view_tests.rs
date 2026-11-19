@@ -3,9 +3,10 @@ use human_money_core::models::profile::PublicProfile;
 use human_money_core::models::voucher::{Voucher, VoucherStandard};
 use human_money_core::services::crypto::create_user_id;
 use humoco_market::{
-    build_ad_board, build_market_view, new_ad_id, render_wire, sign_sd_card, Ad, AdKind, CardItem,
-    CardPayloadInput, EntrySource, Skill, SkillOrigin, StoredCard, TrustTier, WireFilter,
-    MAX_SKILL_TEXT_CHARS, MAX_SKILL_TITLE_CHARS,
+    accept_envelope, build_ad_board, build_market_view, new_ad_id, render_wire, sign_sd_card,
+    AcceptOutcome, Ad, AdKind, CardEnvelope, CardItem, CardPayloadInput, CardStore, DropDescriptor,
+    EntrySource, Skill, SkillOrigin, StoredCard, TrustTier, WireFilter, MAX_SKILL_TEXT_CHARS,
+    MAX_SKILL_TITLE_CHARS,
 };
 use proptest::prelude::*;
 
@@ -46,7 +47,7 @@ fn make_test_voucher(
 }
 
 #[test]
-fn test_prefix_variants_merge_and_deduplicate_standards() {
+fn test_prefix_variants_separate_profiles_and_merge_within_prefix() {
     let sk = create_keypair();
     let pk = sk.verifying_key();
     let canonical_did = create_user_id(&pk, None).unwrap();
@@ -77,7 +78,7 @@ fn test_prefix_variants_merge_and_deduplicate_standards() {
         None,
         None,
         "Minuto",
-        "std-1", // duplicate standard uuid
+        "std-1", // duplicate standard uuid within prefix1
         false,
     );
 
@@ -88,25 +89,33 @@ fn test_prefix_variants_merge_and_deduplicate_standards() {
     let classify = |_did: &str| TrustTier::Trusted;
     let persons = build_market_view(&vouchers, &[], &own_did, &classify, 1700000000);
 
-    assert_eq!(persons.len(), 1);
-    let person = &persons[0];
-    assert_eq!(person.did, canonical_did);
-    assert_eq!(person.as_of, 1769940000); // 2026-02-01T10:00:00Z
-    assert_eq!(person.trust, TrustTier::Trusted);
-    assert_eq!(person.sources, vec![EntrySource::Voucher]);
+    // Distinct prefixes stay separate MarketPerson entries while sharing canonical root did & trust
+    assert_eq!(persons.len(), 2);
 
-    // Standards deduplicated: std-1 and std-2
-    assert_eq!(person.standards.len(), 2);
-    assert_eq!(person.standards[0].uuid, "std-1");
-    assert_eq!(person.standards[1].uuid, "std-2");
+    let bob_person = persons
+        .iter()
+        .find(|p| p.recipient_did == prefix2_id)
+        .expect("prefix2 entry");
+    assert_eq!(bob_person.did, canonical_did);
+    assert_eq!(bob_person.as_of, 1769940000); // 2026-02-01T10:00:00Z
+    assert_eq!(bob_person.trust, TrustTier::Trusted);
+    assert_eq!(bob_person.sources, vec![EntrySource::Voucher]);
+    assert_eq!(bob_person.standards.len(), 1);
+    assert_eq!(bob_person.standards[0].uuid, "std-2");
+    assert_eq!(bob_person.skills.len(), 1);
+    assert_eq!(bob_person.skills[0].title, "Updated Web Design");
+    assert_eq!(bob_person.skills[0].origin, SkillOrigin::Voucher);
+    assert_eq!(bob_person.profile.needs.as_deref(), Some("Logo Design"));
 
-    // Skills extracted from newest voucher service_offer (v2)
-    assert_eq!(person.skills.len(), 1);
-    assert_eq!(person.skills[0].title, "Updated Web Design");
-    assert_eq!(person.skills[0].origin, SkillOrigin::Voucher);
-
-    // Voucher needs is NOT a skill or ad, but is preserved on profile.needs!
-    assert_eq!(person.profile.needs.as_deref(), Some("Logo Design"));
+    let alice_person = persons
+        .iter()
+        .find(|p| p.recipient_did == prefix1_id)
+        .expect("prefix1 entry");
+    assert_eq!(alice_person.did, canonical_did);
+    assert_eq!(alice_person.trust, TrustTier::Trusted);
+    // Same-prefix vouchers merge and deduplicate std-1
+    assert_eq!(alice_person.standards.len(), 1);
+    assert_eq!(alice_person.standards[0].uuid, "std-1");
 }
 
 #[test]
@@ -894,7 +903,10 @@ fn test_subaccount_card_preserves_recipient_did_for_market_and_board() {
     .unwrap();
 
     assert_eq!(card.payload.did, anna_root_did);
-    assert_eq!(card.payload.recipient_did.as_deref(), Some(anna_shop_did.as_str()));
+    assert_eq!(
+        card.payload.recipient_did.as_deref(),
+        Some(anna_shop_did.as_str())
+    );
     assert_eq!(card.payload.recipient_id(), anna_shop_did);
 
     let wire = render_wire(&card, 1, WireFilter::Full).unwrap();
@@ -923,4 +935,148 @@ fn test_subaccount_card_preserves_recipient_did_for_market_and_board() {
     assert_eq!(board.len(), 1);
     assert_eq!(board[0].owner_did, anna_root_did);
     assert_eq!(board[0].recipient_did, anna_shop_did);
+}
+
+#[test]
+fn test_multi_prefix_cards_coexist_with_shared_trust_and_offender_hiding() {
+    let now = 1_700_000_000;
+    let sk = create_keypair();
+    let vk = sk.verifying_key();
+    let root_did = create_user_id(&vk, None).unwrap();
+    let shop_did = create_user_id(&vk, Some("laden")).unwrap();
+    let priv_did = create_user_id(&vk, Some("privat")).unwrap();
+
+    let mut store = CardStore::default();
+    for (idx, (did, name, ad_title, url)) in [
+        (
+            &root_did,
+            "Anna Basis",
+            "Honig",
+            "https://basis.example.com",
+        ),
+        (&shop_did, "Anna Laden", "Brot", "https://laden.example.com"),
+        (
+            &priv_did,
+            "Anna Privat",
+            "Fahrrad",
+            "https://privat.example.com",
+        ),
+    ]
+    .iter()
+    .enumerate()
+    {
+        let card = sign_sd_card(
+            CardPayloadInput {
+                did: (*did).clone(),
+                v: 100 + idx as u64,
+                valid_until: now + 30 * 86_400,
+                max_hops: 2,
+                ad_count: 1,
+                allow_inquiries: true,
+                drops: vec![DropDescriptor {
+                    write_url: (*url).to_string(),
+                    read_url: (*url).to_string(),
+                    slot_id: None,
+                    drop_pub: hex::encode([9u8; 32]),
+                }],
+            },
+            vec![
+                (
+                    CardItem::Name {
+                        first_name: Some((*name).to_string()),
+                        last_name: None,
+                    },
+                    2,
+                ),
+                (
+                    CardItem::Ad(Ad {
+                        id: format!("000000000000001{}", idx),
+                        kind: AdKind::Offer,
+                        title: (*ad_title).to_string(),
+                        text: None,
+                        pricing: None,
+                        published_at: now - 5,
+                        renewed_at: None,
+                        expires_at: now + 86_400,
+                        allow_inquiries: true,
+                        is_remote: false,
+                        image_token: None,
+                    }),
+                    2,
+                ),
+            ],
+            &sk,
+        )
+        .unwrap();
+        let wire = render_wire(&card, 1, WireFilter::Full).unwrap();
+        let res = accept_envelope(
+            &mut store,
+            &CardEnvelope {
+                card_wire: wire,
+                hops: 1,
+            },
+            now,
+            500,
+            None,
+            &|_| false,
+        );
+        assert_eq!(
+            res,
+            AcceptOutcome::Accepted {
+                did: (*did).clone(),
+                replaced: false,
+            }
+        );
+    }
+
+    assert_eq!(store.cards.len(), 3);
+    let stored_vec: Vec<StoredCard> = store.cards.values().cloned().collect();
+    let persons = build_market_view(
+        &[],
+        &stored_vec,
+        "did:key:other",
+        &|_| TrustTier::Trusted,
+        now,
+    );
+    assert_eq!(persons.len(), 3);
+    assert!(persons
+        .iter()
+        .all(|p| p.did == root_did && p.trust == TrustTier::Trusted));
+    assert_eq!(
+        persons
+            .iter()
+            .find(|p| p.recipient_did == shop_did)
+            .unwrap()
+            .card_drops[0]
+            .read_url,
+        "https://laden.example.com"
+    );
+    assert_eq!(
+        persons
+            .iter()
+            .find(|p| p.recipient_did == priv_did)
+            .unwrap()
+            .card_drops[0]
+            .read_url,
+        "https://privat.example.com"
+    );
+
+    let board = build_ad_board(&persons);
+    assert_eq!(board.len(), 3);
+
+    // KnownOffender (TrustTier::Hidden on canonical root DID) hides ALL 3 profiles
+    let hidden_persons = build_market_view(
+        &[],
+        &stored_vec,
+        "did:key:other",
+        &|d| {
+            if d == root_did {
+                TrustTier::Hidden
+            } else {
+                TrustTier::Trusted
+            }
+        },
+        now,
+    );
+    assert!(hidden_persons.is_empty());
 }

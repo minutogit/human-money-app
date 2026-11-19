@@ -14,6 +14,7 @@ import {
 import type { VoucherStatus } from '../../types';
 import { useNavigation } from '../../context/NavigationContext';
 import { getMissingProfileHint } from '../../utils/signatureHints';
+import { isExactSameUserId, isSameRootIdentity } from '../../utils/userIdHelper';
 import { Card } from '../ui/Card';
 import { TrustBadge } from '../ui/TrustBadge';
 import { HelpIcon } from '../ui/HelpIcon';
@@ -213,11 +214,15 @@ export function VoucherDetailsView() {
                         <CreatorSection
                             creator={voucher.creator}
                             trustStatus={state.trustStatus}
-                            isContact={state.contacts.some((c) => c.did === voucher.creator.id)}
+                            isContact={state.contacts.some(
+                                (c) =>
+                                    isExactSameUserId(c.did, voucher.creator.id) ||
+                                    isSameRootIdentity(c.did, voucher.creator.id),
+                            )}
                             onManageContact={() => {
                                 state.setPendingContactDID(voucher.creator.id);
                                 state.setExistingContact(
-                                    state.contacts.find((c) => c.did === voucher.creator.id) || null,
+                                    state.contacts.find((c) => isExactSameUserId(c.did, voucher.creator.id)) || null,
                                 );
                                 state.setShowContactDialog(true);
                             }}

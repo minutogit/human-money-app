@@ -1,6 +1,6 @@
 use human_money_core::crypto::get_pubkey_from_user_id;
 
-use crate::model::{CardEnvelope, CardStore, StoredCard, WireFilter};
+use crate::model::{CardEnvelope, CardStore, StoredCard, WireFilter, MAX_CARDS_PER_PUBKEY};
 use crate::sd_card::{
     decoded_items, merge, strip_disclosures_beyond_distance, verify_sd_card, CardItem,
 };
@@ -126,15 +126,19 @@ pub fn accept_envelope_with_writer(
     // Receiver rule (honest app): strip disclosures beyond effective_hops
     strip_disclosures_beyond_distance(&mut card, effective_hops);
 
+    // Purge expired cards before enforcing per-pubkey and global capacity limits
+    store.cards.retain(|_, c| c.card.payload.valid_until > now);
+
     let pk_bytes = *pk.as_bytes();
-    let existing = store.cards.get_mut(&pk_bytes);
+    let card_key = card.payload.recipient_id().to_string();
+    let existing = store.cards.get_mut(&card_key);
 
     let replaced = match existing {
         None => {
             let card_wire = crate::sd_card::render_wire(&card, effective_hops, WireFilter::Full)
                 .unwrap_or_else(|| env.card_wire.clone());
             store.cards.insert(
-                pk_bytes,
+                card_key.clone(),
                 StoredCard {
                     card: card.clone(),
                     card_wire,
@@ -170,8 +174,41 @@ pub fn accept_envelope_with_writer(
         }
     };
 
-    // Purge expired cards
-    store.cards.retain(|_, c| c.card.payload.valid_until > now);
+    // Enforce max MAX_CARDS_PER_PUBKEY cards per root public key:
+    // Evict tombstones before active cards, then larger hops, then older versions.
+    let same_pubkey = |c: &StoredCard| -> bool {
+        get_pubkey_from_user_id(&c.card.payload.did)
+            .ok()
+            .map(|k| *k.as_bytes())
+            == Some(pk_bytes)
+    };
+    let mut sibling_count = store.cards.values().filter(|c| same_pubkey(c)).count();
+    while sibling_count > MAX_CARDS_PER_PUBKEY {
+        let victim_key = store
+            .cards
+            .iter()
+            .filter(|(_, c)| same_pubkey(c))
+            .max_by(|(k1, c1), (k2, c2)| {
+                let t1 = c1.card.disclosures.is_empty();
+                let t2 = c2.card.disclosures.is_empty();
+                t1.cmp(&t2)
+                    .then_with(|| c1.hops.cmp(&c2.hops))
+                    .then_with(|| c2.card.payload.v.cmp(&c1.card.payload.v))
+                    .then_with(|| c2.received_at.cmp(&c1.received_at))
+                    .then_with(|| k1.cmp(k2))
+            })
+            .map(|(k, _)| k.clone());
+
+        if let Some(vk) = victim_key {
+            store.cards.remove(&vk);
+            sibling_count -= 1;
+            if vk == card_key {
+                return AcceptOutcome::IgnoredStale;
+            }
+        } else {
+            break;
+        }
+    }
 
     // Enforce max_stored_cards limit:
     // Evict card maximizing:
@@ -218,7 +255,7 @@ pub fn accept_envelope_with_writer(
                     .then_with(|| c2.received_at.cmp(&c1.received_at))
                     .then_with(|| k1.cmp(k2))
             })
-            .map(|(k, _)| *k);
+            .map(|(k, _)| k.clone());
 
         if let Some(k) = victim_pk {
             store.cards.remove(&k);
@@ -228,7 +265,7 @@ pub fn accept_envelope_with_writer(
     }
 
     AcceptOutcome::Accepted {
-        did: card.payload.did,
+        did: card_key,
         replaced,
     }
 }

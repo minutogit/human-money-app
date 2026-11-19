@@ -161,7 +161,12 @@ pub fn build_card_bundle(
             .then_with(|| t2.cmp(&t1))
             .then_with(|| r1.cmp(r2))
             .then_with(|| s2.card.payload.v.cmp(&s1.card.payload.v))
-            .then_with(|| s1.card.payload.did.cmp(&s2.card.payload.did))
+            .then_with(|| {
+                s1.card
+                    .payload
+                    .recipient_id()
+                    .cmp(s2.card.payload.recipient_id())
+            })
     };
 
     hop1.sort_by(cmp_candidates);

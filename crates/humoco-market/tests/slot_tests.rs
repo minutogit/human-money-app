@@ -140,7 +140,7 @@ fn test_build_card_bundle_sorting_and_trimming() {
 
         let card = dummy_sd_card(&did, i as u64);
         store.cards.insert(
-            *vk.as_bytes(),
+            did,
             StoredCard {
                 card,
                 card_wire: format!("wire-{}", i),

@@ -4,9 +4,9 @@ use human_money_core::ValidatedUserId;
 use humoco_market::{
     merge_and_pack_post_slot, pack_post_slot, validate_market_inquiry,
     validate_market_inquiry_message, validate_wot_handshake_assertion, DropDescriptor,
-    MarketInquiry, MarketInquiryDecision, MarketInquiryMessage, PostBoxEntry, WotHandshakeAssertion,
-    DROP_POST_MAX_BYTES, MAX_INQUIRY_MESSAGES_PER_THREAD, PAYLOAD_MARKET_INQUIRY_MESSAGE_V1,
-    PAYLOAD_MARKET_INQUIRY_V1,
+    MarketInquiry, MarketInquiryDecision, MarketInquiryMessage, PostBoxEntry,
+    WotHandshakeAssertion, DROP_POST_MAX_BYTES, MAX_INQUIRY_MESSAGES_PER_THREAD,
+    PAYLOAD_MARKET_INQUIRY_MESSAGE_V1, PAYLOAD_MARKET_INQUIRY_V1,
 };
 use log::warn;
 
@@ -14,9 +14,7 @@ use crate::models::{
     FrontendContact, FrontendError, FrontendInquiryChatMessage, FrontendMarketInquiryItem,
     FrontendPostDepositResult, FrontendSyncDescriptor, FrontendUserProfile,
 };
-use crate::services::common::{
-    are_dids_equal, normalize_sync_url, DropChannelSigner, SyncIdentityContext,
-};
+use crate::services::common::{normalize_sync_url, DropChannelSigner, SyncIdentityContext};
 use crate::state::{AppState, StoredPostState};
 use crate::sync_client::{self as sync_client, PutSlotOutcome};
 
@@ -94,16 +92,18 @@ fn collect_flush_context(
         std::collections::HashSet<String>,
     > = std::collections::HashMap::new();
 
+    let extra_trimmed = extra_recipient_did.map(str::trim).filter(|s| !s.is_empty());
+    let mut exact_matched_recipients = std::collections::HashSet::new();
+
     if !extra_recipient_syncs.is_empty() {
-        let extra_can = extra_recipient_did
-            .map(|d| crate::state::canonicalize_did(d).unwrap_or_else(|_| d.to_string()));
         for d in extra_recipient_syncs {
-            if let Some(ref can_did) = extra_can {
+            if let Some(rcpt) = extra_trimmed {
+                exact_matched_recipients.insert(rcpt.to_string());
                 record_recipient_target(
                     &mut recipient_write_urls,
                     &mut recipient_dids_by_write_url,
                     &mut targets,
-                    can_did,
+                    rcpt,
                     d.clone().into(),
                 );
             } else {
@@ -117,90 +117,152 @@ fn collect_flush_context(
     }
 
     // Include recipient Sync endpoints from contacts, inquiries, pending sign requests, and known cards.
-    let recipient_dids: std::collections::HashSet<String> = post_state
+    // Match by exact prefixed recipient_did first; fall back to canonical root DID only when no exact target exists.
+    let queued_recipients: std::collections::HashSet<String> = post_state
         .outbox_entries
         .iter()
-        .map(|e| {
-            crate::state::canonicalize_did(&e.recipient_did)
-                .unwrap_or_else(|_| e.recipient_did.clone())
-        })
+        .map(|e| e.recipient_did.trim().to_string())
+        .filter(|s| !s.is_empty())
         .collect();
 
-    if let Ok(contacts) = state.load_contacts(&mut service, password) {
-        for c in contacts {
-            let can_c_did =
-                crate::state::canonicalize_did(&c.did).unwrap_or_else(|_| c.did.clone());
-            if recipient_dids.contains(&can_c_did) {
-                for d in c.syncs {
+    let contacts = state
+        .load_contacts(&mut service, password)
+        .unwrap_or_default();
+    let card_store = crate::state::load_encrypted_json_opt::<humoco_market::CardStore>(
+        &mut service,
+        crate::state::MARKET_CARD_STORE_KEY,
+        password,
+    )
+    .map_err(|e| format!("Failed to load CardStore in collect_flush_context: {}", e))?;
+
+    for rcpt in &queued_recipients {
+        let mut found_exact = false;
+        for c in &contacts {
+            if c.did.trim() == rcpt {
+                for d in &c.syncs {
+                    found_exact = true;
                     record_recipient_target(
                         &mut recipient_write_urls,
                         &mut recipient_dids_by_write_url,
                         &mut targets,
-                        &can_c_did,
-                        d.into(),
+                        rcpt,
+                        d.clone().into(),
                     );
                 }
             }
         }
-    }
-
-    for inq in &post_state.inquiries {
-        let can_inq_did = crate::state::canonicalize_did(&inq.counterparty_did)
-            .unwrap_or_else(|_| inq.counterparty_did.clone());
-        if recipient_dids.contains(&can_inq_did) {
-            for d in &inq.reply_syncs {
-                record_recipient_target(
-                    &mut recipient_write_urls,
-                    &mut recipient_dids_by_write_url,
-                    &mut targets,
-                    &can_inq_did,
-                    d.clone().into(),
-                );
+        for inq in &post_state.inquiries {
+            if inq.counterparty_did.trim() == rcpt {
+                for d in &inq.reply_syncs {
+                    found_exact = true;
+                    record_recipient_target(
+                        &mut recipient_write_urls,
+                        &mut recipient_dids_by_write_url,
+                        &mut targets,
+                        rcpt,
+                        d.clone().into(),
+                    );
+                }
             }
+        }
+        for req in &post_state.pending_sign_requests {
+            if req.sender_did.trim() == rcpt {
+                for d in &req.reply_syncs {
+                    found_exact = true;
+                    record_recipient_target(
+                        &mut recipient_write_urls,
+                        &mut recipient_dids_by_write_url,
+                        &mut targets,
+                        rcpt,
+                        d.clone().into(),
+                    );
+                }
+            }
+        }
+        if let Some(ref store) = card_store {
+            if let Some(sc) = store.cards.get(rcpt.as_str()) {
+                for d in &sc.card.payload.drops {
+                    found_exact = true;
+                    record_recipient_target(
+                        &mut recipient_write_urls,
+                        &mut recipient_dids_by_write_url,
+                        &mut targets,
+                        rcpt,
+                        d.clone(),
+                    );
+                }
+            }
+        }
+        if found_exact {
+            exact_matched_recipients.insert(rcpt.clone());
         }
     }
 
-    for req in &post_state.pending_sign_requests {
-        let can_req_did = crate::state::canonicalize_did(&req.sender_did)
-            .unwrap_or_else(|_| req.sender_did.clone());
-        if recipient_dids.contains(&can_req_did) {
-            for d in &req.reply_syncs {
-                record_recipient_target(
-                    &mut recipient_write_urls,
-                    &mut recipient_dids_by_write_url,
-                    &mut targets,
-                    &can_req_did,
-                    d.clone().into(),
-                );
+    for rcpt in &queued_recipients {
+        if exact_matched_recipients.contains(rcpt) {
+            continue;
+        }
+        let can_rcpt = crate::state::canonicalize_did(rcpt).unwrap_or_else(|_| rcpt.clone());
+        for c in &contacts {
+            let can_c = crate::state::canonicalize_did(&c.did).unwrap_or_else(|_| c.did.clone());
+            if can_c == can_rcpt {
+                for d in &c.syncs {
+                    record_recipient_target(
+                        &mut recipient_write_urls,
+                        &mut recipient_dids_by_write_url,
+                        &mut targets,
+                        rcpt,
+                        d.clone().into(),
+                    );
+                }
             }
         }
-    }
-
-    match crate::state::load_encrypted_json_opt::<humoco_market::CardStore>(
-        &mut service,
-        crate::state::MARKET_CARD_STORE_KEY,
-        password,
-    ) {
-        Ok(Some(card_store)) => {
-            for sc in card_store.cards.values() {
-                let can_card_did = crate::state::canonicalize_did(&sc.card.payload.did)
+        for inq in &post_state.inquiries {
+            let can_inq = crate::state::canonicalize_did(&inq.counterparty_did)
+                .unwrap_or_else(|_| inq.counterparty_did.clone());
+            if can_inq == can_rcpt {
+                for d in &inq.reply_syncs {
+                    record_recipient_target(
+                        &mut recipient_write_urls,
+                        &mut recipient_dids_by_write_url,
+                        &mut targets,
+                        rcpt,
+                        d.clone().into(),
+                    );
+                }
+            }
+        }
+        for req in &post_state.pending_sign_requests {
+            let can_req = crate::state::canonicalize_did(&req.sender_did)
+                .unwrap_or_else(|_| req.sender_did.clone());
+            if can_req == can_rcpt {
+                for d in &req.reply_syncs {
+                    record_recipient_target(
+                        &mut recipient_write_urls,
+                        &mut recipient_dids_by_write_url,
+                        &mut targets,
+                        rcpt,
+                        d.clone().into(),
+                    );
+                }
+            }
+        }
+        if let Some(ref store) = card_store {
+            for sc in store.cards.values() {
+                let can_card = crate::state::canonicalize_did(&sc.card.payload.did)
                     .unwrap_or_else(|_| sc.card.payload.did.clone());
-                if recipient_dids.contains(&can_card_did) {
+                if can_card == can_rcpt {
                     for d in &sc.card.payload.drops {
                         record_recipient_target(
                             &mut recipient_write_urls,
                             &mut recipient_dids_by_write_url,
                             &mut targets,
-                            &can_card_did,
+                            rcpt,
                             d.clone(),
                         );
                     }
                 }
             }
-        }
-        Ok(None) => {}
-        Err(e) => {
-            return Err(format!("Failed to load CardStore in collect_flush_context: {}", e));
         }
     }
 
@@ -239,12 +301,11 @@ fn select_prioritized_entries_for_target(
             let Some(recipients) = target_recipient_dids else {
                 return true;
             };
-            let can_recipient = crate::state::canonicalize_did(&entry.recipient_did)
-                .unwrap_or_else(|_| entry.recipient_did.clone());
-            recipients.contains(&can_recipient)
+            recipients.contains(entry.recipient_did.trim())
         })
         .collect();
-    selected.sort_by(|a, b| (a.created_at, a.msg_id.as_str()).cmp(&(b.created_at, b.msg_id.as_str())));
+    selected
+        .sort_by(|a, b| (a.created_at, a.msg_id.as_str()).cmp(&(b.created_at, b.msg_id.as_str())));
     selected.into_iter().map(|e| e.entry.clone()).collect()
 }
 
@@ -615,6 +676,7 @@ pub async fn deposit_transfer_to_post_impl(
 
         enqueue_post_envelope(
             &mut post_state,
+            &signing_ctx.identity.user_id,
             &signing_ctx.sync_ctx.my_ed_sk,
             validated_recipient.as_str(),
             recipient_ed_pk,
@@ -628,7 +690,14 @@ pub async fn deposit_transfer_to_post_impl(
         fresh_msg_id
     };
 
-    persist_and_flush_post_box(state, &baseline, &mut post_state, msg_id, password.as_deref()).await
+    persist_and_flush_post_box(
+        state,
+        &baseline,
+        &mut post_state,
+        msg_id,
+        password.as_deref(),
+    )
+    .await
 }
 
 fn resolve_signing_request_anchor_manifest(
@@ -691,6 +760,7 @@ pub async fn send_signing_request_via_post_impl(
     let baseline = post_state.clone();
     enqueue_post_envelope(
         &mut post_state,
+        &signing_ctx.identity.user_id,
         &signing_ctx.sync_ctx.my_ed_sk,
         &recipient_did,
         recipient_ed_pk,
@@ -702,7 +772,14 @@ pub async fn send_signing_request_via_post_impl(
         anchor_manifest_json,
     )?;
 
-    persist_and_flush_post_box(state, &baseline, &mut post_state, msg_id, password.as_deref()).await
+    persist_and_flush_post_box(
+        state,
+        &baseline,
+        &mut post_state,
+        msg_id,
+        password.as_deref(),
+    )
+    .await
 }
 
 /// Replies with a detached voucher signature container via Post and clears any matching request.
@@ -727,6 +804,7 @@ pub async fn reply_detached_signature_via_post_impl(
     let baseline = post_state.clone();
     enqueue_post_envelope(
         &mut post_state,
+        &signing_ctx.identity.user_id,
         &signing_ctx.sync_ctx.my_ed_sk,
         &recipient_did,
         recipient_ed_pk,
@@ -746,9 +824,10 @@ pub async fn reply_detached_signature_via_post_impl(
     merge_and_save_post_state(state, &baseline, &mut post_state, password.as_deref())?;
     let mid_baseline = post_state.clone();
 
-    let outcome = flush_post_slots_impl(state, &mut post_state, None, &[], password.as_deref()).await;
-    let delivered_to_recipient = target_tag16
-        .is_some_and(|t| outcome.recipient_uploaded_tags.contains(&t));
+    let outcome =
+        flush_post_slots_impl(state, &mut post_state, None, &[], password.as_deref()).await;
+    let delivered_to_recipient =
+        target_tag16.is_some_and(|t| outcome.recipient_uploaded_tags.contains(&t));
 
     if delivered_to_recipient {
         if let Some(ref req_id) = request_msg_id {
@@ -877,6 +956,7 @@ pub async fn send_wot_handshake_via_post_impl(
     let baseline = post_state.clone();
     enqueue_post_envelope(
         &mut post_state,
+        &my_identity.user_id,
         &my_ed_sk,
         &recipient_did,
         recipient_ed_pk,
@@ -888,7 +968,14 @@ pub async fn send_wot_handshake_via_post_impl(
         None,
     )?;
 
-    persist_and_flush_post_box(state, &baseline, &mut post_state, msg_id, password.as_deref()).await
+    persist_and_flush_post_box(
+        state,
+        &baseline,
+        &mut post_state,
+        msg_id,
+        password.as_deref(),
+    )
+    .await
 }
 
 /// Accepts a pending incoming WoT handshake, updates contact trust, imports the peer's
@@ -928,10 +1015,7 @@ pub async fn accept_wot_handshake_impl(
             let mut contact = state
                 .load_contacts(&mut service, password.as_deref())
                 .ok()
-                .and_then(|list| {
-                    list.into_iter()
-                        .find(|c| are_dids_equal(&c.did, &sender_did))
-                })
+                .and_then(|list| list.into_iter().find(|c| c.did.trim() == sender_did.trim()))
                 .unwrap_or_else(|| FrontendContact {
                     did: sender_did.clone(),
                     profile: FrontendUserProfile {
@@ -956,7 +1040,9 @@ pub async fn accept_wot_handshake_impl(
         if let Some(json_str) = post_state.pending_wot_packages_by_msg_id.remove(&msg_id) {
             if let Ok(pkg) = serde_json::from_str::<humoco_wot::WotSyncPackage>(&json_str) {
                 let mut service = state.service.lock().unwrap();
-                if let Ok(mut reg) = state.get_or_load_wot_register(&mut service, password.as_deref()) {
+                if let Ok(mut reg) =
+                    state.get_or_load_wot_register(&mut service, password.as_deref())
+                {
                     let can_sender_did = crate::state::canonicalize_did(&sender_did)
                         .unwrap_or_else(|_| sender_did.clone());
                     let _ = reg.import_sync_package(&pkg, Some(&can_sender_did), now_secs);
@@ -1037,6 +1123,7 @@ pub async fn send_market_inquiry_via_post_impl(
     let baseline = post_state.clone();
     enqueue_post_envelope(
         &mut post_state,
+        &signing_ctx.identity.user_id,
         &signing_ctx.sync_ctx.my_ed_sk,
         &recipient_did,
         recipient_ed_pk,
@@ -1208,12 +1295,10 @@ pub async fn send_market_inquiry_message_via_post_impl(
     let recipient_ed_pk = validated_counterparty.public_key();
 
     if dec.is_some() {
-        post_state
-            .inquiry_rate_tracker
-            .resolve_inquiry(
-                &hex::encode(recipient_ed_pk.as_bytes()),
-                &target.target_key(),
-            );
+        post_state.inquiry_rate_tracker.resolve_inquiry(
+            &hex::encode(recipient_ed_pk.as_bytes()),
+            &target.target_key(),
+        );
     }
 
     let signing_ctx = load_post_signing_context(state, password.as_deref())?;
@@ -1228,6 +1313,7 @@ pub async fn send_market_inquiry_message_via_post_impl(
 
     enqueue_post_envelope(
         &mut post_state,
+        &signing_ctx.identity.user_id,
         &signing_ctx.sync_ctx.my_ed_sk,
         &counterparty_did,
         recipient_ed_pk,

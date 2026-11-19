@@ -45,7 +45,7 @@ import { ShareCardModal } from './ShareCardModal';
 import { ImportCardModal } from './ImportCardModal';
 import { MarketplaceOptionsPanel } from './MarketplaceOptionsPanel';
 import { translateError, stringifyError } from '../../utils/errorHelper';
-import { isExactSameUserId } from '../../utils/userIdHelper';
+import { isExactSameUserId, isSameRootIdentity } from '../../utils/userIdHelper';
 import {
     SYNC_STATUS_UPDATED_EVENT,
     MY_PROFILE_UPDATED_EVENT,
@@ -492,7 +492,12 @@ export function MarketplaceView({
     // If person detail view is active
     const selectedPerson = useMemo(() => {
         if (!selectedPersonDid || !snapshot) return null;
-        return snapshot.people.find((p) => isExactSameUserId(p.did, selectedPersonDid)) || null;
+        return (
+            snapshot.people.find((p) => isExactSameUserId(p.recipientDid || p.did, selectedPersonDid)) ||
+            snapshot.people.find((p) => isExactSameUserId(p.did, selectedPersonDid)) ||
+            snapshot.people.find((p) => isSameRootIdentity(p.did, selectedPersonDid)) ||
+            null
+        );
     }, [selectedPersonDid, snapshot]);
 
     if (isLoading) {
@@ -772,7 +777,7 @@ export function MarketplaceView({
                             myCoordinates={currentProfile.profile.coordinates}
                             maxDistanceKm={maxDistanceKm}
                             onMaxDistanceChange={setMaxDistanceKm}
-                            onSelectPerson={(person) => setSelectedPersonDid(person.did)}
+                            onSelectPerson={(person) => setSelectedPersonDid(person.recipientDid || person.did)}
                         />
                     )}
 
@@ -800,9 +805,11 @@ export function MarketplaceView({
                             onDismissInquiry={handleDismissInquiry}
                             onAddContact={(did, suggestedName) => setAddContactTarget({ did, suggestedName })}
                             onViewCard={(did) => {
-                                const match = snapshot?.people.find((p) => isExactSameUserId(p.did, did));
+                                const match =
+                                    snapshot?.people.find((p) => isExactSameUserId(p.recipientDid || p.did, did)) ||
+                                    snapshot?.people.find((p) => isExactSameUserId(p.did, did));
                                 if (match) {
-                                    setSelectedPersonDid(match.did);
+                                    setSelectedPersonDid(match.recipientDid || match.did);
                                 }
                             }}
                         />

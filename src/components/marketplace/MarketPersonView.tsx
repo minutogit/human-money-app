@@ -116,7 +116,10 @@ export const MarketPersonView: React.FC<MarketPersonViewProps> = ({
                 checkAndTriggerCooldown(res);
             }
             const snapshot = await marketService.getMarketView();
-            const updated = (snapshot.people || []).find((p) => isExactSameUserId(p.did, currentPerson.did));
+            const targetId = currentPerson.recipientDid || currentPerson.did;
+            const updated =
+                (snapshot.people || []).find((p) => isExactSameUserId(p.recipientDid || p.did, targetId)) ||
+                (snapshot.people || []).find((p) => isExactSameUserId(p.did, currentPerson.did));
             if (updated) {
                 setCurrentPerson(updated);
             }
@@ -143,7 +146,7 @@ export const MarketPersonView: React.FC<MarketPersonViewProps> = ({
 
     const paymentRecipientId = currentPerson.recipientDid || currentPerson.did;
     const existingContact = Array.isArray(contacts)
-        ? contacts.find((c) => isExactSameUserId(c.did, currentPerson.did) || isExactSameUserId(c.did, paymentRecipientId))
+        ? contacts.find((c) => isExactSameUserId(c.did, paymentRecipientId))
         : undefined;
     const hasReachableInquirySync =
         (currentPerson.cardSyncs?.length ?? 0) > 0 || (existingContact?.syncs?.length ?? 0) > 0;
@@ -168,7 +171,7 @@ export const MarketPersonView: React.FC<MarketPersonViewProps> = ({
         setForwardError(null);
         try {
             const exportData = await protectAction(async (pwd) => {
-                return await marketService.exportForwardCard(currentPerson.did, pwd || undefined);
+                return await marketService.exportForwardCard(paymentRecipientId, pwd || undefined);
             });
             if (exportData) {
                 setForwardCardData(exportData);

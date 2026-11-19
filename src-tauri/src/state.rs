@@ -481,15 +481,19 @@ impl AppState {
             .map(|p| p.share_min_level)
         {
             Some(v) => Some(v),
-            None => load_encrypted_json_opt::<UiPreferences>(
-                service,
-                UI_PREFERENCES_KEY,
-                password,
-            )?
-            .map(|p| p.share_min_level),
+            None => {
+                load_encrypted_json_opt::<UiPreferences>(service, UI_PREFERENCES_KEY, password)?
+                    .map(|p| p.share_min_level)
+            }
         };
         let new_min = prefs.share_min_level;
-        Self::save_store(service, &self.ui_preferences, UI_PREFERENCES_KEY, prefs, password)?;
+        Self::save_store(
+            service,
+            &self.ui_preferences,
+            UI_PREFERENCES_KEY,
+            prefs,
+            password,
+        )?;
         if prev_min.is_some_and(|prev| new_min > prev) {
             crate::services::market_service::bump_own_card_version_for_eviction(
                 self, service, password,
@@ -545,7 +549,12 @@ impl AppState {
         service: &mut AppService,
         password: Option<&str>,
     ) -> Result<SecurityPolicy, AppFacadeError> {
-        Self::load_store(service, &self.security_policy, SECURITY_POLICY_KEY, password)
+        Self::load_store(
+            service,
+            &self.security_policy,
+            SECURITY_POLICY_KEY,
+            password,
+        )
     }
 
     pub fn save_security_policy(
@@ -778,22 +787,12 @@ impl AppState {
             ));
         }
 
-        // Deduplicate address_book.contacts: for own subaccounts keep distinct prefixes separate;
-        // for external contacts deduplicate by canonical DID.
+        // Keep distinct prefixes separate for both own subaccounts and external contacts;
+        // each prefix can carry its own sync endpoints while sharing root WoT trust.
         let keys_to_remove: Vec<String> = address_book
             .contacts
             .keys()
-            .filter(|k| {
-                if *k == &contact.did {
-                    false
-                } else if is_own_root {
-                    k.trim() == contact.did
-                } else if let Ok(k_can) = canonicalize_did(k) {
-                    k_can == can_did
-                } else {
-                    false
-                }
-            })
+            .filter(|k| *k != &contact.did && k.trim() == contact.did)
             .cloned()
             .collect();
 
@@ -896,10 +895,7 @@ impl AppState {
                 ) {
                     Ok(store) => store
                         .cards
-                        .values()
-                        .find(|sc| {
-                            canonicalize_did(&sc.card.payload.did).ok().as_deref() == Some(&can_did)
-                        })
+                        .get(&contact.did)
                         .map(|sc| {
                             sc.card
                                 .payload
@@ -931,6 +927,12 @@ impl AppState {
             let mut reg = self.get_or_load_wot_register(service, password)?;
             let now_secs = Utc::now().timestamp() as u64;
             let prev_level = reg.own_contacts.get(&can_did).map(|e| e.level).unwrap_or(0);
+            if !is_existing && contact.trust_level.is_none() {
+                if let Some(existing_entry) = reg.own_contacts.get(&can_did) {
+                    contact.trust_level = Some(existing_entry.level);
+                    contact.desired_hops = Some(existing_entry.desired_hops);
+                }
+            }
             let new_eff_level = contact.trust_level.unwrap_or(0);
 
             if let Some(level) = contact.trust_level {
@@ -1000,6 +1002,15 @@ impl AppState {
             })
             .collect();
 
+        if !is_own_root {
+            for sibling in address_book.contacts.values_mut() {
+                if canonicalize_did(&sibling.did).ok().as_deref() == Some(can_did.as_str()) {
+                    sibling.trust_level = contact.trust_level;
+                    sibling.desired_hops = contact.desired_hops;
+                }
+            }
+        }
+
         address_book.contacts.insert(contact.did.clone(), contact);
 
         save_encrypted_json(service, CONTACTS_DATA_NAME, &address_book, password)
@@ -1035,13 +1046,7 @@ impl AppState {
         let keys_to_remove: Vec<String> = address_book
             .contacts
             .keys()
-            .filter(|k| {
-                if is_own_root {
-                    k.trim() == did
-                } else {
-                    *k == did || (can_target.is_some() && canonicalize_did(k).ok() == can_target)
-                }
-            })
+            .filter(|k| k.trim() == did)
             .cloned()
             .collect();
 
@@ -1068,7 +1073,14 @@ impl AppState {
             );
         }
 
-        if !is_own_root && service.with_wallet(|_| ()).is_ok() {
+        let has_remaining_sibling = can_target.as_ref().is_some_and(|ct| {
+            address_book
+                .contacts
+                .keys()
+                .any(|k| canonicalize_did(k).ok().as_ref() == Some(ct))
+        });
+
+        if !is_own_root && !has_remaining_sibling && service.with_wallet(|_| ()).is_ok() {
             if let Ok(mut reg) = self.get_or_load_wot_register(service, password) {
                 let target_key = can_target.as_deref().unwrap_or(did);
                 if let Ok(removed) = reg.remove_contact_trust(target_key) {
@@ -1332,9 +1344,9 @@ impl AppState {
             Ok(mut store) => {
                 let before = store.cards.len();
                 if let Some(ref can) = can_revoked {
-                    if let Ok(pk) = human_money_core::crypto::get_pubkey_from_user_id(can) {
-                        store.cards.remove(pk.as_bytes());
-                    }
+                    store.cards.retain(|_, sc| {
+                        canonicalize_did(&sc.card.payload.did).ok().as_deref() != Some(can.as_str())
+                    });
                 }
                 store.cards.retain(|_, sc| {
                     if sc.hops < 2 {
@@ -1732,7 +1744,7 @@ impl AppState {
                         e
                     );
                 }
-                if let Some(stored) = store.cards.values().find(|sc| sc.card.payload.did == did) {
+                if let Some(stored) = store.cards.get(&did) {
                     let card_syncs: Vec<crate::models::FrontendSyncDescriptor> = stored
                         .card
                         .payload
@@ -1771,13 +1783,10 @@ impl AppState {
         card_profile: Option<&human_money_core::models::profile::PublicProfile>,
         password: Option<&str>,
     ) {
-        if card_syncs.is_empty() && card_profile.is_none() {
+        let trimmed_card_did = card_did.trim();
+        if (card_syncs.is_empty() && card_profile.is_none()) || trimmed_card_did.is_empty() {
             return;
         }
-        let can_card_did = match canonicalize_did(card_did) {
-            Ok(d) => d,
-            Err(_) => return,
-        };
 
         let mut address_book: FrontendAddressBook =
             match load_encrypted_json_or_default(service, CONTACTS_DATA_NAME, password) {
@@ -1793,9 +1802,7 @@ impl AppState {
 
         let mut updated = false;
         for (k, contact) in address_book.contacts.iter_mut() {
-            let is_match =
-                k == card_did || canonicalize_did(k).ok().as_deref() == Some(&can_card_did);
-            if is_match {
+            if k.trim() == trimmed_card_did {
                 if !card_syncs.is_empty() {
                     let merged = merge_contact_syncs(&contact.syncs, card_syncs);
                     if contact.syncs != merged {
@@ -1982,10 +1989,10 @@ impl AppState {
             return;
         }
 
-        let admin_opt: Option<StoredSyncAdmin> = match load_encrypted_json_opt::<Option<StoredSyncAdmin>>(
-            service,
-            MARKET_SYNC_ADMIN_KEY,
-            password,
+        let admin_opt: Option<StoredSyncAdmin> = match load_encrypted_json_opt::<
+            Option<StoredSyncAdmin>,
+        >(
+            service, MARKET_SYNC_ADMIN_KEY, password
         ) {
             Ok(opt) => opt.flatten(),
             Err(e) => {
@@ -3518,8 +3525,12 @@ mod tests {
         )
         .unwrap();
         assert!(book.contacts.is_empty());
-        assert!(state.load_ui_preferences(&mut service, Some(password)).is_ok());
-        assert!(state.load_security_policy(&mut service, Some(password)).is_ok());
+        assert!(state
+            .load_ui_preferences(&mut service, Some(password))
+            .is_ok());
+        assert!(state
+            .load_security_policy(&mut service, Some(password))
+            .is_ok());
         assert!(state
             .load_internal_lifecycle(&mut service, Some(password))
             .is_ok());
@@ -3681,10 +3692,7 @@ mod tests {
             })
             .unwrap();
         assert!(stale.is_none());
-        assert!(!state
-            .get_cached_internal_lifecycle()
-            .unwrap()
-            .backup_dirty);
+        assert!(!state.get_cached_internal_lifecycle().unwrap().backup_dirty);
 
         // Logged-out / locked wallet: returns Ok(None) and does NOT touch store
         state.lock_service().unwrap().logout();
@@ -3728,5 +3736,266 @@ mod tests {
                 invalid
             );
         }
+    }
+
+    #[test]
+    fn test_external_sibling_prefixes_keep_separate_syncs_mirror_trust_and_delete_cleanly() {
+        use crate::models::{FrontendContact, FrontendSyncDescriptor, FrontendUserProfile};
+        use chrono::Utc;
+
+        let temp_dir = std::env::temp_dir().join(format!(
+            "humoco_ext_sibling_prefix_{}",
+            uuid::Uuid::new_v4()
+        ));
+        let password = "test-password-123";
+        let alice_service = crate::test_support::setup_test_app(
+            &temp_dir.join("alice"),
+            "Test Alice",
+            crate::test_support::ALICE_PHRASE,
+            password,
+        );
+        let state = crate::test_support::create_test_state(alice_service);
+        let mut service = state.service.lock().unwrap();
+
+        let bob_kp = human_money_core::test_utils::ACTORS.bob.identity.clone();
+        let bob_sk = bob_kp.signing_key.clone();
+        let bob_vk = bob_sk.verifying_key();
+        let bob_laden = human_money_core::crypto::create_user_id(&bob_vk, Some("laden")).unwrap();
+        let bob_privat = human_money_core::crypto::create_user_id(&bob_vk, Some("privat")).unwrap();
+        let bob_can = super::canonicalize_did(&bob_laden).unwrap();
+
+        // Populate CardStore with two distinct prefix cards for Bob
+        let now = Utc::now().timestamp().max(0) as u64;
+        let mut card_store = humoco_market::CardStore::default();
+        for (did, url) in [
+            (&bob_laden, "https://laden.example.com/sync.php"),
+            (&bob_privat, "https://privat.example.com/sync.php"),
+        ] {
+            let card = humoco_market::sign_sd_card(
+                humoco_market::CardPayloadInput {
+                    did: did.clone(),
+                    v: 100,
+                    valid_until: now + 86_400,
+                    max_hops: 2,
+                    ad_count: 0,
+                    allow_inquiries: false,
+                    drops: vec![humoco_market::DropDescriptor {
+                        write_url: url.to_string(),
+                        read_url: url.to_string(),
+                        slot_id: None,
+                        drop_pub: "a".repeat(64),
+                    }],
+                },
+                vec![(
+                    humoco_market::CardItem::Name {
+                        first_name: Some("Bob".to_string()),
+                        last_name: None,
+                    },
+                    1,
+                )],
+                &bob_sk,
+            )
+            .unwrap();
+            let wire =
+                humoco_market::render_wire(&card, 1, humoco_market::WireFilter::Full).unwrap();
+            humoco_market::accept_envelope(
+                &mut card_store,
+                &humoco_market::CardEnvelope {
+                    card_wire: wire,
+                    hops: 1,
+                },
+                now,
+                100,
+                None,
+                &|_| false,
+            );
+        }
+        super::save_encrypted_json(
+            &mut service,
+            super::MARKET_CARD_STORE_KEY,
+            &card_store,
+            Some(password),
+        )
+        .unwrap();
+
+        let mk_sync = |url: &str| FrontendSyncDescriptor {
+            write_url: url.to_string(),
+            read_url: format!("{}/read", url),
+            drop_pub: "b".repeat(64),
+            status: "active".to_string(),
+            ..Default::default()
+        };
+        let mk_ext =
+            |did: &str, name: &str, sync_url: &str, trust_level: Option<u8>| FrontendContact {
+                did: did.to_string(),
+                profile: FrontendUserProfile {
+                    id: Some(did.to_string()),
+                    first_name: Some(name.to_string()),
+                    ..Default::default()
+                },
+                tags: vec![],
+                added_at: Utc::now().to_rfc3339(),
+                notes: None,
+                trust_level,
+                desired_hops: Some(2),
+                has_peer_list: false,
+                peer_list_updated_at: None,
+                syncs: vec![mk_sync(sync_url)],
+            };
+
+        // 1. Save both external prefixes with distinct sync endpoints
+        state
+            .save_contact(
+                &mut service,
+                mk_ext(
+                    &bob_laden,
+                    "Bob Laden",
+                    "https://sync-laden.example.com",
+                    Some(2),
+                ),
+                Some(password),
+            )
+            .unwrap();
+        state
+            .save_contact(
+                &mut service,
+                mk_ext(
+                    &bob_privat,
+                    "Bob Privat",
+                    "https://sync-privat.example.com",
+                    None,
+                ),
+                Some(password),
+            )
+            .unwrap();
+
+        let contacts = state.load_contacts(&mut service, Some(password)).unwrap();
+        assert_eq!(contacts.len(), 2);
+        assert_eq!(
+            contacts
+                .iter()
+                .find(|c| c.did == bob_laden)
+                .unwrap()
+                .trust_level,
+            Some(2)
+        );
+        assert_eq!(
+            contacts
+                .iter()
+                .find(|c| c.did == bob_privat)
+                .unwrap()
+                .trust_level,
+            Some(2)
+        );
+        assert_eq!(
+            state
+                .get_or_load_wot_register(&mut service, Some(password))
+                .unwrap()
+                .own_contacts
+                .get(&bob_can)
+                .map(|e| e.level),
+            Some(2)
+        );
+        assert_eq!(
+            contacts.iter().find(|c| c.did == bob_laden).unwrap().syncs[0].write_url,
+            "https://sync-laden.example.com"
+        );
+        assert_eq!(
+            contacts.iter().find(|c| c.did == bob_privat).unwrap().syncs[0].write_url,
+            "https://sync-privat.example.com"
+        );
+
+        // 2. Updating trust on one prefix atomically mirrors trust_level to sibling on disk & cache
+        state
+            .save_contact(
+                &mut service,
+                mk_ext(
+                    &bob_laden,
+                    "Bob Laden",
+                    "https://sync-laden.example.com",
+                    Some(3),
+                ),
+                Some(password),
+            )
+            .unwrap();
+        let disk_book: crate::models::FrontendAddressBook = super::load_encrypted_json_or_default(
+            &mut service,
+            super::CONTACTS_DATA_NAME,
+            Some(password),
+        )
+        .unwrap();
+        assert_eq!(
+            disk_book.contacts.get(&bob_laden).unwrap().trust_level,
+            Some(3)
+        );
+        assert_eq!(
+            disk_book.contacts.get(&bob_privat).unwrap().trust_level,
+            Some(3)
+        );
+
+        // 3. update_contact_from_card for bob_privat never mutates bob_laden syncs
+        state.update_contact_from_card(
+            &mut service,
+            &bob_privat,
+            &[mk_sync("https://sync-privat-2.example.com")],
+            None,
+            Some(password),
+        );
+        let after_card = state.load_contacts(&mut service, Some(password)).unwrap();
+        assert_eq!(
+            after_card
+                .iter()
+                .find(|c| c.did == bob_laden)
+                .unwrap()
+                .syncs
+                .len(),
+            1
+        );
+        assert_eq!(
+            after_card
+                .iter()
+                .find(|c| c.did == bob_privat)
+                .unwrap()
+                .syncs
+                .len(),
+            2
+        );
+
+        // 4. Deleting bob_laden keeps bob_privat, root WoT trust, and remaining CardStore intact
+        state
+            .delete_contact(&mut service, &bob_laden, Some(password))
+            .unwrap();
+        let remaining = state.load_contacts(&mut service, Some(password)).unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].did, bob_privat);
+        let reg_mid = state
+            .get_or_load_wot_register(&mut service, Some(password))
+            .unwrap();
+        assert_eq!(reg_mid.own_contacts.get(&bob_can).map(|e| e.level), Some(3));
+        let store_mid: humoco_market::CardStore = super::load_encrypted_json_or_default(
+            &mut service,
+            super::MARKET_CARD_STORE_KEY,
+            Some(password),
+        )
+        .unwrap();
+        assert_eq!(store_mid.cards.len(), 2);
+
+        // 5. Deleting last sibling removes root WoT trust AND prunes ALL prefix cards of Bob's key
+        state
+            .delete_contact(&mut service, &bob_privat, Some(password))
+            .unwrap();
+        let reg_end = state
+            .get_or_load_wot_register(&mut service, Some(password))
+            .unwrap();
+        assert!(!reg_end.own_contacts.contains_key(&bob_can));
+        let store_end: humoco_market::CardStore = super::load_encrypted_json_or_default(
+            &mut service,
+            super::MARKET_CARD_STORE_KEY,
+            Some(password),
+        )
+        .unwrap();
+        assert!(store_end.cards.is_empty());
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

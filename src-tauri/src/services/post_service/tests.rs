@@ -1648,7 +1648,8 @@ async fn test_deposit_transfer_to_post_persists_outbox_when_sync_server_unreacha
                     read_url: dead_read_url,
                     drop_pub: DROP_PUB_B.to_string(),
                     access_pubkey:
-                        "1111111111111111111111111111111111111111111111111111111111111111".to_string(),
+                        "1111111111111111111111111111111111111111111111111111111111111111"
+                            .to_string(),
                     enabled: true,
                     authorized_channels: vec!["pc".to_string()],
                     ..Default::default()
@@ -1837,7 +1838,13 @@ async fn test_unreachable_recipient_returns_error_and_locked_dispatch_defers_msg
     let locked_svc = human_money_core::app_service::AppService::new(&locked_dir).unwrap();
     let locked_state = create_test_state(locked_svc);
     let my_ed_sk = ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]);
-    let envelope = PostEnvelope::new("msg-locked-retry-1", 1_760_000_000, vec![], vec![1, 2, 3]);
+    let envelope = PostEnvelope::new(
+        "msg-locked-retry-1",
+        &bob_did,
+        1_760_000_000,
+        vec![],
+        vec![1, 2, 3],
+    );
     let tag16 = [0u8; 16];
     let ctx = super::handlers::PostEnvelopeContext {
         state: &locked_state,
@@ -1925,12 +1932,15 @@ async fn test_merge_and_save_post_state_preserves_concurrent_outbox_and_auto_imp
         save_post_state(&alice_state, &concurrent_state, Some(password)).unwrap();
     }
 
-    merge_and_save_post_state(&alice_state, &baseline, &mut stale_poll_state, Some(password))
-        .unwrap();
+    merge_and_save_post_state(
+        &alice_state,
+        &baseline,
+        &mut stale_poll_state,
+        Some(password),
+    )
+    .unwrap();
     let merged = load_post_state(&alice_state, Some(password)).unwrap();
-    assert!(merged
-        .processed_msg_ids
-        .contains("concurrent-outbox-1"));
+    assert!(merged.processed_msg_ids.contains("concurrent-outbox-1"));
     assert!(merged.processed_msg_ids.contains("polled-msg-1"));
     assert_eq!(merged.outbox_entries.len(), 1);
     assert_eq!(merged.outbox_entries[0].msg_id, "concurrent-outbox-1");
@@ -1946,7 +1956,9 @@ async fn test_merge_and_save_post_state_preserves_concurrent_outbox_and_auto_imp
 
     {
         let mut s_alice = alice_state.service.lock().unwrap();
-        let alice_did = s_alice.with_wallet(|w| w.get_user_id().to_string()).unwrap();
+        let alice_did = s_alice
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
         alice_state
             .save_contact(
                 &mut s_alice,
@@ -2015,8 +2027,9 @@ async fn test_merge_and_save_post_state_preserves_concurrent_outbox_and_auto_imp
             .unwrap();
         drop(s_bob);
 
-        let std_toml =
-            test_utils::generate_signed_standard_toml("voucher_standards/freetaler_v1/standard.toml");
+        let std_toml = test_utils::generate_signed_standard_toml(
+            "voucher_standards/freetaler_v1/standard.toml",
+        );
         s_alice
             .create_new_voucher(
                 &std_toml,
@@ -2171,6 +2184,7 @@ async fn test_outbox_windowed_packing_defers_overflow_past_max_bytes_and_drains_
     // Two 256 KB tier boxes + one 4 KB tier box queued FIFO: raw sum > DROP_POST_MAX_BYTES (512 KB).
     enqueue_post_envelope(
         &mut post_state,
+        &signing_ctx.identity.user_id,
         &signing_ctx.sync_ctx.my_ed_sk,
         &bob_did,
         &bob_pk,
@@ -2184,6 +2198,7 @@ async fn test_outbox_windowed_packing_defers_overflow_past_max_bytes_and_drains_
     .unwrap();
     enqueue_post_envelope(
         &mut post_state,
+        &signing_ctx.identity.user_id,
         &signing_ctx.sync_ctx.my_ed_sk,
         &bob_did,
         &bob_pk,
@@ -2197,6 +2212,7 @@ async fn test_outbox_windowed_packing_defers_overflow_past_max_bytes_and_drains_
     .unwrap();
     enqueue_post_envelope(
         &mut post_state,
+        &signing_ctx.identity.user_id,
         &signing_ctx.sync_ctx.my_ed_sk,
         &bob_did,
         &bob_pk,
@@ -2237,7 +2253,9 @@ async fn test_outbox_windowed_packing_defers_overflow_past_max_bytes_and_drains_
     }
 
     // Simulate delivery-receipt pruning for msg-large-1; flush again -> msg-large-2 drains now!
-    post_state.outbox_entries.retain(|e| e.msg_id != "msg-large-1");
+    post_state
+        .outbox_entries
+        .retain(|e| e.msg_id != "msg-large-1");
     let outcome2 =
         flush_post_slots_impl(&alice_state, &mut post_state, None, &[], Some(password)).await;
     assert_eq!(outcome2.deposited_to, 1, "errors: {:?}", outcome2.errors);
@@ -2289,16 +2307,329 @@ async fn test_sync_post_channels_respects_wifi_only_skip() {
     assert_eq!(metered_res.polled_syncs, 0);
     assert!(metered_res.errors.is_empty());
 
-    let manual_res = sync_post_channels_impl(
+    let manual_res =
+        sync_post_channels_impl(None, None, None, Some(password.to_string()), &alice_state)
+            .await
+            .unwrap();
+    assert!(!manual_res.skipped_wifi_only);
+
+    let _ = std::fs::remove_dir_all(&base_dir);
+}
+
+#[tokio::test]
+async fn test_post_prefix_routing_reply_drops_and_ack_isolation() {
+    let base_dir = temp_test_dir("post_prefix_routing");
+    let password = "TestPassword123!";
+
+    // Alice has TWO separate prefix wallets on the same seed/key: `pc` (Server A1) and `privat` (Server A2)
+    let alice_laden_svc = setup_test_app(
+        &base_dir.join("alice_laden"),
+        "Alice Laden",
+        ALICE_PHRASE,
+        password,
+    );
+    let mut alice_privat_svc =
+        human_money_core::app_service::AppService::new(&base_dir.join("alice_privat")).unwrap();
+    alice_privat_svc
+        .create_profile(
+            "Alice Privat",
+            ALICE_PHRASE,
+            None,
+            Some("privat"),
+            password,
+            human_money_core::MnemonicLanguage::English,
+            "device-privat".into(),
+            true,
+        )
+        .unwrap();
+    let bob_svc = setup_test_app(&base_dir.join("bob"), "Bob", BOB_PHRASE, password);
+
+    let alice_laden_state = create_test_state(alice_laden_svc);
+    let alice_privat_state = create_test_state(alice_privat_svc);
+    let bob_state = create_test_state(bob_svc);
+
+    let alice_laden_did = alice_laden_state
+        .service
+        .lock()
+        .unwrap()
+        .with_wallet(|w| w.get_user_id().to_string())
+        .unwrap();
+    let alice_privat_did = alice_privat_state
+        .service
+        .lock()
+        .unwrap()
+        .with_wallet(|w| w.get_user_id().to_string())
+        .unwrap();
+    let bob_did = bob_state
+        .service
+        .lock()
+        .unwrap()
+        .with_wallet(|w| w.get_user_id().to_string())
+        .unwrap();
+    assert_ne!(alice_laden_did, alice_privat_did);
+
+    // Separate sync servers: A1 for alice_laden, A2 (known) + A3 (new reply_drop) for alice_privat, B for bob
+    let server_a1 = MockSyncServer::start("d-a1".to_string(), ADMIN_A.to_string()).await;
+    let server_a2 = MockSyncServer::start("d-a2".to_string(), ADMIN_A.to_string()).await;
+    let server_a3 = MockSyncServer::start("d-a3".to_string(), ADMIN_A.to_string()).await;
+    let server_b = MockSyncServer::start("d-bob".to_string(), ADMIN_B.to_string()).await;
+
+    let (a1_write, a1_drop) =
+        setup_test_sync(&server_a1, DROP_PUB_A, password, &alice_laden_state).await;
+    let (a2_write, a2_drop) =
+        setup_test_sync(&server_a2, DROP_PUB_A, password, &alice_privat_state).await;
+    let (a3_write, _a3_drop) =
+        setup_test_sync(&server_a3, DROP_PUB_A, password, &alice_privat_state).await;
+    let (b_write, b_drop) = setup_test_sync(&server_b, DROP_PUB_B, password, &bob_state).await;
+
+    let a1_desc = FrontendSyncDescriptor {
+        write_url: a1_write.clone(),
+        read_url: format!("{}/{}", server_a1.base_url, server_a1.data_dir),
+        slot_id: Some(humoco_market::format_slot_id(&a1_drop.access_pubkey, Some("pc")).unwrap()),
+        drop_pub: DROP_PUB_A.to_string(),
+        status: "active".to_string(),
+        ..Default::default()
+    };
+    let a2_desc = FrontendSyncDescriptor {
+        write_url: a2_write.clone(),
+        read_url: format!("{}/{}", server_a2.base_url, server_a2.data_dir),
+        slot_id: Some(
+            humoco_market::format_slot_id(&a2_drop.access_pubkey, Some("privat")).unwrap(),
+        ),
+        drop_pub: DROP_PUB_A.to_string(),
+        status: "active".to_string(),
+        ..Default::default()
+    };
+    let b_desc = FrontendSyncDescriptor {
+        write_url: b_write.clone(),
+        read_url: format!("{}/{}", server_b.base_url, server_b.data_dir),
+        slot_id: Some(humoco_market::format_slot_id(&b_drop.access_pubkey, Some("pc")).unwrap()),
+        drop_pub: DROP_PUB_B.to_string(),
+        status: "active".to_string(),
+        ..Default::default()
+    };
+
+    // Authorize peer slot keys on each MockSyncServer (setup_test_sync already enabled public_syncs)
+    let alice_priv_probe_b = probe_public_sync_impl(
+        b_write.clone(),
+        Some(password.to_string()),
+        &alice_privat_state,
+    )
+    .await
+    .unwrap();
+    server_b
+        .members
+        .lock()
+        .unwrap()
+        .push(alice_priv_probe_b.access_pubkey);
+
+    let bob_probe_a1 =
+        probe_public_sync_impl(a1_write.clone(), Some(password.to_string()), &bob_state)
+            .await
+            .unwrap();
+    server_a1
+        .members
+        .lock()
+        .unwrap()
+        .push(bob_probe_a1.access_pubkey.clone());
+    let bob_probe_a2 =
+        probe_public_sync_impl(a2_write.clone(), Some(password.to_string()), &bob_state)
+            .await
+            .unwrap();
+    server_a2
+        .members
+        .lock()
+        .unwrap()
+        .push(bob_probe_a2.access_pubkey.clone());
+    let bob_probe_a3 =
+        probe_public_sync_impl(a3_write.clone(), Some(password.to_string()), &bob_state)
+            .await
+            .unwrap();
+    server_a3
+        .members
+        .lock()
+        .unwrap()
+        .push(bob_probe_a3.access_pubkey.clone());
+
+    // Bob adds alice_laden (Sync A1) FIRST and alice_privat (only Sync A2 initially) SECOND
+    {
+        let mut s = bob_state.service.lock().unwrap();
+        let mk_contact =
+            |did: String, name: &str, syncs: Vec<FrontendSyncDescriptor>| FrontendContact {
+                did,
+                profile: FrontendUserProfile {
+                    first_name: Some(name.to_string()),
+                    ..Default::default()
+                },
+                tags: vec![],
+                added_at: Utc::now().to_rfc3339(),
+                notes: None,
+                trust_level: Some(2),
+                desired_hops: Some(3),
+                has_peer_list: false,
+                peer_list_updated_at: None,
+                syncs,
+            };
+        bob_state
+            .save_contact(
+                &mut s,
+                mk_contact(
+                    alice_laden_did.clone(),
+                    "Alice Laden",
+                    vec![a1_desc.clone()],
+                ),
+                Some(password),
+            )
+            .unwrap();
+        bob_state
+            .save_contact(
+                &mut s,
+                mk_contact(
+                    alice_privat_did.clone(),
+                    "Alice Privat",
+                    vec![a2_desc.clone()],
+                ),
+                Some(password),
+            )
+            .unwrap();
+    }
+    // alice_privat adds Bob with Sync B
+    {
+        let mut s = alice_privat_state.service.lock().unwrap();
+        alice_privat_state
+            .save_contact(
+                &mut s,
+                FrontendContact {
+                    did: bob_did.clone(),
+                    profile: FrontendUserProfile {
+                        first_name: Some("Bob".to_string()),
+                        ..Default::default()
+                    },
+                    tags: vec![],
+                    added_at: Utc::now().to_rfc3339(),
+                    notes: None,
+                    trust_level: Some(2),
+                    desired_hops: Some(3),
+                    has_peer_list: false,
+                    peer_list_updated_at: None,
+                    syncs: vec![b_desc.clone()],
+                },
+                Some(password),
+            )
+            .unwrap();
+    }
+
+    // Bob enables marketplace inquiries so his inbox accepts incoming MarketInquiry messages
+    save_my_market_profile_impl(
+        FrontendSaveMyMarketProfileRequest {
+            profile: FrontendUserProfile {
+                first_name: Some("Bob".to_string()),
+                ..Default::default()
+            },
+            visibility: Default::default(),
+            skills: vec![],
+            max_hops: 2,
+            validity_years: 2,
+            allow_inquiries: true,
+            published: None,
+        },
+        Some(password.to_string()),
+        &bob_state,
+    )
+    .unwrap();
+    set_card_published_impl(true, false, Some(password.to_string()), &bob_state)
+        .await
+        .unwrap();
+
+    // 1. alice_privat sends a MarketInquiry to Bob (carries reply_drops = [Sync A2, Sync A3])
+    let item = send_market_inquiry_via_post_impl(
+        bob_did.clone(),
+        humoco_market::InquiryTarget::Person { skill_title: None },
+        "Hallo vom Privatkonto".to_string(),
+        vec![b_desc.clone()],
+        Some(password.to_string()),
+        &alice_privat_state,
+    )
+    .await
+    .unwrap();
+    assert!(!item.inquiry_id.is_empty());
+
+    // 2. Bob polls Post:
+    // - Inquiry counterparty must be alice_privat_did (NOT alice_laden_did!)
+    // - Automatic reply_drops update must add Sync A2 ONLY to alice_privat, leaving alice_laden at [Sync A1]
+    // - Bob's ACK receipt must be sent ONLY to alice_privat's Sync A2 (not Server A1!)
+    let bob_poll =
+        sync_post_channels_impl(None, None, None, Some(password.to_string()), &bob_state)
+            .await
+            .unwrap();
+    assert!(
+        bob_poll.errors.is_empty(),
+        "Bob poll errors: {:?}",
+        bob_poll.errors
+    );
+    assert_eq!(bob_poll.new_inquiries, 1);
+
+    let bob_summary = get_post_inbox_summary_impl(Some(password.to_string()), &bob_state).unwrap();
+    assert_eq!(bob_summary.inquiries[0].counterparty_did, alice_privat_did);
+
+    let bob_contacts = bob_state
+        .load_contacts(&mut bob_state.service.lock().unwrap(), Some(password))
+        .unwrap();
+    let c_laden = bob_contacts
+        .iter()
+        .find(|c| c.did == alice_laden_did)
+        .unwrap();
+    let c_privat = bob_contacts
+        .iter()
+        .find(|c| c.did == alice_privat_did)
+        .unwrap();
+    assert_eq!(c_laden.syncs.len(), 1);
+    assert_eq!(c_laden.syncs[0].write_url, a1_write);
+    assert_eq!(c_privat.syncs.len(), 2);
+    assert!(c_privat.syncs.iter().any(|s| s.write_url == a2_write));
+    assert!(c_privat.syncs.iter().any(|s| s.write_url == a3_write));
+
+    assert!(
+        server_a1.slots.lock().unwrap().is_empty(),
+        "ACK receipt for alice_privat must NOT be uploaded to alice_laden's server A1"
+    );
+    let bob_ack_slot_a2 = format!("{}_pc.post", bob_probe_a2.access_pubkey);
+    let bob_ack_slot_a3 = format!("{}_pc.post", bob_probe_a3.access_pubkey);
+    assert!(
+        server_a2
+            .slots
+            .lock()
+            .unwrap()
+            .contains_key(&bob_ack_slot_a2),
+        "ACK receipt for alice_privat must be uploaded to server A2"
+    );
+    assert!(
+        server_a3
+            .slots
+            .lock()
+            .unwrap()
+            .contains_key(&bob_ack_slot_a3),
+        "ACK receipt for alice_privat must also be uploaded to server A3"
+    );
+
+    // 3. alice_privat polls Server A2 and consumes the ACK receipt cleanly without NotAnIntendedRecipient
+    let alice_priv_poll = sync_post_channels_impl(
         None,
         None,
         None,
         Some(password.to_string()),
-        &alice_state,
+        &alice_privat_state,
     )
     .await
     .unwrap();
-    assert!(!manual_res.skipped_wifi_only);
+    assert!(
+        alice_priv_poll.errors.is_empty(),
+        "alice_privat poll errors: {:?}",
+        alice_priv_poll.errors
+    );
+    assert_eq!(alice_priv_poll.imported_receipts, 1);
+    let priv_post_state = load_post_state(&alice_privat_state, Some(password)).unwrap();
+    assert!(priv_post_state.outbox_entries.is_empty());
 
     let _ = std::fs::remove_dir_all(&base_dir);
 }

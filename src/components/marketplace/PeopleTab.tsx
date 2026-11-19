@@ -158,7 +158,7 @@ export const PeopleTab: React.FC<PeopleTabProps> = ({
 
                         return (
                             <div
-                                key={person.did}
+                                key={person.recipientDid || person.did}
                                 onClick={() => onSelectPerson(person)}
                                 className="p-4 sm:p-5 rounded-2xl bg-white border border-theme-subtle hover:border-theme-primary/40 hover:shadow-sm transition-all duration-200 cursor-pointer flex flex-col justify-between gap-4"
                                 data-testid={`person-card-${person.did}`}

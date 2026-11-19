@@ -13,7 +13,7 @@ import { useSession } from '../../context/SessionContext';
 import { openFileAsBytes } from '../../utils/fileIo';
 import { logger } from '../../utils/log';
 import { translateError, stringifyError } from '../../utils/errorHelper';
-import { isExactSameUserId, truncateUserId } from '../../utils/userIdHelper';
+import { isExactSameUserId, isSameRootIdentity, truncateUserId } from '../../utils/userIdHelper';
 import { parseHumocoInput } from '../../utils/humocoUri';
 import { notifySyncStatusUpdated } from '../../utils/syncEvents';
 import { Contact, FrontendMyMarketProfile } from '../../types';
@@ -39,12 +39,14 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
 
     const [myProfile, setMyProfile] = useState<FrontendMyMarketProfile | null>(null);
     const [partnerName, setPartnerName] = useState<string | null>(null);
+    const [siblingContactName, setSiblingContactName] = useState<string | null>(null);
     const [selectedTrustLevel, setSelectedTrustLevel] = useState<number | null>(null);
     const [isSavingTrust, setIsSavingTrust] = useState(false);
     const [isQrOpen, setIsQrOpen] = useState(false);
 
     const fileInputRef = useRef<HTMLInputElement>(null);
     const hadExistingContactRef = useRef<boolean>(false);
+    const hadSiblingContactRef = useRef<boolean>(false);
     const lastImportedPayloadRef = useRef<string | null>(null);
 
     useEffect(() => {
@@ -66,7 +68,9 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
         setSelectedTrustLevel(null);
         setIsSavingTrust(false);
         setPartnerName(null);
+        setSiblingContactName(null);
         hadExistingContactRef.current = false;
+        hadSiblingContactRef.current = false;
         lastImportedPayloadRef.current = null;
     };
 
@@ -89,7 +93,7 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
                 if (!profile) {
                     const snap = await marketService.getMarketView().catch(() => null);
                     const people = snap?.people ?? [];
-                    const p = people.find((x) => isExactSameUserId(x.did, did));
+                    const p = people.find((x) => isExactSameUserId(x.recipientDid || x.did, did) || isExactSameUserId(x.did, did));
                     profile = p?.profile;
                     syncs = p?.cardSyncs;
                 }
@@ -116,7 +120,7 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
 
                 marketService.syncMarketChannels().catch(() => {});
             } else if (existing) {
-                if (!hadExistingContactRef.current) {
+                if (!hadExistingContactRef.current && !hadSiblingContactRef.current) {
                     await protectAction(async (pwd) => {
                         await contactService.deleteContact(did, pwd || undefined);
                         if (lastImportedPayloadRef.current) {
@@ -177,7 +181,19 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
                     }
                     const existingContacts = (await contactService.getContacts().catch(() => [])) || [];
                     const existing = existingContacts.find(c => isExactSameUserId(c.did, parsedContact.did));
+                    const sibling = !existing
+                        ? existingContacts.find(c => isSameRootIdentity(c.did, parsedContact.did!))
+                        : undefined;
                     hadExistingContactRef.current = Boolean(existing);
+                    hadSiblingContactRef.current = Boolean(sibling);
+                    setSiblingContactName(
+                        sibling
+                            ? [sibling.profile.firstName, sibling.profile.lastName].filter(Boolean).join(' ') ||
+                                  sibling.profile.organization ||
+                                  truncateUserId(sibling.did)
+                            : null,
+                    );
+                    setSelectedTrustLevel(existing?.trustLevel ?? sibling?.trustLevel ?? null);
                     lastImportedPayloadRef.current = null;
                     let firstName = existing?.profile.firstName;
                     let lastName = existing?.profile.lastName;
@@ -210,7 +226,7 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
                         tags: existing?.tags || [],
                         notes: existing?.notes,
                         addedAt: existing?.addedAt || new Date().toISOString(),
-                        trustLevel: existing?.trustLevel,
+                        trustLevel: existing?.trustLevel ?? sibling?.trustLevel ?? undefined,
                         syncs: mergedSyncs,
                     };
                     await protectAction(async (pwd) => {
@@ -241,9 +257,24 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
             if (res.status === 'accepted') {
                 if (res.did) {
                     const existingContacts = (await contactService.getContacts().catch(() => [])) || [];
-                    hadExistingContactRef.current = existingContacts.some((c) => isExactSameUserId(c.did, res.did!));
+                    const existing = existingContacts.find((c) => isExactSameUserId(c.did, res.did!));
+                    const sibling = !existing
+                        ? existingContacts.find((c) => isSameRootIdentity(c.did, res.did!))
+                        : undefined;
+                    hadExistingContactRef.current = Boolean(existing);
+                    hadSiblingContactRef.current = Boolean(sibling);
+                    setSiblingContactName(
+                        sibling
+                            ? [sibling.profile.firstName, sibling.profile.lastName].filter(Boolean).join(' ') ||
+                                  sibling.profile.organization ||
+                                  truncateUserId(sibling.did)
+                            : null,
+                    );
+                    setSelectedTrustLevel(existing?.trustLevel ?? sibling?.trustLevel ?? null);
                 } else {
                     hadExistingContactRef.current = false;
+                    hadSiblingContactRef.current = false;
+                    setSiblingContactName(null);
                 }
                 setResultFeedback({
                     type: 'success',
@@ -260,7 +291,7 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
                 if (res.did) {
                     marketService.getMarketView().then(snap => {
                         const people = snap?.people ?? [];
-                        const p = people.find((x) => x.did === res.did);
+                        const p = people.find((x) => isExactSameUserId(x.recipientDid || x.did, res.did!) || isExactSameUserId(x.did, res.did!));
                         if (p) {
                             const name = [p.profile.firstName, p.profile.lastName].filter(Boolean).join(' ') || p.profile.organization || p.profile.community;
                             if (name) setPartnerName(name);
@@ -407,6 +438,15 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
 
                         {/* 1-Click Trust Level Selection */}
                         <div className="p-4 bg-bg-app rounded-2xl border border-theme-subtle space-y-2.5">
+                            {siblingContactName && (
+                                <div
+                                    data-testid="import-sibling-prefix-trust-notice"
+                                    className="p-2.5 rounded-xl bg-sky-50 border border-sky-200 text-xs font-medium text-sky-900 flex items-start gap-2"
+                                >
+                                    <AlertCircle size={15} className="shrink-0 mt-0.5 text-sky-600" />
+                                    <span>{t('contacts.siblingPrefixTrustHint', { name: siblingContactName })}</span>
+                                </div>
+                            )}
                             <span className="text-xs font-bold text-theme-secondary block">
                                 {t('marketplace.trustLevelSelectTitle', 'In mein Adressbuch aufnehmen als:')}
                             </span>

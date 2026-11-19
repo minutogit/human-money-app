@@ -388,8 +388,8 @@ fn test_receiver_rule_strip_contacts_at_hop2() {
     assert!(matches!(outcome, AcceptOutcome::Accepted { .. }));
 
     // Honest app stripped Phone because max_distance (1) < hops (2)
-    let pk_bytes = *sk.verifying_key().as_bytes();
-    let stored = store.cards.get(&pk_bytes).unwrap();
+    let did_key = create_user_id(&sk.verifying_key(), None).unwrap();
+    let stored = store.cards.get(&did_key).unwrap();
     let decoded = humoco_market::sd_card::decoded_items(&stored.card);
     assert!(!decoded
         .iter()
@@ -790,20 +790,20 @@ fn test_geo_eviction_remote_protection() {
     );
 
     assert_eq!(store.cards.len(), 2);
-    let pk_a = *sk_a.verifying_key().as_bytes();
-    let pk_b = *sk_b.verifying_key().as_bytes();
-    let pk_c = *sk_c.verifying_key().as_bytes();
+    let did_a = create_user_id(&sk_a.verifying_key(), None).unwrap();
+    let did_b = create_user_id(&sk_b.verifying_key(), None).unwrap();
+    let did_c = create_user_id(&sk_c.verifying_key(), None).unwrap();
 
     assert!(
-        store.cards.contains_key(&pk_a),
+        store.cards.contains_key(&did_a),
         "Card A (close local) should be kept"
     );
     assert!(
-        store.cards.contains_key(&pk_b),
+        store.cards.contains_key(&did_b),
         "Card B (remote protected) should be kept"
     );
     assert!(
-        !store.cards.contains_key(&pk_c),
+        !store.cards.contains_key(&did_c),
         "Card C (farther local) should be evicted"
     );
 }
@@ -915,20 +915,20 @@ fn test_geo_eviction_hop1_protection() {
     );
 
     assert_eq!(store.cards.len(), 2);
-    let pk1 = *sk1.verifying_key().as_bytes();
-    let pk2 = *sk2.verifying_key().as_bytes();
-    let pk3 = *sk3.verifying_key().as_bytes();
+    let did1 = create_user_id(&sk1.verifying_key(), None).unwrap();
+    let did2 = create_user_id(&sk2.verifying_key(), None).unwrap();
+    let did3 = create_user_id(&sk3.verifying_key(), None).unwrap();
 
     assert!(
-        store.cards.contains_key(&pk1),
+        store.cards.contains_key(&did1),
         "Card 1 (Hop 1 protected) should be kept"
     );
     assert!(
-        store.cards.contains_key(&pk3),
+        store.cards.contains_key(&did3),
         "Card 3 (closer Hop 2) should be kept"
     );
     assert!(
-        !store.cards.contains_key(&pk2),
+        !store.cards.contains_key(&did2),
         "Card 2 (farther Hop 2) should be evicted"
     );
 }
@@ -1040,20 +1040,20 @@ fn test_geo_eviction_far_vs_near() {
     );
 
     assert_eq!(store.cards.len(), 2);
-    let pk1 = *sk1.verifying_key().as_bytes();
-    let pk2 = *sk2.verifying_key().as_bytes();
-    let pk3 = *sk3.verifying_key().as_bytes();
+    let did1 = create_user_id(&sk1.verifying_key(), None).unwrap();
+    let did2 = create_user_id(&sk2.verifying_key(), None).unwrap();
+    let did3 = create_user_id(&sk3.verifying_key(), None).unwrap();
 
     assert!(
-        !store.cards.contains_key(&pk1),
+        !store.cards.contains_key(&did1),
         "Card 1 (Munich, far) should be evicted"
     );
     assert!(
-        store.cards.contains_key(&pk2),
+        store.cards.contains_key(&did2),
         "Card 2 (Potsdam, closer) should be kept"
     );
     assert!(
-        store.cards.contains_key(&pk3),
+        store.cards.contains_key(&did3),
         "Card 3 (Berlin, closest) should be kept"
     );
 }
@@ -1110,4 +1110,140 @@ fn test_card_accepts_prefixed_slot_id_and_rejects_malformed_slot_id() {
         drop_pub: valid_vk_hex,
     }];
     assert!(sign_sd_card(bad_payload, sample_items(), &sk).is_err());
+}
+
+#[test]
+fn test_per_pubkey_card_cap_expiry_and_tombstone_first_eviction() {
+    let mut store = CardStore::default();
+    let sk = make_key(88);
+    let vk = sk.verifying_key();
+    let now = 1_700_000_000;
+
+    let make_wire = |prefix: Option<&str>, v: u64, valid_until: u64, hops: u8, tombstone: bool| {
+        let did = create_user_id(&vk, prefix).unwrap();
+        let card = sign_sd_card(
+            CardPayloadInput {
+                did: did.clone(),
+                v,
+                valid_until,
+                max_hops: 3,
+                ad_count: 0,
+                allow_inquiries: false,
+                drops: vec![],
+            },
+            vec![(
+                CardItem::Name {
+                    first_name: Some(prefix.unwrap_or("root").to_string()),
+                    last_name: None,
+                },
+                1,
+            )],
+            &sk,
+        )
+        .unwrap();
+        let wire = if tombstone {
+            format!("{}~", card.jws)
+        } else {
+            render_wire(&card, 1, WireFilter::Full).unwrap()
+        };
+        (
+            did,
+            CardEnvelope {
+                card_wire: wire,
+                hops,
+            },
+        )
+    };
+
+    // 1. Expired card is purged before cap check and never blocks a 3rd active card
+    let (did_exp, env_exp) = make_wire(Some("old"), 50, now + 100, 1, false);
+    assert!(matches!(
+        accept_envelope(&mut store, &env_exp, now, 100, None, &|_| false),
+        AcceptOutcome::Accepted { .. }
+    ));
+    let (d1, e1) = make_wire(None, 100, now + 10_000, 1, false);
+    let (d2, e2) = make_wire(Some("laden"), 110, now + 10_000, 1, false);
+    let (d3, e3) = make_wire(Some("privat"), 120, now + 10_000, 1, false);
+    let now_later = now + 200; // did_exp is now expired!
+    assert_eq!(
+        accept_envelope(&mut store, &e1, now_later, 100, None, &|_| false),
+        AcceptOutcome::Accepted {
+            did: d1.clone(),
+            replaced: false,
+        }
+    );
+    assert_eq!(
+        accept_envelope(&mut store, &e2, now_later, 100, None, &|_| false),
+        AcceptOutcome::Accepted {
+            did: d2.clone(),
+            replaced: false,
+        }
+    );
+    assert_eq!(
+        accept_envelope(&mut store, &e3, now_later, 100, None, &|_| false),
+        AcceptOutcome::Accepted {
+            did: d3.clone(),
+            replaced: false,
+        }
+    );
+    assert!(!store.cards.contains_key(&did_exp));
+    assert_eq!(store.cards.len(), 3);
+
+    // 2. Older 4th card is ignored as stale
+    let (d4_old, e4_old) = make_wire(Some("extra1"), 50, now + 10_000, 1, false);
+    assert_eq!(
+        accept_envelope(&mut store, &e4_old, now_later, 100, None, &|_| false),
+        AcceptOutcome::IgnoredStale
+    );
+    assert!(!store.cards.contains_key(&d4_old));
+    assert_eq!(store.cards.len(), 3);
+
+    // 3. Tombstone as 4th card NEVER evicts any of the 3 active cards, even with huge v
+    let (d4_tomb, e4_tomb) = make_wire(Some("extra2"), 999, now + 10_000, 1, true);
+    assert_eq!(
+        accept_envelope(&mut store, &e4_tomb, now_later, 100, None, &|_| false),
+        AcceptOutcome::IgnoredStale
+    );
+    assert!(!store.cards.contains_key(&d4_tomb));
+    assert!(store.cards.contains_key(&d1));
+
+    // 4. Newer 4th active card evicts oldest active card (d1 with v=100)
+    let (d4_new, e4_new) = make_wire(Some("verein"), 130, now + 10_000, 1, false);
+    assert_eq!(
+        accept_envelope(&mut store, &e4_new, now_later, 100, None, &|_| false),
+        AcceptOutcome::Accepted {
+            did: d4_new.clone(),
+            replaced: false,
+        }
+    );
+    assert!(!store.cards.contains_key(&d1));
+    assert!(store.cards.contains_key(&d2));
+    assert!(store.cards.contains_key(&d3));
+    assert!(store.cards.contains_key(&d4_new));
+    assert_eq!(store.cards.len(), 3);
+
+    // 5. If one stored slot is a tombstone (d2 revoked), a new lower-v active card evicts the tombstone first
+    let (_, e2_tomb) = make_wire(Some("laden"), 500, now + 10_000, 1, true);
+    assert_eq!(
+        accept_envelope(&mut store, &e2_tomb, now_later, 100, None, &|_| false),
+        AcceptOutcome::Accepted {
+            did: d2.clone(),
+            replaced: true,
+        }
+    );
+    let (d5_active, e5_active) = make_wire(Some("hof"), 5, now + 10_000, 1, false);
+    assert_eq!(
+        accept_envelope(&mut store, &e5_active, now_later, 100, None, &|_| false),
+        AcceptOutcome::Accepted {
+            did: d5_active.clone(),
+            replaced: false,
+        }
+    );
+    assert!(
+        !store.cards.contains_key(&d2),
+        "Tombstone must be evicted before active cards"
+    );
+    assert!(store.cards.contains_key(&d3));
+    assert!(store.cards.contains_key(&d4_new));
+    assert!(store.cards.contains_key(&d5_active));
 }

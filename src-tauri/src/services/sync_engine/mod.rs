@@ -347,12 +347,9 @@ pub fn get_sync_overview_status_impl(
     let connected_count = (if has_own_sync { 1 } else { 0 }) + friend_syncs + public_syncs;
     let pending_count = (if pending_own_sync { 1 } else { 0 }) + pending_public_syncs;
 
-    let sync_state: Option<StoredSyncState> = crate::state::load_encrypted_json_opt(
-        &mut service,
-        MARKET_SYNC_KEY,
-        password.as_deref(),
-    )
-    .map_err(FrontendError::from)?;
+    let sync_state: Option<StoredSyncState> =
+        crate::state::load_encrypted_json_opt(&mut service, MARKET_SYNC_KEY, password.as_deref())
+            .map_err(FrontendError::from)?;
 
     let last_sync_at =
         sync_state.and_then(|s| s.last_upload_at.into_iter().chain(s.last_poll_at).max());
@@ -3123,9 +3120,6 @@ pub(crate) mod tests {
 
         // (d) Bob withdraws trust from Alice (level=0) -> immediate local CardStore & raw_list_store prune
         {
-            let alice_pk_bytes = human_money_core::crypto::get_pubkey_from_user_id(&alice_did)
-                .unwrap()
-                .to_bytes();
             let mut bs = bob_state.service.lock().unwrap();
             bob_state
                 .save_contact(
@@ -3138,7 +3132,9 @@ pub(crate) mod tests {
                 .load_encrypted_data(MARKET_CARD_STORE_KEY, Some(password))
                 .unwrap();
             let store: humoco_market::CardStore = serde_json::from_slice(&store_bytes).unwrap();
-            assert!(!store.cards.contains_key(&alice_pk_bytes));
+            assert!(!store.cards.values().any(|sc| {
+                canonicalize_did(&sc.card.payload.did).ok().as_deref() == Some(can_alice.as_str())
+            }));
             let bob_reg = bob_state
                 .get_or_load_wot_register(&mut bs, Some(password))
                 .unwrap();

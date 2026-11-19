@@ -686,4 +686,92 @@ describe('MarketplaceView Component', () => {
     fireEvent.click(toggleBtn);
     expect(screen.queryByTestId('marketplace-options-panel')).not.toBeInTheDocument();
   });
+
+  it('selects and opens distinct prefix profiles sharing the same root key by recipientDid', async () => {
+    const sharedRoot = 'did:key:z6MkuSharedRoot';
+    const ladenId = `laden:111@${sharedRoot}`;
+    const privatId = `privat:222@${sharedRoot}`;
+    const multiPrefixSnapshot: FrontendMarketSnapshot = {
+      board: [],
+      people: [
+        {
+          did: sharedRoot,
+          recipientDid: ladenId,
+          profile: {
+            id: ladenId,
+            firstName: 'Alice',
+            lastName: 'Shop',
+          },
+          trust: 'trusted',
+          skills: [{ title: 'Laden-Korb', text: 'Frische Backwaren', origin: 'card' }],
+          activeAds: [],
+          adsPending: 0,
+          allowInquiries: true,
+          sources: [{ kind: 'card', hops: 1 }],
+          standards: [],
+          cardSyncs: [],
+          asOf: 1731000000,
+          canForward: true,
+        },
+        {
+          did: sharedRoot,
+          recipientDid: privatId,
+          profile: {
+            id: privatId,
+            firstName: 'Alice',
+            lastName: 'Private',
+          },
+          trust: 'trusted',
+          skills: [{ title: 'Privat-Rad', text: 'Repariert Fahrräder', origin: 'card' }],
+          activeAds: [],
+          adsPending: 0,
+          allowInquiries: true,
+          sources: [{ kind: 'card', hops: 1 }],
+          standards: [],
+          cardSyncs: [],
+          asOf: 1731000001,
+          canForward: true,
+        },
+      ],
+      now: nowSecs,
+    };
+
+    const baseImpl = (invoke as Mock).getMockImplementation()!;
+    (invoke as Mock).mockImplementation((cmd: string, args?: unknown) => {
+      if (cmd === 'get_market_view') {
+        return Promise.resolve(multiPrefixSnapshot);
+      }
+      return baseImpl(cmd, args);
+    });
+
+    render(<MarketplaceView />);
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('get_market_view', {});
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Menschen|People/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Alice Shop')).toBeInTheDocument();
+      expect(screen.getByText('Alice Private')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByText('Alice Private'));
+    await waitFor(() => {
+      expect(screen.getByText('Privat-Rad')).toBeInTheDocument();
+      expect(screen.queryByText('Laden-Korb')).not.toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Zurück|Back/i }));
+    await waitFor(() => {
+      expect(screen.getByText('Alice Shop')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByText('Alice Shop'));
+    await waitFor(() => {
+      expect(screen.getByText('Laden-Korb')).toBeInTheDocument();
+      expect(screen.queryByText('Privat-Rad')).not.toBeInTheDocument();
+    });
+  });
 });

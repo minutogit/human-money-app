@@ -84,6 +84,18 @@ export function suggestFilename(userId: string): string {
 }
 
 /**
+ * Extracts the subaccount/profile prefix from a prefixed SAI User ID (`prefix:chk@did:key:...`),
+ * or returns `null` for prefix-free root DIDs.
+ */
+export function extractUserIdPrefix(userId: string): string | null {
+    const trimmed = (userId || "").trim();
+    const atIdx = trimmed.indexOf('@');
+    if (atIdx <= 0) return null;
+    const prefixPart = trimmed.slice(0, atIdx).split(':')[0].trim();
+    return prefixPart || null;
+}
+
+/**
  * Extracts the canonical root `did:key:...` part from either a plain DID
  * or an SAI/subaccount User ID (`prefix:checksum@did:key:...`).
  */

@@ -70,7 +70,11 @@ pub(crate) fn save_channel_max_bytes_updates(
         if let Err(e) =
             crate::state::save_encrypted_json(&mut service, MARKET_SYNC_KEY, &sync_state, password)
         {
-            log::warn!("Failed to save {} after channel max bytes update: {}", MARKET_SYNC_KEY, e);
+            log::warn!(
+                "Failed to save {} after channel max bytes update: {}",
+                MARKET_SYNC_KEY,
+                e
+            );
         }
     }
 }
@@ -226,11 +230,18 @@ pub(crate) async fn check_revocations(
                 let Ok(mut service) = state.lock_service() else {
                     continue;
                 };
-                if service.with_wallet(|w| w.get_user_id().to_string()).ok().as_deref() != Some(owner_did) {
+                if service
+                    .with_wallet(|w| w.get_user_id().to_string())
+                    .ok()
+                    .as_deref()
+                    != Some(owner_did)
+                {
                     continue;
                 }
 
-                if let Ok(mut fresh_policy) = state.get_or_load_security_policy(&mut service, password) {
+                if let Ok(mut fresh_policy) =
+                    state.get_or_load_security_policy(&mut service, password)
+                {
                     let mut policy_changed = false;
                     for d in &mut fresh_policy.market_selected_syncs {
                         if normalize_sync_url(&d.read_url) == norm_target
@@ -287,7 +298,10 @@ pub(crate) async fn check_revocations(
                                 &ab,
                                 password,
                             ) {
-                                log::warn!("Failed to save address book after revocation notice: {}", e);
+                                log::warn!(
+                                    "Failed to save address book after revocation notice: {}",
+                                    e
+                                );
                             } else {
                                 *state.contacts.lock().unwrap() = Some(ab);
                             }
@@ -305,11 +319,18 @@ pub(crate) async fn check_revocations(
                 let Ok(mut service) = state.lock_service() else {
                     continue;
                 };
-                if service.with_wallet(|w| w.get_user_id().to_string()).ok().as_deref() != Some(owner_did) {
+                if service
+                    .with_wallet(|w| w.get_user_id().to_string())
+                    .ok()
+                    .as_deref()
+                    != Some(owner_did)
+                {
                     continue;
                 }
 
-                if let Ok(mut fresh_policy) = state.get_or_load_security_policy(&mut service, password) {
+                if let Ok(mut fresh_policy) =
+                    state.get_or_load_security_policy(&mut service, password)
+                {
                     let mut policy_changed = false;
                     for d in &mut fresh_policy.market_selected_syncs {
                         if normalize_sync_url(&d.read_url) == norm_target
@@ -366,7 +387,10 @@ pub(crate) async fn check_revocations(
                                 &ab,
                                 password,
                             ) {
-                                log::warn!("Failed to save address book after clearing revocation: {}", e);
+                                log::warn!(
+                                    "Failed to save address book after clearing revocation: {}",
+                                    e
+                                );
                             } else {
                                 *state.contacts.lock().unwrap() = Some(ab);
                             }
@@ -374,7 +398,10 @@ pub(crate) async fn check_revocations(
                     }
                     Ok(None) => {}
                     Err(e) => {
-                        log::warn!("Failed to load address book while clearing revocation: {}", e);
+                        log::warn!(
+                            "Failed to load address book while clearing revocation: {}",
+                            e
+                        );
                     }
                 }
             }
@@ -417,14 +444,17 @@ fn collect_poll_targets(
     }
 
     let reg = state.get_or_load_wot_register(&mut service, password).ok();
-    let card_store: Option<humoco_market::CardStore> =
-        match crate::state::load_encrypted_json_opt(&mut service, MARKET_CARD_STORE_KEY, password) {
-            Ok(c) => c,
-            Err(e) => {
-                log::warn!("Failed to load CardStore in collect_poll_targets: {}", e);
-                None
-            }
-        };
+    let card_store: Option<humoco_market::CardStore> = match crate::state::load_encrypted_json_opt(
+        &mut service,
+        MARKET_CARD_STORE_KEY,
+        password,
+    ) {
+        Ok(c) => c,
+        Err(e) => {
+            log::warn!("Failed to load CardStore in collect_poll_targets: {}", e);
+            None
+        }
+    };
 
     if let Ok(contacts) = state.load_contacts(&mut service, password) {
         for c in contacts {
@@ -437,10 +467,15 @@ fn collect_poll_targets(
                 }
             });
             if lvl >= ui_prefs.share_min_level {
+                let c_prefix = human_money_core::crypto::get_prefix_from_user_id(&c.did);
                 for d in c.syncs {
                     if !d.read_url.is_empty() {
                         if let Some(ref sid) = d.slot_id {
-                            direct_fetches.push((d.read_url.clone(), sid.clone(), None));
+                            direct_fetches.push((
+                                d.read_url.clone(),
+                                sid.clone(),
+                                c_prefix.map(str::to_string),
+                            ));
                         } else {
                             index_urls.push(d.read_url.clone());
                         }
@@ -619,19 +654,16 @@ pub(crate) async fn poll_sync_channels(
         password,
     );
 
-    let mut store: humoco_market::CardStore = match state
-        .lock_service()
-        .and_then(|mut service| {
-            crate::state::load_encrypted_json_or_default(
-                &mut service,
-                MARKET_CARD_STORE_KEY,
-                password,
-            )
+    let mut store: humoco_market::CardStore = match state.lock_service().and_then(|mut service| {
+        crate::state::load_encrypted_json_or_default(&mut service, MARKET_CARD_STORE_KEY, password)
             .map_err(FrontendError::from)
-        }) {
+    }) {
         Ok(s) => s,
         Err(e) => {
-            errors.push(format!("Failed to load CardStore for sync poll: {}", e.message));
+            errors.push(format!(
+                "Failed to load CardStore for sync poll: {}",
+                e.message
+            ));
             return PollOutcome {
                 polled_syncs: 0,
                 decrypted_slots: 0,
@@ -1391,9 +1423,7 @@ pub async fn remove_public_sync_impl(
 
         let updated_policy = state
             .mutate_security_policy(&mut service, password.as_deref(), |policy| {
-                policy
-                    .public_syncs
-                    .retain(|d| d.write_url != canonical_url);
+                policy.public_syncs.retain(|d| d.write_url != canonical_url);
             })
             .map_err(FrontendError::from)?;
 

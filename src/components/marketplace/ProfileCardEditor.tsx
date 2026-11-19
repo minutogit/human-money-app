@@ -19,6 +19,7 @@ import { ProfileCardMediaSection } from './ProfileCardMediaSection';
 import { ProfileCardContactSection } from './ProfileCardContactSection';
 import { ProfileCardBioSkillsSection } from './ProfileCardBioSkillsSection';
 import { ProfileCardPreview } from './ProfileCardPreview';
+import { extractUserIdPrefix } from '../../utils/userIdHelper';
 
 export type { CardPresetId };
 export { CARD_VISIBILITY_PRESETS, detectCardPreset };
@@ -66,6 +67,8 @@ export const ProfileCardEditor: React.FC<ProfileCardEditorProps> = ({
         handleSubmit,
     } = useProfileCardEditor({ isOpen, myProfile, onSave, onClose });
 
+    const activePrefix = extractUserIdPrefix(myProfile.profile.id || '');
+
     return (
         <ModalShell
             isOpen={isOpen}
@@ -100,6 +103,7 @@ export const ProfileCardEditor: React.FC<ProfileCardEditorProps> = ({
                     onPublishedChange={setPublished}
                     visibility={visibility}
                     onApplyPreset={applyPreset}
+                    activePrefix={activePrefix}
                 />
 
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">

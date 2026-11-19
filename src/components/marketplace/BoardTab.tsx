@@ -57,7 +57,13 @@ export const BoardTab: React.FC<BoardTabProps> = ({
         const map = new Map<string, number>();
         if (!people) return map;
         for (const p of people) {
-            map.set(p.did, resolveAuthorHops(p.sources));
+            const hops = resolveAuthorHops(p.sources);
+            if (p.recipientDid) {
+                map.set(p.recipientDid, hops);
+            }
+            if (!map.has(p.did)) {
+                map.set(p.did, hops);
+            }
         }
         return map;
     }, [people]);
@@ -84,7 +90,10 @@ export const BoardTab: React.FC<BoardTabProps> = ({
                     return true;
                 }
                 if (!item.ad.isRemote) {
-                    const ownerPerson = (people || []).find((p) => p.did === item.ownerDid);
+                    const targetDid = item.recipientDid || item.ownerDid;
+                    const ownerPerson =
+                        (people || []).find((p) => (p.recipientDid || p.did) === targetDid) ||
+                        (people || []).find((p) => p.did === item.ownerDid);
                     const ownerCoords = ownerPerson?.profile.coordinates;
                     if (!ownerCoords) {
                         return false;
@@ -207,24 +216,31 @@ export const BoardTab: React.FC<BoardTabProps> = ({
             {/* List or Empty States */}
             {filteredItems.length > 0 ? (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {filteredItems.map((item) => (
-                        <AdCard
-                            key={item.ad.id}
-                            ad={item.ad}
-                            ownerDid={item.ownerDid}
-                            ownerName={item.ownerName}
-                            trust={item.trust}
-                            daysLeft={item.daysLeft}
-                            isOwn={item.isOwn}
-                            authorHops={item.isOwn ? 0 : (hopsByDid.get(item.ownerDid) ?? 99)}
-                            mediaAutoLoadMaxHops={mediaAutoLoadMaxHops}
-                            wifiOnly={wifiOnly}
-                            onEditOwnAd={onEditOwnAd}
-                            onInquire={onInquire}
-                            onPay={onPay ? () => onPay(item.recipientDid || item.ownerDid) : undefined}
-                            onOwnerClick={onOwnerClick}
-                        />
-                    ))}
+                    {filteredItems.map((item) => {
+                        const targetOwnerDid = item.recipientDid || item.ownerDid;
+                        return (
+                            <AdCard
+                                key={item.ad.id}
+                                ad={item.ad}
+                                ownerDid={targetOwnerDid}
+                                ownerName={item.ownerName}
+                                trust={item.trust}
+                                daysLeft={item.daysLeft}
+                                isOwn={item.isOwn}
+                                authorHops={
+                                    item.isOwn
+                                        ? 0
+                                        : (hopsByDid.get(targetOwnerDid) ?? hopsByDid.get(item.ownerDid) ?? 99)
+                                }
+                                mediaAutoLoadMaxHops={mediaAutoLoadMaxHops}
+                                wifiOnly={wifiOnly}
+                                onEditOwnAd={onEditOwnAd}
+                                onInquire={onInquire}
+                                onPay={onPay ? () => onPay(targetOwnerDid) : undefined}
+                                onOwnerClick={onOwnerClick}
+                            />
+                        );
+                    })}
                 </div>
             ) : isBoardEmptyOverall ? (
                 /* Empty state when the board has zero items */

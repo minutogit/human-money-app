@@ -321,4 +321,36 @@ describe('ProfileCardEditor Component', () => {
       }));
     });
   });
+
+  it('shows prefix card limit notice only when active profile ID has a prefix', () => {
+    const { rerender } = render(
+      <ProfileCardEditor
+        isOpen={true}
+        onClose={vi.fn()}
+        myProfile={mockMyProfile}
+        onSave={vi.fn()}
+      />
+    );
+
+    expect(screen.queryByTestId('prefix-card-limit-notice')).not.toBeInTheDocument();
+
+    rerender(
+      <ProfileCardEditor
+        isOpen={true}
+        onClose={vi.fn()}
+        myProfile={{
+          ...mockMyProfile,
+          profile: {
+            ...mockMyProfile.profile,
+            id: 'laden:abc@did:key:z6MkuSelf',
+          },
+        }}
+        onSave={vi.fn()}
+      />
+    );
+
+    const notice = screen.getByTestId('prefix-card-limit-notice');
+    expect(notice).toBeInTheDocument();
+    expect(notice).toHaveTextContent('laden');
+  });
 });

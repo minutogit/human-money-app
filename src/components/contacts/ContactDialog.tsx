@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Contact, PublicProfile, FrontendTrustChangeImpact } from '../../types';
 import { FrontendSyncDescriptor } from '../../types/market';
+import { contactService } from '../../services/contactService';
 import { marketService } from '../../services/marketService';
 import { profileService } from '../../services/profileService';
 import { useOptionalSession } from '../../context/SessionContext';
@@ -14,7 +15,7 @@ import { ModalShell } from '../ui/ModalShell';
 import { TrustLevelRadioCards } from './TrustLevelRadioCards';
 import { readFromClipboard } from '../../utils/clipboard';
 import { parseContactCard, parseHumocoInput, normalizeSyncUrlInput } from '../../utils/humocoUri';
-import { isExactSameUserId, isSameRootIdentity } from '../../utils/userIdHelper';
+import { isExactSameUserId, isSameRootIdentity, truncateUserId } from '../../utils/userIdHelper';
 import { notifySyncStatusUpdated } from '../../utils/syncEvents';
 import { Clipboard, CheckCircle2, AlertCircle, Server, Trash2 } from 'lucide-react';
 
@@ -57,10 +58,13 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
     const [error, setError] = useState<string | null>(null);
     const [ownUserId, setOwnUserId] = useState<string>('');
     const [ownUserIdLoaded, setOwnUserIdLoaded] = useState<boolean>(false);
+    const [allContacts, setAllContacts] = useState<Contact[]>([]);
+    const [hasManualTrustOverride, setHasManualTrustOverride] = useState<boolean>(false);
 
     useEffect(() => {
         if (!isOpen) {
             setOwnUserIdLoaded(false);
+            setAllContacts([]);
             return;
         }
         let cancelled = false;
@@ -75,13 +79,37 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
             .finally(() => {
                 if (!cancelled) setOwnUserIdLoaded(true);
             });
+        if (!existingContact) {
+            Promise.resolve(contactService.getContacts?.())
+                .then((list) => {
+                    if (!cancelled && Array.isArray(list)) {
+                        setAllContacts(list);
+                    }
+                })
+                .catch(() => {});
+        }
         return () => {
             cancelled = true;
         };
-    }, [isOpen]);
+    }, [isOpen, existingContact]);
 
     const isExactSelf = isExactSameUserId(did, ownUserId);
     const isOwnSubaccount = !isExactSelf && isSameRootIdentity(did, ownUserId);
+    const siblingContact =
+        !existingContact && !isExactSelf && !isOwnSubaccount && did.trim()
+            ? allContacts.find(
+                  (c) => !isExactSameUserId(c.did, did) && isSameRootIdentity(c.did, did),
+              ) || null
+            : null;
+
+    useEffect(() => {
+        setHasManualTrustOverride(false);
+    }, [did, existingContact, isOpen]);
+
+    const displayedTrustLevel =
+        !existingContact && siblingContact && !hasManualTrustOverride
+            ? (siblingContact.trustLevel ?? null)
+            : trustLevel;
 
     useEffect(() => {
         let cancelled = false;
@@ -92,7 +120,7 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
             }
             return;
         }
-        const targetLvl = trustLevel ?? 0;
+        const targetLvl = displayedTrustLevel ?? 0;
         marketService.previewContactTrustChange(did.trim(), targetLvl)
             .then((impact) => {
                 if (!cancelled) {
@@ -105,7 +133,7 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
         return () => {
             cancelled = true;
         };
-    }, [did, trustLevel, ownUserIdLoaded, isExactSelf, isOwnSubaccount]);
+    }, [did, trustLevel, displayedTrustLevel, ownUserIdLoaded, isExactSelf, isOwnSubaccount]);
 
     const predefinedTags = ["Friends", "Business", "Favorites"];
     const availableTags = Array.from(new Set([...predefinedTags, ...tags]));
@@ -270,7 +298,7 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
         setIsSaving(true);
         setError(null);
         try {
-            const effectiveTrustLevel = isOwnSubaccount ? null : trustLevel;
+            const effectiveTrustLevel = isOwnSubaccount ? null : displayedTrustLevel;
             const contact: Contact = {
                 ...(existingContact || {}),
                 did: did.trim(),
@@ -631,7 +659,28 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                         <p className="text-[11px] text-theme-light leading-tight">
                             {t('contacts.trustNetworkHint')}
                         </p>
-                        <div className="pt-1">
+                        <div className="pt-1 space-y-2">
+                            {siblingContact && (
+                                <div
+                                    data-testid="sibling-prefix-trust-notice"
+                                    className="p-3 rounded-xl bg-sky-50 border border-sky-200 text-xs font-medium text-sky-900 flex items-start gap-2"
+                                >
+                                    <AlertCircle size={15} className="shrink-0 mt-0.5 text-sky-600" />
+                                    <span>
+                                        {t('contacts.siblingPrefixTrustHint', {
+                                            name:
+                                                [
+                                                    siblingContact.profile.firstName,
+                                                    siblingContact.profile.lastName,
+                                                ]
+                                                    .filter(Boolean)
+                                                    .join(' ') ||
+                                                siblingContact.profile.organization ||
+                                                truncateUserId(siblingContact.did),
+                                        })}
+                                    </span>
+                                </div>
+                            )}
                             {isOwnSubaccount ? (
                                 <div
                                     data-testid="own-subaccount-trust-notice"
@@ -642,8 +691,11 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                                 </div>
                             ) : (
                                 <TrustLevelRadioCards
-                                    value={trustLevel}
-                                    onChange={(lvl) => setTrustLevel(lvl)}
+                                    value={displayedTrustLevel}
+                                    onChange={(lvl) => {
+                                        setHasManualTrustOverride(true);
+                                        setTrustLevel(lvl);
+                                    }}
                                     allowUnrated={true}
                                 />
                             )}

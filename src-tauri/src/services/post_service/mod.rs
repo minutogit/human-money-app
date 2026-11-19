@@ -1,9 +1,9 @@
 use ed25519_dalek::{SigningKey, VerifyingKey};
-use human_money_core::ValidatedUserId;
 use human_money_core::models::profile::UserIdentity;
 use human_money_core::models::secure_container::{
     ContainerConfig, PayloadType, PrivacyMode, SecureContainer,
 };
+use human_money_core::ValidatedUserId;
 use humoco_market::{seal_post_box, PostDeliveryReceipt, PostEnvelope, PAYLOAD_POST_RECEIPT_V1};
 use log::warn;
 
@@ -55,8 +55,10 @@ fn merge_vec_by_id<T: Clone, F: Fn(&T) -> &str>(
     latest: &[T],
     id_fn: F,
 ) {
-    let base_ids: std::collections::HashSet<String> =
-        baseline.iter().map(|item| id_fn(item).to_string()).collect();
+    let base_ids: std::collections::HashSet<String> = baseline
+        .iter()
+        .map(|item| id_fn(item).to_string())
+        .collect();
     let latest_ids: std::collections::HashSet<String> =
         latest.iter().map(|item| id_fn(item).to_string()).collect();
 
@@ -166,12 +168,9 @@ pub(crate) fn merge_and_save_post_state(
     password: Option<&str>,
 ) -> Result<(), FrontendError> {
     let mut service = state.service.lock().unwrap();
-    let latest: StoredPostState = crate::state::load_encrypted_json_or_default(
-        &mut service,
-        MARKET_POST_STATE_KEY,
-        password,
-    )
-    .map_err(FrontendError::from)?;
+    let latest: StoredPostState =
+        crate::state::load_encrypted_json_or_default(&mut service, MARKET_POST_STATE_KEY, password)
+            .map_err(FrontendError::from)?;
 
     if &latest != baseline {
         merge_vec_by_id(
@@ -205,7 +204,11 @@ pub(crate) fn merge_and_save_post_state(
             &mut working.pending_wot_packages_by_msg_id,
             &latest.pending_wot_packages_by_msg_id,
         );
-        merge_inquiries_3way(&baseline.inquiries, &mut working.inquiries, &latest.inquiries);
+        merge_inquiries_3way(
+            &baseline.inquiries,
+            &mut working.inquiries,
+            &latest.inquiries,
+        );
         if working.inquiry_rate_tracker == baseline.inquiry_rate_tracker
             && latest.inquiry_rate_tracker != baseline.inquiry_rate_tracker
         {
@@ -340,15 +343,12 @@ fn find_card_in_store<'a>(
     card_store: &'a humoco_market::CardStore,
     did: &str,
 ) -> Option<&'a humoco_market::StoredCard> {
-    ValidatedUserId::parse(did)
-        .ok()
-        .and_then(|v| card_store.cards.get(&v.public_key_bytes()))
-        .or_else(|| {
-            card_store
-                .cards
-                .values()
-                .find(|sc| are_dids_equal(&sc.card.payload.did, did))
-        })
+    card_store.cards.get(did.trim()).or_else(|| {
+        card_store
+            .cards
+            .values()
+            .find(|sc| are_dids_equal(&sc.card.payload.did, did))
+    })
 }
 
 /// Resolves `(display_name, picture_url, is_contact)` for a DID across the
@@ -414,7 +414,10 @@ pub(crate) fn resolve_counterparty_info(
             }
             Ok(None) => {}
             Err(e) => {
-                log::warn!("Failed to load CardStore in resolve_counterparty_info: {}", e);
+                log::warn!(
+                    "Failed to load CardStore in resolve_counterparty_info: {}",
+                    e
+                );
             }
         }
     }
@@ -431,7 +434,12 @@ pub(crate) fn lookup_counterparty_syncs(
     let mut result = Vec::new();
     let mut service = state.service.lock().unwrap();
     if let Ok(contacts) = state.load_contacts(&mut service, password) {
-        if let Some(c) = contacts.iter().find(|c| are_dids_equal(&c.did, did)) {
+        let trimmed = did.trim();
+        if let Some(c) = contacts
+            .iter()
+            .find(|c| c.did.trim() == trimmed)
+            .or_else(|| contacts.iter().find(|c| are_dids_equal(&c.did, trimmed)))
+        {
             result.extend(c.syncs.iter().cloned());
         }
     }
@@ -448,7 +456,10 @@ pub(crate) fn lookup_counterparty_syncs(
             }
             Ok(None) => {}
             Err(e) => {
-                log::warn!("Failed to load CardStore in lookup_counterparty_syncs: {}", e);
+                log::warn!(
+                    "Failed to load CardStore in lookup_counterparty_syncs: {}",
+                    e
+                );
             }
         }
     }
@@ -463,9 +474,11 @@ pub(crate) fn check_inquiry_target(
     password: Option<&str>,
 ) -> bool {
     let mut service = state.service.lock().unwrap();
-    if let Ok(stored) =
-        crate::services::market_service::load_own_market_profile_state(state, &mut service, password)
-    {
+    if let Ok(stored) = crate::services::market_service::load_own_market_profile_state(
+        state,
+        &mut service,
+        password,
+    ) {
         match target {
             humoco_market::InquiryTarget::Ad { ad_id, .. } => {
                 return stored
@@ -508,6 +521,7 @@ pub(crate) fn seal_post_container_bytes<T: serde::Serialize>(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn enqueue_post_envelope(
     post_state: &mut StoredPostState,
+    sender_did: &str,
     my_ed_sk: &SigningKey,
     recipient_did: &str,
     recipient_ed_pk: &VerifyingKey,
@@ -520,6 +534,7 @@ pub(crate) fn enqueue_post_envelope(
 ) -> Result<(), FrontendError> {
     let envelope = PostEnvelope::new(
         msg_id.clone(),
+        sender_did,
         now_secs,
         own_reply_syncs.iter().cloned().map(Into::into).collect(),
         container_bytes,
@@ -564,6 +579,7 @@ pub(crate) fn queue_sealed_reply<T: serde::Serialize>(
     };
     let _ = enqueue_post_envelope(
         post_state,
+        &my_identity.user_id,
         my_ed_sk,
         recipient_did,
         recipient_pk,
@@ -619,6 +635,7 @@ pub(crate) fn queue_receipt(
     let recipient_pk = validated_sender.public_key();
     if let Err(e) = enqueue_post_envelope(
         post_state,
+        &my_identity.user_id,
         my_ed_sk,
         sender_did,
         recipient_pk,

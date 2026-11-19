@@ -12,8 +12,7 @@ use crate::services::common::{normalize_sync_url, DropChannelSigner, SyncIdentit
 use crate::services::market_service::sync_own_card_drops_on_settings_change;
 use crate::services::recovery_service::enqueue_guardian_locator_updates_if_configured;
 use crate::settings::{
-    SecurityPolicy, UiPreferences, SYNC_BASE_MAX_AGE_SECS, SYNC_CARD_MAX_BYTES,
-    SYNC_HEARTBEAT_SECS,
+    SecurityPolicy, UiPreferences, SYNC_BASE_MAX_AGE_SECS, SYNC_CARD_MAX_BYTES, SYNC_HEARTBEAT_SECS,
 };
 use crate::state::{
     apply_revocation_notice, apply_revocation_notice_to_address_book, canonicalize_did,
@@ -428,8 +427,9 @@ pub async fn probe_contact_syncs_impl(
         let s = state
             .get_or_load_security_policy(&mut service, password.as_deref())
             .map_err(FrontendError::from)?;
-        let own = load_stored_sync_admin_opt(&mut service, password.as_deref())?
-            .is_some_and(|a| !a.descriptor.write_url.is_empty() && !a.descriptor.read_url.is_empty());
+        let own = load_stored_sync_admin_opt(&mut service, password.as_deref())?.is_some_and(|a| {
+            !a.descriptor.write_url.is_empty() && !a.descriptor.read_url.is_empty()
+        });
         let ab: FrontendAddressBook = crate::state::load_encrypted_json_or_default(
             &mut service,
             CONTACTS_DATA_NAME,
@@ -507,10 +507,8 @@ pub async fn probe_contact_syncs_impl(
 
     if !probed_endpoints.is_empty() {
         let mut auto_activated = false;
-        let updated_policy = state.mutate_security_policy_for_owner(
-            &owner_did,
-            password.as_deref(),
-            |policy| {
+        let updated_policy =
+            state.mutate_security_policy_for_owner(&owner_did, password.as_deref(), |policy| {
                 let mut modified = false;
                 let mut current_healthy = has_own_sync
                     || policy.market_selected_syncs.iter().any(|d| {
@@ -520,9 +518,7 @@ pub async fn probe_contact_syncs_impl(
                             && !d.drop_pub.is_empty()
                     })
                     || policy.public_syncs.iter().any(|pd| {
-                        pd.enabled
-                            && !pd.authorized_channels.is_empty()
-                            && !pd.read_url.is_empty()
+                        pd.enabled && !pd.authorized_channels.is_empty() && !pd.read_url.is_empty()
                     });
                 for ep in &probed_endpoints {
                     for sel in &mut policy.market_selected_syncs {
@@ -570,8 +566,7 @@ pub async fn probe_contact_syncs_impl(
                     }
                 }
                 modified
-            },
-        )?;
+            })?;
         let _ = has_healthy_sync;
         if auto_activated {
             if let Some(policy) = updated_policy {
@@ -656,7 +651,7 @@ pub(crate) fn import_decrypted_card_bundle(
             .into_iter()
             .map(|a| a.id)
             .collect();
-        before_ads_by_did.insert(sc.card.payload.did.clone(), ids);
+        before_ads_by_did.insert(sc.card.payload.recipient_id().to_string(), ids);
     }
 
     for env in bundle.envelopes {
@@ -683,12 +678,11 @@ pub(crate) fn import_decrypted_card_bundle(
 
         if let Ok(humoco_market::AcceptOutcome::Accepted { did, .. }) = outcome {
             count += 1;
-            let can_did = canonicalize_did(&did).unwrap_or_else(|_| did.clone());
             sync_state
                 .sync_sources_by_did
-                .insert(can_did, read_url.to_string());
+                .insert(did.clone(), read_url.to_string());
 
-            if let Some(stored) = store.cards.values().find(|sc| sc.card.payload.did == did) {
+            if let Some(stored) = store.cards.get(&did) {
                 let prev_ids = before_ads_by_did.entry(did.clone()).or_default();
                 for ad in humoco_market::sd_card::active_ads(&stored.card, now_secs) {
                     if prev_ids.insert(ad.id) {
@@ -726,22 +720,20 @@ fn load_card_upload_context(
     let mut service = state.lock_service()?;
 
     let my_can_did = canonicalize_did(&id_ctx.my_did).ok();
-    let own_profile_opt: Option<StoredOwnMarketProfile> =
-        Some(crate::services::market_service::load_own_market_profile_state(
+    let own_profile_opt: Option<StoredOwnMarketProfile> = Some(
+        crate::services::market_service::load_own_market_profile_state(
             state,
             &mut service,
             password,
-        )?);
+        )?,
+    );
     // Include unexpired <jws>~ tombstone cards even when `published == false`.
     let own_card_opt = own_profile_opt.as_ref().and_then(|p| p.last_card.clone());
 
     let reg = state.get_or_load_wot_register(&mut service, password).ok();
-    let address_book: FrontendAddressBook = crate::state::load_encrypted_json_or_default(
-        &mut service,
-        CONTACTS_DATA_NAME,
-        password,
-    )
-    .map_err(FrontendError::from)?;
+    let address_book: FrontendAddressBook =
+        crate::state::load_encrypted_json_or_default(&mut service, CONTACTS_DATA_NAME, password)
+            .map_err(FrontendError::from)?;
 
     let mut readers = Vec::new();
     let mut evicted_reader_keys = Vec::new();
@@ -915,10 +907,9 @@ pub(crate) async fn sync_card_upload_channel(
     if !ctx.readers.is_empty() || (active_own_card.is_some() && !ctx.evicted_reader_keys.is_empty())
     {
         let own_wire_info: Option<(String, String, u64)> = active_own_card.and_then(|own_card| {
-            let can_did = canonicalize_did(&own_card.payload.did)
-                .unwrap_or_else(|_| own_card.payload.did.clone());
+            let own_key = own_card.payload.recipient_id().to_string();
             humoco_market::render_wire(own_card, 1, humoco_market::WireFilter::Full)
-                .map(|wire| (can_did, wire, own_card.payload.v))
+                .map(|wire| (own_key, wire, own_card.payload.v))
         });
         let own_tombstone_bundle: Option<humoco_market::CardBundle> =
             active_own_card.map(|own_card| humoco_market::CardBundle {
@@ -987,7 +978,7 @@ pub(crate) async fn sync_card_upload_channel(
             trust_by_did.get(&can).copied().unwrap_or(0)
         };
 
-        let own_can_did_opt = own_wire_info.as_ref().map(|(d, _, _)| d.clone());
+        let my_can_did = canonicalize_did(&id_ctx.my_did).ok();
         let mut wire_meta: HashMap<String, (String, u64)> = HashMap::new();
         let mut card_by_did: HashMap<String, &humoco_market::StoredCard> = HashMap::new();
 
@@ -1002,12 +993,13 @@ pub(crate) async fn sync_card_upload_channel(
             }
             let can = canonicalize_did(&sc.card.payload.did)
                 .unwrap_or_else(|_| sc.card.payload.did.clone());
-            if own_can_did_opt.as_ref() == Some(&can) || offenders.contains(&can) {
+            if my_can_did.as_deref() == Some(can.as_str()) || offenders.contains(&can) {
                 continue;
             }
             if let Some(env) = humoco_market::forward_envelope(sc) {
-                wire_meta.insert(env.card_wire, (can.clone(), sc.card.payload.v));
-                card_by_did.insert(can, sc);
+                let card_key = sc.card.payload.recipient_id().to_string();
+                wire_meta.insert(env.card_wire, (card_key.clone(), sc.card.payload.v));
+                card_by_did.insert(card_key, sc);
                 forward_candidates.push(sc);
             }
         }

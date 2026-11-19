@@ -227,7 +227,10 @@ fn collect_candidate_slot_sources(
         }
         Ok(None) => {}
         Err(e) => {
-            log::warn!("Failed to load CardStore in collect_post_poll_targets: {}", e);
+            log::warn!(
+                "Failed to load CardStore in collect_post_poll_targets: {}",
+                e
+            );
         }
     }
 
@@ -282,18 +285,21 @@ fn collect_authorized_post_senders(
         }
     }
 
-    let has_inquiry_listing =
-        crate::services::market_service::load_own_market_profile_state(state, &mut service, password)
-            .ok()
-            .map(|stored| {
-                stored.published
-                    && (stored.allow_inquiries
-                        || stored
-                            .ads
-                            .iter()
-                            .any(|a| a.expires_at > now_secs && a.allow_inquiries))
-            })
-            .unwrap_or(false);
+    let has_inquiry_listing = crate::services::market_service::load_own_market_profile_state(
+        state,
+        &mut service,
+        password,
+    )
+    .ok()
+    .map(|stored| {
+        stored.published
+            && (stored.allow_inquiries
+                || stored
+                    .ads
+                    .iter()
+                    .any(|a| a.expires_at > now_secs && a.allow_inquiries))
+    })
+    .unwrap_or(false);
 
     match crate::state::load_encrypted_json_opt::<humoco_market::CardStore>(
         &mut service,
@@ -314,7 +320,10 @@ fn collect_authorized_post_senders(
         }
         Ok(None) => {}
         Err(e) => {
-            log::warn!("Failed to load CardStore in collect_authorized_post_senders: {}", e);
+            log::warn!(
+                "Failed to load CardStore in collect_authorized_post_senders: {}",
+                e
+            );
         }
     }
 
@@ -675,7 +684,7 @@ pub async fn sync_post_channels_impl(
                 CardSignerAndMaybeInquiry(bool),
                 InquiryOnly,
             }
-            let (sender_did, envelope, privilege) = match open_attempt {
+            let (matched_sender_did, envelope, privilege) = match open_attempt {
                 Ok(Some((did, env))) => (did, env, SenderPrivilege::Full),
                 Ok(None) => {
                     let card_attempt = if !card_signer_senders.is_empty() {
@@ -713,6 +722,23 @@ pub async fn sync_post_channels_impl(
                     warn!("Error opening post box: {}", e);
                     continue;
                 }
+            };
+
+            let sender_did = {
+                let Ok(parsed_sender) =
+                    human_money_core::ValidatedUserId::parse(&envelope.sender_did)
+                else {
+                    warn!("Rejected PostEnvelope with invalid sender_did");
+                    continue;
+                };
+                let Ok(matched_pk) = get_pubkey_from_user_id(&matched_sender_did) else {
+                    continue;
+                };
+                if parsed_sender.public_key() != &matched_pk {
+                    warn!("Rejected PostEnvelope with mismatched sender_did public key");
+                    continue;
+                }
+                parsed_sender.into_string()
             };
 
             if post_state.processed_msg_ids.contains(&envelope.msg_id) {

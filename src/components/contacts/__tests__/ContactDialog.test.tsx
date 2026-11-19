@@ -2,9 +2,16 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import ContactDialog from '../ContactDialog';
 import { UiModeProvider } from '../../../context/UiModeContext';
+import { contactService } from '../../../services/contactService';
 import { marketService } from '../../../services/marketService';
 import { profileService } from '../../../services/profileService';
 import { Contact } from '../../../types';
+
+vi.mock('../../../services/contactService', () => ({
+  contactService: {
+    getContacts: vi.fn().mockResolvedValue([]),
+  },
+}));
 
 vi.mock('../../../services/marketService', () => ({
   marketService: {
@@ -35,6 +42,7 @@ describe('ContactDialog Component', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
+    vi.mocked(contactService.getContacts).mockResolvedValue([]);
   });
 
   it('hides sync endpoints and edit-mode DID input in Simple mode while keeping new-contact DID input visible', () => {
@@ -358,5 +366,48 @@ describe('ContactDialog Component', () => {
       target: { value: '„ALICE:3K4@DID:KEY:z6MkuT52y5aBqB9R5e6v18c8P4h5M8Z7v“' },
     });
     expect(didInput).toHaveValue('alice:3K4@did:key:z6MkuT52y5aBqB9R5e6v18c8P4h5M8Z7v');
+  });
+
+  it('detects sibling prefix, shows shared-trust notice, and prefills trustLevel on save', async () => {
+    const sibling: Contact = {
+      did: 'laden:abc@did:key:zSiblingKey999',
+      profile: {
+        id: 'laden:abc@did:key:zSiblingKey999',
+        firstName: 'Lisa',
+        lastName: 'Laden',
+      },
+      tags: [],
+      trustLevel: 2,
+      addedAt: '2026-01-01',
+      syncs: [],
+    };
+    vi.mocked(contactService.getContacts).mockResolvedValue([sibling]);
+
+    render(
+      <ContactDialog
+        isOpen={true}
+        onClose={mockOnClose}
+        onSave={mockOnSave}
+      />
+    );
+
+    const didInput = screen.getByTestId('contact-did-input');
+    fireEvent.change(didInput, { target: { value: 'privat:def@did:key:zSiblingKey999' } });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('sibling-prefix-trust-notice')).toHaveTextContent('Lisa Laden');
+    });
+
+    const saveBtn = screen.getByRole('button', { name: /contacts\.saveContact|Kontakt speichern|Save Contact/i });
+    fireEvent.click(saveBtn);
+
+    await waitFor(() => {
+      expect(mockOnSave).toHaveBeenCalledWith(
+        expect.objectContaining({
+          did: 'privat:def@did:key:zSiblingKey999',
+          trustLevel: 2,
+        })
+      );
+    });
   });
 });

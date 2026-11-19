@@ -4,6 +4,7 @@ import {
     truncateUserId,
     suggestFilename,
     extractCanonicalDid,
+    extractUserIdPrefix,
     isExactSameUserId,
     isSameRootIdentity,
 } from '../userIdHelper';
@@ -60,6 +61,13 @@ describe('userIdHelper', () => {
             expect(extractCanonicalDid(saiId)).toBe(rootId);
             expect(extractCanonicalDid(rootId)).toBe(rootId);
             expect(extractCanonicalDid('')).toBe('');
+        });
+
+        it('extractUserIdPrefix returns prefix for SAI IDs and null for root DIDs', () => {
+            expect(extractUserIdPrefix(saiId)).toBe('alice');
+            expect(extractUserIdPrefix(ladenId)).toBe('laden');
+            expect(extractUserIdPrefix(rootId)).toBeNull();
+            expect(extractUserIdPrefix('')).toBeNull();
         });
 
         it('isExactSameUserId matches exact trimmed IDs including prefix', () => {

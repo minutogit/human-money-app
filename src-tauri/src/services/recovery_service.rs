@@ -5,13 +5,13 @@ use tauri::Manager;
 
 use chrono::Utc;
 use human_money_core::app_service::AppService;
-use human_money_core::ValidatedUserId;
 use human_money_core::models::backup::BackupRestoreCredentials;
 use human_money_core::models::secure_container::{
     ContainerConfig, PayloadType, PrivacyMode, SecureContainer,
 };
 use human_money_core::services::mnemonic::MnemonicLanguage;
 use human_money_core::UserIdentity;
+use human_money_core::ValidatedUserId;
 use humoco_market::{
     build_emergency_kit_uri, build_recovery_request_uri, canonicalize_owner_account_id,
     code_to_mnemonic_language, compute_recovery_sas, create_social_recovery_vault_bundle,
@@ -250,6 +250,7 @@ fn seal_recovery_container(
 #[allow(clippy::too_many_arguments)]
 fn enqueue_recovery_container_to_outbox(
     post_state: &mut StoredPostState,
+    my_user_id: &str,
     my_signing_key: &ed25519_dalek::SigningKey,
     recipient_did: &str,
     container_bytes: Vec<u8>,
@@ -259,6 +260,7 @@ fn enqueue_recovery_container_to_outbox(
     let msg_id = uuid::Uuid::new_v4().to_string();
     let envelope = PostEnvelope::new(
         msg_id.clone(),
+        my_user_id,
         now_secs,
         reply_drops.to_vec(),
         container_bytes,
@@ -305,6 +307,7 @@ fn enqueue_guardian_revocations(
             ) {
                 let _ = enqueue_recovery_container_to_outbox(
                     post_state,
+                    &my_identity.user_id,
                     &my_identity.signing_key,
                     &g_did,
                     container_bytes,
@@ -374,6 +377,7 @@ pub async fn enqueue_guardian_locator_updates_if_configured(
 
         if enqueue_recovery_container_to_outbox(
             &mut post_state,
+            &my_identity.user_id,
             &my_identity.signing_key,
             &g.user_id,
             container_bytes,
@@ -389,8 +393,7 @@ pub async fn enqueue_guardian_locator_updates_if_configured(
     if enqueued > 0 {
         merge_and_save_post_state(state, &baseline, &mut post_state, password.as_deref())?;
         baseline = post_state.clone();
-        let _ =
-            flush_post_slots_impl(state, &mut post_state, None, &[], password.as_deref()).await;
+        let _ = flush_post_slots_impl(state, &mut post_state, None, &[], password.as_deref()).await;
         merge_and_save_post_state(state, &baseline, &mut post_state, password.as_deref())?;
     }
 
@@ -620,7 +623,8 @@ pub async fn export_profile_mnemonic_impl(
     state: &AppState,
 ) -> Result<Option<ExportedMnemonicKitDto>, FrontendError> {
     let (phrase, lang, has_bip39_passphrase, user_prefix) = {
-        let service = state.authorize_and_lock(crate::state::RequiredAccess::Full, Some(&password))?;
+        let service =
+            state.authorize_and_lock(crate::state::RequiredAccess::Full, Some(&password))?;
         let exported = service
             .export_mnemonic(&password)
             .map_err(FrontendError::from)?;
@@ -688,7 +692,8 @@ pub async fn confirm_emergency_sheet_saved_impl(
     app: Option<&tauri::AppHandle>,
 ) -> Result<ConfirmEmergencySheetResultDto, FrontendError> {
     let phrase = {
-        let service = state.authorize_and_lock(crate::state::RequiredAccess::Full, Some(&password))?;
+        let service =
+            state.authorize_and_lock(crate::state::RequiredAccess::Full, Some(&password))?;
         let exp = service
             .export_mnemonic(&password)
             .map_err(FrontendError::from)?;
@@ -727,7 +732,9 @@ pub async fn confirm_emergency_sheet_saved_impl(
     }
 
     let backup_sync_result = match app {
-        Some(handle) => sync_backup_impl(Some(password), None, state, handle).await.ok(),
+        Some(handle) => sync_backup_impl(Some(password), None, state, handle)
+            .await
+            .ok(),
         None => None,
     };
 
@@ -753,8 +760,8 @@ pub fn get_recovery_protection_status_impl(
                     .map(|h| !h.is_empty())
                     .unwrap_or(false)
             });
-        let owner =
-            load_recovery_owner_state_with_cache(state, &mut service, password)?.unwrap_or_default();
+        let owner = load_recovery_owner_state_with_cache(state, &mut service, password)?
+            .unwrap_or_default();
         let vault = load_guardian_vault_with_cache(state, &mut service, password)?;
         let contacts = state
             .load_contacts(&mut service, password)
@@ -878,8 +885,7 @@ pub fn verify_recovery_rehearsal_with_password_impl(
     let user_id = service
         .with_wallet_and_identity(|_, id| id.user_id.clone())
         .map_err(FrontendError::from)?;
-    let owner_account_id =
-        canonicalize_owner_account_id(&user_id).map_err(FrontendError::from)?;
+    let owner_account_id = canonicalize_owner_account_id(&user_id).map_err(FrontendError::from)?;
 
     let kdf_params = RecoveryKdfParams {
         m_kib: owner_state.rehearsal_kdf_m_kib,
@@ -1010,7 +1016,8 @@ pub async fn setup_social_recovery_guardians_with_params(
         my_profile_name,
         old_owner_state,
     ) = {
-        let mut service = state.authorize_and_lock(crate::state::RequiredAccess::Full, Some(&password))?;
+        let mut service =
+            state.authorize_and_lock(crate::state::RequiredAccess::Full, Some(&password))?;
         let exp = service
             .export_mnemonic(&password)
             .map_err(FrontendError::from)?;
@@ -1206,6 +1213,7 @@ pub async fn setup_social_recovery_guardians_with_params(
             )?;
             enqueue_recovery_container_to_outbox(
                 &mut post_state,
+                &my_identity.user_id,
                 &my_identity.signing_key,
                 g_did,
                 container_bytes,
@@ -1260,13 +1268,20 @@ pub async fn setup_social_recovery_guardians_with_params(
 
     {
         let mut service = state.lock_service()?;
-        save_recovery_owner_state_with_cache(state, &mut service, &new_owner_state, Some(&password))?;
+        save_recovery_owner_state_with_cache(
+            state,
+            &mut service,
+            &new_owner_state,
+            Some(&password),
+        )?;
     }
 
     let post_sync_result =
         sync_post_channels_impl(app, None, None, Some(password.clone()), state).await?;
     let backup_sync_result = match app {
-        Some(handle) => sync_backup_impl(Some(password), None, state, handle).await.ok(),
+        Some(handle) => sync_backup_impl(Some(password), None, state, handle)
+            .await
+            .ok(),
         None => None,
     };
 
@@ -1556,10 +1571,9 @@ pub fn approve_guardian_recovery_request_impl(
 
         // Collect extra known sync descriptors from own hosted sync
         let mut extras = Vec::new();
-        if let Some(admin) = crate::services::sync_engine::admin::load_stored_sync_admin_opt(
-            &mut service,
-            password,
-        )? {
+        if let Some(admin) =
+            crate::services::sync_engine::admin::load_stored_sync_admin_opt(&mut service, password)?
+        {
             if !admin.descriptor.write_url.is_empty() {
                 extras.push(admin.descriptor.clone());
             }
@@ -1650,7 +1664,10 @@ pub async fn complete_social_recovery_impl(
         recover_master_payload_from_shares(&matching_entries, &ans_refs).map_err(|e| {
             FrontendError::with_code(
                 "error.recovery.wrongAnswers",
-                format!("Deine Antworten stimmen noch nicht – bitte in Ruhe prüfen: {}", e),
+                format!(
+                    "Deine Antworten stimmen noch nicht – bitte in Ruhe prüfen: {}",
+                    e
+                ),
             )
         })?;
 
@@ -1850,9 +1867,11 @@ pub async fn complete_social_recovery_impl(
 
                 {
                     let mut service = state.lock_service()?;
-                    if let Ok(Some(mut local_state)) =
-                        load_recovery_owner_state_with_cache(state, &mut service, Some(&new_password))
-                    {
+                    if let Ok(Some(mut local_state)) = load_recovery_owner_state_with_cache(
+                        state,
+                        &mut service,
+                        Some(&new_password),
+                    ) {
                         if local_state.rotation_epoch < rotation_epoch {
                             local_state.rotation_epoch = rotation_epoch;
                             let _ = save_recovery_owner_state_with_cache(
@@ -3423,7 +3442,11 @@ mod tests {
         for state in [&laden_state, &privat_state] {
             let mut s = state.service.lock().unwrap();
             state
-                .save_contact(&mut s, make_test_contact(&bob_did, "Bob", Some(2)), Some(pass))
+                .save_contact(
+                    &mut s,
+                    make_test_contact(&bob_did, "Bob", Some(2)),
+                    Some(pass),
+                )
                 .unwrap();
             state
                 .save_contact(
@@ -3447,7 +3470,11 @@ mod tests {
             vec![bob_did.clone(), carol_did.clone(), dave_did.clone()],
             2,
             [1, 2, 3],
-            ["Berlin".to_string(), "Fluffy".to_string(), "Pizza".to_string()],
+            [
+                "Berlin".to_string(),
+                "Fluffy".to_string(),
+                "Pizza".to_string(),
+            ],
             RecoveryKdfParams::new_fast_test(),
             &laden_state,
             None,
@@ -3459,7 +3486,11 @@ mod tests {
             vec![bob_did.clone(), carol_did.clone(), dave_did.clone()],
             2,
             [4, 5, 6],
-            ["Hamburg".to_string(), "Rex".to_string(), "Pasta".to_string()],
+            [
+                "Hamburg".to_string(),
+                "Rex".to_string(),
+                "Pasta".to_string(),
+            ],
             RecoveryKdfParams::new_fast_test(),
             &privat_state,
             None,
@@ -3519,7 +3550,9 @@ mod tests {
         // Finding 11: Simulate timeout = 0 (unlocked session absent after initialize_profile_session)
         {
             let mut s = laden_state.service.lock().unwrap();
-            let mut policy = laden_state.load_security_policy(&mut s, Some(pass)).unwrap();
+            let mut policy = laden_state
+                .load_security_policy(&mut s, Some(pass))
+                .unwrap();
             policy.session_timeout_seconds = 0;
             laden_state
                 .save_security_policy(&mut s, policy, Some(pass))

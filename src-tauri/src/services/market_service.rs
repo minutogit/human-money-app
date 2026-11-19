@@ -258,8 +258,7 @@ pub(crate) fn sign_unpublish_tombstone_card(
     let my_signing_key = service
         .with_wallet_and_identity(|_w, id| id.signing_key.clone())
         .map_err(FrontendError::from)?;
-    let root_did = human_money_core::crypto::create_user_id(&my_signing_key.verifying_key(), None)
-        .map_err(|e| FrontendError::from(format!("Failed to create user ID: {}", e)))?;
+    let card_did = prev.payload.recipient_id().to_string();
 
     let prev_hops = prev.payload.max_hops.clamp(1, 3);
     let active_hops = if now < stored.shrink_until {
@@ -273,7 +272,7 @@ pub(crate) fn sign_unpublish_tombstone_card(
     let v = humoco_market::next_card_version(Some(prev.payload.v), now);
     let valid_until = now.saturating_add(30 * 86_400);
     let payload_input = humoco_market::CardPayloadInput {
-        did: root_did,
+        did: card_did,
         v,
         valid_until,
         max_hops: active_hops,
@@ -1162,11 +1161,23 @@ pub async fn get_ad_image_impl(
             password.as_deref(),
         )
         .map_err(FrontendError::from)?;
-        if let Ok(pk) = human_money_core::crypto::get_pubkey_from_user_id(&owner_did) {
-            if let Some(stored_card) = card_store.cards.get(&pk.to_bytes()) {
-                for d in &stored_card.card.payload.drops {
-                    if !d.read_url.trim().is_empty() {
-                        candidate_urls.push(d.read_url.clone());
+        if let Some(stored_card) = card_store.cards.get(owner_did.trim()) {
+            for d in &stored_card.card.payload.drops {
+                if !d.read_url.trim().is_empty() {
+                    candidate_urls.push(d.read_url.clone());
+                }
+            }
+        } else if let Ok(pk) = human_money_core::crypto::get_pubkey_from_user_id(&owner_did) {
+            for stored_card in card_store.cards.values() {
+                if human_money_core::crypto::get_pubkey_from_user_id(&stored_card.card.payload.did)
+                    .ok()
+                    .as_ref()
+                    == Some(&pk)
+                {
+                    for d in &stored_card.card.payload.drops {
+                        if !d.read_url.trim().is_empty() {
+                            candidate_urls.push(d.read_url.clone());
+                        }
                     }
                 }
             }
@@ -1242,7 +1253,8 @@ pub fn get_market_view_impl(
     let mut service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
 
     // Auto-renew own card if published and (validity < 30 days OR active ads count changed)
-    let mut stored_opt = load_own_market_profile_state(state, &mut service, password.as_deref()).ok();
+    let mut stored_opt =
+        load_own_market_profile_state(state, &mut service, password.as_deref()).ok();
 
     if let Some(ref mut stored) = stored_opt {
         if stored.published {
@@ -1313,11 +1325,9 @@ pub fn get_market_view_impl(
         let cached = state.contacts.lock().unwrap().clone();
         let ab = match cached {
             Some(ab) => ab,
-            None => crate::state::load_encrypted_json_or_default::<crate::models::FrontendAddressBook>(
-                &mut service,
-                CONTACTS_DATA_NAME,
-                password.as_deref(),
-            )
+            None => crate::state::load_encrypted_json_or_default::<
+                crate::models::FrontendAddressBook,
+            >(&mut service, CONTACTS_DATA_NAME, password.as_deref())
             .map_err(FrontendError::from)?,
         };
         ab.contacts
@@ -1380,7 +1390,8 @@ pub fn get_market_view_impl(
         })
         .map_err(FrontendError::from)?;
 
-    let canonical_own_did = crate::state::canonicalize_did(&own_did).unwrap_or_else(|_| own_did.clone());
+    let canonical_own_did =
+        crate::state::canonicalize_did(&own_did).unwrap_or_else(|_| own_did.clone());
 
     let raw_board = humoco_market::build_ad_board(&raw_persons);
 
@@ -1436,7 +1447,8 @@ pub fn get_market_view_impl(
             crate::state::canonicalize_did(&person.did).unwrap_or_else(|_| person.did.clone());
         if let Some(read_url) = sync_state
             .sync_sources_by_did
-            .get(&person.did)
+            .get(&person.recipient_did)
+            .or_else(|| sync_state.sync_sources_by_did.get(&person.did))
             .or_else(|| sync_state.sync_sources_by_did.get(&can_did))
         {
             let sync_src = crate::models::FrontendEntrySource::Sync {
@@ -1475,7 +1487,15 @@ pub fn export_forward_card_impl(
 
     let stored = store
         .cards
-        .get(&validated_did.public_key_bytes())
+        .get(validated_did.as_str())
+        .or_else(|| {
+            store.cards.values().find(|sc| {
+                crate::state::canonicalize_did(&sc.card.payload.did)
+                    .ok()
+                    .as_deref()
+                    == Some(validated_did.canonical_did())
+            })
+        })
         .ok_or_else(|| FrontendError::from("Card not found in store".to_string()))?;
 
     let env = humoco_market::forward_envelope(stored)
@@ -1495,7 +1515,7 @@ pub fn export_forward_card_impl(
     };
 
     Ok(FrontendForwardCardExport {
-        did: stored.card.payload.did.clone(),
+        did: stored.card.payload.recipient_id().to_string(),
         envelope_json,
         share_uri,
         qr_svg,
@@ -1582,7 +1602,7 @@ pub fn import_contact_card_impl(
                 password.as_deref(),
             )
             .map_err(FrontendError::from)?;
-            if let Some(stored) = store.cards.values().find(|sc| sc.card.payload.did == did) {
+            if let Some(stored) = store.cards.get(&did) {
                 let card_syncs: Vec<FrontendSyncDescriptor> = stored
                     .card
                     .payload
@@ -1618,15 +1638,7 @@ pub fn import_contact_card_impl(
                         )
                         .map_err(FrontendError::from)?;
 
-                    let exists = if is_own_root {
-                        address_book.contacts.keys().any(|k| k.trim() == did.trim())
-                    } else {
-                        address_book.contacts.iter().any(|(k, _)| {
-                            k == &did
-                                || crate::state::canonicalize_did(k).ok().as_deref()
-                                    == Some(&can_card_did)
-                        })
-                    };
+                    let exists = address_book.contacts.keys().any(|k| k.trim() == did.trim());
 
                     if exists {
                         let card_profile = humoco_market::extract_public_profile(&stored.card);
@@ -1726,7 +1738,20 @@ pub fn delete_foreign_contact_card_impl(
     let validated_did = human_money_core::ValidatedUserId::parse(&did)
         .map_err(|e| FrontendError::from(format!("Invalid DID: {}", e)))?;
 
-    if store.cards.remove(&validated_did.public_key_bytes()).is_some() {
+    let mut removed = store.cards.remove(validated_did.as_str()).is_some();
+    if !removed && validated_did.as_str() == validated_did.canonical_did() {
+        let target_pk = validated_did.public_key_bytes();
+        let before = store.cards.len();
+        store.cards.retain(|_, sc| {
+            human_money_core::crypto::get_pubkey_from_user_id(&sc.card.payload.did)
+                .ok()
+                .map(|k| k.to_bytes())
+                != Some(target_pk)
+        });
+        removed = store.cards.len() != before;
+    }
+
+    if removed {
         crate::state::save_encrypted_json(
             &mut service,
             MARKET_CARD_STORE_KEY,
@@ -2734,9 +2759,15 @@ mod tests {
         let mut alice_service =
             setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
         alice_service
-            .enable_secondary_auth(password, daily_pin, human_money_core::SecondaryScope::DailyPay)
+            .enable_secondary_auth(
+                password,
+                daily_pin,
+                human_money_core::SecondaryScope::DailyPay,
+            )
             .unwrap();
-        let folder = alice_service.list_profiles().unwrap()[0].folder_name.clone();
+        let folder = alice_service.list_profiles().unwrap()[0]
+            .folder_name
+            .clone();
         let alice_state = create_test_state(alice_service);
 
         // Populate market profile with a skill and published card

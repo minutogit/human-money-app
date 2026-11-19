@@ -135,6 +135,7 @@ pub fn is_own_dummy_post_box(master_seed: &[u8; 32], entry: &PostBoxEntry) -> bo
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PostEnvelope {
     pub msg_id: String,
+    pub sender_did: String,
     pub created_at: u64,
     pub reply_drops: Vec<DropDescriptor>,
     /// Raw serialized `SecureContainer` bytes (JSON/JWE).
@@ -146,12 +147,14 @@ pub struct PostEnvelope {
 impl PostEnvelope {
     pub fn new(
         msg_id: impl Into<String>,
+        sender_did: impl Into<String>,
         created_at: u64,
         reply_drops: Vec<DropDescriptor>,
         container_bytes: Vec<u8>,
     ) -> Self {
         Self {
             msg_id: msg_id.into(),
+            sender_did: sender_did.into(),
             created_at,
             reply_drops,
             container_bytes,

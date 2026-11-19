@@ -763,16 +763,21 @@ fn handle_guardian_assign(
         let mut service = ctx.state.service.lock().unwrap();
         match load_guardian_vault_with_cache(ctx.state, &mut service, ctx.password) {
             Ok(mut vault) => match vault.upsert_ward(entry.clone()) {
-                Ok(()) => save_guardian_vault_with_cache(
-                    ctx.state,
-                    &mut service,
-                    &vault,
-                    ctx.password,
-                )
-                .map_err(|e| (format!("Failed to save guardian vault: {}", e.message), false)),
+                Ok(()) => {
+                    save_guardian_vault_with_cache(ctx.state, &mut service, &vault, ctx.password)
+                        .map_err(|e| {
+                            (
+                                format!("Failed to save guardian vault: {}", e.message),
+                                false,
+                            )
+                        })
+                }
                 Err(e) => Err((format!("Failed to upsert guardian ward: {}", e), true)),
             },
-            Err(e) => Err((format!("Failed to load guardian vault: {}", e.message), false)),
+            Err(e) => Err((
+                format!("Failed to load guardian vault: {}", e.message),
+                false,
+            )),
         }
     };
 
@@ -825,9 +830,10 @@ fn handle_guardian_ack(
             match load_recovery_owner_state_with_cache(ctx.state, &mut service, ctx.password) {
                 Ok(opt) => opt,
                 Err(e) => {
-                    stats
-                        .errors
-                        .push(format!("Failed to load recovery owner state: {}", e.message));
+                    stats.errors.push(format!(
+                        "Failed to load recovery owner state: {}",
+                        e.message
+                    ));
                     return false;
                 }
             };
@@ -856,9 +862,10 @@ fn handle_guardian_ack(
                         &owner_state,
                         ctx.password,
                     ) {
-                        stats
-                            .errors
-                            .push(format!("Failed to save recovery owner state: {}", e.message));
+                        stats.errors.push(format!(
+                            "Failed to save recovery owner state: {}",
+                            e.message
+                        ));
                         return false;
                     }
                 }
@@ -905,7 +912,10 @@ fn handle_guardian_locator(
                             ctx.password,
                         )
                         .map_err(|e| {
-                            (format!("Failed to save guardian vault: {}", e.message), false)
+                            (
+                                format!("Failed to save guardian vault: {}", e.message),
+                                false,
+                            )
                         })
                     } else {
                         Ok(())
@@ -913,7 +923,10 @@ fn handle_guardian_locator(
                 }
                 Err(e) => Err((format!("Failed to update guardian locator: {}", e), true)),
             },
-            Err(e) => Err((format!("Failed to load guardian vault: {}", e.message), false)),
+            Err(e) => Err((
+                format!("Failed to load guardian vault: {}", e.message),
+                false,
+            )),
         }
     };
 
@@ -965,7 +978,10 @@ fn handle_guardian_revoke(
                             ctx.password,
                         )
                         .map_err(|e| {
-                            (format!("Failed to save guardian vault: {}", e.message), false)
+                            (
+                                format!("Failed to save guardian vault: {}", e.message),
+                                false,
+                            )
                         })
                     } else {
                         Ok(())
@@ -976,7 +992,10 @@ fn handle_guardian_revoke(
                     true,
                 )),
             },
-            Err(e) => Err((format!("Failed to load guardian vault: {}", e.message), false)),
+            Err(e) => Err((
+                format!("Failed to load guardian vault: {}", e.message),
+                false,
+            )),
         }
     };
 
@@ -1028,6 +1047,7 @@ mod tests {
         let payload_bytes = serde_json::to_vec(&update).unwrap();
         let envelope = humoco_market::PostEnvelope::new(
             "msg-corrupt-vault-1",
+            sender_did.clone(),
             1_750_000_000,
             Vec::new(),
             Vec::new(),
@@ -1066,9 +1086,13 @@ mod tests {
 
         let stored_raw = {
             let mut s = state.service.lock().unwrap();
-            crate::state::load_encrypted_bytes_opt(&mut s, RECOVERY_GUARDIAN_VAULT_KEY, Some(password))
-                .unwrap()
-                .unwrap()
+            crate::state::load_encrypted_bytes_opt(
+                &mut s,
+                RECOVERY_GUARDIAN_VAULT_KEY,
+                Some(password),
+            )
+            .unwrap()
+            .unwrap()
         };
         assert_eq!(stored_raw, b"{corrupt-vault");
 

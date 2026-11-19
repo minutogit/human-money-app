@@ -153,4 +153,53 @@ describe('GuardianSetupModal Component', () => {
             });
         });
     });
+
+    it('deduplicates sibling prefix contacts sharing the same root key', async () => {
+        const withSibling: Contact[] = [
+            {
+                did: 'laden:abc@did:key:z6MkuContact1',
+                profile: { id: 'laden:abc@did:key:z6MkuContact1', firstName: 'Alice', lastName: 'Laden' },
+                tags: [],
+                trustLevel: 2,
+                addedAt: '2026-01-01',
+            },
+            {
+                did: 'privat:def@did:key:z6MkuContact1',
+                profile: { id: 'privat:def@did:key:z6MkuContact1', firstName: 'Alice', lastName: 'Privat' },
+                tags: [],
+                trustLevel: 2,
+                addedAt: '2026-01-01',
+            },
+            {
+                did: 'did:key:z6MkuContact2',
+                profile: { id: 'did:key:z6MkuContact2', firstName: 'Bob', lastName: 'Jones' },
+                tags: [],
+                trustLevel: 2,
+                addedAt: '2026-01-01',
+            },
+            {
+                did: 'did:key:z6MkuContact3',
+                profile: { id: 'did:key:z6MkuContact3', firstName: 'Carol', lastName: 'Williams' },
+                tags: [],
+                trustLevel: 3,
+                addedAt: '2026-01-01',
+            },
+        ];
+        vi.mocked(contactService.getContacts).mockResolvedValue(withSibling);
+
+        render(
+            <GuardianSetupModal
+                isOpen={true}
+                onClose={mockOnClose}
+                onSuccess={mockOnSuccess}
+            />
+        );
+
+        await screen.findByText('Bob Jones');
+        expect(screen.getByTestId('select-contact-laden:abc@did:key:z6MkuContact1')).toBeInTheDocument();
+        expect(screen.queryByTestId('select-contact-privat:def@did:key:z6MkuContact1')).not.toBeInTheDocument();
+        expect(screen.getByTestId('select-contact-did:key:z6MkuContact2')).toBeInTheDocument();
+        expect(screen.getByTestId('select-contact-did:key:z6MkuContact3')).toBeInTheDocument();
+        expect(screen.getByText('3 / 5')).toBeInTheDocument();
+    });
 });
