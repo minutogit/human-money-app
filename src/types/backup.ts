@@ -71,6 +71,7 @@ export interface FrontendBackupSyncResult {
     timestamp?: string | null;
     errors: string[];
     retryAfterSecs?: number | null;
+    skippedWifiOnly?: boolean;
 }
 
 export interface SyncBackupProbeResultDto {

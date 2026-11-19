@@ -218,6 +218,9 @@ export function useAddressBook({
             const wasNew = !contacts.some((c) => isExactSameUserId(c.did, contact.did));
             await protectAction(async (pwd) => {
                 await contactService.saveContact(contact, pwd || undefined);
+                marketService.probeContactSyncs?.(false, pwd || undefined)
+                    ?.then(() => notifySyncStatusUpdated())
+                    ?.catch(() => {});
             });
             channelMembersSyncManager.trigger({ delayMs: 1500, resetQuota: true });
             await loadContacts();
@@ -484,6 +487,9 @@ export function useAddressBook({
             (res?.importedCards ?? 0) > 0;
 
         if (!hasActivity) {
+            if (res?.skippedWifiOnly || postRes?.skippedWifiOnly) {
+                return;
+            }
             setFeedbackMsg({
                 type: 'warning',
                 message: t(

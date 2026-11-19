@@ -314,5 +314,6 @@ export function useTransactionHistory() {
             setCurrencyFilter('all');
             setPeriodFilter('all');
         },
+        protectAction,
     };
 }

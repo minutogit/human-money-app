@@ -30,6 +30,7 @@ vi.mock('../../../context/SessionContext', () => ({
   useSession: () => ({
     protectAction: vi.fn(async (cb: (pw?: string) => Promise<any>) => cb('mock-password')),
   }),
+  useOptionalSession: () => null,
 }));
 
 describe('MarketPersonView Component', () => {

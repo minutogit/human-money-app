@@ -245,7 +245,9 @@ export function TransactionHistoryView() {
                     }
                     onClose={() => state.setContactModalData(null)}
                     onSave={async (contact: Contact) => {
-                        await contactService.saveContact(contact);
+                        await state.protectAction(async (pwd) => {
+                            await contactService.saveContact(contact, pwd || undefined);
+                        });
                         await state.refreshContacts();
                         state.setContactModalData(null);
                     }}

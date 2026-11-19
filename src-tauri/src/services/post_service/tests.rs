@@ -2259,3 +2259,46 @@ async fn test_outbox_windowed_packing_defers_overflow_past_max_bytes_and_drains_
 
     let _ = std::fs::remove_dir_all(&base_dir);
 }
+
+#[tokio::test]
+async fn test_sync_post_channels_respects_wifi_only_skip() {
+    let base_dir = temp_test_dir("sync_post_wifi_only_skip");
+    let password = "TestPassword123!";
+    let alice_service = setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
+    let alice_state = create_test_state(alice_service);
+
+    {
+        let mut s = alice_state.service.lock().unwrap();
+        alice_state
+            .mutate_ui_preferences(&mut s, Some(password), |prefs| {
+                prefs.market_poll_wifi_only = true;
+            })
+            .unwrap();
+    }
+
+    let metered_res = sync_post_channels_impl(
+        None,
+        Some(false),
+        None,
+        Some(password.to_string()),
+        &alice_state,
+    )
+    .await
+    .unwrap();
+    assert!(metered_res.skipped_wifi_only);
+    assert_eq!(metered_res.polled_syncs, 0);
+    assert!(metered_res.errors.is_empty());
+
+    let manual_res = sync_post_channels_impl(
+        None,
+        None,
+        None,
+        Some(password.to_string()),
+        &alice_state,
+    )
+    .await
+    .unwrap();
+    assert!(!manual_res.skipped_wifi_only);
+
+    let _ = std::fs::remove_dir_all(&base_dir);
+}

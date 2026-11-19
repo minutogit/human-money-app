@@ -163,10 +163,11 @@ pub fn run_auto_backup_sync(
 #[tauri::command]
 pub async fn sync_backup(
     password: Option<String>,
+    is_wifi: Option<bool>,
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<FrontendBackupSyncResult, FrontendError> {
-    backup_service::sync_backup_impl(password, &state, &app).await
+    backup_service::sync_backup_impl(password, is_wifi, &state, &app).await
 }
 
 #[tauri::command]

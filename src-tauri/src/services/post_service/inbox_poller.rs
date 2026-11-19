@@ -58,7 +58,7 @@ pub fn mark_inquiry_read_impl(
     Ok(())
 }
 
-/// Dismisses a pending sign request, WoT handshake, inquiry, or staged PoS payment atomically under `state.service`.
+/// Dismisses a pending sign request, WoT handshake, or inquiry atomically under `state.service`.
 pub fn dismiss_pending_post_item_impl(
     item_kind: String,
     id: String,
@@ -575,6 +575,7 @@ pub async fn sync_post_channels_impl(
             new_inquiry_messages: 0,
             pruned_boxes: 0,
             deferred_outbox_boxes: 0,
+            skipped_wifi_only: true,
             errors: Vec::new(),
             retry_after_secs: None,
         });
@@ -844,6 +845,7 @@ pub async fn sync_post_channels_impl(
         new_inquiry_messages: stats.new_inquiry_messages,
         pruned_boxes: stats.pruned_boxes,
         deferred_outbox_boxes: flush_outcome.deferred_count,
+        skipped_wifi_only: false,
         errors: stats.errors,
         retry_after_secs,
     })

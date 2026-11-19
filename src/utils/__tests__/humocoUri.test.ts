@@ -382,5 +382,30 @@ describe('humocoUri Utilities', () => {
       expect(normalizeUserIdInput(`Sende an ${sampleDid}!`)).toBe(sampleDid);
       expect(normalizeUserIdInput(`kasse@${sampleDid}`)).toBeNull();
     });
+
+    it('handles typographic quotes, backticks, @ line breaks, and case-insensitive did:key prefixes while preserving Base58 case', () => {
+      const mixedCaseDid = `DID:KEY:z6MkuT52y5aBqB9R5e6v18c8P4h5M8Z7v`;
+      expect(parseContactCard(`„${sampleDid}“`)).toEqual({ did: sampleDid });
+      expect(parseContactCard(`«${sampleSai}»`)).toEqual({ did: sampleSai });
+      expect(parseContactCard(`\`${mixedCaseDid}\``)).toEqual({ did: sampleDid });
+      expect(parseContactCard(`Bitte zahlen an ALICE:3K4@DID:KEY:z6MkuT52y5aBqB9R5e6v18c8P4h5M8Z7v!`)).toEqual({
+        did: 'alice:3K4@did:key:z6MkuT52y5aBqB9R5e6v18c8P4h5M8Z7v',
+      });
+
+      const wrappedPay = `Bitte überweise:\nhumoco://pay?to=alice:work\n@did:key:z6MkuT52y5aBqB9R5e6v18c8P4h5M8Z7v&amount=10`;
+      const payParsed = parsePaymentRequest(wrappedPay);
+      expect(payParsed?.to).toBe(sampleSai);
+      expect(payParsed?.amount).toBe('10');
+
+      const quotedContact = `»HUMOCO://contact?did=${encodeURIComponent(mixedCaseDid)}&name=Bob«`;
+      expect(parseContactCard(quotedContact)).toEqual({
+        did: sampleDid,
+        name: 'Bob',
+        syncUrls: undefined,
+      });
+
+      // Shortened prefix without checksum must remain rejected (fail-closed)
+      expect(parseContactCard(`„kasse@${sampleDid}“`)).toBeNull();
+    });
   });
 });

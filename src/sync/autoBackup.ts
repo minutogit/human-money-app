@@ -8,6 +8,7 @@ import { APP_EVENTS, emitAppEvent } from '../utils/appEvents';
 import { rateLimitManager } from './rateLimitManager';
 import { channelMembersSyncManager } from './channelMembersSyncManager';
 import { DEFAULT_ONBOARDING_DELAY_MS, scheduleContactOnboardingMarketSync } from './marketSync';
+import { detectIsWifiConnection } from '../utils/networkStatus';
 
 let backupInterval: number | null = null;
 let initialTimeout: number | null = null;
@@ -90,7 +91,7 @@ export async function runSyncBackupPass(force: boolean = false): Promise<Fronten
 
     isSyncBackupRunning = true;
     try {
-        const result = await backupService.syncBackup();
+        const result = await backupService.syncBackup(undefined, detectIsWifiConnection());
         dispatchBackupUpdated();
         notifySyncStatusUpdated();
         if (result) {

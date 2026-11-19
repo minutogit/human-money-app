@@ -63,7 +63,6 @@ export type HelpTopicId =
     | 'subaccount'
     | 'handover'
     | 'deviceBinding'
-    | 'posMode'
     | 'l2Protection';
 
 export type HelpAudience = 'everyone' | 'expert';
@@ -141,7 +140,7 @@ export const HELP_TOPICS: Record<HelpTopicId, HelpTopic> = {
         titleKey: 'help.uiModes.title',
         shortKey: 'help.uiModes.short',
         longKey: 'help.uiModes.long',
-        related: ['profile', 'posMode', 'multiDevice'],
+        related: ['profile', 'multiDevice'],
     },
     conceptPrivacy: {
         id: 'conceptPrivacy',
@@ -546,15 +545,6 @@ export const HELP_TOPICS: Record<HelpTopicId, HelpTopic> = {
         deepDiveKey: 'help.deviceBinding.deepDive',
         related: ['profile', 'handover', 'multiDevice'],
     },
-    posMode: {
-        id: 'posMode',
-        group: 'expert',
-        audience: 'expert',
-        titleKey: 'help.posMode.title',
-        shortKey: 'help.posMode.short',
-        longKey: 'help.posMode.long',
-        related: ['voucherBasics', 'l2Protection'],
-    },
     l2Protection: {
         id: 'l2Protection',
         group: 'expert',
@@ -563,6 +553,6 @@ export const HELP_TOPICS: Record<HelpTopicId, HelpTopic> = {
         shortKey: 'help.l2Protection.short',
         longKey: 'help.l2Protection.long',
         deepDiveKey: 'help.l2Protection.deepDive',
-        related: ['connection', 'offlineProtection', 'posMode', 'offlineRisk'],
+        related: ['connection', 'offlineProtection', 'offlineRisk'],
     },
 };

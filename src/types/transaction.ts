@@ -104,12 +104,16 @@ export interface ReceiveSuccessPayload {
 
 export interface TransactionFingerprint {
     dsTag: string;
-    u: string;
-    blindedId: string;
     tId: string;
-    encryptedTimestamp: string; // u128 usually serializes to string
+    encryptedTimestamp: string; // u128 serialized as string
     layer2Signature: string;
+    senderEphemeralPub: string;
     deletableAt: string;
+    trapR: string;
+    trapS: string;
+    layer2VoucherId: string;
+    privacyGuardHash: string;
+    createdAtMs: number;
 }
 
 export type ConflictRole = "victim" | "witness";

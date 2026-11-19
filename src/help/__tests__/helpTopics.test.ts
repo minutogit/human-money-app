@@ -22,6 +22,7 @@ describe('helpTopics Registry', () => {
         }
         expect('wotReach' in HELP_TOPICS).toBe(false);
         expect('wotSharing' in HELP_TOPICS).toBe(false);
+        expect('posMode' in HELP_TOPICS).toBe(false);
     });
 
     it('ensures every topic has non-empty titleKey, shortKey, and longKey in de.json and en.json', () => {

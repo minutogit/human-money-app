@@ -381,9 +381,15 @@ export function MarketplaceView({
     };
 
     const handleMarkInquiryRead = async (inquiryId: string) => {
+        const target = inboxSummary?.inquiries.find((i) => i.inquiryId === inquiryId);
+        if (target && !target.unread) {
+            return;
+        }
         try {
             if (typeof postService?.markInquiryRead === 'function') {
-                await postService.markInquiryRead(inquiryId);
+                await protectAction(async (pwd) => {
+                    await postService.markInquiryRead(inquiryId, pwd || undefined);
+                });
                 await refreshInbox();
             }
         } catch (err) {

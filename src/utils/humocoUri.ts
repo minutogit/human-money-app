@@ -43,12 +43,12 @@ export interface ParsedPaymentRequest {
   isTest?: boolean;
 }
 
-const CONTACT_URI_REGEX = /humoco:\/\/contact\?([^\s<>"'`]+)/i;
-const PAY_URI_REGEX = /humoco:\/\/pay\?([^\s<>"'`]+)/i;
-const CARD_URI_REGEX = /humoco:\/\/card\?([^\s<>"'`]+)/i;
+const CONTACT_URI_REGEX = /humoco:\/\/contact\?([^\s<>"'`„“”‚‘’«»‹›]+)/i;
+const PAY_URI_REGEX = /humoco:\/\/pay\?([^\s<>"'`„“”‚‘’«»‹›]+)/i;
+const CARD_URI_REGEX = /humoco:\/\/card\?([^\s<>"'`„“”‚‘’«»‹›]+)/i;
 
-const TRAILING_PUNCT_REGEX = /[.,;:!?)\]"'>]+$/;
-const CONTINUATION_LINE_REGEX = /^[A-Za-z0-9\-_=+&%.:/]+$/;
+const TRAILING_PUNCT_REGEX = /[.,;:!?)\]"'>`„“”‚‘’«»‹›]+$/;
+const CONTINUATION_LINE_REGEX = /^[A-Za-z0-9\-_=+&%.:/@]+$/;
 const GREETING_WORDS = new Set([
   'danke',
   'hallo',
@@ -121,7 +121,7 @@ export type ParsedHumocoInput =
   | { kind: 'did'; did: string };
 
 const DEEPLINK_PATTERN =
-  /humoco:\/\/(recovery-reply|kit|recovery-req|card|pay|contact)[^\s"'<>)]+/i;
+  /humoco:\/\/(recovery-reply|kit|recovery-req|card|pay|contact)[^\s"'`<>„“”‚‘’«»‹›)]+/i;
 
 function compactSyncUrlForUri(raw: string): string {
   const trimmed = raw.trim();
@@ -159,9 +159,33 @@ export function buildContactUri({ did, name, syncUrls }: ContactCardParams): str
 function stripSurroundingWrappers(value: string): string {
   return value
     .trim()
-    .replace(/^["'`<(\[]+/, '')
-    .replace(/["'`>)\],.;:!?]+$/, '')
+    .replace(/^["'`„“”‚‘’«»‹›<(\[]+/, '')
+    .replace(/["'`„“”‚‘’«»‹›>)\],.;:!?]+$/, '')
     .trim();
+}
+
+function canonicalizeUserIdCandidate(value: string): string {
+  const cleaned = stripSurroundingWrappers(value);
+  if (!cleaned) return '';
+
+  const atIdx = cleaned.lastIndexOf('@');
+  if (atIdx === -1) {
+    if (/^did:key:/i.test(cleaned)) {
+      return `did:key:${cleaned.slice(8)}`;
+    }
+    return cleaned;
+  }
+
+  const hrp = cleaned.slice(0, atIdx);
+  const didPart = cleaned.slice(atIdx + 1);
+  const normDid = /^did:key:/i.test(didPart) ? `did:key:${didPart.slice(8)}` : didPart;
+  const colonIdx = hrp.indexOf(':');
+  if (colonIdx <= 0) {
+    return `${hrp}@${normDid}`;
+  }
+  const prefix = hrp.slice(0, colonIdx).toLowerCase();
+  const checksum = hrp.slice(colonIdx + 1);
+  return `${prefix}:${checksum}@${normDid}`;
 }
 
 export function isValidUserIdFormat(id: string): boolean {
@@ -190,7 +214,7 @@ export function parseContactCard(input: string): ParsedContactCard | null {
     try {
       const searchParams = new URLSearchParams(stripTrailingPunctuation(match[1]));
       const rawDid = searchParams.get('did');
-      const did = rawDid ? stripSurroundingWrappers(rawDid) : '';
+      const did = rawDid ? canonicalizeUserIdCandidate(rawDid) : '';
       const name = searchParams.get('name')?.trim() || undefined;
       const rawSync = searchParams.getAll('sync');
       const syncUrls = rawSync
@@ -212,20 +236,20 @@ export function parseContactCard(input: string): ParsedContactCard | null {
     }
   }
 
-  const standalone = stripSurroundingWrappers(input);
+  const standalone = canonicalizeUserIdCandidate(input);
   // Check if the trimmed/unwrapped input is a standalone DID or subaccount ID
-  if (!/\s/.test(standalone) && (standalone.startsWith('did:') || standalone.includes('@did:'))) {
+  if (standalone && !/\s/.test(standalone) && (standalone.startsWith('did:') || standalone.includes('@did:'))) {
     return isValidUserIdFormat(standalone) ? { did: standalone } : null;
   }
 
   // Fallback: extract embedded user ID (including any prefix before @did:key:) from chat/email text.
   // Never strip an invalid prefix and fall back to the root DID.
   const embeddedDidMatch = input.trim().match(
-    /(?:[^\s"'`<(\[\]]+@)?did:key:[a-zA-Z0-9]+/
+    /(?:[^\s"'`„“”‚‘’«»‹›<(\[\]]+@)?did:key:[a-zA-Z0-9]+/i
   );
   if (embeddedDidMatch) {
-    const candidate = stripSurroundingWrappers(embeddedDidMatch[0]);
-    return isValidUserIdFormat(candidate) ? { did: candidate } : null;
+    const candidate = canonicalizeUserIdCandidate(embeddedDidMatch[0]);
+    return candidate && isValidUserIdFormat(candidate) ? { did: candidate } : null;
   }
 
   return null;
@@ -318,7 +342,7 @@ export function parsePaymentRequest(input: string): ParsedPaymentRequest | null 
   try {
     const searchParams = new URLSearchParams(stripTrailingPunctuation(match[1]));
     const rawTo = searchParams.get('to');
-    const to = rawTo ? stripSurroundingWrappers(rawTo) : '';
+    const to = rawTo ? canonicalizeUserIdCandidate(rawTo) : '';
 
     if (!to || !isValidUserIdFormat(to)) {
       return null;
@@ -457,7 +481,7 @@ export function extractCardPayload(raw: string): string | null {
 export function extractDidFromCardEnvelopeJson(envelopeJson: string): string | null {
   try {
     const env = JSON.parse(envelopeJson) as Record<string, unknown>;
-    let candidate = typeof env.did === 'string' ? stripSurroundingWrappers(env.did) : '';
+    let candidate = typeof env.did === 'string' ? canonicalizeUserIdCandidate(env.did) : '';
     if (!candidate && typeof env.card_wire === 'string') {
       const seg = env.card_wire.split('.')[1];
       if (seg) {
@@ -465,7 +489,7 @@ export function extractDidFromCardEnvelopeJson(envelopeJson: string): string | n
         if (payloadText) {
           const payload = JSON.parse(payloadText) as { did?: unknown };
           if (typeof payload.did === 'string') {
-            candidate = stripSurroundingWrappers(payload.did);
+            candidate = canonicalizeUserIdCandidate(payload.did);
           }
         }
       }
@@ -553,8 +577,8 @@ export function normalizeSyncUrlInput(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed) return '';
 
-  const embeddedUrl = trimmed.match(/https?:\/\/[^\s<>"'`]+/i);
-  let s = embeddedUrl ? embeddedUrl[0].replace(/[.,;:!?)\]]+$/, '') : trimmed;
+  const embeddedUrl = trimmed.match(/https?:\/\/[^\s<>"'`„“”‚‘’«»‹›]+/i);
+  let s = embeddedUrl ? embeddedUrl[0].replace(/[.,;:!?)\]"'`„“”‚‘’«»‹›]+$/, '') : trimmed;
 
   if (!s.includes('://')) {
     s = 'https://' + s;

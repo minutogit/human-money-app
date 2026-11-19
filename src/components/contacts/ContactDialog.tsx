@@ -4,6 +4,7 @@ import { Contact, PublicProfile, FrontendTrustChangeImpact } from '../../types';
 import { FrontendSyncDescriptor } from '../../types/market';
 import { marketService } from '../../services/marketService';
 import { profileService } from '../../services/profileService';
+import { useOptionalSession } from '../../context/SessionContext';
 import { UserAvatar } from '../ui/UserAvatar';
 import { translateError } from '../../utils/errorHelper';
 import { HelpIcon } from '../ui/HelpIcon';
@@ -37,6 +38,7 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
     initialSyncUrls,
 }) => {
     const { t } = useTranslation();
+    const session = useOptionalSession();
     const [did, setDid] = useState(initialDid || '');
     const [firstName, setFirstName] = useState('');
     const [lastName, setLastName] = useState('');
@@ -289,9 +291,11 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                 syncs: syncs.length > 0 ? syncs : [],
             };
             await onSave(contact);
-            marketService.probeContactSyncs?.(false)
-                ?.then(() => notifySyncStatusUpdated())
-                ?.catch(() => {});
+            if (session?.hasCachedSession !== false) {
+                marketService.probeContactSyncs?.(false)
+                    ?.then(() => notifySyncStatusUpdated())
+                    ?.catch(() => {});
+            }
             onClose();
         } catch (e: unknown) {
             console.error("Failed to save contact:", e);
@@ -392,7 +396,7 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                                             setDid(parsed.did);
                                             return;
                                         }
-                                        if (parsed?.kind === 'did' && /\s/.test(rawVal.trim())) {
+                                        if (parsed?.kind === 'did') {
                                             setDid(parsed.did);
                                             return;
                                         }

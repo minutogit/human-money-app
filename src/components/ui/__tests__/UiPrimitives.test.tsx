@@ -408,7 +408,7 @@ describe('HelpIcon and HelpModal', () => {
   it('opens HelpModal in document.body on click and closes on Close button', () => {
     render(
       <div className="overflow-hidden" data-testid="trapping-wrapper">
-        <HelpIcon topic="posMode" />
+        <HelpIcon topic="l2Protection" />
       </div>
     );
 

@@ -150,6 +150,8 @@ pub struct FrontendBackupSyncResult {
     pub timestamp: Option<String>,
     pub errors: Vec<String>,
     pub retry_after_secs: Option<u64>,
+    #[serde(default)]
+    pub skipped_wifi_only: bool,
 }
 
 /// Non-silent probe result when searching sync services for an encrypted backup.

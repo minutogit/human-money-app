@@ -102,6 +102,8 @@ pub struct FrontendPostSyncResult {
     pub pruned_boxes: usize,
     #[serde(default)]
     pub deferred_outbox_boxes: usize,
+    #[serde(default)]
+    pub skipped_wifi_only: bool,
     pub errors: Vec<String>,
     pub retry_after_secs: Option<u64>,
 }

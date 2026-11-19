@@ -204,6 +204,42 @@ pub struct FrontendL2QuorumDto {
     pub details: Option<String>,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FrontendTransactionFingerprint {
+    pub ds_tag: String,
+    pub t_id: String,
+    pub encrypted_timestamp: String,
+    pub layer2_signature: String,
+    pub sender_ephemeral_pub: String,
+    pub deletable_at: String,
+    pub trap_r: String,
+    pub trap_s: String,
+    pub layer2_voucher_id: String,
+    pub privacy_guard_hash: String,
+    pub created_at_ms: u64,
+}
+
+impl From<human_money_core::models::conflict::TransactionFingerprint>
+    for FrontendTransactionFingerprint
+{
+    fn from(fp: human_money_core::models::conflict::TransactionFingerprint) -> Self {
+        Self {
+            ds_tag: fp.ds_tag,
+            t_id: fp.t_id,
+            encrypted_timestamp: fp.encrypted_timestamp.to_string(),
+            layer2_signature: fp.layer2_signature,
+            sender_ephemeral_pub: fp.sender_ephemeral_pub,
+            deletable_at: fp.deletable_at,
+            trap_r: fp.trap_r,
+            trap_s: fp.trap_s,
+            layer2_voucher_id: fp.layer2_voucher_id,
+            privacy_guard_hash: fp.privacy_guard_hash,
+            created_at_ms: fp.created_at_ms,
+        }
+    }
+}
+
 #[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct ReceiveSuccessPayload {
@@ -213,10 +249,8 @@ pub struct ReceiveSuccessPayload {
     pub transfer_summary: crate::models::FrontendTransferSummary,
     pub involved_vouchers: Vec<String>,
     pub involved_vouchers_details: Vec<crate::models::FrontendInvolvedVoucherInfo>,
-    pub verifiable_conflicts: std::collections::HashMap<
-        String,
-        Vec<human_money_core::models::conflict::TransactionFingerprint>,
-    >,
+    pub verifiable_conflicts:
+        std::collections::HashMap<String, Vec<FrontendTransactionFingerprint>>,
     pub conflict_summaries: Vec<crate::models::FrontendProofOfDoubleSpendSummary>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub l2_quorum: Option<FrontendL2QuorumDto>,
@@ -254,4 +288,67 @@ pub struct FrontendVoucherL2StatusDto {
     pub reduced_guarantor_protection: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub manifest_revision: Option<u64>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FrontendTransactionFingerprint;
+    use human_money_core::models::conflict::TransactionFingerprint;
+
+    #[test]
+    fn frontend_transaction_fingerprint_serializes_v4_camel_case_without_legacy_fields() {
+        let core_fp = TransactionFingerprint {
+            ds_tag: "ds-1".to_string(),
+            t_id: "tx-1".to_string(),
+            encrypted_timestamp: 340282366920938463463374607431768211455,
+            layer2_signature: "sig-1".to_string(),
+            sender_ephemeral_pub: "eph-1".to_string(),
+            deletable_at: "2028-01-01T00:00:00Z".to_string(),
+            trap_r: "trap-r-1".to_string(),
+            trap_s: "trap-s-1".to_string(),
+            layer2_voucher_id: "l2-vid-1".to_string(),
+            privacy_guard_hash: "pg-hash-1".to_string(),
+            created_at_ms: 1_760_000_000_123,
+        };
+
+        let dto = FrontendTransactionFingerprint::from(core_fp);
+        let value = serde_json::to_value(&dto).unwrap();
+        let obj = value.as_object().expect("must serialize as JSON object");
+
+        assert_eq!(obj.get("dsTag").and_then(|v| v.as_str()), Some("ds-1"));
+        assert_eq!(obj.get("tId").and_then(|v| v.as_str()), Some("tx-1"));
+        assert_eq!(
+            obj.get("encryptedTimestamp").and_then(|v| v.as_str()),
+            Some("340282366920938463463374607431768211455")
+        );
+        assert_eq!(
+            obj.get("layer2Signature").and_then(|v| v.as_str()),
+            Some("sig-1")
+        );
+        assert_eq!(
+            obj.get("senderEphemeralPub").and_then(|v| v.as_str()),
+            Some("eph-1")
+        );
+        assert_eq!(
+            obj.get("deletableAt").and_then(|v| v.as_str()),
+            Some("2028-01-01T00:00:00Z")
+        );
+        assert_eq!(obj.get("trapR").and_then(|v| v.as_str()), Some("trap-r-1"));
+        assert_eq!(obj.get("trapS").and_then(|v| v.as_str()), Some("trap-s-1"));
+        assert_eq!(
+            obj.get("layer2VoucherId").and_then(|v| v.as_str()),
+            Some("l2-vid-1")
+        );
+        assert_eq!(
+            obj.get("privacyGuardHash").and_then(|v| v.as_str()),
+            Some("pg-hash-1")
+        );
+        assert_eq!(
+            obj.get("createdAtMs").and_then(|v| v.as_u64()),
+            Some(1_760_000_000_123)
+        );
+        assert!(!obj.contains_key("u"));
+        assert!(!obj.contains_key("blindedId"));
+        assert!(!obj.contains_key("ds_tag"));
+    }
 }

@@ -1,6 +1,7 @@
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
 import { SendView } from '../SendView';
+import { sendReducer, initialSendState } from '../sendTransferHelpers';
 import { invoke } from '@tauri-apps/api/core';
 import { VoucherSummary, VoucherStandardInfo, Contact, AppConfigDto } from '../../../types';
 import { UiModeProvider } from '../../../context/UiModeContext';
@@ -966,6 +967,38 @@ amount_decimal_places = 4`,
 
     fireEvent.change(recipientInput, { target: { value: cleanDid } });
     expect(screen.queryByText(/Trust Alert|Vertrauenswarnung/i)).not.toBeInTheDocument();
+  });
+
+  it('sendReducer resets privacyMode and privacyError when switching standard', () => {
+    const startState = {
+      ...initialSendState,
+      selectedStandardId: 'std-a',
+      selectedIsTest: false,
+      privacyMode: 'stealth' as const,
+      privacyError: true,
+      targetAmountStr: '50',
+    };
+
+    const sameStd = sendReducer(startState, {
+      type: 'SET_STANDARD',
+      id: 'std-a',
+      isTest: false,
+      preserveAmount: true,
+    });
+    expect(sameStd.privacyMode).toBe('stealth');
+    expect(sameStd.privacyError).toBe(false);
+    expect(sameStd.targetAmountStr).toBe('50');
+
+    const switchedStd = sendReducer(startState, {
+      type: 'SET_STANDARD',
+      id: 'std-b',
+      isTest: true,
+    });
+    expect(switchedStd.selectedStandardId).toBe('std-b');
+    expect(switchedStd.selectedIsTest).toBe(true);
+    expect(switchedStd.privacyMode).toBeNull();
+    expect(switchedStd.privacyError).toBe(false);
+    expect(switchedStd.targetAmountStr).toBe('');
   });
 });
 

@@ -4702,7 +4702,7 @@
     }
   },
   "dashboard.pendingSignRequestTitle": {
-    "source_text": "Guarantor Signature Request",
+    "source_text": "Guarantor Signature Request ({{name}})",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -10063,6 +10063,16 @@
       "en": "ai-translated"
     }
   },
+  "profile.field.age": {
+    "source_text": "Age",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated",
+      "en": "ai-translated"
+    }
+  },
   "profile.field.community": {
     "source_text": "Community",
     "status": {
@@ -10093,8 +10103,28 @@
       "en": "ai-translated"
     }
   },
+  "profile.field.firstName": {
+    "source_text": "First Name",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated",
+      "en": "ai-translated"
+    }
+  },
   "profile.field.gender": {
     "source_text": "Gender",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated",
+      "en": "ai-translated"
+    }
+  },
+  "profile.field.lastName": {
+    "source_text": "Last Name",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -12277,26 +12307,6 @@
       "en": "ai-translated"
     }
   },
-  "settings.enablePosMode": {
-    "source_text": "Show Merchant Cashier Mode (PoS Checkout) in Receive View",
-    "status": {
-      "de": "ai-translated",
-      "es": "ai-translated",
-      "fr": "ai-translated",
-      "it": "ai-translated",
-      "en": "ai-translated"
-    }
-  },
-  "settings.enablePosModeDesc": {
-    "source_text": "For shops, market stalls & sellers only: Adds real-time online double-spend verification before handing over goods.",
-    "status": {
-      "de": "ai-translated",
-      "es": "ai-translated",
-      "fr": "ai-translated",
-      "it": "ai-translated",
-      "en": "ai-translated"
-    }
-  },
   "settings.exclusiveServersDesc": {
     "source_text": "Leave unchecked by default (uses free public gateways). Enable only if you want to route requests exclusively through the gateways listed above.",
     "status": {
@@ -14022,36 +14032,6 @@
       "en": "ai-translated"
     }
   },
-  "transfer.checkout.posFallbackTitle": {
-    "source_text": "Online Verification Unavailable",
-    "status": {
-      "de": "ai-translated",
-      "es": "ai-translated",
-      "fr": "ai-translated",
-      "it": "ai-translated",
-      "en": "ai-translated"
-    }
-  },
-  "transfer.checkout.posNoServersDesc": {
-    "source_text": "No verification servers are currently configured. Live confirmation via server majority cannot be performed.",
-    "status": {
-      "de": "ai-translated",
-      "es": "ai-translated",
-      "fr": "ai-translated",
-      "it": "ai-translated",
-      "en": "ai-translated"
-    }
-  },
-  "transfer.checkout.posQuorumUnavailableDesc": {
-    "source_text": "Verification servers are currently unreachable. Live confirmation via server majority could not be confirmed.",
-    "status": {
-      "de": "ai-translated",
-      "es": "ai-translated",
-      "fr": "ai-translated",
-      "it": "ai-translated",
-      "en": "ai-translated"
-    }
-  },
   "transfer.checkout.replayDesc": {
     "source_text": "This payment was already processed. Do not dispense goods again!",
     "status": {
@@ -15320,16 +15300,6 @@
   },
   "transfer.planTitle": {
     "source_text": "Automatic Voucher Selection",
-    "status": {
-      "de": "ai-translated",
-      "es": "ai-translated",
-      "fr": "ai-translated",
-      "it": "ai-translated",
-      "en": "ai-translated"
-    }
-  },
-  "transfer.posModeToggle": {
-    "source_text": "PoS Cashier Mode (Point-of-Sale Checkout)",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",
@@ -18990,6 +18960,76 @@
   },
   "voucher.trustViaNetwork": {
     "source_text": "{{percent}}% · Trust network",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated",
+      "en": "ai-translated"
+    }
+  },
+  "voucher.txType.block": {
+    "source_text": "Blocked",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated",
+      "en": "ai-translated"
+    }
+  },
+  "voucher.txType.claim": {
+    "source_text": "Guarantor Claim",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated",
+      "en": "ai-translated"
+    }
+  },
+  "voucher.txType.init": {
+    "source_text": "Issued",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated",
+      "en": "ai-translated"
+    }
+  },
+  "voucher.txType.merge": {
+    "source_text": "Merged",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated",
+      "en": "ai-translated"
+    }
+  },
+  "voucher.txType.redeem": {
+    "source_text": "Redeemed",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated",
+      "en": "ai-translated"
+    }
+  },
+  "voucher.txType.split": {
+    "source_text": "Partial Transfer",
+    "status": {
+      "de": "ai-translated",
+      "es": "ai-translated",
+      "fr": "ai-translated",
+      "it": "ai-translated",
+      "en": "ai-translated"
+    }
+  },
+  "voucher.txType.transfer": {
+    "source_text": "Transfer",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",

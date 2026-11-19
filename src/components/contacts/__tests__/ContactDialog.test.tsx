@@ -343,4 +343,20 @@ describe('ContactDialog Component', () => {
       );
     });
   });
+
+  it('normalizes quoted and mixed-case DIDs without whitespace in ContactDialog input', () => {
+    render(
+      <ContactDialog
+        isOpen={true}
+        onClose={mockOnClose}
+        onSave={mockOnSave}
+      />
+    );
+
+    const didInput = screen.getByTestId('contact-did-input');
+    fireEvent.change(didInput, {
+      target: { value: '„ALICE:3K4@DID:KEY:z6MkuT52y5aBqB9R5e6v18c8P4h5M8Z7v“' },
+    });
+    expect(didInput).toHaveValue('alice:3K4@did:key:z6MkuT52y5aBqB9R5e6v18c8P4h5M8Z7v');
+  });
 });

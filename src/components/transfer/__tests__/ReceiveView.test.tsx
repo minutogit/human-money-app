@@ -44,7 +44,6 @@ vi.mock('react-i18next', () => ({
         'transfer.importFile.noPayload': 'No payload selected.',
         'transfer.importFile.unknownFormat': 'Unknown payload format.',
         'transfer.importFile.invalidFileType': 'Invalid file type dropped.',
-        'transfer.posModeToggle': 'PoS Cashier Mode (Point-of-Sale Checkout)',
         'transfer.checkout.fallbackCardTitle': 'L2 PoS Protection Unavailable',
         'transfer.checkout.fallbackNoServersDesc': 'No L2 servers configured.',
         'transfer.checkout.fallbackQuorumDesc': 'Quorum unavailable.',

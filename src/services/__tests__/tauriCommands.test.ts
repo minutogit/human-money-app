@@ -523,5 +523,30 @@ describe('Tauri Command Integrity', () => {
     }
     expect(violations).toEqual([]);
   });
+
+  it('should ensure no serialized model DTO embeds raw human_money_core TransactionFingerprint', () => {
+    const modelsDir = path.resolve(__dirname, '../../../src-tauri/src/models');
+    const rustFiles = fs.readdirSync(modelsDir).filter((f) => f.endsWith('.rs'));
+    const violations: string[] = [];
+
+    for (const file of rustFiles) {
+      const content = fs.readFileSync(path.join(modelsDir, file), 'utf-8');
+      const structRegex = /#\[derive\([^\]]*Serialize[^\]]*\)\][\s\S]*?\bstruct\s+([A-Za-z0-9_]+)\s*\{([\s\S]*?)\}/g;
+      let match: RegExpExecArray | null;
+      while ((match = structRegex.exec(content)) !== null) {
+        const structName = match[1];
+        const body = match[2]
+          .replace(/\/\*[\s\S]*?\*\//g, '')
+          .replace(/\/\/.*$/gm, '');
+        if (/human_money_core::(?:models::conflict::)?TransactionFingerprint\b/.test(body)) {
+          violations.push(
+            `Serialized DTO "${structName}" in models/${file} embeds raw human_money_core TransactionFingerprint. Use FrontendTransactionFingerprint instead.`
+          );
+        }
+      }
+    }
+
+    expect(violations).toEqual([]);
+  });
 });
 

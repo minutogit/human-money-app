@@ -15,6 +15,7 @@ import { notifySyncStatusUpdated } from '../../utils/syncEvents';
 import { APP_EVENTS } from '../../utils/appEvents';
 import { channelMembersSyncManager } from '../channelMembersSyncManager';
 import * as marketSync from '../marketSync';
+import * as networkStatus from '../../utils/networkStatus';
 
 vi.mock('../../services/backupService', () => ({
     backupService: {
@@ -205,5 +206,22 @@ describe('autoBackup utils', () => {
         marketSpy.mockRestore();
         window.removeEventListener(APP_EVENTS.CONTACTS_UPDATED, contactsSpy);
         window.removeEventListener(APP_EVENTS.WOT_UPDATED, wotSpy);
+    });
+
+    it('passes detectIsWifiConnection status to backupService.syncBackup', async () => {
+        const wifiSpy = vi.spyOn(networkStatus, 'detectIsWifiConnection').mockReturnValueOnce(false);
+        vi.mocked(backupService.syncBackup).mockResolvedValue({
+            uploadedTo: 0,
+            authorizedTargets: 0,
+            errors: [],
+            paddedBytes: 0,
+            skippedWifiOnly: true,
+        });
+
+        const res = await runSyncBackupPass(true);
+        expect(backupService.syncBackup).toHaveBeenCalledWith(undefined, false);
+        expect(res?.skippedWifiOnly).toBe(true);
+
+        wifiSpy.mockRestore();
     });
 });

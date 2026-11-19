@@ -164,9 +164,13 @@ export const backupService = {
         return await invoke<FrontendAutoBackupStatusDto>("run_auto_backup_sync");
     },
 
-    syncBackup: async (password?: string | null): Promise<FrontendBackupSyncResult> => {
+    syncBackup: async (
+        password?: string | null,
+        isWifi?: boolean,
+    ): Promise<FrontendBackupSyncResult> => {
         return await invoke<FrontendBackupSyncResult>("sync_backup", {
             password: password ?? null,
+            isWifi: typeof isWifi === 'boolean' ? isWifi : null,
         });
     },
 

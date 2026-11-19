@@ -583,7 +583,7 @@ pub fn receive_bundle_impl(
             let (conflict_summaries, unrelated_open_conflicts_count) =
                 filter_conflicts_for_received_vouchers(&service, &opened_vouchers)?;
             let markers = collect_received_voucher_markers(&opened_vouchers);
-            let verifiable_conflicts: HashMap<String, Vec<human_money_core::models::conflict::TransactionFingerprint>> =
+            let verifiable_conflicts: HashMap<String, Vec<crate::models::FrontendTransactionFingerprint>> =
                 result
                     .check_result
                     .verifiable_conflicts
@@ -594,6 +594,14 @@ pub fn receive_bundle_impl(
                                 markers.tx_ids.contains(&fp.t_id)
                                     || markers.trap_tags.contains(&fp.ds_tag)
                             })
+                    })
+                    .map(|(k, fps)| {
+                        (
+                            k,
+                            fps.into_iter()
+                                .map(crate::models::FrontendTransactionFingerprint::from)
+                                .collect(),
+                        )
                     })
                     .collect();
 

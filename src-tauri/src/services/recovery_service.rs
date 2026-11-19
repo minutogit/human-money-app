@@ -727,7 +727,7 @@ pub async fn confirm_emergency_sheet_saved_impl(
     }
 
     let backup_sync_result = match app {
-        Some(handle) => sync_backup_impl(Some(password), state, handle).await.ok(),
+        Some(handle) => sync_backup_impl(Some(password), None, state, handle).await.ok(),
         None => None,
     };
 
@@ -1266,7 +1266,7 @@ pub async fn setup_social_recovery_guardians_with_params(
     let post_sync_result =
         sync_post_channels_impl(app, None, None, Some(password.clone()), state).await?;
     let backup_sync_result = match app {
-        Some(handle) => sync_backup_impl(Some(password), state, handle).await.ok(),
+        Some(handle) => sync_backup_impl(Some(password), None, state, handle).await.ok(),
         None => None,
     };
 
@@ -1351,7 +1351,7 @@ pub async fn revoke_social_recovery_impl(
     let post_sync_result =
         sync_post_channels_impl(app, None, None, password.clone(), state).await?;
     let backup_sync_result = match app {
-        Some(handle) => sync_backup_impl(password, state, handle).await.ok(),
+        Some(handle) => sync_backup_impl(password, None, state, handle).await.ok(),
         None => None,
     };
 

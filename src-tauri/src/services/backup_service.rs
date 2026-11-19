@@ -1566,15 +1566,17 @@ fn target_can_use_delta(
 
 pub async fn sync_backup_impl(
     password: Option<String>,
+    is_wifi: Option<bool>,
     state: &AppState,
     app: &tauri::AppHandle,
 ) -> Result<FrontendBackupSyncResult, FrontendError> {
     let custom_standards = collect_custom_standards(app);
-    sync_backup_with_standards_impl(password, custom_standards, state).await
+    sync_backup_with_standards_impl(password, is_wifi, custom_standards, state).await
 }
 
 pub(crate) async fn sync_backup_with_standards_impl(
     password: Option<String>,
+    is_wifi: Option<bool>,
     custom_standards: HashMap<String, String>,
     state: &AppState,
 ) -> Result<FrontendBackupSyncResult, FrontendError> {
@@ -1588,6 +1590,20 @@ pub(crate) async fn sync_backup_with_standards_impl(
             timestamp: None,
             errors: Vec::new(),
             retry_after_secs: None,
+            skipped_wifi_only: false,
+        });
+    }
+
+    let ui_prefs = state.get_or_load_ui_preferences_locked(password.as_deref())?;
+    if ui_prefs.market_poll_wifi_only && is_wifi == Some(false) {
+        return Ok(FrontendBackupSyncResult {
+            uploaded_to: 0,
+            authorized_targets: 0,
+            padded_bytes: 0,
+            timestamp: None,
+            errors: Vec::new(),
+            retry_after_secs: None,
+            skipped_wifi_only: true,
         });
     }
 
@@ -1650,6 +1666,7 @@ pub(crate) async fn sync_backup_with_standards_impl(
             timestamp: None,
             errors: Vec::new(),
             retry_after_secs: None,
+            skipped_wifi_only: false,
         });
     }
 
@@ -1703,6 +1720,7 @@ pub(crate) async fn sync_backup_with_standards_impl(
             timestamp: None,
             errors: Vec::new(),
             retry_after_secs: None,
+            skipped_wifi_only: false,
         });
     }
 
@@ -2010,6 +2028,7 @@ pub(crate) async fn sync_backup_with_standards_impl(
         timestamp: timestamp_str,
         errors,
         retry_after_secs,
+        skipped_wifi_only: false,
     })
 }
 
@@ -3100,6 +3119,7 @@ mod tests {
         // 1. Small wallet (< 64 KiB compressed): repeated mutations overwrite Base, never create Delta
         let res1 = super::sync_backup_with_standards_impl(
             Some(password.to_string()),
+            None,
             HashMap::new(),
             &state,
         )
@@ -3117,6 +3137,7 @@ mod tests {
         }
         let res2 = super::sync_backup_with_standards_impl(
             Some(password.to_string()),
+            None,
             HashMap::new(),
             &state,
         )
@@ -3137,6 +3158,7 @@ mod tests {
         }
         let res3 = super::sync_backup_with_standards_impl(
             Some(password.to_string()),
+            None,
             HashMap::new(),
             &state,
         )
@@ -3155,6 +3177,7 @@ mod tests {
         }
         let res4 = super::sync_backup_with_standards_impl(
             Some(password.to_string()),
+            None,
             HashMap::new(),
             &state,
         )
@@ -3219,6 +3242,7 @@ mod tests {
 
         let res5 = super::sync_backup_with_standards_impl(
             Some(password.to_string()),
+            None,
             HashMap::new(),
             &state,
         )
@@ -3354,6 +3378,7 @@ mod tests {
         // 2. Upload backup, then probe with only plain write_url (tests fetch_sync_info + stealth resolution!)
         let sync_res = super::sync_backup_with_standards_impl(
             Some(password.to_string()),
+            None,
             HashMap::new(),
             &state,
         )
@@ -3486,6 +3511,57 @@ mod tests {
         assert_eq!(remaining_profiles.len(), 1);
         assert_eq!(remaining_profiles[0].profile_name, "Alice");
         assert_eq!(remaining_profiles[0].folder_name, outcome.folder_name);
+
+        let _ = fs::remove_dir_all(base_dir);
+    }
+
+    #[tokio::test]
+    async fn test_sync_backup_respects_wifi_only_skip() {
+        use crate::test_support::{
+            create_test_state, setup_test_app as setup_sync_test_app, ALICE_PHRASE,
+        };
+
+        let base_dir = temp_test_dir("sync_backup_wifi_only_skip");
+        let wallet_dir = base_dir.join("wallet");
+        let password = "TestPassword123!";
+        let service = setup_sync_test_app(&wallet_dir, "Alice", ALICE_PHRASE, password);
+        let state = create_test_state(service);
+
+        {
+            let mut s = state.service.lock().unwrap();
+            state
+                .mutate_security_policy(&mut s, Some(password), |policy| {
+                    policy.sync_backup_enabled = true;
+                })
+                .unwrap();
+            state
+                .mutate_ui_preferences(&mut s, Some(password), |prefs| {
+                    prefs.market_poll_wifi_only = true;
+                })
+                .unwrap();
+        }
+
+        let metered_res = super::sync_backup_with_standards_impl(
+            Some(password.to_string()),
+            Some(false),
+            HashMap::new(),
+            &state,
+        )
+        .await
+        .unwrap();
+        assert!(metered_res.skipped_wifi_only);
+        assert_eq!(metered_res.uploaded_to, 0);
+        assert!(metered_res.errors.is_empty());
+
+        let manual_res = super::sync_backup_with_standards_impl(
+            Some(password.to_string()),
+            None,
+            HashMap::new(),
+            &state,
+        )
+        .await
+        .unwrap();
+        assert!(!manual_res.skipped_wifi_only);
 
         let _ = fs::remove_dir_all(base_dir);
     }

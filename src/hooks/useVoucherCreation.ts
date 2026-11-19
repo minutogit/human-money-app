@@ -123,6 +123,7 @@ export function useVoucherCreation() {
     const [selectedAnchorId, setSelectedAnchorId] = useState<string | null>(null);
     const hasUserSelectedAnchorRef = useRef(false);
     const isMountedRef = useRef(true);
+    const standardParseSeqRef = useRef(0);
 
     const handleSelectAnchor = useCallback((anchorId: string | null) => {
         hasUserSelectedAnchorRef.current = true;
@@ -172,15 +173,17 @@ export function useVoucherCreation() {
     });
 
     const handleStandardChange = useCallback(async (newId: string) => {
+        const seq = ++standardParseSeqRef.current;
         setSelectedStandardId(newId);
         setErrors(prev => ({ ...prev, standard: false }));
-        
+
         const selectedStd = standards.find(s => s.id === newId);
         if (selectedStd) {
             try {
                 const parsed = await standardsService.parseStandard(selectedStd.content);
+                if (!isMountedRef.current || standardParseSeqRef.current !== seq) return;
                 setParsedStandard(parsed);
-                
+
                 if (parsed.mutable.appConfig.defaultValidityDuration) {
                     const duration = parsed.mutable.appConfig.defaultValidityDuration;
                     const match = duration.match(/P(\d+)([YMD])/);
@@ -190,6 +193,7 @@ export function useVoucherCreation() {
                     }
                 }
             } catch (e) {
+                if (!isMountedRef.current || standardParseSeqRef.current !== seq) return;
                 logger.error(`Failed to parse standard: ${stringifyError(e)}`);
                 setParsedStandard(null);
             }

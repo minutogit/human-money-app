@@ -183,8 +183,10 @@ describe('Dashboard Component', () => {
             expect(screen.getByText(/dashboard\.ownFrameAvailable.*700[.,]00/i)).toBeInTheDocument();
         });
 
-        // Local storage should remember choice
-        expect(localStorage.getItem('hmc_balance_view_mode')).toBe('net');
+        // Preference change should persist via UI preferences instead of localStorage
+        await waitFor(() => {
+            expect(settingsService.patchUiPreferences).toHaveBeenCalledWith({ balanceViewMode: 'net' });
+        });
     });
 
     it('hides net balance toggle and user ID pill in simple mode', async () => {

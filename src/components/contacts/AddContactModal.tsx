@@ -123,13 +123,15 @@ export const AddContactModal: React.FC<AddContactModalProps> = ({
         // 3. Import as signed card envelope (.hmcard, JSON, or card URI)
         setIsProcessing(true);
         try {
+            let actionPassword: string | null = null;
             const res = await protectAction(async (pwd) => {
+                actionPassword = pwd;
                 return await marketService.importContactCard(cardPayload, pwd || undefined);
             });
 
             if (res && res.status === 'accepted') {
                 await onContactAdded();
-                marketService.probeContactSyncs?.(false)
+                marketService.probeContactSyncs?.(false, actionPassword || undefined)
                     ?.then(() => notifySyncStatusUpdated())
                     ?.catch(() => {});
                 onSuccess(

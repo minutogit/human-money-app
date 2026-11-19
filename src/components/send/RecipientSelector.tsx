@@ -78,8 +78,8 @@ export function RecipientSelector({
 
     if (
       lower.includes('humoco://pay') ||
-      trimmed.startsWith('did:') ||
-      trimmed.includes('@did:') ||
+      lower.startsWith('did:') ||
+      lower.includes('@did:') ||
       Boolean(recipientId)
     ) {
       onRecipientChange(e);

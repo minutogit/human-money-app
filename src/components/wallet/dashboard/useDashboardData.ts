@@ -33,6 +33,7 @@ export function useDashboardData() {
         profileName,
         folderName,
         integrityReport,
+        hasCachedSession,
         protectAction,
     } = useSession();
 
@@ -146,7 +147,6 @@ export function useDashboardData() {
                 setAppConfig(userSettings);
                 const initialMode =
                     (userSettings?.uiPreferences.balanceViewMode as 'spendable' | 'net') ||
-                    (localStorage.getItem('hmc_balance_view_mode') as 'spendable' | 'net') ||
                     'spendable';
                 setBalanceViewMode(initialMode);
 
@@ -252,19 +252,17 @@ export function useDashboardData() {
     const handleViewModeChange = useCallback(
         async (mode: 'spendable' | 'net') => {
             setBalanceViewMode(mode);
+            if (!hasCachedSession) return;
             try {
-                localStorage.setItem('hmc_balance_view_mode', mode);
-                const updatedUi = await settingsService
-                    .patchUiPreferences({ balanceViewMode: mode })
-                    .catch(() => null);
+                const updatedUi = await settingsService.patchUiPreferences({ balanceViewMode: mode });
                 if (updatedUi && appConfig) {
                     setAppConfig({ ...appConfig, uiPreferences: updatedUi });
                 }
-            } catch {
-                // Ignore best-effort persistence errors
+            } catch (e) {
+                logger.warn(`Failed to persist balanceViewMode preference: ${stringifyError(e)}`);
             }
         },
-        [appConfig],
+        [appConfig, hasCachedSession],
     );
 
     const handleProtectedNavigate = useCallback(

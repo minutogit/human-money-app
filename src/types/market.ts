@@ -415,6 +415,7 @@ export interface FrontendPostSyncResult {
     newInquiryMessages: number;
     prunedBoxes: number;
     deferredOutboxBoxes?: number;
+    skippedWifiOnly?: boolean;
     errors: string[];
     retryAfterSecs?: number | null;
 }

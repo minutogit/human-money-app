@@ -71,13 +71,18 @@ export function sendReducer(state: SendState, action: SendAction): SendState {
             return { ...state, customSenderName: action.name };
         case 'SET_TARGET_AMOUNT':
             return { ...state, targetAmountStr: action.amount };
-        case 'SET_STANDARD':
+        case 'SET_STANDARD': {
+            const changed =
+                action.id !== state.selectedStandardId || action.isTest !== state.selectedIsTest;
             return {
                 ...state,
                 selectedStandardId: action.id,
                 selectedIsTest: action.isTest,
                 targetAmountStr: action.preserveAmount ? state.targetAmountStr : '',
+                privacyMode: changed ? null : state.privacyMode,
+                privacyError: false,
             };
+        }
         case 'SET_PRIVACY':
             return { ...state, privacyMode: action.mode, privacyError: false };
         case 'SET_PROCESSING':
