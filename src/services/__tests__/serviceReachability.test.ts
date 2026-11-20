@@ -1,9 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { COMMAND_ACCESS_POLICY } from "../commandPolicy";
 
-const APP_ROOT = path.resolve(__dirname, "../../..");
+const CURRENT_DIR = path.dirname(fileURLToPath(import.meta.url));
+const APP_ROOT = path.resolve(CURRENT_DIR, "../../..");
 const LIB_RS_PATH = path.join(APP_ROOT, "src-tauri/src/lib.rs");
 const SRC_ROOT = path.join(APP_ROOT, "src");
 

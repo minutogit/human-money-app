@@ -21,7 +21,7 @@ import { TechId } from '../components/ui/TechId';
 import { backupService } from '../services/backupService';
 import { contactService } from '../services/contactService';
 import { settingsService } from '../services/settingsService';
-import { AppConfigDto, FrontendMyMarketProfile, Contact } from '../types';
+import { AppConfigDto, FrontendMyMarketProfile, Contact, SecurityPolicy, UiPreferences } from '../types';
 
 const mockNavigate = vi.fn();
 const mockGoBack = vi.fn();
@@ -126,11 +126,11 @@ function createBeginnerConfig(backupSyncFolder: string | null = '/fake/backup/pa
 vi.mock('../services/settingsService', () => ({
     settingsService: {
         getConfig: vi.fn().mockImplementation(async () => createBeginnerConfig()),
-        patchUiPreferences: vi.fn().mockImplementation(async (patch: any) => ({
+        patchUiPreferences: vi.fn().mockImplementation(async (patch: Partial<UiPreferences>) => ({
             ...createBeginnerConfig().uiPreferences,
             ...patch,
         })),
-        patchSecurityPolicy: vi.fn().mockImplementation(async (patch: any) => ({
+        patchSecurityPolicy: vi.fn().mockImplementation(async (patch: Partial<SecurityPolicy>) => ({
             ...createBeginnerConfig().securityPolicy,
             ...patch,
         })),
@@ -193,7 +193,7 @@ describe('Beginner User Tasks (Integration Flows)', () => {
         // Step 2: Render BackupSettingsCard in the Security & Backup tab
         const mockConfig = createBeginnerConfig('/home/user/Backups');
 
-        (backupService.getBackupStatus as any).mockResolvedValue({
+        vi.mocked(backupService.getBackupStatus).mockResolvedValue({
             status: 'ok',
             lastBackupAt: null,
             backupDirty: true,
@@ -203,15 +203,14 @@ describe('Beginner User Tasks (Integration Flows)', () => {
             lastSyncBackupAt: null,
             hasAuthorizedSyncBackupTarget: true,
         });
-        (backupService.syncBackupFolder as any).mockResolvedValue({
-            status: 'ok',
-            lastBackupAt: new Date().toISOString(),
-            backupDirty: false,
-            syncFolder: '/home/user/Backups',
+        vi.mocked(backupService.syncBackupFolder).mockResolvedValue({
+            totalBlobs: 2,
             changedBlobs: 0,
-            syncBackupEnabled: true,
-            lastSyncBackupAt: new Date().toISOString(),
-            hasAuthorizedSyncBackupTarget: true,
+            deletedBlobs: 0,
+            uploadBytes: 0,
+            timestamp: new Date().toISOString(),
+            destinationPath: '/home/user/Backups',
+            customStandardCount: 0,
         });
 
         render(<BackupSettingsCard config={mockConfig} onConfigUpdated={vi.fn()} />);

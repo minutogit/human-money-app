@@ -5,7 +5,7 @@ import { UiModeProvider } from '../../../context/UiModeContext';
 import { FrontendMyMarketProfile } from '../../../types';
 
 vi.mock('../../../utils/geoUtils', async () => {
-  const actual = await vi.importActual<any>('../../../utils/geoUtils');
+  const actual = await vi.importActual<typeof import('../../../utils/geoUtils')>('../../../utils/geoUtils');
   return {
     ...actual,
     getCurrentLocation: vi.fn().mockResolvedValue('52.520008, 13.404954'),

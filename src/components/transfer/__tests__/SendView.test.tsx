@@ -1,3 +1,4 @@
+import { Buffer } from 'node:buffer';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
 import { SendView } from '../SendView';

@@ -83,8 +83,7 @@ describe('imageCompression utils', () => {
       }
     }
 
-    (globalThis as any).FileReader = MockFileReader;
-    (globalThis as any).Image = MockImage;
+    Object.assign(globalThis, { FileReader: MockFileReader, Image: MockImage });
 
     try {
       const file = new File(['mock'], 'test.png', { type: 'image/png' });
@@ -152,8 +151,7 @@ describe('imageCompression utils', () => {
       }
     }
 
-    (globalThis as any).FileReader = MockFileReader;
-    (globalThis as any).Image = MockImage;
+    Object.assign(globalThis, { FileReader: MockFileReader, Image: MockImage });
 
     try {
       const file = new File(['mock'], 'ad.png', { type: 'image/png' });
@@ -226,8 +224,7 @@ describe('imageCompression utils', () => {
       }
     }
 
-    (globalThis as any).FileReader = MockFileReader;
-    (globalThis as any).Image = MockImage;
+    Object.assign(globalThis, { FileReader: MockFileReader, Image: MockImage });
 
     try {
       const file = new File(['mock'], 'test.png', { type: 'image/png' });
@@ -292,8 +289,7 @@ describe('imageCompression utils', () => {
       }
     }
 
-    (globalThis as any).FileReader = MockFileReader;
-    (globalThis as any).Image = MockImage;
+    Object.assign(globalThis, { FileReader: MockFileReader, Image: MockImage });
 
     try {
       const file = new File(['mock'], 'ad.png', { type: 'image/png' });

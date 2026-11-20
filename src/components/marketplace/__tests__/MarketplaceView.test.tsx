@@ -252,7 +252,13 @@ describe('MarketplaceView Component', () => {
               syncBackupEnabled: true,
               backupSyncFolder: null,
               backupProtectionMode: null,
-              marketSelectedSyncs: [{ id: 'sync-1' } as any],
+              marketSelectedSyncs: [
+                {
+                  writeUrl: 'https://sync-1.example/sync.php',
+                  readUrl: 'https://sync-1.example/d',
+                  dropPub: '1'.repeat(64),
+                },
+              ],
               publicSyncs: [],
             },
             lifecycle: {

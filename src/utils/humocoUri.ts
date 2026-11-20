@@ -159,7 +159,7 @@ export function buildContactUri({ did, name, syncUrls }: ContactCardParams): str
 function stripSurroundingWrappers(value: string): string {
   return value
     .trim()
-    .replace(/^["'`„“”‚‘’«»‹›<(\[]+/, '')
+    .replace(/^["'`„“”‚‘’«»‹›<([]+/, '')
     .replace(/["'`„“”‚‘’«»‹›>)\],.;:!?]+$/, '')
     .trim();
 }
@@ -249,7 +249,7 @@ export function parseContactCard(input: string): ParsedContactCard | null {
   // Never strip an invalid prefix or whitespace-separated '@' prefix and fall back to the root DID.
   const trimmedNormalized = normalizedInput.trim();
   const embeddedDidMatch = trimmedNormalized.match(
-    /(?:^|[\s"'`„“”‚‘’«»‹›<(\[])((?:[^\s"'`„“”‚‘’«»‹›<(\[\]]+@)?did:key:[a-zA-Z0-9]+)/i
+    /(?:^|[\s"'`„“”‚‘’«»‹›<([])((?:[^\s"'`„“”‚‘’«»‹›<([\]]+@)?did:key:[a-zA-Z0-9]+)/i
   );
   if (embeddedDidMatch?.[1]) {
     const candidate = canonicalizeUserIdCandidate(embeddedDidMatch[1]);

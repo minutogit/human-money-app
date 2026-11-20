@@ -1,7 +1,7 @@
 import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
 import { BoardTab } from '../BoardTab';
-import { FrontendBoardItem } from '../../../types';
+import { FrontendBoardItem, FrontendMarketPerson } from '../../../types';
 
 describe('BoardTab Component', () => {
   const nowSecs = Math.floor(Date.now() / 1000);
@@ -114,14 +114,34 @@ describe('BoardTab Component', () => {
   });
 
   it('filters ads by distance and always includes remote ads', () => {
-    const mockPeople: any[] = [
+    const mockPeople: FrontendMarketPerson[] = [
       {
         did: 'did:key:z6MkuAlice',
-        profile: { coordinates: '52.52, 13.40' }, // Berlin
+        profile: { id: 'did:key:z6MkuAlice', coordinates: '52.52, 13.40' }, // Berlin
+        skills: [],
+        activeAds: [],
+        adsPending: 0,
+        allowInquiries: true,
+        sources: [],
+        asOf: nowSecs,
+        standards: [],
+        trust: 'trusted',
+        canForward: false,
+        cardSyncs: [],
       },
       {
         did: 'did:key:z6MkuBob',
-        profile: { coordinates: '48.14, 11.58' }, // Munich (~500 km)
+        profile: { id: 'did:key:z6MkuBob', coordinates: '48.14, 11.58' }, // Munich (~500 km)
+        skills: [],
+        activeAds: [],
+        adsPending: 0,
+        allowInquiries: true,
+        sources: [],
+        asOf: nowSecs,
+        standards: [],
+        trust: 'trusted',
+        canForward: false,
+        cardSyncs: [],
       },
     ];
 

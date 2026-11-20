@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, it, expect } from 'vitest';
 import deJson from '../de.json';
 import enJson from '../en.json';
@@ -107,7 +108,8 @@ describe('i18n Key & Placeholder Integrity', () => {
     });
 
     it('F2: translates every backend GUARANTOR_ANCHOR_ISSUE_CODES constant in all 5 locales', () => {
-        const vouchersRsPath = path.resolve(__dirname, '../../../src-tauri/src/commands/vouchers.rs');
+        const CURRENT_DIR = path.dirname(fileURLToPath(import.meta.url));
+        const vouchersRsPath = path.resolve(CURRENT_DIR, '../../../src-tauri/src/commands/vouchers.rs');
         const rustSrc = fs.readFileSync(vouchersRsPath, 'utf-8');
 
         const constValues = new Map<string, string>();

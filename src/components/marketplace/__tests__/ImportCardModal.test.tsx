@@ -20,7 +20,7 @@ vi.mock('../../../services/contactService', () => ({
   },
 }));
 
-const mockProtectAction = vi.fn(async (cb: (pw?: string) => Promise<any>) => cb('mock-password'));
+const mockProtectAction = vi.fn(async <T,>(cb: (pw?: string) => Promise<T>) => cb('mock-password'));
 
 vi.mock('../../../context/SessionContext', () => ({
   useSession: () => ({

@@ -28,7 +28,7 @@ vi.mock('../../../context/NavigationContext', () => ({
 
 vi.mock('../../../context/SessionContext', () => ({
   useSession: () => ({
-    protectAction: vi.fn(async (cb: (pw?: string) => Promise<any>) => cb('mock-password')),
+    protectAction: vi.fn(async <T,>(cb: (pw?: string) => Promise<T>) => cb('mock-password')),
   }),
   useOptionalSession: () => null,
 }));
