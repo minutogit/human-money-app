@@ -290,8 +290,14 @@ export interface FrontendDiscoveredSync {
     status?: SyncEndpointStatus | string;
 }
 
+export type MarketSyncStatus =
+    | 'completed'
+    | 'skippedWifiOnly'
+    | 'skippedCooldown'
+    | 'sessionSuperseded';
+
 export interface FrontendMarketSyncResult {
-    skippedWifiOnly: boolean;
+    status: MarketSyncStatus;
     uploadedTo: number;
     polledSyncs: number;
     decryptedSlots: number;

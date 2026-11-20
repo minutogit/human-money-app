@@ -159,6 +159,22 @@ pub fn register_guarantor_anchor_role(
     password: Option<String>,
     state: tauri::State<AppState>,
 ) -> Result<String, FrontendError> {
+    register_guarantor_anchor_role_impl(
+        anchor_id_hex,
+        guarantor_index,
+        context_nonce_hex,
+        password,
+        &state,
+    )
+}
+
+pub(crate) fn register_guarantor_anchor_role_impl(
+    anchor_id_hex: String,
+    guarantor_index: u8,
+    context_nonce_hex: Option<String>,
+    password: Option<String>,
+    state: &AppState,
+) -> Result<String, FrontendError> {
     let mut service = state.authorize_and_lock(RequiredAccess::Full, password.as_deref())?;
 
     let trimmed_anchor = anchor_id_hex.trim().to_ascii_lowercase();
@@ -183,7 +199,7 @@ pub fn register_guarantor_anchor_role(
     };
 
     let pub_hex = service
-        .with_wallet_and_identity(|_, id| {
+        .with_authorized_identity(human_money_core::AccessMode::Full, password.as_deref(), |_, id| {
             let sk = l2_rotation::derive_guarantor_mig_signing_key(id, &nonce_bytes)?;
             Ok::<_, human_money_core::Error>(hex::encode(sk.verifying_key().to_bytes()))
         })
@@ -212,6 +228,26 @@ pub fn create_key_successor_attestation_cmd(
     new_creator_mig_pub_hex: Option<String>,
     password: Option<String>,
     state: tauri::State<AppState>,
+) -> Result<String, FrontendError> {
+    create_key_successor_attestation_impl(
+        new_mnemonic,
+        language,
+        passphrase,
+        reason,
+        new_creator_mig_pub_hex,
+        password,
+        &state,
+    )
+}
+
+pub(crate) fn create_key_successor_attestation_impl(
+    new_mnemonic: String,
+    language: Option<MnemonicLanguage>,
+    passphrase: Option<String>,
+    reason: String,
+    new_creator_mig_pub_hex: Option<String>,
+    password: Option<String>,
+    state: &AppState,
 ) -> Result<String, FrontendError> {
     let rot_reason = match reason.trim().to_ascii_lowercase().as_str() {
         "compromise" => KeyRotationReason::Compromise,
@@ -244,7 +280,7 @@ pub fn create_key_successor_attestation_cmd(
     let mut service = state.authorize_and_lock(RequiredAccess::Full, password.as_deref())?;
 
     let att = service
-        .with_wallet_and_identity(|w, id| {
+        .with_authorized_identity(human_money_core::AccessMode::Full, password.as_deref(), |w, id| {
             let old_can_did = crate::state::canonicalize_did(w.get_user_id())
                 .map_err(|e| lifecycle_err(format!("Invalid wallet user_id: {}", e)))?;
             let old_signer = DidWotSigner {
@@ -384,12 +420,16 @@ pub(crate) async fn create_guarantor_claim_bundle_impl(
                     .map(Into::into)
                     .collect(),
             ),
-            bundle_data: res.bundle_bytes.clone(),
+            bundle_data: Vec::new(),
             bundle_id: res.bundle_id.clone(),
             notes,
             sender_profile_name: None,
         };
-        let _ = state.append_to_history(&mut service, record, password.as_deref());
+        let _ = state.record_outgoing_transactions_with_batch(
+            &mut service,
+            vec![(record, res.bundle_bytes.clone())],
+            password.as_deref(),
+        );
         let _ = state.refresh_events_cache(&mut service, password.as_deref());
 
         let intents = intent_opt.into_iter().collect::<Vec<_>>();
@@ -446,6 +486,24 @@ pub fn create_dead_quorum_swap_offer_cmd(
     password: Option<String>,
     state: tauri::State<AppState>,
 ) -> Result<String, FrontendError> {
+    create_dead_quorum_swap_offer_impl(
+        dead_anchor_id_hex,
+        replacement_anchor_id_hex,
+        claim_window_secs,
+        pow_bits,
+        password,
+        &state,
+    )
+}
+
+pub(crate) fn create_dead_quorum_swap_offer_impl(
+    dead_anchor_id_hex: String,
+    replacement_anchor_id_hex: String,
+    claim_window_secs: Option<u64>,
+    pow_bits: Option<u32>,
+    password: Option<String>,
+    state: &AppState,
+) -> Result<String, FrontendError> {
     let dead_id = decode_hex_fixed::<32>(dead_anchor_id_hex.trim()).map_err(lifecycle_err)?;
     let repl_id =
         decode_hex_fixed::<32>(replacement_anchor_id_hex.trim()).map_err(lifecycle_err)?;
@@ -458,7 +516,7 @@ pub fn create_dead_quorum_swap_offer_cmd(
     let service = state.authorize_and_lock(RequiredAccess::Full, password.as_deref())?;
 
     let offer = service
-        .with_wallet_and_identity(|_, id| {
+        .with_authorized_identity(human_money_core::AccessMode::Full, password.as_deref(), |_, id| {
             DeadQuorumSwapOffer::create_and_sign(id, dead_id, repl_id, now_secs, window, bits)
         })
         .map_err(FrontendError::from)?
@@ -632,6 +690,7 @@ pub(crate) async fn adjudicate_dead_quorum_swap_impl(
             let _ = service.import_proof(proof.clone(), password.as_deref());
         }
 
+        let mut outgoing_records = Vec::new();
         for approved in &adj.approved {
             if let (Some(ref bundle_id), Some(ref bundle_bytes)) = (
                 &approved.replacement_bundle_id,
@@ -662,15 +721,19 @@ pub(crate) async fn adjudicate_dead_quorum_swap_impl(
                     countable_items: std::collections::HashMap::new(),
                     involved_vouchers: approved.replacement_voucher_id.iter().cloned().collect(),
                     involved_sources_details: None,
-                    bundle_data: bundle_bytes.clone(),
+                    bundle_data: Vec::new(),
                     bundle_id: bundle_id.clone(),
                     notes: Some(format!("swap:{}", approved.voucher_id)),
                     sender_profile_name: None,
                 };
-                // `append_to_history` deduplicates by `(bundle_id, direction)`.
-                let _ = state.append_to_history(&mut service, record, password.as_deref());
+                outgoing_records.push((record, bundle_bytes.clone()));
             }
         }
+        let _ = state.record_outgoing_transactions_with_batch(
+            &mut service,
+            outgoing_records,
+            password.as_deref(),
+        );
         let _ = state.refresh_events_cache(&mut service, password.as_deref());
 
         let offer_digest_hex = hex::encode(offer.digest());
@@ -862,5 +925,57 @@ mod tests {
         assert_eq!(daily_swap_err.code, "error.auth.insufficientAccessMode");
 
         let _ = (MnemonicLanguage::English, std::fs::remove_dir_all(&base_dir));
+    }
+
+    #[test]
+    fn test_h2_ram_signing_commands_fail_closed_when_session_locked() {
+        let base_dir = std::env::temp_dir().join(format!("l2_h2_test_{}", uuid::Uuid::new_v4()));
+        let pw = "StrongTestPassword123!";
+        let mut bob_service = crate::test_support::setup_test_app(
+            &base_dir.join("bob"),
+            "Bob",
+            crate::test_support::BOB_PHRASE,
+            pw,
+        );
+        bob_service.lock_session();
+        let bob_state = crate::test_support::create_test_state(bob_service);
+
+        let anchor_a = "11".repeat(32);
+        let anchor_b = "22".repeat(32);
+
+        let reg_err =
+            register_guarantor_anchor_role_impl(anchor_a.clone(), 0, None, None, &bob_state)
+                .unwrap_err();
+        assert_eq!(reg_err.code, "error.auth.sessionNotActive");
+
+        let att_err = create_key_successor_attestation_impl(
+            crate::test_support::ALICE_PHRASE.to_string(),
+            Some(crate::models::wallet::MnemonicLanguage::English),
+            None,
+            "routine".to_string(),
+            None,
+            None,
+            &bob_state,
+        )
+        .unwrap_err();
+        assert_eq!(att_err.code, "error.auth.sessionNotActive");
+
+        let offer_err = create_dead_quorum_swap_offer_impl(
+            anchor_a.clone(),
+            anchor_b.clone(),
+            None,
+            Some(4),
+            None,
+            &bob_state,
+        )
+        .unwrap_err();
+        assert_eq!(offer_err.code, "error.auth.sessionNotActive");
+
+        // Explicit valid master password authorizes while session stays locked.
+        let offer_ok =
+            create_dead_quorum_swap_offer_impl(anchor_a, anchor_b, None, Some(4), Some(pw.into()), &bob_state);
+        assert!(offer_ok.is_ok(), "unexpected error: {:?}", offer_ok);
+
+        let _ = std::fs::remove_dir_all(&base_dir);
     }
 }

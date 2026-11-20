@@ -868,12 +868,21 @@ pub struct GuardianRevoke {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GuardianVaultStore {
     pub wards: BTreeMap<String, GuardianVaultEntry>,
+    /// Monotonic high-water mark of seen `rotation_epoch` per canonical owner DID.
+    #[serde(default)]
+    pub highest_epoch_by_owner: BTreeMap<String, u32>,
+    /// Highest revoked `rotation_epoch` per canonical owner DID to block assign replays after revoke
+    /// or out-of-order assigns arriving after an earlier revoke.
+    #[serde(default)]
+    pub revoked_epoch_by_owner: BTreeMap<String, u32>,
 }
 
 impl GuardianVaultStore {
     pub fn new() -> Self {
         Self {
             wards: BTreeMap::new(),
+            highest_epoch_by_owner: BTreeMap::new(),
+            revoked_epoch_by_owner: BTreeMap::new(),
         }
     }
 
@@ -899,13 +908,32 @@ impl GuardianVaultStore {
     ///
     /// Invariants:
     /// - `verify_guardian_vault_entry(&entry)` must pass.
+    /// - Monotonic epoch watermarks: rejects any epoch `<= revoked_epoch_by_owner` or `< highest_epoch_by_owner`.
     /// - Max `MAX_GUARDIAN_WARDS` (64) entries total.
     /// - 1 entry per `owner_did`.
-    /// - If existing entry exists, `entry.rotation_epoch >= old.rotation_epoch`.
+    /// - If existing entry exists, `entry.rotation_epoch >= old.rotation_epoch` (preserving idempotent active re-upsert).
     pub fn upsert_ward(&mut self, entry: GuardianVaultEntry) -> Result<(), MarketError> {
         verify_guardian_vault_entry(&entry)?;
+        let key = Self::canonical_owner_key(&entry.owner_did);
 
-        if let Some(existing) = self.wards.get(&entry.owner_did) {
+        if let Some(&rev_epoch) = self.revoked_epoch_by_owner.get(&key) {
+            if entry.rotation_epoch <= rev_epoch {
+                return Err(MarketError::Validation(format!(
+                    "Rejected revoked or stale rotation epoch {} <= revoked {}",
+                    entry.rotation_epoch, rev_epoch
+                )));
+            }
+        }
+        if let Some(&hi_epoch) = self.highest_epoch_by_owner.get(&key) {
+            if entry.rotation_epoch < hi_epoch {
+                return Err(MarketError::Validation(format!(
+                    "Stale rotation epoch {} < highest seen {}",
+                    entry.rotation_epoch, hi_epoch
+                )));
+            }
+        }
+
+        if let Some(existing) = self.wards.get(&key) {
             if entry.rotation_epoch < existing.rotation_epoch {
                 return Err(MarketError::Validation(format!(
                     "Stale rotation epoch {} < existing {}",
@@ -919,13 +947,34 @@ impl GuardianVaultStore {
             )));
         }
 
-        self.wards.insert(entry.owner_did.clone(), entry);
+        let epoch = entry.rotation_epoch;
+        self.wards.insert(key.clone(), entry);
+        let hi = self.highest_epoch_by_owner.entry(key).or_insert(0);
+        *hi = (*hi).max(epoch);
         Ok(())
     }
 
-    /// Updates the backup sync descriptors for an existing ward if `update.rotation_epoch >= entry.rotation_epoch`.
+    /// Updates the backup sync descriptors for an existing ward if `update.rotation_epoch` is monotonic
+    /// and not revoked.
     pub fn update_locator(&mut self, update: &GuardianLocatorUpdate) -> Result<bool, MarketError> {
         let key = Self::canonical_owner_key(&update.owner_did);
+        if let Some(&rev_epoch) = self.revoked_epoch_by_owner.get(&key) {
+            if update.rotation_epoch <= rev_epoch {
+                return Err(MarketError::Validation(format!(
+                    "Rejected locator update for revoked epoch {} <= revoked {}",
+                    update.rotation_epoch, rev_epoch
+                )));
+            }
+        }
+        if let Some(&hi_epoch) = self.highest_epoch_by_owner.get(&key) {
+            if update.rotation_epoch < hi_epoch {
+                return Err(MarketError::Validation(format!(
+                    "Stale locator update epoch {} < highest seen {}",
+                    update.rotation_epoch, hi_epoch
+                )));
+            }
+        }
+
         if let Some(entry) = self.wards.get_mut(&key) {
             if update.rotation_epoch < entry.rotation_epoch {
                 return Err(MarketError::Validation(format!(
@@ -935,15 +984,26 @@ impl GuardianVaultStore {
             }
             entry.backup_sync_descriptors = update.backup_sync_descriptors.clone();
             entry.updated_at = update.updated_at;
+            let hi = self.highest_epoch_by_owner.entry(key).or_insert(0);
+            *hi = (*hi).max(update.rotation_epoch);
             Ok(true)
         } else {
             Ok(false)
         }
     }
 
-    /// Removes a ward from the guardian vault if `revoke.rotation_epoch >= entry.rotation_epoch`.
+    /// Removes a ward from the guardian vault and records monotonic high-water & revoke marks so
+    /// replayed or out-of-order assigns at `<= revoke.rotation_epoch` are permanently rejected.
     pub fn revoke_ward(&mut self, revoke: &GuardianRevoke) -> Result<bool, MarketError> {
         let key = Self::canonical_owner_key(&revoke.owner_did);
+        if let Some(&hi_epoch) = self.highest_epoch_by_owner.get(&key) {
+            if revoke.rotation_epoch < hi_epoch {
+                return Err(MarketError::Validation(format!(
+                    "Stale revoke epoch {} < highest seen {}",
+                    revoke.rotation_epoch, hi_epoch
+                )));
+            }
+        }
         if let Some(entry) = self.wards.get(&key) {
             if revoke.rotation_epoch < entry.rotation_epoch {
                 return Err(MarketError::Validation(format!(
@@ -951,11 +1011,20 @@ impl GuardianVaultStore {
                     revoke.rotation_epoch, entry.rotation_epoch
                 )));
             }
-            self.wards.remove(&key);
-            Ok(true)
-        } else {
-            Ok(false)
         }
+
+        let removed = self.wards.remove(&key).is_some();
+        let prev_hi = self.highest_epoch_by_owner.get(&key).copied();
+        let next_hi = prev_hi.map_or(revoke.rotation_epoch, |v| v.max(revoke.rotation_epoch));
+        let hi_changed = prev_hi != Some(next_hi);
+        self.highest_epoch_by_owner.insert(key.clone(), next_hi);
+
+        let prev_rev = self.revoked_epoch_by_owner.get(&key).copied();
+        let next_rev = prev_rev.map_or(revoke.rotation_epoch, |v| v.max(revoke.rotation_epoch));
+        let rev_changed = prev_rev != Some(next_rev);
+        self.revoked_epoch_by_owner.insert(key, next_rev);
+
+        Ok(removed || hi_changed || rev_changed)
     }
 }
 

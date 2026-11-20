@@ -1,12 +1,14 @@
 import { invoke } from "@tauri-apps/api/core";
-import { afterWalletMutation } from "../sync/autoBackup";
-import { TransactionRecord, AssetClassSummary, ReceiveSuccessPayload, WalletEvent, SourceTransfer, IntentDispatchObservation, PurchaseCompletion } from "../types";
+import { afterWalletMutation } from "../sync/syncBridge";
+import { TransactionRecord, AssetClassSummary, ReceiveCommitMode, ReceiveSuccessPayload, WalletEvent, SourceTransfer, IntentDispatchObservation } from "../types";
 
 interface ReceiveBundleArgs {
     bundleData: number[];
     standardDefinitionsToml: Record<string, string>;
     password?: string;
     forceAcceptToleranceBundle: boolean;
+    commitMode?: ReceiveCommitMode;
+    purchaseId?: string;
 }
 
 export interface CreateBundleArgs {
@@ -92,12 +94,6 @@ export const transferService = {
         return result;
     },
 
-    saveTransactionRecord: async (record: TransactionRecord, password?: string) => {
-        const result = await invoke<void>("save_transaction_record", { record, password });
-        afterWalletMutation(password);
-        return result;
-    },
-
     getActiveAssetClasses: async () => {
         return await invoke<AssetClassSummary[]>("get_active_asset_classes");
     },
@@ -107,29 +103,17 @@ export const transferService = {
             bundleData: args.bundleData,
             standardDefinitionsToml: args.standardDefinitionsToml,
             password: args.password,
-            forceAcceptToleranceBundle: args.forceAcceptToleranceBundle
+            forceAcceptToleranceBundle: args.forceAcceptToleranceBundle,
+            commitMode: args.commitMode ?? "onlineVerify",
+            purchaseId: args.purchaseId ?? null,
         });
-        afterWalletMutation(args.password);
+        if (result?.newlyCommitted !== false) {
+            afterWalletMutation(args.password);
+        }
         return result;
     },
 
     getEventHistory: async (offset: number, limit: number) => {
         return await invoke<WalletEvent[]>("get_event_history", { offset, limit });
-    },
-
-    checkoutReceivedBundle: async (args: {
-        purchaseId: string;
-        bundleData: number[];
-        standardDefinitionsToml: Record<string, string>;
-        password?: string | null;
-    }) => {
-        const result = await invoke<PurchaseCompletion>("checkout_received_bundle", {
-            purchaseId: args.purchaseId,
-            bundleData: args.bundleData,
-            standardDefinitionsToml: args.standardDefinitionsToml,
-            password: args.password ?? null,
-        });
-        afterWalletMutation(args.password);
-        return result;
     },
 };

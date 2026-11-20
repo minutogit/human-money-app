@@ -215,11 +215,12 @@ amount_decimal_places = 4`,
     const selectButton = screen.getByRole('button', { name: /Select File/i });
     selectButton.click();
 
-    // 4. Verify invoke call happens automatically
+    // 4. Verify invoke call happens automatically with onlineVerify default
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith('receive_bundle', expect.objectContaining({
         forceAcceptToleranceBundle: false,
-        bundleData: [1, 2, 3]
+        bundleData: [1, 2, 3],
+        commitMode: 'onlineVerify',
       }));
     });
   });

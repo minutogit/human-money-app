@@ -86,6 +86,38 @@ pub fn accept_envelope(
     )
 }
 
+/// Records an explicit user deletion of `card_key` at `version` so concurrent sync
+/// polls cannot resurrect a card with `payload.v <= version`.
+pub fn mark_card_deleted(store: &mut CardStore, card_key: &str, version: u64) {
+    store
+        .deleted_card_versions
+        .entry(card_key.to_string())
+        .and_modify(|prev| *prev = (*prev).max(version))
+        .or_insert(version);
+}
+
+/// Accepts an envelope from an explicit manual user import (e.g., QR/URI/file),
+/// overriding any prior local deletion tombstone for the same version.
+pub fn accept_envelope_manual(
+    store: &mut CardStore,
+    env: &CardEnvelope,
+    now: u64,
+    max_stored_cards: usize,
+    own_coords: Option<(f64, f64)>,
+    is_offender: &dyn Fn(&str) -> bool,
+) -> AcceptOutcome {
+    accept_envelope_inner(
+        store,
+        env,
+        None,
+        now,
+        max_stored_cards,
+        own_coords,
+        is_offender,
+        false,
+    )
+}
+
 pub fn accept_envelope_with_writer(
     store: &mut CardStore,
     env: &CardEnvelope,
@@ -94,6 +126,29 @@ pub fn accept_envelope_with_writer(
     max_stored_cards: usize,
     own_coords: Option<(f64, f64)>,
     is_offender: &dyn Fn(&str) -> bool,
+) -> AcceptOutcome {
+    accept_envelope_inner(
+        store,
+        env,
+        slot_writer_did,
+        now,
+        max_stored_cards,
+        own_coords,
+        is_offender,
+        true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn accept_envelope_inner(
+    store: &mut CardStore,
+    env: &CardEnvelope,
+    slot_writer_did: Option<&str>,
+    now: u64,
+    max_stored_cards: usize,
+    own_coords: Option<(f64, f64)>,
+    is_offender: &dyn Fn(&str) -> bool,
+    respect_deletion_tombstones: bool,
 ) -> AcceptOutcome {
     if env.hops == 0 {
         return AcceptOutcome::RejectedHops;
@@ -123,6 +178,16 @@ pub fn accept_envelope_with_writer(
         return AcceptOutcome::RejectedOffender;
     }
 
+    let card_key = card.payload.recipient_id().to_string();
+    if respect_deletion_tombstones
+        && store
+            .deleted_card_versions
+            .get(&card_key)
+            .is_some_and(|&del_v| card.payload.v <= del_v)
+    {
+        return AcceptOutcome::IgnoredStale;
+    }
+
     // Receiver rule (honest app): strip disclosures beyond effective_hops
     strip_disclosures_beyond_distance(&mut card, effective_hops);
 
@@ -130,7 +195,6 @@ pub fn accept_envelope_with_writer(
     store.cards.retain(|_, c| c.card.payload.valid_until > now);
 
     let pk_bytes = *pk.as_bytes();
-    let card_key = card.payload.recipient_id().to_string();
     let existing = store.cards.get_mut(&card_key);
 
     let replaced = match existing {
@@ -146,6 +210,7 @@ pub fn accept_envelope_with_writer(
                     received_at: now,
                 },
             );
+            store.deleted_card_versions.remove(&card_key);
             false
         }
         Some(ext) => {
@@ -159,12 +224,14 @@ pub fn accept_envelope_with_writer(
                     hops: effective_hops,
                     received_at: now,
                 };
+                store.deleted_card_versions.remove(&card_key);
                 true
             } else if card.payload.v == ext.card.payload.v && card.jws == ext.card.jws {
                 merge(&mut ext.card, card.clone());
                 ext.hops = ext.hops.min(effective_hops);
                 ext.card_wire = crate::sd_card::render_wire(&ext.card, ext.hops, WireFilter::Full)
                     .unwrap_or_else(|| ext.card_wire.clone());
+                store.deleted_card_versions.remove(&card_key);
                 false
             } else {
                 // Either card.payload.v < ext.card.payload.v or

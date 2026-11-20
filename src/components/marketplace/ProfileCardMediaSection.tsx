@@ -58,11 +58,13 @@ export const ProfileCardMediaSection: React.FC<ProfileCardMediaSectionProps> = (
                     <Input
                         placeholder={t('profile.firstName', 'Vorname')}
                         value={profile.firstName || ''}
+                        maxLength={80}
                         onChange={(e) => onProfileChange({ ...profile, firstName: e.target.value })}
                     />
                     <Input
                         placeholder={t('profile.lastName', 'Nachname')}
                         value={profile.lastName || ''}
+                        maxLength={80}
                         onChange={(e) => onProfileChange({ ...profile, lastName: e.target.value })}
                     />
                 </div>
@@ -78,6 +80,7 @@ export const ProfileCardMediaSection: React.FC<ProfileCardMediaSectionProps> = (
                 <Input
                     placeholder={t('profile.organizationPlaceholder', 'z. B. Naturwerkstatt')}
                     value={profile.organization || ''}
+                    maxLength={100}
                     onChange={(e) => onProfileChange({ ...profile, organization: e.target.value })}
                 />
             </div>
@@ -92,6 +95,7 @@ export const ProfileCardMediaSection: React.FC<ProfileCardMediaSectionProps> = (
                 <Input
                     placeholder={t('profile.communityPlaceholder', 'z. B. Tauschring Alztal')}
                     value={profile.community || ''}
+                    maxLength={100}
                     onChange={(e) => onProfileChange({ ...profile, community: e.target.value })}
                 />
             </div>
@@ -164,6 +168,7 @@ export const ProfileCardMediaSection: React.FC<ProfileCardMediaSectionProps> = (
                 <Input
                     placeholder={t('profile.genderPlaceholder', 'z. B. weiblich / männlich')}
                     value={profile.gender || ''}
+                    maxLength={20}
                     onChange={(e) => onProfileChange({ ...profile, gender: e.target.value })}
                 />
             </div>

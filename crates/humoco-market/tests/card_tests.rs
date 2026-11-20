@@ -3,12 +3,12 @@ use std::collections::BTreeSet;
 use ed25519_dalek::SigningKey;
 use human_money_core::crypto::create_user_id;
 use humoco_market::{
-    accept_envelope, derive_effective_hops, encode_qr_svg, haversine_km, mark_sent, merge,
-    new_ad_id, next_card_version, parse_coordinates_pair, render_wire, should_attach_card,
-    sign_sd_card, verify_sd_card, AcceptOutcome, Ad, AdKind, CardEnvelope, CardItem,
-    CardPayloadInput, CardStore, DropDescriptor, Skill, WireFilter, CARD_SD_PADDED_LEN,
-    MAX_BUNDLE_CARD_WIRE_BYTES, MAX_PRICING_CHARS, MAX_QR_SHARE_BYTES, MAX_SKILL_TEXT_CHARS,
-    MAX_SKILL_TITLE_CHARS,
+    accept_envelope, accept_envelope_manual, derive_effective_hops, encode_qr_svg, haversine_km,
+    mark_card_deleted, mark_sent, merge, new_ad_id, next_card_version, parse_coordinates_pair,
+    render_wire, should_attach_card, sign_sd_card, verify_sd_card, AcceptOutcome, Ad, AdKind,
+    CardEnvelope, CardItem, CardPayloadInput, CardStore, DropDescriptor, Skill, WireFilter,
+    CARD_SD_PADDED_LEN, MAX_BUNDLE_CARD_WIRE_BYTES, MAX_PRICING_CHARS, MAX_QR_SHARE_BYTES,
+    MAX_SKILL_TEXT_CHARS, MAX_SKILL_TITLE_CHARS,
 };
 use proptest::prelude::*;
 
@@ -1246,4 +1246,62 @@ fn test_per_pubkey_card_cap_expiry_and_tombstone_first_eviction() {
     assert!(store.cards.contains_key(&d3));
     assert!(store.cards.contains_key(&d4_new));
     assert!(store.cards.contains_key(&d5_active));
+}
+
+#[test]
+fn test_card_deletion_tombstone_prevents_sync_resurrection_but_allows_newer_or_manual() {
+    let sk = make_key(77);
+    let mut store = CardStore::default();
+    let now = 1_750_000_000u64;
+
+    let mut input_v2 = valid_payload_input(&sk);
+    input_v2.v = 2;
+    let card_v2 = sign_sd_card(input_v2, sample_items(), &sk).unwrap();
+    let key = card_v2.payload.recipient_id().to_string();
+    let env_v2 = CardEnvelope {
+        card_wire: render_wire(&card_v2, 1, WireFilter::Full).unwrap(),
+        hops: 1,
+    };
+
+    assert!(matches!(
+        accept_envelope(&mut store, &env_v2, now, 100, None, &|_| false),
+        AcceptOutcome::Accepted { .. }
+    ));
+
+    // Delete v2
+    store.cards.remove(&key);
+    mark_card_deleted(&mut store, &key, 2);
+
+    // Sync poll trying to re-apply v2 must be ignored
+    assert_eq!(
+        accept_envelope(&mut store, &env_v2, now + 5, 100, None, &|_| false),
+        AcceptOutcome::IgnoredStale
+    );
+    assert!(!store.cards.contains_key(&key));
+
+    // Explicit manual QR import overrides tombstone for v2
+    assert!(matches!(
+        accept_envelope_manual(&mut store, &env_v2, now + 6, 100, None, &|_| false),
+        AcceptOutcome::Accepted { .. }
+    ));
+    assert!(store.cards.contains_key(&key));
+    assert!(!store.deleted_card_versions.contains_key(&key));
+
+    // Delete v2 again, then newer v3 from sync succeeds and clears tombstone
+    store.cards.remove(&key);
+    mark_card_deleted(&mut store, &key, 2);
+
+    let mut input_v3 = valid_payload_input(&sk);
+    input_v3.v = 3;
+    let card_v3 = sign_sd_card(input_v3, sample_items(), &sk).unwrap();
+    let env_v3 = CardEnvelope {
+        card_wire: render_wire(&card_v3, 1, WireFilter::Full).unwrap(),
+        hops: 1,
+    };
+    assert!(matches!(
+        accept_envelope(&mut store, &env_v3, now + 10, 100, None, &|_| false),
+        AcceptOutcome::Accepted { .. }
+    ));
+    assert!(store.cards.contains_key(&key));
+    assert!(!store.deleted_card_versions.contains_key(&key));
 }

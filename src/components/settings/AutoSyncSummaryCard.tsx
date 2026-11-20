@@ -11,6 +11,7 @@ import {
 } from '../../types';
 import { marketService } from '../../services/marketService';
 import { settingsService } from '../../services/settingsService';
+import { protectCommandOptions } from '../../services/commandPolicy';
 import { useOptionalSession } from '../../context/SessionContext';
 import { notifySyncStatusUpdated, SYNC_STATUS_UPDATED_EVENT } from '../../utils/syncEvents';
 import { copyToClipboard } from '../../utils/clipboard';
@@ -146,7 +147,10 @@ export const AutoSyncSummaryCard: React.FC<AutoSyncSummaryCardProps> = ({
                 return { updatedSec, updatedUi };
             };
             const result = session?.protectAction
-                ? await session.protectAction((pwd) => runToggle(pwd), { requireFullAccess: true })
+                ? await session.protectAction(
+                      (pwd) => runToggle(pwd),
+                      protectCommandOptions('patch_security_policy'),
+                  )
                 : await runToggle();
             if (result && onConfigUpdated) {
                 if (config) {
@@ -265,7 +269,7 @@ export const AutoSyncSummaryCard: React.FC<AutoSyncSummaryCardProps> = ({
                     );
                 };
                 if (session?.protectAction) {
-                    await session.protectAction(saveAction);
+                    await session.protectAction(saveAction, protectCommandOptions('save_public_sync'));
                 } else {
                     await saveAction(null);
                 }
@@ -308,7 +312,7 @@ export const AutoSyncSummaryCard: React.FC<AutoSyncSummaryCardProps> = ({
                     );
                 };
                 if (session?.protectAction) {
-                    await session.protectAction(saveAction);
+                    await session.protectAction(saveAction, protectCommandOptions('save_public_sync'));
                 } else {
                     await saveAction(null);
                 }

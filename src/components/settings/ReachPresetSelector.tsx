@@ -10,10 +10,13 @@ import { PresetOrCustom, PresetOption } from '../ui/PresetOrCustom';
 import { InfoHint } from '../ui/InfoHint';
 import { translateError, stringifyError } from '../../utils/errorHelper';
 import { logger } from '../../utils/log';
+import type { ProtectActionOptions } from '../../context/SessionContext';
+import type { ProtectActionFn } from '../../utils/fileIo';
+import { protectCommandOptions } from '../../services/commandPolicy';
 
 export interface ReachPresetSelectorProps {
     /** Optional wrapper for password-protected actions in live mode. */
-    protectAction?: <T>(fn: (password: string | null) => Promise<T>) => Promise<T | void>;
+    protectAction?: ProtectActionFn;
     /** Called after a preset or granular reach setting has changed in live mode. */
     onChanged?: (dto: ReachPresetDto) => void;
     /** Optional custom handler for updating WoT forwarding hops (1..3). */
@@ -79,9 +82,12 @@ export function ReachPresetSelector({
     const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
     const runProtected = useCallback(
-        async <T,>(fn: (password: string | null) => Promise<T>): Promise<T | void> => {
+        async <T,>(
+            fn: (password: string | null) => Promise<T>,
+            options?: ProtectActionOptions,
+        ): Promise<T | void> => {
             if (protectAction) {
-                return await protectAction(fn);
+                return await protectAction(fn, options);
             }
             return await fn(null);
         },
@@ -217,7 +223,7 @@ export function ReachPresetSelector({
                         },
                         pwd || undefined
                     );
-                });
+                }, protectCommandOptions('save_my_market_profile'));
             }
             const refreshed = await refreshFromBackend();
             if (refreshed) {

@@ -15,6 +15,7 @@ use crate::models::{
     FrontendPostDepositResult, FrontendSyncDescriptor, FrontendUserProfile,
 };
 use crate::services::common::{normalize_sync_url, DropChannelSigner, SyncIdentityContext};
+use crate::session::SessionToken;
 use crate::state::{AppState, StoredPostState};
 use crate::sync_client::{self as sync_client, PutSlotOutcome};
 
@@ -31,6 +32,8 @@ struct FlushContext {
     recipient_write_urls: std::collections::HashSet<String>,
     recipient_dids_by_write_url:
         std::collections::HashMap<String, std::collections::HashSet<String>>,
+    value_outflow_blocked: bool,
+    blocked_offender_dids: std::collections::HashSet<String>,
     now_secs: u64,
 }
 
@@ -266,6 +269,32 @@ fn collect_flush_context(
         }
     }
 
+    // Check global outflow lock (fork/restore) and KnownOffender status for queued value transfers.
+    let value_outflow_blocked =
+        crate::services::common::ensure_restore_l2_reconciled(state, &mut service, password)
+            .is_err()
+            || service
+                .get_seal_lock_reason(password)
+                .map_or(true, |reason| reason.is_some());
+
+    let mut blocked_offender_dids = std::collections::HashSet::new();
+    let value_transfer_recipients: Vec<String> = post_state
+        .outbox_entries
+        .iter()
+        .filter(|e| e.message_class == crate::state::OutboxMessageClass::ValueTransfer)
+        .map(|e| e.recipient_did.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if !value_transfer_recipients.is_empty() {
+        let _ = service.with_wallet(|wallet| {
+            for rcpt in &value_transfer_recipients {
+                if wallet.assert_not_known_offender(rcpt).is_err() {
+                    blocked_offender_dids.insert(rcpt.clone());
+                }
+            }
+        });
+    }
+
     // Deduplicate targets by normalized write_url.
     let mut deduped_targets = Vec::new();
     let mut seen_urls = std::collections::HashSet::new();
@@ -282,12 +311,15 @@ fn collect_flush_context(
         own_write_urls,
         recipient_write_urls,
         recipient_dids_by_write_url,
+        value_outflow_blocked,
+        blocked_offender_dids,
         now_secs: sync_client::current_unix_timestamp(),
     })
 }
 
 fn select_prioritized_entries_for_target(
     post_state: &StoredPostState,
+    flush_ctx: &FlushContext,
     is_own_target: bool,
     target_recipient_dids: Option<&std::collections::HashSet<String>>,
 ) -> Vec<PostBoxEntry> {
@@ -295,6 +327,14 @@ fn select_prioritized_entries_for_target(
         .outbox_entries
         .iter()
         .filter(|entry| {
+            if entry.message_class == crate::state::OutboxMessageClass::ValueTransfer
+                && (flush_ctx.value_outflow_blocked
+                    || flush_ctx
+                        .blocked_offender_dids
+                        .contains(entry.recipient_did.trim()))
+            {
+                return false;
+            }
             if is_own_target {
                 return true;
             }
@@ -432,6 +472,7 @@ async fn upload_single_post_target(
 /// on multi-device ETag conflicts.
 pub(crate) async fn flush_post_slots_impl(
     state: &AppState,
+    session: &SessionToken,
     post_state: &mut StoredPostState,
     extra_recipient_did: Option<&str>,
     extra_recipient_syncs: &[FrontendSyncDescriptor],
@@ -468,6 +509,9 @@ pub(crate) async fn flush_post_slots_impl(
     let mut reported_oversize_tags = std::collections::HashSet::new();
 
     for sync_desc in &flush_ctx.upload_targets {
+        if !state.is_generation_current(session.generation) {
+            break;
+        }
         let if_match = post_state
             .slot_etags_by_write_url
             .get(&sync_desc.write_url)
@@ -477,9 +521,13 @@ pub(crate) async fn flush_post_slots_impl(
         let is_recipient_target = flush_ctx.recipient_write_urls.contains(&norm_url);
         let target_entries = select_prioritized_entries_for_target(
             post_state,
+            &flush_ctx,
             is_own_target,
             flush_ctx.recipient_dids_by_write_url.get(&norm_url),
         );
+        if target_entries.is_empty() && !is_own_target {
+            continue;
+        }
 
         let packed = match pack_post_slot(
             &flush_ctx.id_ctx.master_seed,
@@ -560,13 +608,15 @@ pub(crate) async fn flush_post_slots_impl(
     }
 
     if !health_updates.is_empty() {
-        let mut service = state.service.lock().unwrap();
-        state.record_contact_sync_health_batch(
-            &mut service,
-            &health_updates,
-            flush_ctx.now_secs,
-            password,
-        );
+        let _ = state.with_session(session, |service| {
+            state.record_contact_sync_health_batch(
+                service,
+                &health_updates,
+                flush_ctx.now_secs,
+                password,
+            );
+            Ok(())
+        });
     }
 
     let deferred_tags: std::collections::HashSet<[u8; 16]> = all_deferred_tags
@@ -588,6 +638,7 @@ pub(crate) async fn flush_post_slots_impl(
 
 async fn persist_and_flush_post_box(
     state: &AppState,
+    session: &SessionToken,
     baseline: &StoredPostState,
     post_state: &mut StoredPostState,
     msg_id: String,
@@ -601,10 +652,10 @@ async fn persist_and_flush_post_box(
 
     // Persist the sealed outbox entry BEFORE network flush so slow or unreachable
     // sync servers never lose an outgoing transfer box if the app closes.
-    merge_and_save_post_state(state, baseline, post_state, password)?;
+    merge_and_save_post_state(state, session, baseline, post_state, password)?;
     let mid_baseline = post_state.clone();
 
-    let outcome = flush_post_slots_impl(state, post_state, None, &[], password).await;
+    let outcome = flush_post_slots_impl(state, session, post_state, None, &[], password).await;
     if !outcome.errors.is_empty() || outcome.deferred_count > 0 {
         warn!(
             "Post deposit status: deposited={}, recipient_deposited={}, deferred={}, failed={}",
@@ -614,7 +665,7 @@ async fn persist_and_flush_post_box(
             outcome.errors.len()
         );
     }
-    merge_and_save_post_state(state, &mid_baseline, post_state, password)?;
+    merge_and_save_post_state(state, session, &mid_baseline, post_state, password)?;
 
     let queued_for_next_flush = target_tag16.is_some_and(|t| outcome.deferred_tags.contains(&t));
 
@@ -634,13 +685,14 @@ pub async fn deposit_transfer_to_post_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendPostDepositResult, FrontendError> {
-    let record = {
+    let (session, record, bundle_bytes) = {
         let mut service = state
             .authorize_and_lock(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
+        let session = state.session_token_for_service(&service)?;
         let history = state
             .load_history_from_disk(&mut service, password.as_deref())
             .map_err(FrontendError::from)?;
-        history
+        let record = history
             .into_iter()
             .find(|r| r.bundle_id == bundle_id || r.id == bundle_id)
             .ok_or_else(|| {
@@ -648,14 +700,20 @@ pub async fn deposit_transfer_to_post_impl(
                     "Transaction record with bundle_id {} not found",
                     bundle_id
                 ))
-            })?
+            })?;
+        let bundle_bytes = crate::state::get_outgoing_bundle_bytes(
+            &mut service,
+            &record.bundle_id,
+            password.as_deref(),
+        )?
+        .filter(|b| !b.is_empty())
+        .ok_or_else(|| {
+            FrontendError::from(
+                "Outgoing bundle bytes not found (expired or not retained)".to_string(),
+            )
+        })?;
+        (session, record, bundle_bytes)
     };
-
-    if record.bundle_data.is_empty() {
-        return Err(FrontendError::from(
-            "Transaction record bundle_data is empty (expired or not retained)".to_string(),
-        ));
-    }
 
     let _post_guard = state.post_op_lock.lock().await;
     let mut post_state = load_post_state(state, password.as_deref())?;
@@ -682,8 +740,9 @@ pub async fn deposit_transfer_to_post_impl(
             recipient_ed_pk,
             fresh_msg_id.clone(),
             Some(record.bundle_id),
+            crate::state::OutboxMessageClass::ValueTransfer,
             &signing_ctx.own_reply_syncs,
-            record.bundle_data, // EXACT bytes! Never call create_transfer_bundle!
+            bundle_bytes, // EXACT bytes! Never call create_transfer_bundle!
             now_secs,
             None,
         )?;
@@ -692,6 +751,7 @@ pub async fn deposit_transfer_to_post_impl(
 
     persist_and_flush_post_box(
         state,
+        &session,
         &baseline,
         &mut post_state,
         msg_id,
@@ -744,7 +804,8 @@ pub async fn send_signing_request_via_post_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendPostDepositResult, FrontendError> {
-    state.authorize(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
+    let session =
+        state.authorize_and_begin_session(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
     let validated_recipient =
         ValidatedUserId::parse(&recipient_did).map_err(FrontendError::from)?;
     let recipient_did = validated_recipient.as_str().to_string();
@@ -766,6 +827,7 @@ pub async fn send_signing_request_via_post_impl(
         recipient_ed_pk,
         msg_id.clone(),
         None,
+        crate::state::OutboxMessageClass::Control,
         &signing_ctx.own_reply_syncs,
         container_bytes,
         now_secs,
@@ -774,6 +836,7 @@ pub async fn send_signing_request_via_post_impl(
 
     persist_and_flush_post_box(
         state,
+        &session,
         &baseline,
         &mut post_state,
         msg_id,
@@ -790,7 +853,8 @@ pub async fn reply_detached_signature_via_post_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendPostDepositResult, FrontendError> {
-    state.authorize(crate::state::RequiredAccess::Full, password.as_deref())?;
+    let session =
+        state.authorize_and_begin_session(crate::state::RequiredAccess::Full, password.as_deref())?;
     let validated_recipient =
         ValidatedUserId::parse(&recipient_did).map_err(FrontendError::from)?;
     let recipient_did = validated_recipient.as_str().to_string();
@@ -810,6 +874,7 @@ pub async fn reply_detached_signature_via_post_impl(
         recipient_ed_pk,
         msg_id.clone(),
         None,
+        crate::state::OutboxMessageClass::Control,
         &signing_ctx.own_reply_syncs,
         container_bytes,
         now_secs,
@@ -821,11 +886,18 @@ pub async fn reply_detached_signature_via_post_impl(
         .find(|e| e.msg_id == msg_id)
         .map(|e| e.entry.tag16);
 
-    merge_and_save_post_state(state, &baseline, &mut post_state, password.as_deref())?;
+    merge_and_save_post_state(state, &session, &baseline, &mut post_state, password.as_deref())?;
     let mid_baseline = post_state.clone();
 
-    let outcome =
-        flush_post_slots_impl(state, &mut post_state, None, &[], password.as_deref()).await;
+    let outcome = flush_post_slots_impl(
+        state,
+        &session,
+        &mut post_state,
+        None,
+        &[],
+        password.as_deref(),
+    )
+    .await;
     let delivered_to_recipient =
         target_tag16.is_some_and(|t| outcome.recipient_uploaded_tags.contains(&t));
 
@@ -838,20 +910,32 @@ pub async fn reply_detached_signature_via_post_impl(
             {
                 let req = post_state.pending_sign_requests.remove(idx);
                 if !req.reply_syncs.is_empty() {
-                    let mut service = state.service.lock().unwrap();
-                    state.update_contact_from_card(
-                        &mut service,
-                        &recipient_did,
-                        &req.reply_syncs,
-                        None,
-                        password.as_deref(),
-                    );
+                    state.with_session_required(
+                        &session,
+                        "Active wallet session changed before reply syncs could be updated",
+                        |service| {
+                            state.update_contact_from_card(
+                                service,
+                                &recipient_did,
+                                &req.reply_syncs,
+                                None,
+                                password.as_deref(),
+                            );
+                            Ok(())
+                        },
+                    )?;
                 }
             }
         }
     }
 
-    merge_and_save_post_state(state, &mid_baseline, &mut post_state, password.as_deref())?;
+    merge_and_save_post_state(
+        state,
+        &session,
+        &mid_baseline,
+        &mut post_state,
+        password.as_deref(),
+    )?;
 
     let queued_for_next_flush = target_tag16.is_some_and(|t| outcome.deferred_tags.contains(&t));
 
@@ -873,7 +957,8 @@ pub async fn send_wot_handshake_via_post_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendPostDepositResult, FrontendError> {
-    state.authorize(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
+    let session = state
+        .authorize_and_begin_session(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
     if proposed_level > 1 {
         return Err(FrontendError::from(format!(
             "proposed_level must be 0 or 1, got {}",
@@ -962,6 +1047,7 @@ pub async fn send_wot_handshake_via_post_impl(
         recipient_ed_pk,
         msg_id.clone(),
         None,
+        crate::state::OutboxMessageClass::Control,
         &own_reply_syncs,
         container_bytes,
         now_secs,
@@ -970,6 +1056,7 @@ pub async fn send_wot_handshake_via_post_impl(
 
     persist_and_flush_post_box(
         state,
+        &session,
         &baseline,
         &mut post_state,
         msg_id,
@@ -987,7 +1074,8 @@ pub async fn accept_wot_handshake_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendPostDepositResult, FrontendError> {
-    state.authorize(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
+    let session = state
+        .authorize_and_begin_session(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
     if trust_level > 3 {
         return Err(FrontendError::from(format!(
             "trust_level must be 0..=3, got {}",
@@ -1010,49 +1098,60 @@ pub async fn accept_wot_handshake_impl(
         let sender_did = handshake.sender_did.clone();
         let now_secs = sync_client::current_unix_timestamp();
 
-        {
-            let mut service = state.service.lock().unwrap();
-            let mut contact = state
-                .load_contacts(&mut service, password.as_deref())
-                .ok()
-                .and_then(|list| list.into_iter().find(|c| c.did.trim() == sender_did.trim()))
-                .unwrap_or_else(|| FrontendContact {
-                    did: sender_did.clone(),
-                    profile: FrontendUserProfile {
-                        first_name: handshake.sender_name.clone(),
-                        ..Default::default()
-                    },
-                    tags: vec![],
-                    added_at: Utc::now().to_rfc3339(),
-                    notes: None,
-                    trust_level: Some(trust_level),
-                    desired_hops: Some(3),
-                    has_peer_list: false,
-                    peer_list_updated_at: None,
-                    syncs: vec![],
-                });
-            contact.trust_level = Some(trust_level);
-            state
-                .save_contact(&mut service, contact, password.as_deref())
-                .map_err(FrontendError::from)?;
-        }
+        let pkg_opt = post_state
+            .pending_wot_packages_by_msg_id
+            .remove(&msg_id)
+            .and_then(|json_str| serde_json::from_str::<humoco_wot::WotSyncPackage>(&json_str).ok());
 
-        if let Some(json_str) = post_state.pending_wot_packages_by_msg_id.remove(&msg_id) {
-            if let Ok(pkg) = serde_json::from_str::<humoco_wot::WotSyncPackage>(&json_str) {
-                let mut service = state.service.lock().unwrap();
-                if let Ok(mut reg) =
-                    state.get_or_load_wot_register(&mut service, password.as_deref())
-                {
-                    let can_sender_did = crate::state::canonicalize_did(&sender_did)
-                        .unwrap_or_else(|_| sender_did.clone());
-                    let _ = reg.import_sync_package(&pkg, Some(&can_sender_did), now_secs);
-                    let _ = state.ensure_wot_list_signed(&mut service, &mut reg);
-                    let _ = state.save_wot_register(&mut service, &reg, password.as_deref());
+        state.with_session_required(
+            &session,
+            "Active wallet session changed before WoT handshake could be saved",
+            |service| {
+                let mut contact = state
+                    .load_contacts(service, password.as_deref())
+                    .ok()
+                    .and_then(|list| list.into_iter().find(|c| c.did.trim() == sender_did.trim()))
+                    .unwrap_or_else(|| FrontendContact {
+                        did: sender_did.clone(),
+                        profile: FrontendUserProfile {
+                            first_name: handshake.sender_name.clone(),
+                            ..Default::default()
+                        },
+                        tags: vec![],
+                        added_at: Utc::now().to_rfc3339(),
+                        notes: None,
+                        trust_level: Some(trust_level),
+                        desired_hops: Some(3),
+                        has_peer_list: false,
+                        peer_list_updated_at: None,
+                        syncs: vec![],
+                    });
+                contact.trust_level = Some(trust_level);
+                state
+                    .save_contact(service, contact, password.as_deref())
+                    .map_err(FrontendError::from)?;
+
+                if let Some(ref pkg) = pkg_opt {
+                    if let Ok(mut reg) = state.get_or_load_wot_register(service, password.as_deref())
+                    {
+                        let can_sender_did = crate::state::canonicalize_did(&sender_did)
+                            .unwrap_or_else(|_| sender_did.clone());
+                        let _ = reg.import_sync_package(pkg, Some(&can_sender_did), now_secs);
+                        let _ = state.ensure_wot_list_signed(service, &mut reg);
+                        let _ = state.save_wot_register(service, &reg, password.as_deref());
+                    }
                 }
-            }
-        }
+                Ok(())
+            },
+        )?;
 
-        merge_and_save_post_state(state, &baseline, &mut post_state, password.as_deref())?;
+        merge_and_save_post_state(
+            state,
+            &session,
+            &baseline,
+            &mut post_state,
+            password.as_deref(),
+        )?;
         sender_did
     };
 
@@ -1080,7 +1179,8 @@ pub async fn send_market_inquiry_via_post_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendMarketInquiryItem, FrontendError> {
-    state.authorize(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
+    let session = state
+        .authorize_and_begin_session(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
     let validated_recipient =
         ValidatedUserId::parse(&recipient_did).map_err(FrontendError::from)?;
     let recipient_did = validated_recipient.as_str().to_string();
@@ -1129,6 +1229,7 @@ pub async fn send_market_inquiry_via_post_impl(
         recipient_ed_pk,
         msg_id.clone(),
         None,
+        crate::state::OutboxMessageClass::Control,
         &signing_ctx.own_reply_syncs,
         container_bytes,
         now_secs,
@@ -1142,6 +1243,7 @@ pub async fn send_market_inquiry_via_post_impl(
 
     let flush_outcome = flush_post_slots_impl(
         state,
+        &session,
         &mut post_state,
         Some(&recipient_did),
         &recipient_syncs,
@@ -1186,7 +1288,7 @@ pub async fn send_market_inquiry_via_post_impl(
         }],
     };
     post_state.inquiries.push(item.clone());
-    merge_and_save_post_state(state, &baseline, &mut post_state, password.as_deref())?;
+    merge_and_save_post_state(state, &session, &baseline, &mut post_state, password.as_deref())?;
 
     Ok(item)
 }
@@ -1203,7 +1305,8 @@ pub async fn send_market_inquiry_message_via_post_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendMarketInquiryItem, FrontendError> {
-    state.authorize(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
+    let session = state
+        .authorize_and_begin_session(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
     let dec = match decision
         .as_deref()
         .map(str::trim)
@@ -1319,6 +1422,7 @@ pub async fn send_market_inquiry_message_via_post_impl(
         recipient_ed_pk,
         msg_id.clone(),
         None,
+        crate::state::OutboxMessageClass::Control,
         &signing_ctx.own_reply_syncs,
         container_bytes,
         now_secs,
@@ -1330,8 +1434,15 @@ pub async fn send_market_inquiry_message_via_post_impl(
         .find(|e| e.msg_id == msg_id)
         .map(|e| e.entry.tag16);
 
-    let flush_outcome =
-        flush_post_slots_impl(state, &mut post_state, None, &[], password.as_deref()).await;
+    let flush_outcome = flush_post_slots_impl(
+        state,
+        &session,
+        &mut post_state,
+        None,
+        &[],
+        password.as_deref(),
+    )
+    .await;
     if !target_tag16.is_some_and(|t| flush_outcome.recipient_uploaded_tags.contains(&t)) {
         return Err(FrontendError::with_code(
             "error.post.recipientUnreachable",
@@ -1375,7 +1486,7 @@ pub async fn send_market_inquiry_message_via_post_impl(
     item.unread = false;
 
     let mut updated_item = item.clone();
-    merge_and_save_post_state(state, &baseline, &mut post_state, password.as_deref())?;
+    merge_and_save_post_state(state, &session, &baseline, &mut post_state, password.as_deref())?;
 
     let (name, pic, is_contact) =
         resolve_counterparty_info(state, &updated_item.counterparty_did, password.as_deref());

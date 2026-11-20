@@ -1,5 +1,13 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum ReceiveCommitMode {
+    #[default]
+    OnlineVerify,
+    ForceTrustOffline,
+}
+
 // Enum for mnemonic language selection (BIP-39)
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -179,10 +187,29 @@ pub struct TransactionRecord {
     pub involved_vouchers: Vec<String>, // local_instance_ids
     pub involved_sources_details: Option<Vec<FrontendInvolvedVoucherInfo>>,
 
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bundle_data: Vec<u8>,
     pub bundle_id: String,
     pub notes: Option<String>,
     pub sender_profile_name: Option<String>,
+}
+
+/// Canonical persisted outgoing transfer bundle bytes keyed by `bundle_id`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct StoredOutgoingBundle {
+    pub bundle_id: String,
+    pub recipient_id: String,
+    pub created_at: String,
+    pub bundle_bytes: Vec<u8>,
+}
+
+/// Encrypted store holding canonical outgoing transfer bundles for retry/download (`OUTGOING_BUNDLES_KEY`).
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct StoredOutgoingBundles {
+    #[serde(default)]
+    pub bundles: std::collections::BTreeMap<String, StoredOutgoingBundle>,
 }
 
 #[derive(Deserialize, Debug, Clone)]

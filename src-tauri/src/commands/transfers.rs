@@ -2,11 +2,11 @@
 use crate::{
     models::{
         CreateBundleResult, FrontendError, FrontendSourceTransfer, FrontendTransferPlan,
-        ReceiveSuccessPayload, TransactionRecord,
+        ReceiveCommitMode, ReceiveSuccessPayload, TransactionRecord,
     },
     services::transfer_service::{
-        checkout_received_bundle_impl, create_transfer_bundle_impl, get_transaction_history_impl,
-        prepare_transfer_plan_impl, receive_bundle_impl, save_transaction_record_impl,
+        create_transfer_bundle_impl, get_transaction_history_impl, prepare_transfer_plan_impl,
+        receive_bundle_impl,
     },
     AppState,
 };
@@ -42,13 +42,16 @@ pub async fn create_transfer_bundle(
 }
 
 #[tauri::command]
-pub fn receive_bundle(
+#[allow(clippy::too_many_arguments)]
+pub async fn receive_bundle(
     app: tauri::AppHandle,
     bundle_data: Vec<u8>,
     standard_definitions_toml: HashMap<String, String>,
     password: Option<String>,
     force_accept_tolerance_bundle: bool,
-    state: tauri::State<AppState>,
+    commit_mode: Option<ReceiveCommitMode>,
+    purchase_id: Option<String>,
+    state: tauri::State<'_, AppState>,
 ) -> Result<ReceiveSuccessPayload, FrontendError> {
     receive_bundle_impl(
         Some(&app),
@@ -56,17 +59,11 @@ pub fn receive_bundle(
         standard_definitions_toml,
         password,
         force_accept_tolerance_bundle,
+        commit_mode,
+        purchase_id,
         &state,
     )
-}
-
-#[tauri::command]
-pub fn save_transaction_record(
-    record: TransactionRecord,
-    password: Option<String>,
-    state: tauri::State<AppState>,
-) -> Result<(), FrontendError> {
-    save_transaction_record_impl(record, password, &state)
+    .await
 }
 
 #[tauri::command]
@@ -91,23 +88,4 @@ pub fn prepare_transfer_plan(
         is_test_voucher,
         &state,
     )
-}
-
-/// Productive purchase path: Sync Lock committee fan-out + atomic wallet/history commit.
-#[tauri::command]
-pub async fn checkout_received_bundle(
-    purchase_id: String,
-    bundle_data: Vec<u8>,
-    standard_definitions_toml: HashMap<String, String>,
-    password: Option<String>,
-    state: tauri::State<'_, AppState>,
-) -> Result<crate::checkout::PurchaseCompletion, FrontendError> {
-    checkout_received_bundle_impl(
-        purchase_id,
-        bundle_data,
-        standard_definitions_toml,
-        password,
-        &state,
-    )
-    .await
 }

@@ -76,7 +76,7 @@ fn import_provider_filter_to_dto(
         FrontendError::from("Imported provider filter not found in register".to_string())
     })?;
 
-    let contacts_cache = state.contacts.lock().unwrap();
+    let contacts_cache = state.cache_contacts();
     let is_known_contact = contacts_cache
         .as_ref()
         .map(|book| {
@@ -156,15 +156,17 @@ pub fn set_wot_max_hops_impl(
         .save_wot_register(&mut service, &reg, password.as_deref())
         .map_err(FrontendError::from)?;
 
-    if let Some(book) = state.contacts.lock().unwrap().as_mut() {
-        for c in book.contacts.values_mut() {
-            if let Ok(can) = crate::state::canonicalize_did(&c.did) {
-                if let Some(entry) = reg.own_contacts.get(&can) {
-                    c.desired_hops = Some(entry.desired_hops);
+    state.with_cached_contacts_mut(|opt| {
+        if let Some(book) = opt {
+            for c in book.contacts.values_mut() {
+                if let Ok(can) = crate::state::canonicalize_did(&c.did) {
+                    if let Some(entry) = reg.own_contacts.get(&can) {
+                        c.desired_hops = Some(entry.desired_hops);
+                    }
                 }
             }
         }
-    }
+    });
 
     drop(service);
     get_wot_summary_impl(state)
@@ -338,7 +340,7 @@ pub fn import_wot_package_impl(
         .save_wot_register(&mut service, &reg, password.as_deref())
         .map_err(FrontendError::from)?;
 
-    let contacts_cache = state.contacts.lock().unwrap();
+    let contacts_cache = state.cache_contacts();
     let is_known_contact = contacts_cache
         .as_ref()
         .map(|book| {

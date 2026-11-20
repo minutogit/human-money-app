@@ -8,6 +8,7 @@ pub mod post_service;
 pub mod preflight;
 pub mod recovery_service;
 pub mod settings_service;
+pub mod sync_coordinator;
 pub mod sync_engine;
 pub mod transfer_service;
 pub mod wot_service;

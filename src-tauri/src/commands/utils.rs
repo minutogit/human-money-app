@@ -235,13 +235,84 @@ pub fn get_latest_logs(app: tauri::AppHandle) -> Result<String, FrontendError> {
         .map_err(|e| FrontendError::from(format!("Failed to read log file: {}", e)))
 }
 
-#[tauri::command]
-pub fn take_startup_launch_items(
-    state: tauri::State<AppState>,
+pub(crate) fn peek_startup_launch_items_from_state(
+    state: &AppState,
 ) -> Result<Vec<String>, FrontendError> {
+    let guard = state
+        .startup_launch_items
+        .lock()
+        .map_err(|_| FrontendError::from("Startup launch items unavailable".to_string()))?;
+    Ok(guard.clone())
+}
+
+pub(crate) fn ack_startup_launch_item_from_state(
+    state: &AppState,
+    item: &str,
+) -> Result<bool, FrontendError> {
     let mut guard = state
         .startup_launch_items
         .lock()
         .map_err(|_| FrontendError::from("Startup launch items unavailable".to_string()))?;
-    Ok(std::mem::take(&mut *guard))
+    if let Some(pos) = guard.iter().position(|existing| existing == item) {
+        guard.remove(pos);
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+#[tauri::command]
+pub fn peek_startup_launch_items(
+    state: tauri::State<AppState>,
+) -> Result<Vec<String>, FrontendError> {
+    peek_startup_launch_items_from_state(&state)
+}
+
+#[tauri::command]
+pub fn ack_startup_launch_item(
+    item: String,
+    state: tauri::State<AppState>,
+) -> Result<bool, FrontendError> {
+    ack_startup_launch_item_from_state(&state, &item)
+}
+
+#[cfg(test)]
+mod launch_queue_tests {
+    use super::{ack_startup_launch_item_from_state, peek_startup_launch_items_from_state};
+    use crate::test_support::{create_test_state, setup_test_app, temp_test_dir, ALICE_PHRASE};
+
+    #[test]
+    fn h9_peek_is_non_destructive_and_ack_removes_first_matching_fifo_item() {
+        let dir = temp_test_dir("h9_launch_queue");
+        let service = setup_test_app(&dir, "Alice", ALICE_PHRASE, "pw123");
+        let state = create_test_state(service);
+        {
+            let mut guard = state.startup_launch_items.lock().unwrap();
+            *guard = vec![
+                "humoco://pay?to=did:key:zAlice".to_string(),
+                "/tmp/payment.transfer".to_string(),
+            ];
+        }
+
+        // Peeking twice never clears the pending launch queue
+        let first_peek = peek_startup_launch_items_from_state(&state).unwrap();
+        let second_peek = peek_startup_launch_items_from_state(&state).unwrap();
+        assert_eq!(first_peek.len(), 2);
+        assert_eq!(first_peek, second_peek);
+
+        // Acking removes only the acknowledged item in FIFO order
+        assert!(ack_startup_launch_item_from_state(&state, &first_peek[0]).unwrap());
+        assert!(!ack_startup_launch_item_from_state(&state, &first_peek[0]).unwrap());
+        assert_eq!(
+            peek_startup_launch_items_from_state(&state).unwrap(),
+            vec!["/tmp/payment.transfer".to_string()]
+        );
+
+        assert!(ack_startup_launch_item_from_state(&state, "/tmp/payment.transfer").unwrap());
+        assert!(peek_startup_launch_items_from_state(&state)
+            .unwrap()
+            .is_empty());
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }

@@ -1,5 +1,6 @@
 // src-tauri/src/state.rs
 use crate::models::{FrontendAddressBook, FrontendContact, TransactionRecord};
+use crate::session::{ActiveProfileCaches, SessionToken};
 use crate::settings::{
     AppConfigDto, InternalLifecycleState, SecurityPolicy, UiPreferences,
     INTERNAL_LIFECYCLE_STATE_KEY, SECURITY_POLICY_KEY, UI_PREFERENCES_KEY,
@@ -10,6 +11,7 @@ use log::{error, info};
 use std::sync::{Mutex, MutexGuard};
 
 pub const TRANSACTION_HISTORY_KEY: &str = "transaction_history";
+pub const OUTGOING_BUNDLES_KEY: &str = "outgoing_bundles";
 pub const CONTACTS_DATA_NAME: &str = "address_book";
 pub const WOT_DATA_NAME: &str = "wot_register";
 pub const MARKET_CARD_STORE_KEY: &str = "market_card_store";
@@ -40,6 +42,13 @@ pub enum RequiredAccess {
     Full,
 }
 
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum OutboxMessageClass {
+    ValueTransfer,
+    Control,
+}
+
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct PostOutboxEntry {
     pub msg_id: String,
@@ -47,6 +56,7 @@ pub struct PostOutboxEntry {
     pub tag16_hex: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bundle_id: Option<String>,
+    pub message_class: OutboxMessageClass,
     pub entry: humoco_market::PostBoxEntry,
     pub created_at: u64,
 }
@@ -124,6 +134,121 @@ pub struct StoredSyncState {
     #[serde(default)]
     pub uploaded_media_blobs: std::collections::HashSet<String>,
     pub wot_tombstone_fp_by_write_url: std::collections::BTreeMap<String, String>,
+}
+
+pub(crate) fn merge_btree_map_3way<K: Ord + Clone, V: Eq + Clone>(
+    baseline: &std::collections::BTreeMap<K, V>,
+    working: &mut std::collections::BTreeMap<K, V>,
+    latest: &std::collections::BTreeMap<K, V>,
+) {
+    let all_keys: std::collections::BTreeSet<K> = baseline
+        .keys()
+        .chain(working.keys())
+        .chain(latest.keys())
+        .cloned()
+        .collect();
+    for key in all_keys {
+        let b = baseline.get(&key);
+        let w = working.get(&key);
+        if w == b {
+            match latest.get(&key) {
+                Some(v) => {
+                    working.insert(key, v.clone());
+                }
+                None => {
+                    working.remove(&key);
+                }
+            }
+        }
+    }
+}
+
+pub(crate) fn merge_sync_state_3way(
+    baseline: &StoredSyncState,
+    working: &mut StoredSyncState,
+    latest: &StoredSyncState,
+) {
+    working.last_upload_at = match (working.last_upload_at, latest.last_upload_at) {
+        (Some(a), Some(b)) => Some(a.max(b)),
+        (a, b) => a.or(b),
+    };
+    working.last_poll_at = match (working.last_poll_at, latest.last_poll_at) {
+        (Some(a), Some(b)) => Some(a.max(b)),
+        (a, b) => a.or(b),
+    };
+    if working.last_readers_hash == baseline.last_readers_hash {
+        working.last_readers_hash = latest.last_readers_hash.clone();
+    }
+    merge_btree_map_3way(&baseline.etags_by_read_url, &mut working.etags_by_read_url, &latest.etags_by_read_url);
+    merge_btree_map_3way(
+        &baseline.last_modified_by_read_url,
+        &mut working.last_modified_by_read_url,
+        &latest.last_modified_by_read_url,
+    );
+    merge_btree_map_3way(&baseline.slot_etags, &mut working.slot_etags, &latest.slot_etags);
+    merge_btree_map_3way(
+        &baseline.channel_max_bytes_by_write_url,
+        &mut working.channel_max_bytes_by_write_url,
+        &latest.channel_max_bytes_by_write_url,
+    );
+    merge_btree_map_3way(
+        &baseline.card_base_uploaded_at_by_write_url,
+        &mut working.card_base_uploaded_at_by_write_url,
+        &latest.card_base_uploaded_at_by_write_url,
+    );
+    merge_btree_map_3way(
+        &baseline.card_base_size_by_write_url,
+        &mut working.card_base_size_by_write_url,
+        &latest.card_base_size_by_write_url,
+    );
+    merge_btree_map_3way(
+        &baseline.card_base_versions_by_write_url,
+        &mut working.card_base_versions_by_write_url,
+        &latest.card_base_versions_by_write_url,
+    );
+    merge_btree_map_3way(
+        &baseline.card_delta_active_by_write_url,
+        &mut working.card_delta_active_by_write_url,
+        &latest.card_delta_active_by_write_url,
+    );
+    merge_btree_map_3way(
+        &baseline.card_last_uploaded_versions_by_write_url,
+        &mut working.card_last_uploaded_versions_by_write_url,
+        &latest.card_last_uploaded_versions_by_write_url,
+    );
+    merge_btree_map_3way(
+        &baseline.last_revocation_check_at,
+        &mut working.last_revocation_check_at,
+        &latest.last_revocation_check_at,
+    );
+    merge_btree_map_3way(
+        &baseline.sync_sources_by_did,
+        &mut working.sync_sources_by_did,
+        &latest.sync_sources_by_did,
+    );
+    merge_btree_map_3way(
+        &baseline.wot_tombstone_fp_by_write_url,
+        &mut working.wot_tombstone_fp_by_write_url,
+        &latest.wot_tombstone_fp_by_write_url,
+    );
+    let all_blobs: std::collections::HashSet<String> = baseline
+        .uploaded_media_blobs
+        .iter()
+        .chain(working.uploaded_media_blobs.iter())
+        .chain(latest.uploaded_media_blobs.iter())
+        .cloned()
+        .collect();
+    for blob in all_blobs {
+        let in_b = baseline.uploaded_media_blobs.contains(&blob);
+        let in_w = working.uploaded_media_blobs.contains(&blob);
+        if in_w == in_b {
+            if latest.uploaded_media_blobs.contains(&blob) {
+                working.uploaded_media_blobs.insert(blob);
+            } else {
+                working.uploaded_media_blobs.remove(&blob);
+            }
+        }
+    }
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Default, PartialEq, Eq)]
@@ -238,31 +363,88 @@ impl ProfileSessionLock {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncWakeRequest {
+    #[serde(default)]
+    pub seal: bool,
+    #[serde(default)]
+    pub local_backup: bool,
+    #[serde(default)]
+    pub sync_backup: bool,
+    #[serde(default)]
+    pub sync_backup_force: bool,
+    #[serde(default)]
+    pub post: bool,
+    #[serde(default)]
+    pub market: bool,
+    #[serde(default)]
+    pub market_force_upload: bool,
+}
+
+impl SyncWakeRequest {
+    pub fn merge(&mut self, other: Self) {
+        self.seal |= other.seal;
+        self.local_backup |= other.local_backup;
+        self.sync_backup |= other.sync_backup;
+        self.sync_backup_force |= other.sync_backup_force;
+        self.post |= other.post;
+        self.market |= other.market;
+        self.market_force_upload |= other.market_force_upload;
+    }
+
+    pub fn is_empty(&self) -> bool {
+        !(self.seal
+            || self.local_backup
+            || self.sync_backup
+            || self.sync_backup_force
+            || self.post
+            || self.market
+            || self.market_force_upload)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SyncCoordinatorControl {
+    pub is_online: bool,
+    pub is_wifi: bool,
+    pub is_visible: bool,
+    pub pending_wake: SyncWakeRequest,
+    pub cooldown_until: Option<std::time::Instant>,
+}
+
+impl Default for SyncCoordinatorControl {
+    fn default() -> Self {
+        Self {
+            is_online: true,
+            is_wifi: true,
+            is_visible: true,
+            pending_wake: SyncWakeRequest::default(),
+            cooldown_until: None,
+        }
+    }
+}
+
 /// Central application state shared across Tauri commands and background workers.
 ///
 /// # Lock Ordering Invariant
 /// Whenever multiple mutexes on `AppState` must be acquired simultaneously,
 /// acquire them strictly in the following total order to prevent deadlocks:
-/// `service -> ui_preferences -> security_policy -> internal_lifecycle -> own_market_profile -> contacts -> wot -> history -> events -> media_negative_cache`.
-/// `active_profile_lock` is a leaf mutex never held while acquiring `service` or across `.await`.
+/// `recovery_op_lock -> post_op_lock -> service -> profile_caches -> media_negative_cache`.
+/// `active_profile_lock` and `sync_control` are leaf mutexes never held while acquiring `service` or across `.await`.
 ///
-/// Never hold any `MutexGuard` across an `.await` point.
+/// Never hold any `std::sync::MutexGuard` across an `.await` point.
 pub struct AppState {
     pub service: Mutex<AppService>,
-    pub history: Mutex<Option<Vec<TransactionRecord>>>,
-    pub events: Mutex<Option<Vec<human_money_core::models::wallet_event::WalletEvent>>>,
-    pub contacts: Mutex<Option<crate::models::FrontendAddressBook>>,
-    pub ui_preferences: Mutex<Option<UiPreferences>>,
-    pub security_policy: Mutex<Option<SecurityPolicy>>,
-    pub internal_lifecycle: Mutex<Option<InternalLifecycleState>>,
-    pub own_market_profile: Mutex<Option<crate::models::StoredOwnMarketProfile>>,
-    pub wot: Mutex<Option<humoco_wot::TrustRegister>>,
-    pub recovery_owner: Mutex<Option<Option<crate::models::recovery::RecoveryOwnerState>>>,
-    pub guardian_vault: Mutex<Option<humoco_market::GuardianVaultStore>>,
-    pub app_notices: Mutex<Option<crate::models::StoredAppNotices>>,
+    pub profile_caches: Mutex<Option<ActiveProfileCaches>>,
+    pub session_generation: std::sync::atomic::AtomicU64,
+    session_gen_tx: tokio::sync::watch::Sender<u64>,
+    pub recovery_op_lock: tokio::sync::Mutex<()>,
     pub post_op_lock: tokio::sync::Mutex<()>,
     pub media_negative_cache: Mutex<std::collections::HashMap<String, u64>>,
     pub startup_launch_items: Mutex<Vec<String>>,
+    pub sync_control: Mutex<SyncCoordinatorControl>,
+    pub sync_coordinator_wake: std::sync::Arc<tokio::sync::Notify>,
     session_lock_dir: Option<std::path::PathBuf>,
     active_profile_lock: Mutex<Option<ProfileSessionLock>>,
 }
@@ -387,6 +569,84 @@ pub fn load_local_sidecar_json_or_default<T: serde::de::DeserializeOwned + Defau
     Ok(load_local_sidecar_json_opt(service, key, password)?.unwrap_or_default())
 }
 
+/// Loads canonical outgoing transfer bundles from encrypted storage (`OUTGOING_BUNDLES_KEY`).
+pub fn load_outgoing_bundles(
+    service: &mut AppService,
+    password: Option<&str>,
+) -> Result<crate::models::StoredOutgoingBundles, crate::models::FrontendError> {
+    load_encrypted_json_or_default(service, OUTGOING_BUNDLES_KEY, password)
+        .map_err(crate::models::FrontendError::from)
+}
+
+/// Returns exact canonical bytes for an outgoing `bundle_id` if still retained.
+pub fn get_outgoing_bundle_bytes(
+    service: &mut AppService,
+    bundle_id: &str,
+    password: Option<&str>,
+) -> Result<Option<Vec<u8>>, crate::models::FrontendError> {
+    let store = load_outgoing_bundles(service, password)?;
+    Ok(store.bundles.get(bundle_id).map(|b| b.bundle_bytes.clone()))
+}
+
+/// Serialized companion batch produced for an atomic outgoing bundle + history commit.
+pub struct OutgoingCompanionBatch {
+    pub blobs: Vec<(String, Vec<u8>)>,
+    pub history: Vec<TransactionRecord>,
+    pub outgoing: crate::models::StoredOutgoingBundles,
+}
+
+/// Pure companion builder producing serialized `(OUTGOING_BUNDLES_KEY, TRANSACTION_HISTORY_KEY)` blobs
+/// with `bundle_data` stripped from `transaction_history` to stay well below the `WalletTransaction` undo limit.
+pub fn prepare_outgoing_history_and_bundle_companions(
+    baseline_history: &[TransactionRecord],
+    baseline_outgoing: &crate::models::StoredOutgoingBundles,
+    entries: Vec<(TransactionRecord, Vec<u8>)>,
+) -> Result<OutgoingCompanionBatch, crate::models::FrontendError> {
+    let mut next_history = baseline_history.to_vec();
+    let mut next_outgoing = baseline_outgoing.clone();
+
+    for (mut record, bundle_bytes) in entries {
+        if !record.bundle_id.is_empty() && !bundle_bytes.is_empty() {
+            next_outgoing.bundles.insert(
+                record.bundle_id.clone(),
+                crate::models::StoredOutgoingBundle {
+                    bundle_id: record.bundle_id.clone(),
+                    recipient_id: record.recipient_id.clone(),
+                    created_at: record.timestamp.clone(),
+                    bundle_bytes,
+                },
+            );
+        }
+        record.bundle_data.clear();
+        let duplicate = !record.bundle_id.is_empty()
+            && next_history
+                .iter()
+                .any(|r| r.bundle_id == record.bundle_id && r.direction == record.direction);
+        if !duplicate {
+            next_history.push(record);
+        }
+    }
+
+    let outgoing_bytes = serde_json::to_vec(&next_outgoing).map_err(|e| {
+        crate::models::FrontendError::from(format!("Failed to serialize outgoing_bundles: {}", e))
+    })?;
+    let history_bytes = serde_json::to_vec(&next_history).map_err(|e| {
+        crate::models::FrontendError::from(format!(
+            "Failed to serialize transaction_history: {}",
+            e
+        ))
+    })?;
+    let blobs = vec![
+        (OUTGOING_BUNDLES_KEY.to_string(), outgoing_bytes),
+        (TRANSACTION_HISTORY_KEY.to_string(), history_bytes),
+    ];
+    Ok(OutgoingCompanionBatch {
+        blobs,
+        history: next_history,
+        outgoing: next_outgoing,
+    })
+}
+
 /// Serializes `value` as JSON and saves it to a device-local encrypted sidecar (`.local_<key>.enc`).
 /// Never triggers `WalletSeal` or backup dirtying.
 pub fn save_local_sidecar_json<T: serde::Serialize>(
@@ -399,29 +659,46 @@ pub fn save_local_sidecar_json<T: serde::Serialize>(
 }
 
 /// Loads verified highest `LockReceipt`s recorded per `lock_pub` for `anchor_id` from the local sidecar.
+///
+/// Fails closed on decryption, parsing, key-format, or signature corruption; returns an empty map
+/// ONLY when no sidecar file exists yet (`StorageError::NotFound`).
 pub fn load_known_head_receipts_for_anchor(
     service: &mut AppService,
     anchor_id: &[u8; 32],
     password: Option<&str>,
-) -> std::collections::HashMap<
-    human_money_core::models::layer2_api::LockPubKey,
-    human_money_core::models::layer2_api::LockReceipt,
+) -> Result<
+    std::collections::HashMap<
+        human_money_core::models::layer2_api::LockPubKey,
+        human_money_core::models::layer2_api::LockReceipt,
+    >,
+    crate::models::FrontendError,
 > {
-    let Ok(heads_state) = load_local_sidecar_json_or_default::<KnownLockHeadsState>(
+    let heads_state = load_local_sidecar_json_or_default::<KnownLockHeadsState>(
         service,
         KNOWN_LOCK_HEADS_KEY,
         password,
-    ) else {
-        return std::collections::HashMap::new();
-    };
-    let pfx = format!("{}:", human_money_core::hex::encode(anchor_id));
+    )
+    .map_err(crate::models::FrontendError::from)?;
+    let anchor_hex = human_money_core::hex::encode(anchor_id);
+    let pfx = format!("{anchor_hex}:");
     let mut out = std::collections::HashMap::new();
     for (k, receipt) in heads_state.heads {
-        if k.starts_with(&pfx) && receipt.verify_signature() {
+        if k.starts_with(&pfx) {
+            let expected_key = format!(
+                "{}:{}",
+                anchor_hex,
+                human_money_core::hex::encode(receipt.lock_pub)
+            );
+            if k != expected_key || !receipt.verify_signature() {
+                return Err(crate::models::FrontendError::from(format!(
+                    "Corrupt anti-rollback head receipt entry '{}' for anchor {}",
+                    k, anchor_hex
+                )));
+            }
             out.insert(receipt.lock_pub, receipt);
         }
     }
-    out
+    Ok(out)
 }
 
 /// Records verified `LockReceipt`s (retaining the highest `write_seq` per `(anchor_id, lock_pub)`)
@@ -478,25 +755,156 @@ fn endpoints_overlap(a_read: &str, a_write: &str, b_read: &str, b_write: &str) -
 
 impl AppState {
     pub fn new(service: AppService) -> Self {
+        let (initial_gen, initial_caches) = match service.with_wallet(|w| w.get_user_id().to_string())
+        {
+            Ok(owner_did) if service.is_wallet_unlocked() => {
+                (1u64, Some(ActiveProfileCaches::new(1, owner_did)))
+            }
+            _ => (0u64, None),
+        };
+        let (session_gen_tx, _) = tokio::sync::watch::channel(initial_gen);
         Self {
             service: Mutex::new(service),
-            history: Mutex::new(None),
-            events: Mutex::new(None),
-            contacts: Mutex::new(None),
-            ui_preferences: Mutex::new(None),
-            security_policy: Mutex::new(None),
-            internal_lifecycle: Mutex::new(None),
-            own_market_profile: Mutex::new(None),
-            wot: Mutex::new(None),
-            recovery_owner: Mutex::new(None),
-            guardian_vault: Mutex::new(None),
-            app_notices: Mutex::new(None),
+            profile_caches: Mutex::new(initial_caches),
+            session_generation: std::sync::atomic::AtomicU64::new(initial_gen),
+            session_gen_tx,
+            recovery_op_lock: tokio::sync::Mutex::new(()),
             post_op_lock: tokio::sync::Mutex::new(()),
             media_negative_cache: Mutex::new(std::collections::HashMap::new()),
             startup_launch_items: Mutex::new(Vec::new()),
+            sync_control: Mutex::new(SyncCoordinatorControl::default()),
+            sync_coordinator_wake: std::sync::Arc::new(tokio::sync::Notify::new()),
             session_lock_dir: None,
             active_profile_lock: Mutex::new(None),
         }
+    }
+
+    pub fn update_network_status(&self, is_online: bool, is_wifi: bool, is_visible: bool) {
+        let should_notify = {
+            let mut guard = self.sync_control.lock().unwrap();
+            let became_online = !guard.is_online && is_online;
+            let became_visible = !guard.is_visible && is_visible;
+            guard.is_online = is_online;
+            guard.is_wifi = is_wifi;
+            guard.is_visible = is_visible;
+            became_online || became_visible
+        };
+        if should_notify {
+            self.sync_coordinator_wake.notify_one();
+        }
+    }
+
+    pub fn wake_sync_coordinator(&self, req: SyncWakeRequest) {
+        {
+            let mut guard = self.sync_control.lock().unwrap();
+            guard.pending_wake.merge(req);
+        }
+        self.sync_coordinator_wake.notify_one();
+    }
+
+    pub fn notify_sync_coordinator(&self) {
+        self.sync_coordinator_wake.notify_one();
+    }
+
+    pub fn take_sync_coordinator_snapshot(&self) -> (SyncCoordinatorControl, SyncWakeRequest) {
+        let mut guard = self.sync_control.lock().unwrap();
+        let wake = std::mem::take(&mut guard.pending_wake);
+        (guard.clone(), wake)
+    }
+
+    pub fn record_sync_cooldown(&self, retry_after_secs: u64) {
+        let clamped = retry_after_secs.clamp(5, 3600);
+        let target = std::time::Instant::now() + std::time::Duration::from_secs(clamped);
+        let mut guard = self.sync_control.lock().unwrap();
+        guard.cooldown_until = Some(guard.cooldown_until.map_or(target, |prev| prev.max(target)));
+    }
+
+    pub fn clear_sync_cooldown(&self) {
+        let mut guard = self.sync_control.lock().unwrap();
+        guard.cooldown_until = None;
+        guard.pending_wake = SyncWakeRequest::default();
+    }
+
+    pub fn current_session_generation(&self) -> u64 {
+        self.session_generation
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    pub fn is_generation_current(&self, generation: u64) -> bool {
+        self.current_session_generation() == generation
+    }
+
+    pub fn subscribe_session_generation(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.session_gen_tx.subscribe()
+    }
+
+    pub fn session_token_for_service(
+        &self,
+        service: &AppService,
+    ) -> Result<SessionToken, crate::models::FrontendError> {
+        if !service.is_wallet_unlocked() {
+            return Err(crate::models::FrontendError::from(
+                AppFacadeError::WalletLocked,
+            ));
+        }
+        let owner_did = service
+            .with_wallet(|w| w.get_user_id().to_string())
+            .map_err(crate::models::FrontendError::from)?;
+        Ok(SessionToken {
+            generation: self.current_session_generation(),
+            owner_did,
+        })
+    }
+
+    pub fn begin_session_op(&self) -> Result<SessionToken, crate::models::FrontendError> {
+        let service = self.lock_service()?;
+        self.session_token_for_service(&service)
+    }
+
+    pub fn authorize_and_begin_session(
+        &self,
+        required: RequiredAccess,
+        password: Option<&str>,
+    ) -> Result<SessionToken, crate::models::FrontendError> {
+        let service = self.authorize_and_lock(required, password)?;
+        self.session_token_for_service(&service)
+    }
+
+    pub fn is_session_current(&self, token: &SessionToken, service: &AppService) -> bool {
+        if self.current_session_generation() != token.generation || !service.is_wallet_unlocked() {
+            return false;
+        }
+        service
+            .with_wallet(|w| w.get_user_id() == token.owner_did)
+            .unwrap_or(false)
+    }
+
+    pub fn with_session<F, R>(
+        &self,
+        token: &SessionToken,
+        f: F,
+    ) -> Result<Option<R>, crate::models::FrontendError>
+    where
+        F: FnOnce(&mut AppService) -> Result<R, crate::models::FrontendError>,
+    {
+        let mut service = self.lock_service()?;
+        if !self.is_session_current(token, &service) {
+            return Ok(None);
+        }
+        f(&mut service).map(Some)
+    }
+
+    pub fn with_session_required<F, R>(
+        &self,
+        token: &SessionToken,
+        superseded_msg: &str,
+        f: F,
+    ) -> Result<R, crate::models::FrontendError>
+    where
+        F: FnOnce(&mut AppService) -> Result<R, crate::models::FrontendError>,
+    {
+        self.with_session(token, f)?
+            .ok_or_else(|| crate::models::FrontendError::from(superseded_msg.to_string()))
     }
 
     pub fn with_session_lock_dir(mut self, dir: std::path::PathBuf) -> Self {
@@ -608,22 +1016,250 @@ impl AppState {
         Ok(())
     }
 
-    // 2. Settings Helpers (Split into UiPreferences, SecurityPolicy, InternalLifecycleState)
+    // 2. Settings & Cache Helpers (Unified ActiveProfileCaches under single mutex)
     fn get_cached_store<T: Clone>(
-        cache: &Mutex<Option<T>>,
+        &self,
+        field: fn(&mut ActiveProfileCaches) -> &mut Option<T>,
         name: &str,
     ) -> Result<T, AppFacadeError> {
-        cache
-            .lock()
-            .unwrap()
-            .as_ref()
-            .cloned()
+        let mut guard = self.profile_caches.lock().unwrap();
+        guard
+            .as_mut()
+            .and_then(|c| field(c).clone())
             .ok_or_else(|| AppFacadeError::Generic(format!("{} not loaded", name)))
     }
 
+    pub(crate) fn write_cache_slot_for_service<T>(
+        &self,
+        service: &AppService,
+        field: fn(&mut ActiveProfileCaches) -> &mut Option<T>,
+        value: Option<T>,
+    ) {
+        let current_gen = self.current_session_generation();
+        let owner_did = service
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap_or_default();
+        let mut guard = self.profile_caches.lock().unwrap();
+        let needs_reset = guard.as_ref().is_none_or(|c| {
+            c.generation != current_gen || (!owner_did.is_empty() && c.owner_did != owner_did)
+        });
+        if needs_reset {
+            *guard = Some(ActiveProfileCaches::new(current_gen, owner_did));
+        }
+        if let Some(ref mut caches) = *guard {
+            *field(caches) = value;
+        }
+    }
+
+    pub fn cache_contacts(&self) -> Option<FrontendAddressBook> {
+        self.profile_caches
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|c| c.contacts.clone())
+    }
+
+    pub fn set_cached_contacts(&self, value: Option<FrontendAddressBook>) {
+        self.set_cache_slot_direct(|c| &mut c.contacts, value);
+    }
+
+    pub fn set_cached_contacts_for_service(
+        &self,
+        service: &AppService,
+        value: Option<FrontendAddressBook>,
+    ) {
+        self.write_cache_slot_for_service(service, |c| &mut c.contacts, value);
+    }
+
+    pub fn with_cached_contacts_mut<R>(
+        &self,
+        f: impl FnOnce(&mut Option<FrontendAddressBook>) -> R,
+    ) -> R {
+        let mut guard = self.profile_caches.lock().unwrap();
+        if let Some(ref mut caches) = *guard {
+            f(&mut caches.contacts)
+        } else {
+            let mut none = None;
+            f(&mut none)
+        }
+    }
+
+    pub fn cache_events(&self) -> Option<Vec<human_money_core::models::wallet_event::WalletEvent>> {
+        self.profile_caches
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|c| c.events.clone())
+    }
+
+    pub fn set_cached_events(
+        &self,
+        value: Option<Vec<human_money_core::models::wallet_event::WalletEvent>>,
+    ) {
+        self.set_cache_slot_direct(|c| &mut c.events, value);
+    }
+
+    pub fn cache_wot(&self) -> Option<humoco_wot::TrustRegister> {
+        self.profile_caches
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|c| c.wot.clone())
+    }
+
+    pub fn set_cached_wot(&self, value: Option<humoco_wot::TrustRegister>) {
+        self.set_cache_slot_direct(|c| &mut c.wot, value);
+    }
+
+    pub fn cache_ui_preferences(&self) -> Option<UiPreferences> {
+        self.profile_caches
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|c| c.ui_preferences.clone())
+    }
+
+    pub fn set_cached_ui_preferences(&self, value: Option<UiPreferences>) {
+        self.set_cache_slot_direct(|c| &mut c.ui_preferences, value);
+    }
+
+    pub fn cache_security_policy(&self) -> Option<SecurityPolicy> {
+        self.profile_caches
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|c| c.security_policy.clone())
+    }
+
+    pub fn set_cached_security_policy(&self, value: Option<SecurityPolicy>) {
+        self.set_cache_slot_direct(|c| &mut c.security_policy, value);
+    }
+
+    pub fn cache_internal_lifecycle(&self) -> Option<InternalLifecycleState> {
+        self.profile_caches
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|c| c.internal_lifecycle.clone())
+    }
+
+    pub fn set_cached_internal_lifecycle(&self, value: Option<InternalLifecycleState>) {
+        self.set_cache_slot_direct(|c| &mut c.internal_lifecycle, value);
+    }
+
+    pub fn cache_history(&self) -> Option<Vec<TransactionRecord>> {
+        self.profile_caches
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|c| c.history.clone())
+    }
+
+    pub fn set_cached_history(&self, value: Option<Vec<TransactionRecord>>) {
+        self.set_cache_slot_direct(|c| &mut c.history, value);
+    }
+
+    pub fn cache_own_market_profile(&self) -> Option<crate::models::StoredOwnMarketProfile> {
+        self.profile_caches
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|c| c.own_market_profile.clone())
+    }
+
+    pub fn set_cached_own_market_profile(
+        &self,
+        value: Option<crate::models::StoredOwnMarketProfile>,
+    ) {
+        self.set_cache_slot_direct(|c| &mut c.own_market_profile, value);
+    }
+
+    pub fn set_cached_own_market_profile_for_service(
+        &self,
+        service: &AppService,
+        value: Option<crate::models::StoredOwnMarketProfile>,
+    ) {
+        self.write_cache_slot_for_service(service, |c| &mut c.own_market_profile, value);
+    }
+
+    pub fn cache_recovery_owner(
+        &self,
+    ) -> Option<Option<crate::models::recovery::RecoveryOwnerState>> {
+        self.profile_caches
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|c| c.recovery_owner.clone())
+    }
+
+    pub fn set_cached_recovery_owner(
+        &self,
+        value: Option<Option<crate::models::recovery::RecoveryOwnerState>>,
+    ) {
+        self.set_cache_slot_direct(|c| &mut c.recovery_owner, value);
+    }
+
+    pub fn set_cached_recovery_owner_for_service(
+        &self,
+        service: &AppService,
+        value: Option<Option<crate::models::recovery::RecoveryOwnerState>>,
+    ) {
+        self.write_cache_slot_for_service(service, |c| &mut c.recovery_owner, value);
+    }
+
+    pub fn cache_guardian_vault(&self) -> Option<humoco_market::GuardianVaultStore> {
+        self.profile_caches
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|c| c.guardian_vault.clone())
+    }
+
+    pub fn set_cached_guardian_vault(&self, value: Option<humoco_market::GuardianVaultStore>) {
+        self.set_cache_slot_direct(|c| &mut c.guardian_vault, value);
+    }
+
+    pub fn set_cached_guardian_vault_for_service(
+        &self,
+        service: &AppService,
+        value: Option<humoco_market::GuardianVaultStore>,
+    ) {
+        self.write_cache_slot_for_service(service, |c| &mut c.guardian_vault, value);
+    }
+
+    pub fn cache_app_notices(&self) -> Option<crate::models::StoredAppNotices> {
+        self.profile_caches
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|c| c.app_notices.clone())
+    }
+
+    pub fn set_cached_app_notices(&self, value: Option<crate::models::StoredAppNotices>) {
+        self.set_cache_slot_direct(|c| &mut c.app_notices, value);
+    }
+
+    fn set_cache_slot_direct<T>(
+        &self,
+        field: fn(&mut ActiveProfileCaches) -> &mut Option<T>,
+        value: Option<T>,
+    ) {
+        let mut guard = self.profile_caches.lock().unwrap();
+        if value.is_some() && guard.is_none() {
+            *guard = Some(ActiveProfileCaches::new(
+                self.current_session_generation(),
+                String::new(),
+            ));
+        }
+        if let Some(ref mut caches) = *guard {
+            *field(caches) = value;
+        }
+    }
+
     fn load_store_inner<T>(
+        &self,
         service: &mut AppService,
-        cache: &Mutex<Option<T>>,
+        field: fn(&mut ActiveProfileCaches) -> &mut Option<T>,
         key: &str,
         password: Option<&str>,
         is_local_sidecar: bool,
@@ -652,37 +1288,40 @@ impl AppState {
                 default_value
             }
         };
-        *cache.lock().unwrap() = Some(value.clone());
+        self.write_cache_slot_for_service(service, field, Some(value.clone()));
         Ok(value)
     }
 
     fn load_store<T>(
+        &self,
         service: &mut AppService,
-        cache: &Mutex<Option<T>>,
+        field: fn(&mut ActiveProfileCaches) -> &mut Option<T>,
         key: &str,
         password: Option<&str>,
     ) -> Result<T, AppFacadeError>
     where
         T: serde::Serialize + serde::de::DeserializeOwned + Default + Clone,
     {
-        Self::load_store_inner(service, cache, key, password, false)
+        self.load_store_inner(service, field, key, password, false)
     }
 
     fn load_local_store<T>(
+        &self,
         service: &mut AppService,
-        cache: &Mutex<Option<T>>,
+        field: fn(&mut ActiveProfileCaches) -> &mut Option<T>,
         key: &str,
         password: Option<&str>,
     ) -> Result<T, AppFacadeError>
     where
         T: serde::Serialize + serde::de::DeserializeOwned + Default + Clone,
     {
-        Self::load_store_inner(service, cache, key, password, true)
+        self.load_store_inner(service, field, key, password, true)
     }
 
     fn get_or_load_store<T>(
+        &self,
         service: &mut AppService,
-        cache: &Mutex<Option<T>>,
+        field: fn(&mut ActiveProfileCaches) -> &mut Option<T>,
         key: &str,
         name: &str,
         password: Option<&str>,
@@ -690,15 +1329,16 @@ impl AppState {
     where
         T: serde::Serialize + serde::de::DeserializeOwned + Default + Clone,
     {
-        if let Ok(cached) = Self::get_cached_store(cache, name) {
+        if let Ok(cached) = self.get_cached_store(field, name) {
             return Ok(cached);
         }
-        Self::load_store(service, cache, key, password)
+        self.load_store(service, field, key, password)
     }
 
     fn get_or_load_local_store<T>(
+        &self,
         service: &mut AppService,
-        cache: &Mutex<Option<T>>,
+        field: fn(&mut ActiveProfileCaches) -> &mut Option<T>,
         key: &str,
         name: &str,
         password: Option<&str>,
@@ -706,15 +1346,15 @@ impl AppState {
     where
         T: serde::Serialize + serde::de::DeserializeOwned + Default + Clone,
     {
-        if let Ok(cached) = Self::get_cached_store(cache, name) {
+        if let Ok(cached) = self.get_cached_store(field, name) {
             return Ok(cached);
         }
-        Self::load_local_store(service, cache, key, password)
+        self.load_local_store(service, field, key, password)
     }
 
     fn get_or_load_store_locked<T>(
         &self,
-        cache: &Mutex<Option<T>>,
+        field: fn(&mut ActiveProfileCaches) -> &mut Option<T>,
         key: &str,
         name: &str,
         password: Option<&str>,
@@ -722,17 +1362,17 @@ impl AppState {
     where
         T: serde::Serialize + serde::de::DeserializeOwned + Default + Clone,
     {
-        if let Ok(cached) = Self::get_cached_store(cache, name) {
+        if let Ok(cached) = self.get_cached_store(field, name) {
             return Ok(cached);
         }
         let mut service = self.lock_service()?;
-        Self::load_store(&mut service, cache, key, password)
+        self.load_store(&mut service, field, key, password)
             .map_err(crate::models::FrontendError::from)
     }
 
     fn get_or_load_local_store_locked<T>(
         &self,
-        cache: &Mutex<Option<T>>,
+        field: fn(&mut ActiveProfileCaches) -> &mut Option<T>,
         key: &str,
         name: &str,
         password: Option<&str>,
@@ -740,17 +1380,18 @@ impl AppState {
     where
         T: serde::Serialize + serde::de::DeserializeOwned + Default + Clone,
     {
-        if let Ok(cached) = Self::get_cached_store(cache, name) {
+        if let Ok(cached) = self.get_cached_store(field, name) {
             return Ok(cached);
         }
         let mut service = self.lock_service()?;
-        Self::load_local_store(&mut service, cache, key, password)
+        self.load_local_store(&mut service, field, key, password)
             .map_err(crate::models::FrontendError::from)
     }
 
     fn save_store<T>(
+        &self,
         service: &mut AppService,
-        cache: &Mutex<Option<T>>,
+        field: fn(&mut ActiveProfileCaches) -> &mut Option<T>,
         key: &str,
         value: T,
         password: Option<&str>,
@@ -759,13 +1400,14 @@ impl AppState {
         T: serde::Serialize + Clone,
     {
         save_encrypted_json(service, key, &value, password)?;
-        *cache.lock().unwrap() = Some(value);
+        self.write_cache_slot_for_service(service, field, Some(value));
         Ok(())
     }
 
     fn save_local_store<T>(
+        &self,
         service: &mut AppService,
-        cache: &Mutex<Option<T>>,
+        field: fn(&mut ActiveProfileCaches) -> &mut Option<T>,
         key: &str,
         value: T,
         password: Option<&str>,
@@ -774,7 +1416,7 @@ impl AppState {
         T: serde::Serialize + Clone,
     {
         save_local_sidecar_json(service, key, &value, password)?;
-        *cache.lock().unwrap() = Some(value);
+        self.write_cache_slot_for_service(service, field, Some(value));
         Ok(())
     }
 
@@ -782,7 +1424,8 @@ impl AppState {
     fn mutate_store_for_owner_inner<T>(
         &self,
         expected_owner_did: &str,
-        cache: &Mutex<Option<T>>,
+        expected_generation: Option<u64>,
+        field: fn(&mut ActiveProfileCaches) -> &mut Option<T>,
         key: &str,
         name: &str,
         password: Option<&str>,
@@ -793,6 +1436,14 @@ impl AppState {
         T: serde::Serialize + serde::de::DeserializeOwned + Default + Clone,
     {
         let mut service = self.lock_service()?;
+        if !service.is_wallet_unlocked() {
+            return Ok(None);
+        }
+        if let Some(expected_gen) = expected_generation {
+            if self.current_session_generation() != expected_gen {
+                return Ok(None);
+            }
+        }
         let Ok(current_did) = service.with_wallet(|w| w.get_user_id().to_string()) else {
             return Ok(None);
         };
@@ -800,16 +1451,16 @@ impl AppState {
             return Ok(None);
         }
         let mut value = if is_local_sidecar {
-            Self::get_or_load_local_store(&mut service, cache, key, name, password)
+            self.get_or_load_local_store(&mut service, field, key, name, password)
         } else {
-            Self::get_or_load_store(&mut service, cache, key, name, password)
+            self.get_or_load_store(&mut service, field, key, name, password)
         }
         .map_err(crate::models::FrontendError::from)?;
         if f(&mut value) {
             if is_local_sidecar {
-                Self::save_local_store(&mut service, cache, key, value.clone(), password)
+                self.save_local_store(&mut service, field, key, value.clone(), password)
             } else {
-                Self::save_store(&mut service, cache, key, value.clone(), password)
+                self.save_store(&mut service, field, key, value.clone(), password)
             }
             .map_err(crate::models::FrontendError::from)?;
         }
@@ -819,7 +1470,7 @@ impl AppState {
     fn mutate_store_for_owner<T>(
         &self,
         expected_owner_did: &str,
-        cache: &Mutex<Option<T>>,
+        field: fn(&mut ActiveProfileCaches) -> &mut Option<T>,
         key: &str,
         name: &str,
         password: Option<&str>,
@@ -828,13 +1479,22 @@ impl AppState {
     where
         T: serde::Serialize + serde::de::DeserializeOwned + Default + Clone,
     {
-        self.mutate_store_for_owner_inner(expected_owner_did, cache, key, name, password, false, f)
+        self.mutate_store_for_owner_inner(
+            expected_owner_did,
+            None,
+            field,
+            key,
+            name,
+            password,
+            false,
+            f,
+        )
     }
 
     fn mutate_local_store_for_owner<T>(
         &self,
         expected_owner_did: &str,
-        cache: &Mutex<Option<T>>,
+        field: fn(&mut ActiveProfileCaches) -> &mut Option<T>,
         key: &str,
         name: &str,
         password: Option<&str>,
@@ -843,11 +1503,20 @@ impl AppState {
     where
         T: serde::Serialize + serde::de::DeserializeOwned + Default + Clone,
     {
-        self.mutate_store_for_owner_inner(expected_owner_did, cache, key, name, password, true, f)
+        self.mutate_store_for_owner_inner(
+            expected_owner_did,
+            None,
+            field,
+            key,
+            name,
+            password,
+            true,
+            f,
+        )
     }
 
     pub fn get_cached_ui_preferences(&self) -> Result<UiPreferences, AppFacadeError> {
-        Self::get_cached_store(&self.ui_preferences, "UiPreferences")
+        self.get_cached_store(|c| &mut c.ui_preferences, "UiPreferences")
     }
 
     pub fn get_or_load_ui_preferences(
@@ -855,9 +1524,9 @@ impl AppState {
         service: &mut AppService,
         password: Option<&str>,
     ) -> Result<UiPreferences, AppFacadeError> {
-        Self::get_or_load_store(
+        self.get_or_load_store(
             service,
-            &self.ui_preferences,
+            |c| &mut c.ui_preferences,
             UI_PREFERENCES_KEY,
             "UiPreferences",
             password,
@@ -869,7 +1538,7 @@ impl AppState {
         password: Option<&str>,
     ) -> Result<UiPreferences, crate::models::FrontendError> {
         self.get_or_load_store_locked(
-            &self.ui_preferences,
+            |c| &mut c.ui_preferences,
             UI_PREFERENCES_KEY,
             "UiPreferences",
             password,
@@ -881,7 +1550,12 @@ impl AppState {
         service: &mut AppService,
         password: Option<&str>,
     ) -> Result<UiPreferences, AppFacadeError> {
-        Self::load_store(service, &self.ui_preferences, UI_PREFERENCES_KEY, password)
+        self.load_store(
+            service,
+            |c| &mut c.ui_preferences,
+            UI_PREFERENCES_KEY,
+            password,
+        )
     }
 
     pub fn save_ui_preferences(
@@ -891,9 +1565,7 @@ impl AppState {
         password: Option<&str>,
     ) -> Result<(), AppFacadeError> {
         let prev_min = match self
-            .ui_preferences
-            .lock()
-            .unwrap()
+            .cache_ui_preferences()
             .as_ref()
             .map(|p| p.share_min_level)
         {
@@ -904,9 +1576,9 @@ impl AppState {
             }
         };
         let new_min = prefs.share_min_level;
-        Self::save_store(
+        self.save_store(
             service,
-            &self.ui_preferences,
+            |c| &mut c.ui_preferences,
             UI_PREFERENCES_KEY,
             prefs,
             password,
@@ -932,7 +1604,7 @@ impl AppState {
     }
 
     pub fn get_cached_security_policy(&self) -> Result<SecurityPolicy, AppFacadeError> {
-        Self::get_cached_store(&self.security_policy, "SecurityPolicy")
+        self.get_cached_store(|c| &mut c.security_policy, "SecurityPolicy")
     }
 
     pub fn get_or_load_security_policy(
@@ -940,9 +1612,9 @@ impl AppState {
         service: &mut AppService,
         password: Option<&str>,
     ) -> Result<SecurityPolicy, AppFacadeError> {
-        Self::get_or_load_store(
+        self.get_or_load_store(
             service,
-            &self.security_policy,
+            |c| &mut c.security_policy,
             SECURITY_POLICY_KEY,
             "SecurityPolicy",
             password,
@@ -954,7 +1626,7 @@ impl AppState {
         password: Option<&str>,
     ) -> Result<SecurityPolicy, crate::models::FrontendError> {
         self.get_or_load_store_locked(
-            &self.security_policy,
+            |c| &mut c.security_policy,
             SECURITY_POLICY_KEY,
             "SecurityPolicy",
             password,
@@ -966,9 +1638,9 @@ impl AppState {
         service: &mut AppService,
         password: Option<&str>,
     ) -> Result<SecurityPolicy, AppFacadeError> {
-        Self::load_store(
+        self.load_store(
             service,
-            &self.security_policy,
+            |c| &mut c.security_policy,
             SECURITY_POLICY_KEY,
             password,
         )
@@ -980,9 +1652,9 @@ impl AppState {
         policy: SecurityPolicy,
         password: Option<&str>,
     ) -> Result<(), AppFacadeError> {
-        Self::save_store(
+        self.save_store(
             service,
-            &self.security_policy,
+            |c| &mut c.security_policy,
             SECURITY_POLICY_KEY,
             policy,
             password,
@@ -1009,7 +1681,7 @@ impl AppState {
     ) -> Result<Option<SecurityPolicy>, crate::models::FrontendError> {
         self.mutate_store_for_owner(
             expected_owner_did,
-            &self.security_policy,
+            |c| &mut c.security_policy,
             SECURITY_POLICY_KEY,
             "SecurityPolicy",
             password,
@@ -1017,8 +1689,26 @@ impl AppState {
         )
     }
 
+    pub fn mutate_security_policy_for_session(
+        &self,
+        token: &SessionToken,
+        password: Option<&str>,
+        f: impl FnOnce(&mut SecurityPolicy) -> bool,
+    ) -> Result<Option<SecurityPolicy>, crate::models::FrontendError> {
+        self.mutate_store_for_owner_inner(
+            &token.owner_did,
+            Some(token.generation),
+            |c| &mut c.security_policy,
+            SECURITY_POLICY_KEY,
+            "SecurityPolicy",
+            password,
+            false,
+            f,
+        )
+    }
+
     pub fn get_cached_internal_lifecycle(&self) -> Result<InternalLifecycleState, AppFacadeError> {
-        Self::get_cached_store(&self.internal_lifecycle, "InternalLifecycleState")
+        self.get_cached_store(|c| &mut c.internal_lifecycle, "InternalLifecycleState")
     }
 
     pub fn get_or_load_internal_lifecycle(
@@ -1026,9 +1716,9 @@ impl AppState {
         service: &mut AppService,
         password: Option<&str>,
     ) -> Result<InternalLifecycleState, AppFacadeError> {
-        Self::get_or_load_local_store(
+        self.get_or_load_local_store(
             service,
-            &self.internal_lifecycle,
+            |c| &mut c.internal_lifecycle,
             INTERNAL_LIFECYCLE_STATE_KEY,
             "InternalLifecycleState",
             password,
@@ -1040,7 +1730,7 @@ impl AppState {
         password: Option<&str>,
     ) -> Result<InternalLifecycleState, crate::models::FrontendError> {
         self.get_or_load_local_store_locked(
-            &self.internal_lifecycle,
+            |c| &mut c.internal_lifecycle,
             INTERNAL_LIFECYCLE_STATE_KEY,
             "InternalLifecycleState",
             password,
@@ -1052,9 +1742,9 @@ impl AppState {
         service: &mut AppService,
         password: Option<&str>,
     ) -> Result<InternalLifecycleState, AppFacadeError> {
-        Self::load_local_store(
+        self.load_local_store(
             service,
-            &self.internal_lifecycle,
+            |c| &mut c.internal_lifecycle,
             INTERNAL_LIFECYCLE_STATE_KEY,
             password,
         )
@@ -1066,9 +1756,9 @@ impl AppState {
         lifecycle: InternalLifecycleState,
         password: Option<&str>,
     ) -> Result<(), AppFacadeError> {
-        Self::save_local_store(
+        self.save_local_store(
             service,
-            &self.internal_lifecycle,
+            |c| &mut c.internal_lifecycle,
             INTERNAL_LIFECYCLE_STATE_KEY,
             lifecycle,
             password,
@@ -1095,7 +1785,7 @@ impl AppState {
     ) -> Result<Option<InternalLifecycleState>, crate::models::FrontendError> {
         self.mutate_local_store_for_owner(
             expected_owner_did,
-            &self.internal_lifecycle,
+            |c| &mut c.internal_lifecycle,
             INTERNAL_LIFECYCLE_STATE_KEY,
             "InternalLifecycleState",
             password,
@@ -1103,22 +1793,56 @@ impl AppState {
         )
     }
 
+    pub fn mutate_internal_lifecycle_for_session(
+        &self,
+        token: &SessionToken,
+        password: Option<&str>,
+        f: impl FnOnce(&mut InternalLifecycleState) -> bool,
+    ) -> Result<Option<InternalLifecycleState>, crate::models::FrontendError> {
+        self.mutate_store_for_owner_inner(
+            &token.owner_did,
+            Some(token.generation),
+            |c| &mut c.internal_lifecycle,
+            INTERNAL_LIFECYCLE_STATE_KEY,
+            "InternalLifecycleState",
+            password,
+            true,
+            f,
+        )
+    }
+
     pub fn get_cached_app_config(&self) -> Result<AppConfigDto, AppFacadeError> {
+        let guard = self.profile_caches.lock().unwrap();
+        let caches = guard
+            .as_ref()
+            .ok_or_else(|| AppFacadeError::Generic("AppConfig caches not loaded".to_string()))?;
         Ok(AppConfigDto {
-            ui_preferences: self.get_cached_ui_preferences()?,
-            security_policy: self.get_cached_security_policy()?,
-            lifecycle: self.get_cached_internal_lifecycle()?,
+            ui_preferences: caches
+                .ui_preferences
+                .clone()
+                .ok_or_else(|| AppFacadeError::Generic("UiPreferences not loaded".to_string()))?,
+            security_policy: caches
+                .security_policy
+                .clone()
+                .ok_or_else(|| AppFacadeError::Generic("SecurityPolicy not loaded".to_string()))?,
+            lifecycle: caches.internal_lifecycle.clone().ok_or_else(|| {
+                AppFacadeError::Generic("InternalLifecycleState not loaded".to_string())
+            })?,
         })
     }
 
     // 3. Contacts Helpers
     pub fn get_cached_contacts(&self) -> Result<Vec<FrontendContact>, AppFacadeError> {
-        let cache = self.contacts.lock().unwrap();
-        if let Some(book) = cache.as_ref() {
-            let wot_guard = self.wot.lock().unwrap();
+        let guard = self.profile_caches.lock().unwrap();
+        let Some(caches) = guard.as_ref() else {
+            return Err(AppFacadeError::Generic(
+                "Contacts cache not initialized".to_string(),
+            ));
+        };
+        if let Some(book) = caches.contacts.as_ref() {
             let mut contacts: Vec<FrontendContact> = book.contacts.values().cloned().collect();
             for c in contacts.iter_mut() {
-                enrich_contact_with_wot(c, wot_guard.as_ref());
+                enrich_contact_with_wot(c, caches.wot.as_ref());
             }
             contacts.sort_by(|a, b| {
                 let name_a = a.profile.first_name.as_deref().unwrap_or("");
@@ -1145,12 +1869,12 @@ impl AppState {
                 e
             })?;
 
-        *self.contacts.lock().unwrap() = Some(address_book.clone());
+        self.set_cached_contacts_for_service(service, Some(address_book.clone()));
 
-        let wot_guard = self.wot.lock().unwrap();
+        let wot_opt = self.cache_wot();
         let mut contacts: Vec<FrontendContact> = address_book.contacts.into_values().collect();
         for c in contacts.iter_mut() {
-            enrich_contact_with_wot(c, wot_guard.as_ref());
+            enrich_contact_with_wot(c, wot_opt.as_ref());
             c.syncs.truncate(2);
         }
         contacts.sort_by(|a, b| {
@@ -1433,7 +2157,7 @@ impl AppState {
         save_encrypted_json(service, CONTACTS_DATA_NAME, &address_book, password)
             .map_err(|e| AppFacadeError::Generic(format!("Failed to save address book: {}", e)))?;
 
-        *self.contacts.lock().unwrap() = Some(address_book.clone());
+        self.set_cached_contacts_for_service(service, Some(address_book.clone()));
         self.prune_orphaned_market_selected_syncs(
             service,
             &address_book,
@@ -1481,7 +2205,7 @@ impl AppState {
                 |e| AppFacadeError::Generic(format!("Failed to save address book: {}", e)),
             )?;
 
-            *self.contacts.lock().unwrap() = Some(address_book.clone());
+            self.set_cached_contacts_for_service(service, Some(address_book.clone()));
             self.prune_orphaned_market_selected_syncs(
                 service,
                 &address_book,
@@ -1520,13 +2244,51 @@ impl AppState {
         Ok(())
     }
 
-    // 4. History Helpers
+    // 4. History & Outgoing Bundle Helpers
     pub fn get_cached_history(&self) -> Result<Vec<TransactionRecord>, AppFacadeError> {
-        let cache = self.history.lock().unwrap();
-        cache
-            .as_ref()
-            .cloned()
-            .ok_or_else(|| AppFacadeError::Generic("History cache not initialized".to_string()))
+        self.get_cached_store(|c| &mut c.history, "History cache")
+    }
+
+    /// Returns cached transaction history with `"sent"` records hydrated from `outgoing_bundles`
+    /// so UI retry/download paths receive exact bytes without storing large payloads inside `tx_history`.
+    pub fn get_hydrated_history(&self) -> Result<Vec<TransactionRecord>, AppFacadeError> {
+        let (mut history, cached_outgoing) = {
+            let guard = self
+                .profile_caches
+                .lock()
+                .map_err(|_| AppFacadeError::Generic("History cache lock poisoned".into()))?;
+            let caches = guard
+                .as_ref()
+                .ok_or_else(|| AppFacadeError::Generic("History cache not initialized".into()))?;
+            let history = caches
+                .history
+                .clone()
+                .ok_or_else(|| AppFacadeError::Generic("History cache not initialized".into()))?;
+            (history, caches.outgoing_bundles.clone())
+        };
+
+        let outgoing = match cached_outgoing {
+            Some(o) => o,
+            None => {
+                let mut service = self.lock_service().map_err(|e| {
+                    AppFacadeError::Generic(format!("Service lock unavailable: {}", e.message))
+                })?;
+                load_outgoing_bundles(&mut service, None)
+                    .map_err(|e| AppFacadeError::Generic(e.message))?
+            }
+        };
+
+        for record in &mut history {
+            if record.direction == "sent"
+                && record.bundle_data.is_empty()
+                && !record.bundle_id.is_empty()
+            {
+                if let Some(entry) = outgoing.bundles.get(&record.bundle_id) {
+                    record.bundle_data = entry.bundle_bytes.clone();
+                }
+            }
+        }
+        Ok(history)
     }
 
     pub fn load_history_from_disk(
@@ -1541,19 +2303,27 @@ impl AppState {
                     e
                 },
             )?;
-        *self.history.lock().unwrap() = Some(records.clone());
+        self.write_cache_slot_for_service(service, |c| &mut c.history, Some(records.clone()));
         Ok(records)
     }
 
     pub fn save_history(
         &self,
         service: &mut AppService,
-        history: Vec<TransactionRecord>,
+        mut history: Vec<TransactionRecord>,
         password: Option<&str>,
     ) -> Result<(), AppFacadeError> {
-        save_encrypted_json(service, TRANSACTION_HISTORY_KEY, &history, password)?;
-        *self.history.lock().unwrap() = Some(history);
-        Ok(())
+        // Keep `transaction_history` metadata-only on disk; outgoing bundle bytes live in `OUTGOING_BUNDLES_KEY`.
+        for record in &mut history {
+            record.bundle_data.clear();
+        }
+        self.save_store(
+            service,
+            |c| &mut c.history,
+            TRANSACTION_HISTORY_KEY,
+            history,
+            password,
+        )
     }
 
     pub fn append_to_history(
@@ -1574,6 +2344,41 @@ impl AppState {
         self.save_history(service, history, password)
     }
 
+    /// Atomically persists outgoing `(TransactionRecord, bundle_bytes)` pairs across
+    /// `(OUTGOING_BUNDLES_KEY, TRANSACTION_HISTORY_KEY)` in a single `WalletTransaction` batch.
+    pub fn record_outgoing_transactions_with_batch(
+        &self,
+        service: &mut AppService,
+        entries: Vec<(TransactionRecord, Vec<u8>)>,
+        password: Option<&str>,
+    ) -> Result<(), AppFacadeError> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+        let baseline_history = self.load_history_from_disk(service, password)?;
+        let baseline_outgoing = load_outgoing_bundles(service, password)
+            .map_err(|e| AppFacadeError::Generic(e.message))?;
+        let batch = prepare_outgoing_history_and_bundle_companions(
+            &baseline_history,
+            &baseline_outgoing,
+            entries,
+        )
+        .map_err(|e| AppFacadeError::Json(e.message))?;
+        let refs: Vec<(&str, &[u8])> = batch
+            .blobs
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_slice()))
+            .collect();
+        service.save_encrypted_batch(&refs, password)?;
+        self.write_cache_slot_for_service(service, |c| &mut c.history, Some(batch.history));
+        self.write_cache_slot_for_service(
+            service,
+            |c| &mut c.outgoing_bundles,
+            Some(batch.outgoing),
+        );
+        Ok(())
+    }
+
     // 5. Events Helpers
     pub fn refresh_events_cache(
         &self,
@@ -1582,24 +2387,20 @@ impl AppState {
     ) -> Result<(), AppFacadeError> {
         info!("Refreshing events cache...");
         let events = service.get_event_history(0, 50, password)?;
-        *self.events.lock().unwrap() = Some(events);
+        self.write_cache_slot_for_service(service, |c| &mut c.events, Some(events));
         Ok(())
     }
 
     // 6. Logout Helpers
     pub fn clear_all_caches(&self) {
         info!("Clearing all caches on logout...");
-        *self.history.lock().unwrap() = None;
-        *self.events.lock().unwrap() = None;
-        *self.contacts.lock().unwrap() = None;
-        *self.ui_preferences.lock().unwrap() = None;
-        *self.security_policy.lock().unwrap() = None;
-        *self.internal_lifecycle.lock().unwrap() = None;
-        *self.own_market_profile.lock().unwrap() = None;
-        *self.wot.lock().unwrap() = None;
-        *self.recovery_owner.lock().unwrap() = None;
-        *self.guardian_vault.lock().unwrap() = None;
-        *self.app_notices.lock().unwrap() = None;
+        let mut guard = self.profile_caches.lock().unwrap();
+        let next = self
+            .session_generation
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            .saturating_add(1);
+        let _ = self.session_gen_tx.send(next);
+        *guard = None;
     }
 
     /// Central session initializer — called after Login, Create Profile, Recovery, and Handover.
@@ -1628,6 +2429,16 @@ impl AppState {
         is_secondary: bool,
     ) -> Result<(), AppFacadeError> {
         info!("Initializing profile session and member caches...");
+        let owner_did = service.with_wallet(|w| w.get_user_id().to_string())?;
+        {
+            let mut guard = self.profile_caches.lock().unwrap();
+            let next = self
+                .session_generation
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                .saturating_add(1);
+            let _ = self.session_gen_tx.send(next);
+            *guard = Some(ActiveProfileCaches::new(next, owner_did));
+        }
 
         // 1. Load or create split configuration stores
         let _ui_prefs = self.load_ui_preferences(service, Some(credential))?;
@@ -1646,28 +2457,48 @@ impl AppState {
             }
         }
 
-        // 3. Load transaction history and clean up expired bundle data
+        // 3. Load transaction history + canonical outgoing bundles and prune expired retained bundles
         let mut history = self.load_history_from_disk(service, Some(credential))?;
-        let mut changed = false;
+        let mut outgoing = load_outgoing_bundles(service, Some(credential))
+            .map_err(|e| AppFacadeError::Generic(e.message))?;
         let retention_duration = Duration::days(BUNDLE_RETENTION_DAYS);
+        let now = Utc::now();
 
-        for record in history.iter_mut() {
-            if record.bundle_data.is_empty() {
-                continue;
-            }
-            if let Ok(timestamp) = record.timestamp.parse::<chrono::DateTime<Utc>>() {
-                if Utc::now().signed_duration_since(timestamp) > retention_duration {
-                    log::debug!("Clearing bundle data for expired transaction record");
-                    record.bundle_data.clear();
-                    changed = true;
-                }
+        let mut history_changed = false;
+        for record in &mut history {
+            if !record.bundle_data.is_empty() {
+                record.bundle_data.clear();
+                history_changed = true;
             }
         }
+        let prev_outgoing_len = outgoing.bundles.len();
+        outgoing.bundles.retain(|_, entry| {
+            entry
+                .created_at
+                .parse::<chrono::DateTime<Utc>>()
+                .map(|ts| now.signed_duration_since(ts) <= retention_duration)
+                .unwrap_or(true)
+        });
+        let outgoing_changed = outgoing.bundles.len() != prev_outgoing_len;
 
-        if changed {
-            info!("Saving cleaned transaction history back to disk...");
-            self.save_history(service, history, Some(credential))?;
+        if history_changed || outgoing_changed {
+            info!("Saving pruned outgoing bundles / transaction history back to disk...");
+            let outgoing_bytes = serde_json::to_vec(&outgoing).map_err(|e| {
+                AppFacadeError::Json(format!("Failed to serialize outgoing_bundles: {}", e))
+            })?;
+            let history_bytes = serde_json::to_vec(&history).map_err(|e| {
+                AppFacadeError::Json(format!("Failed to serialize transaction_history: {}", e))
+            })?;
+            service.save_encrypted_batch(
+                &[
+                    (OUTGOING_BUNDLES_KEY, &outgoing_bytes),
+                    (TRANSACTION_HISTORY_KEY, &history_bytes),
+                ],
+                Some(credential),
+            )?;
+            self.write_cache_slot_for_service(service, |c| &mut c.history, Some(history));
         }
+        self.write_cache_slot_for_service(service, |c| &mut c.outgoing_bundles, Some(outgoing));
 
         // 4. Pre-cache the last 50 wallet events
         self.refresh_events_cache(service, Some(credential))?;
@@ -1687,7 +2518,11 @@ impl AppState {
             Some(credential),
         ) {
             Ok(owner_opt) => {
-                *self.recovery_owner.lock().unwrap() = Some(owner_opt);
+                self.write_cache_slot_for_service(
+                    service,
+                    |c| &mut c.recovery_owner,
+                    Some(owner_opt),
+                );
             }
             Err(e) => {
                 log::warn!("Failed to pre-load recovery owner state: {}", e);
@@ -1699,7 +2534,7 @@ impl AppState {
             Some(credential),
         ) {
             Ok(vault) => {
-                *self.guardian_vault.lock().unwrap() = Some(vault);
+                self.write_cache_slot_for_service(service, |c| &mut c.guardian_vault, Some(vault));
             }
             Err(e) => {
                 log::warn!("Failed to pre-load guardian vault: {}", e);
@@ -1713,7 +2548,11 @@ impl AppState {
             Some(credential),
         ) {
             Ok(own_profile) => {
-                *self.own_market_profile.lock().unwrap() = Some(own_profile);
+                self.write_cache_slot_for_service(
+                    service,
+                    |c| &mut c.own_market_profile,
+                    Some(own_profile),
+                );
             }
             Err(e) => {
                 log::warn!("Failed to pre-load own market profile: {}", e);
@@ -1727,7 +2566,7 @@ impl AppState {
             Some(credential),
         ) {
             Ok(notices) => {
-                *self.app_notices.lock().unwrap() = Some(notices);
+                self.write_cache_slot_for_service(service, |c| &mut c.app_notices, Some(notices));
             }
             Err(e) => {
                 log::warn!("Failed to pre-load app notices: {}", e);
@@ -1836,7 +2675,7 @@ impl AppState {
             }
         }
 
-        *self.wot.lock().unwrap() = Some(reg.clone());
+        self.write_cache_slot_for_service(service, |c| &mut c.wot, Some(reg.clone()));
         Ok(reg)
     }
 
@@ -1845,8 +2684,8 @@ impl AppState {
         service: &mut AppService,
         password: Option<&str>,
     ) -> Result<humoco_wot::TrustRegister, AppFacadeError> {
-        if let Some(reg) = self.wot.lock().unwrap().as_ref() {
-            return Ok(reg.clone());
+        if let Some(reg) = self.cache_wot() {
+            return Ok(reg);
         }
         self.load_wot_register(service, password)
     }
@@ -1859,7 +2698,7 @@ impl AppState {
     ) -> Result<(), AppFacadeError> {
         save_encrypted_json(service, WOT_DATA_NAME, reg, password)
             .map_err(|e| AppFacadeError::Generic(format!("Failed to save TrustRegister: {}", e)))?;
-        *self.wot.lock().unwrap() = Some(reg.clone());
+        self.write_cache_slot_for_service(service, |c| &mut c.wot, Some(reg.clone()));
         Ok(())
     }
 
@@ -1912,9 +2751,9 @@ impl AppState {
             .filter_map(|gid| canonicalize_did(gid).ok())
             .collect();
 
-        let (eval, provider_filter_names) = {
-            let wot_guard = self.wot.lock().unwrap();
-            let reg = match wot_guard.as_ref() {
+        let (eval, provider_filter_names, contacts_cache) = {
+            let caches_guard = self.profile_caches.lock().unwrap();
+            let reg = match caches_guard.as_ref().and_then(|c| c.wot.as_ref()) {
                 Some(r) => r,
                 None => return FrontendVoucherTrustDto::default(),
             };
@@ -1950,7 +2789,8 @@ impl AppState {
                     }
                 }
             }
-            (eval, provider_filter_names)
+            let contacts_cache = caches_guard.as_ref().and_then(|c| c.contacts.clone());
+            (eval, provider_filter_names, contacts_cache)
         };
 
         let score = eval.score;
@@ -1958,7 +2798,6 @@ impl AppState {
         let shortest_hops = eval.shortest_hops;
         let additional_paths_count = eval.paths.len().saturating_sub(1);
 
-        let contacts_cache = self.contacts.lock().unwrap();
         let contacts_ref = contacts_cache.as_ref();
 
         let mut primary_bridge_did = None;
@@ -2237,7 +3076,7 @@ impl AppState {
 
         if updated {
             let _ = save_encrypted_json(service, CONTACTS_DATA_NAME, &address_book, password);
-            *self.contacts.lock().unwrap() = Some(address_book);
+            self.set_cached_contacts_for_service(service, Some(address_book));
         }
     }
 
@@ -2341,7 +3180,7 @@ impl AppState {
 
         if updated {
             let _ = save_encrypted_json(service, CONTACTS_DATA_NAME, &address_book, password);
-            *self.contacts.lock().unwrap() = Some(address_book);
+            self.set_cached_contacts_for_service(service, Some(address_book));
         }
 
         if let Some(mut policy) = policy_opt {
@@ -2686,7 +3525,11 @@ impl AppState {
             password,
         ) {
             Ok(loaded) => {
-                *self.app_notices.lock().unwrap() = Some(loaded.clone());
+                self.write_cache_slot_for_service(
+                    service,
+                    |c| &mut c.app_notices,
+                    Some(loaded.clone()),
+                );
                 loaded
             }
             Err(
@@ -2697,7 +3540,7 @@ impl AppState {
                     | human_money_core::error::AppError::SessionExpired { .. },
                 ),
             ) if password.is_none() => {
-                if let Some(cached) = self.app_notices.lock().unwrap().clone() {
+                if let Some(cached) = self.cache_app_notices() {
                     return cached;
                 }
                 Default::default()
@@ -2705,7 +3548,7 @@ impl AppState {
             Err(e) => {
                 log::warn!("Failed to load {}: {}", APP_NOTICES_KEY, e);
                 if password.is_none() {
-                    if let Some(cached) = self.app_notices.lock().unwrap().clone() {
+                    if let Some(cached) = self.cache_app_notices() {
                         return cached;
                     }
                 }
@@ -2722,13 +3565,13 @@ impl AppState {
     ) -> Result<(), crate::models::FrontendError> {
         save_encrypted_json(service, APP_NOTICES_KEY, notices, password)
             .map_err(crate::models::FrontendError::from)?;
-        *self.app_notices.lock().unwrap() = Some(notices.clone());
+        self.write_cache_slot_for_service(service, |c| &mut c.app_notices, Some(notices.clone()));
         Ok(())
     }
 
-    /// Updates `last_sync_at` and prepends new notices, truncating to `MAX_APP_NOTICES` (50).
-    pub fn append_app_notices(
+    pub fn append_app_notices_with_service(
         &self,
+        service: &mut AppService,
         last_sync_at: Option<u64>,
         mut new_items: Vec<crate::models::FrontendAppNotice>,
         password: Option<&str>,
@@ -2736,9 +3579,8 @@ impl AppState {
         if last_sync_at.is_none() && new_items.is_empty() {
             return;
         }
-        let mut service = self.service.lock().unwrap();
         let mut store: crate::models::StoredAppNotices =
-            match load_encrypted_json_or_default(&mut service, APP_NOTICES_KEY, password) {
+            match load_encrypted_json_or_default(service, APP_NOTICES_KEY, password) {
                 Ok(s) => s,
                 Err(e) => {
                     log::warn!("Failed to load app notices before append: {}", e);
@@ -2753,9 +3595,23 @@ impl AppState {
             new_items.truncate(MAX_APP_NOTICES);
             store.notices = new_items;
         }
-        if let Err(e) = self.save_app_notices(&mut service, &store, password) {
+        if let Err(e) = self.save_app_notices(service, &store, password) {
             log::warn!("Failed to persist app notices: {:?}", e);
         }
+    }
+
+    /// Updates `last_sync_at` and prepends new notices, truncating to `MAX_APP_NOTICES` (50).
+    pub fn append_app_notices(
+        &self,
+        last_sync_at: Option<u64>,
+        new_items: Vec<crate::models::FrontendAppNotice>,
+        password: Option<&str>,
+    ) {
+        if last_sync_at.is_none() && new_items.is_empty() {
+            return;
+        }
+        let mut service = self.service.lock().unwrap();
+        self.append_app_notices_with_service(&mut service, last_sync_at, new_items, password);
     }
 }
 
@@ -3897,7 +4753,7 @@ mod tests {
             .any(|c| c.did == privat_uid && c.trust_level.is_none()));
 
         // 4. lookup_contact_name resolves exact subaccount name rather than sibling
-        let book = state.contacts.lock().unwrap().clone();
+        let book = state.cache_contacts();
         assert_eq!(
             super::lookup_contact_name(book.as_ref(), &laden_uid).as_deref(),
             Some("Mein Laden")
@@ -4470,7 +5326,8 @@ mod tests {
         .unwrap();
 
         let loaded =
-            super::load_known_head_receipts_for_anchor(&mut service, &anchor_id, Some(password));
+            super::load_known_head_receipts_for_anchor(&mut service, &anchor_id, Some(password))
+                .expect("valid sidecar should load");
         assert_eq!(loaded.get(&lock_pub), Some(&receipt));
 
         assert!(service
@@ -4479,6 +5336,30 @@ mod tests {
         assert!(service
             .load_encrypted_data(super::KNOWN_LOCK_HEADS_KEY, Some(password))
             .is_err());
+
+        // Corrupt JSON inside the sidecar must fail closed rather than silently returning empty map.
+        service
+            .save_local_sidecar_data(
+                super::KNOWN_LOCK_HEADS_KEY,
+                b"{corrupt-sidecar",
+                Some(password),
+            )
+            .unwrap();
+        assert!(
+            super::load_known_head_receipts_for_anchor(&mut service, &anchor_id, Some(password))
+                .is_err(),
+            "Corrupt known-lock-heads sidecar must fail closed"
+        );
+        assert!(
+            super::record_known_head_receipts(
+                &mut service,
+                &anchor_id,
+                std::slice::from_ref(&receipt),
+                Some(password),
+            )
+            .is_err(),
+            "Recording against corrupt known-lock-heads sidecar must also fail closed"
+        );
 
         let seal_after = service.get_current_seal().unwrap();
         assert_eq!(

@@ -56,12 +56,7 @@ pub(crate) async fn probe_lock_server_cmd_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendLockServerProbeResult, FrontendError> {
-    let owner_did = {
-        let service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
-        service
-            .with_wallet(|w| w.get_user_id().to_string())
-            .map_err(FrontendError::from)?
-    };
+    let session = state.authorize_and_begin_session(crate::state::RequiredAccess::Unlocked, None)?;
     let client = sync_client::create_sync_probe_client();
     let mut result = sync_client::probe_lock_server(
         &client,
@@ -75,10 +70,13 @@ pub(crate) async fn probe_lock_server_cmd_impl(
 
     let norm_url = normalize_sync_url(&result.write_url);
     if !norm_url.is_empty() {
-        let offenders = {
-            let mut service = state.lock_service()?;
-            crate::l2_lifecycle::load_server_offender_list(&mut service, password.as_deref())?
-        };
+        let offenders = state.with_session_required(
+            &session,
+            "Active wallet session changed before probe could be validated",
+            |service| {
+                crate::l2_lifecycle::load_server_offender_list(service, password.as_deref())
+            },
+        )?;
         if let Ok(lock_pk) = decode_hex_fixed::<32>(&result.lock_pub) {
             let admin_pk = decode_hex_fixed::<32>(&result.admin_pub).ok();
             if crate::l2_lifecycle::is_server_key_revoked(&offenders, &lock_pk, admin_pk.as_ref()) {
@@ -89,7 +87,7 @@ pub(crate) async fn probe_lock_server_cmd_impl(
                 );
             }
         }
-        state.mutate_internal_lifecycle_for_owner(&owner_did, password.as_deref(), |lc| {
+        state.mutate_internal_lifecycle_for_session(&session, password.as_deref(), |lc| {
             lc.l2_probe_cache.insert(norm_url.clone(), result.clone());
             true
         })?;
@@ -172,7 +170,7 @@ pub(crate) async fn assemble_anchor_template_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<StoredAnchorTemplateMeta, FrontendError> {
-    let (owner_did, lifecycle, offenders, creator_mig_pub, signing_key_clone, anchor_nonce) = {
+    let (session, lifecycle, offenders, creator_mig_pub, signing_key_clone, anchor_nonce) = {
         let mut service =
             state.authorize_and_lock(crate::state::RequiredAccess::Full, password.as_deref())?;
         if servers.is_empty() || servers.len() > human_money_core::humoco_proto::MAX_COMMITTEE_SIZE
@@ -186,9 +184,12 @@ pub(crate) async fn assemble_anchor_template_impl(
                 "Too many guarantor authority keys".to_string(),
             ));
         }
-        let owner_did = service
-            .with_wallet(|w| w.get_user_id().to_string())
-            .map_err(FrontendError::from)?;
+        let session = crate::session::SessionToken {
+            generation: state.current_session_generation(),
+            owner_did: service
+                .with_wallet(|w| w.get_user_id().to_string())
+                .map_err(FrontendError::from)?,
+        };
         let lifecycle = state
             .get_or_load_internal_lifecycle(&mut service, password.as_deref())
             .map_err(FrontendError::from)?;
@@ -207,7 +208,7 @@ pub(crate) async fn assemble_anchor_template_impl(
             .map_err(FrontendError::from)?
             .map_err(FrontendError::from)?;
         (
-            owner_did,
+            session,
             lifecycle,
             offenders,
             creator_mig_pub,
@@ -369,25 +370,20 @@ pub(crate) async fn assemble_anchor_template_impl(
         tickets.push(res.map_err(FrontendError::from)?);
     }
 
-    {
-        let mut service = state.lock_service()?;
-        let current_owner = service
-            .with_wallet(|w| w.get_user_id().to_string())
-            .map_err(FrontendError::from)?;
-        if current_owner != owner_did {
-            return Err(FrontendError::from(
-                "Active wallet changed before anchor template could be saved".to_string(),
-            ));
-        }
-        service
-            .register_l2_anchor_template_with_nonce(
-                manifest,
-                tickets,
-                Some(&anchor_nonce),
-                password.as_deref(),
-            )
-            .map_err(FrontendError::from)?;
-    }
+    state.with_session_required(
+        &session,
+        "Active wallet changed before anchor template could be saved",
+        |service| {
+            service
+                .register_l2_anchor_template_with_nonce(
+                    manifest,
+                    tickets,
+                    Some(&anchor_nonce),
+                    password.as_deref(),
+                )
+                .map_err(FrontendError::from)
+        },
+    )?;
 
     let anchor_hex = hex::encode(anchor_id);
     let tmpl_meta = StoredAnchorTemplateMeta {
@@ -403,7 +399,7 @@ pub(crate) async fn assemble_anchor_template_impl(
         servers: stored_metas,
     };
 
-    state.mutate_internal_lifecycle_for_owner(&owner_did, password.as_deref(), |lc| {
+    state.mutate_internal_lifecycle_for_session(&session, password.as_deref(), |lc| {
         lc.l2_anchor_templates_meta
             .retain(|t| t.anchor_id != anchor_hex);
         lc.l2_anchor_templates_meta.push(tmpl_meta.clone());
@@ -623,16 +619,17 @@ pub(crate) async fn reconcile_vouchers_via_static_locks(
     })
 }
 
-pub(crate) fn clear_fork_lock_after_reconciliation(state: &AppState, password: Option<&str>) {
-    if let Ok(mut service) = state.lock_service() {
-        if matches!(
-            service.get_seal_lock_reason(password),
-            Ok(Some(
-                human_money_core::models::seal::SealLockReason::ForkDetected
-            ))
-        ) {
-            let _ = service.reconcile_rollback_with_diagnostics(&[], None, password);
-        }
+pub(crate) fn clear_fork_lock_for_service(
+    service: &mut human_money_core::app_service::AppService,
+    password: Option<&str>,
+) {
+    if matches!(
+        service.get_seal_lock_reason(password),
+        Ok(Some(
+            human_money_core::models::seal::SealLockReason::ForkDetected
+        ))
+    ) {
+        let _ = service.reconcile_rollback_with_diagnostics(&[], None, password);
     }
 }
 
@@ -640,7 +637,7 @@ pub(crate) async fn reconcile_restored_wallet_if_pending(
     state: &AppState,
     password: Option<&str>,
 ) -> Result<bool, FrontendError> {
-    let owner_did = {
+    let session = {
         let mut service = state.lock_service()?;
         let lifecycle = state
             .get_or_load_internal_lifecycle(&mut service, password)
@@ -648,15 +645,29 @@ pub(crate) async fn reconcile_restored_wallet_if_pending(
         if !lifecycle.pending_restore_l2_reconciliation {
             return Ok(false);
         }
-        service
-            .with_wallet(|w| w.get_user_id().to_string())
-            .map_err(FrontendError::from)?
+        if !service.is_wallet_unlocked() {
+            return Err(FrontendError::from(
+                human_money_core::app_service::AppFacadeError::WalletLocked,
+            ));
+        }
+        crate::session::SessionToken {
+            generation: state.current_session_generation(),
+            owner_did: service
+                .with_wallet(|w| w.get_user_id().to_string())
+                .map_err(FrontendError::from)?,
+        }
     };
 
     let summary = reconcile_vouchers_via_static_locks(state, None, password).await?;
     if summary.all_responded || summary.active_anchored_count == 0 {
-        clear_fork_lock_after_reconciliation(state, password);
-        let updated = state.mutate_internal_lifecycle_for_owner(&owner_did, password, |lc| {
+        let cleared = state.with_session(&session, |service| {
+            clear_fork_lock_for_service(service, password);
+            Ok(())
+        })?;
+        if cleared.is_none() {
+            return Ok(false);
+        }
+        let updated = state.mutate_internal_lifecycle_for_session(&session, password, |lc| {
             lc.pending_restore_l2_reconciliation = false;
             if lc
                 .wallet_sync_alert

@@ -26,6 +26,7 @@ import { useReceiveModals } from './useReceiveModals';
 import {
     VoucherStandardInfo,
     AppConfigDto,
+    PendingReceiveCommit,
     ReceiveSuccessPayload,
     VoucherDetails,
     PublicProfile,
@@ -38,7 +39,10 @@ export type {
 
 export interface UseReceiveFlowOptions {
     onBack: () => void;
-    onReceiveSuccess: (payload: ReceiveSuccessPayload | VoucherDetails) => void;
+    onReceiveSuccess: (
+        payload: ReceiveSuccessPayload | VoucherDetails,
+        pendingCommit?: PendingReceiveCommit,
+    ) => void;
     droppedFile?: { name: string; bytes: number[] };
 }
 
@@ -107,7 +111,7 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseRec
                 });
 
                 if (outcome.kind === 'success') {
-                    onReceiveSuccess(outcome.payload);
+                    onReceiveSuccess(outcome.payload, outcome.pendingCommit);
                 } else if (outcome.kind === 'signatureAttached') {
                     modalsRef.current?.setResultModal({
                         isOpen: true,

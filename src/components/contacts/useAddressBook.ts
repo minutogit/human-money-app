@@ -487,7 +487,12 @@ export function useAddressBook({
             (res?.importedCards ?? 0) > 0;
 
         if (!hasActivity) {
-            if (res?.skippedWifiOnly || postRes?.skippedWifiOnly) {
+            if (
+                res?.status === 'skippedWifiOnly' ||
+                res?.status === 'skippedCooldown' ||
+                res?.status === 'sessionSuperseded' ||
+                postRes?.skippedWifiOnly
+            ) {
                 return;
             }
             setFeedbackMsg({

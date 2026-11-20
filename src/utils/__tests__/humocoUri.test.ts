@@ -304,15 +304,17 @@ describe('humocoUri Utilities', () => {
       expect(extractHumocoDeepLink(null)).toBeNull();
     });
 
-    it('extractDidFromCardEnvelopeJson extracts DID from direct did and card_wire JWT payload', () => {
-      expect(extractDidFromCardEnvelopeJson(JSON.stringify({ did: sampleDid }))).toBe(sampleDid);
-
+    it('extractDidFromCardEnvelopeJson extracts DID exclusively from card_wire JWT payload (F6)', () => {
       const header = toBase64Url({ alg: 'EdDSA' });
       const payload = toBase64Url({ did: sampleSai });
       const envelopeJson = JSON.stringify({ card_wire: `${header}.${payload}.sig` });
       expect(extractDidFromCardEnvelopeJson(envelopeJson)).toBe(sampleSai);
 
-      const invalidPrefixEnvelope = JSON.stringify({ did: `badprefix@${sampleDid}` });
+      // Legacy direct top-level did without card_wire must be rejected
+      expect(extractDidFromCardEnvelopeJson(JSON.stringify({ did: sampleDid }))).toBeNull();
+      const invalidPrefixEnvelope = JSON.stringify({
+        card_wire: `${header}.${toBase64Url({ did: `badprefix@${sampleDid}` })}.sig`,
+      });
       expect(extractDidFromCardEnvelopeJson(invalidPrefixEnvelope)).toBeNull();
       expect(extractDidFromCardEnvelopeJson('{not-json')).toBeNull();
     });
@@ -406,6 +408,19 @@ describe('humocoUri Utilities', () => {
 
       // Shortened prefix without checksum must remain rejected (fail-closed)
       expect(parseContactCard(`„kasse@${sampleDid}“`)).toBeNull();
+    });
+
+    it('H8/F6: rejects malformed humoco://contact URIs without falling back and rejects legacy card envelopes', () => {
+      // Invalid prefix inside humoco://contact URI must fail closed (never fall through to embedded did:key)
+      expect(parseContactCard(`humoco://contact?did=bad!prefix@${sampleDid}&name=Evil`)).toBeNull();
+      expect(parseContactCard(`humoco://contact?name=NoDid`)).toBeNull();
+      // Embedded chat text with punctuation prefix must never fall back to bare root did:key
+      expect(parseContactCard(`Bitte an bad!prefix@${sampleDid} zahlen`)).toBeNull();
+
+      // F6: Legacy card+sig, envelope, or bare top-level env.did without card_wire must be rejected
+      expect(extractCardPayload(JSON.stringify({ card: { name: 'Legacy' }, sig: 'abc' }))).toBeNull();
+      expect(extractCardPayload(JSON.stringify({ envelope: { did: sampleDid } }))).toBeNull();
+      expect(extractDidFromCardEnvelopeJson(JSON.stringify({ did: sampleDid }))).toBeNull();
     });
   });
 });

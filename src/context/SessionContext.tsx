@@ -4,15 +4,20 @@ import { authService, SessionAccessMode, SessionStatusDto } from '../services/au
 import { settingsService } from '../services/settingsService';
 import { marketService } from '../services/marketService';
 import { logger } from '../utils/log';
-import { MY_PROFILE_UPDATED_EVENT } from '../utils/syncEvents';
-import { FrontendMyMarketProfile } from '../types';
+import { MY_PROFILE_UPDATED_EVENT, notifyAppNoticesUpdated, notifySyncStatusUpdated } from '../utils/syncEvents';
+import {
+    FrontendAutoBackupStatusDto,
+    FrontendBackupSyncResult,
+    FrontendMarketSyncResult,
+    FrontendMyMarketProfile,
+    FrontendPostSyncResult,
+} from '../types';
 import { AuthModal } from '../components/ui/AuthModal';
 import { useTranslation } from 'react-i18next';
+import { listen } from '@tauri-apps/api/event';
 
-import { startSealSyncLoop, stopSealSyncLoop } from '../sync/sealSync';
-import { startAutoBackupLoop, stopAutoBackupLoop } from '../sync/autoBackup';
-import { startPostSyncLoop, stopPostSyncLoop } from '../sync/postSync';
-import { startMarketSyncLoop, stopMarketSyncLoop } from '../sync/marketSync';
+import { dispatchBackupUpdated, updateNetworkStatus } from '../sync/syncBridge';
+import { detectIsWifiConnection } from '../utils/networkStatus';
 import { channelMembersSyncManager } from '../sync/channelMembersSyncManager';
 import { rateLimitManager } from '../sync/rateLimitManager';
 import { APP_EVENTS, emitAppEvent } from '../utils/appEvents';
@@ -121,30 +126,19 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     const pendingQueueRef = useRef<PendingModalRequest[]>([]);
     const nextPendingIdRef = useRef(1);
     const isModalSubmittingRef = useRef(false);
-    const syncLoopsRunningRef = useRef(false);
 
     const setFolderName = useCallback((folder: string) => {
         folderNameRef.current = folder;
         setFolderNameState(folder);
     }, []);
 
-    const startSyncLoops = useCallback((_syncPassword?: string) => {
-        if (syncLoopsRunningRef.current) {
-            return;
-        }
-        syncLoopsRunningRef.current = true;
-        startSealSyncLoop();
-        startAutoBackupLoop();
-        startPostSyncLoop();
-        startMarketSyncLoop();
-    }, []);
-
-    const stopSyncLoops = useCallback(() => {
-        syncLoopsRunningRef.current = false;
-        stopSealSyncLoop();
-        stopAutoBackupLoop();
-        stopPostSyncLoop();
-        stopMarketSyncLoop();
+    const syncNetworkStatusNow = useCallback(() => {
+        if (typeof navigator === 'undefined') return;
+        const isOnline = navigator.onLine !== false;
+        const isWifi = detectIsWifiConnection();
+        const isVisible =
+            typeof document === 'undefined' ? true : document.visibilityState !== 'hidden';
+        void updateNetworkStatus(isOnline, isWifi, isVisible);
     }, []);
 
     const applySessionStatus = useCallback(
@@ -165,12 +159,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
             if (nextCached && isAuthenticatedRef.current) {
                 lastHeartbeatRef.current = Date.now();
-                startSyncLoops();
-            } else {
-                stopSyncLoops();
+                syncNetworkStatusNow();
             }
         },
-        [startSyncLoops, stopSyncLoops],
+        [syncNetworkStatusNow],
     );
 
     // Side-effect hooks
@@ -213,14 +205,158 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
     useEffect(() => {
         return () => {
-            stopSyncLoops();
             if (pendingQueueRef.current.length > 0) {
                 const remaining = pendingQueueRef.current;
                 pendingQueueRef.current = [];
                 remaining.forEach((entry) => entry.reject(new Error("SessionProvider unmounted")));
             }
         };
-    }, [stopSyncLoops]);
+    }, []);
+
+    // Lightweight network & visibility bridge feeding the backend BackgroundSyncCoordinator.
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        syncNetworkStatusNow();
+        const handleStateChange = () => syncNetworkStatusNow();
+        window.addEventListener('online', handleStateChange);
+        window.addEventListener('offline', handleStateChange);
+        if (typeof document !== 'undefined') {
+            document.addEventListener('visibilitychange', handleStateChange);
+        }
+        const navConn = (navigator as Navigator & {
+            connection?: {
+                addEventListener?: (t: string, cb: () => void) => void;
+                removeEventListener?: (t: string, cb: () => void) => void;
+            };
+        }).connection;
+        navConn?.addEventListener?.('change', handleStateChange);
+
+        return () => {
+            window.removeEventListener('online', handleStateChange);
+            window.removeEventListener('offline', handleStateChange);
+            if (typeof document !== 'undefined') {
+                document.removeEventListener('visibilitychange', handleStateChange);
+            }
+            navConn?.removeEventListener?.('change', handleStateChange);
+        };
+    }, [syncNetworkStatusNow]);
+
+    // Subscribe to backend coordinator events so UI components refresh immediately.
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        let cancelled = false;
+        const unlisteners: Array<() => void> = [];
+
+        const setup = async () => {
+            const register = async <T,>(
+                event: string,
+                handler: (payload: T) => void,
+            ): Promise<void> => {
+                try {
+                    const unlisten = await Promise.resolve(
+                        listen<T>(event, (ev) => {
+                            if (!cancelled) {
+                                handler(ev.payload);
+                            }
+                        }),
+                    );
+                    if (typeof unlisten === 'function') {
+                        if (cancelled) {
+                            unlisten();
+                        } else {
+                            unlisteners.push(unlisten);
+                        }
+                    }
+                } catch {
+                    // Ignore in non-Tauri / unit-test environments without event bridge
+                }
+            };
+
+            await Promise.all([
+                register<FrontendAutoBackupStatusDto | null>(
+                    'humoco://backup-updated',
+                    (status) => {
+                        dispatchBackupUpdated(status ?? undefined);
+                    },
+                ),
+                register<FrontendBackupSyncResult | null>(
+                    'humoco://sync-status-updated',
+                    (res) => {
+                        notifySyncStatusUpdated();
+                        if (res) {
+                            const retrySecs = rateLimitManager.extractRetryAfter(res);
+                            if (retrySecs) rateLimitManager.setCooldown(retrySecs);
+                        }
+                    },
+                ),
+                register<FrontendPostSyncResult | null>(
+                    'humoco://post-synced',
+                    (res) => {
+                        if (!res) return;
+                        const retrySecs = rateLimitManager.extractRetryAfter(res);
+                        if (retrySecs) rateLimitManager.setCooldown(retrySecs);
+                        const hasInboxChanges =
+                            res.uploadedTo > 0 ||
+                            res.importedPayments > 0 ||
+                            res.importedReceipts > 0 ||
+                            res.importedSignatures > 0 ||
+                            res.newSignRequests > 0 ||
+                            res.newWotHandshakes > 0 ||
+                            res.newInquiries > 0 ||
+                            res.newInquiryMessages > 0 ||
+                            res.prunedBoxes > 0;
+                        if (hasInboxChanges) {
+                            emitAppEvent(APP_EVENTS.POST_INBOX_UPDATED);
+                            emitAppEvent(APP_EVENTS.SYNC_COMPLETED, { source: 'post' });
+                        }
+                        if (res.newWotHandshakes > 0) {
+                            emitAppEvent(APP_EVENTS.WOT_UPDATED);
+                        }
+                        if (hasInboxChanges || res.polledSyncs > 0) {
+                            notifyAppNoticesUpdated();
+                        }
+                    },
+                ),
+                register<FrontendMarketSyncResult | null>(
+                    'humoco://market-synced',
+                    (res) => {
+                        notifyAppNoticesUpdated();
+                        if (!res) return;
+                        const retrySecs = rateLimitManager.extractRetryAfter(res);
+                        if (retrySecs) rateLimitManager.setCooldown(retrySecs);
+                        if (res.importedCards > 0 || (res.newAds ?? 0) > 0) {
+                            emitAppEvent(APP_EVENTS.MARKET_CARD_UPDATED);
+                        }
+                        if (res.importedCards > 0) {
+                            emitAppEvent(APP_EVENTS.CONTACTS_UPDATED);
+                        }
+                        if (res.importedWotLists > 0) {
+                            emitAppEvent(APP_EVENTS.WOT_UPDATED);
+                        }
+                        if (
+                            res.uploadedTo > 0 ||
+                            res.polledSyncs > 0 ||
+                            res.importedCards > 0 ||
+                            res.importedWotLists > 0
+                        ) {
+                            emitAppEvent(APP_EVENTS.SYNC_COMPLETED, { source: 'market' });
+                        }
+                    },
+                ),
+                register<unknown>('humoco://conflicts-updated', () => {
+                    emitAppEvent(APP_EVENTS.CONFLICTS_UPDATED);
+                }),
+            ]);
+        };
+
+        void setup();
+        return () => {
+            cancelled = true;
+            for (const unlisten of unlisteners) {
+                unlisten();
+            }
+        };
+    }, []);
 
     const enqueuePendingRequest = useCallback(
         <T,>(
@@ -281,10 +417,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
                 if (!isAuthenticatedRef.current) return;
                 hasCachedSessionRef.current = false;
                 setHasCachedSession(false);
-                stopSyncLoops();
                 void checkIntegrity({ allowSilentRepair: false });
             });
-    }, [applySessionStatus, checkIntegrity, stopSyncLoops]);
+    }, [applySessionStatus, checkIntegrity]);
 
     const notifyLogout = useCallback(() => {
         setIsAuthenticated(false);
@@ -300,7 +435,6 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         setUserAvatarUrl(null);
         folderNameRef.current = "";
         setFolderNameState("");
-        stopSyncLoops();
         channelMembersSyncManager.reset();
         rateLimitManager.clearCooldown();
         emitAppEvent(APP_EVENTS.SESSION_LOCKED);
@@ -312,7 +446,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
             setModalErrorMsg('');
             remaining.forEach((entry) => entry.reject(new Error("User logged out")));
         }
-    }, [stopSyncLoops]);
+    }, []);
 
     const elevateSession = useCallback(async (masterPassword: string) => {
         const status = await authService.elevateSessionWithPassword(masterPassword);
@@ -346,7 +480,6 @@ export function SessionProvider({ children }: { children: ReactNode }) {
                     accessModeRef.current = baseAccessModeRef.current;
                     setHasCachedSession(false);
                     setAccessMode(baseAccessModeRef.current);
-                    stopSyncLoops();
                     emitAppEvent(APP_EVENTS.SESSION_LOCKED);
                     throw new Error("SESSION_EXPIRED_RETRY");
                 }
@@ -422,7 +555,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
             logger.error(`Error in protectAction: ${stringifyError(e)}`);
             throw e;
         }
-    }, [enqueuePendingRequest, stopSyncLoops, triggerSecurityLockdown]);
+    }, [enqueuePendingRequest, triggerSecurityLockdown]);
 
     const runPendingEntry = async (entry: PendingModalRequest, password: string | null) => {
         try {
@@ -662,10 +795,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
             accessModeRef.current = fallbackBase;
             setHasCachedSession(false);
             setAccessMode(fallbackBase);
-            stopSyncLoops();
             emitAppEvent(APP_EVENTS.SESSION_LOCKED);
         }
-    }, [stopSyncLoops]);
+    }, []);
 
     const clearLocks = useCallback(() => {
         setIsForkLocked(false);

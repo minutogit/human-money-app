@@ -31,33 +31,81 @@ import { readFile } from "@tauri-apps/plugin-fs";
 import { isPublicView } from "./types";
 import type { HelpTopicId } from "./help/helpTopics";
 
+function isPreLoginDeepLink(uri: string): boolean {
+    const lower = uri.toLowerCase();
+    return lower.includes('humoco://kit') || lower.includes('humoco://recovery-reply');
+}
+
+type ClassifiedLaunchItem =
+    | { kind: 'uri'; uri: string; preLogin: boolean }
+    | { kind: 'backup'; bytes: number[]; preLogin: true }
+    | {
+          kind: 'file';
+          fileName: string;
+          bytes: number[];
+          classification: ReturnType<typeof classifyHumocoFile>;
+          preLogin: false;
+      }
+    | { kind: 'unknown'; preLogin: true };
+
 function AppContent() {
     const { t } = useTranslation();
     const { appState, navigate, pendingDroppedFile, setPendingDroppedFile } = useNavigation();
     const { isForkLocked, isRecoveryRequired, clearLocks, isAuthenticated, protectAction } = useSession();
     const isLoggedIn = isAuthenticated;
+    const isAuthReady = isLoggedIn && appState.view !== 'needs_profile';
 
     const appStateViewRef = useRef(appState.view);
     appStateViewRef.current = appState.view;
     const hasCheckedStartupItemsRef = useRef(false);
+    const isProcessingLaunchQueueRef = useRef(false);
+    const classifiedLaunchCacheRef = useRef<Map<string, ClassifiedLaunchItem>>(new Map());
+    const deferredLaunchItemsRef = useRef<Set<string>>(new Set());
 
     const [releaseModalOpen, setReleaseModalOpen] = useState(false);
     const [releaseRequestUri, setReleaseRequestUri] = useState<string | undefined>(undefined);
     const [releaseInitialOwnerDid, setReleaseInitialOwnerDid] = useState<string | undefined>(undefined);
-    const [pendingDeepLink, setPendingDeepLink] = useState<string | null>(null);
+    const [launchQueue, setLaunchQueue] = useState<string[]>([]);
+    const [launchQueueKick, setLaunchQueueKick] = useState(0);
+    const [hasDeferredLink, setHasDeferredLink] = useState(false);
+    const [hasDeferredFile, setHasDeferredFile] = useState(false);
     const [deepLinkFeedback, setDeepLinkFeedback] = useState<string | null>(null);
 
-    const handleDeepLink = useCallback((uri: string) => {
+    const enqueueLaunchItems = useCallback((items: string[]) => {
+        if (!Array.isArray(items) || items.length === 0) return;
+        setLaunchQueue((prev) => {
+            const next = [...prev];
+            let changed = false;
+            for (const raw of items) {
+                const item = typeof raw === 'string' ? raw.trim() : '';
+                if (item && !next.includes(item)) {
+                    next.push(item);
+                    changed = true;
+                }
+            }
+            return changed ? next : prev;
+        });
+    }, []);
+
+    const ackLaunchItem = useCallback(async (item: string) => {
+        classifiedLaunchCacheRef.current.delete(item);
+        deferredLaunchItemsRef.current.delete(item);
+        setLaunchQueue((prev) => prev.filter((existing) => existing !== item));
+        await Promise.resolve(invoke<boolean>("ack_startup_launch_item", { item })).catch(() => false);
+    }, []);
+
+    const dispatchDeepLinkUri = useCallback(async (uri: string) => {
         if (!uri) return;
         setDeepLinkFeedback(null);
         const normalizedUri = extractHumocoDeepLink(uri) || uri;
+        const lowerUri = normalizedUri.toLowerCase();
 
-        const handleUriImport = async (targetUri: string) => {
-            const parsed = parseCardUri(targetUri);
+        if (lowerUri.includes('humoco://card')) {
+            const parsed = parseCardUri(normalizedUri);
             if (parsed) {
                 try {
                     const res = await protectAction(async (pwd) => {
-                        return await marketService.importContactCard(targetUri, pwd || undefined);
+                        return await marketService.importContactCard(normalizedUri, pwd || undefined);
                     });
                     if (res && res.status === 'accepted' && res.did) {
                         navigate({ view: 'marketplace', selectedDid: res.did });
@@ -69,40 +117,21 @@ function AppContent() {
                     setDeepLinkFeedback(translateError(err, t));
                 }
             }
-        };
-
-        const lowerUri = normalizedUri.toLowerCase();
-        if (lowerUri.includes('humoco://card')) {
-            if (isLoggedIn && appStateViewRef.current !== 'needs_profile') {
-                handleUriImport(normalizedUri);
-            } else {
-                setPendingDeepLink(normalizedUri);
-            }
         } else if (lowerUri.includes('humoco://pay')) {
-            if (isLoggedIn && appStateViewRef.current !== 'needs_profile') {
-                navigate({ view: 'send_vouchers', initialPaymentUri: normalizedUri });
-            } else {
-                setPendingDeepLink(normalizedUri);
-            }
+            navigate({ view: 'send_vouchers', initialPaymentUri: normalizedUri });
         } else if (lowerUri.includes('humoco://contact')) {
-            if (isLoggedIn && appStateViewRef.current !== 'needs_profile') {
-                navigate({ view: 'address_book', initialContactPayload: normalizedUri });
-            } else {
-                setPendingDeepLink(normalizedUri);
-            }
+            navigate({ view: 'address_book', initialContactPayload: normalizedUri });
         } else if (lowerUri.includes('humoco://recovery-reply')) {
-            recoveryService
-                .getActiveRecoverySession()
-                .then((session) => {
-                    if (session?.sessionMode === 'reset_local_password') {
-                        navigate({ view: 'needs_recovery', initialPayload: normalizedUri });
-                    } else {
-                        navigate({ view: 'restore_backup', initialMethod: 'social', initialPayload: normalizedUri });
-                    }
-                })
-                .catch(() => {
+            try {
+                const session = await recoveryService.getActiveRecoverySession();
+                if (session?.sessionMode === 'reset_local_password') {
+                    navigate({ view: 'needs_recovery', initialPayload: normalizedUri });
+                } else {
                     navigate({ view: 'restore_backup', initialMethod: 'social', initialPayload: normalizedUri });
-                });
+                }
+            } catch {
+                navigate({ view: 'restore_backup', initialMethod: 'social', initialPayload: normalizedUri });
+            }
         } else if (lowerUri.includes('humoco://kit')) {
             if (appStateViewRef.current === 'needs_recovery') {
                 navigate({ view: 'needs_recovery', initialPayload: normalizedUri });
@@ -110,22 +139,151 @@ function AppContent() {
                 navigate({ view: 'restore_backup', initialMethod: 'words_or_sheet', initialPayload: normalizedUri });
             }
         } else if (lowerUri.includes('humoco://recovery-req')) {
-            if (isLoggedIn && appStateViewRef.current !== 'needs_profile') {
-                setReleaseRequestUri(normalizedUri);
-                setReleaseModalOpen(true);
-            } else {
-                setPendingDeepLink(normalizedUri);
+            setReleaseRequestUri(normalizedUri);
+            setReleaseModalOpen(true);
+        }
+    }, [navigate, protectAction, t]);
+
+    const classifyLaunchItem = useCallback(async (item: string): Promise<ClassifiedLaunchItem> => {
+        const cached = classifiedLaunchCacheRef.current.get(item);
+        if (cached) return cached;
+
+        let resolved: ClassifiedLaunchItem;
+        if (item.toLowerCase().includes('humoco://')) {
+            const uri = extractHumocoDeepLink(item) || item;
+            resolved = isPreLoginDeepLink(uri)
+                ? { kind: 'uri', uri, preLogin: true }
+                : { kind: 'uri', uri, preLogin: false };
+        } else {
+            try {
+                const rawBytes = await readFile(item);
+                const bytes = Array.from(rawBytes);
+                const fileName = item.split(/[/\\]/).pop() || 'launch.humoco';
+                const classification = classifyHumocoFile({ fileName, bytes });
+                if (classification.kind === 'deeplink' && classification.deepLink) {
+                    const uri = classification.deepLink;
+                    resolved = isPreLoginDeepLink(uri)
+                        ? { kind: 'uri', uri, preLogin: true }
+                        : { kind: 'uri', uri, preLogin: false };
+                } else if (classification.kind === 'backup' || classifyExtension(fileName) === 'backup') {
+                    resolved = { kind: 'backup', bytes, preLogin: true };
+                } else if (classification.kind === 'unknown') {
+                    resolved = { kind: 'unknown', preLogin: true };
+                } else {
+                    resolved = { kind: 'file', fileName, bytes, classification, preLogin: false };
+                }
+            } catch (err) {
+                logger.warn("Failed to open launch item: " + String(err));
+                resolved = { kind: 'unknown', preLogin: true };
             }
         }
-    }, [isLoggedIn, navigate, protectAction, t]);
 
-    useEffect(() => {
-        if (isLoggedIn && appState.view !== 'needs_profile' && pendingDeepLink) {
-            const linkToRun = pendingDeepLink;
-            setPendingDeepLink(null);
-            handleDeepLink(linkToRun);
+        classifiedLaunchCacheRef.current.set(item, resolved);
+        return resolved;
+    }, []);
+
+    const executeClassifiedItem = useCallback(async (classified: ClassifiedLaunchItem) => {
+        if (classified.kind === 'uri') {
+            await dispatchDeepLinkUri(classified.uri);
+        } else if (classified.kind === 'backup') {
+            const stagedPath = await backupService.stageDroppedBackupBytes(classified.bytes);
+            navigate({
+                view: 'restore_backup',
+                initialMethod: 'file_or_folder',
+                initialBackupPath: stagedPath,
+            });
+        } else if (classified.kind === 'file') {
+            if (classified.classification.kind === 'card') {
+                const text = new TextDecoder().decode(new Uint8Array(classified.bytes));
+                try {
+                    const res = await protectAction(async (pwd) => {
+                        return await marketService.importContactCard(text, pwd || undefined);
+                    });
+                    if (res && res.status === 'accepted' && res.did) {
+                        navigate({ view: 'marketplace', selectedDid: res.did });
+                    } else if (res) {
+                        setDeepLinkFeedback(formatCardImportStatusFeedback(res.status, t));
+                    }
+                } catch (err) {
+                    setDeepLinkFeedback(translateError(err, t));
+                }
+            } else {
+                navigate({
+                    view: 'receive_bundle',
+                    droppedFile: { name: classified.fileName, bytes: classified.bytes },
+                });
+            }
         }
-    }, [isLoggedIn, appState.view, pendingDeepLink, handleDeepLink]);
+    }, [dispatchDeepLinkUri, navigate, protectAction, t]);
+
+    // Process FIFO launch queue:
+    // - Pre-login items (kit, recovery-reply, backup) process & ack immediately.
+    // - Auth-required items stay persisted & un-acked in backend until login is complete.
+    useEffect(() => {
+        if (launchQueue.length === 0) {
+            setHasDeferredLink(false);
+            setHasDeferredFile(false);
+            return;
+        }
+        if (isProcessingLaunchQueueRef.current) return;
+
+        let cancelled = false;
+        let didAck = false;
+        const processNext = async () => {
+            isProcessingLaunchQueueRef.current = true;
+            try {
+                if (!isAuthReady) {
+                    let anyFile = false;
+                    let anyLink = false;
+                    for (const item of launchQueue) {
+                        if (cancelled) break;
+                        const classified = await classifyLaunchItem(item);
+                        if (classified.preLogin) {
+                            await executeClassifiedItem(classified);
+                            await ackLaunchItem(item);
+                            didAck = true;
+                            break;
+                        } else {
+                            deferredLaunchItemsRef.current.add(item);
+                            if (classified.kind === 'file') {
+                                anyFile = true;
+                            } else {
+                                anyLink = true;
+                            }
+                        }
+                    }
+                    if (!cancelled) {
+                        setHasDeferredFile(anyFile);
+                        setHasDeferredLink(anyLink && !anyFile);
+                    }
+                } else {
+                    deferredLaunchItemsRef.current.clear();
+                    setHasDeferredFile(false);
+                    setHasDeferredLink(false);
+                    const nextItem = launchQueue[0];
+                    if (nextItem) {
+                        const classified = await classifyLaunchItem(nextItem);
+                        try {
+                            await executeClassifiedItem(classified);
+                        } finally {
+                            await ackLaunchItem(nextItem);
+                            didAck = true;
+                        }
+                    }
+                }
+            } finally {
+                isProcessingLaunchQueueRef.current = false;
+                if (didAck && !cancelled) {
+                    setLaunchQueueKick((k) => k + 1);
+                }
+            }
+        };
+
+        void processNext();
+        return () => {
+            cancelled = true;
+        };
+    }, [launchQueue, launchQueueKick, isAuthReady, classifyLaunchItem, executeClassifiedItem, ackLaunchItem]);
 
     useEffect(() => {
         if (!isLoggedIn || appState.view === 'needs_profile' || !pendingDroppedFile) return;
@@ -150,48 +308,17 @@ function AppContent() {
         }
     }, [isLoggedIn, appState.view, pendingDroppedFile, setPendingDroppedFile, protectAction, navigate, t]);
 
-    const processLaunchItems = useCallback(async (items: string[]) => {
-        if (!Array.isArray(items) || items.length === 0) return;
-        for (const item of items) {
-            if (!item) continue;
-            if (item.toLowerCase().includes('humoco://')) {
-                handleDeepLink(item);
-                continue;
-            }
-            try {
-                const rawBytes = await readFile(item);
-                const bytes = Array.from(rawBytes);
-                const fileName = item.split(/[/\\]/).pop() || 'launch.humoco';
-                const classification = classifyHumocoFile({ fileName, bytes });
-                if (classification.kind === 'deeplink' && classification.deepLink) {
-                    handleDeepLink(classification.deepLink);
-                } else if (classification.kind === 'backup' || classifyExtension(fileName) === 'backup') {
-                    const stagedPath = await backupService.stageDroppedBackupBytes(bytes);
-                    navigate({
-                        view: 'restore_backup',
-                        initialMethod: 'file_or_folder',
-                        initialBackupPath: stagedPath,
-                    });
-                } else if (classification.kind !== 'unknown') {
-                    setPendingDroppedFile({ name: fileName, bytes });
-                }
-            } catch (err) {
-                logger.warn("Failed to open launch item: " + String(err));
-            }
-        }
-    }, [handleDeepLink, navigate, setPendingDroppedFile]);
-
     useEffect(() => {
         if (typeof window !== 'undefined') {
             const currentUrl = window.location.href;
             if (currentUrl.toLowerCase().includes('humoco://')) {
-                handleDeepLink(currentUrl);
+                enqueueLaunchItems([currentUrl]);
             }
 
             if (!hasCheckedStartupItemsRef.current) {
                 hasCheckedStartupItemsRef.current = true;
-                Promise.resolve(invoke<string[]>("take_startup_launch_items"))
-                    .then((items) => processLaunchItems(items))
+                Promise.resolve(invoke<string[]>("peek_startup_launch_items"))
+                    .then((items) => enqueueLaunchItems(items))
                     .catch(() => {});
             }
 
@@ -199,7 +326,7 @@ function AppContent() {
             let unlistenLaunchItems: (() => void) | undefined;
             Promise.resolve(
                 listen<string[]>("humoco://launch-items", (event) => {
-                    void processLaunchItems(event.payload);
+                    enqueueLaunchItems(event.payload);
                 })
             )
                 .then((unlisten) => {
@@ -214,7 +341,7 @@ function AppContent() {
             const onDeepLink = (e: Event) => {
                 const customEv = e as CustomEvent<string>;
                 if (customEv.detail) {
-                    handleDeepLink(customEv.detail);
+                    enqueueLaunchItems([customEv.detail]);
                 }
             };
             window.addEventListener('humoco:deeplink', onDeepLink);
@@ -226,7 +353,7 @@ function AppContent() {
                 window.removeEventListener('humoco:deeplink', onDeepLink);
             };
         }
-    }, [handleDeepLink, processLaunchItems]);
+    }, [enqueueLaunchItems]);
 
     useEffect(() => {
         const onOpenRelease = (e: Event) => {
@@ -274,16 +401,21 @@ function AppContent() {
                         <div className="flex flex-1 flex-col min-w-0 h-full overflow-hidden">
                             <Header />
                             <main className="w-full flex-1 min-h-0 overflow-y-auto px-3 sm:px-5 lg:px-8 pb-6">
-                                {!isLoggedIn && (pendingDeepLink || pendingDroppedFile) && (
+                                {!isLoggedIn && (hasDeferredLink || hasDeferredFile || pendingDroppedFile || launchQueue.length > 0) && (
                                     <div className="max-w-xl mx-auto mt-3 mb-2" data-testid="pending-deeplink-banner">
                                         <AlertBanner
                                             variant="info"
                                             onDismiss={() => {
-                                                setPendingDeepLink(null);
+                                                const toDismiss = [...launchQueue];
                                                 setPendingDroppedFile(null);
+                                                setHasDeferredFile(false);
+                                                setHasDeferredLink(false);
+                                                for (const item of toDismiss) {
+                                                    void ackLaunchItem(item);
+                                                }
                                             }}
                                         >
-                                            {pendingDroppedFile
+                                            {(pendingDroppedFile || hasDeferredFile)
                                                 ? t('auth.pendingFileNotice', 'Datei vorgemerkt – wird direkt nach dem Anmelden geöffnet.')
                                                 : t('auth.pendingLinkNotice')}
                                         </AlertBanner>

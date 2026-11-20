@@ -81,6 +81,15 @@ export interface IntentDispatchObservation {
     httpStatus?: number | null;
 }
 
+export type ReceiveCommitMode = 'onlineVerify' | 'forceTrustOffline';
+
+export interface PendingReceiveCommit {
+    bundleData: number[];
+    standardDefinitionsToml: Record<string, string>;
+    bundlePassword?: string;
+    forceAcceptToleranceBundle?: boolean;
+}
+
 export interface ReceiveSuccessPayload {
     senderId: string;
     senderProfileName?: string;

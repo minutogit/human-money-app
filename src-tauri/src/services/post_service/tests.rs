@@ -218,7 +218,7 @@ async fn test_dual_delivery_payment_and_receipt_idempotency_sst_v4() {
     let bundle_bytes = bundle_res.bundle_bytes;
     let bundle_id = bundle_res.bundle_id;
 
-    // Save transaction record to Alice's history
+    // Save transaction record + canonical outgoing bundle bytes
     let record = TransactionRecord {
         id: bundle_id.clone(),
         direction: "sent".to_string(),
@@ -229,7 +229,7 @@ async fn test_dual_delivery_payment_and_receipt_idempotency_sst_v4() {
         countable_items: HashMap::new(),
         involved_vouchers: vec![local_id.clone()],
         involved_sources_details: None,
-        bundle_data: bundle_bytes.clone(),
+        bundle_data: Vec::new(),
         bundle_id: bundle_id.clone(),
         notes: None,
         sender_profile_name: Some("Alice".to_string()),
@@ -237,7 +237,11 @@ async fn test_dual_delivery_payment_and_receipt_idempotency_sst_v4() {
     {
         let mut s = alice_state.service.lock().unwrap();
         alice_state
-            .append_to_history(&mut s, record, Some(password))
+            .record_outgoing_transactions_with_batch(
+                &mut s,
+                vec![(record, bundle_bytes.clone())],
+                Some(password),
+            )
             .unwrap();
     }
 
@@ -428,7 +432,7 @@ async fn test_asymmetry_alice_has_sync_bob_has_none() {
         countable_items: HashMap::new(),
         involved_vouchers: vec![local_id.clone()],
         involved_sources_details: None,
-        bundle_data: bundle_res.bundle_bytes,
+        bundle_data: Vec::new(),
         bundle_id: bundle_res.bundle_id.clone(),
         notes: None,
         sender_profile_name: Some("Alice".to_string()),
@@ -436,7 +440,11 @@ async fn test_asymmetry_alice_has_sync_bob_has_none() {
     {
         let mut s = alice_state.service.lock().unwrap();
         alice_state
-            .append_to_history(&mut s, record, Some(password))
+            .record_outgoing_transactions_with_batch(
+                &mut s,
+                vec![(record, bundle_res.bundle_bytes.clone())],
+                Some(password),
+            )
             .unwrap();
     }
 
@@ -654,7 +662,7 @@ async fn test_asymmetry_bob_has_sync_alice_has_none() {
         countable_items: HashMap::new(),
         involved_vouchers: vec![local_id.clone()],
         involved_sources_details: None,
-        bundle_data: bundle_res.bundle_bytes,
+        bundle_data: Vec::new(),
         bundle_id: bundle_res.bundle_id.clone(),
         notes: None,
         sender_profile_name: Some("Alice".to_string()),
@@ -662,7 +670,11 @@ async fn test_asymmetry_bob_has_sync_alice_has_none() {
     {
         let mut s = alice_state.service.lock().unwrap();
         alice_state
-            .append_to_history(&mut s, record, Some(password))
+            .record_outgoing_transactions_with_batch(
+                &mut s,
+                vec![(record, bundle_res.bundle_bytes.clone())],
+                Some(password),
+            )
             .unwrap();
     }
 
@@ -740,8 +752,16 @@ async fn test_multi_device_if_match_412_merge() {
     save_post_state(&alice_state, &post_state, Some(password)).unwrap();
 
     // Flush post slots: PUT with stale ETag -> 412 Precondition Failed -> fetch remote -> merge -> retry with "etag_device_2" -> saved!
-    let outcome =
-        flush_post_slots_impl(&alice_state, &mut post_state, None, &[], Some(password)).await;
+    let session = alice_state.begin_session_op().unwrap();
+    let outcome = flush_post_slots_impl(
+        &alice_state,
+        &session,
+        &mut post_state,
+        None,
+        &[],
+        Some(password),
+    )
+    .await;
     assert_eq!(
         outcome.deposited_to, 1,
         "Must successfully merge and upload on 412: {:?}",
@@ -1473,24 +1493,25 @@ async fn test_own_subaccount_post_compartment_and_sibling_isolation() {
     };
     {
         let mut s = root_state.service.lock().unwrap();
+        let record = TransactionRecord {
+            id: bundle_res.bundle_id.clone(),
+            direction: "sent".to_string(),
+            recipient_id: laden_did.clone(),
+            sender_id: root_did.clone(),
+            timestamp: Utc::now().to_rfc3339(),
+            summable_amounts: HashMap::new(),
+            countable_items: HashMap::new(),
+            involved_vouchers: vec![local_id],
+            involved_sources_details: None,
+            bundle_data: Vec::new(),
+            bundle_id: bundle_res.bundle_id.clone(),
+            notes: None,
+            sender_profile_name: Some("Root".to_string()),
+        };
         root_state
-            .append_to_history(
+            .record_outgoing_transactions_with_batch(
                 &mut s,
-                TransactionRecord {
-                    id: bundle_res.bundle_id.clone(),
-                    direction: "sent".to_string(),
-                    recipient_id: laden_did.clone(),
-                    sender_id: root_did.clone(),
-                    timestamp: Utc::now().to_rfc3339(),
-                    summable_amounts: HashMap::new(),
-                    countable_items: HashMap::new(),
-                    involved_vouchers: vec![local_id],
-                    involved_sources_details: None,
-                    bundle_data: bundle_res.bundle_bytes,
-                    bundle_id: bundle_res.bundle_id.clone(),
-                    notes: None,
-                    sender_profile_name: Some("Root".to_string()),
-                },
+                vec![(record, bundle_res.bundle_bytes.clone())],
                 Some(password),
             )
             .unwrap();
@@ -1728,32 +1749,7 @@ async fn test_deposit_transfer_to_post_persists_outbox_when_sync_server_unreacha
     )
     .await
     .expect("L1 transfer creation must succeed even when Sync and L2 are down");
-
-    {
-        let mut s_alice = alice_state.service.lock().unwrap();
-        let record = crate::models::TransactionRecord {
-            id: uuid::Uuid::new_v4().to_string(),
-            direction: "sent".to_string(),
-            recipient_id: bob_did,
-            sender_id: alice_did,
-            timestamp: Utc::now().to_rfc3339(),
-            summable_amounts: HashMap::from([("Taler".to_string(), "25".to_string())]),
-            countable_items: HashMap::new(),
-            involved_vouchers: bundle_res
-                .involved_sources_details
-                .iter()
-                .map(|d| d.local_instance_id.clone())
-                .collect(),
-            involved_sources_details: None,
-            bundle_data: bundle_res.bundle_data.clone(),
-            bundle_id: bundle_res.bundle_id.clone(),
-            notes: None,
-            sender_profile_name: Some("Alice".to_string()),
-        };
-        alice_state
-            .append_to_history(&mut s_alice, record, Some(password))
-            .unwrap();
-    }
+    let _ = alice_did;
 
     // Deposit against dead sync server returns degraded result, and outbox entry is persisted on disk
     let dep = deposit_transfer_to_post_impl(
@@ -1793,8 +1789,11 @@ async fn test_deposit_transfer_to_post_persists_outbox_when_sync_server_unreacha
         std_map,
         Some(password.to_string()),
         false,
+        Some(crate::models::ReceiveCommitMode::ForceTrustOffline),
+        None,
         &bob_state,
     )
+    .await
     .expect("Manual offline receive_bundle_impl must succeed while sync is down");
 
     let _ = std::fs::remove_dir_all(&base_dir);
@@ -1926,14 +1925,17 @@ async fn test_merge_and_save_post_state_preserves_concurrent_outbox_and_auto_imp
                 recipient_did: bob_did.clone(),
                 tag16_hex: "09090909090909090909090909090909".to_string(),
                 bundle_id: None,
+                message_class: crate::state::OutboxMessageClass::Control,
                 entry: dummy_box,
                 created_at: 1_760_000_000,
             });
         save_post_state(&alice_state, &concurrent_state, Some(password)).unwrap();
     }
 
+    let session = alice_state.begin_session_op().unwrap();
     merge_and_save_post_state(
         &alice_state,
+        &session,
         &baseline,
         &mut stale_poll_state,
         Some(password),
@@ -2190,6 +2192,7 @@ async fn test_outbox_windowed_packing_defers_overflow_past_max_bytes_and_drains_
         &bob_pk,
         "msg-large-1".to_string(),
         None,
+        crate::state::OutboxMessageClass::Control,
         &signing_ctx.own_reply_syncs,
         vec![1u8; 40_000],
         1_700_000_010,
@@ -2204,6 +2207,7 @@ async fn test_outbox_windowed_packing_defers_overflow_past_max_bytes_and_drains_
         &bob_pk,
         "msg-large-2".to_string(),
         None,
+        crate::state::OutboxMessageClass::Control,
         &signing_ctx.own_reply_syncs,
         vec![2u8; 40_000],
         1_700_000_020,
@@ -2218,6 +2222,7 @@ async fn test_outbox_windowed_packing_defers_overflow_past_max_bytes_and_drains_
         &bob_pk,
         "msg-small-3".to_string(),
         None,
+        crate::state::OutboxMessageClass::Control,
         &signing_ctx.own_reply_syncs,
         vec![3u8; 120],
         1_700_000_030,
@@ -2230,8 +2235,16 @@ async fn test_outbox_windowed_packing_defers_overflow_past_max_bytes_and_drains_
     let tag3 = post_state.outbox_entries[2].entry.tag16;
 
     // 1st flush: packs msg-large-1 + msg-small-3 within 512 KB, defers msg-large-2 cleanly.
-    let outcome1 =
-        flush_post_slots_impl(&alice_state, &mut post_state, None, &[], Some(password)).await;
+    let session = alice_state.begin_session_op().unwrap();
+    let outcome1 = flush_post_slots_impl(
+        &alice_state,
+        &session,
+        &mut post_state,
+        None,
+        &[],
+        Some(password),
+    )
+    .await;
     assert_eq!(outcome1.deposited_to, 1, "errors: {:?}", outcome1.errors);
     assert!(outcome1.errors.is_empty());
     assert_eq!(outcome1.deferred_count, 1);
@@ -2256,8 +2269,15 @@ async fn test_outbox_windowed_packing_defers_overflow_past_max_bytes_and_drains_
     post_state
         .outbox_entries
         .retain(|e| e.msg_id != "msg-large-1");
-    let outcome2 =
-        flush_post_slots_impl(&alice_state, &mut post_state, None, &[], Some(password)).await;
+    let outcome2 = flush_post_slots_impl(
+        &alice_state,
+        &session,
+        &mut post_state,
+        None,
+        &[],
+        Some(password),
+    )
+    .await;
     assert_eq!(outcome2.deposited_to, 1, "errors: {:?}", outcome2.errors);
     assert!(outcome2.errors.is_empty());
     assert_eq!(outcome2.deferred_count, 0);
@@ -2630,6 +2650,183 @@ async fn test_post_prefix_routing_reply_drops_and_ack_isolation() {
     assert_eq!(alice_priv_poll.imported_receipts, 1);
     let priv_post_state = load_post_state(&alice_privat_state, Some(password)).unwrap();
     assert!(priv_post_state.outbox_entries.is_empty());
+
+    let _ = std::fs::remove_dir_all(&base_dir);
+}
+
+#[tokio::test]
+async fn test_h5_outbox_holds_back_value_transfers_under_fork_lock_and_known_offender() {
+    use human_money_core::models::conflict::{ConflictRole, ProofOfDoubleSpend, ProofStoreEntry};
+
+    let base_dir = temp_test_dir("post_h5_outflow_preflight");
+    let password = "StrongTestPassword123!";
+    let alice_service = setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
+    let alice_state = create_test_state(alice_service);
+    let bob_service = setup_test_app(&base_dir.join("bob"), "Bob", BOB_PHRASE, password);
+    let bob_state = create_test_state(bob_service);
+
+    let bob_id = {
+        let s = bob_state.service.lock().unwrap();
+        s.with_wallet_and_identity(|_, id| id.clone()).unwrap()
+    };
+
+    let server = MockSyncServer::start("d-alice".to_string(), ADMIN_A.to_string()).await;
+    let (_write_url, _saved) = setup_test_sync(&server, DROP_PUB_A, password, &alice_state).await;
+
+    let signing_ctx = load_post_signing_context(&alice_state, Some(password)).unwrap();
+    let mut post_state = load_post_state(&alice_state, Some(password)).unwrap();
+
+    // Queue 1 Control message and 1 ValueTransfer message to Bob.
+    enqueue_post_envelope(
+        &mut post_state,
+        &signing_ctx.identity.user_id,
+        &signing_ctx.sync_ctx.my_ed_sk,
+        &bob_id.user_id,
+        &bob_id.public_key,
+        "msg-ctrl-1".to_string(),
+        None,
+        crate::state::OutboxMessageClass::Control,
+        &signing_ctx.own_reply_syncs,
+        vec![0xAA; 64],
+        1_700_000_010,
+        None,
+    )
+    .unwrap();
+    enqueue_post_envelope(
+        &mut post_state,
+        &signing_ctx.identity.user_id,
+        &signing_ctx.sync_ctx.my_ed_sk,
+        &bob_id.user_id,
+        &bob_id.public_key,
+        "msg-value-1".to_string(),
+        Some("bundle-h5-1".to_string()),
+        crate::state::OutboxMessageClass::ValueTransfer,
+        &signing_ctx.own_reply_syncs,
+        vec![0xBB; 64],
+        1_700_000_020,
+        None,
+    )
+    .unwrap();
+    save_post_state(&alice_state, &post_state, Some(password)).unwrap();
+
+    // 1. Activate pending_restore_l2_reconciliation lock -> Control flushes, ValueTransfer stays held back.
+    {
+        let mut s = alice_state.service.lock().unwrap();
+        alice_state
+            .mutate_internal_lifecycle(&mut s, Some(password), |lc| {
+                lc.pending_restore_l2_reconciliation = true;
+            })
+            .unwrap();
+    }
+
+    let mut post_state = load_post_state(&alice_state, Some(password)).unwrap();
+    let session = alice_state.begin_session_op().unwrap();
+    let ctrl_tag = post_state
+        .outbox_entries
+        .iter()
+        .find(|e| e.msg_id == "msg-ctrl-1")
+        .unwrap()
+        .entry
+        .tag16;
+    let value_tag = post_state
+        .outbox_entries
+        .iter()
+        .find(|e| e.msg_id == "msg-value-1")
+        .unwrap()
+        .entry
+        .tag16;
+
+    let outcome1 = crate::services::post_service::outbox::flush_post_slots_impl(
+        &alice_state,
+        &session,
+        &mut post_state,
+        None,
+        &[],
+        Some(password),
+    )
+    .await;
+    assert!(outcome1.uploaded_tags.contains(&ctrl_tag));
+    assert!(!outcome1.uploaded_tags.contains(&value_tag));
+
+    // Remove flushed Control entry, clear restore lock, then mark Bob as KnownOffender.
+    post_state.outbox_entries.retain(|e| e.msg_id != "msg-ctrl-1");
+    save_post_state(&alice_state, &post_state, Some(password)).unwrap();
+    {
+        let mut s = alice_state.service.lock().unwrap();
+        alice_state
+            .mutate_internal_lifecycle(&mut s, Some(password), |lc| {
+                lc.pending_restore_l2_reconciliation = false;
+            })
+            .unwrap();
+        let (wallet, _) = s.get_unlocked_mut_for_test();
+        wallet.proof_store.proofs.insert(
+            "proof-h5-1".to_string(),
+            ProofStoreEntry {
+                proof: ProofOfDoubleSpend {
+                    proof_id: "proof-h5-1".to_string(),
+                    offender_id: bob_id.user_id.clone(),
+                    suspected_identity: None,
+                    fork_point_prev_hash: "00".repeat(32),
+                    conflicting_transactions: Vec::new(),
+                    fingerprints: Vec::new(),
+                    victim_witnesses: Vec::new(),
+                    deletable_at: "2099-01-01T00:00:00Z".to_string(),
+                    reporter_id: signing_ctx.identity.user_id.clone(),
+                    report_timestamp: "2026-01-01T00:00:00Z".to_string(),
+                    reporter_signature: "sig".to_string(),
+                    affected_voucher_name: None,
+                    voucher_standard_uuid: None,
+                    resolutions: None,
+                    non_redeemable_test_voucher: false,
+                },
+                local_override: false,
+                local_note: None,
+                conflict_role: ConflictRole::default(),
+            },
+        );
+        assert!(wallet.assert_not_known_offender(&bob_id.user_id).is_err());
+    }
+
+    // Re-queue a fresh Control message for Bob -> Control MUST flush while ValueTransfer to KnownOffender stays held!
+    let mut post_state = load_post_state(&alice_state, Some(password)).unwrap();
+    enqueue_post_envelope(
+        &mut post_state,
+        &signing_ctx.identity.user_id,
+        &signing_ctx.sync_ctx.my_ed_sk,
+        &bob_id.user_id,
+        &bob_id.public_key,
+        "msg-ctrl-2".to_string(),
+        None,
+        crate::state::OutboxMessageClass::Control,
+        &signing_ctx.own_reply_syncs,
+        vec![0xCC; 64],
+        1_700_000_030,
+        None,
+    )
+    .unwrap();
+    let ctrl2_tag = post_state
+        .outbox_entries
+        .iter()
+        .find(|e| e.msg_id == "msg-ctrl-2")
+        .unwrap()
+        .entry
+        .tag16;
+
+    let outcome2 = crate::services::post_service::outbox::flush_post_slots_impl(
+        &alice_state,
+        &session,
+        &mut post_state,
+        None,
+        &[],
+        Some(password),
+    )
+    .await;
+    assert!(outcome2.uploaded_tags.contains(&ctrl2_tag));
+    assert!(!outcome2.uploaded_tags.contains(&value_tag));
+    assert!(post_state
+        .outbox_entries
+        .iter()
+        .any(|e| e.msg_id == "msg-value-1"));
 
     let _ = std::fs::remove_dir_all(&base_dir);
 }

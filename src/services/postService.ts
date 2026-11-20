@@ -9,7 +9,7 @@ import {
     FrontendSyncDescriptor,
     InquiryTarget,
 } from "../types";
-import { afterWalletMutation, triggerAutoBackup } from "../sync/autoBackup";
+import { afterWalletMutation, triggerAutoBackup } from "../sync/syncBridge";
 import { APP_EVENTS, emitAppEvent, POST_INBOX_UPDATED_EVENT } from "../utils/appEvents";
 import { detectIsWifiConnection } from "../utils/networkStatus";
 import { notifyAppNoticesUpdated } from "../utils/syncEvents";

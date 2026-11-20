@@ -4,10 +4,11 @@ import { useTranslation } from 'react-i18next';
 import { Server, Shield, FileArchive, FileCode, RefreshCw } from 'lucide-react';
 import { FrontendMemberPolicyDto, FrontendSyncAdminStatus } from '../../../types';
 import { marketService } from '../../../services/marketService';
+import { protectCommandOptions } from '../../../services/commandPolicy';
 import { useSession } from '../../../context/SessionContext';
 import { normalizeSyncUrlInput } from '../../../utils/humocoUri';
 import { pickSaveFilePath } from '../../../utils/fileIo';
-import { runSyncBackupPass } from '../../../sync/autoBackup';
+import { runSyncBackupPass } from '../../../sync/syncBridge';
 import { notifySyncStatusUpdated } from '../../../utils/syncEvents';
 import { translateError } from '../../../utils/errorHelper';
 import { Button } from '../../ui/Button';
@@ -70,7 +71,7 @@ export const HostSyncSetupWizard: React.FC<HostSyncSetupWizardProps> = ({
                         pwd || undefined
                     );
                     await marketService.saveSyncSetupZip(filePath, pwd || undefined);
-                });
+                }, protectCommandOptions('prepare_sync_setup'));
                 onFeedback({ type: 'success', message: t('settings.syncZipSaved') });
             }
         } catch (err) {
@@ -99,7 +100,7 @@ export const HostSyncSetupWizard: React.FC<HostSyncSetupWizardProps> = ({
                     runSyncBackupPass(true).catch(() => {});
                 }, 1000);
                 onFeedback({ type: 'success', message: t('settings.syncHostActivatedSuccess') });
-            });
+            }, protectCommandOptions('finalize_sync_setup'));
         } catch (err) {
             onFeedback({ type: 'error', message: translateError(err, t) });
         } finally {

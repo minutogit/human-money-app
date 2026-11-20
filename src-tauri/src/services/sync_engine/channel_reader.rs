@@ -6,6 +6,7 @@ use crate::models::{
 use crate::services::common::{normalize_sync_url, DropChannelSigner, SyncIdentityContext};
 use crate::services::market_service::sync_own_card_drops_on_settings_change;
 use crate::services::recovery_service::enqueue_guardian_locator_updates_if_configured;
+use crate::session::SessionToken;
 use crate::settings::{SecurityPolicy, StoredPublicSync, UiPreferences, MAX_POLLED_SYNCS};
 use crate::state::{
     apply_revocation_notice, apply_revocation_notice_to_address_book, canonicalize_did,
@@ -15,17 +16,12 @@ use crate::state::{
 };
 use crate::sync_client::{self, IndexFetchResult, SlotFetchResult};
 
-use super::card_sync::import_decrypted_card_bundle;
-use super::wot_sync::import_decrypted_wot_package;
-
 pub(crate) struct PollOutcome {
     pub polled_syncs: usize,
     pub decrypted_slots: usize,
-    pub imported_cards: usize,
-    pub new_ads: usize,
-    pub imported_wot_lists: usize,
+    pub decoded_card_bundles: Vec<(String, humoco_market::CardBundle)>,
+    pub decoded_wot_packages: Vec<(String, humoco_wot::WotSyncPackage)>,
     pub sync_health_updates: Vec<(String, bool)>,
-    pub updated_card_store: Option<humoco_market::CardStore>,
 }
 
 pub(crate) fn channel_max_bytes_key(write_url: &str, channel: &str) -> String {
@@ -34,49 +30,49 @@ pub(crate) fn channel_max_bytes_key(write_url: &str, channel: &str) -> String {
 
 pub(crate) fn save_channel_max_bytes_updates(
     state: &AppState,
+    session: &SessionToken,
     password: Option<&str>,
     updates: &[(String, String, usize)],
 ) {
     if updates.is_empty() {
         return;
     }
-    let Ok(mut service) = state.lock_service() else {
-        return;
-    };
-    let mut sync_state: StoredSyncState =
-        match crate::state::load_encrypted_json_or_default(&mut service, MARKET_SYNC_KEY, password)
-        {
-            Ok(s) => s,
-            Err(e) => {
+    let _ = state.with_session(session, |service| {
+        let mut sync_state: StoredSyncState =
+            match crate::state::load_encrypted_json_or_default(service, MARKET_SYNC_KEY, password) {
+                Ok(s) => s,
+                Err(e) => {
+                    log::warn!(
+                        "Failed to load {} before updating channel max bytes: {}",
+                        MARKET_SYNC_KEY,
+                        e
+                    );
+                    return Ok(());
+                }
+            };
+        let mut changed = false;
+        for (write_url, channel, mb) in updates {
+            if *mb > 0 {
+                let key = channel_max_bytes_key(write_url, channel);
+                if sync_state.channel_max_bytes_by_write_url.get(&key) != Some(mb) {
+                    sync_state.channel_max_bytes_by_write_url.insert(key, *mb);
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            if let Err(e) =
+                crate::state::save_encrypted_json(service, MARKET_SYNC_KEY, &sync_state, password)
+            {
                 log::warn!(
-                    "Failed to load {} before updating channel max bytes: {}",
+                    "Failed to save {} after channel max bytes update: {}",
                     MARKET_SYNC_KEY,
                     e
                 );
-                return;
-            }
-        };
-    let mut changed = false;
-    for (write_url, channel, mb) in updates {
-        if *mb > 0 {
-            let key = channel_max_bytes_key(write_url, channel);
-            if sync_state.channel_max_bytes_by_write_url.get(&key) != Some(mb) {
-                sync_state.channel_max_bytes_by_write_url.insert(key, *mb);
-                changed = true;
             }
         }
-    }
-    if changed {
-        if let Err(e) =
-            crate::state::save_encrypted_json(&mut service, MARKET_SYNC_KEY, &sync_state, password)
-        {
-            log::warn!(
-                "Failed to save {} after channel max bytes update: {}",
-                MARKET_SYNC_KEY,
-                e
-            );
-        }
-    }
+        Ok(())
+    });
 }
 
 pub(crate) fn collect_upload_targets_for_channel(
@@ -169,20 +165,18 @@ pub(crate) async fn delete_delta_card_slot(
 }
 
 /// Checks `revocation.json` (max once per 24h per `read_url`) across own and contact syncs.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn check_revocations(
     client: &reqwest::Client,
     state: &AppState,
-    owner_did: &str,
+    session: &SessionToken,
     security_policy: &mut SecurityPolicy,
     sync_state: &mut StoredSyncState,
     now_secs: u64,
     password: Option<&str>,
 ) -> Vec<FrontendSyncDescriptor> {
     let mut revoked_own_syncs: Vec<FrontendSyncDescriptor> = Vec::new();
-    let revocation_candidates: Vec<(String, String)> = {
-        let Ok(mut service) = state.lock_service() else {
-            return revoked_own_syncs;
-        };
+    let Ok(Some(revocation_candidates)) = state.with_session(session, |service| {
         let mut seen_urls = HashSet::new();
         let mut list = Vec::new();
         let mut push_pair = |read_url: &str, drop_pub: &str| {
@@ -201,17 +195,22 @@ pub(crate) async fn check_revocations(
         for ps in &security_policy.public_syncs {
             push_pair(&ps.read_url, &ps.drop_pub);
         }
-        if let Ok(contacts) = state.load_contacts(&mut service, password) {
+        if let Ok(contacts) = state.load_contacts(service, password) {
             for c in contacts {
                 for d in &c.syncs {
                     push_pair(&d.read_url, &d.drop_pub);
                 }
             }
         }
-        list
+        Ok(list)
+    }) else {
+        return revoked_own_syncs;
     };
 
     for (rev_read_url, rev_drop_pub) in revocation_candidates {
+        if !state.is_generation_current(session.generation) {
+            break;
+        }
         let last_chk = sync_state
             .last_revocation_check_at
             .get(&rev_read_url)
@@ -227,182 +226,173 @@ pub(crate) async fn check_revocations(
         match sync_client::fetch_revocation_notice(client, &rev_read_url, &rev_drop_pub).await {
             Ok(Some(notice)) => {
                 let norm_target = normalize_sync_url(&rev_read_url);
-                let Ok(mut service) = state.lock_service() else {
-                    continue;
-                };
-                if service
-                    .with_wallet(|w| w.get_user_id().to_string())
-                    .ok()
-                    .as_deref()
-                    != Some(owner_did)
-                {
-                    continue;
-                }
-
-                if let Ok(mut fresh_policy) =
-                    state.get_or_load_security_policy(&mut service, password)
-                {
-                    let mut policy_changed = false;
-                    for d in &mut fresh_policy.market_selected_syncs {
-                        if normalize_sync_url(&d.read_url) == norm_target
-                            && d.drop_pub.trim().eq_ignore_ascii_case(&notice.drop_pub)
-                        {
-                            apply_revocation_notice(d, &notice, now_secs);
-                            revoked_own_syncs.push(d.clone());
-                            policy_changed = true;
-                        }
-                    }
-                    for ps in &mut fresh_policy.public_syncs {
-                        if normalize_sync_url(&ps.read_url) == norm_target
-                            && ps.drop_pub.trim().eq_ignore_ascii_case(&notice.drop_pub)
-                        {
-                            apply_revocation_notice(ps, &notice, now_secs);
-                            revoked_own_syncs.push(FrontendSyncDescriptor {
-                                write_url: ps.write_url.clone(),
-                                read_url: ps.read_url.clone(),
-                                slot_id: None,
-                                drop_pub: ps.drop_pub.clone(),
-                                status: ps.status.clone(),
-                                sunset_at: ps.sunset_at,
-                                revocation_reason: ps.revocation_reason.clone(),
-                                replacement: ps.replacement.clone(),
-                                ..Default::default()
-                            });
-                            policy_changed = true;
-                        }
-                    }
-                    if policy_changed
-                        && state
-                            .save_security_policy(&mut service, fresh_policy.clone(), password)
-                            .is_ok()
+                let committed = state.with_session(session, |service| {
+                    if let Ok(mut fresh_policy) =
+                        state.get_or_load_security_policy(service, password)
                     {
-                        *security_policy = fresh_policy;
-                    }
-                }
-
-                match crate::state::load_encrypted_json_opt::<FrontendAddressBook>(
-                    &mut service,
-                    CONTACTS_DATA_NAME,
-                    password,
-                ) {
-                    Ok(Some(mut ab)) => {
-                        if apply_revocation_notice_to_address_book(
-                            &mut ab,
-                            &rev_read_url,
-                            &notice,
-                            now_secs,
-                        ) {
-                            if let Err(e) = crate::state::save_encrypted_json(
-                                &mut service,
-                                CONTACTS_DATA_NAME,
-                                &ab,
-                                password,
-                            ) {
-                                log::warn!(
-                                    "Failed to save address book after revocation notice: {}",
-                                    e
-                                );
-                            } else {
-                                *state.contacts.lock().unwrap() = Some(ab);
+                        let mut policy_changed = false;
+                        for d in &mut fresh_policy.market_selected_syncs {
+                            if normalize_sync_url(&d.read_url) == norm_target
+                                && d.drop_pub.trim().eq_ignore_ascii_case(&notice.drop_pub)
+                            {
+                                apply_revocation_notice(d, &notice, now_secs);
+                                revoked_own_syncs.push(d.clone());
+                                policy_changed = true;
                             }
                         }
+                        for ps in &mut fresh_policy.public_syncs {
+                            if normalize_sync_url(&ps.read_url) == norm_target
+                                && ps.drop_pub.trim().eq_ignore_ascii_case(&notice.drop_pub)
+                            {
+                                apply_revocation_notice(ps, &notice, now_secs);
+                                revoked_own_syncs.push(FrontendSyncDescriptor {
+                                    write_url: ps.write_url.clone(),
+                                    read_url: ps.read_url.clone(),
+                                    slot_id: None,
+                                    drop_pub: ps.drop_pub.clone(),
+                                    status: ps.status.clone(),
+                                    sunset_at: ps.sunset_at,
+                                    revocation_reason: ps.revocation_reason.clone(),
+                                    replacement: ps.replacement.clone(),
+                                    ..Default::default()
+                                });
+                                policy_changed = true;
+                            }
+                        }
+                        if policy_changed
+                            && state
+                                .save_security_policy(service, fresh_policy.clone(), password)
+                                .is_ok()
+                        {
+                            *security_policy = fresh_policy;
+                        }
                     }
-                    Ok(None) => {}
-                    Err(e) => {
-                        log::warn!("Failed to load address book during revocation check: {}", e);
+
+                    match crate::state::load_encrypted_json_opt::<FrontendAddressBook>(
+                        service,
+                        CONTACTS_DATA_NAME,
+                        password,
+                    ) {
+                        Ok(Some(mut ab)) => {
+                            if apply_revocation_notice_to_address_book(
+                                &mut ab,
+                                &rev_read_url,
+                                &notice,
+                                now_secs,
+                            ) {
+                                if let Err(e) = crate::state::save_encrypted_json(
+                                    service,
+                                    CONTACTS_DATA_NAME,
+                                    &ab,
+                                    password,
+                                ) {
+                                    log::warn!(
+                                        "Failed to save address book after revocation notice: {}",
+                                        e
+                                    );
+                                } else {
+                                    state.set_cached_contacts_for_service(service, Some(ab));
+                                }
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            log::warn!(
+                                "Failed to load address book during revocation check: {}",
+                                e
+                            );
+                        }
                     }
+                    Ok(())
+                });
+                if !matches!(committed, Ok(Some(()))) {
+                    break;
                 }
             }
             Ok(None) => {
                 // Server returned 404 (no revocation / revocation cleared): clear stale local state.
                 let norm_target = normalize_sync_url(&rev_read_url);
-                let Ok(mut service) = state.lock_service() else {
-                    continue;
-                };
-                if service
-                    .with_wallet(|w| w.get_user_id().to_string())
-                    .ok()
-                    .as_deref()
-                    != Some(owner_did)
-                {
-                    continue;
-                }
-
-                if let Ok(mut fresh_policy) =
-                    state.get_or_load_security_policy(&mut service, password)
-                {
-                    let mut policy_changed = false;
-                    for d in &mut fresh_policy.market_selected_syncs {
-                        if normalize_sync_url(&d.read_url) == norm_target
-                            && d.drop_pub.trim().eq_ignore_ascii_case(&rev_drop_pub)
-                            && clear_revocation(d, "active")
-                        {
-                            policy_changed = true;
-                        }
-                    }
-                    for ps in &mut fresh_policy.public_syncs {
-                        if normalize_sync_url(&ps.read_url) == norm_target
-                            && ps.drop_pub.trim().eq_ignore_ascii_case(&rev_drop_pub)
-                        {
-                            let fallback = if ps.authorized_channels.is_empty() {
-                                "pending_auth"
-                            } else {
-                                "active"
-                            };
-                            if clear_revocation(ps, fallback) {
+                let committed = state.with_session(session, |service| {
+                    if let Ok(mut fresh_policy) =
+                        state.get_or_load_security_policy(service, password)
+                    {
+                        let mut policy_changed = false;
+                        for d in &mut fresh_policy.market_selected_syncs {
+                            if normalize_sync_url(&d.read_url) == norm_target
+                                && d.drop_pub.trim().eq_ignore_ascii_case(&rev_drop_pub)
+                                && clear_revocation(d, "active")
+                            {
                                 policy_changed = true;
                             }
                         }
-                    }
-                    if policy_changed
-                        && state
-                            .save_security_policy(&mut service, fresh_policy.clone(), password)
-                            .is_ok()
-                    {
-                        *security_policy = fresh_policy;
-                    }
-                }
-
-                match crate::state::load_encrypted_json_opt::<FrontendAddressBook>(
-                    &mut service,
-                    CONTACTS_DATA_NAME,
-                    password,
-                ) {
-                    Ok(Some(mut ab)) => {
-                        let mut ab_changed = false;
-                        for contact in ab.contacts.values_mut() {
-                            for ep in &mut contact.syncs {
-                                if normalize_sync_url(&ep.read_url) == norm_target
-                                    && ep.drop_pub.trim().eq_ignore_ascii_case(&rev_drop_pub)
-                                    && clear_revocation(ep, "unverified")
-                                {
-                                    ab_changed = true;
+                        for ps in &mut fresh_policy.public_syncs {
+                            if normalize_sync_url(&ps.read_url) == norm_target
+                                && ps.drop_pub.trim().eq_ignore_ascii_case(&rev_drop_pub)
+                            {
+                                let fallback = if ps.authorized_channels.is_empty() {
+                                    "pending_auth"
+                                } else {
+                                    "active"
+                                };
+                                if clear_revocation(ps, fallback) {
+                                    policy_changed = true;
                                 }
                             }
                         }
-                        if ab_changed {
-                            if let Err(e) = crate::state::save_encrypted_json(
-                                &mut service,
-                                CONTACTS_DATA_NAME,
-                                &ab,
-                                password,
-                            ) {
-                                log::warn!(
-                                    "Failed to save address book after clearing revocation: {}",
-                                    e
-                                );
-                            } else {
-                                *state.contacts.lock().unwrap() = Some(ab);
-                            }
+                        if policy_changed
+                            && state
+                                .save_security_policy(service, fresh_policy.clone(), password)
+                                .is_ok()
+                        {
+                            *security_policy = fresh_policy;
                         }
                     }
-                    Ok(None) => {}
-                    Err(e) => {
-                        log::warn!(
-                            "Failed to load address book while clearing revocation: {}",
-                            e
-                        );
+
+                    match crate::state::load_encrypted_json_opt::<FrontendAddressBook>(
+                        service,
+                        CONTACTS_DATA_NAME,
+                        password,
+                    ) {
+                        Ok(Some(mut ab)) => {
+                            let mut ab_changed = false;
+                            for contact in ab.contacts.values_mut() {
+                                for ep in &mut contact.syncs {
+                                    if normalize_sync_url(&ep.read_url) == norm_target
+                                        && ep.drop_pub.trim().eq_ignore_ascii_case(&rev_drop_pub)
+                                        && clear_revocation(ep, "unverified")
+                                    {
+                                        ab_changed = true;
+                                    }
+                                }
+                            }
+                            if ab_changed {
+                                if let Err(e) = crate::state::save_encrypted_json(
+                                    service,
+                                    CONTACTS_DATA_NAME,
+                                    &ab,
+                                    password,
+                                ) {
+                                    log::warn!(
+                                        "Failed to save address book after clearing revocation: {}",
+                                        e
+                                    );
+                                } else {
+                                    state.set_cached_contacts_for_service(service, Some(ab));
+                                }
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            log::warn!(
+                                "Failed to load address book while clearing revocation: {}",
+                                e
+                            );
+                        }
                     }
+                    Ok(())
+                });
+                if !matches!(committed, Ok(Some(()))) {
+                    break;
                 }
             }
             Err(_) => {}
@@ -417,15 +407,12 @@ type PollTargetSets = (Vec<DirectPollTarget>, Vec<String>);
 
 fn collect_poll_targets(
     state: &AppState,
+    service: &mut human_money_core::app_service::AppService,
     ui_prefs: &UiPreferences,
     security_policy: &SecurityPolicy,
     my_prefix: Option<&str>,
     password: Option<&str>,
 ) -> PollTargetSets {
-    let Ok(mut service) = state.lock_service() else {
-        return (Vec::new(), Vec::new());
-    };
-
     let mut direct_fetches: Vec<(String, String, Option<String>)> = Vec::new();
     let mut index_urls = Vec::new();
 
@@ -443,9 +430,9 @@ fn collect_poll_targets(
         }
     }
 
-    let reg = state.get_or_load_wot_register(&mut service, password).ok();
+    let reg = state.get_or_load_wot_register(service, password).ok();
     let card_store: Option<humoco_market::CardStore> = match crate::state::load_encrypted_json_opt(
-        &mut service,
+        service,
         MARKET_CARD_STORE_KEY,
         password,
     ) {
@@ -456,7 +443,7 @@ fn collect_poll_targets(
         }
     };
 
-    if let Ok(contacts) = state.load_contacts(&mut service, password) {
+    if let Ok(contacts) = state.load_contacts(service, password) {
         for c in contacts {
             let lvl = c.trust_level.unwrap_or_else(|| {
                 if let Some(ref r) = reg {
@@ -539,12 +526,7 @@ fn collect_poll_targets(
 }
 
 struct SlotDecodeContext<'a> {
-    state: &'a AppState,
     my_x25519_sk: &'a x25519_dalek::StaticSecret,
-    now_secs: u64,
-    max_stored_cards: usize,
-    password: Option<&'a str>,
-    store: &'a mut humoco_market::CardStore,
     sync_state: &'a mut StoredSyncState,
     outcome: &'a mut PollOutcome,
     errors: &'a mut Vec<String>,
@@ -560,18 +542,9 @@ fn process_card_slot_blob(
     match humoco_market::open_slot_blob(blob, ctx.my_x25519_sk) {
         Ok(Some(bundle)) => {
             ctx.outcome.decrypted_slots += 1;
-            let (cards_count, ads_count) = import_decrypted_card_bundle(
-                bundle,
-                read_url,
-                ctx.now_secs,
-                ctx.max_stored_cards,
-                ctx.state,
-                ctx.store,
-                ctx.sync_state,
-                ctx.password,
-            );
-            ctx.outcome.imported_cards += cards_count;
-            ctx.outcome.new_ads += ads_count;
+            ctx.outcome
+                .decoded_card_bundles
+                .push((read_url.to_string(), bundle));
         }
         Ok(None) => {}
         Err(e) => {
@@ -598,14 +571,9 @@ fn process_wot_slot_blob(
             ctx.outcome.decrypted_slots += 1;
             match serde_json::from_slice::<humoco_wot::WotSyncPackage>(&bytes) {
                 Ok(pkg) => {
-                    ctx.outcome.imported_wot_lists += import_decrypted_wot_package(
-                        &pkg,
-                        read_url,
-                        ctx.now_secs,
-                        ctx.state,
-                        ctx.password,
-                        ctx.errors,
-                    );
+                    ctx.outcome
+                        .decoded_wot_packages
+                        .push((read_url.to_string(), pkg));
                 }
                 Err(e) => {
                     let kind = if is_direct {
@@ -632,10 +600,13 @@ fn process_wot_slot_blob(
 }
 
 /// Polls direct O(1) slots and index-listed sync drops for card and WoT updates.
+/// Strictly read/decrypt/delta-collecting: never mutates wallet stores during `.await`
+/// and aborts early if the active session generation changes.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn poll_sync_channels(
     client: &reqwest::Client,
     state: &AppState,
+    session: &SessionToken,
     ui_prefs: &UiPreferences,
     security_policy: &SecurityPolicy,
     id_ctx: &SyncIdentityContext,
@@ -644,58 +615,32 @@ pub(crate) async fn poll_sync_channels(
     sync_state: &mut StoredSyncState,
     errors: &mut Vec<String>,
 ) -> PollOutcome {
-    sync_state.last_poll_at = Some(now_secs);
-
-    let (direct_slot_fetches, candidate_read_urls) = collect_poll_targets(
-        state,
-        ui_prefs,
-        security_policy,
-        id_ctx.my_prefix.as_deref(),
-        password,
-    );
-
-    let mut store: humoco_market::CardStore = match state.lock_service().and_then(|mut service| {
-        crate::state::load_encrypted_json_or_default(&mut service, MARKET_CARD_STORE_KEY, password)
-            .map_err(FrontendError::from)
-    }) {
-        Ok(s) => s,
-        Err(e) => {
-            errors.push(format!(
-                "Failed to load CardStore for sync poll: {}",
-                e.message
-            ));
-            return PollOutcome {
-                polled_syncs: 0,
-                decrypted_slots: 0,
-                imported_cards: 0,
-                new_ads: 0,
-                imported_wot_lists: 0,
-                sync_health_updates: Vec::new(),
-                updated_card_store: None,
-            };
-        }
-    };
-
-    let max_stored_cards = ui_prefs.max_stored_cards.clamp(100, 10_000);
-    let my_x25519_sk = human_money_core::crypto::ed25519_sk_to_x25519_sk(&id_ctx.my_ed_sk);
-
     let mut outcome = PollOutcome {
         polled_syncs: 0,
         decrypted_slots: 0,
-        imported_cards: 0,
-        new_ads: 0,
-        imported_wot_lists: 0,
+        decoded_card_bundles: Vec::new(),
+        decoded_wot_packages: Vec::new(),
         sync_health_updates: Vec::new(),
-        updated_card_store: None,
     };
 
+    let Ok(Some((direct_slot_fetches, candidate_read_urls))) = state.with_session(session, |service| {
+        Ok(collect_poll_targets(
+            state,
+            service,
+            ui_prefs,
+            security_policy,
+            id_ctx.my_prefix.as_deref(),
+            password,
+        ))
+    }) else {
+        return outcome;
+    };
+
+    sync_state.last_poll_at = Some(now_secs);
+    let my_x25519_sk = human_money_core::crypto::ed25519_sk_to_x25519_sk(&id_ctx.my_ed_sk);
+
     let mut decode_ctx = SlotDecodeContext {
-        state,
         my_x25519_sk: &my_x25519_sk,
-        now_secs,
-        max_stored_cards,
-        password,
-        store: &mut store,
         sync_state,
         outcome: &mut outcome,
         errors,
@@ -703,6 +648,9 @@ pub(crate) async fn poll_sync_channels(
 
     // 1. Direct O(1) fetches
     for (read_url, slot_id, prefix_opt) in direct_slot_fetches {
+        if !state.is_generation_current(session.generation) {
+            break;
+        }
         decode_ctx.outcome.polled_syncs += 1;
         let (base_slot_pk, slot_prefix) =
             humoco_market::parse_slot_id(&slot_id).unwrap_or_else(|_| (slot_id.clone(), None));
@@ -852,6 +800,9 @@ pub(crate) async fn poll_sync_channels(
 
     // 2. Index-based fetches
     for read_url in candidate_read_urls {
+        if !state.is_generation_current(session.generation) {
+            break;
+        }
         decode_ctx.outcome.polled_syncs += 1;
         let cached_etag = decode_ctx
             .sync_state
@@ -935,6 +886,9 @@ pub(crate) async fn poll_sync_channels(
                 });
 
                 for entry in entries {
+                    if !state.is_generation_current(session.generation) {
+                        break;
+                    }
                     if entry.channel != "card" && entry.channel != "wot" {
                         continue;
                     }
@@ -1030,7 +984,6 @@ pub(crate) async fn poll_sync_channels(
         }
     }
 
-    outcome.updated_card_store = Some(store);
     outcome
 }
 
@@ -1038,14 +991,15 @@ pub async fn delete_own_sync_slots_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<usize, FrontendError> {
-    let (id_ctx, drops) = {
+    let (session, id_ctx, drops) = {
         let mut service =
             state.authorize_and_lock(crate::state::RequiredAccess::Full, password.as_deref())?;
+        let session = state.session_token_for_service(&service)?;
         let id_ctx = SyncIdentityContext::from_service(&service)?;
         let security_policy = state
             .get_or_load_security_policy(&mut service, password.as_deref())
             .map_err(FrontendError::from)?;
-        (id_ctx, security_policy.market_selected_syncs)
+        (session, id_ctx, security_policy.market_selected_syncs)
     };
 
     let client = sync_client::create_sync_http_client();
@@ -1088,72 +1042,78 @@ pub async fn delete_own_sync_slots_impl(
     }
 
     // Clear drop_sent_log, sync_state, post slot ETags, and backup mirror state
-    {
-        let mut service = state.lock_service()?;
-        if let Ok(mut reg) = state.get_or_load_wot_register(&mut service, password.as_deref()) {
-            reg.clear_drop_sent_log(None);
-            let _ = state.save_wot_register(&mut service, &reg, password.as_deref());
-        }
+    state.with_session_required(
+        &session,
+        "Active wallet changed before sync state could be reset",
+        |service| {
+            if let Ok(mut reg) = state.get_or_load_wot_register(service, password.as_deref()) {
+                reg.clear_drop_sent_log(None);
+                let _ = state.save_wot_register(service, &reg, password.as_deref());
+            }
 
-        if let Some(mut sync_state) = crate::state::load_encrypted_json_opt::<StoredSyncState>(
-            &mut service,
-            MARKET_SYNC_KEY,
-            password.as_deref(),
-        )
-        .map_err(FrontendError::from)?
-        {
-            sync_state.last_upload_at = None;
-            sync_state.last_poll_at = None;
-            sync_state.last_readers_hash = None;
-            sync_state.card_base_uploaded_at_by_write_url.clear();
-            sync_state.card_base_size_by_write_url.clear();
-            sync_state.card_base_versions_by_write_url.clear();
-            sync_state.card_delta_active_by_write_url.clear();
-            sync_state.card_last_uploaded_versions_by_write_url.clear();
-            crate::state::save_encrypted_json(
-                &mut service,
+            if let Some(mut sync_state) = crate::state::load_encrypted_json_opt::<StoredSyncState>(
+                service,
                 MARKET_SYNC_KEY,
-                &sync_state,
                 password.as_deref(),
             )
-            .map_err(FrontendError::from)?;
-        }
+            .map_err(FrontendError::from)?
+            {
+                sync_state.last_upload_at = None;
+                sync_state.last_poll_at = None;
+                sync_state.last_readers_hash = None;
+                sync_state.card_base_uploaded_at_by_write_url.clear();
+                sync_state.card_base_size_by_write_url.clear();
+                sync_state.card_base_versions_by_write_url.clear();
+                sync_state.card_delta_active_by_write_url.clear();
+                sync_state.card_last_uploaded_versions_by_write_url.clear();
+                crate::state::save_encrypted_json(
+                    service,
+                    MARKET_SYNC_KEY,
+                    &sync_state,
+                    password.as_deref(),
+                )
+                .map_err(FrontendError::from)?;
+            }
 
-        if let Some(mut post_state) = crate::state::load_encrypted_json_opt::<StoredPostState>(
-            &mut service,
-            MARKET_POST_STATE_KEY,
-            password.as_deref(),
-        )
-        .map_err(FrontendError::from)?
-        {
-            post_state.slot_etags_by_write_url.clear();
-            crate::state::save_encrypted_json(
-                &mut service,
+            if let Some(mut post_state) = crate::state::load_encrypted_json_opt::<StoredPostState>(
+                service,
                 MARKET_POST_STATE_KEY,
-                &post_state,
+                password.as_deref(),
+            )
+            .map_err(FrontendError::from)?
+            {
+                post_state.slot_etags_by_write_url.clear();
+                crate::state::save_encrypted_json(
+                    service,
+                    MARKET_POST_STATE_KEY,
+                    &post_state,
+                    password.as_deref(),
+                )
+                .map_err(FrontendError::from)?;
+            }
+
+            crate::state::save_local_sidecar_json(
+                service,
+                BACKUP_SYNC_STATE_KEY,
+                &StoredBackupSyncState::default(),
                 password.as_deref(),
             )
             .map_err(FrontendError::from)?;
-        }
-
-        crate::state::save_local_sidecar_json(
-            &mut service,
-            BACKUP_SYNC_STATE_KEY,
-            &StoredBackupSyncState::default(),
-            password.as_deref(),
-        )
-        .map_err(FrontendError::from)?;
-    }
+            Ok(())
+        },
+    )?;
 
     Ok(deleted_count)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn probe_public_sync_capabilities(
     probe_client: &reqwest::Client,
     canonical_url: &str,
     access_pubkey: &str,
     my_prefix: Option<&str>,
     state: &AppState,
+    session: &SessionToken,
     password: Option<&str>,
 ) -> Vec<String> {
     let mut authorized_channels = Vec::new();
@@ -1177,7 +1137,7 @@ async fn probe_public_sync_capabilities(
             }
         }
     }
-    save_channel_max_bytes_updates(state, password, &channel_max_bytes_updates);
+    save_channel_max_bytes_updates(state, session, password, &channel_max_bytes_updates);
     authorized_channels
 }
 
@@ -1186,7 +1146,8 @@ pub async fn probe_public_sync_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendPublicSyncInfo, FrontendError> {
-    state.authorize(crate::state::RequiredAccess::Unlocked, None)?;
+    let session =
+        state.authorize_and_begin_session(crate::state::RequiredAccess::Unlocked, None)?;
     let canonical_url = humoco_market::canonicalize_write_url(&url)
         .map_err(|e| FrontendError::from(e.to_string()))?;
     sync_client::validate_sync_url(&canonical_url).map_err(FrontendError::from)?;
@@ -1211,6 +1172,7 @@ pub async fn probe_public_sync_impl(
         &access_pubkey,
         id_ctx.my_prefix.as_deref(),
         state,
+        &session,
         password.as_deref(),
     )
     .await;
@@ -1242,13 +1204,13 @@ pub async fn save_public_sync_impl(
     humoco_market::parse_ed25519_pubkey_hex64(&drop_pub)
         .map_err(|e| FrontendError::from(e.to_string()))?;
 
-    let (owner_did, id_ctx) = {
-        let service = state.lock_service()?;
-        let owner_did = service
-            .with_wallet(|w| w.get_user_id().to_string())
-            .map_err(FrontendError::from)?;
-        (owner_did, SyncIdentityContext::from_service(&service)?)
-    };
+    let session =
+        state.authorize_and_begin_session(crate::state::RequiredAccess::Full, password.as_deref())?;
+    let id_ctx = state.with_session_required(
+        &session,
+        "Active wallet changed before public sync could be prepared",
+        |service| SyncIdentityContext::from_service(service),
+    )?;
 
     let (_r_sk, _r_vk, access_pubkey) =
         humoco_market::derive_public_drop_keypair(&id_ctx.master_seed, &canonical_url)
@@ -1269,70 +1231,66 @@ pub async fn save_public_sync_impl(
         &access_pubkey,
         id_ctx.my_prefix.as_deref(),
         state,
+        &session,
         password.as_deref(),
     )
     .await;
 
-    {
-        let mut service = state.lock_service()?;
-        let current_did = service
-            .with_wallet(|w| w.get_user_id().to_string())
-            .map_err(FrontendError::from)?;
-        if current_did != owner_did {
-            return Err(FrontendError::from(
-                "Active wallet changed before public sync could be saved".to_string(),
-            ));
-        }
+    state.with_session_required(
+        &session,
+        "Active wallet changed before public sync could be saved",
+        |service| {
+            let mut stored = StoredPublicSync {
+                write_url: canonical_url.clone(),
+                read_url: read_url.clone(),
+                drop_pub: drop_pub.clone(),
+                register_url: clean_register_url.clone(),
+                access_pubkey: access_pubkey.clone(),
+                enabled,
+                authorized_channels: authorized_channels.clone(),
+                status: if !authorized_channels.is_empty() {
+                    "active".to_string()
+                } else {
+                    "pending_auth".to_string()
+                },
+                ..Default::default()
+            };
 
-        let mut stored = StoredPublicSync {
-            write_url: canonical_url.clone(),
-            read_url: read_url.clone(),
-            drop_pub: drop_pub.clone(),
-            register_url: clean_register_url.clone(),
-            access_pubkey: access_pubkey.clone(),
-            enabled,
-            authorized_channels: authorized_channels.clone(),
-            status: if !authorized_channels.is_empty() {
-                "active".to_string()
-            } else {
-                "pending_auth".to_string()
-            },
-            ..Default::default()
-        };
-
-        if let Some(ref info) = info_opt {
-            if let Some(ref notice) = info.revocation {
-                if sync_client::verify_revocation_notice(notice, &drop_pub).is_ok() {
-                    apply_revocation_notice(
-                        &mut stored,
-                        notice,
-                        sync_client::current_unix_timestamp(),
-                    );
+            if let Some(ref info) = info_opt {
+                if let Some(ref notice) = info.revocation {
+                    if sync_client::verify_revocation_notice(notice, &drop_pub).is_ok() {
+                        apply_revocation_notice(
+                            &mut stored,
+                            notice,
+                            sync_client::current_unix_timestamp(),
+                        );
+                    }
                 }
             }
-        }
 
-        let updated_policy = state
-            .mutate_security_policy(&mut service, password.as_deref(), |policy| {
-                if let Some(pos) = policy
-                    .public_syncs
-                    .iter()
-                    .position(|d| d.write_url == canonical_url)
-                {
-                    policy.public_syncs[pos] = stored;
-                } else {
-                    policy.public_syncs.push(stored);
-                }
-            })
-            .map_err(FrontendError::from)?;
+            let updated_policy = state
+                .mutate_security_policy(service, password.as_deref(), |policy| {
+                    if let Some(pos) = policy
+                        .public_syncs
+                        .iter()
+                        .position(|d| d.write_url == canonical_url)
+                    {
+                        policy.public_syncs[pos] = stored;
+                    } else {
+                        policy.public_syncs.push(stored);
+                    }
+                })
+                .map_err(FrontendError::from)?;
 
-        sync_own_card_drops_on_settings_change(
-            state,
-            &mut service,
-            &updated_policy.market_selected_syncs,
-            password.as_deref(),
-        );
-    }
+            sync_own_card_drops_on_settings_change(
+                state,
+                service,
+                &updated_policy.market_selected_syncs,
+                password.as_deref(),
+            );
+            Ok(())
+        },
+    )?;
 
     let _ = enqueue_guardian_locator_updates_if_configured(state, password.clone()).await;
 
@@ -1352,13 +1310,8 @@ pub async fn remove_public_sync_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<(), FrontendError> {
-    let owner_did = {
-        let service =
-            state.authorize_and_lock(crate::state::RequiredAccess::Full, password.as_deref())?;
-        service
-            .with_wallet(|w| w.get_user_id().to_string())
-            .map_err(FrontendError::from)?
-    };
+    let session =
+        state.authorize_and_begin_session(crate::state::RequiredAccess::Full, password.as_deref())?;
     let canonical_url = humoco_market::canonicalize_write_url(&write_url)
         .map_err(|e| FrontendError::from(e.to_string()))?;
 
@@ -1410,79 +1363,74 @@ pub async fn remove_public_sync_impl(
         }
     }
 
-    {
-        let mut service = state.lock_service()?;
-        let current_did = service
-            .with_wallet(|w| w.get_user_id().to_string())
-            .map_err(FrontendError::from)?;
-        if current_did != owner_did {
-            return Err(FrontendError::from(
-                "Active wallet changed before public sync could be removed".to_string(),
-            ));
-        }
+    state.with_session_required(
+        &session,
+        "Active wallet changed before public sync could be removed",
+        |service| {
+            let updated_policy = state
+                .mutate_security_policy(service, password.as_deref(), |policy| {
+                    policy.public_syncs.retain(|d| d.write_url != canonical_url);
+                })
+                .map_err(FrontendError::from)?;
 
-        let updated_policy = state
-            .mutate_security_policy(&mut service, password.as_deref(), |policy| {
-                policy.public_syncs.retain(|d| d.write_url != canonical_url);
-            })
-            .map_err(FrontendError::from)?;
+            sync_own_card_drops_on_settings_change(
+                state,
+                service,
+                &updated_policy.market_selected_syncs,
+                password.as_deref(),
+            );
 
-        sync_own_card_drops_on_settings_change(
-            state,
-            &mut service,
-            &updated_policy.market_selected_syncs,
-            password.as_deref(),
-        );
+            if let Ok(mut reg) = state.get_or_load_wot_register(service, password.as_deref()) {
+                reg.clear_drop_sent_log(Some(&canonical_url));
+                let _ = state.save_wot_register(service, &reg, password.as_deref());
+            }
 
-        if let Ok(mut reg) = state.get_or_load_wot_register(&mut service, password.as_deref()) {
-            reg.clear_drop_sent_log(Some(&canonical_url));
-            let _ = state.save_wot_register(&mut service, &reg, password.as_deref());
-        }
-
-        if let Some(mut post_state) = crate::state::load_encrypted_json_opt::<StoredPostState>(
-            &mut service,
-            MARKET_POST_STATE_KEY,
-            password.as_deref(),
-        )
-        .map_err(FrontendError::from)?
-        {
-            post_state.slot_etags_by_write_url.remove(&canonical_url);
-            post_state.slot_etags_by_write_url.remove(&write_url);
-            crate::state::save_encrypted_json(
-                &mut service,
+            if let Some(mut post_state) = crate::state::load_encrypted_json_opt::<StoredPostState>(
+                service,
                 MARKET_POST_STATE_KEY,
-                &post_state,
                 password.as_deref(),
             )
-            .map_err(FrontendError::from)?;
-        }
-
-        if let Some(mut backup_state) = crate::state::load_local_sidecar_json_opt::<
-            StoredBackupSyncState,
-        >(
-            &mut service, BACKUP_SYNC_STATE_KEY, password.as_deref()
-        )
-        .map_err(FrontendError::from)?
-        {
-            let removed = backup_state
-                .mirrors_by_write_url
-                .remove(&canonical_url)
-                .is_some()
-                || backup_state
-                    .mirrors_by_write_url
-                    .remove(&write_url)
-                    .is_some();
-            if removed {
-                crate::state::save_local_sidecar_json(
-                    &mut service,
-                    BACKUP_SYNC_STATE_KEY,
-                    &backup_state,
+            .map_err(FrontendError::from)?
+            {
+                post_state.slot_etags_by_write_url.remove(&canonical_url);
+                post_state.slot_etags_by_write_url.remove(&write_url);
+                crate::state::save_encrypted_json(
+                    service,
+                    MARKET_POST_STATE_KEY,
+                    &post_state,
                     password.as_deref(),
                 )
                 .map_err(FrontendError::from)?;
             }
-        }
-    }
+
+            if let Some(mut backup_state) = crate::state::load_local_sidecar_json_opt::<
+                StoredBackupSyncState,
+            >(
+                service, BACKUP_SYNC_STATE_KEY, password.as_deref()
+            )
+            .map_err(FrontendError::from)?
+            {
+                let removed = backup_state
+                    .mirrors_by_write_url
+                    .remove(&canonical_url)
+                    .is_some()
+                    || backup_state
+                        .mirrors_by_write_url
+                        .remove(&write_url)
+                        .is_some();
+                if removed {
+                    crate::state::save_local_sidecar_json(
+                        service,
+                        BACKUP_SYNC_STATE_KEY,
+                        &backup_state,
+                        password.as_deref(),
+                    )
+                    .map_err(FrontendError::from)?;
+                }
+            }
+            Ok(())
+        },
+    )?;
 
     let _ = enqueue_guardian_locator_updates_if_configured(state, password.clone()).await;
 

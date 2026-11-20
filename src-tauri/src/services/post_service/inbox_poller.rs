@@ -560,15 +560,16 @@ pub async fn sync_post_channels_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendPostSyncResult, FrontendError> {
-    let (ui_prefs, security_policy) = {
+    let (session, ui_prefs, security_policy) = {
         let mut service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
+        let session = state.session_token_for_service(&service)?;
         let ui_prefs = state
             .get_or_load_ui_preferences(&mut service, password.as_deref())
             .map_err(FrontendError::from)?;
         let security_policy = state
             .get_or_load_security_policy(&mut service, password.as_deref())
             .map_err(FrontendError::from)?;
-        (ui_prefs, security_policy)
+        (session, ui_prefs, security_policy)
     };
 
     if ui_prefs.market_poll_wifi_only && is_wifi == Some(false) {
@@ -633,16 +634,54 @@ pub async fn sync_post_channels_impl(
     // 4. Download slots (no mutex held across `.await`)
     let (fetched_slots, post_sync_health_updates, polled_syncs, download_errors) =
         download_post_slots(&client, direct_slot_fetches, candidate_read_urls).await;
+    if !state.is_generation_current(session.generation) {
+        return Ok(FrontendPostSyncResult {
+            uploaded_to: 0,
+            polled_syncs: 0,
+            imported_payments: 0,
+            imported_receipts: 0,
+            imported_signatures: 0,
+            new_sign_requests: 0,
+            new_wot_handshakes: 0,
+            new_inquiries: 0,
+            new_inquiry_messages: 0,
+            pruned_boxes: 0,
+            deferred_outbox_boxes: 0,
+            skipped_wifi_only: false,
+            errors: Vec::new(),
+            retry_after_secs: None,
+        });
+    }
     stats.errors.extend(download_errors);
 
     if !post_sync_health_updates.is_empty() {
-        let mut service = state.service.lock().unwrap();
-        state.record_contact_sync_health_batch(
-            &mut service,
-            &post_sync_health_updates,
-            now_secs,
-            password.as_deref(),
-        );
+        let committed = state.with_session(&session, |service| {
+            state.record_contact_sync_health_batch(
+                service,
+                &post_sync_health_updates,
+                now_secs,
+                password.as_deref(),
+            );
+            Ok(())
+        })?;
+        if committed.is_none() {
+            return Ok(FrontendPostSyncResult {
+                uploaded_to: 0,
+                polled_syncs: 0,
+                imported_payments: 0,
+                imported_receipts: 0,
+                imported_signatures: 0,
+                new_sign_requests: 0,
+                new_wot_handshakes: 0,
+                new_inquiries: 0,
+                new_inquiry_messages: 0,
+                pruned_boxes: 0,
+                deferred_outbox_boxes: 0,
+                skipped_wifi_only: false,
+                errors: Vec::new(),
+                retry_after_secs: None,
+            });
+        }
     }
 
     // 5. Decrypt and process entries
@@ -788,14 +827,19 @@ pub async fn sync_post_channels_impl(
                     .cloned()
                     .map(Into::into)
                     .collect();
-                let mut service = state.service.lock().unwrap();
-                state.update_contact_from_card(
-                    &mut service,
-                    &sender_did,
-                    &reply_dtos,
-                    None,
-                    password.as_deref(),
-                );
+                let committed = state.with_session(&session, |service| {
+                    state.update_contact_from_card(
+                        service,
+                        &sender_did,
+                        &reply_dtos,
+                        None,
+                        password.as_deref(),
+                    );
+                    Ok(())
+                })?;
+                if committed.is_none() {
+                    break;
+                }
             }
 
             let env_ctx = PostEnvelopeContext {
@@ -819,8 +863,27 @@ pub async fn sync_post_channels_impl(
     }
 
     // 6. Merge any concurrent local writes before flushing, then flush and persist atomically.
+    if !state.is_generation_current(session.generation) {
+        return Ok(FrontendPostSyncResult {
+            uploaded_to: 0,
+            polled_syncs: 0,
+            imported_payments: 0,
+            imported_receipts: 0,
+            imported_signatures: 0,
+            new_sign_requests: 0,
+            new_wot_handshakes: 0,
+            new_inquiries: 0,
+            new_inquiry_messages: 0,
+            pruned_boxes: 0,
+            deferred_outbox_boxes: 0,
+            skipped_wifi_only: false,
+            errors: Vec::new(),
+            retry_after_secs: None,
+        });
+    }
     merge_and_save_post_state(
         state,
+        &session,
         &baseline_post_state,
         &mut post_state,
         password.as_deref(),
@@ -828,12 +891,32 @@ pub async fn sync_post_channels_impl(
     baseline_post_state = post_state.clone();
 
     let flush_outcome =
-        flush_post_slots_impl(state, &mut post_state, None, &[], password.as_deref()).await;
+        flush_post_slots_impl(state, &session, &mut post_state, None, &[], password.as_deref())
+            .await;
     let uploaded_to = flush_outcome.deposited_to;
     stats.errors.extend(flush_outcome.errors);
 
+    if !state.is_generation_current(session.generation) {
+        return Ok(FrontendPostSyncResult {
+            uploaded_to: 0,
+            polled_syncs: 0,
+            imported_payments: 0,
+            imported_receipts: 0,
+            imported_signatures: 0,
+            new_sign_requests: 0,
+            new_wot_handshakes: 0,
+            new_inquiries: 0,
+            new_inquiry_messages: 0,
+            pruned_boxes: 0,
+            deferred_outbox_boxes: 0,
+            skipped_wifi_only: false,
+            errors: Vec::new(),
+            retry_after_secs: None,
+        });
+    }
     merge_and_save_post_state(
         state,
+        &session,
         &baseline_post_state,
         &mut post_state,
         password.as_deref(),
@@ -841,7 +924,15 @@ pub async fn sync_post_channels_impl(
 
     if polled_syncs > 0 || uploaded_to > 0 {
         let post_notices = build_post_notices(&stats, now_secs);
-        state.append_app_notices(Some(now_secs), post_notices, password.as_deref());
+        let _ = state.with_session(&session, |service| {
+            state.append_app_notices_with_service(
+                service,
+                Some(now_secs),
+                post_notices,
+                password.as_deref(),
+            );
+            Ok(())
+        });
     }
 
     let mut retry_after_secs: Option<u64> = None;

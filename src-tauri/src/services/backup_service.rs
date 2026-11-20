@@ -1667,13 +1667,14 @@ pub(crate) async fn sync_backup_with_standards_impl(
         });
     }
 
-    let (owner_did, my_ed_sk, master_seed, my_prefix, own_admin_opt) = {
+    let (session, my_ed_sk, master_seed, my_prefix, own_admin_opt) = {
         let mut service = state.lock_service()?;
-        let (owner_did, my_ed_sk, my_prefix) = service
-            .with_wallet_and_identity(|w, id| {
+        let session = state.session_token_for_service(&service)?;
+        let (my_ed_sk, my_prefix) = service
+            .with_wallet_and_identity(|_w, id| {
                 let pfx = human_money_core::crypto::get_prefix_from_user_id(&id.user_id)
                     .map(|s| s.to_string());
-                (w.get_user_id().to_string(), id.signing_key.clone(), pfx)
+                (id.signing_key.clone(), pfx)
             })
             .map_err(FrontendError::from)?;
         let master_seed = my_ed_sk.to_bytes();
@@ -1681,7 +1682,7 @@ pub(crate) async fn sync_backup_with_standards_impl(
             &mut service,
             password.as_deref(),
         )?;
-        (owner_did, my_ed_sk, master_seed, my_prefix, own_admin_opt)
+        (session, my_ed_sk, master_seed, my_prefix, own_admin_opt)
     };
 
     // Gather candidate backup drops: selected friend drops + own drop + enabled public drops
@@ -1938,15 +1939,17 @@ pub(crate) async fn sync_backup_with_standards_impl(
                             .is_some(),
                     };
                     if is_fork {
-                        let mut service = state.lock_service()?;
-                        let _ = service.persist_seal_lock_reason(
-                            human_money_core::models::seal::SealLockReason::ForkDetected,
-                            password.as_deref(),
-                        );
+                        let _ = state.with_session(&session, |service| {
+                            let _ = service.persist_seal_lock_reason(
+                                human_money_core::models::seal::SealLockReason::ForkDetected,
+                                password.as_deref(),
+                            );
+                            Ok(())
+                        });
                     }
                     let alert_clone = alert.clone();
-                    let _ = state.mutate_internal_lifecycle_for_owner(
-                        &owner_did,
+                    let _ = state.mutate_internal_lifecycle_for_session(
+                        &session,
                         password.as_deref(),
                         |lc| {
                             lc.pending_restore_l2_reconciliation = true;
@@ -2339,18 +2342,23 @@ pub(crate) async fn sync_backup_with_standards_impl(
                 backup_sync_state.base_manifest_sha256 = Some(new_sha);
             }
         }
-        let mut service = state.lock_service()?;
-        crate::state::save_local_sidecar_json(
-            &mut service,
-            crate::state::BACKUP_SYNC_STATE_KEY,
-            &backup_sync_state,
-            password.as_deref(),
-        )
-        .map_err(FrontendError::from)?;
+        state.with_session_required(
+            &session,
+            "Active wallet session changed before backup sync state could be saved",
+            |service| {
+                crate::state::save_local_sidecar_json(
+                    service,
+                    crate::state::BACKUP_SYNC_STATE_KEY,
+                    &backup_sync_state,
+                    password.as_deref(),
+                )
+                .map_err(FrontendError::from)
+            },
+        )?;
     }
 
     if let Some(alert) = pending_sync_alert.clone() {
-        let _ = state.mutate_internal_lifecycle_for_owner(&owner_did, password.as_deref(), |lc| {
+        let _ = state.mutate_internal_lifecycle_for_session(&session, password.as_deref(), |lc| {
             let keep_higher = lc
                 .wallet_sync_alert
                 .as_ref()
@@ -2367,7 +2375,7 @@ pub(crate) async fn sync_backup_with_standards_impl(
         let ts = Utc::now().to_rfc3339();
         let ts_clone = ts.clone();
         let mutated = state
-            .mutate_internal_lifecycle_for_owner(&owner_did, password.as_deref(), |lc| {
+            .mutate_internal_lifecycle_for_session(&session, password.as_deref(), |lc| {
                 lc.last_sync_backup_at = Some(ts_clone);
                 lc.backup_dirty = false;
                 true
@@ -2377,10 +2385,12 @@ pub(crate) async fn sync_backup_with_standards_impl(
             .is_some();
         if mutated {
             if let Some(ref seal_hash) = pending_seal_hash {
-                let mut service = state.lock_service()?;
-                if let Err(err) = service.acknowledge_seal_sync(seal_hash, password.as_deref()) {
-                    log::warn!("Post-sync seal acknowledgement deferred: {}", err);
-                }
+                let _ = state.with_session(&session, |service| {
+                    if let Err(err) = service.acknowledge_seal_sync(seal_hash, password.as_deref()) {
+                        log::warn!("Post-sync seal acknowledgement deferred: {}", err);
+                    }
+                    Ok(())
+                });
             }
         }
         Some(ts)
@@ -2937,13 +2947,8 @@ pub(crate) async fn reconcile_restored_wallet_l2_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendRestoreReconcileResultDto, FrontendError> {
-    let owner_did = {
-        let service = state
-            .authorize_and_lock(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
-        service
-            .with_wallet(|w| w.get_user_id().to_string())
-            .map_err(FrontendError::from)?
-    };
+    let session =
+        state.authorize_and_begin_session(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
     let summary = crate::services::l2_anchor_service::reconcile_vouchers_via_static_locks(
         state,
         None,
@@ -2959,24 +2964,32 @@ pub(crate) async fn reconcile_restored_wallet_l2_impl(
         .get_or_load_internal_lifecycle_locked(password.as_deref())?
         .pending_restore_l2_reconciliation;
     if summary.all_responded || active_voucher_queries_count == 0 {
-        crate::services::l2_anchor_service::clear_fork_lock_after_reconciliation(
-            state,
-            password.as_deref(),
-        );
-        let updated =
-            state.mutate_internal_lifecycle_for_owner(&owner_did, password.as_deref(), |lc| {
-                lc.pending_restore_l2_reconciliation = false;
-                if lc
-                    .wallet_sync_alert
-                    .as_ref()
-                    .is_some_and(|a| a.kind == "stale_local_backup" || a.kind == "fork_detected")
-                {
-                    lc.wallet_sync_alert = None;
-                }
-                true
-            })?;
-        if let Some(lc) = updated {
-            pending_restore_l2 = lc.pending_restore_l2_reconciliation;
+        let cleared = state.with_session(&session, |service| {
+            crate::services::l2_anchor_service::clear_fork_lock_for_service(
+                service,
+                password.as_deref(),
+            );
+            Ok(())
+        })?;
+        if cleared.is_some() {
+            let updated = state.mutate_internal_lifecycle_for_session(
+                &session,
+                password.as_deref(),
+                |lc| {
+                    lc.pending_restore_l2_reconciliation = false;
+                    if lc
+                        .wallet_sync_alert
+                        .as_ref()
+                        .is_some_and(|a| a.kind == "stale_local_backup" || a.kind == "fork_detected")
+                    {
+                        lc.wallet_sync_alert = None;
+                    }
+                    true
+                },
+            )?;
+            if let Some(lc) = updated {
+                pending_restore_l2 = lc.pending_restore_l2_reconciliation;
+            }
         }
     }
 
@@ -2993,7 +3006,7 @@ pub(crate) fn dismiss_wallet_sync_alert_impl(
     state: &AppState,
 ) -> Result<(), FrontendError> {
     let mut service =
-        state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, password.as_deref())?;
+        state.authorize_and_lock(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
     state
         .mutate_internal_lifecycle(&mut service, password.as_deref(), |lc| {
             if let Some(ref alert) = lc.wallet_sync_alert {
@@ -3838,7 +3851,7 @@ mod tests {
                 Some(password),
             )
             .unwrap();
-            *state_b_stale.internal_lifecycle.lock().unwrap() = Some(lc);
+            state_b_stale.set_cached_internal_lifecycle(Some(lc));
         }
 
         let res_b_stale = super::sync_backup_with_standards_impl(
@@ -4063,7 +4076,7 @@ mod tests {
                 Some(password),
             )
             .unwrap();
-            *state.internal_lifecycle.lock().unwrap() = Some(lc);
+            state.set_cached_internal_lifecycle(Some(lc));
 
             let mut bkp_state: crate::state::StoredBackupSyncState =
                 crate::state::load_local_sidecar_json_or_default(

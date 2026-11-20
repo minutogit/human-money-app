@@ -235,3 +235,24 @@ pub fn get_sync_overview_status(
 ) -> Result<FrontendSyncOverviewStatus, FrontendError> {
     sync_engine::get_sync_overview_status_impl(password, &state)
 }
+
+#[tauri::command]
+pub fn update_network_status(
+    is_online: bool,
+    is_wifi: bool,
+    is_visible: bool,
+    state: State<'_, AppState>,
+) -> Result<(), FrontendError> {
+    state.update_network_status(is_online, is_wifi, is_visible);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn wake_sync_coordinator(
+    scopes: crate::state::SyncWakeRequest,
+    state: State<'_, AppState>,
+) -> Result<(), FrontendError> {
+    state.authorize(crate::state::RequiredAccess::Unlocked, None)?;
+    state.wake_sync_coordinator(scopes);
+    Ok(())
+}

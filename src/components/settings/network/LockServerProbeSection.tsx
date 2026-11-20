@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { RefreshCw, ShieldCheck, Trash2, CheckCircle2, XCircle } from 'lucide-react';
 import { LockServerProbeResult, NominatedLockServerMeta } from '../../../types';
 import { settingsService } from '../../../services/settingsService';
+import { protectCommandOptions } from '../../../services/commandPolicy';
 import { useSession } from '../../../context/SessionContext';
 import { Button } from '../../ui/Button';
 import { Input } from '../../ui/Input';
@@ -109,7 +110,7 @@ export const LockServerProbeSection: React.FC<LockServerProbeSectionProps> = ({
             const targetAsn = clear ? null : ownServerAsn.trim() || null;
             const res = await protectAction(async (pwd) => {
                 return await settingsService.setOwnNominatedLockServer(targetUrl, targetAsn, pwd || null);
-            });
+            }, protectCommandOptions('set_own_nominated_lock_server'));
             if (res !== undefined) {
                 onSuccess(
                     clear

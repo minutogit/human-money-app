@@ -9,9 +9,11 @@ use log::warn;
 
 use crate::models::{FrontendError, FrontendSyncDescriptor};
 use crate::services::common::{are_dids_equal, SyncIdentityContext};
+use crate::session::SessionToken;
 use crate::settings::SecurityPolicy;
 use crate::state::{
-    AppState, PostOutboxEntry, StoredPostState, MARKET_CARD_STORE_KEY, MARKET_POST_STATE_KEY,
+    merge_btree_map_3way, AppState, PostOutboxEntry, StoredPostState, MARKET_CARD_STORE_KEY,
+    MARKET_POST_STATE_KEY,
 };
 
 mod handlers;
@@ -79,33 +81,6 @@ fn merge_vec_by_id<T: Clone, F: Fn(&T) -> &str>(
     }
 }
 
-fn merge_btree_map_3way<K: Ord + Clone, V: Eq + Clone>(
-    baseline: &std::collections::BTreeMap<K, V>,
-    working: &mut std::collections::BTreeMap<K, V>,
-    latest: &std::collections::BTreeMap<K, V>,
-) {
-    let all_keys: std::collections::BTreeSet<K> = baseline
-        .keys()
-        .chain(working.keys())
-        .chain(latest.keys())
-        .cloned()
-        .collect();
-    for key in all_keys {
-        let b = baseline.get(&key);
-        let w = working.get(&key);
-        if w == b {
-            match latest.get(&key) {
-                Some(v) => {
-                    working.insert(key, v.clone());
-                }
-                None => {
-                    working.remove(&key);
-                }
-            }
-        }
-    }
-}
-
 fn merge_inquiries_3way(
     baseline: &[crate::models::FrontendMarketInquiryItem],
     working: &mut Vec<crate::models::FrontendMarketInquiryItem>,
@@ -159,18 +134,20 @@ fn merge_inquiries_3way(
     }
 }
 
-/// Atomically loads the latest on-disk `StoredPostState`, 3-way merges any concurrent
-/// modifications relative to `baseline` into `working`, and persists `working`.
-pub(crate) fn merge_and_save_post_state(
-    state: &AppState,
+/// Loads the latest on-disk `StoredPostState` and 3-way merges any concurrent
+/// modifications relative to `baseline` into `working` without persisting yet.
+pub(crate) fn merge_post_state_with_service(
+    service: &mut human_money_core::app_service::AppService,
     baseline: &StoredPostState,
     working: &mut StoredPostState,
     password: Option<&str>,
 ) -> Result<(), FrontendError> {
-    let mut service = state.service.lock().unwrap();
-    let latest: StoredPostState =
-        crate::state::load_encrypted_json_or_default(&mut service, MARKET_POST_STATE_KEY, password)
-            .map_err(FrontendError::from)?;
+    let latest: StoredPostState = crate::state::load_encrypted_json_or_default(
+        service,
+        MARKET_POST_STATE_KEY,
+        password,
+    )
+    .map_err(FrontendError::from)?;
 
     if &latest != baseline {
         merge_vec_by_id(
@@ -224,9 +201,27 @@ pub(crate) fn merge_and_save_post_state(
             }
         }
     }
+    Ok(())
+}
 
-    crate::state::save_encrypted_json(&mut service, MARKET_POST_STATE_KEY, working, password)
-        .map_err(FrontendError::from)
+/// Atomically loads the latest on-disk `StoredPostState` for `session`, 3-way merges any
+/// concurrent modifications relative to `baseline` into `working`, and persists `working`.
+pub(crate) fn merge_and_save_post_state(
+    state: &AppState,
+    session: &SessionToken,
+    baseline: &StoredPostState,
+    working: &mut StoredPostState,
+    password: Option<&str>,
+) -> Result<(), FrontendError> {
+    state.with_session_required(
+        session,
+        "Active wallet session changed before post state could be saved",
+        |service| {
+            merge_post_state_with_service(service, baseline, working, password)?;
+            crate::state::save_encrypted_json(service, MARKET_POST_STATE_KEY, working, password)
+                .map_err(FrontendError::from)
+        },
+    )
 }
 
 /// Persists the encrypted Post outbox/inbox state directly (test helper).
@@ -527,6 +522,7 @@ pub(crate) fn enqueue_post_envelope(
     recipient_ed_pk: &VerifyingKey,
     msg_id: String,
     bundle_id: Option<String>,
+    message_class: crate::state::OutboxMessageClass,
     own_reply_syncs: &[FrontendSyncDescriptor],
     container_bytes: Vec<u8>,
     now_secs: u64,
@@ -547,6 +543,7 @@ pub(crate) fn enqueue_post_envelope(
         recipient_did: recipient_did.to_string(),
         tag16_hex: hex::encode(entry.tag16),
         bundle_id,
+        message_class,
         entry,
         created_at: now_secs,
     });
@@ -585,6 +582,7 @@ pub(crate) fn queue_sealed_reply<T: serde::Serialize>(
         recipient_pk,
         msg_id,
         None,
+        crate::state::OutboxMessageClass::Control,
         own_reply_syncs,
         container_bytes,
         now_secs,
@@ -641,6 +639,7 @@ pub(crate) fn queue_receipt(
         recipient_pk,
         uuid::Uuid::new_v4().to_string(),
         None,
+        crate::state::OutboxMessageClass::Control,
         own_reply_syncs,
         container_bytes,
         now_secs,

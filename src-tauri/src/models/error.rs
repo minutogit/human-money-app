@@ -88,12 +88,14 @@ impl From<human_money_core::app_service::AppFacadeError> for FrontendError {
             human_money_core::app_service::AppFacadeError::WalletLocked => {
                 "error.wallet.locked".to_string()
             }
-            human_money_core::app_service::AppFacadeError::SessionExpired(_) => {
-                "error.auth.sessionTimeout".to_string()
-            }
-            human_money_core::app_service::AppFacadeError::SessionNotActive(_) => {
-                "error.auth.sessionNotActive".to_string()
-            }
+            human_money_core::app_service::AppFacadeError::SessionExpired(_)
+            | human_money_core::app_service::AppFacadeError::App(
+                human_money_core::error::AppError::SessionExpired { .. },
+            ) => "error.auth.sessionTimeout".to_string(),
+            human_money_core::app_service::AppFacadeError::SessionNotActive(_)
+            | human_money_core::app_service::AppFacadeError::App(
+                human_money_core::error::AppError::SessionNotActive { .. },
+            ) => "error.auth.sessionNotActive".to_string(),
             human_money_core::app_service::AppFacadeError::DoubleSpendAttemptBlocked {
                 local_instance_id,
             } => {

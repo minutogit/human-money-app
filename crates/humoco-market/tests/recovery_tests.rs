@@ -654,6 +654,119 @@ fn test_guardian_vault_store_capacity_and_lifecycle() {
     assert!(store.get_ward(&did_1).is_none());
 }
 
+#[test]
+fn h3_guardian_vault_blocks_replay_and_out_of_order_assign_after_revoke() {
+    let q_ids = [1, 2, 3];
+    let answers = ["Lindenstrasse", "Erna", "Schulzentrum"];
+    let kdf_params = RecoveryKdfParams::new_fast_test();
+
+    // Case A: Assign ep 1 -> Revoke ep 2 -> Replay ep 1 & ep 2 rejected; ep 3 accepted.
+    let mut store = GuardianVaultStore::new();
+    let sk_a = make_signing_key(71);
+    let did_a = create_user_id(&sk_a.verifying_key(), None).unwrap();
+    let payload_a = RecoveryMasterPayload::new(
+        &did_a,
+        vec![0x71; 16],
+        MnemonicLanguage::English,
+        None,
+        false,
+    );
+
+    let make_entry = |sk: &SigningKey, did: &str, payload: &RecoveryMasterPayload, epoch: u32| {
+        create_social_recovery_vault_bundle(
+            sk,
+            did,
+            "Alice",
+            epoch,
+            2,
+            3,
+            &q_ids,
+            &answers,
+            &kdf_params,
+            payload,
+            &[],
+            1_700_000_000 + u64::from(epoch),
+        )
+        .unwrap()[0]
+            .clone()
+    };
+
+    let ep1 = make_entry(&sk_a, &did_a, &payload_a, 1);
+    let ep2 = make_entry(&sk_a, &did_a, &payload_a, 2);
+    let ep3 = make_entry(&sk_a, &did_a, &payload_a, 3);
+
+    store.upsert_ward(ep1.clone()).unwrap();
+    // Idempotent re-upsert at active non-revoked epoch 1 remains allowed
+    store.upsert_ward(ep1.clone()).unwrap();
+
+    // Revoke at epoch 2 removes active ward and records monotonic revoke watermark
+    assert!(store
+        .revoke_ward(&GuardianRevoke {
+            owner_did: did_a.clone(),
+            rotation_epoch: 2,
+        })
+        .unwrap());
+    assert!(store.get_ward(&did_a).is_none());
+
+    // Replaying assign at epoch 1 or same revoked epoch 2 must fail
+    assert!(store.upsert_ward(ep1).is_err());
+    assert!(store.upsert_ward(ep2).is_err());
+    assert!(store.get_ward(&did_a).is_none());
+
+    // Stale locator update at epoch 2 after revoke is rejected
+    assert!(store
+        .update_locator(&GuardianLocatorUpdate {
+            owner_did: did_a.clone(),
+            rotation_epoch: 2,
+            backup_sync_descriptors: vec![sample_drop_descriptor("stale")],
+            updated_at: 1_700_000_500,
+        })
+        .is_err());
+
+    // Strictly newer epoch 3 succeeds
+    store.upsert_ward(ep3).unwrap();
+    assert_eq!(store.get_ward(&did_a).unwrap().rotation_epoch, 3);
+
+    // Case B: Out-of-order revoke at epoch 2 arrives BEFORE assign at epoch 1
+    let mut store_ooo = GuardianVaultStore::new();
+    let sk_b = make_signing_key(72);
+    let did_b = create_user_id(&sk_b.verifying_key(), None).unwrap();
+    let payload_b = RecoveryMasterPayload::new(
+        &did_b,
+        vec![0x72; 16],
+        MnemonicLanguage::English,
+        None,
+        false,
+    );
+    assert!(
+        store_ooo
+            .revoke_ward(&GuardianRevoke {
+                owner_did: did_b.clone(),
+                rotation_epoch: 2,
+            })
+            .unwrap(),
+        "First out-of-order revoke must report changed watermark so handler persists it"
+    );
+    // Duplicate same revoke does not mutate watermarks further
+    assert!(!store_ooo
+        .revoke_ward(&GuardianRevoke {
+            owner_did: did_b.clone(),
+            rotation_epoch: 2,
+        })
+        .unwrap());
+
+    assert!(store_ooo
+        .upsert_ward(make_entry(&sk_b, &did_b, &payload_b, 1))
+        .is_err());
+    assert!(store_ooo
+        .upsert_ward(make_entry(&sk_b, &did_b, &payload_b, 2))
+        .is_err());
+    store_ooo
+        .upsert_ward(make_entry(&sk_b, &did_b, &payload_b, 3))
+        .unwrap();
+    assert_eq!(store_ooo.get_ward(&did_b).unwrap().rotation_epoch, 3);
+}
+
 // ============================================================================
 // 8. Ephemeral 1-Tap Handshake & SAS Verification Tests
 // ============================================================================

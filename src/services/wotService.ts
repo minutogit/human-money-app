@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { afterWalletMutation } from "../sync/autoBackup";
+import { afterWalletMutation } from "../sync/syncBridge";
 import { WotSummaryDto, WotImportResultDto, VoucherTrustDto, WotProviderDto } from "../types";
 
 export interface ExportWotPackageArgs {

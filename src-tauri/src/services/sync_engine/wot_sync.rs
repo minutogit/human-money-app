@@ -5,6 +5,7 @@ use sha2::{Digest, Sha256};
 
 use crate::models::{FrontendAddressBook, FrontendError, FrontendTrustChangeImpact};
 use crate::services::common::{DropChannelSigner, SyncIdentityContext};
+use crate::session::SessionToken;
 use crate::settings::{SecurityPolicy, UiPreferences, SYNC_WOT_MAX_BYTES};
 use crate::state::{canonicalize_did, AppState, StoredSyncState, CONTACTS_DATA_NAME};
 use crate::sync_client::{self, PutSlotOutcome};
@@ -27,38 +28,24 @@ pub(crate) fn import_decrypted_wot_package(
     pkg: &humoco_wot::WotSyncPackage,
     read_url: &str,
     now_secs: u64,
-    state: &AppState,
-    password: Option<&str>,
+    reg: &mut humoco_wot::TrustRegister,
     errors: &mut Vec<String>,
 ) -> usize {
-    let Ok(mut service) = state.lock_service() else {
-        return 0;
-    };
-    if let Ok(mut reg) = state.get_or_load_wot_register(&mut service, password) {
-        match reg.import_sync_package(pkg, None, now_secs) {
-            Ok(stats) => {
-                let accepted = stats.accepted_total() + stats.merged;
-                if accepted > 0 || reg.own_list_dirty {
-                    if reg.own_list_dirty {
-                        let _ = state.ensure_wot_list_signed(&mut service, &mut reg);
-                    }
-                    let _ = state.save_wot_register(&mut service, &reg, password);
-                }
-                return accepted;
-            }
-            Err(e) => {
-                errors.push(format!(
-                    "Failed to import wot package from {}: {}",
-                    read_url, e
-                ));
-            }
+    match reg.import_sync_package(pkg, None, now_secs) {
+        Ok(stats) => stats.accepted_total() + stats.merged,
+        Err(e) => {
+            errors.push(format!(
+                "Failed to import wot package from {}: {}",
+                read_url, e
+            ));
+            0
         }
     }
-    0
 }
 
 fn load_wot_upload_context(
     state: &AppState,
+    session: &SessionToken,
     ui_prefs: &UiPreferences,
     wot_upload_targets: &[humoco_market::DropDescriptor],
     password: Option<&str>,
@@ -71,58 +58,66 @@ fn load_wot_upload_context(
         });
     }
 
-    let mut service = state.lock_service()?;
+    state.with_session_required(
+        session,
+        "Wallet session changed during WoT upload preparation",
+        |service| {
+            let reg_opt = Some(
+                state
+                    .get_or_load_wot_register(service, password)
+                    .map_err(FrontendError::from)?,
+            );
+            let address_book: FrontendAddressBook = crate::state::load_encrypted_json_or_default(
+                service,
+                CONTACTS_DATA_NAME,
+                password,
+            )
+            .map_err(FrontendError::from)?;
 
-    let reg_opt = Some(
-        state
-            .get_or_load_wot_register(&mut service, password)
-            .map_err(FrontendError::from)?,
-    );
-    let address_book: FrontendAddressBook = crate::state::load_encrypted_json_or_default(
-        &mut service,
-        CONTACTS_DATA_NAME,
-        password,
-    )
-    .map_err(FrontendError::from)?;
+            let zero_book_dids: Vec<String> = address_book
+                .contacts
+                .values()
+                .filter(|c| c.trust_level.unwrap_or(0) == 0)
+                .filter_map(|c| canonicalize_did(&c.did).ok())
+                .collect();
 
-    let zero_book_dids: Vec<String> = address_book
-        .contacts
-        .values()
-        .filter(|c| c.trust_level.unwrap_or(0) == 0)
-        .filter_map(|c| canonicalize_did(&c.did).ok())
-        .collect();
-
-    let offenders: HashSet<String> = if ui_prefs.wot_share_via_sync {
-        if let Some(ref r) = reg_opt {
-            let mut candidate_dids: HashSet<String> = r.own_contacts.keys().cloned().collect();
-            for d in &zero_book_dids {
-                candidate_dids.insert(d.clone());
-            }
-            for did in r.get_or_build_graph_cache().did_to_id.keys() {
-                candidate_dids.insert(did.clone());
-            }
-            candidate_dids
-                .into_iter()
-                .filter(|did| {
-                    service
-                        .with_wallet(|w| {
-                            matches!(w.check_reputation(did), TrustStatus::KnownOffender(_))
+            let offenders: HashSet<String> = if ui_prefs.wot_share_via_sync {
+                if let Some(ref r) = reg_opt {
+                    let mut candidate_dids: HashSet<String> =
+                        r.own_contacts.keys().cloned().collect();
+                    for d in &zero_book_dids {
+                        candidate_dids.insert(d.clone());
+                    }
+                    for did in r.get_or_build_graph_cache().did_to_id.keys() {
+                        candidate_dids.insert(did.clone());
+                    }
+                    candidate_dids
+                        .into_iter()
+                        .filter(|did| {
+                            service
+                                .with_wallet(|w| {
+                                    matches!(
+                                        w.check_reputation(did),
+                                        TrustStatus::KnownOffender(_)
+                                    )
+                                })
+                                .unwrap_or(false)
                         })
-                        .unwrap_or(false)
-                })
-                .collect()
-        } else {
-            HashSet::new()
-        }
-    } else {
-        HashSet::new()
-    };
+                        .collect()
+                } else {
+                    HashSet::new()
+                }
+            } else {
+                HashSet::new()
+            };
 
-    Ok(WotUploadContext {
-        reg_opt,
-        zero_book_dids,
-        offenders,
-    })
+            Ok(WotUploadContext {
+                reg_opt,
+                zero_book_dids,
+                offenders,
+            })
+        },
+    )
 }
 
 fn build_wot_tombstone_bundle(
@@ -219,12 +214,16 @@ fn build_wot_tombstone_bundle(
 
 struct WotUploadState<'a> {
     client: &'a reqwest::Client,
+    state: &'a AppState,
+    session: &'a SessionToken,
     id_ctx: &'a SyncIdentityContext,
     now_secs: u64,
     force_upload: bool,
     sync_state: &'a mut StoredSyncState,
     uploaded_to: &'a mut usize,
     errors: &'a mut Vec<String>,
+    committed_receipts: Vec<humoco_wot::DropSyncReceipt>,
+    cleared_drop_urls: Vec<String>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -348,6 +347,7 @@ async fn upload_wot_subpackages_to_target(
                                     Ok(PutSlotOutcome::Saved { .. }) => {
                                         *ctx.uploaded_to += 1;
                                         ctx.sync_state.last_upload_at = Some(ctx.now_secs);
+                                        ctx.committed_receipts.push(receipt.clone());
                                         reg.commit_drop_sync_receipt(receipt, ctx.now_secs);
                                         reg_modified = true;
                                         match tombstone.fingerprint {
@@ -426,6 +426,9 @@ async fn upload_wot_tombstones_only(
 ) -> bool {
     let mut reg_modified = false;
     for drop_desc in wot_upload_targets {
+        if !ctx.state.is_generation_current(ctx.session.generation) {
+            break;
+        }
         if drop_desc.write_url.is_empty() {
             continue;
         }
@@ -486,6 +489,7 @@ async fn upload_wot_tombstones_only(
                         *ctx.uploaded_to += 1;
                         ctx.sync_state.last_upload_at = Some(ctx.now_secs);
                         if reg.drop_sent_log.remove(&drop_desc.write_url).is_some() {
+                            ctx.cleared_drop_urls.push(drop_desc.write_url.clone());
                             reg_modified = true;
                         }
                         ctx.sync_state
@@ -510,6 +514,9 @@ async fn delete_unshared_wot_slots(
 ) -> bool {
     let mut reg_modified = false;
     for drop_desc in wot_upload_targets {
+        if !ctx.state.is_generation_current(ctx.session.generation) {
+            break;
+        }
         if drop_desc.write_url.is_empty() {
             continue;
         }
@@ -542,6 +549,7 @@ async fn delete_unshared_wot_slots(
                 .is_ok()
             {
                 if reg.drop_sent_log.remove(&drop_desc.write_url).is_some() {
+                    ctx.cleared_drop_urls.push(drop_desc.write_url.clone());
                     reg_modified = true;
                 }
                 ctx.sync_state
@@ -558,6 +566,7 @@ async fn delete_unshared_wot_slots(
 pub(crate) async fn sync_wot_upload_channel(
     client: &reqwest::Client,
     state: &AppState,
+    session: &SessionToken,
     ui_prefs: &UiPreferences,
     security_policy: &SecurityPolicy,
     id_ctx: &SyncIdentityContext,
@@ -569,38 +578,46 @@ pub(crate) async fn sync_wot_upload_channel(
     errors: &mut Vec<String>,
 ) {
     let wot_upload_targets = collect_upload_targets_for_channel(security_policy, "wot");
-    let ctx_data = match load_wot_upload_context(state, ui_prefs, &wot_upload_targets, password) {
-        Ok(c) => c,
-        Err(e) => {
-            errors.push(format!("WoT upload context failed: {}", e.message));
-            return;
-        }
-    };
+    let ctx_data =
+        match load_wot_upload_context(state, session, ui_prefs, &wot_upload_targets, password) {
+            Ok(c) => c,
+            Err(e) => {
+                errors.push(format!("WoT upload context failed: {}", e.message));
+                return;
+            }
+        };
 
     let Some(mut reg) = ctx_data.reg_opt else {
         return;
     };
 
-    let mut reg_modified = false;
     let mut delete_unshared = !ui_prefs.wot_share_via_sync;
 
     let mut upload_state = WotUploadState {
         client,
+        state,
+        session,
         id_ctx,
         now_secs,
         force_upload: force_upload == Some(true),
         sync_state,
         uploaded_to,
         errors,
+        committed_receipts: Vec::new(),
+        cleared_drop_urls: Vec::new(),
     };
 
     if ui_prefs.wot_share_via_sync {
         let needs_signing =
             reg.own_list_dirty || (reg.own_signed_list.is_none() && !reg.own_contacts.is_empty());
         if needs_signing {
-            if let Ok(mut service) = state.lock_service() {
-                let _ = state.ensure_wot_list_signed(&mut service, &mut reg);
-                let _ = state.save_wot_register(&mut service, &reg, password);
+            let signed_ok = state.with_session(session, |service| {
+                let _ = state.ensure_wot_list_signed(service, &mut reg);
+                let _ = state.save_wot_register(service, &reg, password);
+                Ok(())
+            });
+            if !matches!(signed_ok, Ok(Some(()))) {
+                return;
             }
         }
 
@@ -649,10 +666,13 @@ pub(crate) async fn sync_wot_upload_channel(
             };
 
             for drop_desc in &wot_upload_targets {
+                if !state.is_generation_current(session.generation) {
+                    return;
+                }
                 if drop_desc.write_url.is_empty() {
                     continue;
                 }
-                if upload_wot_subpackages_to_target(
+                let _ = upload_wot_subpackages_to_target(
                     &mut upload_state,
                     &mut reg,
                     drop_desc,
@@ -662,16 +682,13 @@ pub(crate) async fn sync_wot_upload_channel(
                     tomb_overhead,
                     active_classes,
                 )
-                .await
-                {
-                    reg_modified = true;
-                }
+                .await;
             }
         } else if !tombstone.reader_vks.is_empty() {
             if let (Some(ref tomb_bytes), Some(ref tomb_fp)) =
                 (&tombstone.pkg_bytes, &tombstone.fingerprint)
             {
-                if upload_wot_tombstones_only(
+                let _ = upload_wot_tombstones_only(
                     &mut upload_state,
                     &mut reg,
                     &wot_upload_targets,
@@ -679,10 +696,7 @@ pub(crate) async fn sync_wot_upload_channel(
                     tomb_fp,
                     &tombstone.reader_vks,
                 )
-                .await
-                {
-                    reg_modified = true;
-                }
+                .await;
             } else {
                 delete_unshared = true;
             }
@@ -691,16 +705,31 @@ pub(crate) async fn sync_wot_upload_channel(
         }
     }
 
-    if delete_unshared
-        && delete_unshared_wot_slots(&mut upload_state, &mut reg, &wot_upload_targets).await
-    {
-        reg_modified = true;
+    if delete_unshared {
+        let _ = delete_unshared_wot_slots(&mut upload_state, &mut reg, &wot_upload_targets).await;
     }
 
-    if reg_modified {
-        if let Ok(mut service) = state.lock_service() {
-            let _ = state.save_wot_register(&mut service, &reg, password);
-        }
+    let committed_receipts = upload_state.committed_receipts;
+    let cleared_drop_urls = upload_state.cleared_drop_urls;
+    if !committed_receipts.is_empty() || !cleared_drop_urls.is_empty() {
+        let _ = state.with_session(session, |service| {
+            if let Ok(mut fresh_reg) = state.get_or_load_wot_register(service, password) {
+                let mut changed = false;
+                for receipt in committed_receipts {
+                    fresh_reg.commit_drop_sync_receipt(receipt, now_secs);
+                    changed = true;
+                }
+                for url in cleared_drop_urls {
+                    if fresh_reg.drop_sent_log.remove(&url).is_some() {
+                        changed = true;
+                    }
+                }
+                if changed {
+                    let _ = state.save_wot_register(service, &fresh_reg, password);
+                }
+            }
+            Ok(())
+        });
     }
 }
 

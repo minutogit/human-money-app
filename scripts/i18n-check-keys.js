@@ -2,7 +2,10 @@ import fs from 'fs';
 import path from 'path';
 
 const srcDir = path.resolve('src');
-const enPath = path.resolve('src/locales/en.json');
+const localesDir = path.resolve('src/locales');
+const LOCALES = ['en', 'de', 'es', 'fr', 'it'];
+const FIX_MODE = process.argv.includes('--fix');
+const enPath = path.join(localesDir, 'en.json');
 
 if (!fs.existsSync(enPath)) {
   console.error(`❌ Error: en.json not found at ${enPath}`);
@@ -33,58 +36,84 @@ const VALID_DOMAINS = [
   'backup'
 ];
 
-let enContent;
-try {
-  enContent = fs.readFileSync(enPath, 'utf8');
-} catch (err) {
-  console.error(`❌ Error reading en.json: ${err.message}`);
-  process.exit(1);
+function extractPlaceholders(text) {
+  return Array.from(String(text).matchAll(/\{\{([^}]+)\}\}/g), (m) => m[1].trim()).sort().join(',');
 }
 
-let enData;
-try {
-  enData = JSON.parse(enContent);
-} catch (err) {
-  console.error(`❌ Error parsing en.json: ${err.message}`);
-  process.exit(1);
-}
-
-const originalKeys = Object.keys(enData);
-const sortedKeys = [...originalKeys].sort();
-const isSorted = originalKeys.every((key, index) => key === sortedKeys[index]);
-
-let enKeys = new Set(originalKeys);
-
+const localeDataByLang = {};
 let sortingFailed = false;
-if (!isSorted) {
-  console.log(`ℹ️ en.json is not alphabetically sorted. Sorting automatically...`);
-  const sortedData = {};
-  for (const key of sortedKeys) {
-    sortedData[key] = enData[key];
-  }
-  try {
-    fs.writeFileSync(enPath, JSON.stringify(sortedData, null, 2) + '\n', 'utf8');
-    console.log(`✅ en.json sorted alphabetically.`);
-  } catch (err) {
-    console.error(`❌ Error writing sorted en.json: ${err.message}`);
+let invalidDomainKeysCount = 0;
+const parityIssues = [];
+const placeholderIssues = [];
+
+for (const lang of LOCALES) {
+  const filePath = path.join(localesDir, `${lang}.json`);
+  if (!fs.existsSync(filePath)) {
+    console.error(`❌ Error: ${lang}.json not found at ${filePath}`);
     process.exit(1);
   }
-  enKeys = new Set(sortedKeys);
-  sortingFailed = true;
+
+  let data;
+  try {
+    data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  } catch (err) {
+    console.error(`❌ Error reading/parsing ${lang}.json: ${err.message}`);
+    process.exit(1);
+  }
+
+  const originalKeys = Object.keys(data);
+  const sortedKeys = [...originalKeys].sort();
+  const isSorted = originalKeys.every((key, index) => key === sortedKeys[index]);
+
+  if (!isSorted) {
+    if (FIX_MODE) {
+      console.log(`ℹ️ ${lang}.json is not alphabetically sorted. Sorting (--fix)...`);
+      const sortedData = {};
+      for (const key of sortedKeys) {
+        sortedData[key] = data[key];
+      }
+      fs.writeFileSync(filePath, JSON.stringify(sortedData, null, 2) + '\n', 'utf8');
+      data = sortedData;
+    } else {
+      console.error(`❌ Error: ${lang}.json is not alphabetically sorted (run with --fix to sort).`);
+      sortingFailed = true;
+    }
+  }
+
+  for (const key of Object.keys(data)) {
+    const dotIndex = key.indexOf('.');
+    if (dotIndex === -1) {
+      console.error(`❌ Key '${key}' in ${lang}.json is missing a domain prefix.`);
+      invalidDomainKeysCount++;
+    } else {
+      const domain = key.substring(0, dotIndex);
+      if (!VALID_DOMAINS.includes(domain)) {
+        console.error(`❌ Key '${key}' in ${lang}.json has an invalid domain '${domain}'.`);
+        invalidDomainKeysCount++;
+      }
+    }
+  }
+
+  localeDataByLang[lang] = data;
 }
 
-// Validate all keys in en.json for domain prefixes
-let invalidEnKeysCount = 0;
-for (const key of enKeys) {
-  const dotIndex = key.indexOf('.');
-  if (dotIndex === -1) {
-    console.error(`❌ Key '${key}' in en.json is missing a domain prefix.`);
-    invalidEnKeysCount++;
-  } else {
-    const domain = key.substring(0, dotIndex);
-    if (!VALID_DOMAINS.includes(domain)) {
-      console.error(`❌ Key '${key}' in en.json has an invalid domain '${domain}'.`);
-      invalidEnKeysCount++;
+const enData = localeDataByLang.en;
+const enKeys = new Set(Object.keys(enData));
+
+for (const lang of LOCALES.filter((l) => l !== 'en')) {
+  const data = localeDataByLang[lang];
+  const langKeys = new Set(Object.keys(data));
+  const missing = [...enKeys].filter((k) => !langKeys.has(k));
+  const extra = [...langKeys].filter((k) => !enKeys.has(k));
+  if (missing.length > 0 || extra.length > 0) {
+    parityIssues.push({ lang, missing, extra });
+  }
+  for (const key of enKeys) {
+    if (!(key in data)) continue;
+    const expectedVars = extractPlaceholders(enData[key]);
+    const actualVars = extractPlaceholders(data[key]);
+    if (expectedVars !== actualVars) {
+      placeholderIssues.push(`[${lang}] ${key}: expected {{${expectedVars}}}, got {{${actualVars}}}`);
     }
   }
 }
@@ -185,8 +214,29 @@ if (fs.existsSync(rustErrorFile)) {
 
 let hasErrors = false;
 
-if (invalidEnKeysCount > 0) {
-  console.error(`❌ Critical Error: Found ${invalidEnKeysCount} key(s) in en.json with invalid domain prefixes.`);
+if (invalidDomainKeysCount > 0) {
+  console.error(`❌ Critical Error: Found ${invalidDomainKeysCount} key(s) with invalid domain prefixes.`);
+  hasErrors = true;
+}
+
+if (parityIssues.length > 0) {
+  console.error('❌ Critical Error: Locale key parity mismatches detected against en.json:');
+  for (const issue of parityIssues) {
+    if (issue.missing.length > 0) {
+      console.error(`   - [${issue.lang}] Missing ${issue.missing.length} key(s): ${issue.missing.slice(0, 10).join(', ')}${issue.missing.length > 10 ? ' ...' : ''}`);
+    }
+    if (issue.extra.length > 0) {
+      console.error(`   - [${issue.lang}] Extra ${issue.extra.length} key(s): ${issue.extra.slice(0, 10).join(', ')}${issue.extra.length > 10 ? ' ...' : ''}`);
+    }
+  }
+  hasErrors = true;
+}
+
+if (placeholderIssues.length > 0) {
+  console.error('❌ Critical Error: Placeholder mismatches detected across locales:');
+  for (const msg of placeholderIssues.slice(0, 20)) {
+    console.error(`   - ${msg}`);
+  }
   hasErrors = true;
 }
 
@@ -207,7 +257,7 @@ if (missingKeys.length > 0) {
 }
 
 if (sortingFailed) {
-  console.error('❌ Critical Error: en.json was not sorted alphabetically. It has been automatically sorted.');
+  console.error('❌ Critical Error: One or more locale files are not alphabetically sorted.');
   hasErrors = true;
 }
 
@@ -215,5 +265,5 @@ if (hasErrors) {
   process.exit(1);
 }
 
-console.log('✅ All i18n keys used in code are valid and present in en.json.');
+console.log(`✅ All i18n keys across ${LOCALES.length} locales (${enKeys.size} keys each) are sorted, complete, and valid.`);
 process.exit(0);

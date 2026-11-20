@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { RefreshCw } from 'lucide-react';
 import { L2LifecycleStatusDto } from '../../../types';
 import { settingsService } from '../../../services/settingsService';
+import { protectCommandOptions } from '../../../services/commandPolicy';
 import { useSession } from '../../../context/SessionContext';
 import { Button } from '../../ui/Button';
 import { Input } from '../../ui/Input';
@@ -76,7 +77,7 @@ export const L2LifecycleSection: React.FC<L2LifecycleSectionProps> = ({
                     contextNonceHex: regContextNonceHex.trim() || null,
                     password: pwd || null,
                 });
-            });
+            }, protectCommandOptions('register_guarantor_anchor_role'));
             if (pub) {
                 setRegisteredGuarantorPub(pub);
                 const st = await settingsService.getL2LifecycleStatus().catch(() => null);

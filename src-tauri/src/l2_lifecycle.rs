@@ -548,7 +548,7 @@ pub async fn discover_anchor_manifest(
         )
     };
 
-    let cached_contacts = state.contacts.lock().ok().and_then(|g| g.clone());
+    let cached_contacts = state.cache_contacts();
     let address_book_ref = cached_contacts.as_ref().or(address_book_opt.as_ref());
 
     let mut stage_urls: Vec<String> = Vec::new();

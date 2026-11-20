@@ -52,6 +52,13 @@ pub(crate) fn create_test_state(service: AppService) -> AppState {
 }
 
 #[allow(dead_code)]
+pub(crate) struct HttpPauseGate {
+    pub path_substr: String,
+    pub hit_tx: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    pub release_rx: tokio::sync::watch::Receiver<bool>,
+}
+
+#[allow(dead_code)]
 pub(crate) struct MockSyncServer {
     pub base_url: String,
     pub data_dir: String,
@@ -66,10 +73,30 @@ pub(crate) struct MockSyncServer {
     pub rotation_cert: Arc<Mutex<Option<String>>>,
     pub put_members_count: Arc<Mutex<usize>>,
     pub admin_config: Arc<Mutex<(u64, usize, u64)>>,
+    pub pause_gate: Arc<Mutex<Option<Arc<HttpPauseGate>>>>,
     pub _shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
 impl MockSyncServer {
+    /// Arms a one-shot pause before responding to the next request whose path contains `path_substr`.
+    #[allow(dead_code)]
+    pub fn arm_pause_gate(
+        &self,
+        path_substr: &str,
+    ) -> (
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::watch::Sender<bool>,
+    ) {
+        let (hit_tx, hit_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::watch::channel(false);
+        *self.pause_gate.lock().unwrap() = Some(Arc::new(HttpPauseGate {
+            path_substr: path_substr.to_string(),
+            hit_tx: Mutex::new(Some(hit_tx)),
+            release_rx,
+        }));
+        (hit_rx, release_tx)
+    }
+
     pub async fn start(data_dir: String, admin_pubkey: String) -> Self {
         use ed25519_dalek::{Signer, SigningKey};
 
@@ -88,6 +115,7 @@ impl MockSyncServer {
         let rotation_cert = Arc::new(Mutex::new(None));
         let put_members_count = Arc::new(Mutex::new(0));
         let admin_config = Arc::new(Mutex::new((2048u64, 300usize, 25u64)));
+        let pause_gate: Arc<Mutex<Option<Arc<HttpPauseGate>>>> = Arc::new(Mutex::new(None));
         let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
 
         let s_data_dir = data_dir.clone();
@@ -103,6 +131,7 @@ impl MockSyncServer {
         let s_rotation = Arc::clone(&rotation_cert);
         let s_put_members = Arc::clone(&put_members_count);
         let s_admin_config = Arc::clone(&admin_config);
+        let s_pause_gate = Arc::clone(&pause_gate);
 
         tokio::spawn(async move {
             loop {
@@ -124,6 +153,7 @@ impl MockSyncServer {
                         let rotation = Arc::clone(&s_rotation);
                         let put_members = Arc::clone(&s_put_members);
                         let admin_config = Arc::clone(&s_admin_config);
+                        let pause_gate = Arc::clone(&s_pause_gate);
 
                         tokio::spawn(async move {
                             use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -156,6 +186,29 @@ impl MockSyncServer {
                             let mut parts = req_line.split_whitespace();
                             let method = parts.next().unwrap_or("");
                             let path = parts.next().unwrap_or("");
+
+                            let matched_gate = {
+                                let mut guard = pause_gate.lock().unwrap();
+                                if guard
+                                    .as_ref()
+                                    .is_some_and(|g| path.contains(&g.path_substr))
+                                {
+                                    guard.take()
+                                } else {
+                                    None
+                                }
+                            };
+                            if let Some(gate) = matched_gate {
+                                if let Some(tx) = gate.hit_tx.lock().unwrap().take() {
+                                    let _ = tx.send(());
+                                }
+                                let mut rx = gate.release_rx.clone();
+                                while !*rx.borrow() {
+                                    if rx.changed().await.is_err() {
+                                        break;
+                                    }
+                                }
+                            }
 
                             let mut headers = HashMap::new();
                             for l in lines {
@@ -564,6 +617,7 @@ impl MockSyncServer {
             rotation_cert,
             put_members_count,
             admin_config,
+            pause_gate,
             _shutdown_tx: Some(shutdown_tx),
         }
     }

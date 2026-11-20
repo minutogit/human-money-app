@@ -122,13 +122,16 @@ pub async fn dispatch_l2_send_intents(
 
     for intent in intents {
         let nonce = random_non_zero_nonce();
-        let reqs_res = {
+        let known_heads = {
             let mut service = state.lock_service()?;
-            let known_heads = crate::state::load_known_head_receipts_for_anchor(
+            crate::state::load_known_head_receipts_for_anchor(
                 &mut service,
                 &intent.anchor_id,
                 password,
-            );
+            )?
+        };
+        let reqs_res = {
+            let service = state.lock_service()?;
             service
                 .build_intent_committee_requests(
                     &intent.local_instance_id,
@@ -164,12 +167,12 @@ pub async fn dispatch_l2_send_intents(
             || !dispatch.receipts.is_empty()
         {
             let mut service = state.lock_service()?;
-            let _ = crate::state::record_known_head_receipts(
+            crate::state::record_known_head_receipts(
                 &mut service,
                 &intent.anchor_id,
                 &dispatch.receipts,
                 password,
-            );
+            )?;
             if !matching_receipts.is_empty() || !dispatch.competing_entries.is_empty() {
                 match service.record_intent_server_receipts(
                     &intent.local_instance_id,
@@ -209,4 +212,148 @@ pub async fn dispatch_l2_send_intents(
     }
 
     Ok(l2_dispatch)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ed25519_dalek::{Signer, SigningKey};
+    use human_money_core::{
+        humoco_proto::{
+            crypto::DEFAULT_LOCK_POW_BASE_BITS,
+            encode_quarter,
+            manifest::{AnchorAuthority, AnchorManifest, GenesisTicket, NominatedBy, ServerEntry},
+        },
+        models::{profile::PublicProfile, voucher::ValueDefinition},
+        services::l2_gateway,
+        test_utils::{self, ACTORS},
+        NewVoucherData,
+    };
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+
+    #[tokio::test]
+    async fn k2_corrupt_known_heads_blocks_intent_dispatch_without_http() {
+        let dir = crate::test_support::temp_test_dir("k2_corrupt_sidecar_preflight");
+        let pw = "test-pw";
+        let (mut service, _) =
+            test_utils::setup_service_with_profile(&dir, &ACTORS.alice, "Alice", pw);
+        service.unlock_session(pw, 600).unwrap();
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let hits = Arc::new(AtomicUsize::new(0));
+        let hits_bg = Arc::clone(&hits);
+        let server_task = tokio::spawn(async move {
+            while let Ok((_sock, _)) = listener.accept().await {
+                hits_bg.fetch_add(1, Ordering::SeqCst);
+            }
+        });
+
+        let anchor_nonce = [42u8; 32];
+        let creator_mig_pub = service
+            .with_wallet_and_identity(|_, id| {
+                l2_gateway::derive_anchor_mig_signing_key(id, &anchor_nonce)
+                    .map(|k| k.verifying_key().to_bytes())
+            })
+            .unwrap()
+            .unwrap();
+        let sk1 = SigningKey::from_bytes(&[73u8; 32]);
+        let retain_q = encode_quarter(2035, 4).unwrap();
+        let manifest = AnchorManifest {
+            revision: 1,
+            threshold: 1,
+            servers: vec![ServerEntry {
+                write_url: format!("http://{addr}/sync.php"),
+                read_url: format!("http://{addr}/d"),
+                admin_pub: sk1.verifying_key().to_bytes(),
+                lock_pub: sk1.verifying_key().to_bytes(),
+                nominated_by: NominatedBy::Creator,
+            }],
+            successors: vec![],
+            authority: AnchorAuthority {
+                creator_mig_pub,
+                guarantor_mig_pubs: vec![],
+            },
+            migration_chain: vec![],
+            issued_at_ms: 1_760_000_000_000,
+            retain_until_quarter: retain_q,
+        };
+        let anchor_id = manifest.rev1_anchor_id().unwrap();
+        let mut t = GenesisTicket {
+            anchor_id,
+            retain_until_quarter: retain_q,
+            issued_at: 1_760_000_000,
+            lock_pub: sk1.verifying_key().to_bytes(),
+            sig: [0u8; 64],
+        };
+        t.sig = sk1.sign(&t.digest()).to_bytes();
+        service
+            .register_l2_anchor_template_with_nonce(
+                manifest,
+                vec![t],
+                Some(&anchor_nonce),
+                Some(pw),
+            )
+            .unwrap();
+
+        let user_id = service.with_wallet(|w| w.get_user_id().to_string()).unwrap();
+        let std_toml = test_utils::generate_signed_standard_toml(
+            "voucher_standards/freetaler_v1/standard.toml",
+        );
+        service
+            .create_new_voucher(
+                &std_toml,
+                NewVoucherData {
+                    creator_profile: PublicProfile {
+                        id: Some(user_id),
+                        ..Default::default()
+                    },
+                    nominal_value: ValueDefinition {
+                        amount: "50".into(),
+                        ..Default::default()
+                    },
+                    layer2_anchor: Some(anchor_id),
+                    ..Default::default()
+                },
+                Some(pw),
+            )
+            .unwrap();
+        let local_id = service
+            .with_wallet_and_identity(|w, id| w.list_vouchers(Some(id), None, None, None))
+            .unwrap()[0]
+            .local_instance_id
+            .clone();
+        service
+            .prepare_l2_send_intent(&local_id, DEFAULT_LOCK_POW_BASE_BITS, Some(pw))
+            .unwrap();
+        let intent = service.pending_l2_send_intent(&local_id).unwrap();
+
+        // Corrupt the anti-rollback sidecar before dispatch.
+        service
+            .save_local_sidecar_data(
+                crate::state::KNOWN_LOCK_HEADS_KEY,
+                b"{corrupt-lock-heads",
+                Some(pw),
+            )
+            .unwrap();
+
+        let state = crate::test_support::create_test_state(service);
+        let res = dispatch_l2_send_intents(&state, &[intent], DEFAULT_LOCK_POW_BASE_BITS, Some(pw))
+            .await;
+
+        server_task.abort();
+        assert!(
+            res.is_err(),
+            "Corrupt anti-rollback sidecar must fail closed before sending L2 requests"
+        );
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            0,
+            "Zero HTTP requests may be dispatched when known heads fail to load"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

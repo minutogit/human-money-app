@@ -1,9 +1,13 @@
-import { render, screen, fireEvent } from '@testing-library/react';
-import { describe, it, expect, vi } from 'vitest';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { describe, it, expect, vi, Mock } from 'vitest';
+import { invoke } from '@tauri-apps/api/core';
 import { ReceiveSuccessView } from '../ReceiveSuccessView';
 import { ReceiveSuccessPayload, L2QuorumInfo } from '../../../types';
 
 vi.mock('../../../utils/log', () => ({ logger: { info: vi.fn(), error: vi.fn() } }));
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: vi.fn(),
+}));
 
 const payload: ReceiveSuccessPayload = {
   senderId: '', transferSummary: { summableAmounts: { EUR: '10' }, countableItems: {} },
@@ -257,5 +261,91 @@ describe('ReceiveSuccessView payment evidence', () => {
     expect(screen.getByTestId('goods-release-card')).toHaveTextContent(/Ware sicher herausgeben|Safely hand over goods/i);
     expect(screen.getByTestId('unrelated-conflicts-notice')).toBeInTheDocument();
     expect(screen.queryByRole('heading', { level: 1, name: /Sicherheitswarnung|Security Warning/i })).not.toBeInTheDocument();
+  });
+
+  it('F2: renders intuitive green online-verified checkmark badge on Confirmed checkout', () => {
+    render(
+      <ReceiveSuccessView
+        payload={{
+          ...payload,
+          newlyCommitted: true,
+          isReplay: false,
+          checkoutVerdict: {
+            outcome: 'Confirmed',
+            canReleaseGoodsAutomatically: true,
+            requiresMerchantApproval: false,
+            isGoodsReleaseAuthorized: true,
+          },
+        }}
+        onDone={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId('online-verified-badge')).toBeInTheDocument();
+    expect(screen.getByTestId('online-verified-badge')).toHaveTextContent(
+      /Online geprüft|Verified online/i,
+    );
+  });
+
+  it('F2: does not render uncommitted OfflineOnly verdict as Replay and commits via forceTrustOffline on approve click', async () => {
+    (invoke as Mock).mockImplementation(async (cmd: string) => {
+      if (cmd === 'get_voucher_summaries') return [];
+      if (cmd === 'receive_bundle') {
+        return {
+          ...payload,
+          newlyCommitted: true,
+          isReplay: false,
+          checkoutVerdict: {
+            outcome: 'OfflineOnly',
+            canReleaseGoodsAutomatically: false,
+            requiresMerchantApproval: false,
+            isGoodsReleaseAuthorized: true,
+          },
+        };
+      }
+      return undefined;
+    });
+
+    render(
+      <ReceiveSuccessView
+        payload={{
+          ...payload,
+          purchaseId: 'bundle-abc123',
+          newlyCommitted: false,
+          isReplay: false,
+          checkoutVerdict: {
+            outcome: 'OfflineOnly',
+            canReleaseGoodsAutomatically: false,
+            requiresMerchantApproval: true,
+            isGoodsReleaseAuthorized: false,
+          },
+        }}
+        pendingCommit={{
+          bundleData: [9, 8, 7],
+          standardDefinitionsToml: { 'std-1': 'toml' },
+        }}
+        onDone={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByText(/Bereits verbucht|Already Processed/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(
+      /Prüfung & Bestätigung|Review & confirmation/i,
+    );
+
+    fireEvent.click(screen.getByTestId('merchant-approve-btn'));
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith(
+        'receive_bundle',
+        expect.objectContaining({
+          bundleData: [9, 8, 7],
+          commitMode: 'forceTrustOffline',
+          purchaseId: 'bundle-abc123',
+          forceAcceptToleranceBundle: false,
+        }),
+      );
+    });
+    expect(await screen.findByTestId('merchant-approved-badge')).toBeInTheDocument();
   });
 });

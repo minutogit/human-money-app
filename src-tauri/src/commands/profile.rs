@@ -173,9 +173,7 @@ mod tests {
         let state = crate::test_support::create_test_state(alice_service);
 
         // Add both a selected friend/own sync and a public sync with distinct read_url vs write_url
-        {
-            let mut s = state.security_policy.lock().unwrap();
-            *s = Some(crate::settings::SecurityPolicy {
+        state.set_cached_security_policy(Some(crate::settings::SecurityPolicy {
                 market_selected_syncs: vec![crate::models::FrontendSyncDescriptor {
                     write_url: "https://own.example.com/sync.php".to_string(),
                     read_url: "https://own.example.com/d-own12345".to_string(),
@@ -194,8 +192,7 @@ mod tests {
                     ..Default::default()
                 }],
                 ..Default::default()
-            });
-        }
+            }));
 
         let quick = get_my_quick_contact_impl(&state).expect("get_my_quick_contact should succeed");
 

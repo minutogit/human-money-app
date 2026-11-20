@@ -160,6 +160,7 @@ pub struct CardStore {
     pub cards: BTreeMap<String, StoredCard>,
     #[serde(with = "hex_key_map")]
     pub sent_log: BTreeMap<[u8; 32], u64>,
+    pub deleted_card_versions: BTreeMap<String, u64>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]

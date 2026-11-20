@@ -16,17 +16,25 @@ describe('i18n Key & Placeholder Integrity', () => {
     const es = esJson as Record<string, string>;
     const itLocale = itJson as Record<string, string>;
 
-    it('keeps 100% key parity and alphabetical key order between de.json and en.json', () => {
+    it('keeps 100% key parity and alphabetical key order across all 5 locales', () => {
+        const allLocales: Array<[string, Record<string, string>]> = [
+            ['en', en],
+            ['de', de],
+            ['fr', fr],
+            ['es', es],
+            ['it', itLocale],
+        ];
         const enKeys = Object.keys(en);
-        const deKeys = Object.keys(de);
 
-        const sortedEnKeys = [...enKeys].sort();
-        expect(enKeys).toEqual(sortedEnKeys);
+        for (const [lang, obj] of allLocales) {
+            const keys = Object.keys(obj);
+            expect(keys, `${lang}.json keys must be alphabetically sorted`).toEqual([...keys].sort());
 
-        const missingInDe = enKeys.filter((k) => !(k in de));
-        const extraInDe = deKeys.filter((k) => !(k in en));
-        expect(missingInDe).toEqual([]);
-        expect(extraInDe).toEqual([]);
+            const missing = enKeys.filter((k) => !(k in obj));
+            const extra = keys.filter((k) => !(k in en));
+            expect(missing, `${lang}.json missing keys vs en.json`).toEqual([]);
+            expect(extra, `${lang}.json extra keys vs en.json`).toEqual([]);
+        }
     });
 
     it('preserves identical {{placeholder}} variables across all 5 locales for shared keys', () => {

@@ -120,7 +120,7 @@ pub(crate) fn load_own_market_profile_state(
         password,
     ) {
         Ok(stored) => {
-            *state.own_market_profile.lock().unwrap() = Some(stored.clone());
+            state.set_cached_own_market_profile_for_service(service, Some(stored.clone()));
             Ok(stored)
         }
         Err(
@@ -131,7 +131,7 @@ pub(crate) fn load_own_market_profile_state(
                 | human_money_core::error::AppError::SessionExpired { .. },
             ),
         ) if password.is_none() => {
-            if let Some(cached) = state.own_market_profile.lock().unwrap().clone() {
+            if let Some(cached) = state.cache_own_market_profile() {
                 return Ok(cached);
             }
             Err(FrontendError::from(
@@ -166,7 +166,7 @@ fn save_own_market_profile_state(
 ) -> Result<(), FrontendError> {
     crate::state::save_encrypted_json(service, MARKET_OWN_PROFILE_KEY, stored, password)
         .map_err(FrontendError::from)?;
-    *state.own_market_profile.lock().unwrap() = Some(stored.clone());
+    state.set_cached_own_market_profile_for_service(service, Some(stored.clone()));
     Ok(())
 }
 
@@ -372,15 +372,28 @@ pub fn rebuild_and_sign_own_card_with_drops(
     now: u64,
     override_drops: Option<Vec<humoco_market::DropDescriptor>>,
 ) -> Result<(), FrontendError> {
+    rebuild_and_sign_own_card_with_drops_and_profile(service, stored, now, override_drops, None)
+}
+
+pub(crate) fn rebuild_and_sign_own_card_with_drops_and_profile(
+    service: &mut AppService,
+    stored: &mut StoredOwnMarketProfile,
+    now: u64,
+    override_drops: Option<Vec<humoco_market::DropDescriptor>>,
+    draft_profile: Option<&human_money_core::models::profile::PublicProfile>,
+) -> Result<(), FrontendError> {
     let (my_identity, my_signing_key) = service
         .with_wallet_and_identity(|_w, id| (id.clone(), id.signing_key.clone()))
         .map_err(FrontendError::from)?;
     let my_account_id = humoco_market::canonicalize_owner_account_id(&my_identity.user_id)
         .map_err(FrontendError::from)?;
 
-    let profile = service
-        .with_wallet(|w| w.profile.to_public_profile())
-        .map_err(FrontendError::from)?;
+    let profile = match draft_profile {
+        Some(p) => p.clone(),
+        None => service
+            .with_wallet(|w| w.profile.to_public_profile())
+            .map_err(FrontendError::from)?,
+    };
 
     let max_hops = stored.max_hops.clamp(1, 3);
     let envelope_max_hops = if now < stored.shrink_until {
@@ -808,10 +821,8 @@ pub fn save_my_market_profile_impl(
         Some(service_offer)
     };
 
-    service
-        .update_public_profile(core_profile, password.as_deref())
-        .map_err(|e| FrontendError::from(format!("Failed to update Core public profile: {}", e)))?;
-
+    // Build and sign the draft Market profile BEFORE committing Core profile so validation
+    // errors fail cleanly and both stores commit inside one WalletTransaction.
     let mut stored = load_own_market_profile_for_write(&mut service, password.as_deref())?;
 
     let now = chrono::Utc::now().timestamp().max(0) as u64;
@@ -837,10 +848,26 @@ pub fn save_my_market_profile_impl(
 
     if stored.published {
         let drops = load_drops_from_settings(state, &mut service, None, password.as_deref())?;
-        rebuild_and_sign_own_card_with_drops(&mut service, &mut stored, now, Some(drops))?;
+        rebuild_and_sign_own_card_with_drops_and_profile(
+            &mut service,
+            &mut stored,
+            now,
+            Some(drops),
+            Some(&core_profile),
+        )?;
     }
 
-    save_own_market_profile_state(state, &mut service, &stored, password.as_deref())?;
+    let stored_bytes = serde_json::to_vec(&stored).map_err(|e| {
+        FrontendError::from(format!("Failed to serialize own market profile: {}", e))
+    })?;
+    service
+        .update_public_profile_with_companions(
+            core_profile,
+            vec![(crate::state::MARKET_OWN_PROFILE_KEY.to_string(), stored_bytes)],
+            password.as_deref(),
+        )
+        .map_err(|e| FrontendError::from(format!("Failed to update Core & market profile: {}", e)))?;
+    state.set_cached_own_market_profile_for_service(&service, Some(stored));
 
     drop(service);
     get_my_market_profile_impl(password, state)
@@ -1322,7 +1349,7 @@ pub fn get_market_view_impl(
     .map_err(FrontendError::from)?;
 
     let known_contact_dids: std::collections::HashSet<String> = {
-        let cached = state.contacts.lock().unwrap().clone();
+        let cached = state.cache_contacts();
         let ab = match cached {
             Some(ab) => ab,
             None => crate::state::load_encrypted_json_or_default::<
@@ -1582,7 +1609,7 @@ pub fn import_contact_card_impl(
                 .coordinates
                 .as_deref()
                 .and_then(humoco_market::parse_coordinates_pair);
-            humoco_market::accept_envelope(
+            humoco_market::accept_envelope_manual(
                 &mut store,
                 &env,
                 now,
@@ -1671,7 +1698,7 @@ pub fn import_contact_card_impl(
                                         password.as_deref(),
                                     )
                                     .map_err(FrontendError::from)?;
-                                    *state.contacts.lock().unwrap() = Some(address_book);
+                                    state.set_cached_contacts_for_service(&service, Some(address_book));
                                 }
                             }
                         } else {
@@ -1738,20 +1765,30 @@ pub fn delete_foreign_contact_card_impl(
     let validated_did = human_money_core::ValidatedUserId::parse(&did)
         .map_err(|e| FrontendError::from(format!("Invalid DID: {}", e)))?;
 
-    let mut removed = store.cards.remove(validated_did.as_str()).is_some();
-    if !removed && validated_did.as_str() == validated_did.canonical_did() {
+    let mut removed_tombstones: Vec<(String, u64)> = Vec::new();
+    if let Some(sc) = store.cards.remove(validated_did.as_str()) {
+        removed_tombstones.push((sc.card.payload.recipient_id().to_string(), sc.card.payload.v));
+    }
+    if removed_tombstones.is_empty() && validated_did.as_str() == validated_did.canonical_did() {
         let target_pk = validated_did.public_key_bytes();
-        let before = store.cards.len();
         store.cards.retain(|_, sc| {
-            human_money_core::crypto::get_pubkey_from_user_id(&sc.card.payload.did)
-                .ok()
-                .map(|k| k.to_bytes())
-                != Some(target_pk)
+            let matches_pk =
+                human_money_core::crypto::get_pubkey_from_user_id(&sc.card.payload.did)
+                    .ok()
+                    .map(|k| k.to_bytes())
+                    == Some(target_pk);
+            if matches_pk {
+                removed_tombstones
+                    .push((sc.card.payload.recipient_id().to_string(), sc.card.payload.v));
+            }
+            !matches_pk
         });
-        removed = store.cards.len() != before;
     }
 
-    if removed {
+    if !removed_tombstones.is_empty() {
+        for (card_key, version) in removed_tombstones {
+            humoco_market::mark_card_deleted(&mut store, &card_key, version);
+        }
         crate::state::save_encrypted_json(
             &mut service,
             MARKET_CARD_STORE_KEY,
@@ -2546,24 +2583,21 @@ mod tests {
         assert_eq!(invalid_token_res, None);
 
         // Valid syntax token but unknown and drops configured -> tries network, fails, inserts into negative cache
-        {
-            let mut s = alice_state.security_policy.lock().unwrap();
-            *s = Some(crate::settings::SecurityPolicy {
-                market_selected_syncs: vec![FrontendSyncDescriptor {
-                    write_url: "http://127.0.0.1:9999".to_string(),
-                    read_url: "http://127.0.0.1:9999".to_string(),
-                    slot_id: None,
-                    drop_pub: "0".repeat(64),
-                    last_seen_at: None,
-                    last_error_at: None,
-                    fail_count: 0,
-                    status: "active".to_string(),
-                    last_probed_at: None,
-                    ..Default::default()
-                }],
+        alice_state.set_cached_security_policy(Some(crate::settings::SecurityPolicy {
+            market_selected_syncs: vec![FrontendSyncDescriptor {
+                write_url: "http://127.0.0.1:9999".to_string(),
+                read_url: "http://127.0.0.1:9999".to_string(),
+                slot_id: None,
+                drop_pub: "0".repeat(64),
+                last_seen_at: None,
+                last_error_at: None,
+                fail_count: 0,
+                status: "active".to_string(),
+                last_probed_at: None,
                 ..Default::default()
-            });
-        }
+            }],
+            ..Default::default()
+        }));
 
         let unknown_token = "0123456789abcdef0123456789abcdef".to_string();
         let unknown_res = get_ad_image_impl(
@@ -2876,5 +2910,75 @@ mod tests {
             &alice_state,
         )
         .is_ok());
+    }
+
+    #[test]
+    fn h6_save_my_market_profile_rejects_oversized_card_field_without_mutating_core_profile() {
+        let dir = crate::test_support::temp_test_dir("h6_atomic_profile_save");
+        let pw = "pw-h6-test";
+        let state = crate::test_support::create_test_state(crate::test_support::setup_test_app(
+            &dir.join("alice"),
+            "Alice Initial",
+            crate::test_support::ALICE_PHRASE,
+            pw,
+        ));
+
+        let initial_ok = save_my_market_profile_impl(
+            FrontendSaveMyMarketProfileRequest {
+                profile: FrontendUserProfile {
+                    first_name: Some("Alice".to_string()),
+                    organization: Some("Clean Org".to_string()),
+                    ..Default::default()
+                },
+                visibility: CardFieldVisibility::default(),
+                skills: vec![],
+                max_hops: 2,
+                validity_years: 2,
+                allow_inquiries: true,
+                published: Some(true),
+            },
+            Some(pw.to_string()),
+            &state,
+        )
+        .expect("Initial valid profile save should succeed");
+        assert_eq!(initial_ok.profile.first_name.as_deref(), Some("Alice"));
+        assert_eq!(initial_ok.profile.organization.as_deref(), Some("Clean Org"));
+
+        // Attempt an update whose first_name exceeds sd_card's 80-char limit while published = true.
+        // Validation/signing MUST fail BEFORE mutating Core's UserProfile on disk or in RAM.
+        let too_long_name = "X".repeat(120);
+        let err = save_my_market_profile_impl(
+            FrontendSaveMyMarketProfileRequest {
+                profile: FrontendUserProfile {
+                    first_name: Some(too_long_name),
+                    organization: Some("Partially Mutated Org".to_string()),
+                    ..Default::default()
+                },
+                visibility: CardFieldVisibility::default(),
+                skills: vec![],
+                max_hops: 2,
+                validity_years: 2,
+                allow_inquiries: true,
+                published: Some(true),
+            },
+            Some(pw.to_string()),
+            &state,
+        )
+        .unwrap_err();
+        assert!(!err.message.is_empty());
+
+        let after = get_my_market_profile_impl(Some(pw.to_string()), &state).unwrap();
+        assert_eq!(
+            after.profile.first_name.as_deref(),
+            Some("Alice"),
+            "Core profile first_name must stay untouched when card signing fails"
+        );
+        assert_eq!(
+            after.profile.organization.as_deref(),
+            Some("Clean Org"),
+            "Core profile organization must stay untouched when card signing fails"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

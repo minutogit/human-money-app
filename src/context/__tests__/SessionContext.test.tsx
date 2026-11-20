@@ -6,10 +6,7 @@ import { settingsService } from '../../services/settingsService';
 import { NavigationProvider, useNavigation } from '../NavigationContext';
 import { Sidebar } from '../../components/shell/Sidebar';
 import App from '../../App';
-import { startSealSyncLoop, stopSealSyncLoop } from '../../sync/sealSync';
-import { startAutoBackupLoop, stopAutoBackupLoop } from '../../sync/autoBackup';
-import { startPostSyncLoop, stopPostSyncLoop } from '../../sync/postSync';
-import { startMarketSyncLoop, stopMarketSyncLoop } from '../../sync/marketSync';
+import { updateNetworkStatus } from '../../sync/syncBridge';
 import { channelMembersSyncManager } from '../../sync/channelMembersSyncManager';
 import { rateLimitManager } from '../../sync/rateLimitManager';
 import { AppConfigDto, AppState } from '../../types';
@@ -89,32 +86,15 @@ vi.mock('../../services/settingsService', () => ({
   },
 }));
 
-vi.mock('../../sync/sealSync', () => ({
-  startSealSyncLoop: vi.fn(),
-  stopSealSyncLoop: vi.fn(),
-}));
-
-vi.mock('../../sync/autoBackup', () => ({
-  startAutoBackupLoop: vi.fn(),
-  stopAutoBackupLoop: vi.fn(),
+vi.mock('../../sync/syncBridge', () => ({
+  updateNetworkStatus: vi.fn().mockResolvedValue(undefined),
+  wakeSyncCoordinator: vi.fn().mockResolvedValue(undefined),
   triggerAutoBackup: vi.fn(),
   dispatchBackupUpdated: vi.fn(),
   afterWalletMutation: vi.fn(),
-  BACKUP_UPDATED_EVENT: 'humoco:backup-updated',
-}));
-
-vi.mock('../../sync/postSync', () => ({
-  startPostSyncLoop: vi.fn(),
-  stopPostSyncLoop: vi.fn(),
+  runSyncBackupPass: vi.fn().mockResolvedValue(null),
   runPostSyncPass: vi.fn().mockResolvedValue(undefined),
-}));
-
-vi.mock('../../sync/marketSync', () => ({
-  startMarketSyncLoop: vi.fn(),
-  stopMarketSyncLoop: vi.fn(),
-  runMarketSyncPass: vi.fn().mockResolvedValue(undefined),
-  scheduleContactOnboardingMarketSync: vi.fn(),
-  DEFAULT_ONBOARDING_DELAY_MS: 3000,
+  BACKUP_UPDATED_EVENT: 'humoco:backup-updated',
 }));
 
 vi.mock('../../hooks/useWindowTitleSync', () => ({
@@ -365,10 +345,7 @@ describe('SessionContext and Session Timeout UX (APP-017)', () => {
       expect(screen.getByTestId('is-authenticated').textContent).toBe('true');
     });
 
-    vi.mocked(startSealSyncLoop).mockClear();
-    vi.mocked(startAutoBackupLoop).mockClear();
-    vi.mocked(startPostSyncLoop).mockClear();
-    vi.mocked(startMarketSyncLoop).mockClear();
+    vi.mocked(updateNetworkStatus).mockClear();
 
     let actionPromise!: Promise<unknown>;
     await act(async () => {
@@ -397,10 +374,7 @@ describe('SessionContext and Session Timeout UX (APP-017)', () => {
     await waitFor(() => {
       expect(screen.queryByText('Authentication Required')).not.toBeInTheDocument();
     });
-    expect(startSealSyncLoop).toHaveBeenCalled();
-    expect(startAutoBackupLoop).toHaveBeenCalled();
-    expect(startPostSyncLoop).toHaveBeenCalled();
-    expect(startMarketSyncLoop).toHaveBeenCalled();
+    expect(updateNetworkStatus).toHaveBeenCalled();
   });
 
   it('queues concurrent protectAction callers without dropping earlier promises', async () => {
@@ -430,10 +404,12 @@ describe('SessionContext and Session Timeout UX (APP-017)', () => {
     await expect(Promise.all([p1, p2])).resolves.toEqual(['first', 'second']);
   });
 
-  it('stops all sync loops on lockSession and heartbeat expiry (demoting elevated accessMode back to dailyPay)', async () => {
+  it('demotes elevated accessMode back to dailyPay on lockSession and heartbeat expiry', async () => {
     vi.useFakeTimers();
     try {
       (authService.getSessionStatus as Mock).mockResolvedValue(dailyPayStatus(true, true));
+      const lockedSpy = vi.fn();
+      window.addEventListener('humoco:session-locked', lockedSpy);
 
       const { unmount } = render(
         <SessionProvider>
@@ -448,14 +424,10 @@ describe('SessionContext and Session Timeout UX (APP-017)', () => {
       expect(screen.getByTestId('has-cached-session').textContent).toBe('true');
       expect(screen.getByTestId('access-mode').textContent).toBe('full');
       expect(screen.getByTestId('base-access-mode').textContent).toBe('dailyPay');
-      expect(startSealSyncLoop).toHaveBeenCalledTimes(1);
 
-      vi.mocked(stopSealSyncLoop).mockClear();
-      vi.mocked(stopAutoBackupLoop).mockClear();
-      vi.mocked(stopPostSyncLoop).mockClear();
-      vi.mocked(stopMarketSyncLoop).mockClear();
+      lockedSpy.mockClear();
 
-      // 1. Explicit lockSession stops loops and demotes accessMode back to dailyPay
+      // 1. Explicit lockSession demotes accessMode back to dailyPay and emits SESSION_LOCKED
       await act(async () => {
         screen.getByText('Lock Session').click();
       });
@@ -463,7 +435,7 @@ describe('SessionContext and Session Timeout UX (APP-017)', () => {
       expect(authService.lockSession).toHaveBeenCalledTimes(1);
       expect(screen.getByTestId('access-mode').textContent).toBe('dailyPay');
       expect(screen.getByTestId('has-cached-session').textContent).toBe('false');
-      expect(stopSealSyncLoop).toHaveBeenCalledTimes(1);
+      expect(lockedSpy).toHaveBeenCalledTimes(1);
 
       // Re-login in elevated dailyPay state and trigger heartbeat expiry
       await act(async () => {
@@ -471,10 +443,7 @@ describe('SessionContext and Session Timeout UX (APP-017)', () => {
       });
       expect(screen.getByTestId('access-mode').textContent).toBe('full');
 
-      vi.mocked(stopSealSyncLoop).mockClear();
-      vi.mocked(stopAutoBackupLoop).mockClear();
-      vi.mocked(stopPostSyncLoop).mockClear();
-      vi.mocked(stopMarketSyncLoop).mockClear();
+      lockedSpy.mockClear();
 
       (authService.getSessionStatus as Mock).mockResolvedValue(dailyPayStatus(false, false));
       await act(async () => {
@@ -484,23 +453,21 @@ describe('SessionContext and Session Timeout UX (APP-017)', () => {
       expect(screen.getByTestId('has-cached-session').textContent).toBe('false');
       expect(screen.getByTestId('access-mode').textContent).toBe('dailyPay');
       expect(screen.getByTestId('is-authenticated').textContent).toBe('true');
-      expect(stopSealSyncLoop).toHaveBeenCalledTimes(1);
-      expect(stopAutoBackupLoop).toHaveBeenCalledTimes(1);
-      expect(stopPostSyncLoop).toHaveBeenCalledTimes(1);
-      expect(stopMarketSyncLoop).toHaveBeenCalledTimes(1);
+      expect(lockedSpy).toHaveBeenCalledTimes(1);
 
-      vi.mocked(stopSealSyncLoop).mockClear();
+      window.removeEventListener('humoco:session-locked', lockedSpy);
       unmount();
-      expect(stopSealSyncLoop).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it('notifyLogout stops sync loops and resets channelMembersSyncManager and rateLimitManager', async () => {
+  it('notifyLogout resets channelMembersSyncManager and rateLimitManager and emits session lock', async () => {
     (authService.getSessionStatus as Mock).mockResolvedValue(fullStatus(true));
     const membersResetSpy = vi.spyOn(channelMembersSyncManager, 'reset');
     const cooldownClearSpy = vi.spyOn(rateLimitManager, 'clearCooldown');
+    const lockedSpy = vi.fn();
+    window.addEventListener('humoco:session-locked', lockedSpy);
 
     render(
       <SessionProvider>
@@ -512,24 +479,19 @@ describe('SessionContext and Session Timeout UX (APP-017)', () => {
       screen.getByText('Login Alice').click();
     });
 
-    vi.mocked(stopSealSyncLoop).mockClear();
-    vi.mocked(stopAutoBackupLoop).mockClear();
-    vi.mocked(stopPostSyncLoop).mockClear();
-    vi.mocked(stopMarketSyncLoop).mockClear();
     membersResetSpy.mockClear();
     cooldownClearSpy.mockClear();
+    lockedSpy.mockClear();
 
     await act(async () => {
       screen.getByText('Logout').click();
     });
 
-    expect(stopSealSyncLoop).toHaveBeenCalledTimes(1);
-    expect(stopAutoBackupLoop).toHaveBeenCalledTimes(1);
-    expect(stopPostSyncLoop).toHaveBeenCalledTimes(1);
-    expect(stopMarketSyncLoop).toHaveBeenCalledTimes(1);
     expect(membersResetSpy).toHaveBeenCalledTimes(1);
     expect(cooldownClearSpy).toHaveBeenCalledTimes(1);
+    expect(lockedSpy).toHaveBeenCalledTimes(1);
 
+    window.removeEventListener('humoco:session-locked', lockedSpy);
     membersResetSpy.mockRestore();
     cooldownClearSpy.mockRestore();
   });

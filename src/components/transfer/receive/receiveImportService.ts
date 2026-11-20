@@ -10,6 +10,7 @@ import { isBackendError, stringifyError } from '../../../utils/errorHelper';
 import { APP_EVENTS, emitAppEvent } from '../../../utils/appEvents';
 import type { ProtectActionFn } from '../../../utils/fileIo';
 import type {
+    PendingReceiveCommit,
     ReceiveSuccessPayload,
     VoucherDetails,
     VoucherStandardInfo,
@@ -97,7 +98,11 @@ async function resolveDetachedSigCandidates(
 }
 
 export type ReceiveImportOutcome =
-    | { kind: 'success'; payload: ReceiveSuccessPayload | VoucherDetails }
+    | {
+          kind: 'success';
+          payload: ReceiveSuccessPayload | VoucherDetails;
+          pendingCommit?: PendingReceiveCommit;
+      }
     | { kind: 'signatureAttached'; voucherId: string }
     | { kind: 'wotImported'; result: WotImportResultDto }
     | { kind: 'proofImported'; proofId: string }
@@ -131,6 +136,7 @@ export async function executeReceiveImport({
                 standardDefinitionsToml,
                 password: password || walletPassword || undefined,
                 forceAcceptToleranceBundle: false,
+                commitMode: 'onlineVerify',
             });
         });
 
@@ -142,7 +148,17 @@ export async function executeReceiveImport({
             emitAppEvent(APP_EVENTS.CONFLICTS_UPDATED);
         }
 
-        return payload ? { kind: 'success', payload } : { kind: 'cancelled' };
+        const pendingCommit: PendingReceiveCommit | undefined =
+            payload && payload.newlyCommitted === false && !payload.isReplay
+                ? {
+                      bundleData: fileData,
+                      standardDefinitionsToml,
+                      bundlePassword: password || undefined,
+                      forceAcceptToleranceBundle: false,
+                  }
+                : undefined;
+
+        return payload ? { kind: 'success', payload, pendingCommit } : { kind: 'cancelled' };
     }
 
     if (type === 'ask') {

@@ -198,6 +198,51 @@ fn handle_transaction_bundle(
                     ctx.password,
                 );
             }
+            let has_l2_anchor = result.involved_vouchers.iter().any(|local_id| {
+                service
+                    .with_wallet(|w| {
+                        w.get_voucher_instance(local_id)
+                            .is_some_and(|inst| inst.voucher.layer2_anchor.is_some())
+                    })
+                    .unwrap_or(false)
+            });
+            drop(service);
+
+            if has_l2_anchor {
+                if let (Some(app_handle), Ok(_rt)) =
+                    (ctx.app.cloned(), tokio::runtime::Handle::try_current())
+                {
+                    let session = crate::session::SessionToken {
+                        generation: ctx.state.current_session_generation(),
+                        owner_did: ctx.my_identity.user_id.clone(),
+                    };
+                    let bundle_bytes = ctx.envelope.container_bytes.clone();
+                    tokio::spawn(async move {
+                        use tauri::{Emitter, Manager};
+                        let state = app_handle.state::<crate::AppState>();
+                        match crate::checkout::verify_committed_bundle_l2(
+                            &state,
+                            &session,
+                            &bundle_bytes,
+                            None,
+                        )
+                        .await
+                        {
+                            Ok(true) => {
+                                let _ = app_handle.emit("humoco://conflicts-updated", ());
+                            }
+                            Ok(false) => {}
+                            Err(err) => {
+                                log::warn!(
+                                    "Background L2 check after PoST payment failed: {}",
+                                    err.message
+                                );
+                            }
+                        }
+                    });
+                }
+            }
+
             (Some(result.header.bundle_id), true)
         }
         Err(e) => {

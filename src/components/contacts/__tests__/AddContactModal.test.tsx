@@ -190,8 +190,9 @@ describe('AddContactModal Component', () => {
   });
 
   it('imports business card from file when clicking file tile', async () => {
+    const canonicalCardJson = '{"card_wire":"header.payload.sig"}';
     (open as unknown as Mock).mockResolvedValue('/path/to/contact.hmcard');
-    (readFile as unknown as Mock).mockResolvedValue(new TextEncoder().encode('{"envelope":"test"}'));
+    (readFile as unknown as Mock).mockResolvedValue(new TextEncoder().encode(canonicalCardJson));
     vi.mocked(marketService.importContactCard).mockResolvedValue({ status: 'accepted', did: 'did:key:zTest', replaced: false });
 
     render(
@@ -211,7 +212,7 @@ describe('AddContactModal Component', () => {
 
     await waitFor(() => {
       expect(open).toHaveBeenCalled();
-      expect(marketService.importContactCard).toHaveBeenCalledWith('{"envelope":"test"}', undefined);
+      expect(marketService.importContactCard).toHaveBeenCalledWith(canonicalCardJson, undefined);
       expect(mockOnContactAdded).toHaveBeenCalled();
       expect(mockOnSuccess).toHaveBeenCalled();
       expect(mockOnClose).toHaveBeenCalled();

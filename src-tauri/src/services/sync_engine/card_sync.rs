@@ -11,6 +11,7 @@ use crate::models::{
 use crate::services::common::{normalize_sync_url, DropChannelSigner, SyncIdentityContext};
 use crate::services::market_service::sync_own_card_drops_on_settings_change;
 use crate::services::recovery_service::enqueue_guardian_locator_updates_if_configured;
+use crate::session::SessionToken;
 use crate::settings::{
     SecurityPolicy, UiPreferences, SYNC_BASE_MAX_AGE_SECS, SYNC_CARD_MAX_BYTES, SYNC_HEARTBEAT_SECS,
 };
@@ -413,31 +414,63 @@ async fn probe_single_contact_endpoint(
     }
 }
 
+fn apply_probe_result_fields(
+    target: &mut FrontendSyncDescriptor,
+    probed: &FrontendSyncDescriptor,
+) {
+    target.write_url = probed.write_url.clone();
+    target.read_url = probed.read_url.clone();
+    if probed.slot_id.is_some() {
+        target.slot_id = probed.slot_id.clone();
+    }
+    target.drop_pub = probed.drop_pub.clone();
+    target.last_seen_at = probed.last_seen_at;
+    target.last_error_at = probed.last_error_at;
+    target.fail_count = probed.fail_count;
+    target.status = probed.status.clone();
+    target.last_probed_at = probed.last_probed_at;
+    target.sunset_at = probed.sunset_at;
+    target.revocation_reason = probed.revocation_reason.clone();
+    target.replacement = probed.replacement.clone();
+}
+
 pub async fn probe_contact_syncs_impl(
     force: bool,
     password: Option<String>,
     state: &AppState,
 ) -> Result<Vec<FrontendSyncDescriptor>, FrontendError> {
-    let (owner_did, id_ctx, initial_policy, has_own_sync, mut address_book) = {
-        let mut service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
-        let owner_did = service
-            .with_wallet(|w| w.get_user_id().to_string())
+    let session =
+        state.authorize_and_begin_session(crate::state::RequiredAccess::Unlocked, None)?;
+    let (id_ctx, initial_policy, has_own_sync, mut probe_targets) = state.with_session_required(
+        &session,
+        "Wallet session changed before sync probe started",
+        |service| {
+            let id_ctx = SyncIdentityContext::from_service(service)?;
+            let s = state
+                .get_or_load_security_policy(service, password.as_deref())
+                .map_err(FrontendError::from)?;
+            let own = load_stored_sync_admin_opt(service, password.as_deref())?.is_some_and(|a| {
+                !a.descriptor.write_url.is_empty() && !a.descriptor.read_url.is_empty()
+            });
+            let ab: FrontendAddressBook = crate::state::load_encrypted_json_or_default(
+                service,
+                CONTACTS_DATA_NAME,
+                password.as_deref(),
+            )
             .map_err(FrontendError::from)?;
-        let id_ctx = SyncIdentityContext::from_service(&service)?;
-        let s = state
-            .get_or_load_security_policy(&mut service, password.as_deref())
-            .map_err(FrontendError::from)?;
-        let own = load_stored_sync_admin_opt(&mut service, password.as_deref())?.is_some_and(|a| {
-            !a.descriptor.write_url.is_empty() && !a.descriptor.read_url.is_empty()
-        });
-        let ab: FrontendAddressBook = crate::state::load_encrypted_json_or_default(
-            &mut service,
-            CONTACTS_DATA_NAME,
-            password.as_deref(),
-        )
-        .map_err(FrontendError::from)?;
-        (owner_did, id_ctx, s, own, ab)
-    };
+            let targets: Vec<(String, String, FrontendSyncDescriptor)> = ab
+                .contacts
+                .into_iter()
+                .flat_map(|(c_key, c)| {
+                    c.syncs.into_iter().map(move |ep| {
+                        let norm = normalize_sync_url(&ep.write_url);
+                        (c_key.clone(), norm, ep)
+                    })
+                })
+                .collect();
+            Ok((id_ctx, s, own, targets))
+        },
+    )?;
 
     let has_active_friend_sync = initial_policy.market_selected_syncs.iter().any(|d| {
         d.status == "active"
@@ -455,60 +488,83 @@ pub async fn probe_contact_syncs_impl(
 
     let now = chrono::Utc::now().timestamp() as u64;
     let client = sync_client::create_sync_probe_client();
-    let mut contacts_modified = false;
+    let mut probed_updates: Vec<(String, String, FrontendSyncDescriptor)> = Vec::new();
     let mut probed_endpoints: Vec<FrontendSyncDescriptor> = Vec::new();
     let mut probe_cache: HashMap<String, ProbeCacheEntry> = HashMap::new();
     let mut verified_revocations: Vec<(String, SyncRevocationNotice)> = Vec::new();
     let mut channel_max_bytes_updates: Vec<(String, String, usize)> = Vec::new();
 
-    for contact in address_book.contacts.values_mut() {
-        for ep in &mut contact.syncs {
-            if should_skip_endpoint_probe(ep, initial_has_healthy, force, now) {
-                continue;
-            }
+    for (contact_key, orig_norm_write, ep) in &mut probe_targets {
+        if !state.is_generation_current(session.generation) {
+            return Ok(Vec::new());
+        }
+        if should_skip_endpoint_probe(ep, initial_has_healthy, force, now) {
+            continue;
+        }
 
-            if probe_single_contact_endpoint(
-                &client,
-                &id_ctx,
-                ep,
-                now,
-                &mut probe_cache,
-                &mut verified_revocations,
-                &mut channel_max_bytes_updates,
-            )
-            .await
-            {
+        if probe_single_contact_endpoint(
+            &client,
+            &id_ctx,
+            ep,
+            now,
+            &mut probe_cache,
+            &mut verified_revocations,
+            &mut channel_max_bytes_updates,
+        )
+        .await
+        {
+            probed_updates.push((contact_key.clone(), orig_norm_write.clone(), ep.clone()));
+            probed_endpoints.push(ep.clone());
+        }
+    }
+
+    let final_book_opt = state.with_session(&session, |service| {
+        let mut fresh_ab: FrontendAddressBook = crate::state::load_encrypted_json_or_default(
+            service,
+            CONTACTS_DATA_NAME,
+            password.as_deref(),
+        )
+        .map_err(FrontendError::from)?;
+        let mut contacts_modified = false;
+
+        for (contact_key, orig_norm_write, probed_ep) in &probed_updates {
+            if let Some(contact) = fresh_ab.contacts.get_mut(contact_key) {
+                if let Some(ep) = contact.syncs.iter_mut().find(|existing| {
+                    normalize_sync_url(&existing.write_url) == *orig_norm_write
+                }) {
+                    apply_probe_result_fields(ep, probed_ep);
+                    contacts_modified = true;
+                }
+            }
+        }
+
+        for (rev_read_url, notice) in &verified_revocations {
+            if apply_revocation_notice_to_address_book(&mut fresh_ab, rev_read_url, notice, now) {
                 contacts_modified = true;
-                probed_endpoints.push(ep.clone());
             }
         }
-    }
 
-    for (rev_read_url, notice) in verified_revocations {
-        if apply_revocation_notice_to_address_book(&mut address_book, &rev_read_url, &notice, now) {
-            contacts_modified = true;
-        }
-    }
-
-    if contacts_modified {
-        let mut service = state.lock_service()?;
-        let current_did = service.with_wallet(|w| w.get_user_id().to_string()).ok();
-        if current_did.as_deref() == Some(owner_did.as_str()) {
+        if contacts_modified {
             crate::state::save_encrypted_json(
-                &mut service,
+                service,
                 CONTACTS_DATA_NAME,
-                &address_book,
+                &fresh_ab,
                 password.as_deref(),
             )
             .map_err(FrontendError::from)?;
-            *state.contacts.lock().unwrap() = Some(address_book.clone());
+            state.set_cached_contacts_for_service(service, Some(fresh_ab.clone()));
         }
-    }
+        Ok(fresh_ab)
+    })?;
+
+    let Some(final_book) = final_book_opt else {
+        return Ok(Vec::new());
+    };
 
     if !probed_endpoints.is_empty() {
         let mut auto_activated = false;
         let updated_policy =
-            state.mutate_security_policy_for_owner(&owner_did, password.as_deref(), |policy| {
+            state.mutate_security_policy_for_session(&session, password.as_deref(), |policy| {
                 let mut modified = false;
                 let mut current_healthy = has_own_sync
                     || policy.market_selected_syncs.iter().any(|d| {
@@ -523,15 +579,7 @@ pub async fn probe_contact_syncs_impl(
                 for ep in &probed_endpoints {
                     for sel in &mut policy.market_selected_syncs {
                         if descriptors_overlap(sel, ep) {
-                            sel.write_url = ep.write_url.clone();
-                            sel.read_url = ep.read_url.clone();
-                            sel.drop_pub = ep.drop_pub.clone();
-                            sel.status = ep.status.clone();
-                            sel.fail_count = ep.fail_count;
-                            sel.last_probed_at = ep.last_probed_at;
-                            sel.sunset_at = ep.sunset_at;
-                            sel.revocation_reason = ep.revocation_reason.clone();
-                            sel.replacement = ep.replacement.clone();
+                            apply_probe_result_fields(sel, ep);
                             modified = true;
                         }
                     }
@@ -570,21 +618,23 @@ pub async fn probe_contact_syncs_impl(
         let _ = has_healthy_sync;
         if auto_activated {
             if let Some(policy) = updated_policy {
-                let mut service = state.lock_service()?;
-                sync_own_card_drops_on_settings_change(
-                    state,
-                    &mut service,
-                    &policy.market_selected_syncs,
-                    password.as_deref(),
-                );
+                let _ = state.with_session(&session, |service| {
+                    sync_own_card_drops_on_settings_change(
+                        state,
+                        service,
+                        &policy.market_selected_syncs,
+                        password.as_deref(),
+                    );
+                    Ok(())
+                });
             }
         }
     }
 
-    save_channel_max_bytes_updates(state, password.as_deref(), &channel_max_bytes_updates);
+    save_channel_max_bytes_updates(state, &session, password.as_deref(), &channel_max_bytes_updates);
 
     let mut all_syncs = Vec::new();
-    for c in address_book.contacts.values() {
+    for c in final_book.contacts.values() {
         all_syncs.extend(c.syncs.clone());
     }
     Ok(all_syncs)
@@ -639,6 +689,7 @@ pub(crate) fn import_decrypted_card_bundle(
     now_secs: u64,
     max_stored_cards: usize,
     state: &AppState,
+    service: &mut AppService,
     store: &mut humoco_market::CardStore,
     sync_state: &mut StoredSyncState,
     password: Option<&str>,
@@ -655,9 +706,6 @@ pub(crate) fn import_decrypted_card_bundle(
     }
 
     for env in bundle.envelopes {
-        let Ok(mut service) = state.lock_service() else {
-            break;
-        };
         let outcome = service.with_wallet(|wallet| {
             let is_offender =
                 |did: &str| matches!(wallet.check_reputation(did), TrustStatus::KnownOffender(_));
@@ -699,7 +747,7 @@ pub(crate) fn import_decrypted_card_bundle(
                     .collect();
                 let card_profile = humoco_market::extract_public_profile(&stored.card);
                 state.update_contact_from_card(
-                    &mut service,
+                    service,
                     &did,
                     &card_syncs,
                     Some(&card_profile),
@@ -713,77 +761,85 @@ pub(crate) fn import_decrypted_card_bundle(
 
 fn load_card_upload_context(
     state: &AppState,
+    session: &SessionToken,
     ui_prefs: &UiPreferences,
     id_ctx: &SyncIdentityContext,
     password: Option<&str>,
 ) -> Result<CardUploadContext, FrontendError> {
-    let mut service = state.lock_service()?;
+    state.with_session_required(
+        session,
+        "Wallet session changed during card upload preparation",
+        |service| {
+            let my_can_did = canonicalize_did(&id_ctx.my_did).ok();
+            let own_profile_opt: Option<StoredOwnMarketProfile> = Some(
+                crate::services::market_service::load_own_market_profile_state(
+                    state,
+                    service,
+                    password,
+                )?,
+            );
+            // Include unexpired <jws>~ tombstone cards even when `published == false`.
+            let own_card_opt = own_profile_opt.as_ref().and_then(|p| p.last_card.clone());
 
-    let my_can_did = canonicalize_did(&id_ctx.my_did).ok();
-    let own_profile_opt: Option<StoredOwnMarketProfile> = Some(
-        crate::services::market_service::load_own_market_profile_state(
-            state,
-            &mut service,
-            password,
-        )?,
-    );
-    // Include unexpired <jws>~ tombstone cards even when `published == false`.
-    let own_card_opt = own_profile_opt.as_ref().and_then(|p| p.last_card.clone());
-
-    let reg = state.get_or_load_wot_register(&mut service, password).ok();
-    let address_book: FrontendAddressBook =
-        crate::state::load_encrypted_json_or_default(&mut service, CONTACTS_DATA_NAME, password)
+            let reg = state.get_or_load_wot_register(service, password).ok();
+            let address_book: FrontendAddressBook = crate::state::load_encrypted_json_or_default(
+                service,
+                CONTACTS_DATA_NAME,
+                password,
+            )
             .map_err(FrontendError::from)?;
 
-    let mut readers = Vec::new();
-    let mut evicted_reader_keys = Vec::new();
-    if let Some(r) = reg {
-        for (did, entry) in &r.own_contacts {
-            if let Ok(pk) = human_money_core::crypto::get_pubkey_from_user_id(did) {
-                if entry.level >= ui_prefs.share_min_level {
-                    readers.push(pk);
-                } else if !is_known_offender(&service, did) {
-                    evicted_reader_keys.push(pk);
+            let mut readers = Vec::new();
+            let mut evicted_reader_keys = Vec::new();
+            if let Some(r) = reg {
+                for (did, entry) in &r.own_contacts {
+                    if let Ok(pk) = human_money_core::crypto::get_pubkey_from_user_id(did) {
+                        if entry.level >= ui_prefs.share_min_level {
+                            readers.push(pk);
+                        } else if !is_known_offender(service, did) {
+                            evicted_reader_keys.push(pk);
+                        }
+                    }
                 }
             }
-        }
-    }
-    let reader_set: HashSet<[u8; 32]> = readers.iter().map(|k| *k.as_bytes()).collect();
-    for contact in address_book.contacts.values() {
-        let can = canonicalize_did(&contact.did).unwrap_or_else(|_| contact.did.clone());
-        if my_can_did.as_deref() == Some(can.as_str()) {
-            continue;
-        }
-        if let Ok(pk) = human_money_core::crypto::get_pubkey_from_user_id(&can) {
-            if !reader_set.contains(pk.as_bytes()) && !is_known_offender(&service, &can) {
-                evicted_reader_keys.push(pk);
+            let reader_set: HashSet<[u8; 32]> = readers.iter().map(|k| *k.as_bytes()).collect();
+            for contact in address_book.contacts.values() {
+                let can = canonicalize_did(&contact.did).unwrap_or_else(|_| contact.did.clone());
+                if my_can_did.as_deref() == Some(can.as_str()) {
+                    continue;
+                }
+                if let Ok(pk) = human_money_core::crypto::get_pubkey_from_user_id(&can) {
+                    if !reader_set.contains(pk.as_bytes()) && !is_known_offender(service, &can) {
+                        evicted_reader_keys.push(pk);
+                    }
+                }
             }
-        }
-    }
-    readers.sort_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
-    readers.dedup();
-    evicted_reader_keys.sort_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
-    evicted_reader_keys.dedup();
-    evicted_reader_keys.truncate(humoco_market::MAX_SLOT_RECIPIENTS);
+            readers.sort_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
+            readers.dedup();
+            evicted_reader_keys.sort_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
+            evicted_reader_keys.dedup();
+            evicted_reader_keys.truncate(humoco_market::MAX_SLOT_RECIPIENTS);
 
-    let mut hasher = sha2::Sha256::new();
-    hasher.update(b"active");
-    for k in &readers {
-        hasher.update(k.as_bytes());
-    }
-    hasher.update(b"evicted");
-    for k in &evicted_reader_keys {
-        hasher.update(k.as_bytes());
-    }
-    let readers_hash = hex::encode(hasher.finalize());
+            let mut hasher = sha2::Sha256::new();
+            hasher.update(b"active");
+            for k in &readers {
+                hasher.update(k.as_bytes());
+            }
+            hasher.update(b"evicted");
+            for k in &evicted_reader_keys {
+                hasher.update(k.as_bytes());
+            }
+            let readers_hash = hex::encode(hasher.finalize());
 
-    Ok(CardUploadContext {
-        own_card_opt,
-        own_profile_opt,
-        readers,
-        evicted_reader_keys,
-        readers_hash,
-    })
+            Ok(CardUploadContext {
+                own_card_opt,
+                own_profile_opt,
+                readers,
+                evicted_reader_keys,
+                readers_hash,
+            })
+        },
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -874,6 +930,7 @@ fn seal_base_card_blob(
 pub(crate) async fn sync_card_upload_channel(
     client: &reqwest::Client,
     state: &AppState,
+    session: &SessionToken,
     ui_prefs: &UiPreferences,
     security_policy: &SecurityPolicy,
     id_ctx: &SyncIdentityContext,
@@ -891,7 +948,7 @@ pub(crate) async fn sync_card_upload_channel(
     if upload_targets.is_empty() {
         return None;
     }
-    let ctx = match load_card_upload_context(state, ui_prefs, id_ctx, password) {
+    let ctx = match load_card_upload_context(state, session, ui_prefs, id_ctx, password) {
         Ok(c) => c,
         Err(e) => {
             errors.push(format!("Card upload context failed: {}", e.message));
@@ -919,51 +976,54 @@ pub(crate) async fn sync_card_upload_channel(
                 }],
             });
 
-        let load_res: Result<_, FrontendError> = (|| {
-            let mut service = state.lock_service()?;
-            let store: humoco_market::CardStore = crate::state::load_encrypted_json_or_default(
-                &mut service,
-                MARKET_CARD_STORE_KEY,
-                password,
-            )
-            .map_err(FrontendError::from)?;
-            let reg = state.get_or_load_wot_register(&mut service, password).ok();
-            let own_coords = service
-                .with_wallet(|wallet| {
-                    wallet
-                        .profile
-                        .coordinates
-                        .as_deref()
-                        .and_then(humoco_market::parse_coordinates_pair)
-                })
-                .ok()
-                .flatten();
+        let load_res = state.with_session_required(
+            session,
+            "Wallet session changed during card upload data load",
+            |service| {
+                let store: humoco_market::CardStore = crate::state::load_encrypted_json_or_default(
+                    service,
+                    MARKET_CARD_STORE_KEY,
+                    password,
+                )
+                .map_err(FrontendError::from)?;
+                let reg = state.get_or_load_wot_register(service, password).ok();
+                let own_coords = service
+                    .with_wallet(|wallet| {
+                        wallet
+                            .profile
+                            .coordinates
+                            .as_deref()
+                            .and_then(humoco_market::parse_coordinates_pair)
+                    })
+                    .ok()
+                    .flatten();
 
-            let mut trust_by_did = HashMap::new();
-            let mut offenders = HashSet::new();
-            if let Some(ref r) = reg {
-                for (did, entry) in &r.own_contacts {
-                    let can = canonicalize_did(did).unwrap_or_else(|_| did.clone());
-                    trust_by_did.insert(can, entry.level);
+                let mut trust_by_did = HashMap::new();
+                let mut offenders = HashSet::new();
+                if let Some(ref r) = reg {
+                    for (did, entry) in &r.own_contacts {
+                        let can = canonicalize_did(did).unwrap_or_else(|_| did.clone());
+                        trust_by_did.insert(can, entry.level);
+                    }
                 }
-            }
-            for sc in store.cards.values() {
-                let can = canonicalize_did(&sc.card.payload.did)
-                    .unwrap_or_else(|_| sc.card.payload.did.clone());
-                if is_known_offender(&service, &sc.card.payload.did) {
-                    offenders.insert(can);
+                for sc in store.cards.values() {
+                    let can = canonicalize_did(&sc.card.payload.did)
+                        .unwrap_or_else(|_| sc.card.payload.did.clone());
+                    if is_known_offender(service, &sc.card.payload.did) {
+                        offenders.insert(can);
+                    }
                 }
-            }
 
-            let media_blobs = seal_active_ad_media_blobs(
-                &mut service,
-                active_own_card,
-                ctx.own_profile_opt.as_ref(),
-                now_secs,
-                password,
-            )?;
-            Ok((store, own_coords, trust_by_did, offenders, media_blobs))
-        })();
+                let media_blobs = seal_active_ad_media_blobs(
+                    service,
+                    active_own_card,
+                    ctx.own_profile_opt.as_ref(),
+                    now_secs,
+                    password,
+                )?;
+                Ok((store, own_coords, trust_by_did, offenders, media_blobs))
+            },
+        );
 
         let (store, own_coords, trust_by_did, offenders, active_media_blobs) = match load_res {
             Ok(tuple) => tuple,
@@ -1018,6 +1078,9 @@ pub(crate) async fn sync_card_upload_channel(
             let mut any_card_failed = false;
 
             for drop_desc in &upload_targets {
+                if !state.is_generation_current(session.generation) {
+                    return None;
+                }
                 let target_key = normalize_sync_url(&drop_desc.write_url);
                 if target_key.is_empty() {
                     continue;
@@ -1348,6 +1411,9 @@ pub(crate) async fn sync_card_upload_channel(
     {
         let delta_prefix = humoco_market::derive_delta_prefix(id_ctx.my_prefix.as_deref());
         for drop_desc in &upload_targets {
+            if !state.is_generation_current(session.generation) {
+                return None;
+            }
             if drop_desc.write_url.is_empty() {
                 continue;
             }
@@ -1404,7 +1470,7 @@ mod tests {
             )
             .unwrap();
         }
-        *state.contacts.lock().unwrap() = None;
+        state.set_cached_contacts(None);
 
         let res = probe_contact_syncs_impl(false, Some(password.to_string()), &state).await;
         assert!(
@@ -1419,6 +1485,151 @@ mod tests {
                 .unwrap()
         };
         assert_eq!(stored_raw, b"{corrupt-contacts");
+
+        let _ = std::fs::remove_dir_all(&base_dir);
+    }
+
+    #[tokio::test]
+    async fn test_h1_probe_contact_syncs_preserves_concurrent_add_and_delete() {
+        use crate::models::{FrontendContact, FrontendUserProfile};
+        use crate::test_support::{MockSyncServer, BOB_PHRASE, CHARLIE_PHRASE, READER1_PHRASE};
+        use std::sync::Arc;
+
+        let base_dir = temp_test_dir("h1_probe_concurrency");
+        let password = "TestPassword123!";
+        let alice_state = Arc::new(create_test_state(setup_test_app(
+            &base_dir.join("alice"),
+            "Alice",
+            ALICE_PHRASE,
+            password,
+        )));
+
+        let bob_did = setup_test_app(&base_dir.join("bob"), "Bob", BOB_PHRASE, password)
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
+        let del_did = setup_test_app(&base_dir.join("del"), "Del", CHARLIE_PHRASE, password)
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
+        let added_did = setup_test_app(&base_dir.join("add"), "Add", READER1_PHRASE, password)
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
+
+        let admin_sk = ed25519_dalek::SigningKey::from_bytes(&[0x42u8; 32]);
+        let admin_pub = hex::encode(admin_sk.verifying_key().as_bytes());
+        let server = MockSyncServer::start("d-h1".to_string(), admin_pub.clone()).await;
+
+        let mk_ep = |write_url: &str| FrontendSyncDescriptor {
+            write_url: write_url.to_string(),
+            read_url: String::new(),
+            slot_id: None,
+            drop_pub: admin_pub.clone(),
+            last_seen_at: None,
+            last_error_at: None,
+            fail_count: 0,
+            status: "unverified".to_string(),
+            last_probed_at: None,
+            ..Default::default()
+        };
+
+        {
+            let mut s = alice_state.service.lock().unwrap();
+            alice_state
+                .save_contact(
+                    &mut s,
+                    FrontendContact {
+                        did: bob_did.clone(),
+                        profile: FrontendUserProfile {
+                            first_name: Some("Bob".to_string()),
+                            ..Default::default()
+                        },
+                        tags: vec![],
+                        added_at: "2026-01-01T00:00:00Z".to_string(),
+                        notes: None,
+                        trust_level: Some(2),
+                        desired_hops: Some(3),
+                        has_peer_list: false,
+                        peer_list_updated_at: None,
+                        syncs: vec![mk_ep(&format!("{}/sync.php", server.base_url))],
+                    },
+                    Some(password),
+                )
+                .unwrap();
+            alice_state
+                .save_contact(
+                    &mut s,
+                    FrontendContact {
+                        did: del_did.clone(),
+                        profile: FrontendUserProfile {
+                            first_name: Some("ToDelete".to_string()),
+                            ..Default::default()
+                        },
+                        tags: vec![],
+                        added_at: "2026-01-01T00:00:00Z".to_string(),
+                        notes: None,
+                        trust_level: Some(1),
+                        desired_hops: Some(3),
+                        has_peer_list: false,
+                        peer_list_updated_at: None,
+                        syncs: vec![mk_ep(&format!("{}/sync.php", server.base_url))],
+                    },
+                    Some(password),
+                )
+                .unwrap();
+        }
+
+        let (hit_rx, release_tx) = server.arm_pause_gate("info");
+        let alice_bg = Arc::clone(&alice_state);
+        let probe_handle = tokio::spawn(async move {
+            probe_contact_syncs_impl(true, Some(password.to_string()), &alice_bg).await
+        });
+
+        hit_rx.await.unwrap();
+
+        // Concurrently during probe .await: add AddedContact AND delete ToDelete
+        {
+            let mut s = alice_state.service.lock().unwrap();
+            alice_state
+                .save_contact(
+                    &mut s,
+                    FrontendContact {
+                        did: added_did.clone(),
+                        profile: FrontendUserProfile {
+                            first_name: Some("AddedDuringProbe".to_string()),
+                            ..Default::default()
+                        },
+                        tags: vec![],
+                        added_at: "2026-01-01T00:00:00Z".to_string(),
+                        notes: None,
+                        trust_level: Some(2),
+                        desired_hops: Some(3),
+                        has_peer_list: false,
+                        peer_list_updated_at: None,
+                        syncs: vec![],
+                    },
+                    Some(password),
+                )
+                .unwrap();
+            alice_state
+                .delete_contact(&mut s, &del_did, Some(password))
+                .unwrap();
+        }
+
+        let _ = release_tx.send(true);
+        let _ = probe_handle.await.unwrap().unwrap();
+
+        let mut s = alice_state.service.lock().unwrap();
+        let contacts = alice_state.load_contacts(&mut s, Some(password)).unwrap();
+        assert!(
+            contacts.iter().any(|c| c.did == added_did),
+            "Concurrently added contact must NOT be overwritten by probe snapshot"
+        );
+        assert!(
+            !contacts.iter().any(|c| c.did == del_did),
+            "Concurrently deleted contact must NOT be resurrected by probe snapshot"
+        );
+        let bob_c = contacts.iter().find(|c| c.did == bob_did).unwrap();
+        assert_ne!(bob_c.syncs[0].status, "unverified");
+        assert!(bob_c.syncs[0].last_probed_at.is_some());
 
         let _ = std::fs::remove_dir_all(&base_dir);
     }

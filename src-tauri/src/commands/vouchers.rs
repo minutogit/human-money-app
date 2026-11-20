@@ -892,8 +892,8 @@ mod tests {
             ..Default::default()
         };
         let guar_state = AppState::new(svc_guarantor);
-        *guar_state.security_policy.lock().unwrap() = Some(guar_policy);
-        *guar_state.internal_lifecycle.lock().unwrap() = Some(InternalLifecycleState::default());
+        guar_state.set_cached_security_policy(Some(guar_policy));
+        guar_state.set_cached_internal_lifecycle(Some(InternalLifecycleState::default()));
 
         // Backend signing command MUST reject guarantor signing without valid anchor verification
         let creator_id_for_cfg = creator_id.clone();

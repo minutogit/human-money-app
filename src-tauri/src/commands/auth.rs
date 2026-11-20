@@ -350,18 +350,23 @@ pub fn handover_to_this_device(
     }
 }
 
-#[tauri::command]
-pub fn logout(state: tauri::State<AppState>) {
+pub fn logout_impl(state: &AppState) {
     info!("Logging out...");
-    // Leere die zwischengespeicherten Daten sicher aus dem Speicher
-    state.clear_all_caches();
-
     {
         let mut service = state.service.lock().unwrap();
         service.logout();
+        // Clear cached profile data while still holding the service lock (`service -> profile_caches`)
+        // so no concurrent request can repopulate caches after logout starts.
+        state.clear_all_caches();
     }
     state.release_profile_lock();
+    state.clear_sync_cooldown();
     info!("Logout complete.");
+}
+
+#[tauri::command]
+pub fn logout(state: tauri::State<AppState>) {
+    logout_impl(&state);
 }
 
 // NEUE SESSION COMMANDS
@@ -428,6 +433,7 @@ pub fn unlock_session(
     service
         .unlock_session(&password, duration_seconds)
         .map_err(FrontendError::from)?;
+    state.notify_sync_coordinator();
     Ok(build_session_status(&service))
 }
 
@@ -644,6 +650,7 @@ pub fn unlock_session_with_pin_impl(
     match service.unlock_secondary_session(&secret, duration_seconds) {
         Ok(()) => {
             let _ = pin_keystore::reset_failed_attempts(keystore_dir, folder_name);
+            state.notify_sync_coordinator();
             Ok(build_session_status(&service))
         }
         Err(_) => {
@@ -1015,30 +1022,22 @@ mod tests {
 
         let service = AppService::new(&PathBuf::from("/tmp")).unwrap();
         let state = AppState::new(service);
-        *state.history.lock().unwrap() = Some(vec![]);
-        *state.events.lock().unwrap() = Some(vec![]);
-        *state.contacts.lock().unwrap() = Some(Default::default());
-        *state.ui_preferences.lock().unwrap() = Some(UiPreferences::default());
-        *state.security_policy.lock().unwrap() = Some(SecurityPolicy::default());
-        *state.internal_lifecycle.lock().unwrap() = Some(InternalLifecycleState::default());
+        state.set_cached_history(Some(vec![]));
+        state.set_cached_events(Some(vec![]));
+        state.set_cached_contacts(Some(Default::default()));
+        state.set_cached_ui_preferences(Some(UiPreferences::default()));
+        state.set_cached_security_policy(Some(SecurityPolicy::default()));
+        state.set_cached_internal_lifecycle(Some(InternalLifecycleState::default()));
 
-        // We can't call the command directly easily because of tauri::State,
-        // but we can test the logic:
-        {
-            *state.history.lock().unwrap() = None;
-            *state.events.lock().unwrap() = None;
-            *state.contacts.lock().unwrap() = None;
-            *state.ui_preferences.lock().unwrap() = None;
-            *state.security_policy.lock().unwrap() = None;
-            *state.internal_lifecycle.lock().unwrap() = None;
-        }
+        state.clear_all_caches();
 
-        assert!(state.history.lock().unwrap().is_none());
-        assert!(state.events.lock().unwrap().is_none());
-        assert!(state.contacts.lock().unwrap().is_none());
-        assert!(state.ui_preferences.lock().unwrap().is_none());
-        assert!(state.security_policy.lock().unwrap().is_none());
-        assert!(state.internal_lifecycle.lock().unwrap().is_none());
+        assert!(state.profile_caches.lock().unwrap().is_none());
+        assert!(state.cache_history().is_none());
+        assert!(state.cache_events().is_none());
+        assert!(state.cache_contacts().is_none());
+        assert!(state.cache_ui_preferences().is_none());
+        assert!(state.cache_security_policy().is_none());
+        assert!(state.cache_internal_lifecycle().is_none());
     }
 
     #[test]
@@ -1160,7 +1159,7 @@ mod tests {
         assert_eq!(st.base_access_mode, "dailyPay");
 
         // Fail-closed elevation when cached security policy is cleared -> timeout 0, no cache, base mode stays dailyPay
-        *app_state.security_policy.lock().unwrap() = None;
+        app_state.set_cached_security_policy(None);
         let fail_closed = elevate_session_with_password_impl(master_pw, &app_state).unwrap();
         assert!(fail_closed.is_unlocked);
         assert!(!fail_closed.has_cached_session);
@@ -1172,7 +1171,7 @@ mod tests {
             session_timeout_seconds: 300,
             ..Default::default()
         };
-        *app_state.security_policy.lock().unwrap() = Some(timed_policy);
+        app_state.set_cached_security_policy(Some(timed_policy));
         let elevated = elevate_session_with_password_impl(master_pw, &app_state).unwrap();
         assert_eq!(
             elevated,

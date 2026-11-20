@@ -142,7 +142,7 @@ export const AppRouter: React.FC = () => {
             return <ReceiveView
                 droppedFile={appState.droppedFile}
                 onBack={goBack}
-                onReceiveSuccess={(payload) => {
+                onReceiveSuccess={(payload, pendingCommit) => {
                     if ('localInstanceId' in payload) {
                         const details = payload as VoucherDetails;
                         navigate({
@@ -153,7 +153,11 @@ export const AppRouter: React.FC = () => {
                     } else if (payload.isSignatureAttached && payload.voucherId) {
                         navigate({ view: "voucher_details", voucherId: payload.voucherId });
                     } else {
-                        navigate({ view: "receive_success", payload: payload as ReceiveSuccessPayload });
+                        navigate({
+                            view: "receive_success",
+                            payload: payload as ReceiveSuccessPayload,
+                            pendingCommit,
+                        });
                     }
                 }}
             />;
@@ -172,7 +176,11 @@ export const AppRouter: React.FC = () => {
                 onDone={() => navigate({ view: "logged_in" })}
             />;
         case "receive_success":
-            return <ReceiveSuccessView payload={appState.payload} onDone={() => navigate({ view: "logged_in" })} />;
+            return <ReceiveSuccessView
+                payload={appState.payload}
+                pendingCommit={appState.pendingCommit}
+                onDone={() => navigate({ view: "logged_in" })}
+            />;
         case "sign_request":
             return <SignRequestView
                 voucherData={appState.voucherData}

@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { afterWalletMutation } from "../sync/autoBackup";
+import { afterWalletMutation } from "../sync/syncBridge";
 import { Contact } from "../types";
 
 export const contactService = {

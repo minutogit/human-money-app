@@ -774,4 +774,58 @@ describe('MarketplaceView Component', () => {
       expect(screen.queryByText('Privat-Rad')).not.toBeInTheDocument();
     });
   });
+
+  it('shows skipped feedback instead of up-to-date toast when sync returns skippedWifiOnly', async () => {
+    const baseImpl = (invoke as Mock).getMockImplementation()!;
+    (invoke as Mock).mockImplementation((cmd: string, args?: unknown) => {
+      if (cmd === 'sync_market_channels') {
+        return Promise.resolve({
+          status: 'skippedWifiOnly',
+          uploadedTo: 0,
+          polledSyncs: 0,
+          decryptedSlots: 0,
+          importedCards: 0,
+          importedWotLists: 0,
+          errors: [],
+        });
+      }
+      if (cmd === 'sync_post_channels') {
+        return Promise.resolve({
+          uploadedTo: 0,
+          polledSyncs: 0,
+          importedPayments: 0,
+          importedReceipts: 0,
+          importedSignatures: 0,
+          newSignRequests: 0,
+          newWotHandshakes: 0,
+          newInquiries: 0,
+          newInquiryMessages: 0,
+          errors: [],
+        });
+      }
+      return baseImpl(cmd, args);
+    });
+
+    const toasts: Array<{ message: string; variant?: string }> = [];
+    const onToast = (e: Event) => {
+      toasts.push((e as CustomEvent<{ message: string; variant?: string }>).detail);
+    };
+    window.addEventListener('humoco:transient-sync-toast', onToast);
+    try {
+      render(<MarketplaceView />);
+      const syncBtn = await screen.findByTestId('refresh-marketplace-button');
+      fireEvent.click(syncBtn);
+
+      await waitFor(() => {
+        expect(
+          toasts.some((item) => /WiFi only|nur im WLAN/i.test(item.message)),
+        ).toBe(true);
+      });
+      expect(
+        toasts.some((item) => /up to date|Alles aktuell/i.test(item.message)),
+      ).toBe(false);
+    } finally {
+      window.removeEventListener('humoco:transient-sync-toast', onToast);
+    }
+  });
 });

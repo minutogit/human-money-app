@@ -442,9 +442,6 @@ amount_decimal_places = 4`,
           involvedSourcesDetails: [],
         });
       }
-      if (cmd === 'save_transaction_record') {
-        return Promise.resolve(undefined);
-      }
       return Promise.resolve(undefined);
     });
 
@@ -610,9 +607,6 @@ amount_decimal_places = 4`,
           involvedSourcesDetails: [],
         });
       }
-      if (cmd === 'save_transaction_record') {
-        return Promise.resolve(undefined);
-      }
       if (cmd === 'deposit_transfer_to_post') {
         return Promise.resolve({ msgId: 'm1', depositedTo: 1, errors: [] });
       }
@@ -675,9 +669,6 @@ amount_decimal_places = 4`,
           involvedSourcesDetails: [],
           l2Dispatch: [],
         });
-      }
-      if (cmd === 'save_transaction_record') {
-        return Promise.resolve(undefined);
       }
       if (cmd === 'deposit_transfer_to_post') {
         return Promise.reject({
@@ -931,11 +922,9 @@ amount_decimal_places = 4`,
     expect(recipientInput).toHaveValue(contactDid);
 
     const cardDid = 'did:key:z6MkwCardUser22222222222222222222';
-    const cardB64 = Buffer.from(JSON.stringify({ did: cardDid, card_wire: 'a.b.c' }), 'utf8')
-      .toString('base64')
-      .replace(/\+/g, '-')
-      .replace(/\//g, '_')
-      .replace(/=+$/, '');
+    const cardWirePayload = Buffer.from(JSON.stringify({ did: cardDid }), 'utf8').toString('base64url');
+    const cardB64 = Buffer.from(JSON.stringify({ card_wire: `header.${cardWirePayload}.sig` }), 'utf8')
+      .toString('base64url');
     fireEvent.change(recipientInput, {
       target: { value: `humoco://card?env=${cardB64}` },
     });

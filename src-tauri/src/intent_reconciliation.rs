@@ -33,30 +33,22 @@ fn random_non_zero_nonce() -> [u8; 32] {
 
 async fn reconcile_due_intent(
     state: &AppState,
+    session: &crate::session::SessionToken,
     lifecycle: &InternalLifecycleState,
     intent: &L2SendIntent,
-    owner: &str,
     now: u64,
 ) -> Result<(), FrontendError> {
     let local_id = &intent.local_instance_id;
     let nonce = random_non_zero_nonce();
 
-    let requests = {
-        let mut service = state.lock_service()?;
-        let current_owner = service
-            .with_wallet(|wallet| wallet.get_user_id().to_string())
-            .map_err(FrontendError::from)?;
-        if current_owner != owner {
-            return Ok(());
-        }
-        let known_heads = crate::state::load_known_head_receipts_for_anchor(
-            &mut service,
-            &intent.anchor_id,
-            None,
-        );
+    let Some(requests) = state.with_session(session, |service| {
+        let known_heads =
+            crate::state::load_known_head_receipts_for_anchor(service, &intent.anchor_id, None)?;
         service
             .build_intent_committee_requests(local_id, &nonce, &known_heads, true)
-            .map_err(FrontendError::from)?
+            .map_err(FrontendError::from)
+    })? else {
+        return Ok(());
     };
 
     if requests.is_empty() {
@@ -85,25 +77,21 @@ async fn reconcile_due_intent(
         }
     }
     if let Some(newer_manifest) = best_upgraded {
-        let upgraded_reqs = {
-            let mut service = state.lock_service()?;
-            if service
-                .update_l2_anchor_manifest(newer_manifest, None)
-                .is_ok()
-            {
+        let upgraded_reqs = state.with_session(session, |service| {
+            if service.update_l2_anchor_manifest(newer_manifest, None).is_ok() {
                 let known_heads = crate::state::load_known_head_receipts_for_anchor(
-                    &mut service,
+                    service,
                     &intent.anchor_id,
                     None,
-                );
-                service
+                )?;
+                Ok(service
                     .build_intent_committee_requests(local_id, &nonce, &known_heads, true)
-                    .ok()
+                    .ok())
             } else {
-                None
+                Ok(None)
             }
-        };
-        if let Some(next_reqs) = upgraded_reqs {
+        })?;
+        if let Some(Some(next_reqs)) = upgraded_reqs {
             if !next_reqs.is_empty() {
                 let extra = crate::gateway_resolver::dispatch_lock_committee_batches(
                     &client,
@@ -133,19 +121,15 @@ async fn reconcile_due_intent(
         lifecycle,
         intent.manifest.servers.iter().map(|s| s.write_url.as_str()),
     );
-    let mut service = state.lock_service()?;
-    let current_owner = service
-        .with_wallet(|wallet| wallet.get_user_id().to_string())
-        .map_err(FrontendError::from)?;
-    if current_owner != owner {
+    let Some(mut service) = state.lock_service().ok().filter(|s| state.is_session_current(session, s)) else {
         return Ok(());
-    }
-    let _ = crate::state::record_known_head_receipts(
+    };
+    crate::state::record_known_head_receipts(
         &mut service,
         &intent.anchor_id,
         &dispatch.receipts,
         None,
-    );
+    )?;
 
     let (resolution_opt, equivocation_opt) = service
         .record_intent_server_receipts(
@@ -192,10 +176,10 @@ pub async fn reconcile_due_intents(
 ) -> Result<usize, FrontendError> {
     let now = now_ms()?;
 
-    let (owner, intents) = {
+    let (session, intents) = {
         let mut service = state.lock_service()?;
-        let owner = match service.with_wallet(|wallet| wallet.get_user_id().to_string()) {
-            Ok(owner) => owner,
+        let session = match state.session_token_for_service(&service) {
+            Ok(session) => session,
             Err(_) => return Ok(0),
         };
         if let Err(error) = service.cleanup_terminal_intents(TERMINAL_RETENTION_MS, now, None) {
@@ -204,7 +188,7 @@ pub async fn reconcile_due_intents(
         let intents = service
             .unresolved_l2_send_intents()
             .map_err(FrontendError::from)?;
-        (owner, intents)
+        (session, intents)
     };
 
     if intents.is_empty() {
@@ -217,15 +201,24 @@ pub async fn reconcile_due_intents(
     let mut handled = 0usize;
 
     for intent in intents {
+        if !state.is_generation_current(session.generation) {
+            break;
+        }
         let local_id = intent.local_instance_id.clone();
 
         if now >= intent.root_valid_until_ms {
-            let mut service = state.lock_service()?;
-            if let Err(error) = service.expire_intent_if_overdue(&local_id, now, None) {
-                log::debug!("Failed to expire L2 send intent {}: {}", local_id, error);
-            }
-            if let Err(error) = service.cleanup_terminal_intents(TERMINAL_RETENTION_MS, now, None) {
-                log::debug!("Failed to clean up terminal L2 send intents: {}", error);
+            let expired = state.with_session(&session, |service| {
+                if let Err(error) = service.expire_intent_if_overdue(&local_id, now, None) {
+                    log::debug!("Failed to expire L2 send intent {}: {}", local_id, error);
+                }
+                if let Err(error) = service.cleanup_terminal_intents(TERMINAL_RETENTION_MS, now, None)
+                {
+                    log::debug!("Failed to clean up terminal L2 send intents: {}", error);
+                }
+                Ok(())
+            })?;
+            if expired.is_none() {
+                break;
             }
             handled += 1;
             continue;
@@ -244,7 +237,7 @@ pub async fn reconcile_due_intents(
             }
         }
 
-        let result = reconcile_due_intent(state, &lifecycle, &intent, &owner, now).await;
+        let result = reconcile_due_intent(state, &session, &lifecycle, &intent, now).await;
 
         if let Ok(mut in_flight_guard) = in_flight.lock() {
             in_flight_guard.remove(&local_id);
@@ -252,7 +245,7 @@ pub async fn reconcile_due_intents(
 
         match result {
             Ok(()) => handled += 1,
-            Err(error) => log::debug!(
+            Err(error) => log::warn!(
                 "L2 send intent reconciliation failed for {}: {}",
                 local_id,
                 error.message
@@ -315,7 +308,7 @@ mod tests {
 
     fn state_with(service: AppService, lifecycle: Option<InternalLifecycleState>) -> AppState {
         let state = AppState::new(service);
-        *state.internal_lifecycle.lock().unwrap() = lifecycle;
+        state.set_cached_internal_lifecycle(lifecycle);
         state
     }
 

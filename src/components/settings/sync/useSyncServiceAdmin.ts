@@ -11,9 +11,10 @@ import {
 } from '../../../types';
 import { marketService } from '../../../services/marketService';
 import { settingsService } from '../../../services/settingsService';
-import { useSession } from '../../../context/SessionContext';
+import { protectCommandOptions } from '../../../services/commandPolicy';
+import { useSession, type ProtectActionOptions } from '../../../context/SessionContext';
 import { copyToClipboard } from '../../../utils/clipboard';
-import { runSyncBackupPass } from '../../../sync/autoBackup';
+import { runSyncBackupPass } from '../../../sync/syncBridge';
 import { notifySyncStatusUpdated, SYNC_STATUS_UPDATED_EVENT } from '../../../utils/syncEvents';
 import { translateError } from '../../../utils/errorHelper';
 import { useRateLimitCooldown } from '../../../hooks/useRateLimitCooldown';
@@ -41,7 +42,7 @@ export interface UseSyncServiceAdminOptions {
  */
 export function useSyncServiceAdmin({ config, onConfigUpdated }: UseSyncServiceAdminOptions) {
     const { t } = useTranslation();
-    const { protectAction, accessMode = 'full', requireFullAccess } = useSession();
+    const { protectAction } = useSession();
 
     const [isLoading, setIsLoading] = useState(false);
     const [feedback, setFeedback] = useState<SyncFeedback | null>(null);
@@ -161,13 +162,14 @@ export function useSyncServiceAdmin({ config, onConfigUpdated }: UseSyncServiceA
 
     const runProtected = (
         setBusy: ((busy: boolean) => void) | null,
-        fn: (pwd: string | undefined) => Promise<boolean | void>
+        fn: (pwd: string | undefined) => Promise<boolean | void>,
+        options?: ProtectActionOptions,
     ) =>
         runAction(setBusy, async () => {
             let ok = false;
             await protectAction(async (pwd) => {
                 ok = (await fn(pwd || undefined)) !== false;
-            });
+            }, options);
             return ok;
         });
 
@@ -238,7 +240,7 @@ export function useSyncServiceAdmin({ config, onConfigUpdated }: UseSyncServiceA
         try {
             const res = await protectAction(async (pwd) => {
                 return await probeAndSavePublicSync(targetUrl, undefined, pwd || undefined);
-            });
+            }, protectCommandOptions('save_public_sync'));
             if (res) {
                 setInputUrl('');
                 if (res.hasAuth) {
@@ -276,18 +278,14 @@ export function useSyncServiceAdmin({ config, onConfigUpdated }: UseSyncServiceA
                 pwd
             );
             await refreshPublicSyncSettings();
-        });
+        }, protectCommandOptions('save_public_sync'));
 
     const handleRemovePublicSync = async (writeUrl: string, deleteRemoteSlots: boolean) => {
-        if (accessMode !== 'full' && requireFullAccess) {
-            const ok = await requireFullAccess(async () => true);
-            if (!ok) return false;
-        }
         return await runProtected(setIsDeletingPublicDrop, async (pwd) => {
             await marketService.removePublicSync(writeUrl, deleteRemoteSlots, pwd);
             await refreshPublicSyncSettings();
             setFeedback({ type: 'success', message: t('settings.syncPublicRemovedSuccess') });
-        });
+        }, protectCommandOptions('remove_public_sync'));
     };
 
     const handleAdoptReplacementUrl = async (targetUrl: string) => {
@@ -298,7 +296,7 @@ export function useSyncServiceAdmin({ config, onConfigUpdated }: UseSyncServiceA
         try {
             const res = await protectAction(async (pwd) => {
                 return await probeAndSavePublicSync(normalized, undefined, pwd || undefined);
-            });
+            }, protectCommandOptions('save_public_sync'));
             if (res) {
                 setFeedback({
                     type: res.hasAuth ? 'success' : 'info',
@@ -322,7 +320,7 @@ export function useSyncServiceAdmin({ config, onConfigUpdated }: UseSyncServiceA
         try {
             const res = await protectAction(async (pwd) => {
                 return await probeAndSavePublicSync(drop.writeUrl, drop.registerUrl, pwd || undefined);
-            });
+            }, protectCommandOptions('save_public_sync'));
             if (res) {
                 setFeedback({
                     type: res.hasAuth ? 'success' : 'info',
@@ -383,7 +381,7 @@ export function useSyncServiceAdmin({ config, onConfigUpdated }: UseSyncServiceA
 
             await protectAction(async (pwd) => {
                 await marketService.setSelectedUploadSyncs(updatedList, pwd || undefined);
-            });
+            }, protectCommandOptions('set_selected_upload_syncs'));
             await refreshDiscoveredDrops();
             if (!isCurrentlySelected) {
                 setTimeout(() => {
@@ -408,7 +406,7 @@ export function useSyncServiceAdmin({ config, onConfigUpdated }: UseSyncServiceA
             if (!toml) toml = await marketService.getRustSyncConfig(pwd);
             await copyToClipboard(toml);
             setFeedback({ type: 'success', message: t('settings.syncHostRustConfigCopied') });
-        });
+        }, protectCommandOptions('get_rust_sync_config'));
 
     const handleUpdateHostPolicy = () =>
         runProtected(setIsUpdatingPolicy, async (pwd) => {
@@ -424,7 +422,7 @@ export function useSyncServiceAdmin({ config, onConfigUpdated }: UseSyncServiceA
                 maxUserStorageMb: updated.maxUserStorageMb,
             });
             setFeedback({ type: 'success', message: t('settings.syncHostPolicyUpdated') });
-        });
+        }, protectCommandOptions('update_sync_admin_config'));
 
     const handleDeleteHost = () =>
         runProtected(setIsDeletingAdmin, async (pwd) => {
@@ -432,7 +430,7 @@ export function useSyncServiceAdmin({ config, onConfigUpdated }: UseSyncServiceA
             setAdminStatus(null);
             notifySyncStatusUpdated();
             setFeedback({ type: 'success', message: t('settings.syncHostDeletedSuccess') });
-        });
+        }, protectCommandOptions('delete_sync_admin'));
 
     const handleRevokeServer = (opts: {
         clearRevocation: boolean;
@@ -458,7 +456,7 @@ export function useSyncServiceAdmin({ config, onConfigUpdated }: UseSyncServiceA
                     ? t('settings.syncHostRevokeCleared', 'Abkündigung für Sync-Dienst wurde aufgehoben.')
                     : t('settings.syncHostRevokeSaved', 'Abkündigung für Sync-Dienst wurde veröffentlicht.'),
             });
-        });
+        }, protectCommandOptions('revoke_own_sync_server'));
 
     return {
         isLoading, feedback, setFeedback,

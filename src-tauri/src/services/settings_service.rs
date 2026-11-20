@@ -285,9 +285,9 @@ mod tests {
             )
             .unwrap();
         }
-        *state.ui_preferences.lock().unwrap() = Some(ui_base);
-        *state.security_policy.lock().unwrap() = Some(sec_base);
-        *state.internal_lifecycle.lock().unwrap() = Some(lc_base);
+        state.set_cached_ui_preferences(Some(ui_base));
+        state.set_cached_security_policy(Some(sec_base));
+        state.set_cached_internal_lifecycle(Some(lc_base));
 
         // 1. DailyPay can patch UiPreferences (clamping works) while InternalLifecycleState stays intact
         let updated_ui = patch_ui_preferences_impl(

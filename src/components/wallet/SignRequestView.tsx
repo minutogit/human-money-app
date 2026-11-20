@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { voucherService } from '../../services/voucherService';
 import { postService } from '../../services/postService';
 import { settingsService } from '../../services/settingsService';
-import { triggerAutoBackup } from '../../sync/autoBackup';
+import { triggerAutoBackup } from '../../sync/syncBridge';
 import { standardsService } from '../../services/standardsService';
 import { profileService } from '../../services/profileService';
 import { wotService } from '../../services/wotService';

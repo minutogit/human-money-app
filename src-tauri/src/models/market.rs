@@ -686,10 +686,19 @@ pub struct FrontendDiscoveredSync {
     pub status: String,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum MarketSyncStatus {
+    Completed,
+    SkippedWifiOnly,
+    SkippedCooldown,
+    SessionSuperseded,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct FrontendMarketSyncResult {
-    pub skipped_wifi_only: bool,
+    pub status: MarketSyncStatus,
     pub uploaded_to: usize,
     pub polled_syncs: usize,
     pub decrypted_slots: usize,

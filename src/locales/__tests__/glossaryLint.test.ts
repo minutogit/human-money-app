@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import deJson from '../de.json';
 import enJson from '../en.json';
+import esJson from '../es.json';
+import frJson from '../fr.json';
+import itJson from '../it.json';
 
 /**
  * Glossary Lint Test Suite (enforces docs/UX_GLOSSARY.md).
@@ -201,5 +204,42 @@ describe('UX Glossary Linting (docs/UX_GLOSSARY.md)', () => {
                 `Sample should have triggered WoT guarantor prohibition: "${sample}"`
             ).toBe(true);
         }
+    });
+
+    it('ensures all 5 locales contain zero stale ReceiveOnly / Kassenmodus / 14-of-20 terminology (F1)', () => {
+        const allLocales: Array<[string, Record<string, string>]> = [
+            ['de', de],
+            ['en', en],
+            ['es', esJson as Record<string, string>],
+            ['fr', frJson as Record<string, string>],
+            ['it', itJson as Record<string, string>],
+        ];
+        const stalePatterns: Array<{ name: string; pattern: RegExp }> = [
+            { name: 'Kassenmodus', pattern: /\bKassenmodus\b/i },
+            { name: 'nur Empfang', pattern: /\bnur Empfang\b/i },
+            { name: 'ReceiveOnly', pattern: /\bReceiveOnly\b/i },
+            { name: 'Cashier Mode', pattern: /\bCashier\s+Mode\b/i },
+            { name: 'receive only', pattern: /\breceive\s+only\b/i },
+            { name: 'modo caja', pattern: /\bmodo\s+caja\b/i },
+            { name: 'mode caisse', pattern: /\bmode\s+caisse\b/i },
+            { name: 'modalità cassa', pattern: /\bmodalità\s+cassa\b/i },
+            { name: '14/20', pattern: /14\/20/ },
+            { name: '14 von 20', pattern: /14\s+von\s+20/i },
+            { name: '14 of 20', pattern: /14\s+of\s+20/i },
+        ];
+
+        const violations: string[] = [];
+        for (const [lang, obj] of allLocales) {
+            for (const [key, value] of Object.entries(obj)) {
+                if (typeof value !== 'string') continue;
+                for (const { name, pattern } of stalePatterns) {
+                    if (pattern.test(value)) {
+                        violations.push(`[${lang}] (${name}) ${key}: "${value}"`);
+                    }
+                }
+            }
+        }
+
+        expect(violations).toEqual([]);
     });
 });

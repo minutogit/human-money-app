@@ -64,6 +64,7 @@ export const ProfileCardContactSection: React.FC<ProfileCardContactSectionProps>
                         <Input
                             placeholder={t('profile.zipCode', 'PLZ')}
                             value={profile.address?.zipCode || ''}
+                            maxLength={20}
                             onChange={(e) =>
                                 onProfileChange({
                                     ...profile,
@@ -75,6 +76,7 @@ export const ProfileCardContactSection: React.FC<ProfileCardContactSectionProps>
                             <Input
                                 placeholder={t('profile.city', 'Ort')}
                                 value={profile.address?.city || ''}
+                                maxLength={80}
                                 onChange={(e) =>
                                     onProfileChange({
                                         ...profile,
@@ -98,6 +100,7 @@ export const ProfileCardContactSection: React.FC<ProfileCardContactSectionProps>
                             <Input
                                 placeholder={t('profile.street', 'Straße')}
                                 value={profile.address?.street || ''}
+                                maxLength={100}
                                 onChange={(e) =>
                                     onProfileChange({
                                         ...profile,
@@ -109,6 +112,7 @@ export const ProfileCardContactSection: React.FC<ProfileCardContactSectionProps>
                         <Input
                             placeholder={t('profile.houseNumber', 'Nr.')}
                             value={profile.address?.houseNumber || ''}
+                            maxLength={20}
                             onChange={(e) =>
                                 onProfileChange({
                                     ...profile,
@@ -133,6 +137,7 @@ export const ProfileCardContactSection: React.FC<ProfileCardContactSectionProps>
                                 <Input
                                     placeholder="z. B. 48.14, 11.58"
                                     value={profile.coordinates || ''}
+                                    maxLength={60}
                                     onChange={(e) => onProfileChange({ ...profile, coordinates: e.target.value })}
                                     data-testid="profile-coordinates-input"
                                 />
@@ -228,6 +233,7 @@ export const ProfileCardContactSection: React.FC<ProfileCardContactSectionProps>
                         type="email"
                         placeholder="name@beispiel.de"
                         value={profile.email || ''}
+                        maxLength={100}
                         onChange={(e) => onProfileChange({ ...profile, email: e.target.value })}
                     />
                 </div>
@@ -243,6 +249,7 @@ export const ProfileCardContactSection: React.FC<ProfileCardContactSectionProps>
                         type="tel"
                         placeholder="+49 ..."
                         value={profile.phone || ''}
+                        maxLength={40}
                         onChange={(e) => onProfileChange({ ...profile, phone: e.target.value })}
                     />
                 </div>
@@ -257,6 +264,7 @@ export const ProfileCardContactSection: React.FC<ProfileCardContactSectionProps>
                     <Input
                         placeholder="https://..."
                         value={profile.url || ''}
+                        maxLength={200}
                         onChange={(e) => onProfileChange({ ...profile, url: e.target.value })}
                     />
                 </div>

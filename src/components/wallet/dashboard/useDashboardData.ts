@@ -270,49 +270,53 @@ export function useDashboardData() {
     const handleReconcileSyncAlert = useCallback(async () => {
         setIsReconcilingSyncAlert(true);
         try {
-            const res = await backupService.reconcileRestoredWalletL2();
-            const refreshedConfig = await settingsService.getConfig().catch(() => null);
-            if (refreshedConfig) {
-                setAppConfig(refreshedConfig);
-            } else if (res.l2ReconciliationStatus === 'reconciled') {
+            await protectAction(async (password) => {
+                const res = await backupService.reconcileRestoredWalletL2(password || undefined);
+                const refreshedConfig = await settingsService.getConfig().catch(() => null);
+                if (refreshedConfig) {
+                    setAppConfig(refreshedConfig);
+                } else if (res.l2ReconciliationStatus === 'reconciled') {
+                    setAppConfig((prev) =>
+                        prev
+                            ? {
+                                  ...prev,
+                                  lifecycle: {
+                                      ...prev.lifecycle,
+                                      pendingRestoreL2Reconciliation: false,
+                                      walletSyncAlert: null,
+                                  },
+                              }
+                            : prev,
+                    );
+                }
+            });
+        } catch (err) {
+            setFeedbackMsg(translateError(err, t));
+        } finally {
+            setIsReconcilingSyncAlert(false);
+        }
+    }, [protectAction, t]);
+
+    const handleDismissSyncAlert = useCallback(async () => {
+        try {
+            await protectAction(async (password) => {
+                await backupService.dismissWalletSyncAlert(password || undefined);
                 setAppConfig((prev) =>
                     prev
                         ? {
                               ...prev,
                               lifecycle: {
                                   ...prev.lifecycle,
-                                  pendingRestoreL2Reconciliation: false,
                                   walletSyncAlert: null,
                               },
                           }
                         : prev,
                 );
-            }
-        } catch {
-            // Surface remains in current alert state if offline or incomplete
-        } finally {
-            setIsReconcilingSyncAlert(false);
+            });
+        } catch (err) {
+            setFeedbackMsg(translateError(err, t));
         }
-    }, []);
-
-    const handleDismissSyncAlert = useCallback(async () => {
-        try {
-            await backupService.dismissWalletSyncAlert();
-            setAppConfig((prev) =>
-                prev
-                    ? {
-                          ...prev,
-                          lifecycle: {
-                              ...prev.lifecycle,
-                              walletSyncAlert: null,
-                          },
-                      }
-                    : prev,
-            );
-        } catch {
-            // Keep alert visible if dismissal failed
-        }
-    }, []);
+    }, [protectAction, t]);
 
     const handleProtectedNavigate = useCallback(
         (target: Parameters<typeof navigate>[0]) => {

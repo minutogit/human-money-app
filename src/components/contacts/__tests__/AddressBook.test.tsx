@@ -250,7 +250,7 @@ describe('AddressBook Component', () => {
       }
       if (cmd === 'sync_market_channels') {
         return Promise.resolve({
-          skippedWifiOnly: false,
+          status: 'completed',
           uploadedTo: 1,
           polledSyncs: 2,
           decryptedSlots: 3,
@@ -491,7 +491,7 @@ describe('AddressBook Component', () => {
       if (cmd === 'get_contacts') return Promise.resolve(mockContacts);
       if (cmd === 'sync_market_channels') {
         return Promise.resolve({
-          skippedWifiOnly: false,
+          status: 'completed',
           uploadedTo: 0,
           polledSyncs: 1,
           decryptedSlots: 0,
@@ -538,7 +538,7 @@ describe('AddressBook Component', () => {
       }
       if (cmd === 'sync_market_channels') {
         return Promise.resolve({
-          skippedWifiOnly: false,
+          status: 'completed',
           uploadedTo: 0,
           polledSyncs: 0,
           decryptedSlots: 0,

@@ -443,7 +443,7 @@ pub fn get_event_history_impl(
     state: &AppState,
 ) -> Result<Vec<crate::models::FrontendWalletEvent>, FrontendError> {
     state.authorize(crate::state::RequiredAccess::Unlocked, None)?;
-    let events_cache = state.events.lock().unwrap();
+    let events_cache = state.cache_events();
     if let Some(events) = events_cache.as_ref() {
         let start = offset.min(events.len());
         let end = offset.saturating_add(limit).min(events.len());
@@ -471,16 +471,16 @@ mod tests {
         // Mock AppState
         let service = AppService::new(&PathBuf::from("/tmp")).unwrap();
         let state_raw = AppState::new(service);
-        *state_raw.events.lock().unwrap() = Some(vec![WalletEvent {
+        state_raw.set_cached_events(Some(vec![WalletEvent {
             event_id: "test_event_1".to_string(),
             event_type: WalletEventType::VoucherActivated,
             timestamp: Utc::now(),
             local_instance_id: "voucher_1".to_string(),
             voucher_id: "vid_1".to_string(),
             bff_data: Default::default(),
-        }]);
+        }]));
 
-        let events = state_raw.events.lock().unwrap();
+        let events = state_raw.cache_events();
         assert!(events.is_some());
         assert_eq!(events.as_ref().unwrap().len(), 1);
         assert_eq!(events.as_ref().unwrap()[0].event_id, "test_event_1");

@@ -241,9 +241,9 @@ mod tests {
         );
 
         let state_raw = AppState::new(service);
-        *state_raw.contacts.lock().unwrap() = Some(book);
+        state_raw.set_cached_contacts(Some(book));
 
-        let cache = state_raw.contacts.lock().unwrap();
+        let cache = state_raw.cache_contacts();
         assert!(cache.is_some());
         assert_eq!(cache.as_ref().unwrap().contacts.len(), 1);
         assert_eq!(

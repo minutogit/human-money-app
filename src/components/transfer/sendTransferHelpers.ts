@@ -2,7 +2,7 @@
 import type { TFunction } from 'i18next';
 import { transferService, CreateBundleResult } from '../../services/transferService';
 import { postService } from '../../services/postService';
-import { runPostSyncPass } from '../../sync/postSync';
+import { runPostSyncPass } from '../../sync/syncBridge';
 import { parsePaymentRequest } from '../../utils/humocoUri';
 import { logger } from '../../utils/log';
 import { stringifyError, translateError } from '../../utils/errorHelper';

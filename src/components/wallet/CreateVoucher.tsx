@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { voucherService } from "../../services/voucherService";
 import { Button } from "../ui/Button";
 import { useSession } from "../../context/SessionContext";
+import { protectCommandOptions } from "../../services/commandPolicy";
 import { ConfirmationModal } from "../ui/ConfirmationModal";
 import { translateError } from "../../utils/errorHelper";
 import { PageLayout } from "../ui/PageLayout";
@@ -138,7 +139,7 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
             let created: VoucherDetails | undefined;
             await protectAction(async (password) => {
                 created = await voucherService.create(selectedStandard.content, voucherData, password || undefined);
-            });
+            }, protectCommandOptions('create_new_voucher'));
             setFeedback({type: 'success', msg: t('voucher.create.success')});
             timerRef.current = setTimeout(() => {
                 if (created && String(created.status).toLowerCase() === 'incomplete' && navigation) {

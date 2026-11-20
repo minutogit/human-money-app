@@ -232,8 +232,9 @@ export function parseContactCard(input: string): ParsedContactCard | null {
         };
       }
     } catch {
-      // Fall through if URL parsing fails
+      // Malformed humoco://contact URI fails closed below
     }
+    return null;
   }
 
   const standalone = canonicalizeUserIdCandidate(input);
@@ -245,10 +246,10 @@ export function parseContactCard(input: string): ParsedContactCard | null {
   // Fallback: extract embedded user ID (including any prefix before @did:key:) from chat/email text.
   // Never strip an invalid prefix and fall back to the root DID.
   const embeddedDidMatch = input.trim().match(
-    /(?:[^\s"'`„“”‚‘’«»‹›<(\[\]]+@)?did:key:[a-zA-Z0-9]+/i
+    /(?:^|[\s"'`„“”‚‘’«»‹›<(\[])((?:[^\s"'`„“”‚‘’«»‹›<(\[\]]+@)?did:key:[a-zA-Z0-9]+)/i
   );
-  if (embeddedDidMatch) {
-    const candidate = canonicalizeUserIdCandidate(embeddedDidMatch[0]);
+  if (embeddedDidMatch?.[1]) {
+    const candidate = canonicalizeUserIdCandidate(embeddedDidMatch[1]);
     return candidate && isValidUserIdFormat(candidate) ? { did: candidate } : null;
   }
 
@@ -464,7 +465,9 @@ export function extractCardPayload(raw: string): string | null {
       if (
         typeof parsed === 'object' &&
         parsed !== null &&
-        ('card_wire' in parsed || ('card' in parsed && 'sig' in parsed) || 'envelope' in parsed)
+        'card_wire' in parsed &&
+        typeof parsed.card_wire === 'string' &&
+        parsed.card_wire.trim().length > 0
       ) {
         return candidate;
       }
@@ -481,8 +484,8 @@ export function extractCardPayload(raw: string): string | null {
 export function extractDidFromCardEnvelopeJson(envelopeJson: string): string | null {
   try {
     const env = JSON.parse(envelopeJson) as Record<string, unknown>;
-    let candidate = typeof env.did === 'string' ? canonicalizeUserIdCandidate(env.did) : '';
-    if (!candidate && typeof env.card_wire === 'string') {
+    let candidate = '';
+    if (typeof env.card_wire === 'string') {
       const seg = env.card_wire.split('.')[1];
       if (seg) {
         const payloadText = decodeBase64UrlToUtf8(seg);

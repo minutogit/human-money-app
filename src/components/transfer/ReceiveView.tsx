@@ -2,7 +2,7 @@
 import { useTranslation } from 'react-i18next';
 import { PageLayout } from '../ui/PageLayout';
 import { AlertBanner } from '../ui/AlertBanner';
-import type { ReceiveSuccessPayload, VoucherDetails } from '../../types';
+import type { PendingReceiveCommit, ReceiveSuccessPayload, VoucherDetails } from '../../types';
 import { useReceiveFlow } from './receive/useReceiveFlow';
 import { ReceivePaymentRequestCard } from './receive/ReceivePaymentRequestCard';
 import { ReceiveInputStep } from './receive/ReceiveInputStep';
@@ -10,7 +10,10 @@ import { ReceivePreviewStep } from './receive/ReceivePreviewStep';
 
 interface ReceiveViewProps {
     onBack: () => void;
-    onReceiveSuccess: (payload: ReceiveSuccessPayload | VoucherDetails) => void;
+    onReceiveSuccess: (
+        payload: ReceiveSuccessPayload | VoucherDetails,
+        pendingCommit?: PendingReceiveCommit,
+    ) => void;
     droppedFile?: { name: string; bytes: number[] };
 }
 

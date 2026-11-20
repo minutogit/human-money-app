@@ -12478,36 +12478,6 @@
       "en": "ai-translated"
     }
   },
-  "settings.helpPosModeLong": {
-    "source_text": "Regular private users do not need this option.\n\nIf you sell goods or services in person (e.g. at a store, café, or market stall), enabling this reveals the **PoS Cashier toggle** and optional receipt ID in the Receive view.\n\nWhen active during checkout, the app immediately verifies incoming payments against the live Layer-2 server quorum (14/20) to block double-spends and replayed receipts before you hand over goods.",
-    "status": {
-      "de": "ai-translated",
-      "es": "ai-translated",
-      "fr": "ai-translated",
-      "it": "ai-translated",
-      "en": "ai-translated"
-    }
-  },
-  "settings.helpPosModeShort": {
-    "source_text": "Real-time online verification when receiving payments at a shop or market stall before releasing goods.",
-    "status": {
-      "de": "ai-translated",
-      "es": "ai-translated",
-      "fr": "ai-translated",
-      "it": "ai-translated",
-      "en": "ai-translated"
-    }
-  },
-  "settings.helpPosModeTitle": {
-    "source_text": "Merchant Cashier Mode (Point-of-Sale)",
-    "status": {
-      "de": "ai-translated",
-      "es": "ai-translated",
-      "fr": "ai-translated",
-      "it": "ai-translated",
-      "en": "ai-translated"
-    }
-  },
   "settings.helpPrivacyLong": {
     "source_text": "Flexible voucher standards let you choose between two privacy modes:\n\n• **Stealth:** Cloaks your signature in the voucher proof chain and protects you against surveillance, tracking, and profiling by later participants. Your identity stays hidden unless you attempt a double-spend.\n\n• **Public:** Keeps your signature visible in the chain. Useful in local communities or trust circles where open provenance builds confidence.\n\n• **Interactive:** Leaves the choice open so you can pick per transfer with a single click.",
     "status": {
@@ -14746,7 +14716,7 @@
     "ai_hint": "Empty state text when no vouchers match the filter."
   },
   "transfer.l2.bftQuorum": {
-    "source_text": "14/20 Server Majority",
+    "source_text": "Sync-Lock Quorum",
     "status": {
       "de": "ai-translated",
       "es": "ai-translated",

@@ -287,7 +287,7 @@ describe('StatusChip Component', () => {
             lastSyncAt: null,
         });
         vi.mocked(marketService.syncMarketChannels).mockResolvedValue({
-            skippedWifiOnly: false,
+            status: 'completed',
             uploadedTo: 0,
             polledSyncs: 1,
             decryptedSlots: 0,

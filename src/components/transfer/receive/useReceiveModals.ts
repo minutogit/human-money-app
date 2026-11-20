@@ -106,6 +106,7 @@ export function useReceiveModals({
                     standardDefinitionsToml,
                     password: password || undefined,
                     forceAcceptToleranceBundle: true,
+                    commitMode: 'forceTrustOffline',
                 });
             });
             if (payload) {

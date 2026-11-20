@@ -1,7 +1,6 @@
 // src/sync/__tests__/channelMembersSync.test.ts
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { channelMembersSyncManager } from '../channelMembersSyncManager';
-import { stopAutoBackupLoop } from '../autoBackup';
 import { contactService } from '../../services/contactService';
 import { invoke } from '@tauri-apps/api/core';
 
@@ -34,12 +33,10 @@ describe('Debounced Channel Members Sync (Task 3.1)', () => {
     beforeEach(() => {
         vi.useFakeTimers();
         vi.clearAllMocks();
-        stopAutoBackupLoop();
         channelMembersSyncManager.reset();
     });
 
     afterEach(() => {
-        stopAutoBackupLoop();
         channelMembersSyncManager.reset();
         vi.useRealTimers();
     });

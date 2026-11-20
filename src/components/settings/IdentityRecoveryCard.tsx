@@ -69,7 +69,7 @@ export const IdentityRecoveryCard: React.FC = () => {
             } else {
                 await protectAction(async (pwd) => {
                     await recoveryService.revokeSocialRecovery(pwd || '');
-                });
+                }, { requireFullAccess: true });
             }
             setRevokeFeedback({ type: 'success', text: t('backup.revokeGuardiansSuccess') });
             await loadProtectionStatus();

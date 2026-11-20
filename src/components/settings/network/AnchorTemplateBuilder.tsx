@@ -9,6 +9,7 @@ import {
     StoredAnchorTemplateMeta,
 } from '../../../types';
 import { settingsService } from '../../../services/settingsService';
+import { protectCommandOptions } from '../../../services/commandPolicy';
 import { useSession } from '../../../context/SessionContext';
 import { Button } from '../../ui/Button';
 import { Input } from '../../ui/Input';
@@ -114,7 +115,7 @@ export const AnchorTemplateBuilder: React.FC<AnchorTemplateBuilderProps> = ({
                     threshold: Number.isFinite(parsedThresh as number) ? parsedThresh : null,
                     password: pwd || null,
                 });
-            });
+            }, protectCommandOptions('assemble_anchor_template'));
 
             setTplLabel('');
             setTplThreshold('');

@@ -9,6 +9,7 @@ pub mod l2_lifecycle;
 pub mod models;
 pub mod pin_keystore;
 pub mod services;
+pub mod session;
 pub mod settings;
 pub mod state;
 pub mod sync_client;
@@ -344,6 +345,7 @@ pub fn run() {
                 register_os_url_scheme_best_effort();
             }
             crate::intent_reconciliation::spawn_intent_reconciliation_worker(app.handle().clone());
+            crate::services::sync_coordinator::spawn_background_sync_coordinator(app.handle().clone());
 
             Ok(())
         })
@@ -402,7 +404,8 @@ pub fn run() {
             validate_mnemonic,
             get_local_instance_id,
             get_latest_logs,
-            take_startup_launch_items,
+            peek_startup_launch_items,
+            ack_startup_launch_item,
             get_user_id,
             get_user_profile,
             get_total_balance_by_currency,
@@ -412,10 +415,8 @@ pub fn run() {
             create_new_voucher,
             create_transfer_bundle,
             receive_bundle,
-            save_transaction_record,
             get_transaction_history,
             prepare_transfer_plan,
-            checkout_received_bundle,
             get_app_config,
             patch_ui_preferences,
             patch_security_policy,
@@ -525,6 +526,8 @@ pub fn run() {
             probe_contact_syncs,
             set_selected_upload_syncs,
             sync_market_channels,
+            update_network_status,
+            wake_sync_coordinator,
             sync_channel_members,
             delete_own_sync_slots,
             preview_contact_trust_change,

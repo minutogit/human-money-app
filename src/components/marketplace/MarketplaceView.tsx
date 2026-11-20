@@ -466,7 +466,17 @@ export function MarketplaceView({
             await refreshData(false);
             if (syncErrors.length > 0) {
                 setError(syncErrors.join(' · '));
-            } else if (!hasNewItems) {
+            } else if (mktRes?.status === 'skippedWifiOnly') {
+                showTransientSyncToast({
+                    message: t('marketplace.syncSkippedWifi', 'Synchronisation übersprungen (nur im WLAN aktiv)'),
+                    variant: 'info',
+                });
+            } else if (mktRes?.status === 'skippedCooldown') {
+                showTransientSyncToast({
+                    message: t('marketplace.syncSkippedCooldown', 'Synchronisation kürzlich durchgeführt – bitte später erneut prüfen.'),
+                    variant: 'info',
+                });
+            } else if (!hasNewItems && mktRes?.status !== 'sessionSuperseded') {
                 showTransientSyncToast({
                     message: t('common.syncUpToDateToast', 'Alles aktuell – keine neuen Einträge.'),
                     variant: 'info',

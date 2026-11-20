@@ -18,7 +18,7 @@ import { InfoHint } from '../ui/InfoHint';
 import { AdvancedDisclosure } from '../ui/AdvancedDisclosure';
 import { translateError, stringifyError } from '../../utils/errorHelper';
 import { logger } from '../../utils/log';
-import { dispatchBackupUpdated } from '../../sync/autoBackup';
+import { dispatchBackupUpdated } from '../../sync/syncBridge';
 import { pickDirectoryPath, pickSaveFilePath } from '../../utils/fileIo';
 import { 
     Archive, 

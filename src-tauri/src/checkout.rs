@@ -133,28 +133,24 @@ pub(crate) async fn resolve_trusted_lock_keys(
     let canonical_creator = creator_id.and_then(|c| canonicalize_did(c).ok());
     let contact_candidates: Vec<String> = {
         let svc_guard = state.service.lock().ok();
-        let book_guard = state.contacts.lock().ok();
-        let wot_guard = state.wot.lock().ok();
+        let caches_guard = state.profile_caches.lock().ok();
+        let caches_ref = caches_guard.as_ref().and_then(|g| g.as_ref());
+        let book_opt = caches_ref.and_then(|c| c.contacts.as_ref());
+        let wot_ref = caches_ref.and_then(|c| c.wot.as_ref());
 
-        let self_did = wot_guard
-            .as_ref()
-            .and_then(|g| g.as_ref().map(|r| r.self_did.clone()))
-            .or_else(|| {
-                svc_guard.as_ref().and_then(|s| {
-                    s.with_wallet(|w| w.get_user_id().to_string())
-                        .ok()
-                        .and_then(|d| canonicalize_did(&d).ok())
-                })
-            });
+        let self_did = wot_ref.map(|r| r.self_did.clone()).or_else(|| {
+            svc_guard.as_ref().and_then(|s| {
+                s.with_wallet(|w| w.get_user_id().to_string())
+                    .ok()
+                    .and_then(|d| canonicalize_did(&d).ok())
+            })
+        });
 
-        let wot_ref = wot_guard.as_ref().and_then(|g| g.as_ref());
         let wallet_offenders: HashSet<String> = svc_guard
             .as_ref()
             .and_then(|s| {
                 s.with_wallet(|w| {
-                    book_guard
-                        .as_ref()
-                        .and_then(|b| b.as_ref())
+                    book_opt
                         .map(|book| {
                             book.contacts
                                 .keys()
@@ -171,7 +167,7 @@ pub(crate) async fn resolve_trusted_lock_keys(
             .unwrap_or_default();
 
         let mut urls = Vec::new();
-        if let Some(Some(book)) = book_guard.as_deref() {
+        if let Some(book) = book_opt {
             for contact in book.contacts.values() {
                 if wallet_offenders.contains(&contact.did) {
                     continue;
@@ -555,15 +551,20 @@ pub(crate) async fn checkout_bundle(
     }
 
     // 2. Decrypt & inspect bundle to check N = 0 offline-only vs anchored vouchers
-    let (opened_bundle, merchant_id) = {
+    let (opened_bundle, merchant_id, session) = {
         let service = state.lock_service()?;
-        service
+        let (parsed, mid) = service
             .with_wallet_and_identity(|wallet, identity| {
                 let parsed = bundle_processor::open_and_verify_bundle(identity, bundle)?;
                 Ok::<_, human_money_core::Error>((parsed, wallet.get_user_id().to_string()))
             })
             .map_err(FrontendError::from)?
-            .map_err(FrontendError::from)?
+            .map_err(FrontendError::from)?;
+        let session = crate::session::SessionToken {
+            generation: state.current_session_generation(),
+            owner_did: mid.clone(),
+        };
+        (parsed, mid, session)
     };
 
     if opened_bundle.vouchers.is_empty() {
@@ -663,11 +664,14 @@ pub(crate) async fn checkout_bundle(
         })
         .unwrap_or(DEFAULT_LOCK_POW_BASE_BITS);
 
-    // 3. Prepare durable challenge context + per-server SyncLockBatchRequests (running Discovery if local manifest missing)
+    // 3. Prepare durable challenge context + per-server SyncLockBatchRequests (running Discovery if local manifest missing).
+    // Fail closed immediately if the local anti-rollback sidecar is corrupted BEFORE any discovery fallback.
+    let known_heads = {
+        let mut service = state.lock_service()?;
+        crate::state::load_known_head_receipts_for_anchor(&mut service, &anchor_id, password)?
+    };
     let first_prepare = {
         let mut service = state.lock_service()?;
-        let known_heads =
-            crate::state::load_known_head_receipts_for_anchor(&mut service, &anchor_id, password);
         service.prepare_checkout_requests(
             purchase_id,
             bundle,
@@ -701,7 +705,7 @@ pub(crate) async fn checkout_bundle(
                 &mut service,
                 &anchor_id,
                 password,
-            );
+            )?;
             service
                 .prepare_checkout_requests(
                     purchase_id,
@@ -738,16 +742,17 @@ pub(crate) async fn checkout_bundle(
     {
         let now_secs = sync_client::current_unix_timestamp();
         if !dispatch.revoked_notices.is_empty() {
-            if let Ok(mut service) = state.service.lock() {
+            let _ = state.with_session(&session, |service| {
                 let _ = crate::l2_lifecycle::record_revoked_servers(
-                    &mut service,
+                    service,
                     &anchor_id,
                     &dispatch.revoked_notices,
                     &context.manifest.servers,
                     now_secs,
                     password,
                 );
-            }
+                Ok(())
+            });
         }
 
         let mut best_upgraded: Option<AnchorManifest> = None;
@@ -791,27 +796,30 @@ pub(crate) async fn checkout_bundle(
                     &lifecycle,
                     newer_manifest.servers.iter().map(|s| s.write_url.as_str()),
                 ));
-            let upgraded_pair = {
-                let mut service = state.lock_service()?;
-                service
-                    .update_l2_anchor_manifest(newer_manifest, password)
-                    .map_err(FrontendError::from)?;
-                let known_heads = crate::state::load_known_head_receipts_for_anchor(
-                    &mut service,
-                    &anchor_id,
-                    password,
-                );
-                service
-                    .prepare_checkout_requests(
-                        purchase_id,
-                        bundle,
-                        pow_base_bits,
-                        now()?,
-                        &known_heads,
+            let upgraded_pair = state.with_session_required(
+                &session,
+                "Wallet changed during checkout",
+                |service| {
+                    service
+                        .update_l2_anchor_manifest(newer_manifest, password)
+                        .map_err(FrontendError::from)?;
+                    let known_heads = crate::state::load_known_head_receipts_for_anchor(
+                        service,
+                        &anchor_id,
                         password,
-                    )
-                    .map_err(FrontendError::from)?
-            };
+                    )?;
+                    service
+                        .prepare_checkout_requests(
+                            purchase_id,
+                            bundle,
+                            pow_base_bits,
+                            now()?,
+                            &known_heads,
+                            password,
+                        )
+                        .map_err(FrontendError::from)
+                },
+            )?;
             context = upgraded_pair.0;
             requests = upgraded_pair.1;
             let keys = resolve_trusted_lock_keys(
@@ -868,18 +876,9 @@ pub(crate) async fn checkout_bundle(
     let manifest_revision = Some(context.manifest.revision);
 
     let mut service = state.lock_service()?;
-    let current_owner = service
-        .with_wallet(|wallet| wallet.get_user_id().to_string())
-        .map_err(FrontendError::from)?;
-    if current_owner != merchant_id {
+    if !state.is_session_current(&session, &service) {
         return Err(fail("Wallet changed during checkout"));
     }
-    let _ = crate::state::record_known_head_receipts(
-        &mut service,
-        &anchor_id,
-        &dispatch.receipts,
-        password,
-    );
 
     for competing_entry in &dispatch.competing_entries {
         if let Err(err) = service.record_checkout_upstream_conflict(
@@ -891,6 +890,13 @@ pub(crate) async fn checkout_bundle(
             log::warn!("Recording upstream conflict entry failed: {}", err);
         }
     }
+
+    crate::state::record_known_head_receipts(
+        &mut service,
+        &anchor_id,
+        &dispatch.receipts,
+        password,
+    )?;
 
     match outcome {
         L2ProcessingOutcome::Confirmed {
@@ -1037,6 +1043,186 @@ pub(crate) async fn checkout_bundle(
     }
 }
 
+/// Runs non-blocking L2 committee verification for an already-committed bundle (e.g. PoST auto-import),
+/// pinning signed heads via K2 fail-closed loader and recording any detected upstream double-spends.
+/// Returns `Ok(true)` if at least one new upstream double-spend conflict was recorded.
+pub(crate) async fn verify_committed_bundle_l2(
+    state: &AppState,
+    session: &crate::session::SessionToken,
+    bundle: &[u8],
+    password: Option<&str>,
+) -> Result<bool, FrontendError> {
+    let opened_opt = state.with_session(session, |service| {
+        service
+            .with_wallet_and_identity(|_, identity| {
+                bundle_processor::open_and_verify_bundle(identity, bundle)
+            })
+            .map_err(FrontendError::from)?
+            .map_err(FrontendError::from)
+    })?;
+    let Some(opened_bundle) = opened_opt else {
+        return Ok(false);
+    };
+
+    let anchored_vouchers: Vec<human_money_core::Voucher> = opened_bundle
+        .vouchers
+        .iter()
+        .filter(|v| v.layer2_anchor.is_some())
+        .cloned()
+        .collect();
+    if anchored_vouchers.is_empty() {
+        return Ok(false);
+    }
+
+    let lifecycle = state
+        .get_cached_internal_lifecycle()
+        .map_err(FrontendError::from)?;
+    let client = sync_client::create_sync_http_client();
+    let mut conflict_recorded = false;
+
+    for voucher in &anchored_vouchers {
+        let Some(anchor_id) = voucher.layer2_anchor else {
+            continue;
+        };
+        let anchor_hex = hex::encode(anchor_id);
+        let guarantor_dids: Vec<String> = voucher
+            .signatures
+            .iter()
+            .filter(|s| s.role.eq_ignore_ascii_case("guarantor"))
+            .map(|s| s.signer_id.clone())
+            .collect();
+
+        let local_manifest = state
+            .with_session(session, |service| {
+                let bundled = opened_bundle
+                    .anchor_manifest
+                    .as_ref()
+                    .filter(|m| m.verify_anchor_id(&anchor_id).is_ok())
+                    .cloned();
+                let stored = service
+                    .with_wallet(|w| w.profile.l2_anchor_manifests.get(&anchor_hex).cloned())
+                    .map_err(FrontendError::from)?;
+                Ok(match (bundled, stored) {
+                    (Some(b), Some(s)) if s.revision > b.revision => Some(s),
+                    (Some(b), _) => Some(b),
+                    (None, s) => s,
+                })
+            })?
+            .flatten();
+
+        let manifest = match local_manifest {
+            Some(m) => m,
+            None => match crate::l2_lifecycle::discover_anchor_manifest(
+                state,
+                &client,
+                &anchor_id,
+                voucher.creator_profile.id.as_deref(),
+                &guarantor_dids,
+                password,
+            )
+            .await?
+            {
+                Some(m) => m,
+                None => continue,
+            },
+        };
+
+        let pow_base_bits = crate::services::common::max_pow_base_bits_for_servers(
+            &lifecycle,
+            manifest.servers.iter().map(|s| s.write_url.as_str()),
+        );
+
+        let prepared = state.with_session(session, |service| {
+            // K2 fail-closed: corrupt sidecar aborts dispatch rather than sending None known_head
+            let known_heads =
+                crate::state::load_known_head_receipts_for_anchor(service, &anchor_id, password)?;
+            let first_unconfirmed = l2_gateway::first_unconfirmed_hop_index(
+                voucher,
+                &manifest,
+                &opened_bundle.quorum_certificates,
+            )
+            .map_err(FrontendError::from)?;
+            let entries = l2_gateway::build_voucher_lock_batch(
+                voucher,
+                first_unconfirmed,
+                &opened_bundle.causal_outputs,
+                if first_unconfirmed == 0 {
+                    opened_bundle.root_mig_sig
+                } else {
+                    None
+                },
+                pow_base_bits,
+            )
+            .map_err(FrontendError::from)?;
+            let mut nonce = [0u8; 32];
+            nonce[..16].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
+            nonce[16..].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
+            l2_gateway::build_committee_batch_requests(
+                &anchor_id,
+                &manifest,
+                &opened_bundle.genesis_tickets,
+                &entries,
+                &nonce,
+                &known_heads,
+            )
+            .map_err(FrontendError::from)
+        })?;
+        let Some(requests) = prepared else {
+            return Ok(false);
+        };
+
+        let dispatch = crate::gateway_resolver::dispatch_lock_committee_batches(
+            &client,
+            &requests,
+            CHECKOUT_BATCH_TIMEOUT,
+        )
+        .await;
+        let equiv_proof = l2_gateway::detect_equivocation(&dispatch.receipts);
+
+        let applied = state.with_session(session, |service| {
+            if let Some(ref eq) = equiv_proof {
+                let now_secs = sync_client::current_unix_timestamp().max(1);
+                let _ = crate::l2_lifecycle::record_equivocation_proof(
+                    service,
+                    None,
+                    eq,
+                    now_secs,
+                    password,
+                );
+            }
+            crate::state::record_known_head_receipts(
+                service,
+                &anchor_id,
+                &dispatch.receipts,
+                password,
+            )?;
+            let mut recorded_here = false;
+            for competing_entry in &dispatch.competing_entries {
+                match service.record_checkout_upstream_conflict(
+                    bundle,
+                    competing_entry,
+                    pow_base_bits,
+                    password,
+                ) {
+                    Ok(true) => recorded_here = true,
+                    Ok(false) => {}
+                    Err(err) => {
+                        log::warn!("Recording PoST background L2 conflict failed: {}", err);
+                    }
+                }
+            }
+            Ok(recorded_here)
+        })?;
+
+        match applied {
+            Some(recorded_here) => conflict_recorded |= recorded_here,
+            None => return Ok(false),
+        }
+    }
+
+    Ok(conflict_recorded)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1127,8 +1313,8 @@ mod tests {
             .unwrap();
 
         let state_bob = AppState::new(svc_bob);
-        *state_bob.security_policy.lock().unwrap() = Some(SecurityPolicy::default());
-        *state_bob.internal_lifecycle.lock().unwrap() = Some(InternalLifecycleState::default());
+        state_bob.set_cached_security_policy(Some(SecurityPolicy::default()));
+        state_bob.set_cached_internal_lifecycle(Some(InternalLifecycleState::default()));
         let completion = checkout_bundle(
             &state_bob,
             "pos-offline-1",
@@ -1359,8 +1545,8 @@ mod tests {
 
         // Case A: Bob has NO trusted servers -> Yellow verdict, NOT auto-committed
         let state_bob = AppState::new(svc_bob);
-        *state_bob.security_policy.lock().unwrap() = Some(SecurityPolicy::default());
-        *state_bob.internal_lifecycle.lock().unwrap() = Some(InternalLifecycleState::default());
+        state_bob.set_cached_security_policy(Some(SecurityPolicy::default()));
+        state_bob.set_cached_internal_lifecycle(Some(InternalLifecycleState::default()));
         let yellow = checkout_bundle(
             &state_bob,
             "pos-yellow",
@@ -1376,10 +1562,8 @@ mod tests {
 
         // Case B: Bob trusts both servers via own public_syncs + verified probe cache -> Green Confirmed!
         {
-            let mut st_sec = state_bob.security_policy.lock().unwrap();
-            let s = st_sec.as_mut().unwrap();
-            let mut st_lc = state_bob.internal_lifecycle.lock().unwrap();
-            let lc = st_lc.as_mut().unwrap();
+            let mut s = state_bob.cache_security_policy().unwrap();
+            let mut lc = state_bob.cache_internal_lifecycle().unwrap();
             for (port, sk) in [(p1, &sk1), (p2, &sk2)] {
                 let wurl = format!("http://127.0.0.1:{}/sync.php", port);
                 s.public_syncs.push(crate::settings::StoredPublicSync {
@@ -1420,6 +1604,8 @@ mod tests {
                     },
                 );
             }
+            state_bob.set_cached_security_policy(Some(s));
+            state_bob.set_cached_internal_lifecycle(Some(lc));
         }
         let green = checkout_bundle(
             &state_bob,
