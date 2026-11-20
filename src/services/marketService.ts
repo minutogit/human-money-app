@@ -46,12 +46,10 @@ export const marketService = {
 
     setCardPublished: async (
         published: boolean,
-        deleteRemote: boolean = false,
         password?: string
     ): Promise<FrontendMyMarketProfile> => {
         const res = await invoke<FrontendMyMarketProfile>("set_card_published", {
             published,
-            deleteRemote,
             password: password || undefined,
         });
         notifyMyProfileUpdated(res);

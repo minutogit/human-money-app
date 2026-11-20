@@ -107,6 +107,7 @@ pub struct DropDescriptor {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct CardEnvelope {
     pub card_wire: String,
     pub hops: u8,

@@ -22,6 +22,9 @@ interface VoucherBasicsFormProps {
     onValidityUnitChange: (unit: "Y" | "M" | "D") => void;
     nonRedeemable: boolean;
     onNonRedeemableChange: (val: boolean) => void;
+    allowOfflineOnly?: boolean;
+    onAllowOfflineOnlyChange?: (val: boolean) => void;
+    offlineOnlyConfirmRef?: React.RefObject<HTMLInputElement | null>;
     isLoading: boolean;
     errors: Record<string, boolean>;
     standardRef: React.RefObject<HTMLSelectElement | null>;
@@ -43,6 +46,9 @@ export function VoucherBasicsForm({
     onValidityUnitChange,
     nonRedeemable,
     onNonRedeemableChange,
+    allowOfflineOnly = false,
+    onAllowOfflineOnlyChange,
+    offlineOnlyConfirmRef,
     isLoading,
     errors,
     standardRef,
@@ -136,18 +142,48 @@ export function VoucherBasicsForm({
                     </span>
                 </p>
             ) : (
-                <p
+                <div
                     data-testid="voucher-offline-only-notice"
-                    className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-xl p-2.5 flex items-start gap-2 font-medium"
+                    className={`text-[11px] rounded-xl p-2.5 space-y-2 border transition-all ${
+                        errors.offlineOnlyConfirm
+                            ? 'text-rose-900 bg-rose-50 border-rose-500 ring-2 ring-rose-500/20'
+                            : 'text-amber-800 bg-amber-50 border-amber-200'
+                    }`}
                 >
-                    <WifiOff size={14} className="shrink-0 mt-0.5 text-amber-600" />
-                    <span>
-                        {t(
-                            'voucher.basics.l2AnchorOfflineOnlyWarning',
-                            'Currently offline-only (N = 0). Protected offline via SST V4 signatures, without live double-spend locks.'
-                        )}
-                    </span>
-                </p>
+                    <p className="flex items-start gap-2 font-medium">
+                        <WifiOff
+                            size={14}
+                            className={`shrink-0 mt-0.5 ${
+                                errors.offlineOnlyConfirm ? 'text-rose-600' : 'text-amber-600'
+                            }`}
+                        />
+                        <span>
+                            {t(
+                                'voucher.basics.l2AnchorOfflineOnlyWarning',
+                                'No lock servers selected (N = 0). Protected offline via SST V4 signatures, without live double-spend locks.'
+                            )}
+                        </span>
+                    </p>
+                    {onAllowOfflineOnlyChange && (
+                        <label className="flex items-start gap-2 pt-1 border-t border-amber-200/70 cursor-pointer select-none">
+                            <input
+                                ref={offlineOnlyConfirmRef}
+                                type="checkbox"
+                                data-testid="voucher-confirm-offline-only"
+                                checked={allowOfflineOnly}
+                                disabled={isLoading}
+                                onChange={(e) => onAllowOfflineOnlyChange(e.target.checked)}
+                                className="mt-0.5 rounded border-amber-400 text-theme-primary focus:ring-theme-primary"
+                            />
+                            <span className="font-semibold leading-snug">
+                                {t(
+                                    'voucher.basics.l2ConfirmOfflineOnly',
+                                    'I understand and want to issue this voucher offline-only (N = 0, without live double-spend protection).'
+                                )}
+                            </span>
+                        </label>
+                    )}
+                </div>
             )}
         </div>
     ) : null;
@@ -300,7 +336,7 @@ export function VoucherBasicsForm({
                         )}
                     </div>
 
-                    <Advanced>{anchorSelectorSection}</Advanced>
+                    {anchorSelectorSection}
                 </div>
             </div>
         </Card>

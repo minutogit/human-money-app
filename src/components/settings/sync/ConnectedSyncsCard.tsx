@@ -57,6 +57,8 @@ export interface ConnectedSyncsCardProps {
     onFeedback: (feedback: SyncFeedback | null) => void;
     checkingPublicUrl: string | null;
     isDeletingPublicDrop: boolean;
+    deletePublicDropError?: string | null;
+    onClearDeletePublicDropError?: () => void;
 }
 
 /**
@@ -84,6 +86,8 @@ export const ConnectedSyncsCard: React.FC<ConnectedSyncsCardProps> = ({
     onFeedback,
     checkingPublicUrl,
     isDeletingPublicDrop,
+    deletePublicDropError = null,
+    onClearDeletePublicDropError,
 }) => {
     const { t } = useTranslation();
     const [pendingPublicDelete, setPendingPublicDelete] = useState<StoredPublicSync | null>(null);
@@ -335,6 +339,7 @@ export const ConnectedSyncsCard: React.FC<ConnectedSyncsCardProps> = ({
                                             <button
                                                 type="button"
                                                 onClick={() => {
+                                                    onClearDeletePublicDropError?.();
                                                     setDeletePublicRemoteData(true);
                                                     setPendingPublicDelete(drop);
                                                 }}
@@ -404,11 +409,23 @@ export const ConnectedSyncsCard: React.FC<ConnectedSyncsCardProps> = ({
                             <input
                                 type="checkbox"
                                 checked={deletePublicRemoteData}
-                                onChange={(e) => setDeletePublicRemoteData(e.target.checked)}
+                                onChange={(e) => {
+                                    onClearDeletePublicDropError?.();
+                                    setDeletePublicRemoteData(e.target.checked);
+                                }}
                                 className="mt-0.5 rounded border-theme-subtle text-theme-primary focus:ring-theme-primary"
                             />
                             <span>{t('settings.syncPublicDeleteRemoteLabel')}</span>
                         </label>
+                        {deletePublicDropError && (
+                            <div
+                                data-testid="public-sync-delete-error"
+                                className="p-2.5 rounded-lg border border-rose-200 bg-rose-50 text-rose-800 text-xs flex items-start gap-2"
+                            >
+                                <AlertTriangle size={14} className="shrink-0 mt-0.5 text-rose-600" />
+                                <span>{deletePublicDropError}</span>
+                            </div>
+                        )}
                     </div>
                 }
                 confirmVariant="danger"
@@ -416,7 +433,10 @@ export const ConnectedSyncsCard: React.FC<ConnectedSyncsCardProps> = ({
                 isProcessing={isDeletingPublicDrop}
                 onConfirm={handleConfirmDelete}
                 onCancel={() => {
-                    if (!isDeletingPublicDrop) setPendingPublicDelete(null);
+                    if (!isDeletingPublicDrop) {
+                        onClearDeletePublicDropError?.();
+                        setPendingPublicDelete(null);
+                    }
                 }}
             />
         </div>

@@ -5,7 +5,8 @@ import { Button } from "../ui/Button";
 import { useSession } from "../../context/SessionContext";
 import { protectCommandOptions } from "../../services/commandPolicy";
 import { ConfirmationModal } from "../ui/ConfirmationModal";
-import { translateError } from "../../utils/errorHelper";
+import { ModalShell } from "../ui/ModalShell";
+import { isBackendError, translateError } from "../../utils/errorHelper";
 import { PageLayout } from "../ui/PageLayout";
 import { AlertBanner } from "../ui/AlertBanner";
 import { useOptionalNavigation } from "../../context/NavigationContext";
@@ -15,7 +16,8 @@ import {
     Clock,
     AlertCircle,
     Lock, 
-    PlusCircle
+    PlusCircle,
+    WifiOff
 } from "lucide-react";
 
 import type { VoucherDetails } from "../../types";
@@ -40,6 +42,7 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
         validityValue,
         validityUnit,
         nonRedeemable,
+        allowOfflineOnly,
         identity,
         isLoading,
         coordWarning,
@@ -49,6 +52,7 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
         setValidityValue,
         setValidityUnit,
         setNonRedeemable,
+        setAllowOfflineOnly,
         setIdentity,
         handleStandardChange,
         handleLoadProfile,
@@ -61,6 +65,7 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
     const [feedback, setFeedback] = useState<{ type: 'error' | 'success', msg: string } | null>(null);
     const [showConfirm, setShowConfirm] = useState(false);
     const [showTestVoucherWarning, setShowTestVoucherWarning] = useState(false);
+    const [showL2UnavailableModal, setShowL2UnavailableModal] = useState(false);
 
     const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -78,6 +83,7 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
         firstName: t('voucher.create.firstName'),
         lastName: t('voucher.create.lastName'),
         gender: t('profile.gender'),
+        offlineOnlyConfirm: t('voucher.basics.l2ConfirmOfflineOnlyShort'),
     };
 
     // Helper to generate missing field names string
@@ -94,6 +100,7 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
     const firstNameRef = useRef<HTMLInputElement>(null);
     const lastNameRef = useRef<HTMLInputElement>(null);
     const genderRef = useRef<HTMLSelectElement>(null);
+    const offlineOnlyConfirmRef = useRef<HTMLInputElement>(null);
 
     const requiresGender = standardRequiresCreatorGender(parsedStandard);
 
@@ -110,6 +117,9 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
             } else if (currentErrors.amount) {
                 amountRef.current?.focus();
                 amountRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            } else if (currentErrors.offlineOnlyConfirm) {
+                offlineOnlyConfirmRef.current?.focus();
+                offlineOnlyConfirmRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
             } else if (currentErrors.firstName) {
                 firstNameRef.current?.focus();
                 firstNameRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -127,10 +137,11 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
         setShowConfirm(true);
     };
 
-    async function executeCreation() {
+    async function executeCreation(forceAllowOfflineOnly = false) {
         setIsLoading(true);
+        setShowL2UnavailableModal(false);
         const selectedStandard = standards.find(s => s.id === selectedStandardId)!;
-        const voucherData = prepareVoucherData();
+        const voucherData = prepareVoucherData(forceAllowOfflineOnly ? true : undefined);
         
         try {
             let created: VoucherDetails | undefined;
@@ -146,8 +157,13 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
                 }
             }, 800);
         } catch (e) {
-            setFeedback({type: 'error', msg: t('voucher.create.failed', { error: translateError(e, t) })});
-            setShowConfirm(false);
+            if (!forceAllowOfflineOnly && isBackendError(e) && e.code === 'error.voucher.l2AnchorUnavailable') {
+                setShowConfirm(false);
+                setShowL2UnavailableModal(true);
+            } else {
+                setFeedback({type: 'error', msg: t('voucher.create.failed', { error: translateError(e, t) })});
+                setShowConfirm(false);
+            }
         } finally {
             setIsLoading(false);
         }
@@ -180,6 +196,9 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
                             if (val) setNonRedeemable(true);
                             else setShowTestVoucherWarning(true);
                         }}
+                        allowOfflineOnly={allowOfflineOnly}
+                        onAllowOfflineOnlyChange={setAllowOfflineOnly}
+                        offlineOnlyConfirmRef={offlineOnlyConfirmRef}
                         isLoading={isLoading}
                         errors={errors}
                         standardRef={standardRef}
@@ -252,9 +271,61 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
                     </div>
                 }
                 confirmText={t('voucher.create')}
-                onConfirm={executeCreation}
+                onConfirm={() => void executeCreation(false)}
                 onCancel={() => setShowConfirm(false)}
                 isProcessing={isLoading}
+            />
+
+            <ModalShell
+                isOpen={showL2UnavailableModal}
+                onClose={isLoading ? undefined : () => setShowL2UnavailableModal(false)}
+                closeOnBackdrop={false}
+                maxWidth="md"
+                title={
+                    <h2 className="text-xl font-bold text-theme-primary mb-2">
+                        {t('voucher.create.l2UnavailableTitle')}
+                    </h2>
+                }
+                description={
+                    <div className="space-y-3 pt-1">
+                        <div className="p-4 bg-amber-50 border border-amber-200 rounded-2xl flex items-start gap-3">
+                            <WifiOff size={20} className="text-amber-600 shrink-0 mt-0.5" />
+                            <p className="text-sm font-medium text-amber-900 leading-relaxed">
+                                {t('voucher.create.l2UnavailableDesc')}
+                            </p>
+                        </div>
+                    </div>
+                }
+                footer={
+                    <div className="flex flex-col sm:flex-row gap-2">
+                        <Button
+                            variant="secondary"
+                            onClick={() => setShowL2UnavailableModal(false)}
+                            disabled={isLoading}
+                            className="sm:flex-1"
+                        >
+                            {t('common.cancel')}
+                        </Button>
+                        <Button
+                            variant="primary"
+                            data-testid="l2-unavailable-retry-btn"
+                            onClick={() => void executeCreation(false)}
+                            disabled={isLoading}
+                            className="sm:flex-1"
+                        >
+                            {t('common.retry')}
+                        </Button>
+                        <Button
+                            variant="danger"
+                            data-testid="l2-unavailable-offline-btn"
+                            onClick={() => void executeCreation(true)}
+                            disabled={isLoading}
+                            className="sm:flex-1"
+                        >
+                            {t('voucher.create.issueOfflineOnly')}
+                        </Button>
+                    </div>
+                }
             />
 
             <ConfirmationModal

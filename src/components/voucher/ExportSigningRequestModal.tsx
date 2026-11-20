@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { voucherService, SigningRequestConfig } from "../../services/voucherService";
 import { postService } from "../../services/postService";
@@ -45,9 +45,27 @@ export function ExportSigningRequestModal({
     const [showExportPassword, setShowExportPassword] = useState(false);
     const [isExporting, setIsExporting] = useState(false);
     const [isSendingViaPost, setIsSendingViaPost] = useState(false);
+    const [isResolvingCard, setIsResolvingCard] = useState(false);
     const [postSuccessMsg, setPostSuccessMsg] = useState("");
     const [exportError, setExportError] = useState("");
     const [availableContacts, setAvailableContacts] = useState<Contact[]>(contacts || []);
+    const isMountedRef = useRef(true);
+    const cardResolveGenRef = useRef(0);
+
+    useEffect(() => {
+        isMountedRef.current = true;
+        return () => {
+            isMountedRef.current = false;
+            cardResolveGenRef.current += 1;
+        };
+    }, []);
+
+    useEffect(() => {
+        if (!isOpen) {
+            cardResolveGenRef.current += 1;
+            setIsResolvingCard(false);
+        }
+    }, [isOpen]);
 
     useEffect(() => {
         if (contacts && contacts.length > 0) {
@@ -69,7 +87,7 @@ export function ExportSigningRequestModal({
     };
 
     const handleExportSigningRequest = async () => {
-        if (!voucherId) return;
+        if (!voucherId || isResolvingCard) return;
         setIsExporting(true);
         setExportError("");
         try {
@@ -144,7 +162,7 @@ export function ExportSigningRequestModal({
     };
 
     const handleSendSigningRequestViaPost = async () => {
-        if (!voucherId) return;
+        if (!voucherId || isResolvingCard) return;
         let normalizedDid: string | null = null;
         try {
             normalizedDid = await resolveTargetRecipientId(recipientId);
@@ -192,6 +210,8 @@ export function ExportSigningRequestModal({
     };
 
     const resetAndClose = () => {
+        cardResolveGenRef.current += 1;
+        setIsResolvingCard(false);
         setRecipientId("");
         setExportPassword("");
         setExportPasswordConfirm("");
@@ -230,7 +250,12 @@ export function ExportSigningRequestModal({
                                         className="w-full px-4 py-2.5 border border-theme-subtle rounded-xl bg-bg-input text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary/20 text-xs font-semibold"
                                         value={availableContacts.some(c => c.did === recipientId) ? recipientId : ""}
                                         onChange={(e) => {
-                                            if (e.target.value) setRecipientId(e.target.value);
+                                            if (e.target.value) {
+                                                cardResolveGenRef.current += 1;
+                                                setIsResolvingCard(false);
+                                                setExportError("");
+                                                setRecipientId(e.target.value);
+                                            }
                                         }}
                                     >
                                         <option value="">{t('voucher.export.chooseContactPlaceholder')}</option>
@@ -254,16 +279,34 @@ export function ExportSigningRequestModal({
                                         const rawVal = e.target.value;
                                         const parsed = parseHumocoInput(rawVal);
                                         if (parsed?.kind === 'card') {
+                                            const resolveGen = ++cardResolveGenRef.current;
                                             setRecipientId(rawVal);
+                                            setIsResolvingCard(true);
+                                            setExportError("");
                                             void marketService
                                                 .resolveCardRecipient(parsed.payload)
                                                 .then((resolved) => {
+                                                    if (!isMountedRef.current || cardResolveGenRef.current !== resolveGen) {
+                                                        return;
+                                                    }
                                                     setExportError("");
                                                     setRecipientId(resolved.recipientId);
                                                 })
-                                                .catch((err) => setExportError(translateError(err, t)));
+                                                .catch((err) => {
+                                                    if (!isMountedRef.current || cardResolveGenRef.current !== resolveGen) {
+                                                        return;
+                                                    }
+                                                    setExportError(translateError(err, t));
+                                                })
+                                                .finally(() => {
+                                                    if (isMountedRef.current && cardResolveGenRef.current === resolveGen) {
+                                                        setIsResolvingCard(false);
+                                                    }
+                                                });
                                             return;
                                         }
+                                        cardResolveGenRef.current += 1;
+                                        setIsResolvingCard(false);
                                         const normalized = normalizeUserIdInput(rawVal);
                                         setRecipientId(normalized ?? rawVal);
                                     }}
@@ -277,7 +320,7 @@ export function ExportSigningRequestModal({
                                 <Button
                                     type="button"
                                     variant="primary"
-                                    disabled={!recipientId.trim() || isSendingViaPost || isExporting}
+                                    disabled={!recipientId.trim() || isResolvingCard || isSendingViaPost || isExporting}
                                     onClick={handleSendSigningRequestViaPost}
                                     data-testid="send-signing-request-post-button"
                                     className="w-full gap-2 text-xs font-bold py-3 rounded-xl shadow-sm"
@@ -355,6 +398,7 @@ export function ExportSigningRequestModal({
             onConfirm={handleExportSigningRequest}
             onCancel={resetAndClose}
             isProcessing={isExporting}
+            confirmDisabled={isResolvingCard}
         />
     );
 }

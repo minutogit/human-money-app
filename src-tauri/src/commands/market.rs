@@ -34,11 +34,10 @@ pub fn save_my_market_profile(
 #[tauri::command]
 pub async fn set_card_published(
     published: bool,
-    delete_remote: bool,
     password: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<FrontendMyMarketProfile, FrontendError> {
-    set_card_published_impl(published, delete_remote, password, &state).await
+    set_card_published_impl(published, password, &state).await
 }
 
 #[tauri::command]

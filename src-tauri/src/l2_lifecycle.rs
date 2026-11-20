@@ -4,7 +4,7 @@
 //! - Periodic server health checks with 5-day hysteresis (immediate on `SyncRevocationNotice` / `410`).
 //! - Crash-resumable 3-phase committee rotation (`propose` -> `fetch_snapshot`/`import` -> `commit`/`finalize`).
 //! - Automatic guarantor vetoing of unauthorized or protection-reducing proposals during timelock.
-//! - Regular L1 `Tx_claim` at guarantors and L1 `DeadQuorumSwap` emergency exchange commands (§5.7).
+//! - Regular L1 `Tx_claim` at guarantors (§5.7).
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
@@ -276,24 +276,28 @@ pub(crate) enum ServerProbeOutcome {
     Revoked,
 }
 
-/// Pure decision helper classifying a server's `/info` response into healthy, unhealthy, or revoked.
+/// Pure decision helper classifying a server's `/info` response into healthy, unhealthy, or revoked
+/// strictly against the expected manifest operator/lock identity (`admin_pub` and `lock_pub`).
 pub(crate) fn classify_server_probe_info(
     info: &sync_client::SyncServerInfo,
     expected_lock_hex: &str,
+    expected_admin_hex: &str,
     now_secs: u64,
 ) -> ServerProbeOutcome {
     let revoked = info.revocation.as_ref().is_some_and(|rev| {
-        sync_client::verify_revocation_notice(rev, &info.drop_pub).is_ok()
+        sync_client::verify_revocation_notice(rev, expected_admin_hex).is_ok()
             && rev.effective_at <= now_secs
     });
     if revoked {
         return ServerProbeOutcome::Revoked;
     }
-    let lock_matches = info
-        .lock
-        .as_ref()
-        .is_some_and(|l| l.lock_pub.trim().eq_ignore_ascii_case(expected_lock_hex));
-    if lock_matches {
+    let healthy = info.lock.as_ref().is_some_and(|l| {
+        l.lock_pub.trim().eq_ignore_ascii_case(expected_lock_hex)
+            && l.delegation.as_ref().is_some_and(|d| {
+                sync_client::verify_lock_delegation(expected_lock_hex, d, Some(expected_admin_hex))
+            })
+    });
+    if healthy {
         ServerProbeOutcome::Healthy
     } else {
         ServerProbeOutcome::Unhealthy
@@ -301,23 +305,21 @@ pub(crate) fn classify_server_probe_info(
 }
 
 /// Validates a signed same-`lock_pub` relocation notice and replacement probe, updating `probe_cache`
-/// without revoking `expected_srv.lock_pub`.
+/// without revoking `expected_srv.lock_pub`, and returning the normalized verified probe on update.
 pub(crate) fn try_apply_relocation_from_notice(
     probe_cache: &mut BTreeMap<String, FrontendLockServerProbeResult>,
     expected_srv: &ServerEntry,
     notice: &SyncRevocationNotice,
     replacement_probe: FrontendLockServerProbeResult,
-) -> bool {
+) -> Option<FrontendLockServerProbeResult> {
     let admin_hex = hex::encode(expected_srv.admin_pub);
     let lock_hex = hex::encode(expected_srv.lock_pub);
     if sync_client::verify_revocation_notice(notice, &admin_hex).is_err() {
-        return false;
+        return None;
     }
-    let Some(ref rep) = notice.replacement else {
-        return false;
-    };
+    let rep = notice.replacement.as_ref()?;
     if !replacement_probe.delegation_valid || !replacement_probe.passed {
-        return false;
+        return None;
     }
     if !replacement_probe
         .lock_pub
@@ -328,7 +330,7 @@ pub(crate) fn try_apply_relocation_from_notice(
             .trim()
             .eq_ignore_ascii_case(&admin_hex)
     {
-        return false;
+        return None;
     }
     let rep_w = normalize_sync_url(&rep.write_url);
     let rep_r = normalize_sync_url(&rep.read_url);
@@ -337,14 +339,18 @@ pub(crate) fn try_apply_relocation_from_notice(
         || normalize_sync_url(&replacement_probe.write_url) != rep_w
         || normalize_sync_url(&replacement_probe.read_url) != rep_r
     {
-        return false;
+        return None;
     }
     if !replacement_probe.delegation.as_ref().is_none_or(|d| {
         normalize_sync_url(&d.write_url) == rep_w && normalize_sync_url(&d.read_url) == rep_r
     }) {
-        return false;
+        return None;
     }
-    upsert_verified_lock_probe(probe_cache, replacement_probe)
+    if upsert_verified_lock_probe(probe_cache, replacement_probe) {
+        probe_cache.get(&lock_hex).cloned()
+    } else {
+        None
+    }
 }
 
 pub(crate) async fn try_follow_relocation_notice(
@@ -352,21 +358,19 @@ pub(crate) async fn try_follow_relocation_notice(
     probe_cache: &mut BTreeMap<String, FrontendLockServerProbeResult>,
     expected_srv: &ServerEntry,
     notice: &SyncRevocationNotice,
-) -> bool {
+) -> Option<FrontendLockServerProbeResult> {
     let admin_hex = hex::encode(expected_srv.admin_pub);
     if sync_client::verify_revocation_notice(notice, &admin_hex).is_err() {
-        return false;
+        return None;
     }
-    let Some(ref rep) = notice.replacement else {
-        return false;
-    };
+    let rep = notice.replacement.as_ref()?;
     let Ok(rep_probe) = tokio::time::timeout(
         std::time::Duration::from_secs(3),
         sync_client::probe_lock_server(client, &rep.write_url, Some(&admin_hex)),
     )
     .await
     else {
-        return false;
+        return None;
     };
     try_apply_relocation_from_notice(probe_cache, expected_srv, notice, rep_probe)
 }
@@ -1761,7 +1765,7 @@ pub(crate) async fn run_lifecycle_tick_with_now(
         // Probe health of every server in manifest.servers (relocation-aware)
         let mut unhealthy_now: HashSet<String> = HashSet::new();
         let mut revoked_now: HashSet<String> = HashSet::new();
-        let mut probe_cache_dirty = false;
+        let mut probe_cache_deltas: Vec<FrontendLockServerProbeResult> = Vec::new();
         let mut last_creator_activity_secs = manifest.issued_at_ms / 1_000;
 
         for srv in &manifest.servers {
@@ -1776,7 +1780,7 @@ pub(crate) async fn run_lifecycle_tick_with_now(
             match sync_client::fetch_sync_info(client, &active_write_url).await {
                 Ok(info) => {
                     if let Some(ref rev) = info.revocation {
-                        if try_follow_relocation_notice(
+                        if let Some(relocated_probe) = try_follow_relocation_notice(
                             client,
                             &mut internal_lc.l2_probe_cache,
                             srv,
@@ -1784,11 +1788,12 @@ pub(crate) async fn run_lifecycle_tick_with_now(
                         )
                         .await
                         {
-                            probe_cache_dirty = true;
+                            probe_cache_deltas.push(relocated_probe);
                             active_write_url =
                                 resolve_server_locator(srv, &internal_lc.l2_probe_cache).0;
                         } else {
-                            match classify_server_probe_info(&info, &lock_hex, now_secs) {
+                            match classify_server_probe_info(&info, &lock_hex, &admin_hex, now_secs)
+                            {
                                 ServerProbeOutcome::Healthy => {}
                                 ServerProbeOutcome::Unhealthy => {
                                     unhealthy_now.insert(lock_hex.clone());
@@ -1799,7 +1804,7 @@ pub(crate) async fn run_lifecycle_tick_with_now(
                             }
                         }
                     } else {
-                        match classify_server_probe_info(&info, &lock_hex, now_secs) {
+                        match classify_server_probe_info(&info, &lock_hex, &admin_hex, now_secs) {
                             ServerProbeOutcome::Healthy => {
                                 if let Some(ref lock_info) = info.lock {
                                     if let Some(ref del) = lock_info.delegation {
@@ -1816,7 +1821,8 @@ pub(crate) async fn run_lifecycle_tick_with_now(
                                                 .map(|d| d.issued_at)
                                                 .unwrap_or(0);
                                             if del.issued_at > cur_cached
-                                                && sync_client::is_valid_delegation_url(target_url)
+                                                && sync_client::validate_sync_url(target_url)
+                                                    .is_ok()
                                             {
                                                 let updated_probe = sync_client::probe_lock_server(
                                                     client,
@@ -1826,9 +1832,9 @@ pub(crate) async fn run_lifecycle_tick_with_now(
                                                 .await;
                                                 if upsert_verified_lock_probe(
                                                     &mut internal_lc.l2_probe_cache,
-                                                    updated_probe,
+                                                    updated_probe.clone(),
                                                 ) {
-                                                    probe_cache_dirty = true;
+                                                    probe_cache_deltas.push(updated_probe);
                                                 }
                                             }
                                         }
@@ -1861,11 +1867,13 @@ pub(crate) async fn run_lifecycle_tick_with_now(
             }
         }
 
-        if probe_cache_dirty {
-            let updated_cache = internal_lc.l2_probe_cache.clone();
+        if !probe_cache_deltas.is_empty() {
             let _ = state.mutate_internal_lifecycle_for_session(session, password, |lc| {
-                lc.l2_probe_cache = updated_cache;
-                true
+                let mut changed = false;
+                for probe in probe_cache_deltas {
+                    changed |= upsert_verified_lock_probe(&mut lc.l2_probe_cache, probe);
+                }
+                changed
             });
         }
 
@@ -2102,15 +2110,9 @@ mod tests {
     use human_money_core::{
         humoco_proto::{
             encode_quarter, types::LockReceipt, AnchorAuthority, GenesisTicket, MigrationCert,
-            ProposalInitiator, DEAD_QUORUM_CLAIM_WINDOW_SECS,
+            ProposalInitiator,
         },
-        services::{
-            dead_quorum_swap::{
-                adjudicate_dead_quorum_claims, solve_swap_ticket_pow, DeadQuorumClaimSubmission,
-                DeadQuorumSwapOffer,
-            },
-            l2_gateway, l2_rotation,
-        },
+        services::{l2_gateway, l2_rotation},
         test_utils::{self, ACTORS},
     };
     use humoco_market::{own_envelope, render_wire, sign_sd_card, DropDescriptor, WireFilter};
@@ -3105,7 +3107,18 @@ mod tests {
                            sk: SigningKey,
                            stop_flag: Arc<AtomicBool>| {
             tokio::spawn(async move {
+                let port = listener.local_addr().unwrap().port();
+                let write_url = format!("http://127.0.0.1:{}/sync.php", port);
+                let read_url = format!("http://127.0.0.1:{}/d", port);
                 let lock_hex = hex::encode(sk.verifying_key().to_bytes());
+                let del_msg = humoco_market::format_lock_delegate_signature_message(
+                    &lock_hex,
+                    &lock_hex,
+                    &write_url,
+                    &read_url,
+                    1_760_000_000,
+                );
+                let del_sig = hex::encode(sk.sign(del_msg.as_bytes()).to_bytes());
                 loop {
                     let accept = tokio::time::timeout(
                         std::time::Duration::from_millis(40),
@@ -3131,12 +3144,20 @@ mod tests {
                     let resp = if path.contains("info") {
                         serde_json::json!({
                             "drop_pub": lock_hex,
-                            "read_url": "http://127.0.0.1:9/d",
+                            "read_url": read_url,
                             "revocation": null,
                             "lock": {
                                 "lock_pub": lock_hex,
                                 "max_retention_quarter": 8159,
-                                "pow_base_bits": 0
+                                "pow_base_bits": 0,
+                                "delegation": {
+                                    "admin_pub": lock_hex,
+                                    "lock_pub": lock_hex,
+                                    "write_url": write_url,
+                                    "read_url": read_url,
+                                    "issued_at": 1_760_000_000u64,
+                                    "sig": del_sig
+                                }
                             }
                         })
                     } else if path.contains("lock_freeze") {
@@ -3209,7 +3230,7 @@ mod tests {
     }
 
     #[test]
-    fn test_guarantor_claim_bundle_and_dead_quorum_swap_roundtrip() {
+    fn test_guarantor_claim_bundle_roundtrip() {
         let dir_issuer = temp_dir("claim-issuer");
         let dir_guar = temp_dir("claim-guarantor");
         let dir_holder = temp_dir("claim-holder");
@@ -3248,8 +3269,7 @@ mod tests {
         let mut standards = std::collections::HashMap::new();
         standards.insert(std_def.immutable.identity.uuid.clone(), minuto_toml.clone());
 
-        let dead_anchor = [0xAAu8; 32];
-        let repl_anchor = [0xBBu8; 32];
+        let anchor_id = [0xAAu8; 32];
 
         // Create and sign a guaranteed voucher (Minuto requires additional signatures -> let's use Freetaler with optional guarantor signature so 1 guarantor suffices cleanly!)
         let (ft_def, _) = (*test_utils::FREETALER_STANDARD).clone();
@@ -3269,7 +3289,7 @@ mod tests {
         v_data.creator_profile.id = Some(issuer_id.clone());
         v_data.nominal_value.amount = "100.00".into();
         v_data.nominal_value.unit = ft_def.immutable.blueprint.unit.clone();
-        v_data.layer2_anchor = Some(dead_anchor);
+        v_data.layer2_anchor = Some(anchor_id);
         let voucher = svc_issuer
             .create_new_voucher(&ft_toml, v_data, Some(pw))
             .unwrap();
@@ -3303,7 +3323,7 @@ mod tests {
             )
             .unwrap();
         svc_issuer
-            .process_and_attach_signature(&detached, &ft_toml, None, Some(pw))
+            .process_and_attach_signature(&detached, &standards, None, Some(pw))
             .unwrap();
 
         // Issuer sends voucher to Holder
@@ -3331,62 +3351,7 @@ mod tests {
             .unwrap();
         let holder_local_id = recv_res.involved_vouchers[0].clone();
 
-        // 1. Holder submits DeadQuorumSwapOffer/Claim BEFORE claiming -> verify offer + claim pow!
-        let offer = svc_issuer
-            .with_wallet_and_identity(|_, id| {
-                DeadQuorumSwapOffer::create_and_sign(
-                    id,
-                    dead_anchor,
-                    repl_anchor,
-                    1_760_000_000,
-                    DEAD_QUORUM_CLAIM_WINDOW_SECS,
-                    4,
-                )
-            })
-            .unwrap()
-            .unwrap();
-        let v_for_claim = svc_holder
-            .with_wallet(|w| {
-                w.get_voucher_instance(&holder_local_id)
-                    .unwrap()
-                    .voucher
-                    .clone()
-            })
-            .unwrap();
-        let tip_id = v_for_claim.transactions.last().unwrap().t_id.clone();
-        let nonce = solve_swap_ticket_pow(
-            &offer.verify().unwrap(),
-            &v_for_claim.voucher_id,
-            &tip_id,
-            &holder_id,
-            4,
-            0,
-            100_000,
-        )
-        .unwrap();
-        let sub = DeadQuorumClaimSubmission {
-            voucher: v_for_claim,
-            claimant_did: holder_id.clone(),
-            quorum_certificates: vec![],
-            swap_pow_nonce: nonce,
-        };
-        let adj = svc_issuer
-            .with_wallet_and_identity(|_, id| {
-                adjudicate_dead_quorum_claims(
-                    &offer,
-                    None,
-                    &ft_def,
-                    &[sub],
-                    id,
-                    offer.claim_window_ends_at_secs + 1,
-                )
-            })
-            .unwrap()
-            .unwrap();
-        assert_eq!(adj.approved.len(), 1);
-        assert_eq!(adj.approved[0].approved_amount, "100.00");
-
-        // 2. Partial Tx_claim (40.00 of 100.00) directly at Guarantor Bob!
+        // Partial Tx_claim (40.00 of 100.00) directly at Guarantor Bob!
         let (claim_res, _) = svc_holder
             .create_guarantor_claim_bundle(
                 &holder_local_id,
@@ -3412,23 +3377,44 @@ mod tests {
     fn make_probe_info(
         lock_hex: &str,
         drop_pub_hex: &str,
+        admin_sk: &SigningKey,
         revocation: Option<SyncRevocationNotice>,
     ) -> sync_client::SyncServerInfo {
+        let admin_hex = hex::encode(admin_sk.verifying_key().as_bytes());
+        let lock_lower = lock_hex.trim().to_ascii_lowercase();
+        let write_u = "https://node.example/sync.php".to_string();
+        let read_u = "https://node.example/d".to_string();
+        let issued_at = 1_759_000_000u64;
+        let del_msg = humoco_market::format_lock_delegate_signature_message(
+            &admin_hex,
+            &lock_lower,
+            &write_u,
+            &read_u,
+            issued_at,
+        );
         sync_client::SyncServerInfo {
             drop_pub: drop_pub_hex.to_string(),
-            read_url: "https://node.example/d".to_string(),
+            read_url: read_u.clone(),
             register_url: None,
             channels: vec![],
             revocation,
             lock: Some(sync_client::SyncLockInfoDto {
                 lock_pub: lock_hex.to_string(),
-                delegation: None,
+                delegation: Some(sync_client::SyncLockDelegationDto {
+                    admin_pub: admin_hex,
+                    lock_pub: lock_lower,
+                    write_url: write_u,
+                    read_url: read_u,
+                    issued_at,
+                    sig: hex::encode(admin_sk.sign(del_msg.as_bytes()).to_bytes()),
+                }),
                 max_retention_quarter: 8159,
                 max_inodes: 1000,
                 used_inodes: 10,
                 inode_warning: false,
                 pow_base_bits: 0,
                 allow_pow_tickets: true,
+                ticket_pow_bits: 16,
                 selftest: None,
             }),
         }
@@ -3476,31 +3462,31 @@ mod tests {
 
         let now0 = 1_760_000_000u64;
 
-        // 1. Classify probe info: healthy, mismatched lock_pub, missing lock, future/invalid/active revocation
-        let healthy_info = make_probe_info(&s1_hex.to_uppercase(), &s1_hex, None);
+        // 1. Classify probe info: healthy, mismatched lock_pub, missing lock, future/invalid/forged/active revocation
+        let healthy_info = make_probe_info(&s1_hex.to_uppercase(), &s1_hex, &s1_sk, None);
         assert_eq!(
-            classify_server_probe_info(&healthy_info, &s1_hex, now0),
+            classify_server_probe_info(&healthy_info, &s1_hex, &s1_hex, now0),
             ServerProbeOutcome::Healthy
         );
 
-        let mismatched_info = make_probe_info(&wrong_hex, &s1_hex, None);
+        let mismatched_info = make_probe_info(&wrong_hex, &s1_hex, &s1_sk, None);
         assert_eq!(
-            classify_server_probe_info(&mismatched_info, &s1_hex, now0),
+            classify_server_probe_info(&mismatched_info, &s1_hex, &s1_hex, now0),
             ServerProbeOutcome::Unhealthy
         );
 
-        let mut no_lock_info = make_probe_info(&s1_hex, &s1_hex, None);
+        let mut no_lock_info = make_probe_info(&s1_hex, &s1_hex, &s1_sk, None);
         no_lock_info.lock = None;
         assert_eq!(
-            classify_server_probe_info(&no_lock_info, &s1_hex, now0),
+            classify_server_probe_info(&no_lock_info, &s1_hex, &s1_hex, now0),
             ServerProbeOutcome::Unhealthy
         );
 
         let future_rev =
             sync_client::sign_revocation_notice(&s1_sk, now0, now0 + 600, None, None).unwrap();
-        let future_rev_info = make_probe_info(&s1_hex, &s1_hex, Some(future_rev));
+        let future_rev_info = make_probe_info(&s1_hex, &s1_hex, &s1_sk, Some(future_rev));
         assert_eq!(
-            classify_server_probe_info(&future_rev_info, &s1_hex, now0),
+            classify_server_probe_info(&future_rev_info, &s1_hex, &s1_hex, now0),
             ServerProbeOutcome::Healthy,
             "future revocation notice must not trigger early revocation"
         );
@@ -3508,19 +3494,31 @@ mod tests {
         let mut forged_rev =
             sync_client::sign_revocation_notice(&s2_sk, now0, now0, None, None).unwrap();
         forged_rev.drop_pub = s1_hex.clone();
-        let forged_rev_info = make_probe_info(&s1_hex, &s1_hex, Some(forged_rev));
+        let forged_rev_info = make_probe_info(&s1_hex, &s1_hex, &s1_sk, Some(forged_rev));
         assert_eq!(
-            classify_server_probe_info(&forged_rev_info, &s1_hex, now0),
+            classify_server_probe_info(&forged_rev_info, &s1_hex, &s1_hex, now0),
             ServerProbeOutcome::Healthy,
             "forged revocation notice must be ignored"
+        );
+
+        // H8 regression guard: attacker hijacks domain, advertises own drop_pub & self-signed revocation
+        let s2_hex = hex::encode(s2_sk.verifying_key().as_bytes());
+        let attacker_self_rev =
+            sync_client::sign_revocation_notice(&s2_sk, now0, now0, Some("hijack".into()), None)
+                .unwrap();
+        let hijacked_info = make_probe_info(&s2_hex, &s2_hex, &s2_sk, Some(attacker_self_rev));
+        assert_eq!(
+            classify_server_probe_info(&hijacked_info, &s1_hex, &s1_hex, now0),
+            ServerProbeOutcome::Unhealthy,
+            "self-signed revocation under foreign drop_pub must never mark expected server as Revoked"
         );
 
         let active_rev =
             sync_client::sign_revocation_notice(&s1_sk, now0, now0, Some("eol".into()), None)
                 .unwrap();
-        let active_rev_info = make_probe_info(&s1_hex, &s1_hex, Some(active_rev.clone()));
+        let active_rev_info = make_probe_info(&s1_hex, &s1_hex, &s1_sk, Some(active_rev.clone()));
         assert_eq!(
-            classify_server_probe_info(&active_rev_info, &s1_hex, now0),
+            classify_server_probe_info(&active_rev_info, &s1_hex, &s1_hex, now0),
             ServerProbeOutcome::Revoked
         );
 
@@ -3699,6 +3697,7 @@ mod tests {
                 max_retention_quarter: manifest.retain_until_quarter,
                 pow_base_bits: 0,
                 allow_pow_tickets: true,
+                ticket_pow_bits: 16,
                 inode_warning: false,
                 used_inodes: 0,
                 max_inodes: 1000,
@@ -4044,6 +4043,7 @@ mod tests {
             max_retention_quarter,
             pow_base_bits: 16,
             allow_pow_tickets: false,
+            ticket_pow_bits: 16,
             inode_warning: false,
             used_inodes: 0,
             max_inodes: 50_000,
@@ -4130,7 +4130,8 @@ mod tests {
         );
         assert!(try_apply_relocation_from_notice(
             &mut cache, &entry, &notice, p_moved2
-        ));
+        )
+        .is_some());
         assert_eq!(
             resolve_server_locator(&entry, &cache),
             (
@@ -4479,6 +4480,78 @@ mod tests {
         let _ = h2.await;
         let _ = h3.await;
         let _ = h4.await;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_h7_delta_probe_merge_preserves_concurrent_cache_entries() {
+        let dir = temp_dir("h7_delta_merge");
+        let pw = "pw";
+        let (mut svc, _) = test_utils::setup_service_with_profile(&dir, &ACTORS.alice, "Alice", pw);
+        svc.unlock_session(pw, 600).unwrap();
+        let state = AppState::new(svc);
+        let session = {
+            let s = state.service.lock().unwrap();
+            state.session_token_for_service(&s).unwrap()
+        };
+
+        let s1_admin = SigningKey::from_bytes(&[31u8; 32]);
+        let s1_lock = SigningKey::from_bytes(&[32u8; 32]);
+        let s2_admin = SigningKey::from_bytes(&[33u8; 32]);
+        let s2_lock = SigningKey::from_bytes(&[34u8; 32]);
+
+        let p1 = make_signed_probe_result(
+            &s1_admin,
+            &s1_lock,
+            "https://s1.example/sync.php",
+            "https://s1.example/d",
+            100,
+            8159,
+        );
+        let p2 = make_signed_probe_result(
+            &s2_admin,
+            &s2_lock,
+            "https://s2.example/sync.php",
+            "https://s2.example/d",
+            200,
+            8159,
+        );
+        let p2_key = p2.lock_pub.clone();
+
+        state
+            .mutate_internal_lifecycle_for_session(&session, Some(pw), |lc| {
+                upsert_verified_lock_probe(&mut lc.l2_probe_cache, p1.clone())
+            })
+            .unwrap();
+        state
+            .mutate_internal_lifecycle_for_session(&session, Some(pw), |lc| {
+                upsert_verified_lock_probe(&mut lc.l2_probe_cache, p2.clone())
+            })
+            .unwrap();
+
+        let p1_newer = make_signed_probe_result(
+            &s1_admin,
+            &s1_lock,
+            "https://s1-new.example/sync.php",
+            "https://s1-new.example/d",
+            300,
+            8159,
+        );
+        state
+            .mutate_internal_lifecycle_for_session(&session, Some(pw), |lc| {
+                upsert_verified_lock_probe(&mut lc.l2_probe_cache, p1_newer.clone())
+            })
+            .unwrap();
+
+        let lc = {
+            let mut s = state.service.lock().unwrap();
+            state.load_internal_lifecycle(&mut s, Some(pw)).unwrap()
+        };
+        assert!(lc.l2_probe_cache.contains_key(&p2_key), "H7: concurrent cache entry S2 preserved");
+        assert_eq!(
+            lc.l2_probe_cache.get(&p1.lock_pub).unwrap().write_url,
+            "https://s1-new.example/sync.php"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

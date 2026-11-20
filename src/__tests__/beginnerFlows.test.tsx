@@ -119,7 +119,6 @@ function createBeginnerConfig(backupSyncFolder: string | null = '/fake/backup/pa
             backupDirty: false,
             lastBackupAt: null,
             lastSyncBackupAt: null,
-            l2ProbeCache: {},
         },
     };
 }

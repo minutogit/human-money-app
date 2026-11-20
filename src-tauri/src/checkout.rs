@@ -1101,8 +1101,8 @@ async fn resolve_manifest_upgrade_after_dispatch(
     let now_secs = sync_client::current_unix_timestamp();
     if !dispatch.revoked_notices.is_empty() {
         let mut relocated_lock_pubs: HashSet<LockPubKey> = HashSet::new();
-        let mut updated_cache = lifecycle.l2_probe_cache.clone();
-        let mut cache_changed = false;
+        let mut scratch_cache = lifecycle.l2_probe_cache.clone();
+        let mut probe_cache_deltas = Vec::new();
         for (lock_pub, notice) in &dispatch.revoked_notices {
             if notice.replacement.is_some() {
                 if let Some(expected_srv) = current_manifest
@@ -1110,24 +1110,30 @@ async fn resolve_manifest_upgrade_after_dispatch(
                     .iter()
                     .find(|s| s.lock_pub == *lock_pub)
                 {
-                    if crate::l2_lifecycle::try_follow_relocation_notice(
+                    if let Some(probe) = crate::l2_lifecycle::try_follow_relocation_notice(
                         client,
-                        &mut updated_cache,
+                        &mut scratch_cache,
                         expected_srv,
                         notice,
                     )
                     .await
                     {
                         relocated_lock_pubs.insert(*lock_pub);
-                        cache_changed = true;
+                        probe_cache_deltas.push(probe);
                     }
                 }
             }
         }
-        if cache_changed {
+        if !probe_cache_deltas.is_empty() {
             let _ = state.mutate_internal_lifecycle_for_session(session, password, |lc| {
-                lc.l2_probe_cache = updated_cache;
-                true
+                let mut changed = false;
+                for probe in probe_cache_deltas {
+                    changed |= crate::services::common::upsert_verified_lock_probe(
+                        &mut lc.l2_probe_cache,
+                        probe,
+                    );
+                }
+                changed
             });
         }
         let _ = state.with_session(session, |service| {
@@ -2041,6 +2047,7 @@ mod tests {
                         max_retention_quarter: retain_q,
                         pow_base_bits: DEFAULT_LOCK_POW_BASE_BITS,
                         allow_pow_tickets: true,
+                        ticket_pow_bits: 16,
                         inode_warning: false,
                         used_inodes: 0,
                         max_inodes: 50000,

@@ -224,41 +224,6 @@ export function classifyHumocoFile(input: ClassifyHumocoFileInput): HumocoFileCl
     return { kind: 'unknown', source: 'unknown' };
 }
 
-/**
- * Extracts `voucher_id` from an unencrypted `DetachedSignature` container payload
- * to aid standard matching before verification.
- */
-export function extractDetachedSignatureVoucherId(
-    fileData: Uint8Array | number[],
-): string | null {
-    const jsonStr = decodeUtf8Text(fileData);
-    if (!jsonStr) return null;
-
-    try {
-        const container = JSON.parse(jsonStr) as {
-            ciphertext?: unknown;
-            recipients?: unknown;
-        };
-        if (
-            typeof container.ciphertext === 'string' &&
-            (!Array.isArray(container.recipients) || container.recipients.length === 0)
-        ) {
-            const base64 = container.ciphertext.replace(/-/g, '+').replace(/_/g, '/');
-            const payloadStr = window.atob(base64);
-            const sigObj = JSON.parse(payloadStr) as {
-                Signature?: { voucher_id?: unknown };
-            };
-            const inner = sigObj.Signature;
-            if (inner && typeof inner.voucher_id === 'string') {
-                return inner.voucher_id;
-            }
-        }
-    } catch {
-        // Ciphertext may be encrypted or non-JSON; ignore safely.
-    }
-    return null;
-}
-
 export function isReceiveImportKind(kind: HumocoFileKind): kind is ReceiveImportKind {
     return (
         kind === 'transfer' ||

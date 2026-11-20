@@ -1556,7 +1556,6 @@ mod offline_and_degraded_transfer_tests {
         .unwrap();
         crate::services::market_service::set_card_published_impl(
             true,
-            false,
             Some(password.to_string()),
             &alice_state,
         )
@@ -1956,6 +1955,7 @@ mod offline_and_degraded_transfer_tests {
                     max_retention_quarter: retain_q,
                     pow_base_bits: DEFAULT_LOCK_POW_BASE_BITS,
                     allow_pow_tickets: true,
+                    ticket_pow_bits: 16,
                     inode_warning: false,
                     used_inodes: 0,
                     max_inodes: 50_000,

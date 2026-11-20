@@ -1,8 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import {
-    classifyHumocoFile,
-    extractDetachedSignatureVoucherId,
-} from '../humocoFileClassifier';
+import { classifyHumocoFile } from '../humocoFileClassifier';
 
 describe('humocoFileClassifier', () => {
     it('classifies wot-provider-filter+v1 JSON payloads as wot packages', () => {
@@ -58,24 +55,19 @@ describe('humocoFileClassifier', () => {
         ).toBe('unknown');
     });
 
-    it('F6: extracts voucher_id from canonical wrapped DetachedSignature only and rejects flat legacy signature JSON', () => {
-        const toB64Url = (obj: unknown) =>
-            Buffer.from(JSON.stringify(obj), 'utf8').toString('base64url');
+    it('F6: classifies .sig detached signature containers by filename/payload', () => {
+        const toB64Url = (obj: unknown) => {
+            const bytes = new TextEncoder().encode(JSON.stringify(obj));
+            const bin = Array.from(bytes, (b) => String.fromCharCode(b)).join('');
+            return window.btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+        };
         const canonicalContainer = JSON.stringify({
             ciphertext: toB64Url({ Signature: { voucher_id: 'v-123' } }),
         });
-        const flatLegacyContainer = JSON.stringify({
-            ciphertext: toB64Url({ voucher_id: 'v-legacy' }),
-        });
         const canonicalBytes = Array.from(new TextEncoder().encode(canonicalContainer));
-        const flatBytes = Array.from(new TextEncoder().encode(flatLegacyContainer));
 
         expect(classifyHumocoFile({ fileName: 'reply.sig', bytes: canonicalBytes }).kind).toBe(
             'sig',
         );
-        expect(extractDetachedSignatureVoucherId(canonicalBytes)).toBe('v-123');
-
-        expect(classifyHumocoFile({ fileName: 'reply.sig', bytes: flatBytes }).kind).toBe('sig');
-        expect(extractDetachedSignatureVoucherId(flatBytes)).toBeNull();
     });
 });

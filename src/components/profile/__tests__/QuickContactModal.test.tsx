@@ -153,7 +153,7 @@ describe('QuickContactModal Component', () => {
         fireEvent.click(publishBtn);
 
         await waitFor(() => {
-            expect(marketService.setCardPublished).toHaveBeenCalledWith(true, false, 'pw');
+            expect(marketService.setCardPublished).toHaveBeenCalledWith(true, 'pw');
             expect(screen.getByTestId('share-card-save-file-button')).toBeInTheDocument();
             expect(screen.getByTestId('share-card-qr-img')).toBeInTheDocument();
         });

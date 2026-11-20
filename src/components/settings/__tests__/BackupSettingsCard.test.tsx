@@ -117,7 +117,6 @@ describe('BackupSettingsCard', () => {
             backupDirty: false,
             lastBackupAt: null,
             lastSyncBackupAt: null,
-            l2ProbeCache: {},
         },
     });
 

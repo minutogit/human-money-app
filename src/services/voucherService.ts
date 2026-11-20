@@ -79,8 +79,8 @@ export const voucherService = {
         });
     },
 
-    processAndAttachSignature: async (containerBytes: number[], standardTomlContent: string, containerPassword?: string, walletPassword?: string) => {
-        const result = await invoke<string>("process_and_attach_signature", { containerBytes, standardTomlContent, containerPassword, walletPassword });
+    processAndAttachSignature: async (containerBytes: number[], containerPassword?: string, walletPassword?: string) => {
+        const result = await invoke<string>("process_and_attach_signature", { containerBytes, containerPassword, walletPassword });
         afterWalletMutation(walletPassword);
         return result;
     },

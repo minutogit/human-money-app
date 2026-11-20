@@ -95,6 +95,10 @@ pub struct SyncLockSelftestReportDto {
     pub sig: String,
 }
 
+fn default_ticket_pow_bits() -> u32 {
+    16
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct SyncLockInfoDto {
     pub lock_pub: String,
@@ -110,6 +114,8 @@ pub struct SyncLockInfoDto {
     pub pow_base_bits: u32,
     #[serde(default)]
     pub allow_pow_tickets: bool,
+    #[serde(default = "default_ticket_pow_bits")]
+    pub ticket_pow_bits: u32,
     #[serde(default)]
     pub selftest: Option<SyncLockSelftestReportDto>,
 }
@@ -145,6 +151,8 @@ pub struct FrontendLockServerProbeResult {
     pub max_retention_quarter: u16,
     pub pow_base_bits: u32,
     pub allow_pow_tickets: bool,
+    #[serde(default = "default_ticket_pow_bits")]
+    pub ticket_pow_bits: u32,
     pub inode_warning: bool,
     pub used_inodes: u64,
     pub max_inodes: u64,
@@ -431,7 +439,7 @@ pub async fn push_lock_delegation(
     let url = append_sync_query(write_url, "lock_delegate")?;
     let clean_write = write_url.trim().to_string();
     let clean_read = read_url.trim().to_string();
-    if !is_valid_delegation_url(&clean_write) || !is_valid_delegation_url(&clean_read) {
+    if validate_sync_url(&clean_write).is_err() || validate_sync_url(&clean_read).is_err() {
         return Err("Invalid write_url or read_url for lock delegation".to_string());
     }
     let admin_pub = hex::encode(admin_sk.verifying_key().as_bytes());
@@ -475,26 +483,106 @@ fn loopback_sync_allowed() -> bool {
     cfg!(test) || std::env::var("HUMOCO_ALLOW_LOOPBACK_SYNC").ok().as_deref() == Some("1")
 }
 
-fn is_blocked_ip(ip: std::net::IpAddr, allow_loopback: bool) -> bool {
+fn is_blocked_v4(v4: std::net::Ipv4Addr, allow_loopback: bool) -> bool {
+    if v4.is_loopback() {
+        return !allow_loopback;
+    }
+    let o = v4.octets();
+    v4.is_private()
+        || v4.is_link_local()
+        || v4.is_unspecified()
+        || v4.is_broadcast()
+        || v4.is_multicast()
+        || o[0] == 0
+        || (o[0] == 100 && (o[1] & 0b1100_0000) == 64)
+        || (o[0] == 192 && o[1] == 0 && o[2] == 0)
+        || (o[0] == 198 && (o[1] & 0b1111_1110) == 18)
+        || o[0] >= 240
+}
+
+pub(crate) fn is_blocked_ip(ip: std::net::IpAddr, allow_loopback: bool) -> bool {
     match ip {
-        std::net::IpAddr::V4(v4) => {
-            if v4.is_loopback() {
-                !allow_loopback
-            } else {
-                v4.is_private() || v4.is_link_local() || v4.is_unspecified() || v4.is_multicast()
-            }
-        }
+        std::net::IpAddr::V4(v4) => is_blocked_v4(v4, allow_loopback),
         std::net::IpAddr::V6(v6) => {
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return is_blocked_v4(v4, allow_loopback);
+            }
+            let seg = v6.segments();
+            // NAT64 well-known prefix (64:ff9b::/96) and IPv4-compatible IPv6 (::/96 except :: and ::1)
+            if (seg[0] == 0x0064 && seg[1] == 0xff9b && seg[2..6] == [0, 0, 0, 0])
+                || (seg[0..6] == [0, 0, 0, 0, 0, 0] && (seg[6] != 0 || seg[7] > 1))
+            {
+                let embedded_v4 = std::net::Ipv4Addr::new(
+                    (seg[6] >> 8) as u8,
+                    (seg[6] & 0xff) as u8,
+                    (seg[7] >> 8) as u8,
+                    (seg[7] & 0xff) as u8,
+                );
+                return is_blocked_v4(embedded_v4, allow_loopback);
+            }
             if v6.is_loopback() {
                 !allow_loopback
             } else {
-                let seg0 = v6.segments()[0];
                 v6.is_unspecified()
                     || v6.is_multicast()
-                    || (seg0 & 0xfe00) == 0xfc00
-                    || (seg0 & 0xffc0) == 0xfe80
+                    || (seg[0] & 0xfe00) == 0xfc00
+                    || (seg[0] & 0xffc0) == 0xfe80
+                    || (seg[0] == 0x2001 && seg[1] == 0x0db8)
             }
         }
+    }
+}
+
+pub(crate) fn filter_resolved_addrs(
+    addrs: Vec<std::net::SocketAddr>,
+    host: &str,
+    allow_loopback: bool,
+) -> std::io::Result<Vec<std::net::SocketAddr>> {
+    if addrs.is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("DNS resolution for '{}' returned no addresses", host),
+        ));
+    }
+    for addr in &addrs {
+        if is_blocked_ip(addr.ip(), allow_loopback) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                format!(
+                    "SSRF guard blocked private/internal IP {} for host '{}'",
+                    addr.ip(),
+                    host
+                ),
+            ));
+        }
+    }
+    Ok(addrs)
+}
+
+struct SsrfSafeDnsResolver {
+    allow_loopback: bool,
+}
+
+impl SsrfSafeDnsResolver {
+    fn new(allow_loopback: bool) -> Self {
+        Self { allow_loopback }
+    }
+}
+
+impl reqwest::dns::Resolve for SsrfSafeDnsResolver {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        let host = name.as_str().to_string();
+        let allow_loopback = self.allow_loopback;
+        Box::pin(async move {
+            let addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host((host.as_str(), 0))
+                .await
+                .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?
+                .collect();
+            let verified = filter_resolved_addrs(addrs, &host, allow_loopback)
+                .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
+            let iter: reqwest::dns::Addrs = Box::new(verified.into_iter());
+            Ok(iter)
+        })
     }
 }
 
@@ -504,6 +592,12 @@ pub fn validate_sync_url(url: &str) -> Result<(), String> {
 
 pub fn validate_sync_url_strict(url: &str, allow_loopback: bool) -> Result<(), String> {
     let trimmed = url.trim();
+    if trimmed.is_empty()
+        || trimmed.len() > 2048
+        || trimmed.chars().any(|c| c.is_control() || c.is_whitespace())
+    {
+        return Err(format!("Invalid Sync URL '{}'", url));
+    }
     let parsed =
         reqwest::Url::parse(trimmed).map_err(|e| format!("Invalid Sync URL '{}': {}", url, e))?;
     if !parsed.username().is_empty() || parsed.password().is_some() || parsed.fragment().is_some() {
@@ -552,6 +646,9 @@ pub fn validate_sync_url_strict(url: &str, allow_loopback: bool) -> Result<(), S
 pub fn create_sync_http_client() -> reqwest::Client {
     reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
+        .dns_resolver(std::sync::Arc::new(SsrfSafeDnsResolver::new(
+            loopback_sync_allowed(),
+        )))
         .timeout(std::time::Duration::from_secs(15))
         .build()
         .unwrap_or_else(|_| reqwest::Client::new())
@@ -560,6 +657,9 @@ pub fn create_sync_http_client() -> reqwest::Client {
 pub fn create_sync_probe_client() -> reqwest::Client {
     reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
+        .dns_resolver(std::sync::Arc::new(SsrfSafeDnsResolver::new(
+            loopback_sync_allowed(),
+        )))
         .timeout(std::time::Duration::from_secs(6))
         .build()
         .unwrap_or_else(|_| reqwest::Client::new())
@@ -1209,14 +1309,6 @@ fn verify_ed25519_hex_strict(pubkey_hex: &str, sig_hex: &str, msg: &[u8]) -> boo
     vk.verify_strict(msg, &sig).is_ok()
 }
 
-pub fn is_valid_delegation_url(url: &str) -> bool {
-    let trimmed = url.trim();
-    !trimmed.is_empty()
-        && trimmed.len() <= 2048
-        && (trimmed.starts_with("http://") || trimmed.starts_with("https://"))
-        && !trimmed.chars().any(|c| c.is_control() || c.is_whitespace())
-}
-
 pub fn verify_lock_delegation(
     info_lock_pub: &str,
     delegation: &SyncLockDelegationDto,
@@ -1227,7 +1319,7 @@ pub fn verify_lock_delegation(
     }
     let write_url = delegation.write_url.trim();
     let read_url = delegation.read_url.trim();
-    if !is_valid_delegation_url(write_url) || !is_valid_delegation_url(read_url) {
+    if validate_sync_url(write_url).is_err() || validate_sync_url(read_url).is_err() {
         return false;
     }
     let lock_lower = delegation.lock_pub.trim().to_ascii_lowercase();
@@ -1329,6 +1421,7 @@ pub async fn probe_lock_server(
         max_retention_quarter: 0,
         pow_base_bits: 0,
         allow_pow_tickets: false,
+        ticket_pow_bits: 0,
         inode_warning: false,
         used_inodes: 0,
         max_inodes: 0,
@@ -1380,6 +1473,9 @@ pub async fn probe_lock_server(
     failed.max_retention_quarter = lock_info.max_retention_quarter;
     failed.pow_base_bits = lock_info.pow_base_bits;
     failed.allow_pow_tickets = lock_info.allow_pow_tickets;
+    failed.ticket_pow_bits = lock_info
+        .ticket_pow_bits
+        .min(human_money_core::humoco_proto::crypto::MAX_LOCK_POW_BITS);
     failed.inode_warning = lock_info.inode_warning;
     failed.used_inodes = lock_info.used_inodes;
     failed.max_inodes = lock_info.max_inodes;
@@ -2683,5 +2779,86 @@ mod tests {
         );
 
         server.await.unwrap();
+    }
+
+    #[test]
+    fn test_h11_ssrf_blocks_ipv4_mapped_v6_nat64_and_filters_resolved_ips() {
+        let blocked_ips = [
+            "::ffff:127.0.0.1",
+            "::ffff:10.0.0.1",
+            "::ffff:169.254.169.254",
+            "::ffff:100.64.0.1",
+            "64:ff9b::7f00:1",
+            "64:ff9b::a00:1",
+            "::7f00:1",
+            "0.0.0.1",
+            "100.64.0.1",
+            "198.18.0.1",
+            "240.0.0.1",
+            "fc00::1",
+            "fe80::1",
+            "2001:db8::1",
+        ];
+        for ip_str in blocked_ips {
+            let ip: std::net::IpAddr = ip_str.parse().unwrap();
+            assert!(
+                is_blocked_ip(ip, false),
+                "expected {} to be blocked when allow_loopback=false",
+                ip_str
+            );
+        }
+
+        let allowed_ips = [
+            "93.184.216.34",
+            "::ffff:93.184.216.34",
+            "2606:2800:220:1:248:1893:25c8:1946",
+        ];
+        for ip_str in allowed_ips {
+            let ip: std::net::IpAddr = ip_str.parse().unwrap();
+            assert!(
+                !is_blocked_ip(ip, false),
+                "expected {} to be allowed when allow_loopback=false",
+                ip_str
+            );
+        }
+
+        let mapped_loopback: std::net::IpAddr = "::ffff:127.0.0.1".parse().unwrap();
+        assert!(is_blocked_ip(mapped_loopback, false));
+        assert!(!is_blocked_ip(mapped_loopback, true));
+
+        let bad_urls = [
+            "https://[::ffff:127.0.0.1]/sync.php",
+            "https://[::ffff:169.254.169.254]/sync.php",
+            "https://[64:ff9b::7f00:1]/sync.php",
+            "https://user:pass@sync.example.org/sync.php",
+            "https://sync.example.org/sync.php#frag",
+            "https://service.local/sync.php",
+            "http://localhost:8080/sync.php",
+        ];
+        for url in bad_urls {
+            assert!(
+                validate_sync_url_strict(url, false).is_err(),
+                "expected URL '{}' to be rejected with allow_loopback=false",
+                url
+            );
+        }
+        assert!(validate_sync_url_strict("https://sync.example.org/sync.php", false).is_ok());
+
+        let empty_err = filter_resolved_addrs(Vec::new(), "dual.example.org", false).unwrap_err();
+        assert_eq!(empty_err.kind(), std::io::ErrorKind::NotFound);
+
+        let public_v4: std::net::SocketAddr = "93.184.216.34:443".parse().unwrap();
+        let private_mapped_v6: std::net::SocketAddr =
+            "[::ffff:169.254.169.254]:443".parse().unwrap();
+        let mixed_err = filter_resolved_addrs(
+            vec![public_v4, private_mapped_v6],
+            "dual.example.org",
+            false,
+        )
+        .unwrap_err();
+        assert_eq!(mixed_err.kind(), std::io::ErrorKind::PermissionDenied);
+
+        let clean = filter_resolved_addrs(vec![public_v4], "dual.example.org", false).unwrap();
+        assert_eq!(clean, vec![public_v4]);
     }
 }

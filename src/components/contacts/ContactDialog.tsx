@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Contact, PublicProfile, FrontendTrustChangeImpact } from '../../types';
 import { FrontendSyncDescriptor } from '../../types/market';
@@ -55,11 +55,28 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
     const [syncError, setSyncError] = useState<string | null>(null);
     const [confirmDeleteKey, setConfirmDeleteKey] = useState<string | null>(null);
     const [isSaving, setIsSaving] = useState(false);
+    const [isResolvingCard, setIsResolvingCard] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [ownUserId, setOwnUserId] = useState<string>('');
     const [ownUserIdLoaded, setOwnUserIdLoaded] = useState<boolean>(false);
     const [allContacts, setAllContacts] = useState<Contact[]>([]);
     const [hasManualTrustOverride, setHasManualTrustOverride] = useState<boolean>(false);
+    const isMountedRef = useRef(true);
+    const cardResolveGenRef = useRef(0);
+    const firstNameRef = useRef(firstName);
+    firstNameRef.current = firstName;
+    const lastNameRef = useRef(lastName);
+    lastNameRef.current = lastName;
+    const organizationRef = useRef(organization);
+    organizationRef.current = organization;
+
+    useEffect(() => {
+        isMountedRef.current = true;
+        return () => {
+            isMountedRef.current = false;
+            cardResolveGenRef.current += 1;
+        };
+    }, []);
 
     useEffect(() => {
         if (!isOpen) {
@@ -177,6 +194,8 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                 setSyncs(initSyncs);
             }
         }
+        cardResolveGenRef.current += 1;
+        setIsResolvingCard(false);
         setError(null);
         setSyncInputUrl('');
         setSyncError(null);
@@ -186,10 +205,20 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
     const applyContactCard = async (rawText: string) => {
         const parsedInput = parseHumocoInput(rawText);
         if (parsedInput?.kind === 'card') {
+            const resolveGen = ++cardResolveGenRef.current;
+            setIsResolvingCard(true);
             try {
                 const resolved = await marketService.resolveCardRecipient(parsedInput.payload);
+                if (!isMountedRef.current || cardResolveGenRef.current !== resolveGen) {
+                    return;
+                }
                 setDid(resolved.recipientId);
-                if (resolved.displayName && !firstName && !lastName && !organization) {
+                if (
+                    resolved.displayName &&
+                    !firstNameRef.current &&
+                    !lastNameRef.current &&
+                    !organizationRef.current
+                ) {
                     const parts = resolved.displayName.trim().split(/\s+/);
                     if (parts.length === 1) {
                         setFirstName(parts[0]);
@@ -199,14 +228,28 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                     }
                 }
             } catch (e) {
+                if (!isMountedRef.current || cardResolveGenRef.current !== resolveGen) {
+                    return;
+                }
                 setError(translateError(e, t));
+            } finally {
+                if (isMountedRef.current && cardResolveGenRef.current === resolveGen) {
+                    setIsResolvingCard(false);
+                }
             }
             return;
         }
+        cardResolveGenRef.current += 1;
+        setIsResolvingCard(false);
         const parsed = parseContactCard(rawText);
         if (parsed) {
             setDid(parsed.did);
-            if (parsed.name && !firstName && !lastName && !organization) {
+            if (
+                parsed.name &&
+                !firstNameRef.current &&
+                !lastNameRef.current &&
+                !organizationRef.current
+            ) {
                 const parts = parsed.name.trim().split(/\s+/);
                 if (parts.length === 1) {
                     setFirstName(parts[0]);
@@ -309,7 +352,7 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
     if (!isOpen) return null;
 
     const handleSave = async () => {
-        if (!did.trim()) return;
+        if (isResolvingCard || !did.trim()) return;
         if (isExactSelf) {
             setError(t('contacts.selfActiveProfileHint'));
             return;
@@ -405,7 +448,7 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                     <button
                         type="button"
                         onClick={handleSave}
-                        disabled={isSaving || !did.trim() || isExactSelf}
+                        disabled={isSaving || isResolvingCard || !did.trim() || isExactSelf}
                         className="flex-[2] py-3 px-4 rounded-xl bg-theme-primary text-white font-bold hover:bg-theme-accent disabled:opacity-50 disabled:hover:bg-theme-primary transition-all shadow-lg shadow-theme-primary/20 active:scale-[0.98]"
                     >
                         {isSaving ? t('contacts.saving') : (existingContact ? t('contacts.updateContact') : t('contacts.saveContact'))}
@@ -445,9 +488,13 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                                             return;
                                         }
                                         if (parsed?.kind === 'did') {
+                                            cardResolveGenRef.current += 1;
+                                            setIsResolvingCard(false);
                                             setDid(parsed.did);
                                             return;
                                         }
+                                        cardResolveGenRef.current += 1;
+                                        setIsResolvingCard(false);
                                         const val = rawVal.replace(/\s+/g, '');
                                         setDid(val);
                                     }}

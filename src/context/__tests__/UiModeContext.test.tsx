@@ -52,7 +52,6 @@ function makeConfig(uiMode: 'simple' | 'expert'): AppConfigDto {
             backupDirty: false,
             lastBackupAt: null,
             lastSyncBackupAt: null,
-            l2ProbeCache: {},
         },
     };
 }

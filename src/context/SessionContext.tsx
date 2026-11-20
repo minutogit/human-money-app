@@ -126,6 +126,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     const pendingQueueRef = useRef<PendingModalRequest[]>([]);
     const nextPendingIdRef = useRef(1);
     const isModalSubmittingRef = useRef(false);
+    const modalAttemptGenRef = useRef(0);
+    const [isModalSubmitting, setIsModalSubmitting] = useState(false);
 
     const setFolderName = useCallback((folder: string) => {
         folderNameRef.current = folder;
@@ -205,6 +207,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
     useEffect(() => {
         return () => {
+            modalAttemptGenRef.current += 1;
+            isModalSubmittingRef.current = false;
+
             if (pendingQueueRef.current.length > 0) {
                 const remaining = pendingQueueRef.current;
                 pendingQueueRef.current = [];
@@ -384,6 +389,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     );
 
     const switchActivePendingToPassword = useCallback((errorText?: string) => {
+        modalAttemptGenRef.current += 1;
+        isModalSubmittingRef.current = false;
+        setIsModalSubmitting(false);
         const current = pendingQueueRef.current[0];
         if (!current) return;
         current.credentialKind = 'password';
@@ -439,6 +447,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         channelMembersSyncManager.reset();
         rateLimitManager.clearCooldown();
         emitAppEvent(APP_EVENTS.SESSION_LOCKED);
+
+        modalAttemptGenRef.current += 1;
+        isModalSubmittingRef.current = false;
+        setIsModalSubmitting(false);
 
         if (pendingQueueRef.current.length > 0) {
             const remaining = pendingQueueRef.current;
@@ -580,28 +592,37 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     const handleModalConfirm = async (credential: string) => {
         const currentPending = pendingQueueRef.current[0];
         if (!currentPending || isModalSubmittingRef.current) return;
+        const gen = ++modalAttemptGenRef.current;
         isModalSubmittingRef.current = true;
+        setIsModalSubmitting(true);
+
+        const isAttemptCurrent = () =>
+            modalAttemptGenRef.current === gen && pendingQueueRef.current[0]?.id === currentPending.id;
 
         try {
             if (currentPending.mode === 'stepUp') {
                 try {
-                    await elevateSession(credential);
+                    const status = await authService.elevateSessionWithPassword(credential);
+                    if (!isAttemptCurrent()) return;
+                    applySessionStatus(status);
                 } catch (err) {
-                    isModalSubmittingRef.current = false;
+                    if (!isAttemptCurrent()) return;
                     setModalErrorMsg(translateError(err, t));
                     return;
                 }
 
-                setModalErrorMsg('');
-                pendingQueueRef.current.shift();
-
                 let timeout = 0;
                 try {
                     const config = await settingsService.getConfig();
+                    if (!isAttemptCurrent()) return;
                     timeout = config.securityPolicy.sessionTimeoutSeconds;
                 } catch {
+                    if (!isAttemptCurrent()) return;
                     timeout = 0;
                 }
+
+                setModalErrorMsg('');
+                pendingQueueRef.current.shift();
 
                 const toRun: Array<{ entry: PendingModalRequest; pwd: string | null }> = [
                     { entry: currentPending, pwd: credential },
@@ -624,6 +645,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
                 setActivePending(pendingQueueRef.current[0] ?? null);
                 isModalSubmittingRef.current = false;
+                setIsModalSubmitting(false);
                 await Promise.all(toRun.map((item) => runPendingEntry(item.entry, item.pwd)));
                 return;
             }
@@ -631,9 +653,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
             let timeout = 0;
             try {
                 const config = await settingsService.getConfig();
+                if (!isAttemptCurrent()) return;
                 timeout = config.securityPolicy.sessionTimeoutSeconds;
             } catch (err) {
-                isModalSubmittingRef.current = false;
+                if (!isAttemptCurrent()) return;
                 setModalErrorMsg(translateError(err, t));
                 return;
             }
@@ -647,15 +670,16 @@ export function SessionProvider({ children }: { children: ReactNode }) {
                             credential,
                             folderArg,
                         );
+                        if (!isAttemptCurrent()) return;
                         applySessionStatus(status);
                         setModalErrorMsg('');
                     } catch (err) {
+                        if (!isAttemptCurrent()) return;
                         const code = isBackendError(err) ? err.code : '';
                         const msg = stringifyError(err);
                         const isPinWiped =
                             code === 'error.auth.pinWipedMaxAttempts' ||
                             msg.includes('pinWipedMaxAttempts');
-                        isModalSubmittingRef.current = false;
                         if (isPinWiped) {
                             switchActivePendingToPassword(translateError(err, t));
                         } else {
@@ -666,9 +690,12 @@ export function SessionProvider({ children }: { children: ReactNode }) {
                 } else {
                     try {
                         if (baseAccessModeRef.current !== 'full') {
-                            await elevateSession(credential);
+                            const status = await authService.elevateSessionWithPassword(credential);
+                            if (!isAttemptCurrent()) return;
+                            applySessionStatus(status);
                         } else {
                             const status = await authService.unlockSession(credential);
+                            if (!isAttemptCurrent()) return;
                             if ((status as unknown) === false) {
                                 throw new Error('Invalid password');
                             }
@@ -677,6 +704,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
                         setModalErrorMsg('');
                         logger.info(`Session unlocked via modal for ${timeout} seconds.`);
                     } catch (err) {
+                        if (!isAttemptCurrent()) return;
                         const msg = stringifyError(err);
                         const code = isBackendError(err) ? err.code : '';
                         const isInsufficient =
@@ -684,21 +712,23 @@ export function SessionProvider({ children }: { children: ReactNode }) {
                             msg.includes('InsufficientAccessMode');
                         if (isInsufficient && accessModeRef.current !== 'full') {
                             try {
-                                await elevateSession(credential);
+                                const status = await authService.elevateSessionWithPassword(credential);
+                                if (!isAttemptCurrent()) return;
+                                applySessionStatus(status);
                                 setModalErrorMsg('');
                             } catch (elevErr) {
-                                isModalSubmittingRef.current = false;
+                                if (!isAttemptCurrent()) return;
                                 setModalErrorMsg(translateError(elevErr, t));
                                 return;
                             }
                         } else {
-                            isModalSubmittingRef.current = false;
                             setModalErrorMsg(translateError(err, t));
                             return;
                         }
                     }
                 }
 
+                if (!isAttemptCurrent()) return;
                 pendingQueueRef.current.shift();
                 const toRun: PendingModalRequest[] = [currentPending];
                 while (pendingQueueRef.current.length > 0 && pendingQueueRef.current[0].mode === 'session') {
@@ -707,6 +737,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
                 setActivePending(pendingQueueRef.current[0] ?? null);
                 isModalSubmittingRef.current = false;
+                setIsModalSubmitting(false);
                 await Promise.all(toRun.map((entry) => runPendingEntry(entry, null)));
             } else {
                 // Mode A (timeout === 0): prompt per action; PIN uses a single-use backend grant token
@@ -714,13 +745,14 @@ export function SessionProvider({ children }: { children: ReactNode }) {
                     let status: Awaited<ReturnType<typeof authService.unlockSessionWithPin>>;
                     try {
                         status = await authService.unlockSessionWithPin(credential, folderArg);
+                        if (!isAttemptCurrent()) return;
                     } catch (err) {
+                        if (!isAttemptCurrent()) return;
                         const code = isBackendError(err) ? err.code : '';
                         const msg = stringifyError(err);
                         const isPinWiped =
                             code === 'error.auth.pinWipedMaxAttempts' ||
                             msg.includes('pinWipedMaxAttempts');
-                        isModalSubmittingRef.current = false;
                         if (isPinWiped) {
                             switchActivePendingToPassword(translateError(err, t));
                         } else {
@@ -733,45 +765,56 @@ export function SessionProvider({ children }: { children: ReactNode }) {
                     pendingQueueRef.current.shift();
                     setActivePending(pendingQueueRef.current[0] ?? null);
                     isModalSubmittingRef.current = false;
+                    setIsModalSubmitting(false);
                     await runPendingEntry(currentPending, status.oneShotGrant ?? null);
                 } else {
                     if (baseAccessModeRef.current !== 'full') {
                         try {
-                            await elevateSession(credential);
+                            const status = await authService.elevateSessionWithPassword(credential);
+                            if (!isAttemptCurrent()) return;
+                            applySessionStatus(status);
                         } catch (err) {
-                            isModalSubmittingRef.current = false;
+                            if (!isAttemptCurrent()) return;
                             setModalErrorMsg(translateError(err, t));
                             return;
                         }
                     } else {
                         try {
                             const status = await authService.unlockSession(credential);
+                            if (!isAttemptCurrent()) return;
                             if ((status as unknown) === false) {
                                 throw new Error('Invalid password');
                             }
                             applySessionStatus(status);
                         } catch (err) {
-                            isModalSubmittingRef.current = false;
+                            if (!isAttemptCurrent()) return;
                             setModalErrorMsg(translateError(err, t));
                             return;
                         }
                     }
+                    if (!isAttemptCurrent()) return;
                     setModalErrorMsg('');
                     pendingQueueRef.current.shift();
                     setActivePending(pendingQueueRef.current[0] ?? null);
                     isModalSubmittingRef.current = false;
+                    setIsModalSubmitting(false);
                     await runPendingEntry(currentPending, credential);
                 }
             }
         } finally {
-            isModalSubmittingRef.current = false;
+            if (modalAttemptGenRef.current === gen) {
+                isModalSubmittingRef.current = false;
+                setIsModalSubmitting(false);
+            }
         }
     };
 
     const handleModalCancel = () => {
+        modalAttemptGenRef.current += 1;
         const cancelled = pendingQueueRef.current;
         pendingQueueRef.current = [];
         isModalSubmittingRef.current = false;
+        setIsModalSubmitting(false);
         setModalErrorMsg('');
         setActivePending(null);
         for (const entry of cancelled) {
@@ -898,6 +941,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
                 onConfirm={handleModalConfirm}
                 onCancel={handleModalCancel}
                 credentialKind={activePending?.credentialKind ?? 'password'}
+                isSubmitting={isModalSubmitting}
                 canSwitchToPassword={
                     activePending?.mode === 'session' && activePending?.credentialKind === 'pin'
                 }

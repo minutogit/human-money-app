@@ -120,7 +120,6 @@ describe('SyncServiceSettingsCard Component', () => {
             backupDirty: false,
             lastBackupAt: null,
             lastSyncBackupAt: null,
-            l2ProbeCache: {},
         },
     });
 
@@ -692,5 +691,51 @@ describe('SyncServiceSettingsCard Component', () => {
         expect(await screen.findByText(/Next steps before entering the URL below:/i)).toBeInTheDocument();
         expect(screen.getByText(/PHP webspace \(humoco-sync-setup\.zip\)/i)).toBeInTheDocument();
         expect(screen.getByText(/Rust server \(config\.toml\)/i)).toBeInTheDocument();
+    });
+
+    it('H13: keeps delete confirmation dialog open and renders remote error when remote delete fails', async () => {
+        const publicConfig = createDefaultConfig();
+        publicConfig.securityPolicy.publicSyncs = [
+            {
+                writeUrl: 'https://community.example.org/sync.php',
+                readUrl: 'https://community.example.org/data',
+                dropPub: 'a'.repeat(64),
+                accessPubkey: 'b'.repeat(64),
+                enabled: true,
+                authorizedChannels: ['card', 'post'],
+                status: 'active',
+            },
+        ];
+        vi.mocked(settingsService.getConfig).mockResolvedValue(publicConfig);
+        vi.mocked(marketService.removePublicSync).mockRejectedValue({
+            code: 'error.sync.remoteDeleteFailed',
+            message: 'Remote cleanup HTTP 500',
+        });
+
+        render(
+            <SyncServiceSettingsCard
+                config={publicConfig}
+                onConfigUpdated={vi.fn()}
+            />
+        );
+
+        const deleteTrigger = await screen.findByRole('button', { name: 'Delete' });
+        fireEvent.click(deleteTrigger);
+
+        const dialog = await screen.findByRole('dialog');
+        const confirmBtn = within(dialog).getByRole('button', { name: /^Delete$/i });
+        fireEvent.click(confirmBtn);
+
+        await waitFor(() => {
+            expect(marketService.removePublicSync).toHaveBeenCalledWith(
+                'https://community.example.org/sync.php',
+                true,
+                'mock-wallet-pw'
+            );
+        });
+
+        const errBanner = await within(dialog).findByTestId('public-sync-delete-error');
+        expect(errBanner).toBeInTheDocument();
+        expect(screen.getByRole('dialog')).toBeInTheDocument();
     });
 });

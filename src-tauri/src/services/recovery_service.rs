@@ -225,7 +225,7 @@ pub(crate) fn collect_candidate_backup_sync_descriptors_with_service(
             Err(err)
                 if password.is_none()
                     && (err.code == "error.auth.sessionNotActive"
-                        || err.code == "error.auth.sessionExpired") =>
+                        || err.code == "error.auth.sessionTimeout") =>
             {
                 None
             }
@@ -1865,7 +1865,9 @@ pub async fn complete_social_recovery_impl(
                 .with_wallet_and_identity(|_, id| id.user_id.clone())
                 .ok();
             let _ = record_profile_metadata_in_dir(wallet_data_dir, &target_folder, user_id);
-            let _ = state.initialize_profile_session(&mut service, &new_password);
+            state
+                .initialize_profile_session(&mut service, &new_password)
+                .map_err(FrontendError::from)?;
             state.commit_profile_lock(pending_lock);
             if let Some(app) = app_opt {
                 if let Ok(config_dir) = app.path().app_config_dir() {
@@ -2198,61 +2200,79 @@ pub async fn complete_social_recovery_impl(
             )
             .map_err(FrontendError::from)?;
 
-        let folder = service
-            .list_profiles()
-            .ok()
-            .and_then(|profiles| {
-                profiles
-                    .into_iter()
-                    .find(|p| p.profile_name == final_name)
-                    .map(|p| p.folder_name)
-            })
-            .unwrap_or_default();
+        let setup_res = (|| -> Result<String, FrontendError> {
+            let folder = service
+                .list_profiles()
+                .ok()
+                .and_then(|profiles| {
+                    profiles
+                        .into_iter()
+                        .find(|p| p.profile_name == final_name)
+                        .map(|p| p.folder_name)
+                })
+                .unwrap_or_default();
 
-        let _ = crate::state::save_encrypted_json(
-            &mut service,
-            crate::settings::UI_PREFERENCES_KEY,
-            &crate::settings::UiPreferences::default(),
-            Some(&new_password),
-        );
-        let _ = crate::state::save_encrypted_json(
-            &mut service,
-            crate::settings::SECURITY_POLICY_KEY,
-            &crate::settings::SecurityPolicy::default(),
-            Some(&new_password),
-        );
-        let _ = crate::state::save_local_sidecar_json(
-            &mut service,
-            crate::settings::INTERNAL_LIFECYCLE_STATE_KEY,
-            &crate::settings::InternalLifecycleState::default(),
-            Some(&new_password),
-        );
+            let pending_lock = if !folder.is_empty() {
+                state.acquire_profile_lock(&folder)?
+            } else {
+                crate::state::PendingProfileLock::None
+            };
 
-        let initial_state = RecoveryOwnerState {
-            rotation_epoch,
-            ..Default::default()
-        };
-        let _ = save_recovery_owner_state_with_cache(
-            state,
-            &mut service,
-            &initial_state,
-            Some(&new_password),
-        );
+            crate::state::save_encrypted_json(
+                &mut service,
+                crate::settings::UI_PREFERENCES_KEY,
+                &crate::settings::UiPreferences::default(),
+                Some(&new_password),
+            )
+            .map_err(FrontendError::from)?;
+            crate::state::save_encrypted_json(
+                &mut service,
+                crate::settings::SECURITY_POLICY_KEY,
+                &crate::settings::SecurityPolicy::default(),
+                Some(&new_password),
+            )
+            .map_err(FrontendError::from)?;
+            crate::state::save_local_sidecar_json(
+                &mut service,
+                crate::settings::INTERNAL_LIFECYCLE_STATE_KEY,
+                &crate::settings::InternalLifecycleState::default(),
+                Some(&new_password),
+            )
+            .map_err(FrontendError::from)?;
 
-        if !folder.is_empty() {
-            let _ = record_profile_metadata_in_dir(
-                wallet_data_dir,
-                &folder,
-                Some(derived_identity.user_id.clone()),
-            );
-        }
-        let _ = state.initialize_profile_session(&mut service, &new_password);
-        if !folder.is_empty() {
-            if let Ok(pending_lock) = state.acquire_profile_lock(&folder) {
-                state.commit_profile_lock(pending_lock);
+            let initial_state = RecoveryOwnerState {
+                rotation_epoch,
+                ..Default::default()
+            };
+            save_recovery_owner_state_with_cache(
+                state,
+                &mut service,
+                &initial_state,
+                Some(&new_password),
+            )?;
+
+            if !folder.is_empty() {
+                let _ = record_profile_metadata_in_dir(
+                    wallet_data_dir,
+                    &folder,
+                    Some(derived_identity.user_id.clone()),
+                );
+            }
+            state
+                .initialize_profile_session(&mut service, &new_password)
+                .map_err(FrontendError::from)?;
+            state.commit_profile_lock(pending_lock);
+            Ok(folder)
+        })();
+        match setup_res {
+            Ok(folder) => folder,
+            Err(err) => {
+                service.logout();
+                state.clear_all_caches();
+                state.clear_sync_cooldown();
+                return Err(err);
             }
         }
-        folder
     };
 
     for target in &resolved_targets {

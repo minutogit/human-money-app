@@ -83,6 +83,7 @@ pub(crate) async fn dispatch_post_payload(
     ctx: &PostEnvelopeContext<'_>,
     payload_type: &PayloadType,
     post_state: &mut StoredPostState,
+    baseline_post_state: &mut StoredPostState,
     stats: &mut PostDispatchStats,
 ) -> PostDispatchOutcome {
     let as_outcome = |ok: bool| {
@@ -93,13 +94,15 @@ pub(crate) async fn dispatch_post_payload(
         }
     };
     match payload_type {
-        PayloadType::TransactionBundle => handle_transaction_bundle(ctx, post_state, stats).await,
+        PayloadType::TransactionBundle => {
+            handle_transaction_bundle(ctx, post_state, baseline_post_state, stats).await
+        }
         PayloadType::VoucherForSigning => {
             handle_voucher_for_signing(ctx, post_state, stats);
             PostDispatchOutcome::Handled
         }
         PayloadType::DetachedSignature => {
-            as_outcome(handle_detached_signature(ctx, post_state, stats))
+            as_outcome(handle_detached_signature(ctx, post_state, baseline_post_state, stats))
         }
         PayloadType::TrustAssertion => {
             handle_trust_assertion(ctx, post_state, stats);
@@ -157,12 +160,15 @@ const MAX_PENDING_TOLERANCE_PAYMENTS: usize = 20;
 const MAX_PENDING_TOLERANCE_TOTAL_B64_BYTES: usize = 4 * 1024 * 1024;
 
 pub(crate) enum PostBundleCommitResult {
-    Committed(Box<human_money_core::wallet::types::ProcessBundleResult>),
+    Committed {
+        result: Box<human_money_core::wallet::types::ProcessBundleResult>,
+        post_state: Box<StoredPostState>,
+    },
     CoreError(human_money_core::Error),
 }
 
-/// Commits an incoming PoST transaction bundle together with its history companion
-/// and stored/precommit L2 evidence on an already-locked `AppService`.
+/// Commits an incoming PoST transaction bundle together with its history and `market_post_state`
+/// companions and stored/precommit L2 evidence on an already-locked `AppService`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn commit_post_transaction_bundle(
     service: &mut human_money_core::app_service::AppService,
@@ -173,16 +179,32 @@ pub(crate) fn commit_post_transaction_bundle(
     l2_evidence: Option<&crate::state::StoredPrecommitL2Evidence>,
     force_accept_tolerance_bundle: bool,
     password: Option<&str>,
+    baseline_post_state: &StoredPostState,
+    working_post_state: &StoredPostState,
+    update_post_state: impl FnOnce(
+        &mut StoredPostState,
+        &human_money_core::wallet::types::ProcessBundleResult,
+    ),
 ) -> Result<PostBundleCommitResult, crate::models::FrontendError> {
     let archive = app.and_then(|a| crate::services::common::open_wallet_archive(a, service));
     let baseline_history = state
         .load_history_from_disk(service, password)
         .map_err(crate::models::FrontendError::from)?;
+    let mut candidate_post_state = working_post_state.clone();
+    super::merge_post_state_with_service(
+        service,
+        baseline_post_state,
+        &mut candidate_post_state,
+        password,
+    )?;
     let core_l2_evidence = l2_evidence.map(|ev| human_money_core::ReceiveL2Evidence {
         quorum_certificates: ev.quorum_certificates.as_slice(),
         competing_entries: ev.competing_entries.as_slice(),
     });
     let next_history_cell = std::cell::RefCell::new(None::<Vec<TransactionRecord>>);
+    let post_state_cell = std::cell::RefCell::new(Some(candidate_post_state));
+    let update_cell = std::cell::RefCell::new(Some(update_post_state));
+    let committed_post_cell = std::cell::RefCell::new(None::<StoredPostState>);
     match service.receive_bundle_with_companions(
         container_bytes,
         all_standards,
@@ -220,14 +242,34 @@ pub(crate) fn commit_post_transaction_bundle(
                 notes,
                 sender_profile_name: result.header.sender_profile_name.clone(),
             };
-            let (blobs, next_hist) =
+            let (mut blobs, next_hist) =
                 crate::state::prepare_receive_history_companion(&baseline_history, record)
                     .map_err(|e| {
                         human_money_core::Error::Storage(
                             human_money_core::StorageError::InvalidFormat(e.message),
                         )
                     })?;
+            let mut next_post = post_state_cell.borrow_mut().take().ok_or_else(|| {
+                human_money_core::Error::Storage(
+                    human_money_core::StorageError::InvalidFormat(
+                        "Missing post_state companion buffer".to_string(),
+                    ),
+                )
+            })?;
+            if let Some(update_fn) = update_cell.borrow_mut().take() {
+                update_fn(&mut next_post, result);
+            }
+            let post_bytes = serde_json::to_vec(&next_post).map_err(|e| {
+                human_money_core::Error::Storage(human_money_core::StorageError::InvalidFormat(
+                    format!(
+                        "Failed to serialize {}: {}",
+                        crate::state::MARKET_POST_STATE_KEY, e
+                    ),
+                ))
+            })?;
+            blobs.push((crate::state::MARKET_POST_STATE_KEY.to_string(), post_bytes));
             *next_history_cell.borrow_mut() = Some(next_hist);
+            *committed_post_cell.borrow_mut() = Some(next_post);
             Ok(blobs)
         },
     ) {
@@ -235,7 +277,15 @@ pub(crate) fn commit_post_transaction_bundle(
             if let Some(next_hist) = next_history_cell.into_inner() {
                 state.write_cache_slot_for_service(service, |c| &mut c.history, Some(next_hist));
             }
-            Ok(PostBundleCommitResult::Committed(Box::new(result)))
+            let post_state = committed_post_cell.into_inner().ok_or_else(|| {
+                crate::models::FrontendError::from(
+                    "Missing committed post_state after receive_bundle_with_companions".to_string(),
+                )
+            })?;
+            Ok(PostBundleCommitResult::Committed {
+                result: Box::new(result),
+                post_state: Box::new(post_state),
+            })
         }
         Err(e) => Ok(PostBundleCommitResult::CoreError(e)),
     }
@@ -244,6 +294,7 @@ pub(crate) fn commit_post_transaction_bundle(
 async fn handle_transaction_bundle(
     ctx: &PostEnvelopeContext<'_>,
     post_state: &mut StoredPostState,
+    baseline_post_state: &mut StoredPostState,
     stats: &mut PostDispatchStats,
 ) -> PostDispatchOutcome {
     let all_standards = load_all_standard_tomls(ctx.app, ctx.extra_standards);
@@ -291,7 +342,7 @@ async fn handle_transaction_bundle(
     let is_conflict = l2_evidence_owned.as_ref().is_some_and(|e| e.is_conflict);
 
     enum HandleCommitOutcome {
-        Committed(String),
+        Committed(Box<StoredPostState>),
         CoreError(human_money_core::Error),
     }
 
@@ -306,16 +357,24 @@ async fn handle_transaction_bundle(
                 l2_evidence_owned.as_ref(),
                 false,
                 ctx.password,
+                baseline_post_state,
+                post_state,
+                |ps, result| {
+                    ps.processed_msg_ids.insert(ctx.envelope.msg_id.clone());
+                    queue_ack_receipt(ctx, ps, Some(&result.header.bundle_id));
+                },
             )? {
-                PostBundleCommitResult::Committed(result) => {
-                    let bundle_id = result.header.bundle_id.clone();
+                PostBundleCommitResult::Committed {
+                    result,
+                    post_state: committed_post_state,
+                } => {
                     crate::services::transfer_service::apply_receive_companion_side_effects(
                         service,
                         ctx.state,
                         &result,
                         ctx.password,
                     );
-                    Ok(HandleCommitOutcome::Committed(bundle_id))
+                    Ok(HandleCommitOutcome::Committed(committed_post_state))
                 }
                 PostBundleCommitResult::CoreError(e) => Ok(HandleCommitOutcome::CoreError(e)),
             });
@@ -337,7 +396,9 @@ async fn handle_transaction_bundle(
     };
 
     match outcome {
-        HandleCommitOutcome::Committed(bundle_id) => {
+        HandleCommitOutcome::Committed(committed_post_state) => {
+            *post_state = *committed_post_state;
+            *baseline_post_state = post_state.clone();
             stats.imported_payments += 1;
             if is_conflict {
                 if let Some(app_handle) = ctx.app {
@@ -345,7 +406,6 @@ async fn handle_transaction_bundle(
                     let _ = app_handle.emit("humoco://conflicts-updated", ());
                 }
             }
-            queue_ack_receipt(ctx, post_state, Some(&bundle_id));
             PostDispatchOutcome::Handled
         }
         HandleCommitOutcome::CoreError(e) => {
@@ -477,35 +537,50 @@ fn is_retryable_post_attach_error(err: &human_money_core::app_service::AppFacade
 fn handle_detached_signature(
     ctx: &PostEnvelopeContext<'_>,
     post_state: &mut StoredPostState,
+    baseline_post_state: &mut StoredPostState,
     stats: &mut PostDispatchStats,
 ) -> bool {
     let all_standards = load_all_standard_tomls(ctx.app, ctx.extra_standards);
     let mut attached = false;
     let mut retryable_error: Option<String> = None;
+    let mut committed_post_state: Option<StoredPostState> = None;
     let lock_res = ctx.state.with_session(ctx.session, |service| {
         if !service.is_wallet_unlocked() {
             return Ok(Some(
                 "Detached signature attachment deferred: wallet session is locked".to_string(),
             ));
         }
-        for toml in all_standards.values() {
-            match service.process_and_attach_signature(
-                &ctx.envelope.container_bytes,
-                toml,
-                None,
-                ctx.password,
-            ) {
-                Ok(_) => {
-                    attached = true;
-                    retryable_error = None;
-                    let _ = ctx.state.refresh_events_cache(service, ctx.password);
-                    break;
-                }
-                Err(e) => {
-                    if is_retryable_post_attach_error(&e) {
-                        retryable_error = Some(e.to_string());
-                        break;
-                    }
+        match service.process_and_attach_signature(
+            &ctx.envelope.container_bytes,
+            &all_standards,
+            None,
+            ctx.password,
+        ) {
+            Ok(_) => {
+                attached = true;
+                retryable_error = None;
+                let _ = ctx.state.refresh_events_cache(service, ctx.password);
+                let mut next_ps = post_state.clone();
+                queue_ack_receipt(ctx, &mut next_ps, None);
+                next_ps.processed_msg_ids.insert(ctx.envelope.msg_id.clone());
+                super::merge_post_state_with_service(
+                    service,
+                    baseline_post_state,
+                    &mut next_ps,
+                    ctx.password,
+                )?;
+                crate::state::save_encrypted_json(
+                    service,
+                    crate::state::MARKET_POST_STATE_KEY,
+                    &next_ps,
+                    ctx.password,
+                )
+                .map_err(crate::models::FrontendError::from)?;
+                committed_post_state = Some(next_ps);
+            }
+            Err(e) => {
+                if is_retryable_post_attach_error(&e) {
+                    retryable_error = Some(e.to_string());
                 }
             }
         }
@@ -532,8 +607,11 @@ fn handle_detached_signature(
         Ok(Some(None)) => {}
     }
     if attached {
+        if let Some(saved_ps) = committed_post_state {
+            *post_state = saved_ps;
+            *baseline_post_state = post_state.clone();
+        }
         stats.imported_signatures += 1;
-        queue_ack_receipt(ctx, post_state, None);
         return true;
     }
     if let Some(err) = retryable_error {
@@ -1352,11 +1430,13 @@ mod tests {
         };
 
         let mut post_state = StoredPostState::default();
+        let mut baseline_post_state = post_state.clone();
         let mut stats = PostDispatchStats::default();
         let outcome = dispatch_post_payload(
             &ctx,
             &PayloadType::Generic(humoco_market::PAYLOAD_GUARDIAN_LOCATOR_V1.to_string()),
             &mut post_state,
+            &mut baseline_post_state,
             &mut stats,
         )
         .await;
@@ -1424,11 +1504,13 @@ mod tests {
         };
 
         let mut post_state = StoredPostState::default();
+        let mut baseline_post_state = post_state.clone();
         let mut stats = PostDispatchStats::default();
         let outcome = dispatch_post_payload(
             &ctx,
             &PayloadType::Generic("future-feature+v99".to_string()),
             &mut post_state,
+            &mut baseline_post_state,
             &mut stats,
         )
         .await;

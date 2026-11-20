@@ -223,13 +223,41 @@ pub struct InternalLifecycleState {
     pub wallet_sync_alert: Option<WalletSyncAlert>,
 }
 
+/// Public subset of `InternalLifecycleState` exposed to the React frontend via `AppConfigDto`.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct FrontendLifecycleStateDto {
+    #[serde(default)]
+    pub pending_restore_l2_reconciliation: bool,
+    #[serde(default)]
+    pub backup_dirty: bool,
+    #[serde(default)]
+    pub last_backup_at: Option<String>,
+    #[serde(default)]
+    pub last_sync_backup_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wallet_sync_alert: Option<WalletSyncAlert>,
+}
+
+impl From<InternalLifecycleState> for FrontendLifecycleStateDto {
+    fn from(value: InternalLifecycleState) -> Self {
+        Self {
+            pending_restore_l2_reconciliation: value.pending_restore_l2_reconciliation,
+            backup_dirty: value.backup_dirty,
+            last_backup_at: value.last_backup_at,
+            last_sync_backup_at: value.last_sync_backup_at,
+            wallet_sync_alert: value.wallet_sync_alert,
+        }
+    }
+}
+
 /// Read-only composite view of all three stores exposed to the UI via `get_app_config`.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AppConfigDto {
     pub ui_preferences: UiPreferences,
     pub security_policy: SecurityPolicy,
-    pub lifecycle: InternalLifecycleState,
+    pub lifecycle: FrontendLifecycleStateDto,
 }
 
 /// Partial update for `UiPreferences` (authorized with `RequiredAccess::DailyPay`).

@@ -125,6 +125,8 @@ export const SyncServiceSettingsCard: React.FC<SyncServiceSettingsCardProps> = (
                         onFeedback={admin.setFeedback}
                         checkingPublicUrl={admin.checkingPublicUrl}
                         isDeletingPublicDrop={admin.isDeletingPublicDrop}
+                        deletePublicDropError={admin.deletePublicDropError}
+                        onClearDeletePublicDropError={admin.clearDeletePublicDropError}
                     />
                 )}
 

@@ -18,6 +18,7 @@ vi.mock('../../../services/marketService', () => ({
     previewContactTrustChange: vi.fn().mockResolvedValue(null),
     probePublicSync: vi.fn(),
     probeContactSyncs: vi.fn().mockResolvedValue([]),
+    resolveCardRecipient: vi.fn(),
   },
 }));
 
@@ -408,6 +409,55 @@ describe('ContactDialog Component', () => {
           trustLevel: 2,
         })
       );
+    });
+  });
+
+  it('H12: disables Save while resolving card URI and discards stale resolve result after newer edit', async () => {
+    let resolveCard!: (val: { recipientId: string; did: string; displayName?: string }) => void;
+    vi.mocked(marketService.resolveCardRecipient).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveCard = resolve;
+        }),
+    );
+
+    render(
+      <ContactDialog
+        isOpen={true}
+        onClose={mockOnClose}
+        onSave={mockOnSave}
+      />
+    );
+
+    const didInput = screen.getByTestId('contact-did-input') as HTMLInputElement;
+    const firstNameInput = screen.getByTestId('contact-firstname-input') as HTMLInputElement;
+    const saveBtn = screen.getByRole('button', { name: /contacts\.saveContact|Kontakt speichern|Save Contact/i });
+
+    fireEvent.change(didInput, {
+      target: { value: 'humoco://card?env=eyJ0ZXN0IjoxfQ' },
+    });
+
+    await waitFor(() => {
+      expect(marketService.resolveCardRecipient).toHaveBeenCalledTimes(1);
+    });
+    expect(saveBtn).toBeDisabled();
+
+    // User overwrites with a fresh valid DID before the async card lookup finishes
+    fireEvent.change(didInput, {
+      target: { value: 'did:key:z6MkNewerDirectDid111' },
+    });
+    expect(saveBtn).not.toBeDisabled();
+
+    // Stale resolution finishes afterwards -> must be completely ignored
+    resolveCard({
+      recipientId: 'did:key:z6MkStaleCardDid999',
+      did: 'did:key:z6MkStaleCardDid999',
+      displayName: 'Stale Name',
+    });
+
+    await waitFor(() => {
+      expect(didInput.value).toBe('did:key:z6MkNewerDirectDid111');
+      expect(firstNameInput.value).toBe('');
     });
   });
 });

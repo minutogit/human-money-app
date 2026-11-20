@@ -100,6 +100,7 @@ export function useVoucherCreation() {
     const [validityValue, setValidityValue] = useState<number>(3);
     const [validityUnit, setValidityUnit] = useState<"Y" | "M" | "D">("Y");
     const [nonRedeemable, setNonRedeemable] = useState(true);
+    const [allowOfflineOnly, setAllowOfflineOnly] = useState(false);
 
     const [identity, setIdentity] = useState<CreatorData>({
         firstName: "",
@@ -271,6 +272,23 @@ export function useVoucherCreation() {
         }
     }, [parsedStandard, identity.gender]);
 
+    const hasOnlineProtection =
+        (lockOverview?.readyTrustedCount ?? 0) > 0 || Boolean(lockOverview?.hasOfflineCachedAnchor);
+    const requiresOfflineOnlyConfirm = !nonRedeemable && !hasOnlineProtection;
+
+    useEffect(() => {
+        if (!requiresOfflineOnlyConfirm) {
+            setAllowOfflineOnly(false);
+            setErrors(prev => prev.offlineOnlyConfirm ? { ...prev, offlineOnlyConfirm: false } : prev);
+        }
+    }, [requiresOfflineOnlyConfirm]);
+
+    useEffect(() => {
+        if (allowOfflineOnly) {
+            setErrors(prev => prev.offlineOnlyConfirm ? { ...prev, offlineOnlyConfirm: false } : prev);
+        }
+    }, [allowOfflineOnly]);
+
     const validate = useCallback(() => {
         const newErrors: Record<string, boolean> = {};
         if (!selectedStandardId) newErrors.standard = true;
@@ -280,12 +298,15 @@ export function useVoucherCreation() {
         if (standardRequiresCreatorGender(parsedStandard) && identity.gender !== "1" && identity.gender !== "2") {
             newErrors.gender = true;
         }
+        if (requiresOfflineOnlyConfirm && !allowOfflineOnly) {
+            newErrors.offlineOnlyConfirm = true;
+        }
         
         setErrors(newErrors);
         return newErrors;
-    }, [selectedStandardId, amount, identity, parsedStandard]);
+    }, [selectedStandardId, amount, identity, parsedStandard, requiresOfflineOnlyConfirm, allowOfflineOnly]);
 
-    const prepareVoucherData = useCallback((): NewVoucherData => {
+    const prepareVoucherData = useCallback((allowOfflineOnlyOverride?: boolean): NewVoucherData => {
         const validityDuration = validityValue > 0 ? `P${validityValue}${validityUnit}` : null;
         const { street, houseNumber, zipCode, city, country } = identity.address;
         const fullAddress = `${street} ${houseNumber}, ${zipCode} ${city}, ${country}`.trim();
@@ -304,8 +325,9 @@ export function useVoucherCreation() {
                 address: { ...identity.address, fullAddress }
             },
             layer2Anchor: null,
+            allowOfflineOnly: allowOfflineOnlyOverride ?? allowOfflineOnly,
         };
-    }, [identity, collateral, amount, nonRedeemable, parsedStandard, validityValue, validityUnit]);
+    }, [identity, collateral, amount, nonRedeemable, parsedStandard, validityValue, validityUnit, allowOfflineOnly]);
 
     return {
         standards,
@@ -315,6 +337,8 @@ export function useVoucherCreation() {
         validityValue,
         validityUnit,
         nonRedeemable,
+        allowOfflineOnly,
+        requiresOfflineOnlyConfirm,
         identity,
         collateral,
         isLoading,
@@ -325,6 +349,7 @@ export function useVoucherCreation() {
         setValidityValue,
         setValidityUnit,
         setNonRedeemable,
+        setAllowOfflineOnly,
         setIdentity,
         setCollateral,
         setErrors,

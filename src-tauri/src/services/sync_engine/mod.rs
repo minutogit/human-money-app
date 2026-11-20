@@ -14,6 +14,7 @@ pub use admin::{
 pub use card_sync::{
     discover_available_syncs_impl, probe_contact_syncs_impl, set_selected_upload_syncs_impl,
 };
+pub(crate) use card_sync::probe_contact_syncs_with_session;
 pub use channel_reader::{
     delete_own_sync_slots_impl, probe_public_sync_impl, remove_public_sync_impl,
     save_public_sync_impl,
@@ -884,7 +885,7 @@ pub(crate) mod tests {
             published: None,
         };
         save_my_market_profile_impl(save_req, Some(password.to_string()), &bob_state).unwrap();
-        set_card_published_impl(true, false, Some(password.to_string()), &bob_state)
+        set_card_published_impl(true, Some(password.to_string()), &bob_state)
             .await
             .unwrap();
 
@@ -3293,7 +3294,7 @@ pub(crate) mod tests {
         }
 
         // (c) Alice unpublishes her card -> orphaned media blob GC deletes .media slot & Bob hides Alice
-        set_card_published_impl(false, false, Some(password.to_string()), &alice_state)
+        set_card_published_impl(false, Some(password.to_string()), &alice_state)
             .await
             .unwrap();
         let _ = sync_market_channels_impl(

@@ -79,8 +79,8 @@ export const QuickContactModal: React.FC<QuickContactModalProps> = ({
         setPublishError(null);
         try {
             const updated = session
-                ? await session.protectAction(async (pwd) => marketService.setCardPublished(true, false, pwd || undefined))
-                : await marketService.setCardPublished(true, false);
+                ? await session.protectAction(async (pwd) => marketService.setCardPublished(true, pwd || undefined))
+                : await marketService.setCardPublished(true);
             if (updated) {
                 setMarketProfile(updated);
             }

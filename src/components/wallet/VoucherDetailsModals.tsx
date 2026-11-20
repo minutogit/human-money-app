@@ -17,14 +17,13 @@ interface VoucherDetailsModalsProps {
     onCloseExportModal: () => void;
     onConfigRefresh: (config: AppConfigDto) => void;
     onAskSaved: (savedPath: string) => void;
-    pendingSigImport: { fileBytes: Uint8Array; standardToml: string } | null;
+    pendingSigImport: { fileBytes: Uint8Array } | null;
     sigContainerPassword: string;
     sigPasswordError: string;
     onSigContainerPasswordChange: (val: string) => void;
     onSigPasswordError: (err: string) => void;
     onExecuteSigAttachment: (
         fileBytes: Uint8Array,
-        standardToml: string,
         pwd?: string,
     ) => Promise<void>;
     onCancelSigImport: () => void;
@@ -116,7 +115,6 @@ export function VoucherDetailsModals({
                         }
                         void onExecuteSigAttachment(
                             pendingSigImport.fileBytes,
-                            pendingSigImport.standardToml,
                             sigContainerPassword,
                         );
                     }}

@@ -53,7 +53,6 @@ export function useVoucherDetails(voucherId: string) {
     } | null>(null);
     const [pendingSigImport, setPendingSigImport] = useState<{
         fileBytes: Uint8Array;
-        standardToml: string;
     } | null>(null);
     const [sigContainerPassword, setSigContainerPassword] = useState('');
     const [sigPasswordError, setSigPasswordError] = useState('');
@@ -209,14 +208,12 @@ export function useVoucherDetails(voucherId: string) {
 
     const executeSignatureAttachment = async (
         fileBytes: Uint8Array,
-        standardToml: string,
         containerPwd?: string,
     ) => {
         try {
             await protectAction(async (walletPassword) => {
                 return await voucherService.processAndAttachSignature(
                     Array.from(fileBytes),
-                    standardToml,
                     containerPwd || undefined,
                     walletPassword || undefined,
                 );
@@ -241,7 +238,7 @@ export function useVoucherDetails(voucherId: string) {
                 errStr.includes('SymmetricEncryption') ||
                 errStr.includes('MacError');
             if (isPasswordRequired && !containerPwd) {
-                setPendingSigImport({ fileBytes, standardToml });
+                setPendingSigImport({ fileBytes });
                 setSigPasswordError('');
             } else {
                 setSignatureImportFeedback({
@@ -267,8 +264,7 @@ export function useVoucherDetails(voucherId: string) {
                 ],
             });
             if (!opened) return;
-            const standardTomlContent = await findMatchingStandardToml();
-            await executeSignatureAttachment(new Uint8Array(opened.bytes), standardTomlContent);
+            await executeSignatureAttachment(new Uint8Array(opened.bytes));
         } catch (e) {
             setSignatureImportFeedback({
                 type: 'error',

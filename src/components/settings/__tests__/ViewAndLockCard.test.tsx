@@ -36,7 +36,6 @@ function makeConfig(sessionTimeoutSeconds: number): AppConfigDto {
             backupDirty: false,
             lastBackupAt: null,
             lastSyncBackupAt: null,
-            l2ProbeCache: {},
         },
     };
 }

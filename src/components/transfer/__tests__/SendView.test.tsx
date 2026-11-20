@@ -119,7 +119,6 @@ amount_decimal_places = 4`,
       backupDirty: false,
       lastBackupAt: null,
       lastSyncBackupAt: null,
-      l2ProbeCache: {},
     },
   };
 

@@ -67,6 +67,8 @@ pub struct FrontendNewVoucherData {
     pub non_redeemable_test_voucher: bool,
     pub collateral: FrontendCollateralData,
     pub layer2_anchor: Option<String>,
+    #[serde(default)]
+    pub allow_offline_only: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

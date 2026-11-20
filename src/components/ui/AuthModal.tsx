@@ -14,6 +14,7 @@ interface AuthModalProps {
     credentialKind?: 'password' | 'pin';
     canSwitchToPassword?: boolean;
     onSwitchToPassword?: () => void;
+    isSubmitting?: boolean;
 }
 
 export function AuthModal({
@@ -26,6 +27,7 @@ export function AuthModal({
     credentialKind = 'password',
     canSwitchToPassword = false,
     onSwitchToPassword,
+    isSubmitting = false,
 }: AuthModalProps) {
     const { t } = useTranslation();
     const [password, setPassword] = useState('');
@@ -38,6 +40,7 @@ export function AuthModal({
 
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
+        if (isSubmitting) return;
         onConfirm(password);
     };
 
@@ -49,6 +52,7 @@ export function AuthModal({
             isOpen={isOpen}
             onClose={onCancel}
             closeOnBackdrop={false}
+            closeOnEscape={!isSubmitting}
             hideCloseButton={true}
             maxWidth="md"
             zIndexClass="z-50"
@@ -68,6 +72,7 @@ export function AuthModal({
                         inputMode={isPin ? 'numeric' : undefined}
                         maxLength={isPin ? 8 : undefined}
                         value={password}
+                        disabled={isSubmitting}
                         onChange={(e) => {
                             const val = e.target.value;
                             setPassword(isPin ? val.replace(/\D/g, '').slice(0, 8) : val);
@@ -81,16 +86,17 @@ export function AuthModal({
                                 <button
                                     type="button"
                                     data-testid="auth-modal-switch-password"
+                                    disabled={isSubmitting}
                                     onClick={onSwitchToPassword}
-                                    className="text-xs font-semibold text-theme-primary hover:underline cursor-pointer"
+                                    className="text-xs font-semibold text-theme-primary hover:underline cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                                 >
                                     {t('auth.useMasterPasswordInstead')}
                                 </button>
                             )}
                         </div>
                         <div className="flex justify-end gap-3">
-                            <Button type="button" variant="secondary" onClick={onCancel}>{t('common.cancel')}</Button>
-                            <Button type="submit" disabled={isPin ? password.length < 6 : !password}>{t('common.confirm')}</Button>
+                            <Button type="button" variant="secondary" disabled={isSubmitting} onClick={onCancel}>{t('common.cancel')}</Button>
+                            <Button type="submit" disabled={isSubmitting || (isPin ? password.length < 6 : !password)}>{t('common.confirm')}</Button>
                         </div>
                     </div>
                 </form>

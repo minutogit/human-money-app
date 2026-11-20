@@ -117,64 +117,74 @@ pub async fn create_profile(
         ) {
             Ok(()) => {
                 info!("Profile created successfully!");
+                let setup_res = (|| -> Result<String, FrontendError> {
+                    let folder_name = service.list_profiles().ok().and_then(|profiles| {
+                        profiles
+                            .iter()
+                            .find(|p| !existing_folders.contains(&p.folder_name))
+                            .or_else(|| profiles.iter().find(|p| p.profile_name == profile_name))
+                            .map(|p| p.folder_name.clone())
+                    });
+                    let pending_lock = if let Some(ref folder) = folder_name {
+                        state.acquire_profile_lock(folder)?
+                    } else {
+                        PendingProfileLock::None
+                    };
+                    let user_id = service
+                        .with_wallet_and_identity(|_, id| id.user_id.clone())
+                        .ok();
 
-                let folder_name = service.list_profiles().ok().and_then(|profiles| {
-                    profiles
-                        .iter()
-                        .find(|p| !existing_folders.contains(&p.folder_name))
-                        .or_else(|| profiles.iter().find(|p| p.profile_name == profile_name))
-                        .map(|p| p.folder_name.clone())
-                });
-                let pending_lock = if let Some(ref folder) = folder_name {
-                    state.acquire_profile_lock(folder)?
-                } else {
-                    PendingProfileLock::None
-                };
-                let user_id = service
-                    .with_wallet_and_identity(|_, id| id.user_id.clone())
-                    .ok();
+                    if let Some(ref folder) = folder_name {
+                        if let Err(e) = record_profile_metadata(&app, folder, user_id) {
+                            error!("Failed to update profile metadata: {}", e);
+                        }
+                    }
 
-                if let Some(ref folder) = folder_name {
-                    if let Err(e) = record_profile_metadata(&app, folder, user_id) {
-                        error!("Failed to update profile metadata: {}", e);
+                    // 1. Initialize and save split default configuration stores for the new profile
+                    crate::state::save_encrypted_json(
+                        &mut service,
+                        UI_PREFERENCES_KEY,
+                        &UiPreferences::default(),
+                        Some(&password),
+                    )
+                    .map_err(|e| {
+                        FrontendError::from(format!("Failed to save default uiPreferences: {}", e))
+                    })?;
+                    crate::state::save_encrypted_json(
+                        &mut service,
+                        SECURITY_POLICY_KEY,
+                        &SecurityPolicy::default(),
+                        Some(&password),
+                    )
+                    .map_err(|e| {
+                        FrontendError::from(format!("Failed to save default securityPolicy: {}", e))
+                    })?;
+                    crate::state::save_local_sidecar_json(
+                        &mut service,
+                        INTERNAL_LIFECYCLE_STATE_KEY,
+                        &InternalLifecycleState::default(),
+                        Some(&password),
+                    )
+                    .map_err(|e| {
+                        FrontendError::from(format!("Failed to save default lifecycle state: {}", e))
+                    })?;
+
+                    // 2. Initialize session and cache
+                    state
+                        .initialize_profile_session(&mut service, &password)
+                        .map_err(FrontendError::from)?;
+                    state.commit_profile_lock(pending_lock);
+                    Ok(folder_name.unwrap_or_default())
+                })();
+                match setup_res {
+                    Ok(folder) => folder,
+                    Err(err) => {
+                        service.logout();
+                        state.clear_all_caches();
+                        state.clear_sync_cooldown();
+                        return Err(err);
                     }
                 }
-
-                // 1. Initialize and save split default configuration stores for the new profile
-                crate::state::save_encrypted_json(
-                    &mut service,
-                    UI_PREFERENCES_KEY,
-                    &UiPreferences::default(),
-                    Some(&password),
-                )
-                .map_err(|e| {
-                    FrontendError::from(format!("Failed to save default uiPreferences: {}", e))
-                })?;
-                crate::state::save_encrypted_json(
-                    &mut service,
-                    SECURITY_POLICY_KEY,
-                    &SecurityPolicy::default(),
-                    Some(&password),
-                )
-                .map_err(|e| {
-                    FrontendError::from(format!("Failed to save default securityPolicy: {}", e))
-                })?;
-                crate::state::save_local_sidecar_json(
-                    &mut service,
-                    INTERNAL_LIFECYCLE_STATE_KEY,
-                    &InternalLifecycleState::default(),
-                    Some(&password),
-                )
-                .map_err(|e| {
-                    FrontendError::from(format!("Failed to save default lifecycle state: {}", e))
-                })?;
-
-                // 2. Initialize session and cache
-                state
-                    .initialize_profile_session(&mut service, &password)
-                    .map_err(FrontendError::from)?;
-                state.commit_profile_lock(pending_lock);
-                folder_name.unwrap_or_default()
             }
             Err(e) => {
                 error!("Profile creation failed: {}", e);
@@ -1657,6 +1667,42 @@ mod tests {
         // K2: flock-backed .lock file stays on disk and is never unlinked while another instance can re-lock
         assert!(lock_dir.join(format!("{}.lock", folder)).exists());
         assert!(state_b.acquire_profile_lock(&folder).is_ok());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_h2_initialize_profile_session_rolls_back_core_on_companion_failure() {
+        let dir = crate::test_support::temp_test_dir("h2_init_rollback");
+        let pw = "StrongPassword123!";
+        let mut svc = crate::test_support::setup_test_app(
+            &dir,
+            "Alice",
+            crate::test_support::ALICE_PHRASE,
+            pw,
+        );
+        svc.save_encrypted_data(
+            crate::settings::SECURITY_POLICY_KEY,
+            b"{corrupt-json",
+            Some(pw),
+        )
+        .unwrap();
+        assert!(svc.is_wallet_unlocked());
+        let state = crate::test_support::create_test_state(svc);
+
+        let err = {
+            let mut s = state.service.lock().unwrap();
+            state.initialize_profile_session(&mut s, pw)
+        }
+        .unwrap_err();
+        assert!(
+            !format!("{:?}", err).is_empty(),
+            "H2: corrupt companion store must abort session initialization"
+        );
+        assert!(
+            !state.service.lock().unwrap().is_wallet_unlocked(),
+            "H2: Core session must roll back to logged-out state when companion init fails"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

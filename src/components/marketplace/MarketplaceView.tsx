@@ -238,7 +238,7 @@ export function MarketplaceView({
     const handleConfirmPublishAndCreateAd = async () => {
         try {
             const updated = await protectAction(async (pwd) => {
-                return await marketService.setCardPublished(true, false, pwd || undefined);
+                return await marketService.setCardPublished(true, pwd || undefined);
             });
             if (updated) {
                 setMyProfile(updated);
@@ -255,7 +255,7 @@ export function MarketplaceView({
     const handleTogglePublished = async (published: boolean) => {
         try {
             const updated = await protectAction(async (pwd) => {
-                return await marketService.setCardPublished(published, false, pwd || undefined);
+                return await marketService.setCardPublished(published, pwd || undefined);
             });
             if (updated) {
                 setMyProfile(updated);

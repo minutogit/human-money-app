@@ -5,18 +5,65 @@ import { wotService } from '../../../services/wotService';
 import { integrityService } from '../../../services/integrityService';
 import { marketService } from '../../../services/marketService';
 import { parseStandardInfo } from '../../../hooks/useParsedStandards';
-import { extractDetachedSignatureVoucherId, ReceiveImportKind } from '../../../utils/humocoFileClassifier';
+import { ReceiveImportKind } from '../../../utils/humocoFileClassifier';
 import { isBackendError, stringifyError } from '../../../utils/errorHelper';
 import { APP_EVENTS, emitAppEvent } from '../../../utils/appEvents';
 import type { ProtectActionFn } from '../../../utils/fileIo';
 import type {
     PendingReceiveCommit,
+    ReceiveCommitMode,
     ReceiveSuccessPayload,
     VoucherDetails,
     VoucherStandardInfo,
-    VoucherSummary,
     WotImportResultDto,
 } from '../../../types';
+
+export function emitConflictsUpdatedIfPresent(payload: ReceiveSuccessPayload): void {
+    if (
+        (payload.verifiableConflicts && Object.keys(payload.verifiableConflicts).length > 0) ||
+        (payload.conflictSummaries?.some((c) => !c.isResolved && !c.localOverride) ?? false)
+    ) {
+        emitAppEvent(APP_EVENTS.CONFLICTS_UPDATED);
+    }
+}
+
+export function classifyToleranceError(err: unknown): 'Soft' | 'Critical' | null {
+    const errStr = stringifyError(err);
+    const isTolerance =
+        (isBackendError(err) &&
+            (err.code === 'error.transfer.bundleRecoveryZone' ||
+                err.code === 'error.transfer.bundleToleranceZone')) ||
+        errStr.includes('ToleranceZone');
+    if (!isTolerance) return null;
+    const isCritical =
+        (isBackendError(err) && err.code === 'error.transfer.bundleRecoveryZone') ||
+        errStr.includes('Extended');
+    return isCritical ? 'Critical' : 'Soft';
+}
+
+export async function commitPendingReceiveBundle(params: {
+    pendingCommit: PendingReceiveCommit;
+    forceAcceptToleranceBundle: boolean;
+    commitMode?: ReceiveCommitMode;
+    purchaseId?: string;
+    protectAction?: ProtectActionFn;
+}): Promise<ReceiveSuccessPayload | null> {
+    const runCommit = async (walletPassword: string | null) =>
+        await transferService.receiveBundle({
+            bundleData: params.pendingCommit.bundleData,
+            standardDefinitionsToml: params.pendingCommit.standardDefinitionsToml,
+            password: walletPassword || params.pendingCommit.bundlePassword || undefined,
+            forceAcceptToleranceBundle: params.forceAcceptToleranceBundle,
+            commitMode: params.commitMode ?? 'forceTrustOffline',
+            purchaseId: params.purchaseId,
+        });
+    const payload = params.protectAction
+        ? await params.protectAction(runCommit)
+        : await runCommit(null);
+    if (!payload) return null;
+    emitConflictsUpdatedIfPresent(payload);
+    return payload;
+}
 
 export function buildStandardDefinitionsToml(
     standards: VoucherStandardInfo[],
@@ -45,56 +92,6 @@ export function isAuthOrDecryptError(err: unknown): boolean {
         errMsg.includes('SymmetricEncryption') ||
         errMsg.includes('MacError')
     );
-}
-
-async function resolveDetachedSigCandidates(
-    fileData: number[],
-    standardDefinitionsToml: Record<string, string>,
-): Promise<string[]> {
-    const targetVoucherId = extractDetachedSignatureVoucherId(fileData);
-    let matchedStandardUuid: string | null = null;
-    const summaries = await voucherService.getSummaries().catch(() => [] as VoucherSummary[]);
-    const incompleteVouchers = summaries.filter((v) => {
-        const statusStr = typeof v.status === 'string' ? v.status : Object.keys(v.status)[0];
-        return statusStr?.toLowerCase() === 'incomplete';
-    });
-
-    if (targetVoucherId) {
-        const searchOrder = [
-            ...incompleteVouchers,
-            ...summaries.filter((s) => !incompleteVouchers.includes(s)),
-        ];
-        for (const v of searchOrder) {
-            try {
-                const details = await voucherService.getDetails(v.localInstanceId);
-                if (details?.voucher?.voucherId === targetVoucherId) {
-                    matchedStandardUuid =
-                        v.voucherStandardUuid || details.voucher.voucherStandard?.uuid || null;
-                    break;
-                }
-            } catch {
-                // Ignore details fetch failure for individual vouchers
-            }
-        }
-    }
-
-    if (!matchedStandardUuid && incompleteVouchers.length > 0) {
-        const incompleteUuids = Array.from(
-            new Set(incompleteVouchers.map((v) => v.voucherStandardUuid).filter(Boolean)),
-        );
-        if (incompleteUuids.length === 1) {
-            matchedStandardUuid = incompleteUuids[0];
-        }
-    }
-
-    const allStandards = Object.values(standardDefinitionsToml);
-    const preferredToml = matchedStandardUuid
-        ? standardDefinitionsToml[matchedStandardUuid]
-        : undefined;
-    const candidates = preferredToml
-        ? [preferredToml, ...allStandards.filter((s) => s !== preferredToml)]
-        : allStandards;
-    return candidates.length > 0 ? candidates : [''];
 }
 
 export type ReceiveImportOutcome =
@@ -140,12 +137,8 @@ export async function executeReceiveImport({
             });
         });
 
-        if (
-            payload &&
-            ((payload.verifiableConflicts && Object.keys(payload.verifiableConflicts).length > 0) ||
-                (payload.conflictSummaries?.some((c) => !c.isResolved && !c.localOverride) ?? false))
-        ) {
-            emitAppEvent(APP_EVENTS.CONFLICTS_UPDATED);
+        if (payload) {
+            emitConflictsUpdatedIfPresent(payload);
         }
 
         const pendingCommit: PendingReceiveCommit | undefined =
@@ -170,29 +163,12 @@ export async function executeReceiveImport({
     }
 
     if (type === 'sig') {
-        const standardDefinitionsToml = await ensureStandardsToml();
-        const tomlCandidates = await resolveDetachedSigCandidates(
-            fileData,
-            standardDefinitionsToml,
-        );
         const updatedInstanceId = await protectAction(async (walletPassword) => {
-            let lastErr: unknown = null;
-            for (const stdToml of tomlCandidates) {
-                try {
-                    return await voucherService.processAndAttachSignature(
-                        fileData,
-                        stdToml,
-                        password || undefined,
-                        walletPassword || undefined,
-                    );
-                } catch (err) {
-                    if (isAuthOrDecryptError(err)) {
-                        throw err;
-                    }
-                    lastErr = err;
-                }
-            }
-            throw lastErr;
+            return await voucherService.processAndAttachSignature(
+                fileData,
+                password || undefined,
+                walletPassword || undefined,
+            );
         });
 
         return updatedInstanceId

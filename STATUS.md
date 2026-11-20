@@ -1,12 +1,18 @@
 ---
 project: human-money-app
-version: "0.5.14"
+version: "0.5.15"
 phase: "beta"
 health: "green"
 last_updated: "2026-11-20"
 blocks: []
 blocked_by: []
 priority_tasks:
+  - id: "APP-073"
+    title: "Architecture Audit Remediation (K1–K2, H1–H13, F1–F3), Strict 24-bit PoW Align & 554-Key i18n Cleanup"
+    status: "completed"
+    priority: "critical"
+    depends_on: ["APP-072", "CORE-023", "SYNC-011"]
+    description: "Completed systematic KISS + Zero-Compat remediation across all 5 architectural root causes (`K1`–`K2`, `H1`–`H13`, `F1`–`F3`) and hardened QS checks: 1) Identity, Delegation & Egress Security (`K1`, `H8`, `H9`, `H11`): required verified 5-field `HUMOCO-LOCK-DELEGATE-V1` + `admin_pub`/`lock_pub` binding before counting L2 static 404s or classifying `?info` revocations, decoupled signed delegation metadata from health/offender observations (`upsert_verified_lock_probe` + `password`-aware `load_server_offender_list` in `l2_anchor_service.rs`), and hardened `sync_client.rs` / `wot_service.rs` SSRF checks (IPv4-mapped IPv6, NAT64 `64:ff9b::/96`, CGNAT, DNS-pinning resolver); 2) Transactional Boundaries (`H2`, `H3`, `H4`, `H10`, `H13`): added Core logout/cache rollback in `state.rs::initialize_profile_session`, multi-standard exact-UUID `.sig` attachment without guessing, atomic PoST commit/baseline sync + deterministic `ack-<msg_id>`, visible Sync-Lock protection selector with explicit `N=0` opt-in & TOCTOU modal (`voucher.create.l2Unavailable*`) + `?info.ticket_pow_bits` (24-bit cap), and fail-closed `remove_public_sync_impl` retaining error feedback inside the open delete dialog; 3) Async Generation & Delta Merges (`K2`, `H1`, `H6`, `H7`, `H12`): added `modalAttemptGenRef` + `isSubmitting` cancellation guards in `SessionContext`/`AuthModal`, threaded `SessionToken` through async backend sync/PoST flows, treated `OutboxMessageClass::ClaimBearing` strictly with per-target flush checks, replaced whole-map `l2_probe_cache` overwrites with delta upserts, and added async `cardResolveGenRef`/`isMountedRef` guards in `ContactDialog` & `ExportSigningRequestModal`; 4) Unified Flows & Strict Adapters (`H5`, `F2`, `F3`): routed `ReceiveSuccessView` `pendingCommit` retries through shared `ToleranceConfirmationModal` (`forceAcceptToleranceBundle` + `purchaseId`), enforced delimiter-bounded `humoco://card?env=` + `#[serde(deny_unknown_fields)]`, and removed sibling root-DID card forwarding fallbacks; 5) QS & Zero-Compat Cleanup (`F1` + i18n): replaced `AppConfigDto.lifecycle` with trimmed `FrontendLifecycleStateDto`, removed unused `l2ProbeCache`/`deleteRemote`/`DeadQuorumSwap` remnants, fixed latent `error.auth.sessionExpired` -> `sessionTimeout` keys, purged 554 dead i18n keys (`2497` sorted keys across all 5 locales), and upgraded `scripts/i18n-check-keys.js` to hard-error on unused keys. Verified with `humoco-market` (`112/112` tests, Clippy `0` warnings), `src-tauri` (`208/208` tests incl. new `K1`/`H1`/`H2`/`H4`/`H6`–`H13`/`F2`/`F3` regression tests, Clippy `0` warnings), `npm run check-versions` (`2.11`), `npm run i18n:check` (`2497` keys), ESLint (`0` errors on modified/added TS/TSX files), Vitest (`95/95` files, `715/715` tests), and `npm run build` (`tsc && vite build`)."
   - id: "APP-072"
     title: "Zero-Config & Relocation-Safe Sync-Locks UX, Automatic Committee Assembly, N=1->2/3 Auto-Growth & Soft Guarantor Trust Flow"
     status: "completed"

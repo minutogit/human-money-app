@@ -56,7 +56,6 @@ vi.mock('../../../services/settingsService', () => ({
         backupDirty: false,
         lastBackupAt: null,
         lastSyncBackupAt: null,
-        l2ProbeCache: {},
       },
     } satisfies AppConfigDto),
   },

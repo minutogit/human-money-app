@@ -19,8 +19,12 @@ import {
 } from '../../../utils/humocoFileClassifier';
 import { parseContactCard } from '../../../utils/humocoUri';
 import { logger } from '../../../utils/log';
-import { translateError, isBackendError, stringifyError } from '../../../utils/errorHelper';
-import { buildStandardDefinitionsToml, executeReceiveImport } from './receiveImportService';
+import { translateError, stringifyError } from '../../../utils/errorHelper';
+import {
+    buildStandardDefinitionsToml,
+    classifyToleranceError,
+    executeReceiveImport,
+} from './receiveImportService';
 import { useReceiveWotImport } from './useReceiveWotImport';
 import { useReceiveModals } from './useReceiveModals';
 import {
@@ -181,18 +185,11 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile, onFinish
                     return;
                 }
 
-                const isTolerance =
-                    (isBackendError(e) &&
-                        (e.code === 'error.transfer.bundleRecoveryZone' ||
-                            e.code === 'error.transfer.bundleToleranceZone')) ||
-                    errorStr.includes('ToleranceZone');
-                if (isTolerance) {
-                    const isCritical =
-                        (isBackendError(e) && e.code === 'error.transfer.bundleRecoveryZone') ||
-                        errorStr.includes('Extended');
+                const toleranceZone = classifyToleranceError(e);
+                if (toleranceZone) {
                     const standardDefinitionsToml = await ensureStandardsToml();
                     modalsRef.current?.setToleranceModal({
-                        type: isCritical ? 'Critical' : 'Soft',
+                        type: toleranceZone,
                         message: translateError(e, t),
                         pendingCommit: {
                             bundleData: fileData,

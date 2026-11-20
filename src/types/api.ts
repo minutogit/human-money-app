@@ -19,28 +19,6 @@ export type SettingsSection =
     | 'connection'
     | 'advanced';
 
-export interface LockServerProbeResult {
-    writeUrl: string;
-    readUrl: string;
-    dropPub: string;
-    adminPub: string;
-    lockPub: string;
-    delegationValid: boolean;
-    wafProbePassed: boolean;
-    selftestPassed: boolean;
-    keyLeakSafe: boolean;
-    passed: boolean;
-    latencyMs: number;
-    maxRetentionQuarter: number;
-    powBaseBits: number;
-    allowPowTickets: boolean;
-    inodeWarning: boolean;
-    usedInodes: number;
-    maxInodes: number;
-    probedAtSecs: number;
-    error?: string | null;
-}
-
 export interface LockServerItemDto {
     writeUrl: string;
     readUrl: string;
@@ -174,7 +152,6 @@ export interface InternalLifecycleState {
     backupDirty: boolean;
     lastBackupAt?: string | null;
     lastSyncBackupAt?: string | null;
-    l2ProbeCache: Record<string, LockServerProbeResult>;
     walletSyncAlert?: WalletSyncAlert | null;
 }
 

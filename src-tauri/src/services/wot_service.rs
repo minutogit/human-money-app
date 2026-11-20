@@ -496,19 +496,14 @@ pub async fn refresh_wot_provider_url_impl(
         },
     )?;
 
-    let is_valid_scheme = source_url.starts_with("https://")
-        || source_url.starts_with("http://127.0.0.1")
-        || source_url.starts_with("http://localhost");
-    if !is_valid_scheme {
-        return Err(FrontendError::from(
-            "Security violation: provider sourceUrl must use https:// (or localhost for dev/testing)".to_string(),
-        ));
+    if let Err(e) = crate::sync_client::validate_sync_url(&source_url) {
+        return Err(FrontendError::from(format!(
+            "Security violation: provider sourceUrl failed SSRF/HTTPS validation: {}",
+            e
+        )));
     }
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .map_err(|e| FrontendError::from(format!("Failed to build HTTP client: {}", e)))?;
+    let client = crate::sync_client::create_sync_http_client();
 
     let response = client
         .get(&source_url)

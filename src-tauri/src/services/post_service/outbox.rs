@@ -21,8 +21,9 @@ use crate::sync_client::{self as sync_client, PutSlotOutcome};
 
 use super::{
     collect_own_reply_syncs, collect_post_upload_targets, enqueue_post_envelope,
-    load_post_signing_context, load_post_state, lookup_counterparty_syncs,
-    merge_and_save_post_state, resolve_counterparty_info, seal_post_container_bytes,
+    load_post_signing_context_for_service, load_post_signing_context_for_session,
+    load_post_state_for_session, lookup_counterparty_syncs, merge_and_save_post_state,
+    resolve_counterparty_info, seal_post_container_bytes,
 };
 
 struct FlushContext {
@@ -70,251 +71,349 @@ fn record_recipient_target(
     }
 }
 
-fn collect_flush_context(
+fn map_seal_lock_error(reason: human_money_core::models::seal::SealLockReason) -> FrontendError {
+    match reason {
+        human_money_core::models::seal::SealLockReason::SupersededByHandover {
+            target_epoch,
+            is_seed_recovery,
+            ..
+        } => {
+            let mut err = FrontendError::with_code(
+                "error.security.supersededByHandover",
+                format!(
+                    "Wallet profile was handed over to another device (epoch #{}).",
+                    target_epoch
+                ),
+            );
+            err.details
+                .insert("targetEpoch".to_string(), target_epoch.to_string());
+            err.details
+                .insert("isSeedRecovery".to_string(), is_seed_recovery.to_string());
+            err
+        }
+        human_money_core::models::seal::SealLockReason::ConcurrentCloneDetected { .. } => {
+            FrontendError::with_code(
+                "error.security.concurrentCloneDetected",
+                "Security Lockdown: Concurrent clone detected.",
+            )
+        }
+        human_money_core::models::seal::SealLockReason::ForkDetected => FrontendError::with_code(
+            "error.security.walletLockedDueToFork",
+            "Security Lockdown: Wallet is locked due to a detected fork in the transaction history. Recovery required.",
+        ),
+    }
+}
+
+fn refresh_outbox_security_guards_with_service(
     state: &AppState,
+    service: &mut human_money_core::app_service::AppService,
     post_state: &StoredPostState,
-    extra_recipient_did: Option<&str>,
-    extra_recipient_syncs: &[FrontendSyncDescriptor],
     password: Option<&str>,
-) -> Result<FlushContext, String> {
-    let mut service = state.service.lock().unwrap();
-    let id_ctx = SyncIdentityContext::from_service(&service)
-        .map_err(|e| format!("Failed to access wallet signing key: {}", e.message))?;
-    let security_policy = state
-        .get_or_load_security_policy(&mut service, password)
-        .map_err(|e| format!("Failed to load security policy: {}", e))?;
-    let mut targets = collect_post_upload_targets(&security_policy);
-    let own_write_urls: std::collections::HashSet<String> = targets
-        .iter()
-        .map(|d| normalize_sync_url(&d.write_url))
-        .filter(|u| !u.is_empty())
-        .collect();
-    let mut recipient_write_urls = std::collections::HashSet::new();
-    let mut recipient_dids_by_write_url: std::collections::HashMap<
-        String,
-        std::collections::HashSet<String>,
-    > = std::collections::HashMap::new();
-
-    let extra_trimmed = extra_recipient_did.map(str::trim).filter(|s| !s.is_empty());
-    let mut exact_matched_recipients = std::collections::HashSet::new();
-
-    if !extra_recipient_syncs.is_empty() {
-        for d in extra_recipient_syncs {
-            if let Some(rcpt) = extra_trimmed {
-                exact_matched_recipients.insert(rcpt.to_string());
-                record_recipient_target(
-                    &mut recipient_write_urls,
-                    &mut recipient_dids_by_write_url,
-                    &mut targets,
-                    rcpt,
-                    d.clone().into(),
-                );
-            } else {
-                let norm = normalize_sync_url(&d.write_url);
-                if !norm.is_empty() {
-                    recipient_write_urls.insert(norm);
-                    targets.push(d.clone().into());
-                }
-            }
-        }
-    }
-
-    // Include recipient Sync endpoints from contacts, inquiries, pending sign requests, and known cards.
-    // Match by exact prefixed recipient_did first; fall back to canonical root DID only when no exact target exists.
-    let queued_recipients: std::collections::HashSet<String> = post_state
-        .outbox_entries
-        .iter()
-        .map(|e| e.recipient_did.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect();
-
-    let contacts = state
-        .load_contacts(&mut service, password)
-        .unwrap_or_default();
-    let card_store = crate::state::load_encrypted_json_opt::<humoco_market::CardStore>(
-        &mut service,
-        crate::state::MARKET_CARD_STORE_KEY,
-        password,
-    )
-    .map_err(|e| format!("Failed to load CardStore in collect_flush_context: {}", e))?;
-
-    for rcpt in &queued_recipients {
-        let mut found_exact = false;
-        for c in &contacts {
-            if c.did.trim() == rcpt {
-                for d in &c.syncs {
-                    found_exact = true;
-                    record_recipient_target(
-                        &mut recipient_write_urls,
-                        &mut recipient_dids_by_write_url,
-                        &mut targets,
-                        rcpt,
-                        d.clone().into(),
-                    );
-                }
-            }
-        }
-        for inq in &post_state.inquiries {
-            if inq.counterparty_did.trim() == rcpt {
-                for d in &inq.reply_syncs {
-                    found_exact = true;
-                    record_recipient_target(
-                        &mut recipient_write_urls,
-                        &mut recipient_dids_by_write_url,
-                        &mut targets,
-                        rcpt,
-                        d.clone().into(),
-                    );
-                }
-            }
-        }
-        for req in &post_state.pending_sign_requests {
-            if req.sender_did.trim() == rcpt {
-                for d in &req.reply_syncs {
-                    found_exact = true;
-                    record_recipient_target(
-                        &mut recipient_write_urls,
-                        &mut recipient_dids_by_write_url,
-                        &mut targets,
-                        rcpt,
-                        d.clone().into(),
-                    );
-                }
-            }
-        }
-        if let Some(ref store) = card_store {
-            if let Some(sc) = store.cards.get(rcpt.as_str()) {
-                for d in &sc.card.payload.drops {
-                    found_exact = true;
-                    record_recipient_target(
-                        &mut recipient_write_urls,
-                        &mut recipient_dids_by_write_url,
-                        &mut targets,
-                        rcpt,
-                        d.clone(),
-                    );
-                }
-            }
-        }
-        if found_exact {
-            exact_matched_recipients.insert(rcpt.clone());
-        }
-    }
-
-    for rcpt in &queued_recipients {
-        if exact_matched_recipients.contains(rcpt) {
-            continue;
-        }
-        let can_rcpt = crate::state::canonicalize_did(rcpt).unwrap_or_else(|_| rcpt.clone());
-        for c in &contacts {
-            let can_c = crate::state::canonicalize_did(&c.did).unwrap_or_else(|_| c.did.clone());
-            if can_c == can_rcpt {
-                for d in &c.syncs {
-                    record_recipient_target(
-                        &mut recipient_write_urls,
-                        &mut recipient_dids_by_write_url,
-                        &mut targets,
-                        rcpt,
-                        d.clone().into(),
-                    );
-                }
-            }
-        }
-        for inq in &post_state.inquiries {
-            let can_inq = crate::state::canonicalize_did(&inq.counterparty_did)
-                .unwrap_or_else(|_| inq.counterparty_did.clone());
-            if can_inq == can_rcpt {
-                for d in &inq.reply_syncs {
-                    record_recipient_target(
-                        &mut recipient_write_urls,
-                        &mut recipient_dids_by_write_url,
-                        &mut targets,
-                        rcpt,
-                        d.clone().into(),
-                    );
-                }
-            }
-        }
-        for req in &post_state.pending_sign_requests {
-            let can_req = crate::state::canonicalize_did(&req.sender_did)
-                .unwrap_or_else(|_| req.sender_did.clone());
-            if can_req == can_rcpt {
-                for d in &req.reply_syncs {
-                    record_recipient_target(
-                        &mut recipient_write_urls,
-                        &mut recipient_dids_by_write_url,
-                        &mut targets,
-                        rcpt,
-                        d.clone().into(),
-                    );
-                }
-            }
-        }
-        if let Some(ref store) = card_store {
-            for sc in store.cards.values() {
-                let can_card = crate::state::canonicalize_did(&sc.card.payload.did)
-                    .unwrap_or_else(|_| sc.card.payload.did.clone());
-                if can_card == can_rcpt {
-                    for d in &sc.card.payload.drops {
-                        record_recipient_target(
-                            &mut recipient_write_urls,
-                            &mut recipient_dids_by_write_url,
-                            &mut targets,
-                            rcpt,
-                            d.clone(),
-                        );
-                    }
-                }
-            }
-        }
-    }
-
-    // Check global outflow lock (fork/restore) and KnownOffender status for queued value transfers.
-    let value_outflow_blocked =
-        crate::services::common::ensure_restore_l2_reconciled(state, &mut service, password)
-            .is_err()
+) -> (bool, std::collections::HashSet<String>) {
+    let mut value_outflow_blocked =
+        crate::services::common::ensure_restore_l2_reconciled(state, service, password).is_err()
             || service
                 .get_seal_lock_reason(password)
                 .map_or(true, |reason| reason.is_some());
 
     let mut blocked_offender_dids = std::collections::HashSet::new();
-    let value_transfer_recipients: Vec<String> = post_state
+    let guarded_recipients: Vec<String> = post_state
         .outbox_entries
         .iter()
-        .filter(|e| e.message_class == crate::state::OutboxMessageClass::ValueTransfer)
+        .filter(|e| e.message_class.requires_outflow_guard())
         .map(|e| e.recipient_did.trim().to_string())
         .filter(|s| !s.is_empty())
         .collect();
-    if !value_transfer_recipients.is_empty() {
-        let _ = service.with_wallet(|wallet| {
-            for rcpt in &value_transfer_recipients {
+    if !value_outflow_blocked && !guarded_recipients.is_empty() {
+        let check_res = service.with_wallet(|wallet| {
+            if wallet.assert_not_known_offender(wallet.get_user_id()).is_err() {
+                value_outflow_blocked = true;
+            }
+            for rcpt in &guarded_recipients {
                 if wallet.assert_not_known_offender(rcpt).is_err() {
                     blocked_offender_dids.insert(rcpt.clone());
                 }
             }
         });
-    }
-
-    // Deduplicate targets by normalized write_url.
-    let mut deduped_targets = Vec::new();
-    let mut seen_urls = std::collections::HashSet::new();
-    for t in targets {
-        let norm = normalize_sync_url(&t.write_url);
-        if !norm.is_empty() && seen_urls.insert(norm) {
-            deduped_targets.push(t);
+        if check_res.is_err() {
+            value_outflow_blocked = true;
         }
     }
+    (value_outflow_blocked, blocked_offender_dids)
+}
 
-    Ok(FlushContext {
-        id_ctx,
-        upload_targets: deduped_targets,
-        own_write_urls,
-        recipient_write_urls,
-        recipient_dids_by_write_url,
-        value_outflow_blocked,
-        blocked_offender_dids,
-        now_secs: sync_client::current_unix_timestamp(),
-    })
+fn refresh_outbox_security_guards(
+    state: &AppState,
+    session: &SessionToken,
+    post_state: &StoredPostState,
+    password: Option<&str>,
+) -> Result<(bool, std::collections::HashSet<String>), String> {
+    state
+        .with_session_required(
+            session,
+            "Active wallet session changed before outbox security check",
+            |service| {
+                Ok(refresh_outbox_security_guards_with_service(
+                    state,
+                    service,
+                    post_state,
+                    password,
+                ))
+            },
+        )
+        .map_err(|e| e.message)
+}
+
+#[cfg(test)]
+pub(crate) fn collect_flush_security_for_test(
+    state: &AppState,
+    session: &SessionToken,
+    post_state: &StoredPostState,
+    password: Option<&str>,
+) -> (bool, std::collections::HashSet<String>) {
+    refresh_outbox_security_guards(state, session, post_state, password).unwrap_or((true, Default::default()))
+}
+
+fn collect_flush_context(
+    state: &AppState,
+    session: &SessionToken,
+    post_state: &StoredPostState,
+    extra_recipient_did: Option<&str>,
+    extra_recipient_syncs: &[FrontendSyncDescriptor],
+    password: Option<&str>,
+) -> Result<FlushContext, String> {
+    state
+        .with_session_required(
+            session,
+            "Active wallet session changed before outbox flush could be prepared",
+            |service| {
+                let id_ctx = SyncIdentityContext::from_service(service).map_err(|e| {
+                    FrontendError::from(format!("Failed to access wallet signing key: {}", e.message))
+                })?;
+                let security_policy = state
+                    .get_or_load_security_policy(service, password)
+                    .map_err(|e| {
+                        FrontendError::from(format!("Failed to load security policy: {}", e))
+                    })?;
+                let mut targets = collect_post_upload_targets(&security_policy);
+                let own_write_urls: std::collections::HashSet<String> = targets
+                    .iter()
+                    .map(|d| normalize_sync_url(&d.write_url))
+                    .filter(|u| !u.is_empty())
+                    .collect();
+                let mut recipient_write_urls = std::collections::HashSet::new();
+                let mut recipient_dids_by_write_url: std::collections::HashMap<
+                    String,
+                    std::collections::HashSet<String>,
+                > = std::collections::HashMap::new();
+
+                let extra_trimmed = extra_recipient_did.map(str::trim).filter(|s| !s.is_empty());
+                let mut exact_matched_recipients = std::collections::HashSet::new();
+
+                if !extra_recipient_syncs.is_empty() {
+                    for d in extra_recipient_syncs {
+                        if let Some(rcpt) = extra_trimmed {
+                            exact_matched_recipients.insert(rcpt.to_string());
+                            record_recipient_target(
+                                &mut recipient_write_urls,
+                                &mut recipient_dids_by_write_url,
+                                &mut targets,
+                                rcpt,
+                                d.clone().into(),
+                            );
+                        } else {
+                            let norm = normalize_sync_url(&d.write_url);
+                            if !norm.is_empty() {
+                                recipient_write_urls.insert(norm);
+                                targets.push(d.clone().into());
+                            }
+                        }
+                    }
+                }
+
+                let queued_recipients: std::collections::HashSet<String> = post_state
+                    .outbox_entries
+                    .iter()
+                    .map(|e| e.recipient_did.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+
+                let contacts = state.load_contacts(service, password).unwrap_or_default();
+                let card_store = crate::state::load_encrypted_json_opt::<humoco_market::CardStore>(
+                    service,
+                    crate::state::MARKET_CARD_STORE_KEY,
+                    password,
+                )
+                .map_err(|e| {
+                    FrontendError::from(format!(
+                        "Failed to load CardStore in collect_flush_context: {}",
+                        e
+                    ))
+                })?;
+
+                for rcpt in &queued_recipients {
+                    let mut found_exact = false;
+                    for c in &contacts {
+                        if c.did.trim() == rcpt {
+                            for d in &c.syncs {
+                                found_exact = true;
+                                record_recipient_target(
+                                    &mut recipient_write_urls,
+                                    &mut recipient_dids_by_write_url,
+                                    &mut targets,
+                                    rcpt,
+                                    d.clone().into(),
+                                );
+                            }
+                        }
+                    }
+                    for inq in &post_state.inquiries {
+                        if inq.counterparty_did.trim() == rcpt {
+                            for d in &inq.reply_syncs {
+                                found_exact = true;
+                                record_recipient_target(
+                                    &mut recipient_write_urls,
+                                    &mut recipient_dids_by_write_url,
+                                    &mut targets,
+                                    rcpt,
+                                    d.clone().into(),
+                                );
+                            }
+                        }
+                    }
+                    for req in &post_state.pending_sign_requests {
+                        if req.sender_did.trim() == rcpt {
+                            for d in &req.reply_syncs {
+                                found_exact = true;
+                                record_recipient_target(
+                                    &mut recipient_write_urls,
+                                    &mut recipient_dids_by_write_url,
+                                    &mut targets,
+                                    rcpt,
+                                    d.clone().into(),
+                                );
+                            }
+                        }
+                    }
+                    if let Some(ref store) = card_store {
+                        if let Some(sc) = store.cards.get(rcpt.as_str()) {
+                            for d in &sc.card.payload.drops {
+                                found_exact = true;
+                                record_recipient_target(
+                                    &mut recipient_write_urls,
+                                    &mut recipient_dids_by_write_url,
+                                    &mut targets,
+                                    rcpt,
+                                    d.clone(),
+                                );
+                            }
+                        }
+                    }
+                    if found_exact {
+                        exact_matched_recipients.insert(rcpt.clone());
+                    }
+                }
+
+                for rcpt in &queued_recipients {
+                    if exact_matched_recipients.contains(rcpt) {
+                        continue;
+                    }
+                    let can_rcpt =
+                        crate::state::canonicalize_did(rcpt).unwrap_or_else(|_| rcpt.clone());
+                    for c in &contacts {
+                        let can_c = crate::state::canonicalize_did(&c.did)
+                            .unwrap_or_else(|_| c.did.clone());
+                        if can_c == can_rcpt {
+                            for d in &c.syncs {
+                                record_recipient_target(
+                                    &mut recipient_write_urls,
+                                    &mut recipient_dids_by_write_url,
+                                    &mut targets,
+                                    rcpt,
+                                    d.clone().into(),
+                                );
+                            }
+                        }
+                    }
+                    for inq in &post_state.inquiries {
+                        let can_inq = crate::state::canonicalize_did(&inq.counterparty_did)
+                            .unwrap_or_else(|_| inq.counterparty_did.clone());
+                        if can_inq == can_rcpt {
+                            for d in &inq.reply_syncs {
+                                record_recipient_target(
+                                    &mut recipient_write_urls,
+                                    &mut recipient_dids_by_write_url,
+                                    &mut targets,
+                                    rcpt,
+                                    d.clone().into(),
+                                );
+                            }
+                        }
+                    }
+                    for req in &post_state.pending_sign_requests {
+                        let can_req = crate::state::canonicalize_did(&req.sender_did)
+                            .unwrap_or_else(|_| req.sender_did.clone());
+                        if can_req == can_rcpt {
+                            for d in &req.reply_syncs {
+                                record_recipient_target(
+                                    &mut recipient_write_urls,
+                                    &mut recipient_dids_by_write_url,
+                                    &mut targets,
+                                    rcpt,
+                                    d.clone().into(),
+                                );
+                            }
+                        }
+                    }
+                    if let Some(ref store) = card_store {
+                        for sc in store.cards.values() {
+                            let can_card = crate::state::canonicalize_did(&sc.card.payload.did)
+                                .unwrap_or_else(|_| sc.card.payload.did.clone());
+                            if can_card == can_rcpt {
+                                for d in &sc.card.payload.drops {
+                                    record_recipient_target(
+                                        &mut recipient_write_urls,
+                                        &mut recipient_dids_by_write_url,
+                                        &mut targets,
+                                        rcpt,
+                                        d.clone(),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+
+                let (value_outflow_blocked, blocked_offender_dids) =
+                    refresh_outbox_security_guards_with_service(
+                        state,
+                        service,
+                        post_state,
+                        password,
+                    );
+
+                let mut deduped_targets = Vec::new();
+                let mut seen_urls = std::collections::HashSet::new();
+                for t in targets {
+                    let norm = normalize_sync_url(&t.write_url);
+                    if !norm.is_empty() && seen_urls.insert(norm) {
+                        deduped_targets.push(t);
+                    }
+                }
+
+                Ok(FlushContext {
+                    id_ctx,
+                    upload_targets: deduped_targets,
+                    own_write_urls,
+                    recipient_write_urls,
+                    recipient_dids_by_write_url,
+                    value_outflow_blocked,
+                    blocked_offender_dids,
+                    now_secs: sync_client::current_unix_timestamp(),
+                })
+            },
+        )
+        .map_err(|e| e.message)
 }
 
 fn select_prioritized_entries_for_target(
@@ -327,7 +426,7 @@ fn select_prioritized_entries_for_target(
         .outbox_entries
         .iter()
         .filter(|entry| {
-            if entry.message_class == crate::state::OutboxMessageClass::ValueTransfer
+            if entry.message_class.requires_outflow_guard()
                 && (flush_ctx.value_outflow_blocked
                     || flush_ctx
                         .blocked_offender_dids
@@ -478,8 +577,9 @@ pub(crate) async fn flush_post_slots_impl(
     extra_recipient_syncs: &[FrontendSyncDescriptor],
     password: Option<&str>,
 ) -> FlushPostSlotsOutcome {
-    let flush_ctx = match collect_flush_context(
+    let mut flush_ctx = match collect_flush_context(
         state,
+        session,
         post_state,
         extra_recipient_did,
         extra_recipient_syncs,
@@ -511,6 +611,22 @@ pub(crate) async fn flush_post_slots_impl(
     for sync_desc in &flush_ctx.upload_targets {
         if !state.is_generation_current(session.generation) {
             break;
+        }
+        if post_state
+            .outbox_entries
+            .iter()
+            .any(|e| e.message_class.requires_outflow_guard())
+        {
+            match refresh_outbox_security_guards(state, session, post_state, password) {
+                Ok((blocked, offenders)) => {
+                    flush_ctx.value_outflow_blocked = blocked;
+                    flush_ctx.blocked_offender_dids = offenders;
+                }
+                Err(err) => {
+                    errors.push(err);
+                    break;
+                }
+            }
         }
         let if_match = post_state
             .slot_etags_by_write_url
@@ -716,7 +832,7 @@ pub(crate) async fn deposit_transfer_to_post_with_session(
     )?;
 
     let _post_guard = state.post_op_lock.lock().await;
-    let mut post_state = load_post_state(state, password)?;
+    let mut post_state = load_post_state_for_session(state, session, password)?;
     let baseline = post_state.clone();
 
     let msg_id = if let Some(existing) = post_state.outbox_entries.iter().find(|e| {
@@ -728,7 +844,7 @@ pub(crate) async fn deposit_transfer_to_post_with_session(
         let validated_recipient =
             ValidatedUserId::parse(&record.recipient_id).map_err(FrontendError::from)?;
         let recipient_ed_pk = validated_recipient.public_key();
-        let signing_ctx = load_post_signing_context(state, password)?;
+        let signing_ctx = load_post_signing_context_for_session(state, session, password)?;
         let now_secs = sync_client::current_unix_timestamp();
         let fresh_msg_id = uuid::Uuid::new_v4().to_string();
 
@@ -819,14 +935,14 @@ pub async fn send_signing_request_via_post_impl(
         ValidatedUserId::parse(&recipient_did).map_err(FrontendError::from)?;
     let recipient_did = validated_recipient.as_str().to_string();
     let recipient_ed_pk = validated_recipient.public_key();
-    let signing_ctx = load_post_signing_context(state, pw)?;
+    let signing_ctx = load_post_signing_context_for_session(state, &session, pw)?;
     let anchor_manifest_json =
         resolve_signing_request_anchor_manifest(state, local_instance_id.as_deref());
     let now_secs = sync_client::current_unix_timestamp();
 
     let _post_guard = state.post_op_lock.lock().await;
     let msg_id = uuid::Uuid::new_v4().to_string();
-    let mut post_state = load_post_state(state, pw)?;
+    let mut post_state = load_post_state_for_session(state, &session, pw)?;
     let baseline = post_state.clone();
     enqueue_post_envelope(
         &mut post_state,
@@ -854,18 +970,47 @@ pub async fn reply_detached_signature_via_post_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendPostDepositResult, FrontendError> {
-    let session = state
-        .authorize_and_begin_session(crate::state::RequiredAccess::Full, password.as_deref())?;
+    let (session, resolved_pw) = state.authorize_and_begin_session_secret(
+        crate::state::RequiredAccess::Full,
+        password.as_deref(),
+    )?;
+    let pw = resolved_pw.as_deref().map(String::as_str);
     let validated_recipient =
         ValidatedUserId::parse(&recipient_did).map_err(FrontendError::from)?;
     let recipient_did = validated_recipient.as_str().to_string();
     let recipient_ed_pk = validated_recipient.public_key();
-    let signing_ctx = load_post_signing_context(state, password.as_deref())?;
+    let signing_ctx = state.with_session_required(
+        &session,
+        "Active wallet session changed before detached signature reply could be prepared",
+        |service| {
+            if let Some(reason) = service
+                .get_seal_lock_reason(pw)
+                .map_err(FrontendError::from)?
+            {
+                return Err(map_seal_lock_error(reason));
+            }
+            let signing_ctx = load_post_signing_context_for_service(state, service, pw)?;
+            let offender_dids = [recipient_did.as_str(), signing_ctx.identity.user_id.as_str()];
+            let preflight = crate::services::preflight::ValueOutflowPreflight {
+                require_restore_reconciled: true,
+                check_known_offender_dids: &offender_dids,
+                check_blocking_intent_local_ids: &[],
+                check_anchor_id_quorum_health: None,
+            };
+            crate::services::preflight::run_value_outflow_preflight(
+                state,
+                service,
+                pw,
+                &preflight,
+            )?;
+            Ok(signing_ctx)
+        },
+    )?;
     let now_secs = sync_client::current_unix_timestamp();
 
     let _post_guard = state.post_op_lock.lock().await;
     let msg_id = uuid::Uuid::new_v4().to_string();
-    let mut post_state = load_post_state(state, password.as_deref())?;
+    let mut post_state = load_post_state_for_session(state, &session, pw)?;
     let baseline = post_state.clone();
     enqueue_post_envelope(
         &mut post_state,
@@ -875,7 +1020,7 @@ pub async fn reply_detached_signature_via_post_impl(
         recipient_ed_pk,
         msg_id.clone(),
         None,
-        crate::state::OutboxMessageClass::Control,
+        crate::state::OutboxMessageClass::ClaimBearing,
         &signing_ctx.own_reply_syncs,
         container_bytes,
         now_secs,
@@ -892,7 +1037,7 @@ pub async fn reply_detached_signature_via_post_impl(
         &session,
         &baseline,
         &mut post_state,
-        password.as_deref(),
+        pw,
     )?;
     let mid_baseline = post_state.clone();
 
@@ -902,7 +1047,7 @@ pub async fn reply_detached_signature_via_post_impl(
         &mut post_state,
         None,
         &[],
-        password.as_deref(),
+        pw,
     )
     .await;
     let delivered_to_recipient =
@@ -926,7 +1071,7 @@ pub async fn reply_detached_signature_via_post_impl(
                                 &recipient_did,
                                 &req.reply_syncs,
                                 None,
-                                password.as_deref(),
+                                pw,
                             ) {
                                 warn!(
                                     "Failed to update contact from signing request reply syncs: {}",
@@ -974,6 +1119,25 @@ pub async fn send_wot_handshake_via_post_impl(
         password.as_deref(),
     )?;
     let pw = resolved_pw.as_deref().map(String::as_str);
+    send_wot_handshake_via_post_with_session(
+        &session,
+        recipient_did,
+        proposed_level,
+        reply_requested,
+        pw,
+        state,
+    )
+    .await
+}
+
+pub(crate) async fn send_wot_handshake_via_post_with_session(
+    session: &SessionToken,
+    recipient_did: String,
+    proposed_level: u8,
+    reply_requested: bool,
+    pw: Option<&str>,
+    state: &AppState,
+) -> Result<FrontendPostDepositResult, FrontendError> {
     if proposed_level > 1 {
         return Err(FrontendError::from(format!(
             "proposed_level must be 0 or 1, got {}",
@@ -988,7 +1152,7 @@ pub async fn send_wot_handshake_via_post_impl(
 
     let (my_identity, my_ed_sk, own_reply_syncs, assertion, now_secs) = state
         .with_session_required(
-            &session,
+            session,
             "Wallet session changed before preparing WoT handshake",
             |service| {
                 let my_identity = service
@@ -1057,7 +1221,7 @@ pub async fn send_wot_handshake_via_post_impl(
 
     let _post_guard = state.post_op_lock.lock().await;
     let msg_id = uuid::Uuid::new_v4().to_string();
-    let mut post_state = load_post_state(state, pw)?;
+    let mut post_state = load_post_state_for_session(state, session, pw)?;
     let baseline = post_state.clone();
     enqueue_post_envelope(
         &mut post_state,
@@ -1074,7 +1238,7 @@ pub async fn send_wot_handshake_via_post_impl(
         None,
     )?;
 
-    persist_and_flush_post_box(state, &session, &baseline, &mut post_state, msg_id, pw).await
+    persist_and_flush_post_box(state, session, &baseline, &mut post_state, msg_id, pw).await
 }
 
 /// Accepts a pending incoming WoT handshake, updates contact trust, imports the peer's
@@ -1100,7 +1264,7 @@ pub async fn accept_wot_handshake_impl(
 
     let sender_did = {
         let _post_guard = state.post_op_lock.lock().await;
-        let mut post_state = load_post_state(state, pw)?;
+        let mut post_state = load_post_state_for_session(state, &session, pw)?;
         let baseline = post_state.clone();
         let idx = post_state
             .pending_wot_handshakes
@@ -1166,11 +1330,12 @@ pub async fn accept_wot_handshake_impl(
     };
 
     if send_return_handshake {
-        send_wot_handshake_via_post_impl(
+        send_wot_handshake_via_post_with_session(
+            &session,
             sender_did,
             trust_level.min(1),
             false,
-            resolved_pw.as_deref().cloned(),
+            pw,
             state,
         )
         .await
@@ -1237,7 +1402,7 @@ pub async fn send_market_inquiry_via_post_impl(
         )?;
     }
 
-    let signing_ctx = load_post_signing_context(state, pw)?;
+    let signing_ctx = load_post_signing_context_for_session(state, &session, pw)?;
 
     let container_bytes = seal_post_container_bytes(
         &signing_ctx.identity,
@@ -1249,7 +1414,7 @@ pub async fn send_market_inquiry_via_post_impl(
 
     let _post_guard = state.post_op_lock.lock().await;
     let msg_id = uuid::Uuid::new_v4().to_string();
-    let mut post_state = load_post_state(state, pw)?;
+    let mut post_state = load_post_state_for_session(state, &session, pw)?;
     let baseline = post_state.clone();
     enqueue_post_envelope(
         &mut post_state,
@@ -1364,7 +1529,7 @@ pub async fn send_market_inquiry_message_via_post_impl(
 
     let _post_guard = state.post_op_lock.lock().await;
     let now_secs = sync_client::current_unix_timestamp();
-    let mut post_state = load_post_state(state, pw)?;
+    let mut post_state = load_post_state_for_session(state, &session, pw)?;
     let baseline = post_state.clone();
 
     let (item_idx, counterparty_did, target, has_reply_syncs) = {
@@ -1436,7 +1601,7 @@ pub async fn send_market_inquiry_message_via_post_impl(
         );
     }
 
-    let signing_ctx = load_post_signing_context(state, pw)?;
+    let signing_ctx = load_post_signing_context_for_session(state, &session, pw)?;
 
     let container_bytes = seal_post_container_bytes(
         &signing_ctx.identity,

@@ -48,7 +48,14 @@ pub enum RequiredAccess {
 #[serde(rename_all = "camelCase")]
 pub enum OutboxMessageClass {
     ValueTransfer,
+    ClaimBearing,
     Control,
+}
+
+impl OutboxMessageClass {
+    pub fn requires_outflow_guard(self) -> bool {
+        matches!(self, Self::ValueTransfer | Self::ClaimBearing)
+    }
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -2158,9 +2165,13 @@ impl AppState {
                 .security_policy
                 .clone()
                 .ok_or_else(|| AppFacadeError::Generic("SecurityPolicy not loaded".to_string()))?,
-            lifecycle: caches.internal_lifecycle.clone().ok_or_else(|| {
-                AppFacadeError::Generic("InternalLifecycleState not loaded".to_string())
-            })?,
+            lifecycle: caches
+                .internal_lifecycle
+                .clone()
+                .map(Into::into)
+                .ok_or_else(|| {
+                    AppFacadeError::Generic("InternalLifecycleState not loaded".to_string())
+                })?,
         })
     }
 
@@ -2780,6 +2791,22 @@ impl AppState {
     }
 
     fn initialize_profile_session_inner(
+        &self,
+        service: &mut AppService,
+        credential: &str,
+        is_secondary: bool,
+    ) -> Result<(), AppFacadeError> {
+        let res = self.initialize_profile_session_fallible(service, credential, is_secondary);
+        if let Err(err) = res {
+            service.logout();
+            self.clear_all_caches();
+            self.clear_sync_cooldown();
+            return Err(err);
+        }
+        Ok(())
+    }
+
+    fn initialize_profile_session_fallible(
         &self,
         service: &mut AppService,
         credential: &str,

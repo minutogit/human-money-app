@@ -260,7 +260,6 @@ describe('MarketplaceView Component', () => {
               backupDirty: false,
               lastBackupAt: null,
               lastSyncBackupAt: null,
-              l2ProbeCache: {},
             },
           } satisfies AppConfigDto);
         case 'set_card_published':
@@ -545,7 +544,6 @@ describe('MarketplaceView Component', () => {
             backupDirty: false,
             lastBackupAt: null,
             lastSyncBackupAt: null,
-            l2ProbeCache: {},
           },
         });
       }
@@ -620,7 +618,6 @@ describe('MarketplaceView Component', () => {
             backupDirty: false,
             lastBackupAt: null,
             lastSyncBackupAt: null,
-            l2ProbeCache: {},
           },
         });
       }

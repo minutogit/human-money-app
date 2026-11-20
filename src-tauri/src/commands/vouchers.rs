@@ -141,6 +141,15 @@ pub(crate) async fn create_new_voucher_impl(
         anchor_bytes = auto_aid;
         voucher_data.layer2_anchor = auto_aid;
     }
+    if !voucher_data.non_redeemable_test_voucher
+        && anchor_bytes.is_none()
+        && !data.allow_offline_only
+    {
+        return Err(FrontendError::with_code(
+            "error.voucher.l2AnchorUnavailable",
+            "Online double-spend protection could not be established for this voucher.",
+        ));
+    }
 
     let pw = resolved_pw.as_deref().map(String::as_str);
     let details_res = state.with_session_required(
@@ -560,12 +569,13 @@ pub fn create_detached_signature_response_bundle(
 #[tauri::command]
 pub fn process_and_attach_signature(
     container_bytes: Vec<u8>,
-    standard_toml_content: String,
     container_password: Option<String>,
     wallet_password: Option<String>,
+    app: tauri::AppHandle,
     state: tauri::State<AppState>,
 ) -> Result<String, FrontendError> {
     info!("Processing and attaching signature from bundle...");
+    let all_standards = crate::services::common::load_all_standard_tomls(Some(&app), None);
     let (mut service, resolved_pw) = state.authorize_and_lock_secret(
         crate::state::RequiredAccess::DailyPay,
         wallet_password.as_deref(),
@@ -574,7 +584,7 @@ pub fn process_and_attach_signature(
     service
         .process_and_attach_signature(
             &container_bytes,
-            &standard_toml_content,
+            &all_standards,
             container_password.as_deref(),
             pw,
         )
@@ -818,7 +828,7 @@ pub(crate) fn evaluate_guarantor_anchor_check_impl(
             Err(err)
                 if password.is_none()
                     && (err.code == "error.auth.sessionNotActive"
-                        || err.code == "error.auth.sessionExpired") =>
+                        || err.code == "error.auth.sessionTimeout") =>
             {
                 humoco_wot::ServerOffenderList::new()
             }
@@ -1061,6 +1071,7 @@ mod tests {
                 abbreviation: "FT".into(),
             },
             layer2_anchor: None,
+            allow_offline_only: false,
         };
         let issue_err = create_new_voucher_impl(
             ft_toml.clone(),
@@ -1195,5 +1206,52 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn test_h10_create_voucher_rejects_silent_offline_fallback_unless_confirmed() {
+        let dir = crate::test_support::temp_test_dir("h10_offline_guard");
+        let pw = "StrongPassword123!";
+        let svc = crate::test_support::setup_test_app(
+            &dir,
+            "Alice",
+            crate::test_support::ALICE_PHRASE,
+            pw,
+        );
+        let profile = svc
+            .with_wallet(|w| w.profile.to_public_profile())
+            .unwrap();
+        let state = crate::test_support::create_test_state(svc);
+        let ft_toml =
+            human_money_core::test_utils::generate_signed_standard_toml("voucher_standards/freetaler_v1/standard.toml");
+
+        let make_data = |allow_offline_only: bool| FrontendNewVoucherData {
+            nominal_value: crate::models::NominalValueData {
+                amount: "25.00".into(),
+                unit: "FT".into(),
+            },
+            creator: crate::models::FrontendCreatorData::from(profile.clone()),
+            validity_duration: Some("P1Y".into()),
+            non_redeemable_test_voucher: false,
+            collateral: crate::models::FrontendCollateralData {
+                amount: "25.00".into(),
+                unit: "FT".into(),
+                abbreviation: "FT".into(),
+            },
+            layer2_anchor: None,
+            allow_offline_only,
+        };
+
+        let err = create_new_voucher_impl(ft_toml.clone(), make_data(false), Some(pw.into()), &state)
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, "error.voucher.l2AnchorUnavailable");
+
+        let created = create_new_voucher_impl(ft_toml, make_data(true), Some(pw.into()), &state)
+            .await
+            .expect("explicit offline-only confirmation must succeed at N=0");
+        assert!(created.voucher.layer2_anchor.is_none());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

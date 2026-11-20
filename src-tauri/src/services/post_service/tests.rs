@@ -1188,7 +1188,7 @@ async fn test_async_wot_handshake_and_1_step_marketplace_inquiry_cycle() {
         published: None,
     };
     save_my_market_profile_impl(save_req, Some(password.to_string()), &bob_state).unwrap();
-    set_card_published_impl(true, false, Some(password.to_string()), &bob_state)
+    set_card_published_impl(true, Some(password.to_string()), &bob_state)
         .await
         .unwrap();
 
@@ -1866,11 +1866,13 @@ async fn test_unreachable_recipient_returns_error_and_locked_dispatch_defers_msg
         now_secs: 1_760_000_000,
     };
     let mut post_state = StoredPostState::default();
+    let mut baseline_post_state = post_state.clone();
     let mut stats = super::handlers::PostDispatchStats::default();
     let outcome = super::handlers::dispatch_post_payload(
         &ctx,
         &PayloadType::DetachedSignature,
         &mut post_state,
+        &mut baseline_post_state,
         &mut stats,
     )
     .await;
@@ -2566,7 +2568,7 @@ async fn test_post_prefix_routing_reply_drops_and_ack_isolation() {
         &bob_state,
     )
     .unwrap();
-    set_card_published_impl(true, false, Some(password.to_string()), &bob_state)
+    set_card_published_impl(true, Some(password.to_string()), &bob_state)
         .await
         .unwrap();
 
@@ -3087,4 +3089,123 @@ async fn h8_post_tolerance_zone_parks_confirms_and_dismisses() {
     assert!(post_bob_final.pending_tolerance_payments.is_empty());
 
     let _ = std::fs::remove_dir_all(&base_dir);
+}
+
+#[test]
+fn test_h4_queue_receipt_is_deterministic_and_idempotent() {
+    let dir = temp_test_dir("h4_idempotent_ack");
+    let pw = "TestPassword123!";
+    let alice_svc = setup_test_app(&dir.join("alice"), "Alice", ALICE_PHRASE, pw);
+    let bob_svc = setup_test_app(&dir.join("bob"), "Bob", BOB_PHRASE, pw);
+    let (my_id, my_sk) = alice_svc
+        .with_wallet_and_identity(|_, id| (id.clone(), id.signing_key.clone()))
+        .unwrap();
+    let bob_did = bob_svc.with_wallet(|w| w.get_user_id().to_string()).unwrap();
+
+    let mut post_state = StoredPostState::default();
+    let tag16 = [7u8; 16];
+    super::queue_receipt(
+        &mut post_state,
+        &my_id,
+        &my_sk,
+        &bob_did,
+        "msg-unique-1",
+        &tag16,
+        Some("bundle-1"),
+        &[],
+        1_760_000_000,
+    );
+    super::queue_receipt(
+        &mut post_state,
+        &my_id,
+        &my_sk,
+        &bob_did,
+        "msg-unique-1",
+        &tag16,
+        Some("bundle-1"),
+        &[],
+        1_760_000_010,
+    );
+    assert_eq!(post_state.outbox_entries.len(), 1);
+    assert_eq!(post_state.outbox_entries[0].msg_id, "ack-msg-unique-1");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn test_h1_h6_claim_bearing_outflow_guard_and_stale_session_rejection() {
+    let dir = temp_test_dir("h1_h6_outbox_guards");
+    let pw = "TestPassword123!";
+    let alice_svc = setup_test_app(&dir.join("alice"), "Alice", ALICE_PHRASE, pw);
+    let bob_svc = setup_test_app(&dir.join("bob"), "Bob", BOB_PHRASE, pw);
+    let bob_did = bob_svc.with_wallet(|w| w.get_user_id().to_string()).unwrap();
+    let bob_pk = *human_money_core::ValidatedUserId::parse(&bob_did)
+        .unwrap()
+        .public_key();
+
+    let alice_state = create_test_state(alice_svc);
+    let stale_session = {
+        let s = alice_state.lock_service().unwrap();
+        alice_state.session_token_for_service(&s).unwrap()
+    };
+
+    // H1: stale session token is rejected after logout / generation bump
+    crate::commands::auth::logout_impl(&alice_state);
+    let stale_err =
+        super::load_post_state_for_session(&alice_state, &stale_session, Some(pw)).unwrap_err();
+    assert!(
+        stale_err.message.contains("session changed"),
+        "unexpected H1 err: {:?}",
+        stale_err
+    );
+
+    // Re-open fresh profile session for H6 check
+    let fresh_svc = setup_test_app(&dir.join("alice2"), "Alice2", ALICE_PHRASE, pw);
+    let fresh_state = create_test_state(fresh_svc);
+    let (session, my_id, my_sk) = {
+        let mut s = fresh_state.lock_service().unwrap();
+        let sess = fresh_state.session_token_for_service(&s).unwrap();
+        let id = s.with_wallet_and_identity(|_, id| id.clone()).unwrap();
+        s.persist_seal_lock_reason(
+            human_money_core::models::seal::SealLockReason::ForkDetected,
+            Some(pw),
+        )
+        .unwrap();
+        (sess, id.clone(), id.signing_key.clone())
+    };
+
+    // Enqueue ClaimBearing fails immediately while ForkDetected seal lock is active
+    let reply_err = reply_detached_signature_via_post_impl(
+        None,
+        bob_did.clone(),
+        b"detached-sig".to_vec(),
+        Some(pw.into()),
+        &fresh_state,
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(reply_err.code, "error.security.walletLockedDueToFork");
+
+    // Pre-queued ClaimBearing entry MUST be blocked from flush while seal lock is active
+    assert!(crate::state::OutboxMessageClass::ClaimBearing.requires_outflow_guard());
+    let mut ps = StoredPostState::default();
+    super::enqueue_post_envelope(
+        &mut ps,
+        &my_id.user_id,
+        &my_sk,
+        &bob_did,
+        &bob_pk,
+        "claim-1".into(),
+        None,
+        crate::state::OutboxMessageClass::ClaimBearing,
+        &[],
+        b"claim".to_vec(),
+        1_760_000_000,
+        None,
+    )
+    .unwrap();
+    let (blocked, _) = super::outbox::collect_flush_security_for_test(&fresh_state, &session, &ps, Some(pw));
+    assert!(blocked, "H6: ClaimBearing must be blocked when ForkDetected");
+
+    let _ = std::fs::remove_dir_all(&dir);
 }

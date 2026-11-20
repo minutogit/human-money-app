@@ -146,7 +146,6 @@ amount_decimal_places = 4`,
       backupDirty: false,
       lastBackupAt: null,
       lastSyncBackupAt: null,
-      l2ProbeCache: {},
     },
   };
 
@@ -321,64 +320,33 @@ amount_decimal_places = 4`,
     expect(reImportButton.textContent).not.toContain('common.processing');
   });
 
-  it('selects matching standard for detached signature file', async () => {
+  it('delegates detached signature attachment directly to backend without guessing standards in frontend', async () => {
     (open as Mock).mockResolvedValue('/path/to/signature.sig');
     const { readFile } = await import('@tauri-apps/plugin-fs');
 
-    const sigPayload = JSON.stringify({
-      Signature: {
-        voucher_id: 'v-123',
-        signature: 'sig-abc'
-      }
-    });
-    const container = {
-      ciphertext: window.btoa(sigPayload),
-      recipients: [],
-      c: 'DetachedSignature'
+    const encryptedContainer = {
+      ciphertext: 'opaque-encrypted-ciphertext',
+      recipients: [{ header: 'eph' }],
+      c: 'DetachedSignature',
     };
-    const containerBytes = new TextEncoder().encode(JSON.stringify(container));
+    const containerBytes = new TextEncoder().encode(JSON.stringify(encryptedContainer));
     (readFile as Mock).mockResolvedValue(containerBytes);
 
-    let attachedStandardToml = '';
+    let attachCallCount = 0;
+    let receivedArgs: Record<string, unknown> | undefined;
     (invoke as Mock).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
       if (cmd === 'get_voucher_standards') {
-        return Promise.resolve([
-          {
-            id: 'standard-other',
-            displayName: 'OtherStandard',
-            content: 'uuid = "std-uuid-other"\nname = "Other"',
-          },
-          {
-            id: 'standard-matching',
-            displayName: 'MatchingStandard',
-            content: 'uuid = "std-uuid-match"\nname = "Matching"',
-          }
-        ]);
+        return Promise.resolve(mockStandards);
       }
       if (cmd === 'get_app_config') {
         return Promise.resolve(mockConfig);
       }
-      if (cmd === 'get_voucher_summaries') {
-        return Promise.resolve([
-          {
-            localInstanceId: 'inst-1',
-            status: 'incomplete',
-            voucherStandardUuid: 'std-uuid-match',
-          }
-        ]);
-      }
-      if (cmd === 'get_voucher_details') {
-        return Promise.resolve({
-          localInstanceId: 'inst-1',
-          status: 'incomplete',
-          voucher: {
-            voucherId: 'v-123',
-            voucherStandard: { uuid: 'std-uuid-match' }
-          }
-        });
+      if (cmd === 'get_user_id') {
+        return Promise.resolve('did:key:zTestReceiver123');
       }
       if (cmd === 'process_and_attach_signature') {
-        attachedStandardToml = String(args?.standardTomlContent || '');
+        attachCallCount += 1;
+        receivedArgs = args;
         return Promise.resolve('inst-1');
       }
       return Promise.resolve(undefined);
@@ -392,8 +360,10 @@ amount_decimal_places = 4`,
     fireEvent.click(selectButton);
 
     await waitFor(() => {
-      expect(attachedStandardToml).toContain('uuid = "std-uuid-match"');
+      expect(attachCallCount).toBe(1);
     });
+    expect(receivedArgs?.containerBytes).toEqual(Array.from(containerBytes));
+    expect(receivedArgs?.standardTomlContent).toBeUndefined();
   });
 
   it('APP-UX-09 P3 Simple Mode: renders unified My Code QR + Select File without tabs, PoS toggle, or technical file guides', async () => {

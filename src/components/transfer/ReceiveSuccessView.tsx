@@ -1,18 +1,28 @@
 // src/components/ReceiveSuccessView.tsx
 import { useEffect, useState } from "react";
-import { ReceiveSuccessPayload, PendingReceiveCommit, TrustStatus, L2QuorumInfo, VoucherTrustDto } from "../../types";
+import {
+    ReceiveSuccessPayload,
+    PendingReceiveCommit,
+    ToleranceReceiveConfirmation,
+    TrustStatus,
+    L2QuorumInfo,
+    VoucherTrustDto,
+} from "../../types";
 import { Button } from "../ui/Button";
 import { AlertBanner } from "../ui/AlertBanner";
 import { L2QuorumBadge } from "../ui/L2QuorumBadge";
 import { TrustBadge } from "../ui/TrustBadge";
 import { TechId } from "../ui/TechId";
+import { ToleranceConfirmationModal } from "./receive/ToleranceConfirmationModal";
+import {
+    classifyToleranceError,
+    commitPendingReceiveBundle,
+} from "./receive/receiveImportService";
 import { logger } from '../../utils/log';
 import { stringifyError, translateError } from '../../utils/errorHelper';
 import { profileService } from "../../services/profileService";
 import { voucherService } from "../../services/voucherService";
-import { transferService } from "../../services/transferService";
 import { useOptionalSession } from "../../context/SessionContext";
-import { APP_EVENTS, emitAppEvent } from "../../utils/appEvents";
 import { useTranslation } from "react-i18next";
 import { 
     CheckCircle2, 
@@ -45,10 +55,14 @@ export function ReceiveSuccessView({ payload, pendingCommit, launchItem, onFinis
     const [trustByLocalId, setTrustByLocalId] = useState<Record<string, VoucherTrustDto>>({});
     const [isApprovingOnTrust, setIsApprovingOnTrust] = useState(false);
     const [approvalError, setApprovalError] = useState<string | null>(null);
+    const [toleranceModal, setToleranceModal] = useState<ToleranceReceiveConfirmation | null>(null);
+    const [confirmText, setConfirmText] = useState('');
 
     useEffect(() => {
         setActivePayload(payload);
         setApprovalError(null);
+        setToleranceModal(null);
+        setConfirmText('');
     }, [payload]);
 
     useEffect(() => {
@@ -105,6 +119,14 @@ export function ReceiveSuccessView({ payload, pendingCommit, launchItem, onFinis
         setManualApprovalGranted(Boolean(activePayload.checkoutVerdict?.isGoodsReleaseAuthorized));
     }, [activePayload]);
 
+    const finishCommittedPayload = (committed: ReceiveSuccessPayload) => {
+        setActivePayload(committed);
+        setManualApprovalGranted(true);
+        if (launchItem) {
+            onFinishLaunchItem?.(launchItem);
+        }
+    };
+
     const handleApproveOnTrust = async () => {
         if (isApprovingOnTrust) return;
         setApprovalError(null);
@@ -113,41 +135,22 @@ export function ReceiveSuccessView({ payload, pendingCommit, launchItem, onFinis
             if (onApproveOnTrust) {
                 const updated = await onApproveOnTrust();
                 if (updated) {
-                    setActivePayload(updated);
-                    if (launchItem) {
-                        onFinishLaunchItem?.(launchItem);
-                    }
+                    finishCommittedPayload(updated);
+                    return;
                 }
                 setManualApprovalGranted(true);
                 return;
             }
             if (pendingCommit) {
-                const runCommit = async (walletPassword: string | null) =>
-                    await transferService.receiveBundle({
-                        bundleData: pendingCommit.bundleData,
-                        standardDefinitionsToml: pendingCommit.standardDefinitionsToml,
-                        password: walletPassword || pendingCommit.bundlePassword || undefined,
-                        forceAcceptToleranceBundle: Boolean(pendingCommit.forceAcceptToleranceBundle),
-                        commitMode: 'forceTrustOffline',
-                        purchaseId: activePayload.purchaseId,
-                    });
-                const committed = session?.protectAction
-                    ? await session.protectAction(runCommit)
-                    : await runCommit(null);
+                const committed = await commitPendingReceiveBundle({
+                    pendingCommit,
+                    forceAcceptToleranceBundle: Boolean(pendingCommit.forceAcceptToleranceBundle),
+                    commitMode: 'forceTrustOffline',
+                    purchaseId: activePayload.purchaseId,
+                    protectAction: session?.protectAction,
+                });
                 if (committed) {
-                    setActivePayload(committed);
-                    setManualApprovalGranted(true);
-                    if (
-                        (committed.verifiableConflicts &&
-                            Object.keys(committed.verifiableConflicts).length > 0) ||
-                        (committed.conflictSummaries?.some((c) => !c.isResolved && !c.localOverride) ??
-                            false)
-                    ) {
-                        emitAppEvent(APP_EVENTS.CONFLICTS_UPDATED);
-                    }
-                    if (launchItem) {
-                        onFinishLaunchItem?.(launchItem);
-                    }
+                    finishCommittedPayload(committed);
                 }
                 return;
             }
@@ -158,9 +161,46 @@ export function ReceiveSuccessView({ payload, pendingCommit, launchItem, onFinis
                 }
             }
         } catch (err) {
+            const toleranceZone = pendingCommit ? classifyToleranceError(err) : null;
+            if (toleranceZone && pendingCommit) {
+                setToleranceModal({
+                    type: toleranceZone,
+                    message: translateError(err, t),
+                    pendingCommit: {
+                        ...pendingCommit,
+                        forceAcceptToleranceBundle: true,
+                    },
+                });
+                return;
+            }
             setApprovalError(translateError(err, t));
         } finally {
             setIsApprovingOnTrust(false);
+        }
+    };
+
+    const confirmToleranceCommit = async () => {
+        const modal = toleranceModal;
+        if (!modal || isApprovingOnTrust) return;
+        setApprovalError(null);
+        setIsApprovingOnTrust(true);
+        try {
+            const committed = await commitPendingReceiveBundle({
+                pendingCommit: modal.pendingCommit,
+                forceAcceptToleranceBundle: true,
+                commitMode: 'forceTrustOffline',
+                purchaseId: activePayload.purchaseId,
+                protectAction: session?.protectAction,
+            });
+            if (committed) {
+                finishCommittedPayload(committed);
+            }
+        } catch (err) {
+            setApprovalError(translateError(err, t));
+        } finally {
+            setIsApprovingOnTrust(false);
+            setToleranceModal(null);
+            setConfirmText('');
         }
     };
 
@@ -605,6 +645,32 @@ export function ReceiveSuccessView({ payload, pendingCommit, launchItem, onFinis
                     )}
                 </div>
             </div>
+
+            <ToleranceConfirmationModal
+                isOpen={toleranceModal !== null}
+                zone={toleranceModal?.type ?? 'Soft'}
+                message={toleranceModal?.message ?? ''}
+                hasConflict={
+                    Boolean(
+                        activePayload.verifiableConflicts &&
+                            Object.keys(activePayload.verifiableConflicts).length > 0,
+                    ) ||
+                    (activePayload.conflictSummaries?.some(
+                        (c) => !c.isResolved && !c.localOverride,
+                    ) ??
+                        false)
+                }
+                confirmText={confirmText}
+                onConfirmTextChange={setConfirmText}
+                onConfirm={() => void confirmToleranceCommit()}
+                onCancel={() => {
+                    if (!isApprovingOnTrust) {
+                        setToleranceModal(null);
+                        setConfirmText('');
+                    }
+                }}
+                isProcessing={isApprovingOnTrust}
+            />
         </div>
     );
 }

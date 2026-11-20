@@ -153,8 +153,9 @@ pub(crate) fn normalize_sync_url(raw: &str) -> String {
     }
 }
 
-/// Upserts a lock server probe keyed by lowercase 64-hex `lock_pub`, never rolling back a
-/// verified delegation to a stale `issued_at` or an unverified failure result.
+/// Upserts a lock server probe keyed by lowercase 64-hex `lock_pub`, keeping verified
+/// delegation metadata independent from live health/liveness observations so a newer failure or
+/// revocation cannot be dropped while signed locators are never downgraded.
 pub(crate) fn upsert_verified_lock_probe(
     cache: &mut std::collections::BTreeMap<
         String,
@@ -170,27 +171,104 @@ pub(crate) fn upsert_verified_lock_probe(
     probe.admin_pub = probe.admin_pub.trim().to_ascii_lowercase();
     probe.drop_pub = probe.drop_pub.trim().to_ascii_lowercase();
 
+    let Some(existing) = cache.get_mut(&lock_key) else {
+        cache.insert(lock_key, probe);
+        return true;
+    };
+
+    let before = existing.clone();
+    let incoming_del_valid = probe.delegation_valid && probe.delegation.is_some();
     let incoming_issued_at = probe.delegation.as_ref().map(|d| d.issued_at).unwrap_or(0);
-    if let Some(existing) = cache.get(&lock_key) {
-        if existing.delegation_valid {
-            if !probe.delegation_valid {
-                return false;
-            }
-            let existing_issued_at = existing
-                .delegation
-                .as_ref()
-                .map(|d| d.issued_at)
-                .unwrap_or(0);
-            if incoming_issued_at < existing_issued_at {
-                return false;
-            }
-            if incoming_issued_at == existing_issued_at && existing.passed && !probe.passed {
-                return false;
-            }
+    let existing_issued_at = existing
+        .delegation
+        .as_ref()
+        .map(|d| d.issued_at)
+        .unwrap_or(0);
+
+    let update_delegation = if existing.delegation_valid {
+        incoming_del_valid && incoming_issued_at >= existing_issued_at
+    } else {
+        incoming_del_valid || (!probe.delegation_valid && probe.probed_at_secs >= existing.probed_at_secs)
+    };
+
+    if update_delegation {
+        if !probe.write_url.trim().is_empty() {
+            existing.write_url = probe.write_url;
         }
+        if !probe.read_url.trim().is_empty() {
+            existing.read_url = probe.read_url;
+        }
+        if !probe.drop_pub.is_empty() {
+            existing.drop_pub = probe.drop_pub;
+        }
+        if !probe.admin_pub.is_empty() {
+            existing.admin_pub = probe.admin_pub;
+        }
+        existing.delegation_valid = probe.delegation_valid;
+        existing.delegation = probe.delegation;
     }
-    cache.insert(lock_key, probe);
-    true
+
+    let update_health = if probe.probed_at_secs > existing.probed_at_secs {
+        true
+    } else if probe.probed_at_secs == existing.probed_at_secs {
+        probe.passed || probe.error.is_some() || !existing.passed
+    } else {
+        false
+    };
+
+    if update_health {
+        existing.waf_probe_passed = probe.waf_probe_passed;
+        existing.selftest_passed = probe.selftest_passed;
+        existing.key_leak_safe = probe.key_leak_safe;
+        existing.passed = probe.passed;
+        existing.latency_ms = probe.latency_ms;
+        if probe.max_retention_quarter > 0 || probe.delegation_valid {
+            existing.max_retention_quarter = probe.max_retention_quarter;
+            existing.pow_base_bits = probe.pow_base_bits;
+            existing.allow_pow_tickets = probe.allow_pow_tickets;
+            existing.ticket_pow_bits = probe.ticket_pow_bits;
+            existing.inode_warning = probe.inode_warning;
+            existing.used_inodes = probe.used_inodes;
+            existing.max_inodes = probe.max_inodes;
+        }
+        existing.probed_at_secs = probe.probed_at_secs;
+        existing.error = probe.error;
+    }
+
+    *existing != before
+}
+
+/// Resolves the verified live locator `(write_url, read_url)` for a manifest `ServerEntry` from
+/// `probe_cache` ONLY when a cryptographically valid 5-field delegation matching `(lock_pub, admin_pub)`
+/// exists and passes SSRF/URL validation.
+pub(crate) fn resolve_verified_server_locator(
+    entry: &human_money_core::humoco_proto::manifest::ServerEntry,
+    probe_cache: &std::collections::BTreeMap<
+        String,
+        crate::sync_client::FrontendLockServerProbeResult,
+    >,
+) -> Option<(String, String)> {
+    let lock_hex = hex::encode(entry.lock_pub);
+    let admin_hex = hex::encode(entry.admin_pub);
+    let probe = probe_cache.get(&lock_hex)?;
+    let admin_matches = probe.admin_pub.trim().eq_ignore_ascii_case(&admin_hex);
+    let lock_matches = probe.lock_pub.trim().eq_ignore_ascii_case(&lock_hex);
+    let del_valid = probe.delegation_valid
+        && probe.delegation.as_ref().is_some_and(|d| {
+            crate::sync_client::verify_lock_delegation(&lock_hex, d, Some(&admin_hex))
+                && normalize_sync_url(&d.write_url) == normalize_sync_url(&probe.write_url)
+                && normalize_sync_url(&d.read_url) == normalize_sync_url(&probe.read_url)
+                && crate::sync_client::validate_sync_url(d.write_url.trim()).is_ok()
+                && crate::sync_client::validate_sync_url(d.read_url.trim()).is_ok()
+        });
+    if admin_matches && lock_matches && del_valid {
+        Some((
+            probe.write_url.trim().to_string(),
+            probe.read_url.trim().to_string(),
+        ))
+    } else {
+        None
+    }
 }
 
 /// Resolves the live locator `(write_url, read_url)` for a manifest `ServerEntry`, preferring
@@ -202,27 +280,8 @@ pub(crate) fn resolve_server_locator(
         crate::sync_client::FrontendLockServerProbeResult,
     >,
 ) -> (String, String) {
-    let lock_hex = hex::encode(entry.lock_pub);
-    let admin_hex = hex::encode(entry.admin_pub);
-    if let Some(probe) = probe_cache.get(&lock_hex) {
-        let admin_matches = probe.admin_pub.trim().eq_ignore_ascii_case(&admin_hex);
-        let lock_matches = probe.lock_pub.trim().eq_ignore_ascii_case(&lock_hex);
-        let del_valid = probe.delegation_valid
-            && probe.delegation.as_ref().is_some_and(|d| {
-                crate::sync_client::verify_lock_delegation(&lock_hex, d, Some(&admin_hex))
-                    && normalize_sync_url(&d.write_url) == normalize_sync_url(&probe.write_url)
-                    && normalize_sync_url(&d.read_url) == normalize_sync_url(&probe.read_url)
-                    && crate::sync_client::validate_sync_url(d.write_url.trim()).is_ok()
-                    && crate::sync_client::validate_sync_url(d.read_url.trim()).is_ok()
-            });
-        if admin_matches && lock_matches && del_valid {
-            return (
-                probe.write_url.trim().to_string(),
-                probe.read_url.trim().to_string(),
-            );
-        }
-    }
-    (entry.write_url.clone(), entry.read_url.clone())
+    resolve_verified_server_locator(entry, probe_cache)
+        .unwrap_or_else(|| (entry.write_url.clone(), entry.read_url.clone()))
 }
 
 /// Computes the maximum `pow_base_bits` across probed lock servers identified by `lock_pub`.

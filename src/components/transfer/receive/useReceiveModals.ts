@@ -1,9 +1,8 @@
 // src/components/transfer/receive/useReceiveModals.ts
 import React, { useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { transferService } from '../../../services/transferService';
 import { translateError } from '../../../utils/errorHelper';
-import { APP_EVENTS, emitAppEvent } from '../../../utils/appEvents';
+import { commitPendingReceiveBundle } from './receiveImportService';
 import type { ProtectActionFn } from '../../../utils/fileIo';
 import type { ReceiveImportKind } from '../../../utils/humocoFileClassifier';
 import type {
@@ -98,24 +97,13 @@ export function useReceiveModals({
         const { pendingCommit } = modal;
         setIsProcessing(true);
         try {
-            const payload = await protectAction(async (walletPassword) => {
-                return await transferService.receiveBundle({
-                    bundleData: pendingCommit.bundleData,
-                    standardDefinitionsToml: pendingCommit.standardDefinitionsToml,
-                    password: walletPassword || pendingCommit.bundlePassword || undefined,
-                    forceAcceptToleranceBundle: true,
-                    commitMode: 'forceTrustOffline',
-                });
+            const payload = await commitPendingReceiveBundle({
+                pendingCommit,
+                forceAcceptToleranceBundle: true,
+                commitMode: 'forceTrustOffline',
+                protectAction,
             });
             if (payload) {
-                if (
-                    (payload.verifiableConflicts &&
-                        Object.keys(payload.verifiableConflicts).length > 0) ||
-                    (payload.conflictSummaries?.some((c) => !c.isResolved && !c.localOverride) ??
-                        false)
-                ) {
-                    emitAppEvent(APP_EVENTS.CONFLICTS_UPDATED);
-                }
                 onReceiveSuccess(payload);
                 onFinishPendingLaunchItem?.();
             }

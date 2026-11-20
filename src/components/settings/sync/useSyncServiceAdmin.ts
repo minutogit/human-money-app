@@ -59,6 +59,7 @@ export function useSyncServiceAdmin({ config, onConfigUpdated }: UseSyncServiceA
         buildChannelSettings(config?.uiPreferences)
     );
     const [isDeletingPublicDrop, setIsDeletingPublicDrop] = useState(false);
+    const [deletePublicDropError, setDeletePublicDropError] = useState<string | null>(null);
     const [checkingPublicUrl, setCheckingPublicUrl] = useState<string | null>(null);
 
     const [adminStatus, setAdminStatus] = useState<FrontendSyncAdminStatus | null>(null);
@@ -281,11 +282,26 @@ export function useSyncServiceAdmin({ config, onConfigUpdated }: UseSyncServiceA
         }, protectCommandOptions('save_public_sync'));
 
     const handleRemovePublicSync = async (writeUrl: string, deleteRemoteSlots: boolean) => {
-        return await runProtected(setIsDeletingPublicDrop, async (pwd) => {
-            await marketService.removePublicSync(writeUrl, deleteRemoteSlots, pwd);
-            await refreshPublicSyncSettings();
-            setFeedback({ type: 'success', message: t('settings.syncPublicRemovedSuccess') });
-        }, protectCommandOptions('remove_public_sync'));
+        setDeletePublicDropError(null);
+        setIsDeletingPublicDrop(true);
+        setFeedback(null);
+        try {
+            let completed = false;
+            await protectAction(async (pwd) => {
+                await marketService.removePublicSync(writeUrl, deleteRemoteSlots, pwd || undefined);
+                await refreshPublicSyncSettings();
+                setFeedback({ type: 'success', message: t('settings.syncPublicRemovedSuccess') });
+                completed = true;
+            }, protectCommandOptions('remove_public_sync'));
+            return completed;
+        } catch (err) {
+            const msg = translateError(err, t);
+            setDeletePublicDropError(msg);
+            setFeedback({ type: 'error', message: msg });
+            return false;
+        } finally {
+            setIsDeletingPublicDrop(false);
+        }
     };
 
     const handleAdoptReplacementUrl = async (targetUrl: string) => {
@@ -464,7 +480,8 @@ export function useSyncServiceAdmin({ config, onConfigUpdated }: UseSyncServiceA
         inputUrl, setInputUrl, isProbing, isProbingContacts, probeResult,
         cooldownSeconds, isCoolingDown,
         channelSettings, updateChannelSetting,
-        isDeletingPublicDrop, checkingPublicUrl,
+        isDeletingPublicDrop, deletePublicDropError, clearDeletePublicDropError: () => setDeletePublicDropError(null),
+        checkingPublicUrl,
         adminStatus, setAdminStatus,
         hostPolicy, setHostPolicy, hostQuotas, setHostQuotas,
         hostWebspaceUrl, setHostWebspaceUrl,

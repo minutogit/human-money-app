@@ -32,7 +32,10 @@ pub use outbox::{
     send_market_inquiry_via_post_impl, send_signing_request_via_post_impl,
     send_wot_handshake_via_post_impl,
 };
-pub(crate) use outbox::{deposit_transfer_to_post_with_session, flush_post_slots_impl};
+pub(crate) use outbox::{
+    deposit_transfer_to_post_with_session, flush_post_slots_impl,
+    send_wot_handshake_via_post_with_session,
+};
 
 /// Extracted identity and reply-sync configuration required to seal and queue Post messages.
 pub(crate) struct PostSigningContext {
@@ -50,7 +53,21 @@ pub(crate) fn load_post_state_with_service(
         .map_err(FrontendError::from)
 }
 
+/// Loads the encrypted Post outbox/inbox state only if `session` is still active.
+pub(crate) fn load_post_state_for_session(
+    state: &AppState,
+    session: &SessionToken,
+    password: Option<&str>,
+) -> Result<StoredPostState, FrontendError> {
+    state.with_session_required(
+        session,
+        "Active wallet session changed before post state could be loaded",
+        |service| load_post_state_with_service(service, password),
+    )
+}
+
 /// Loads the encrypted Post outbox/inbox state, falling back to default only on `StorageError::NotFound`.
+#[cfg(test)]
 pub(crate) fn load_post_state(
     state: &AppState,
     password: Option<&str>,
@@ -313,17 +330,17 @@ pub(crate) fn collect_post_upload_targets(
 }
 
 /// Loads identity, signing context, and own reply sync descriptors under `service -> security_policy`.
-pub(crate) fn load_post_signing_context(
+pub(crate) fn load_post_signing_context_for_service(
     state: &AppState,
+    service: &mut human_money_core::app_service::AppService,
     password: Option<&str>,
 ) -> Result<PostSigningContext, FrontendError> {
-    let mut service = state.service.lock().unwrap();
     let identity = service
         .with_wallet_and_identity(|_w, id| id.clone())
         .map_err(FrontendError::from)?;
-    let sync_ctx = SyncIdentityContext::from_service(&service)?;
+    let sync_ctx = SyncIdentityContext::from_service(service)?;
     let security_policy = state
-        .get_or_load_security_policy(&mut service, password)
+        .get_or_load_security_policy(service, password)
         .map_err(FrontendError::from)?;
     let own_reply_syncs = collect_own_reply_syncs(&security_policy, sync_ctx.my_prefix.as_deref());
     Ok(PostSigningContext {
@@ -331,6 +348,29 @@ pub(crate) fn load_post_signing_context(
         sync_ctx,
         own_reply_syncs,
     })
+}
+
+/// Loads identity, signing context, and own reply sync descriptors only if `session` is still active.
+pub(crate) fn load_post_signing_context_for_session(
+    state: &AppState,
+    session: &SessionToken,
+    password: Option<&str>,
+) -> Result<PostSigningContext, FrontendError> {
+    state.with_session_required(
+        session,
+        "Active wallet session changed before post signing context could be loaded",
+        |service| load_post_signing_context_for_service(state, service, password),
+    )
+}
+
+/// Loads identity, signing context, and own reply sync descriptors (test helper).
+#[cfg(test)]
+pub(crate) fn load_post_signing_context(
+    state: &AppState,
+    password: Option<&str>,
+) -> Result<PostSigningContext, FrontendError> {
+    let mut service = state.service.lock().unwrap();
+    load_post_signing_context_for_service(state, &mut service, password)
 }
 
 fn format_name_parts(
@@ -652,6 +692,15 @@ pub(crate) fn queue_receipt(
     own_reply_syncs: &[FrontendSyncDescriptor],
     now_secs: u64,
 ) {
+    let receipt_msg_id = format!("ack-{}", msg_id);
+    if post_state
+        .outbox_entries
+        .iter()
+        .any(|e| e.msg_id == receipt_msg_id)
+        || post_state.processed_msg_ids.contains(&receipt_msg_id)
+    {
+        return;
+    }
     let receipt = PostDeliveryReceipt {
         acknowledged_msg_id: msg_id.to_string(),
         acknowledged_tag16_hex: hex::encode(tag16),
@@ -686,7 +735,7 @@ pub(crate) fn queue_receipt(
         my_ed_sk,
         sender_did,
         recipient_pk,
-        uuid::Uuid::new_v4().to_string(),
+        receipt_msg_id,
         None,
         crate::state::OutboxMessageClass::Control,
         own_reply_syncs,

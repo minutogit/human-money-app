@@ -121,7 +121,6 @@ uuid = "minuto-uuid-123"`,
       backupDirty: false,
       lastBackupAt: null,
       lastSyncBackupAt: null,
-      l2ProbeCache: {},
     },
   };
 

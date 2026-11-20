@@ -118,31 +118,70 @@ for (const lang of LOCALES.filter((l) => l !== 'en')) {
   }
 }
 
-// Recursively find TS/TSX files
-function getFiles(dir) {
+const DYNAMIC_USED_PREFIXES = [
+  'profile.field.',
+  'voucher.role.',
+  'voucher.txType.',
+  'voucher.signRequest.anchorIssue.',
+];
+
+const DYNAMIC_USED_EXACT = new Set([
+  'profile.gender',
+  'profile.coordinates',
+  'profile.age',
+  'profile.firstName',
+  'profile.lastName',
+  'profile.email',
+  'profile.phone',
+  'profile.organization',
+  'profile.community',
+  'profile.url',
+]);
+
+function isAllowlistedDynamicKey(key) {
+  return (
+    DYNAMIC_USED_EXACT.has(key) ||
+    DYNAMIC_USED_PREFIXES.some((prefix) => key.startsWith(prefix))
+  );
+}
+
+function getSourceFiles(dir, { includeTests = true, extensions = ['.ts', '.tsx'] } = {}) {
   let results = [];
-  const list = fs.readdirSync(dir);
-  for (const file of list) {
-    const filePath = path.join(dir, file);
-    const stat = fs.statSync(filePath);
-    if (stat && stat.isDirectory()) {
-      // Exclude directories we don't want to parse
-      if (file !== 'locales' && file !== 'test' && file !== 'node_modules') {
-        results = results.concat(getFiles(filePath));
+  if (!fs.existsSync(dir)) return results;
+  for (const entry of fs.readdirSync(dir)) {
+    const fullPath = path.join(dir, entry);
+    const stat = fs.statSync(fullPath);
+    if (stat.isDirectory()) {
+      if (
+        entry === 'locales' ||
+        entry === 'test' ||
+        entry === 'node_modules' ||
+        (!includeTests && entry === '__tests__')
+      ) {
+        continue;
       }
-    } else if (filePath.endsWith('.ts') || filePath.endsWith('.tsx')) {
-      results.push(filePath);
+      results = results.concat(getSourceFiles(fullPath, { includeTests, extensions }));
+    } else if (extensions.some((ext) => fullPath.endsWith(ext))) {
+      if (!includeTests && /\.test\.(ts|tsx)$/.test(entry)) {
+        continue;
+      }
+      results.push(fullPath);
     }
   }
   return results;
 }
 
-const files = getFiles(srcDir);
+const files = getSourceFiles(srcDir, { includeTests: true, extensions: ['.ts', '.tsx'] });
+const prodTsFiles = new Set(
+  getSourceFiles(srcDir, { includeTests: false, extensions: ['.ts', '.tsx'] }),
+);
 const missingKeys = [];
 const invalidKeys = [];
+const usedKeys = new Set();
 
-// Matches t('key') or t("key") or t('key.subkey')
+// Matches t('key') or t("key") or t(`key`)
 const tRegex = /\bt\(\s*(['"`])([a-zA-Z0-9_.-]+)\1/g;
+const anyStringLiteralRegex = /(['"`])([a-zA-Z0-9_.-]+)\1/g;
 
 for (const file of files) {
   let content;
@@ -157,19 +196,17 @@ for (const file of files) {
   tRegex.lastIndex = 0;
   while ((match = tRegex.exec(content)) !== null) {
     const key = match[2];
-    
-    // Calculate the correct line number by counting newlines before match.index
+
     const linesBefore = (content.substring(0, match.index).match(/\n/g) || []).length;
     const lineNo = linesBefore + 1;
 
-    // 1. Check if the key uses a valid domain
     const dotIndex = key.indexOf('.');
     if (dotIndex === -1) {
       invalidKeys.push({
         key,
         file: path.relative(process.cwd(), file),
         line: lineNo,
-        reason: 'missing a domain prefix'
+        reason: 'missing a domain prefix',
       });
     } else {
       const domain = key.substring(0, dotIndex);
@@ -178,12 +215,11 @@ for (const file of files) {
           key,
           file: path.relative(process.cwd(), file),
           line: lineNo,
-          reason: `invalid domain '${domain}'`
+          reason: `invalid domain '${domain}'`,
         });
       }
     }
 
-    // 2. Check if the key is missing in en.json
     if (!enKeys.has(key)) {
       missingKeys.push({
         key,
@@ -192,25 +228,42 @@ for (const file of files) {
       });
     }
   }
+
+  if (prodTsFiles.has(file)) {
+    anyStringLiteralRegex.lastIndex = 0;
+    while ((match = anyStringLiteralRegex.exec(content)) !== null) {
+      const literal = match[2];
+      if (enKeys.has(literal)) {
+        usedKeys.add(literal);
+      }
+    }
+  }
 }
 
-// --- NEW: Cross-language scan of Rust error mapping ---
-const rustErrorFile = path.resolve('src-tauri/src/models/error.rs');
-if (fs.existsSync(rustErrorFile)) {
-  const rustContent = fs.readFileSync(rustErrorFile, 'utf8');
-  const rustKeyRegex = /"(error\.[a-zA-Z0-9_.-]+)"/g;
+// --- Cross-language scan of Rust error mappings across all src-tauri/src/**/*.rs ---
+const rustSrcDir = path.resolve('src-tauri/src');
+const rustFiles = getSourceFiles(rustSrcDir, { includeTests: true, extensions: ['.rs'] });
+const rustKeyRegex = /"(error\.[a-zA-Z0-9_.-]+)"/g;
+for (const rustFile of rustFiles) {
+  const rustContent = fs.readFileSync(rustFile, 'utf8');
   let rustMatch;
+  rustKeyRegex.lastIndex = 0;
   while ((rustMatch = rustKeyRegex.exec(rustContent)) !== null) {
     const key = rustMatch[1];
+    usedKeys.add(key);
     if (!enKeys.has(key)) {
       missingKeys.push({
         key,
-        file: path.relative(process.cwd(), rustErrorFile),
+        file: path.relative(process.cwd(), rustFile),
         line: (rustContent.substring(0, rustMatch.index).match(/\n/g) || []).length + 1,
       });
     }
   }
 }
+
+const unusedKeys = [...enKeys].filter(
+  (key) => !usedKeys.has(key) && !isAllowlistedDynamicKey(key),
+);
 
 let hasErrors = false;
 
@@ -252,6 +305,14 @@ if (missingKeys.length > 0) {
   console.error('❌ Critical Error: Found i18n keys used in code that are missing from en.json:');
   for (const item of missingKeys) {
     console.error(`   - Key '${item.key}' in ${item.file}:${item.line}`);
+  }
+  hasErrors = true;
+}
+
+if (unusedKeys.length > 0) {
+  console.error(`❌ Critical Error: Found ${unusedKeys.length} unused i18n key(s) in en.json:`);
+  for (const key of unusedKeys) {
+    console.error(`   - ${key}`);
   }
   hasErrors = true;
 }

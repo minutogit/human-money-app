@@ -22,7 +22,7 @@ use crate::{
     },
     services::common::{
         get_wallet_master_seed, max_pow_base_bits_for_servers, normalize_sync_url,
-        resolve_server_locator, upsert_verified_lock_probe,
+        resolve_verified_server_locator, upsert_verified_lock_probe,
     },
     settings::{is_lock_admin_trusted, InternalLifecycleState, SecurityPolicy},
     sync_client::{self, FrontendLockServerProbeResult, LockTicketAuth},
@@ -50,10 +50,94 @@ enum StaticVoucherReconcileOutcome {
     Inconclusive { reason: String, any_reachable: bool },
 }
 
+async fn verify_and_cache_static_read_locator(
+    client: &reqwest::Client,
+    srv: &ServerEntry,
+    probe_cache: &mut BTreeMap<String, FrontendLockServerProbeResult>,
+    learned_probes: &mut Vec<FrontendLockServerProbeResult>,
+) -> Option<String> {
+    if let Some((_, verified_read_url)) = resolve_verified_server_locator(srv, probe_cache) {
+        return Some(verified_read_url);
+    }
+
+    let lock_hex = hex::encode(srv.lock_pub);
+    let admin_hex = hex::encode(srv.admin_pub);
+    let info = tokio::time::timeout(
+        Duration::from_secs(3),
+        sync_client::fetch_sync_info(client, &srv.write_url),
+    )
+    .await
+    .ok()?
+    .ok()?;
+
+    if let Some(ref rev) = info.revocation {
+        if rev.replacement.is_some() {
+            if let Some(probe) =
+                crate::l2_lifecycle::try_follow_relocation_notice(client, probe_cache, srv, rev)
+                    .await
+            {
+                learned_probes.push(probe);
+                return resolve_verified_server_locator(srv, probe_cache).map(|(_, r)| r);
+            }
+        }
+        let now_secs = sync_client::current_unix_timestamp();
+        if sync_client::verify_revocation_notice(rev, &admin_hex).is_ok()
+            && rev.effective_at <= now_secs
+        {
+            return None;
+        }
+    }
+
+    let lock_info = info.lock?;
+    if !lock_info.lock_pub.trim().eq_ignore_ascii_case(&lock_hex) {
+        return None;
+    }
+    let del = lock_info.delegation?;
+    let d_write = del.write_url.trim().to_string();
+    let d_read = del.read_url.trim().to_string();
+    if !sync_client::verify_lock_delegation(&lock_hex, &del, Some(&admin_hex))
+        || sync_client::validate_sync_url(&d_write).is_err()
+        || sync_client::validate_sync_url(&d_read).is_err()
+    {
+        return None;
+    }
+
+    let probe = FrontendLockServerProbeResult {
+        write_url: d_write,
+        read_url: d_read.clone(),
+        drop_pub: info.drop_pub.trim().to_ascii_lowercase(),
+        admin_pub: admin_hex,
+        lock_pub: lock_hex,
+        delegation_valid: true,
+        waf_probe_passed: false,
+        selftest_passed: false,
+        key_leak_safe: false,
+        passed: false,
+        latency_ms: 0,
+        max_retention_quarter: lock_info.max_retention_quarter,
+        pow_base_bits: lock_info.pow_base_bits,
+        allow_pow_tickets: lock_info.allow_pow_tickets,
+        ticket_pow_bits: lock_info
+            .ticket_pow_bits
+            .min(human_money_core::humoco_proto::crypto::MAX_LOCK_POW_BITS),
+        inode_warning: lock_info.inode_warning,
+        used_inodes: lock_info.used_inodes,
+        max_inodes: lock_info.max_inodes,
+        probed_at_secs: sync_client::current_unix_timestamp(),
+        delegation: Some(del),
+        error: None,
+    };
+    upsert_verified_lock_probe(probe_cache, probe.clone());
+    learned_probes.push(probe);
+    Some(d_read)
+}
+
 async fn probe_voucher_static_lock(
     client: &reqwest::Client,
     target: &VoucherLockReadTarget,
-    probe_cache: &BTreeMap<String, FrontendLockServerProbeResult>,
+    probe_cache: &mut BTreeMap<String, FrontendLockServerProbeResult>,
+    offenders: &humoco_wot::ServerOffenderList,
+    learned_probes: &mut Vec<FrontendLockServerProbeResult>,
 ) -> StaticSlotProbeResult {
     let mut seen_lock_pubs: HashSet<[u8; 32]> = HashSet::new();
     let mut dedup_paths = Vec::with_capacity(target.server_paths.len());
@@ -68,8 +152,16 @@ async fn probe_voucher_static_lock(
     let mut any_server_answered = false;
 
     for (srv, rel_path) in dedup_paths {
-        let (_, resolved_read_url) = resolve_server_locator(srv, probe_cache);
-        match sync_client::fetch_static_lock_entry(client, &resolved_read_url, rel_path).await {
+        if crate::l2_lifecycle::is_server_key_revoked(offenders, &srv.lock_pub, Some(&srv.admin_pub))
+        {
+            continue;
+        }
+        let Some(verified_read_url) =
+            verify_and_cache_static_read_locator(client, srv, probe_cache, learned_probes).await
+        else {
+            continue;
+        };
+        match sync_client::fetch_static_lock_entry(client, &verified_read_url, rel_path).await {
             Ok(Some(entry)) => {
                 any_server_answered = true;
                 if entry.slot == target.slot {
@@ -352,7 +444,11 @@ pub(crate) fn resolve_ticket_auth_for_server(
 
     // 4. Open PoW fallback ONLY when server advertises `allow_pow_tickets = true`
     if probe.allow_pow_tickets {
-        return Ok(Some(LockTicketAuth::Pow { pow_bits: 16 }));
+        return Ok(Some(LockTicketAuth::Pow {
+            pow_bits: probe
+                .ticket_pow_bits
+                .min(human_money_core::humoco_proto::crypto::MAX_LOCK_POW_BITS),
+        }));
     }
 
     Ok(None)
@@ -423,7 +519,21 @@ pub(crate) fn build_lock_protection_overview_from_service(
     service: &mut human_money_core::app_service::AppService,
     policy: &SecurityPolicy,
     lifecycle: &InternalLifecycleState,
+    password: Option<&str>,
 ) -> FrontendLockProtectionOverviewDto {
+    let offenders =
+        crate::l2_lifecycle::load_server_offender_list(service, password).unwrap_or_default();
+    let is_offender_hex = |lock_hex: &str, admin_hex: &str| -> bool {
+        let lock_pk = decode_hex_fixed::<32>(lock_hex).ok();
+        let admin_pk = decode_hex_fixed::<32>(admin_hex).ok();
+        match (lock_pk, admin_pk) {
+            (Some(lpk), apk) => {
+                crate::l2_lifecycle::is_server_key_revoked(&offenders, &lpk, apk.as_ref())
+            }
+            (None, Some(apk)) => offenders.is_admin_pub_revoked(&apk),
+            (None, None) => false,
+        }
+    };
     let sources = collect_known_sync_sources(service, policy, None);
     let mut probe_by_write_norm: BTreeMap<String, &FrontendLockServerProbeResult> = BTreeMap::new();
     let mut probe_by_admin: BTreeMap<String, &FrontendLockServerProbeResult> = BTreeMap::new();
@@ -442,8 +552,10 @@ pub(crate) fn build_lock_protection_overview_from_service(
     let mut servers: Vec<FrontendLockServerItemDto> = Vec::new();
     let mut ready_trusted_count = 0usize;
 
-    let item_status_from_probe = |p: &FrontendLockServerProbeResult| -> String {
-        if p.passed && p.delegation_valid {
+    let item_status_from_probe = |p: &FrontendLockServerProbeResult, revoked: bool| -> String {
+        if revoked {
+            "unverified".to_string()
+        } else if p.passed && p.delegation_valid {
             "ok".to_string()
         } else if p
             .error
@@ -480,18 +592,24 @@ pub(crate) fn build_lock_protection_overview_from_service(
         }
         seen_admin_or_url.insert(norm_w);
 
+        let revoked = is_offender_hex(&lock_pub, &admin_pub);
         let trusted = if admin_pub.is_empty() {
             true
         } else {
             is_lock_admin_trusted(policy, &admin_pub)
         };
         let status = match probe_opt {
-            Some(p) => item_status_from_probe(p),
+            Some(p) => item_status_from_probe(p, revoked),
             None => "unreachable".to_string(),
         };
-        if status == "ok" && trusted {
+        if status == "ok" && trusted && !revoked {
             ready_trusted_count += 1;
         }
+        let error = probe_opt.and_then(|p| p.error.clone()).or_else(|| {
+            revoked.then(|| {
+                "Server key or operator key is permanently revoked on ServerOffenderList".to_string()
+            })
+        });
         servers.push(FrontendLockServerItemDto {
             write_url: probe_opt
                 .map(|p| p.write_url.clone())
@@ -509,7 +627,7 @@ pub(crate) fn build_lock_protection_overview_from_service(
             allow_pow_tickets: probe_opt.is_some_and(|p| p.allow_pow_tickets),
             max_retention_quarter: probe_opt.map(|p| p.max_retention_quarter).unwrap_or(0),
             probed_at_secs: probe_opt.map(|p| p.probed_at_secs).unwrap_or(0),
-            error: probe_opt.and_then(|p| p.error.clone()),
+            error,
         });
     }
 
@@ -523,15 +641,21 @@ pub(crate) fn build_lock_protection_overview_from_service(
         {
             continue;
         }
+        let revoked = is_offender_hex(&lp, &ap);
         let trusted = if ap.is_empty() {
             true
         } else {
             is_lock_admin_trusted(policy, &ap)
         };
-        let status = item_status_from_probe(probe);
-        if status == "ok" && trusted {
+        let status = item_status_from_probe(probe, revoked);
+        if status == "ok" && trusted && !revoked {
             ready_trusted_count += 1;
         }
+        let error = probe.error.clone().or_else(|| {
+            revoked.then(|| {
+                "Server key or operator key is permanently revoked on ServerOffenderList".to_string()
+            })
+        });
         servers.push(FrontendLockServerItemDto {
             write_url: probe.write_url.clone(),
             read_url: probe.read_url.clone(),
@@ -543,13 +667,11 @@ pub(crate) fn build_lock_protection_overview_from_service(
             allow_pow_tickets: probe.allow_pow_tickets,
             max_retention_quarter: probe.max_retention_quarter,
             probed_at_secs: probe.probed_at_secs,
-            error: probe.error.clone(),
+            error,
         });
     }
 
     let now_ms = sync_client::current_unix_timestamp().saturating_mul(1000);
-    let offenders =
-        crate::l2_lifecycle::load_server_offender_list(service, None).unwrap_or_default();
     let has_offline_cached_anchor =
         find_reusable_offline_anchor(service, policy, &offenders, now_ms).is_some();
     let unresolved_intents_count = service
@@ -592,6 +714,7 @@ pub(crate) fn get_lock_protection_overview_impl(
         &mut service,
         &policy,
         &lifecycle,
+        None,
     ))
 }
 
@@ -626,6 +749,7 @@ pub(crate) fn set_lock_server_trust_impl(
         &mut service,
         &policy,
         &lifecycle,
+        password.as_deref(),
     ))
 }
 
@@ -648,6 +772,17 @@ async fn probe_known_sync_sources_into_cache(
         .flatten()
         .unwrap_or_default();
 
+    let src_admin_by_write_norm: HashMap<String, String> = sources
+        .iter()
+        .filter(|s| !s.admin_pub.trim().is_empty())
+        .map(|s| {
+            (
+                normalize_sync_url(&s.write_url),
+                s.admin_pub.trim().to_ascii_lowercase(),
+            )
+        })
+        .collect();
+
     let mut join_set = tokio::task::JoinSet::new();
     for src in sources {
         let c = client.clone();
@@ -665,21 +800,7 @@ async fn probe_known_sync_sources_into_cache(
 
     let mut probes = Vec::new();
     while let Some(joined) = join_set.join_next().await {
-        if let Ok(Some(mut res)) = joined {
-            if let Ok(lock_pk) = decode_hex_fixed::<32>(&res.lock_pub) {
-                let admin_pk = decode_hex_fixed::<32>(&res.admin_pub).ok();
-                if crate::l2_lifecycle::is_server_key_revoked(
-                    &offenders,
-                    &lock_pk,
-                    admin_pk.as_ref(),
-                ) {
-                    res.passed = false;
-                    res.error = Some(
-                        "Server key or operator key is permanently revoked on ServerOffenderList"
-                            .to_string(),
-                    );
-                }
-            }
+        if let Ok(Some(res)) = joined {
             probes.push(res);
         }
     }
@@ -687,7 +808,39 @@ async fn probe_known_sync_sources_into_cache(
     if !probes.is_empty() {
         let _ = state.mutate_internal_lifecycle_for_session(session, password, |lc| {
             let mut changed = false;
-            for probe in probes {
+            for mut probe in probes {
+                let norm_w = normalize_sync_url(&probe.write_url);
+                let hint_admin = (!probe.admin_pub.trim().is_empty())
+                    .then(|| probe.admin_pub.trim().to_ascii_lowercase())
+                    .or_else(|| src_admin_by_write_norm.get(&norm_w).cloned());
+                if probe.lock_pub.trim().is_empty() {
+                    if let Some(existing) = lc.l2_probe_cache.values().find(|e| {
+                        (!norm_w.is_empty() && normalize_sync_url(&e.write_url) == norm_w)
+                            || hint_admin.as_ref().is_some_and(|a| {
+                                !e.admin_pub.trim().is_empty()
+                                    && e.admin_pub.trim().eq_ignore_ascii_case(a)
+                            })
+                    }) {
+                        probe.lock_pub = existing.lock_pub.clone();
+                        if probe.admin_pub.trim().is_empty() {
+                            probe.admin_pub = existing.admin_pub.clone();
+                        }
+                    }
+                }
+                if let Ok(lock_pk) = decode_hex_fixed::<32>(&probe.lock_pub) {
+                    let admin_pk = decode_hex_fixed::<32>(&probe.admin_pub).ok();
+                    if crate::l2_lifecycle::is_server_key_revoked(
+                        &offenders,
+                        &lock_pk,
+                        admin_pk.as_ref(),
+                    ) {
+                        probe.passed = false;
+                        probe.error = Some(
+                            "Server key or operator key is permanently revoked on ServerOffenderList"
+                                .to_string(),
+                        );
+                    }
+                }
                 if upsert_verified_lock_probe(&mut lc.l2_probe_cache, probe) {
                     changed = true;
                 }
@@ -1100,7 +1253,7 @@ pub(crate) async fn refresh_lock_servers_with_session(
                 .get_or_load_internal_lifecycle(service, password)
                 .map_err(FrontendError::from)?;
             Ok(build_lock_protection_overview_from_service(
-                service, &policy, &lifecycle,
+                service, &policy, &lifecycle, password,
             ))
         },
     )
@@ -1165,12 +1318,14 @@ pub(crate) async fn reconcile_vouchers_via_static_locks(
     let filter_set: Option<HashSet<&str>> =
         filter_ids.map(|ids| ids.iter().map(|s| s.as_str()).collect());
 
-    let (session, probe_cache, targets, missing_manifest_ids) = {
+    let (session, mut probe_cache, offenders, targets, missing_manifest_ids) = {
         let mut service = state.lock_service()?;
         let session = state.session_token_for_service(&service)?;
         let lifecycle = state
             .get_or_load_internal_lifecycle(&mut service, password)
             .map_err(FrontendError::from)?;
+        let offenders =
+            crate::l2_lifecycle::load_server_offender_list(&mut service, password).unwrap_or_default();
         let (targets, missing_manifest_ids) = service
             .with_wallet_and_identity(|wallet, identity| {
                 let mut ready = Vec::new();
@@ -1207,6 +1362,7 @@ pub(crate) async fn reconcile_vouchers_via_static_locks(
         (
             session,
             lifecycle.l2_probe_cache,
+            offenders,
             targets,
             missing_manifest_ids,
         )
@@ -1226,9 +1382,17 @@ pub(crate) async fn reconcile_vouchers_via_static_locks(
     let mut reconciled_spent_count = 0usize;
     let mut inconclusive_count = missing_manifest_ids.len();
     let mut any_committee_reachable = false;
+    let mut learned_probes = Vec::new();
 
     for (local_id, target, pow_bits) in targets {
-        let probe = probe_voucher_static_lock(&client, &target, &probe_cache).await;
+        let probe = probe_voucher_static_lock(
+            &client,
+            &target,
+            &mut probe_cache,
+            &offenders,
+            &mut learned_probes,
+        )
+        .await;
         if probe.any_server_answered {
             any_committee_reachable = true;
         }
@@ -1275,6 +1439,18 @@ pub(crate) async fn reconcile_vouchers_via_static_locks(
                 inconclusive_count += 1;
             }
         }
+    }
+
+    if !learned_probes.is_empty() {
+        let _ = state.mutate_internal_lifecycle_for_session(&session, password, |lc| {
+            let mut changed = false;
+            for probe in learned_probes {
+                if upsert_verified_lock_probe(&mut lc.l2_probe_cache, probe) {
+                    changed = true;
+                }
+            }
+            changed
+        });
     }
 
     let all_resolved = inconclusive_count == 0;
@@ -1360,7 +1536,8 @@ pub(crate) async fn check_voucher_l2_status_impl(
 
     let (
         target_opt,
-        probe_cache,
+        mut probe_cache,
+        offenders,
         is_currently_archived,
         pow_bits,
         reduced_protection,
@@ -1373,6 +1550,9 @@ pub(crate) async fn check_voucher_l2_status_impl(
                 .get_or_load_internal_lifecycle(service, password.as_deref())
                 .map_err(FrontendError::from)?;
             let probe_cache = lifecycle.l2_probe_cache.clone();
+            let offenders =
+                crate::l2_lifecycle::load_server_offender_list(service, password.as_deref())
+                    .unwrap_or_default();
             let tup = service
                 .with_wallet_and_identity(|wallet, identity| {
                     let instance = wallet
@@ -1421,7 +1601,7 @@ pub(crate) async fn check_voucher_l2_status_impl(
                 })
                 .map_err(FrontendError::from)?
                 .map_err(FrontendError::from)?;
-            Ok((tup.0, probe_cache, tup.1, tup.2, tup.3, tup.4))
+            Ok((tup.0, probe_cache, offenders, tup.1, tup.2, tup.3, tup.4))
         },
     )?;
 
@@ -1446,7 +1626,26 @@ pub(crate) async fn check_voucher_l2_status_impl(
     }
 
     let client = sync_client::create_sync_probe_client();
-    let probe = probe_voucher_static_lock(&client, &target, &probe_cache).await;
+    let mut learned_probes = Vec::new();
+    let probe = probe_voucher_static_lock(
+        &client,
+        &target,
+        &mut probe_cache,
+        &offenders,
+        &mut learned_probes,
+    )
+    .await;
+    if !learned_probes.is_empty() {
+        let _ = state.mutate_internal_lifecycle_for_session(&session, password.as_deref(), |lc| {
+            let mut changed = false;
+            for p in learned_probes {
+                if upsert_verified_lock_probe(&mut lc.l2_probe_cache, p) {
+                    changed = true;
+                }
+            }
+            changed
+        });
+    }
 
     let outcome = state.with_session_required(
         &session,
@@ -1525,6 +1724,12 @@ pub(crate) async fn check_voucher_l2_status_impl(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ed25519_dalek::{Signer, SigningKey};
+    use human_money_core::humoco_proto::NominatedBy;
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
 
     #[test]
     fn test_frontend_voucher_l2_status_dto_serialization() {
@@ -2076,6 +2281,169 @@ mod tests {
                 .unwrap();
         assert!(aid_none.is_none());
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_k1_and_h9_unverified_404_rejected_and_negative_health_overwrites_stale() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let dir = crate::test_support::temp_test_dir("k1_h9_locator_health");
+        let pw = "StrongPassword123!";
+        let mut svc = crate::test_support::setup_test_app(
+            &dir,
+            "Alice",
+            crate::test_support::ALICE_PHRASE,
+            pw,
+        );
+        let admin_sk = SigningKey::from_bytes(&[61u8; 32]);
+        let lock_sk = SigningKey::from_bytes(&[62u8; 32]);
+        let admin_pub: [u8; 32] = admin_sk.verifying_key().to_bytes();
+        let lock_pub: [u8; 32] = lock_sk.verifying_key().to_bytes();
+        let admin_hex = hex::encode(admin_pub);
+        let lock_hex = hex::encode(lock_pub);
+
+        // Unverified fake read server returning 404 (not in probe_cache, ?info fails)
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_bg = Arc::clone(&stop);
+        let srv = tokio::spawn(async move {
+            while !stop_bg.load(Ordering::Relaxed) {
+                if let Ok(Ok((mut stream, _))) =
+                    tokio::time::timeout(Duration::from_millis(50), listener.accept()).await
+                {
+                    let mut buf = [0u8; 2048];
+                    let _ = stream.read(&mut buf).await;
+                    let resp = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n";
+                    let _ = stream.write_all(resp.as_bytes()).await;
+                }
+            }
+        });
+
+        let evil_read_url = format!("http://127.0.0.1:{}/d", port);
+        let dead_write_url = format!("http://127.0.0.1:{}/sync.php", port);
+        let srv_entry = ServerEntry {
+            admin_pub,
+            lock_pub,
+            write_url: dead_write_url.clone(),
+            read_url: evil_read_url.clone(),
+            nominated_by: NominatedBy::Creator,
+        };
+
+        let mut cache = BTreeMap::new();
+        let mut learned = Vec::new();
+        // K1: without a verified 5-field delegation in cache or from ?info, resolve_verified_server_locator MUST be None
+        assert!(resolve_verified_server_locator(&srv_entry, &cache).is_none());
+        let client = sync_client::create_sync_probe_client();
+        assert!(
+            verify_and_cache_static_read_locator(&client, &srv_entry, &mut cache, &mut learned)
+                .await
+                .is_none(),
+            "K1: 404 on unverified ?info/read_url must never populate verified locator"
+        );
+        assert!(learned.is_empty());
+
+        // H9 part A: newer negative health probe overwrites stale healthy passed=true while preserving delegation & capability metadata
+        let del_msg = humoco_market::format_lock_delegate_signature_message(
+            &admin_hex,
+            &lock_hex,
+            &dead_write_url,
+            &evil_read_url,
+            1_760_000_000,
+        );
+        let del = sync_client::SyncLockDelegationDto {
+            admin_pub: admin_hex.clone(),
+            lock_pub: lock_hex.clone(),
+            write_url: dead_write_url.clone(),
+            read_url: evil_read_url.clone(),
+            issued_at: 1_760_000_000,
+            sig: hex::encode(admin_sk.sign(del_msg.as_bytes()).to_bytes()),
+        };
+        let healthy = FrontendLockServerProbeResult {
+            write_url: dead_write_url.clone(),
+            read_url: evil_read_url.clone(),
+            drop_pub: admin_hex.clone(),
+            admin_pub: admin_hex.clone(),
+            lock_pub: lock_hex.clone(),
+            delegation_valid: true,
+            waf_probe_passed: true,
+            selftest_passed: true,
+            key_leak_safe: true,
+            passed: true,
+            latency_ms: 10,
+            max_retention_quarter: 8200,
+            pow_base_bits: 12,
+            allow_pow_tickets: true,
+            ticket_pow_bits: 16,
+            inode_warning: false,
+            used_inodes: 1,
+            max_inodes: 1000,
+            probed_at_secs: 1_760_000_010,
+            delegation: Some(del),
+            error: None,
+        };
+        assert!(upsert_verified_lock_probe(&mut cache, healthy));
+
+        let failed_later = FrontendLockServerProbeResult {
+            write_url: dead_write_url.clone(),
+            read_url: String::new(),
+            drop_pub: String::new(),
+            admin_pub: String::new(),
+            lock_pub: lock_hex.clone(),
+            delegation_valid: false,
+            waf_probe_passed: false,
+            selftest_passed: false,
+            key_leak_safe: false,
+            passed: false,
+            latency_ms: 500,
+            max_retention_quarter: 0,
+            pow_base_bits: 0,
+            allow_pow_tickets: false,
+            ticket_pow_bits: 0,
+            inode_warning: false,
+            used_inodes: 0,
+            max_inodes: 0,
+            probed_at_secs: 1_760_000_100,
+            delegation: None,
+            error: Some("connection refused".into()),
+        };
+        assert!(upsert_verified_lock_probe(&mut cache, failed_later));
+        let cached = cache.get(&lock_hex).unwrap();
+        assert!(!cached.passed, "H9: newer failed probe must mark passed=false");
+        assert!(cached.delegation_valid, "H9: verified delegation must remain intact");
+        assert_eq!(cached.pow_base_bits, 12);
+        assert_eq!(cached.error.as_deref(), Some("connection refused"));
+
+        // H9 part B: build_lock_protection_overview_from_service excludes ServerOffenderList servers
+        let mut lc = InternalLifecycleState {
+            l2_probe_cache: BTreeMap::from([(
+                lock_hex.clone(),
+                FrontendLockServerProbeResult {
+                    passed: true,
+                    delegation_valid: true,
+                    error: None,
+                    ..cached.clone()
+                },
+            )]),
+            ..Default::default()
+        };
+        let mut offenders = humoco_wot::ServerOffenderList::new();
+        offenders.revoked_admin_pubs.insert(admin_pub);
+        crate::l2_lifecycle::save_server_offender_list(&mut svc, &offenders, Some(pw)).unwrap();
+        let state = AppState::new(svc);
+        {
+            let mut s = state.lock_service().unwrap();
+            let policy = state.get_or_load_security_policy(&mut s, Some(pw)).unwrap();
+            lc.pending_restore_l2_reconciliation = false;
+            let overview =
+                build_lock_protection_overview_from_service(&mut s, &policy, &lc, Some(pw));
+            assert_eq!(overview.ready_trusted_count, 0, "H9: revoked server must not count as ready");
+        }
+
+        stop.store(true, Ordering::Relaxed);
+        let _ = srv.await;
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

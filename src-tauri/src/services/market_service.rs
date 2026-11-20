@@ -4,7 +4,6 @@ use crate::models::{
     FrontendMyMarketProfile, FrontendResolvedCardRecipient, FrontendSaveMyMarketProfileRequest,
     FrontendSyncDescriptor, FrontendTrustTier, StoredAppNotices, StoredOwnMarketProfile,
 };
-use crate::services::common::DropChannelSigner;
 use crate::settings::StoredPublicSync;
 use crate::state::{AppState, CONTACTS_DATA_NAME, MARKET_CARD_STORE_KEY, MARKET_OWN_PROFILE_KEY};
 use crate::sync_client;
@@ -626,64 +625,6 @@ pub(crate) fn rebuild_and_sign_own_card_with_drops_and_profile(
     Ok(())
 }
 
-async fn delete_remote_card_slots(state: &AppState, password: Option<&str>) {
-    let (my_ed_sk, master_seed, my_prefix, drops) = {
-        let mut service = match state.service.lock() {
-            Ok(s) => s,
-            Err(_) => return,
-        };
-        let (my_ed_sk, my_prefix) = match service.with_wallet_and_identity(|_w, id| {
-            let pfx = human_money_core::crypto::get_prefix_from_user_id(&id.user_id)
-                .map(|s| s.to_string());
-            (id.signing_key.clone(), pfx)
-        }) {
-            Ok(k) => k,
-            Err(_) => return,
-        };
-        let master_seed = my_ed_sk.to_bytes();
-        let security_policy = match state.get_or_load_security_policy(&mut service, password) {
-            Ok(p) => p,
-            Err(_) => return,
-        };
-        let mut drops = security_policy.market_selected_syncs;
-        for pd in security_policy.public_syncs {
-            if pd.enabled {
-                drops.push(FrontendSyncDescriptor {
-                    write_url: pd.write_url,
-                    read_url: pd.read_url,
-                    slot_id: Some(pd.access_pubkey),
-                    drop_pub: pd.drop_pub,
-                    last_seen_at: None,
-                    last_error_at: None,
-                    fail_count: 0,
-                    status: "active".to_string(),
-                    last_probed_at: None,
-                    ..Default::default()
-                });
-            }
-        }
-        (my_ed_sk, master_seed, my_prefix, drops)
-    };
-    let client = sync_client::create_sync_http_client();
-    let now = sync_client::current_unix_timestamp();
-    let delta_prefix = humoco_market::derive_delta_prefix(my_prefix.as_deref());
-    for drop_desc in drops {
-        let dd: humoco_market::DropDescriptor = drop_desc.into();
-        let signer = DropChannelSigner {
-            is_public: false,
-            master_seed: &master_seed,
-            my_ed_sk: &my_ed_sk,
-            drop_desc: &dd,
-        };
-        for prefix in [my_prefix.as_deref(), Some(delta_prefix.as_str())] {
-            let nonce = sync_client::generate_sync_nonce();
-            if let Ok(signed) = signer.sign_request("DELETE", "card", prefix, now, &nonce, b"") {
-                let _ = sync_client::delete_slot(&client, &dd.write_url, &signed, "card").await;
-            }
-        }
-    }
-}
-
 pub fn get_my_market_profile_impl(
     password: Option<String>,
     state: &AppState,
@@ -885,7 +826,6 @@ pub fn save_my_market_profile_impl(
 
 pub async fn set_card_published_impl(
     published: bool,
-    delete_remote: bool,
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendMyMarketProfile, FrontendError> {
@@ -904,22 +844,12 @@ pub async fn set_card_published_impl(
             rebuild_and_sign_own_card_with_drops(&mut service, &mut stored, now, Some(drops))?;
         } else {
             stored.published = false;
-            if delete_remote {
-                stored.last_card = None;
-                stored.shrink_hops = 0;
-                stored.shrink_until = 0;
-            } else {
-                sign_unpublish_tombstone_card(&mut service, &mut stored, now)?;
-            }
+            sign_unpublish_tombstone_card(&mut service, &mut stored, now)?;
         }
 
         save_own_market_profile_state(state, &mut service, &stored, pw)?;
         resolved_pw
     };
-
-    if !published && delete_remote {
-        delete_remote_card_slots(state, resolved_pw_owned.as_deref().map(String::as_str)).await;
-    }
 
     get_my_market_profile_impl(resolved_pw_owned.as_deref().cloned(), state)
 }
@@ -1546,14 +1476,6 @@ pub fn export_forward_card_impl(
     let stored = store
         .cards
         .get(validated_did.as_str())
-        .or_else(|| {
-            store.cards.values().find(|sc| {
-                crate::state::canonicalize_did(&sc.card.payload.did)
-                    .ok()
-                    .as_deref()
-                    == Some(validated_did.canonical_did())
-            })
-        })
         .ok_or_else(|| FrontendError::from("Card not found in store".to_string()))?;
 
     let env = humoco_market::forward_envelope(stored)
@@ -1583,16 +1505,30 @@ pub fn export_forward_card_impl(
 fn parse_card_envelope_payload(
     payload: &str,
 ) -> Result<humoco_market::CardEnvelope, FrontendError> {
-    let trimmed_payload = payload.trim();
-    let lower_payload = trimmed_payload.to_ascii_lowercase();
-    let json_str = if let Some(pos) = lower_payload.find("?env=") {
-        let query_part = &trimmed_payload[pos + 5..];
-        let raw_b64 = query_part
-            .split(|c: char| c == '&' || c.is_whitespace() || matches!(c, '"' | '\'' | '>' | '<'))
+    const CARD_URI_PREFIX: &str = "humoco://card?";
+    let card_token = payload
+        .split_whitespace()
+        .map(|tok| tok.trim_start_matches(['<', '"', '\'', '(', '[']))
+        .find(|tok| {
+            tok.get(..CARD_URI_PREFIX.len())
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(CARD_URI_PREFIX))
+        });
+    let json_str = if let Some(uri_token) = card_token {
+        let after_scheme = &uri_token[CARD_URI_PREFIX.len()..];
+        let query_slice = after_scheme
+            .split(['#', '"', '\'', '>', '<'])
             .next()
-            .unwrap_or(query_part);
-        let b64 = raw_b64.trim_end_matches(['.', ',', ';', ':', '!', '?', ')', ']']);
-        let bytes = human_money_core::crypto::decode_base64(b64).map_err(|e| {
+            .unwrap_or(after_scheme);
+        let raw_b64 = query_slice
+            .split('&')
+            .filter_map(|pair| pair.split_once('='))
+            .find(|(k, _)| k.eq_ignore_ascii_case("env"))
+            .map(|(_, v)| v.trim_end_matches(['.', ',', ';', ':', '!', '?', ')', ']']))
+            .filter(|v| !v.is_empty())
+            .ok_or_else(|| {
+                FrontendError::from("Card share URI is missing env query parameter".to_string())
+            })?;
+        let bytes = human_money_core::crypto::decode_base64(raw_b64).map_err(|e| {
             FrontendError::from(format!("Failed to decode card share URI base64: {}", e))
         })?;
         String::from_utf8(bytes)
@@ -1910,6 +1846,7 @@ pub fn clear_app_notices_impl(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ed25519_dalek::SigningKey;
     use crate::models::{
         CardFieldVisibility, FieldAudience, FrontendAdInput, FrontendSaveMyMarketProfileRequest,
         FrontendUserProfile,
@@ -2146,7 +2083,7 @@ mod tests {
         };
 
         save_my_market_profile_impl(save_req, Some(password.to_string()), &alice_state).unwrap();
-        set_card_published_impl(true, false, Some(password.to_string()), &alice_state)
+        set_card_published_impl(true, Some(password.to_string()), &alice_state)
             .await
             .unwrap();
 
@@ -2314,7 +2251,7 @@ mod tests {
         };
         upsert_ad_impl(ad_req, Some(password.to_string()), &alice_state).unwrap();
         let alice_profile =
-            set_card_published_impl(true, false, Some(password.to_string()), &alice_state)
+            set_card_published_impl(true, Some(password.to_string()), &alice_state)
                 .await
                 .unwrap();
 
@@ -2349,10 +2286,14 @@ mod tests {
         assert_eq!(bob_view.board[0].ad.title, "Fresh Baguettes");
         assert!(!bob_view.board[0].is_own);
 
-        // 3. Bob forwards Alice's card to Charlie (hops = 2)
-        let bob_export =
-            export_forward_card_impl(alice_did.clone(), Some(password.to_string()), &bob_state)
-                .unwrap();
+        // 3. Bob forwards Alice's card to Charlie (hops = 2) using exact subaccount recipient DID
+        let alice_recipient_did = bob_view.people[0].recipient_did.clone();
+        let bob_export = export_forward_card_impl(
+            alice_recipient_did.clone(),
+            Some(password.to_string()),
+            &bob_state,
+        )
+        .unwrap();
         let charlie_import = import_contact_card_impl(
             bob_export.envelope_json,
             Some(password.to_string()),
@@ -2372,7 +2313,7 @@ mod tests {
         // Since max_hops = 2, Charlie cannot forward further
         assert!(!charlie_view.people[0].can_forward);
         assert!(export_forward_card_impl(
-            alice_did.clone(),
+            alice_recipient_did.clone(),
             Some(password.to_string()),
             &charlie_state
         )
@@ -2702,7 +2643,7 @@ mod tests {
         let alice_state = crate::test_support::create_test_state(alice_service);
 
         let res =
-            set_card_published_impl(true, false, Some(password.to_string()), &alice_state).await;
+            set_card_published_impl(true, Some(password.to_string()), &alice_state).await;
         assert!(
             res.is_ok(),
             "Expected success publishing card with empty name, got: {:?}",
@@ -3275,5 +3216,77 @@ mod tests {
             std::fs::remove_dir_all(&dir_alice),
         );
         let _ = std::fs::remove_dir_all(&dir_bob);
+    }
+
+    #[test]
+    fn test_f2_f3_strict_card_envelope_and_no_subaccount_sibling_fallback() {
+        let dir = temp_test_dir("f2_f3_strict_adapters");
+        let pw = "StrongPassword123!";
+        let alice_svc = setup_test_app(&dir.join("alice"), "Alice", ALICE_PHRASE, pw);
+        let state = create_test_state(alice_svc);
+
+        let sample_env = serde_json::json!({
+            "card_wire": "hdr.payload.sig",
+            "hops": 1
+        });
+        let b64 = human_money_core::crypto::encode_base64(sample_env.to_string().as_bytes());
+        assert!(parse_card_envelope_payload(&format!("humoco://card?env={}", b64)).is_ok());
+        assert!(parse_card_envelope_payload(&format!("HUMOCO://CARD?foo=bar&env={}", b64)).is_ok());
+
+        // F2: arbitrary URL prefixes must NOT be accepted just for containing ?env=
+        assert!(parse_card_envelope_payload(&format!("https://evil.example/path?env={}", b64)).is_err());
+        assert!(parse_card_envelope_payload(&format!("humoco://pay?env={}", b64)).is_err());
+
+        // F2: unknown JSON fields on CardEnvelope must be rejected (#[serde(deny_unknown_fields)])
+        let unknown_json = r#"{"card_wire":"hdr.payload.sig","hops":1,"extra":true}"#;
+        assert!(parse_card_envelope_payload(unknown_json).is_err());
+
+        // F3: export_forward_card_impl for missing subaccount does not fall back to sibling card
+        let sib_sk = SigningKey::from_bytes(&[77u8; 32]);
+        let sib_vk = sib_sk.verifying_key();
+        let sib_a = human_money_core::crypto::create_user_id(&sib_vk, Some("shop")).unwrap();
+        let sib_missing = human_money_core::crypto::create_user_id(&sib_vk, Some("work")).unwrap();
+        let card = humoco_market::sign_sd_card(
+            humoco_market::CardPayloadInput {
+                did: sib_a.clone(),
+                v: 1,
+                valid_until: 2_000_000_000,
+                max_hops: 2,
+                ad_count: 0,
+                allow_inquiries: true,
+                drops: vec![humoco_market::DropDescriptor {
+                    write_url: "https://sync.example/sync.php".into(),
+                    read_url: "https://sync.example/d".into(),
+                    slot_id: None,
+                    drop_pub: "11".repeat(32),
+                }],
+            },
+            Vec::new(),
+            &sib_sk,
+        )
+        .unwrap();
+        let wire = humoco_market::render_wire(&card, 1, humoco_market::WireFilter::Full).unwrap();
+        let mut store = humoco_market::CardStore::default();
+        store.cards.insert(
+            sib_a.clone(),
+            humoco_market::StoredCard {
+                card,
+                card_wire: wire,
+                hops: 0,
+                received_at: 1_760_000_000,
+            },
+        );
+        {
+            let mut s = state.lock_service().unwrap();
+            crate::state::save_encrypted_json(&mut s, MARKET_CARD_STORE_KEY, &store, Some(pw))
+                .unwrap();
+        }
+        assert!(export_forward_card_impl(sib_a, Some(pw.into()), &state).is_ok());
+        assert!(
+            export_forward_card_impl(sib_missing, Some(pw.into()), &state).is_err(),
+            "F3: missing subaccount must not fall back to sibling card under same root DID"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

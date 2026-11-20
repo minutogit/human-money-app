@@ -348,4 +348,78 @@ describe('ReceiveSuccessView payment evidence', () => {
     });
     expect(await screen.findByTestId('merchant-approved-badge')).toBeInTheDocument();
   });
+
+  it('H5: opens ToleranceConfirmationModal on pendingCommit bundleToleranceZone error and retries with forceAcceptToleranceBundle + purchaseId', async () => {
+    let receiveCalls = 0;
+    (invoke as Mock).mockImplementation(async (cmd: string) => {
+      if (cmd === 'get_voucher_summaries') return [];
+      if (cmd === 'receive_bundle') {
+        receiveCalls += 1;
+        if (receiveCalls === 1) {
+          throw {
+            code: 'error.transfer.bundleToleranceZone',
+            message: 'Time tolerance zone warning',
+          };
+        }
+        return {
+          ...payload,
+          purchaseId: 'bundle-abc123',
+          newlyCommitted: true,
+          isReplay: false,
+          checkoutVerdict: {
+            outcome: 'OfflineOnly',
+            canReleaseGoodsAutomatically: false,
+            requiresMerchantApproval: false,
+            isGoodsReleaseAuthorized: true,
+          },
+        };
+      }
+      return undefined;
+    });
+
+    render(
+      <ReceiveSuccessView
+        payload={{
+          ...payload,
+          purchaseId: 'bundle-abc123',
+          newlyCommitted: false,
+          isReplay: false,
+          checkoutVerdict: {
+            outcome: 'OfflineOnly',
+            canReleaseGoodsAutomatically: false,
+            requiresMerchantApproval: true,
+            isGoodsReleaseAuthorized: false,
+          },
+        }}
+        pendingCommit={{
+          bundleData: [9, 8, 7],
+          standardDefinitionsToml: { 'std-1': 'toml' },
+        }}
+        onDone={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('merchant-approve-btn'));
+
+    const dialog = await screen.findByRole('dialog');
+    const checkbox = dialog.querySelector('input[type="checkbox"]') as HTMLInputElement;
+    expect(checkbox).toBeInTheDocument();
+    fireEvent.click(checkbox);
+
+    const importBtn = screen.getByRole('button', { name: /Import Anyway/i });
+    fireEvent.click(importBtn);
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenLastCalledWith(
+        'receive_bundle',
+        expect.objectContaining({
+          bundleData: [9, 8, 7],
+          commitMode: 'forceTrustOffline',
+          purchaseId: 'bundle-abc123',
+          forceAcceptToleranceBundle: true,
+        }),
+      );
+    });
+    expect(await screen.findByTestId('merchant-approved-badge')).toBeInTheDocument();
+  });
 });

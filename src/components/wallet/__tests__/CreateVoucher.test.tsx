@@ -422,4 +422,181 @@ amount_decimal_places = 4`,
     await userEvent.click(submitButton);
     expect(await screen.findByRole('dialog')).toBeInTheDocument();
   });
+
+  it('H10: requires explicit offline-only confirmation before issuing a real voucher with N=0', async () => {
+    (invoke as Mock).mockImplementation((cmd: string) => {
+      if (cmd === 'get_voucher_standards') return Promise.resolve(mockStandards);
+      if (cmd === 'get_lock_protection_overview') {
+        return Promise.resolve({
+          status: 'none',
+          readyTrustedCount: 0,
+          servers: [],
+          hasOfflineCachedAnchor: false,
+          unresolvedIntentsCount: 0,
+          pendingRestoreReconciliation: false,
+        });
+      }
+      if (cmd === 'get_user_profile') {
+        return Promise.resolve({
+          firstName: 'John',
+          lastName: 'Doe',
+          gender: '1',
+          serviceOffer: 'Test services',
+          address: { city: 'Test City' },
+        });
+      }
+      if (cmd === 'parse_standard_toml') {
+        return Promise.resolve({
+          immutable: {
+            identity: { uuid: 'freetaler-uuid', name: 'FreeTaler', abbreviation: 'Taler' },
+            blueprint: { unit: 'Taler', primaryRedemptionType: 'goodsOrServices', collateralType: 'personalGuarantee' },
+            features: { allowPartialTransfers: true, balancesAreSummable: true, amountDecimalPlaces: 4, privacyMode: 'public', allowedTTypes: [] },
+            issuance: { validityDurationRange: [], issuanceMinimumValidityDuration: 'P1Y', additionalSignaturesRange: [], allowedSignatureRoles: [] },
+            customRules: {},
+          },
+          mutable: {
+            metadata: { issuerName: 'Human Money Project', keywords: [] },
+            appConfig: { defaultValidityDuration: 'P1Y' },
+            i18n: { descriptions: {}, footnotes: {}, collateralDescriptions: {} },
+          },
+        });
+      }
+      if (cmd === 'create_new_voucher') {
+        return Promise.resolve({ localInstanceId: 'v-offline', status: 'Active' });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    const { container } = render(
+      <CreateVoucher onVoucherCreated={mockOnVoucherCreated} onCancel={mockOnCancel} />
+    );
+
+    await userEvent.selectOptions(await screen.findByLabelText(/Voucher Type/i), 'freetaler_v1');
+    await userEvent.type(screen.getByLabelText(/Amount \(e\.g\., 60\)/i), '15');
+
+    // Switch to Real Voucher mode
+    await userEvent.click(screen.getByTestId('voucher-mode-real'));
+    const warningDialog = await screen.findByRole('dialog');
+    await userEvent.click(within(warningDialog).getByRole('button', { name: /Create Real Voucher/i }));
+
+    const offlineCheckbox = await screen.findByTestId('voucher-confirm-offline-only');
+    expect(offlineCheckbox).not.toBeChecked();
+
+    // Attempting to submit without ticking offline confirmation must block submission
+    const submitButton = container.querySelector('form button[type="submit"]') as HTMLButtonElement;
+    await userEvent.click(submitButton);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    // Ticking offline-only confirmation unlocks submission with allowOfflineOnly=true
+    await userEvent.click(offlineCheckbox);
+    expect(offlineCheckbox).toBeChecked();
+
+    await userEvent.click(submitButton);
+    const confirmDialog = await screen.findByRole('dialog');
+    await userEvent.click(within(confirmDialog).getByRole('button', { name: /Create Voucher/i }));
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith(
+        'create_new_voucher',
+        expect.objectContaining({
+          data: expect.objectContaining({
+            nonRedeemableTestVoucher: false,
+            allowOfflineOnly: true,
+          }),
+        }),
+      );
+    });
+  });
+
+  it('H10: opens TOCTOU L2-unavailable modal on error.voucher.l2AnchorUnavailable and allows offline-only retry', async () => {
+    let createAttempt = 0;
+    (invoke as Mock).mockImplementation((cmd: string) => {
+      if (cmd === 'get_voucher_standards') return Promise.resolve(mockStandards);
+      if (cmd === 'get_lock_protection_overview') {
+        return Promise.resolve({
+          status: 'ready',
+          readyTrustedCount: 1,
+          servers: [],
+          hasOfflineCachedAnchor: false,
+          unresolvedIntentsCount: 0,
+          pendingRestoreReconciliation: false,
+        });
+      }
+      if (cmd === 'get_user_profile') {
+        return Promise.resolve({
+          firstName: 'John',
+          lastName: 'Doe',
+          gender: '1',
+          serviceOffer: 'Test services',
+          address: { city: 'Test City' },
+        });
+      }
+      if (cmd === 'parse_standard_toml') {
+        return Promise.resolve({
+          immutable: {
+            identity: { uuid: 'freetaler-uuid', name: 'FreeTaler', abbreviation: 'Taler' },
+            blueprint: { unit: 'Taler', primaryRedemptionType: 'goodsOrServices', collateralType: 'personalGuarantee' },
+            features: { allowPartialTransfers: true, balancesAreSummable: true, amountDecimalPlaces: 4, privacyMode: 'public', allowedTTypes: [] },
+            issuance: { validityDurationRange: [], issuanceMinimumValidityDuration: 'P1Y', additionalSignaturesRange: [], allowedSignatureRoles: [] },
+            customRules: {},
+          },
+          mutable: {
+            metadata: { issuerName: 'Human Money Project', keywords: [] },
+            appConfig: { defaultValidityDuration: 'P1Y' },
+            i18n: { descriptions: {}, footnotes: {}, collateralDescriptions: {} },
+          },
+        });
+      }
+      if (cmd === 'create_new_voucher') {
+        createAttempt += 1;
+        if (createAttempt === 1) {
+          return Promise.reject({
+            code: 'error.voucher.l2AnchorUnavailable',
+            message: 'All lock servers unreachable',
+          });
+        }
+        return Promise.resolve({ localInstanceId: 'v-fallback', status: 'Active' });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    const { container } = render(
+      <CreateVoucher onVoucherCreated={mockOnVoucherCreated} onCancel={mockOnCancel} />
+    );
+
+    await userEvent.selectOptions(await screen.findByLabelText(/Voucher Type/i), 'freetaler_v1');
+    await userEvent.type(screen.getByLabelText(/Amount \(e\.g\., 60\)/i), '25');
+
+    await userEvent.click(screen.getByTestId('voucher-mode-real'));
+    const warningDialog = await screen.findByRole('dialog');
+    await userEvent.click(within(warningDialog).getByRole('button', { name: /Create Real Voucher/i }));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('voucher-confirm-offline-only')).not.toBeInTheDocument();
+    });
+
+    const submitButton = container.querySelector('form button[type="submit"]') as HTMLButtonElement;
+    await userEvent.click(submitButton);
+    const confirmDialog = await screen.findByRole('dialog');
+    await userEvent.click(within(confirmDialog).getByRole('button', { name: /Create Voucher/i }));
+
+    const retryBtn = await screen.findByTestId('l2-unavailable-retry-btn');
+    const offlineBtn = await screen.findByTestId('l2-unavailable-offline-btn');
+    expect(retryBtn).toBeInTheDocument();
+    expect(offlineBtn).toBeInTheDocument();
+
+    await userEvent.click(offlineBtn);
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith(
+        'create_new_voucher',
+        expect.objectContaining({
+          data: expect.objectContaining({
+            nonRedeemableTestVoucher: false,
+            allowOfflineOnly: true,
+          }),
+        }),
+      );
+    });
+  });
 });

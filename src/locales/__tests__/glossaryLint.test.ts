@@ -35,7 +35,7 @@ describe('UX Glossary Linting (docs/UX_GLOSSARY.md)', () => {
     };
 
     const isTechnicalLockServerKey = (key: string): boolean => {
-        if (key === 'error.network.l2Offline' || key === 'profile.backupRestoreOfflineNotice') return true;
+        if (key === 'profile.backupRestoreOfflineNotice') return true;
         if (key.startsWith('help.')) return true;
         if (
             key.startsWith('transfer.checkout.') ||
@@ -46,7 +46,7 @@ describe('UX Glossary Linting (docs/UX_GLOSSARY.md)', () => {
         }
         if (key.startsWith('voucher.')) return true;
         if (
-            /^settings\.(addServerButton|anchorTemplates|benchmarkButton|cachedLockProbes|clearOwnServerBtn|customServersTitle|l2Mode|lifecycle|lockProbe|lockServerUrlLabel|noCustomServers|ownLock|ownNominated|probeLockServerBtn|probeServersFirstHint|probingLockServer|saveOwnServerBtn|selectCommitteeServers|serverNamePlaceholder|serverUrlPlaceholder|useAsOwnServer)/.test(
+            /^settings\.(clearOwnServerBtn|l2Mode|ownLock|ownNominated)/.test(
                 key,
             )
         ) {

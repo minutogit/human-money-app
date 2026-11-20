@@ -184,6 +184,7 @@ export interface NewVoucherData {
     collateral: CollateralData;
     creator: CreatorData;
     layer2Anchor?: string | null;
+    allowOfflineOnly?: boolean;
 }
 
 export interface TransactionHistoryEntry {

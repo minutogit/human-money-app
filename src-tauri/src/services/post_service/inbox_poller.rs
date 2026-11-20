@@ -22,7 +22,7 @@ use super::handlers::{
     dispatch_post_payload, PostDispatchOutcome, PostDispatchStats, PostEnvelopeContext,
 };
 use super::{
-    load_post_state, merge_and_save_post_state, resolve_counterparty_info,
+    merge_and_save_post_state, resolve_counterparty_info,
     resolve_counterparty_info_for_session,
 };
 use crate::services::post_service::outbox::flush_post_slots_impl;
@@ -82,8 +82,12 @@ pub async fn confirm_pending_post_payment_impl(
         Committed {
             payload: Box<crate::models::ReceiveSuccessPayload>,
             is_conflict: bool,
+            queued_ack: bool,
         },
-        CoreError(human_money_core::Error),
+        CoreError {
+            err: human_money_core::Error,
+            queued_ack: bool,
+        },
     }
 
     let outcome = state.with_session_required(
@@ -111,6 +115,39 @@ pub async fn confirm_pending_post_payment_impl(
                     ))
                 })?;
 
+            let tag16_opt: Option<[u8; 16]> = hex::decode(&item.tag16_hex)
+                .ok()
+                .and_then(|bytes| bytes.try_into().ok());
+            let ack_ctx = tag16_opt.and_then(|tag16| {
+                let my_identity = service.with_wallet_and_identity(|_, id| id.clone()).ok()?;
+                let sync_ctx =
+                    crate::services::common::SyncIdentityContext::from_service(service).ok()?;
+                let security_policy = state.get_or_load_security_policy(service, pw).ok()?;
+                let own_reply_syncs = super::collect_own_reply_syncs(
+                    &security_policy,
+                    sync_ctx.my_prefix.as_deref(),
+                );
+                Some((my_identity, sync_ctx.my_ed_sk, tag16, own_reply_syncs))
+            });
+            let mut queued_ack = false;
+            let queue_confirm_ack = |ps: &mut StoredPostState, bundle_id: Option<&str>| -> bool {
+                let Some((my_identity, my_ed_sk, tag16, own_reply_syncs)) = &ack_ctx else {
+                    return false;
+                };
+                super::queue_receipt(
+                    ps,
+                    my_identity,
+                    my_ed_sk,
+                    &item.sender_did,
+                    &item.msg_id,
+                    tag16,
+                    bundle_id,
+                    own_reply_syncs,
+                    now_secs,
+                );
+                true
+            };
+
             let is_conflict = item.l2_evidence.as_ref().is_some_and(|e| e.is_conflict);
             match super::handlers::commit_post_transaction_bundle(
                 service,
@@ -121,51 +158,18 @@ pub async fn confirm_pending_post_payment_impl(
                 item.l2_evidence.as_ref(),
                 true,
                 pw,
-            )? {
-                super::handlers::PostBundleCommitResult::Committed(result) => {
-                    let bundle_id = result.header.bundle_id.clone();
-                    post_state
-                        .pending_tolerance_payments
+                &baseline,
+                &post_state,
+                |ps, result| {
+                    ps.pending_tolerance_payments
                         .retain(|p| p.msg_id != msg_id);
-                    if let Ok(tag16_bytes) = hex::decode(&item.tag16_hex) {
-                        if tag16_bytes.len() == 16 {
-                            let mut tag16 = [0u8; 16];
-                            tag16.copy_from_slice(&tag16_bytes);
-                            if let (Ok(my_identity), Ok(sync_ctx), Ok(security_policy)) = (
-                                service
-                                    .with_wallet_and_identity(|_, id| id.clone())
-                                    .map_err(FrontendError::from),
-                                crate::services::common::SyncIdentityContext::from_service(service),
-                                state
-                                    .get_or_load_security_policy(service, pw)
-                                    .map_err(FrontendError::from),
-                            ) {
-                                let own_reply_syncs = super::collect_own_reply_syncs(
-                                    &security_policy,
-                                    sync_ctx.my_prefix.as_deref(),
-                                );
-                                super::queue_receipt(
-                                    &mut post_state,
-                                    &my_identity,
-                                    &sync_ctx.my_ed_sk,
-                                    &item.sender_did,
-                                    &item.msg_id,
-                                    &tag16,
-                                    Some(&bundle_id),
-                                    &own_reply_syncs,
-                                    now_secs,
-                                );
-                            }
-                        }
+                    ps.processed_msg_ids.insert(item.msg_id.clone());
+                    if queue_confirm_ack(ps, Some(&result.header.bundle_id)) {
+                        queued_ack = true;
                     }
-                    super::merge_post_state_with_service(service, &baseline, &mut post_state, pw)?;
-                    crate::state::save_encrypted_json(
-                        service,
-                        crate::state::MARKET_POST_STATE_KEY,
-                        &post_state,
-                        pw,
-                    )
-                    .map_err(FrontendError::from)?;
+                },
+            )? {
+                super::handlers::PostBundleCommitResult::Committed { result, .. } => {
                     let payload =
                         crate::services::transfer_service::build_receive_success_payload_from_result(
                             service,
@@ -178,17 +182,24 @@ pub async fn confirm_pending_post_payment_impl(
                     Ok(ConfirmCommitOutcome::Committed {
                         payload: Box::new(payload),
                         is_conflict,
+                        queued_ack,
                     })
                 }
                 super::handlers::PostBundleCommitResult::CoreError(e) => {
                     let err_lower = e.to_string().to_ascii_lowercase();
-                    let is_stale = matches!(e, human_money_core::Error::BundlePredatesCurrentEpoch)
-                        || err_lower.contains("already processed")
+                    let is_duplicate = err_lower.contains("already processed")
                         || err_lower.contains("duplicate");
+                    let is_stale =
+                        matches!(e, human_money_core::Error::BundlePredatesCurrentEpoch)
+                            || is_duplicate;
                     if is_stale {
                         post_state
                             .pending_tolerance_payments
                             .retain(|p| p.msg_id != msg_id);
+                        post_state.processed_msg_ids.insert(item.msg_id.clone());
+                        if is_duplicate && queue_confirm_ack(&mut post_state, None) {
+                            queued_ack = true;
+                        }
                         super::merge_post_state_with_service(
                             service,
                             &baseline,
@@ -203,7 +214,7 @@ pub async fn confirm_pending_post_payment_impl(
                         )
                         .map_err(FrontendError::from)?;
                     }
-                    Ok(ConfirmCommitOutcome::CoreError(e))
+                    Ok(ConfirmCommitOutcome::CoreError { err: e, queued_ack })
                 }
             }
         },
@@ -213,7 +224,14 @@ pub async fn confirm_pending_post_payment_impl(
         ConfirmCommitOutcome::Committed {
             payload,
             is_conflict,
+            queued_ack,
         } => {
+            if queued_ack {
+                state.wake_sync_coordinator(crate::state::SyncWakeRequest {
+                    post: true,
+                    ..Default::default()
+                });
+            }
             if is_conflict {
                 if let Some(app_handle) = app {
                     use tauri::Emitter;
@@ -222,7 +240,15 @@ pub async fn confirm_pending_post_payment_impl(
             }
             Ok(*payload)
         }
-        ConfirmCommitOutcome::CoreError(err) => Err(FrontendError::from(err)),
+        ConfirmCommitOutcome::CoreError { err, queued_ack } => {
+            if queued_ack {
+                state.wake_sync_coordinator(crate::state::SyncWakeRequest {
+                    post: true,
+                    ..Default::default()
+                });
+            }
+            Err(FrontendError::from(err))
+        }
     }
 }
 
@@ -282,8 +308,10 @@ pub fn get_post_inbox_summary_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendPostInboxSummary, FrontendError> {
-    state.authorize(crate::state::RequiredAccess::Unlocked, None)?;
-    let mut post_state = load_post_state(state, password.as_deref())?;
+    let session =
+        state.authorize_and_begin_session(crate::state::RequiredAccess::Unlocked, None)?;
+    let mut post_state =
+        super::load_post_state_for_session(state, &session, password.as_deref())?;
     let unacknowledged_payments = post_state
         .outbox_entries
         .iter()
@@ -1067,7 +1095,15 @@ pub async fn sync_post_channels_impl(
                 decrypted_bytes: &decrypted_bytes,
                 now_secs,
             };
-            match dispatch_post_payload(&env_ctx, &container.c, &mut post_state, &mut stats).await {
+            match dispatch_post_payload(
+                &env_ctx,
+                &container.c,
+                &mut post_state,
+                &mut baseline_post_state,
+                &mut stats,
+            )
+            .await
+            {
                 PostDispatchOutcome::Handled => {
                     post_state.processed_msg_ids.insert(envelope.msg_id.clone());
                 }

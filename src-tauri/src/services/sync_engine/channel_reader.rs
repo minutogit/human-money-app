@@ -1401,47 +1401,26 @@ pub async fn remove_public_sync_impl(
             let service = state.lock_service()?;
             SyncIdentityContext::from_service(&service)?
         };
-        if let Ok((r_sk, _, _)) =
+        let (r_sk, _, _) =
             humoco_market::derive_public_drop_keypair(&id_ctx.master_seed, &canonical_url)
-        {
-            let client = sync_client::create_sync_http_client();
-            let now = sync_client::current_unix_timestamp();
-            let acct_nonce = sync_client::generate_sync_nonce();
-            let acct_signed = humoco_market::sign_delete_account_request(&r_sk, now, &acct_nonce);
-            if sync_client::delete_account(&client, &canonical_url, &acct_signed)
-                .await
-                .is_err()
-            {
-                let delta_prefix = humoco_market::derive_delta_prefix(id_ctx.my_prefix.as_deref());
-                for (ch, ch_prefix) in [
-                    ("card", id_ctx.my_prefix.as_deref()),
-                    ("card", Some(delta_prefix.as_str())),
-                    ("wot", None),
-                    ("backup", id_ctx.my_prefix.as_deref()),
-                    ("backup", Some(delta_prefix.as_str())),
-                    ("post", id_ctx.my_prefix.as_deref()),
-                ] {
-                    let nonce = sync_client::generate_sync_nonce();
-                    let signed = humoco_market::sign_member_request_direct(
-                        &r_sk, "DELETE", ch, ch_prefix, now, &nonce, b"",
-                    );
-                    let _ = sync_client::delete_slot(&client, &canonical_url, &signed, ch).await;
-                }
-                let media_nonce = sync_client::generate_sync_nonce();
-                let media_signed = humoco_market::sign_member_request_direct(
-                    &r_sk,
-                    "DELETE",
-                    "media",
-                    None,
-                    now,
-                    &media_nonce,
-                    b"",
+                .map_err(|e| FrontendError::from(e.to_string()))?;
+        let client = sync_client::create_sync_http_client();
+        let now = sync_client::current_unix_timestamp();
+        let acct_nonce = sync_client::generate_sync_nonce();
+        let acct_signed = humoco_market::sign_delete_account_request(&r_sk, now, &acct_nonce);
+        sync_client::delete_account(&client, &canonical_url, &acct_signed)
+            .await
+            .map_err(|err| {
+                let mut fe = FrontendError::with_code(
+                    "error.sync.remoteDeleteFailed",
+                    format!(
+                        "Remote sync deletion failed; local sync settings were preserved: {}",
+                        err
+                    ),
                 );
-                let _ =
-                    sync_client::delete_media_blob(&client, &canonical_url, &media_signed, None)
-                        .await;
-            }
-        }
+                fe.details.insert("error".to_string(), err);
+                fe
+            })?;
     }
 
     state.with_session_required(
@@ -1580,5 +1559,69 @@ mod tests {
         assert!(etags.contains_key(&direct_full));
         assert!(etags.contains_key(&direct_delta));
         assert!(etags.contains_key(&direct_wot));
+    }
+
+    #[tokio::test]
+    async fn test_h13_remove_public_sync_preserves_local_state_on_remote_delete_failure() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let dir = crate::test_support::temp_test_dir("h13_remote_delete_fail");
+        let pw = "StrongPassword123!";
+        let svc = crate::test_support::setup_test_app(
+            &dir,
+            "Alice",
+            crate::test_support::ALICE_PHRASE,
+            pw,
+        );
+        let state = crate::test_support::create_test_state(svc);
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let srv = tokio::spawn(async move {
+            if let Ok((mut stream, _)) = listener.accept().await {
+                let mut buf = [0u8; 2048];
+                let _ = stream.read(&mut buf).await;
+                let resp = "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 4\r\n\r\nfail";
+                let _ = stream.write_all(resp.as_bytes()).await;
+            }
+        });
+
+        let write_url = format!("http://127.0.0.1:{}/sync.php", port);
+        {
+            let mut s = state.lock_service().unwrap();
+            state
+                .mutate_security_policy(&mut s, Some(pw), |p| {
+                    p.public_syncs.push(crate::settings::StoredPublicSync {
+                        write_url: write_url.clone(),
+                        read_url: format!("http://127.0.0.1:{}/d", port),
+                        drop_pub: "11".repeat(32),
+                        register_url: None,
+                        access_pubkey: "22".repeat(32),
+                        enabled: true,
+                        authorized_channels: vec!["card".into()],
+                        status: "active".into(),
+                        sunset_at: None,
+                        revocation_reason: None,
+                        replacement: None,
+                    });
+                })
+                .unwrap();
+        }
+
+        let err = remove_public_sync_impl(write_url.clone(), true, Some(pw.into()), &state)
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, "error.sync.remoteDeleteFailed");
+
+        let remaining = {
+            let mut s = state.lock_service().unwrap();
+            state.get_or_load_security_policy(&mut s, Some(pw)).unwrap()
+        };
+        assert_eq!(remaining.public_syncs.len(), 1);
+        assert_eq!(remaining.public_syncs[0].write_url, write_url);
+
+        let _ = srv.await;
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -46,7 +46,6 @@ function makeAppConfig(
       backupDirty: false,
       lastBackupAt: null,
       lastSyncBackupAt: null,
-      l2ProbeCache: {},
     },
   };
 }
@@ -864,5 +863,67 @@ describe('SessionContext and Session Timeout UX (APP-017)', () => {
     });
     await expect(p2).resolves.toBe('second:pw-2');
     expect(authService.elevateSessionWithPassword).toHaveBeenCalledTimes(2);
+  });
+
+  it('K2: discards in-flight auth callback if logout/cancel happens before elevate resolves', async () => {
+    (authService.getSessionStatus as Mock).mockResolvedValue(dailyPayStatus(false));
+    (settingsService.getConfig as Mock).mockResolvedValue(makeAppConfig(300));
+
+    let resolveElevate!: (status: ReturnType<typeof dailyPayStatus>) => void;
+    (authService.elevateSessionWithPassword as Mock).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveElevate = resolve;
+        }),
+    );
+
+    let sessionCtx!: ReturnType<typeof useSession>;
+    render(
+      <SessionProvider>
+        <SessionConsumer onContextReady={(ctx) => { sessionCtx = ctx; }} />
+      </SessionProvider>
+    );
+
+    await act(async () => {
+      screen.getByText('Login Alice').click();
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('base-access-mode').textContent).toBe('dailyPay');
+    });
+
+    const staleCallback = vi.fn().mockResolvedValue('should-never-run');
+    let pendingPromise!: Promise<unknown>;
+    await act(async () => {
+      pendingPromise = sessionCtx.requireFullAccess(staleCallback);
+    });
+    const handledRejection = pendingPromise.catch((err) => err);
+
+    fireEvent.change(await screen.findByPlaceholderText('Profile Password'), {
+      target: { value: 'master-pw' },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    });
+
+    expect(authService.elevateSessionWithPassword).toHaveBeenCalledWith('master-pw');
+
+    // Cancel / log out before the backend call resolves
+    await act(async () => {
+      sessionCtx.notifyLogout();
+    });
+
+    const rejection = await handledRejection;
+    expect(rejection).toBeInstanceOf(Error);
+    expect((rejection as Error).message).toMatch(/logged out|cancelled/i);
+
+    // Late resolution of the superseded unlock attempt must NOT run the callback or elevate state
+    await act(async () => {
+      resolveElevate(dailyPayStatus(true, true));
+      await Promise.resolve();
+    });
+
+    expect(staleCallback).not.toHaveBeenCalled();
+    expect(screen.getByTestId('is-authenticated').textContent).toBe('false');
+    expect(screen.getByTestId('has-cached-session').textContent).toBe('false');
   });
 });

@@ -117,9 +117,9 @@ export const MarketPersonView: React.FC<MarketPersonViewProps> = ({
             }
             const snapshot = await marketService.getMarketView();
             const targetId = currentPerson.recipientDid || currentPerson.did;
-            const updated =
-                (snapshot.people || []).find((p) => isExactSameUserId(p.recipientDid || p.did, targetId)) ||
-                (snapshot.people || []).find((p) => isExactSameUserId(p.did, currentPerson.did));
+            const updated = (snapshot.people || []).find((p) =>
+                isExactSameUserId(p.recipientDid || p.did, targetId),
+            );
             if (updated) {
                 setCurrentPerson(updated);
             }

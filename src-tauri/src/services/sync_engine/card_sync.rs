@@ -438,21 +438,30 @@ pub async fn probe_contact_syncs_impl(
 ) -> Result<Vec<FrontendSyncDescriptor>, FrontendError> {
     let session =
         state.authorize_and_begin_session(crate::state::RequiredAccess::Unlocked, None)?;
+    probe_contact_syncs_with_session(&session, force, password.as_deref(), state).await
+}
+
+pub(crate) async fn probe_contact_syncs_with_session(
+    session: &crate::session::SessionToken,
+    force: bool,
+    password: Option<&str>,
+    state: &AppState,
+) -> Result<Vec<FrontendSyncDescriptor>, FrontendError> {
     let (id_ctx, initial_policy, has_own_sync, mut probe_targets) = state.with_session_required(
-        &session,
+        session,
         "Wallet session changed before sync probe started",
         |service| {
             let id_ctx = SyncIdentityContext::from_service(service)?;
             let s = state
-                .get_or_load_security_policy(service, password.as_deref())
+                .get_or_load_security_policy(service, password)
                 .map_err(FrontendError::from)?;
-            let own = load_stored_sync_admin_opt(service, password.as_deref())?.is_some_and(|a| {
+            let own = load_stored_sync_admin_opt(service, password)?.is_some_and(|a| {
                 !a.descriptor.write_url.is_empty() && !a.descriptor.read_url.is_empty()
             });
             let ab: FrontendAddressBook = crate::state::load_encrypted_json_or_default(
                 service,
                 CONTACTS_DATA_NAME,
-                password.as_deref(),
+                password,
             )
             .map_err(FrontendError::from)?;
             let targets: Vec<(String, String, FrontendSyncDescriptor)> = ab
@@ -515,11 +524,11 @@ pub async fn probe_contact_syncs_impl(
         }
     }
 
-    let final_book_opt = state.with_session(&session, |service| {
+    let final_book_opt = state.with_session(session, |service| {
         let mut fresh_ab: FrontendAddressBook = crate::state::load_encrypted_json_or_default(
             service,
             CONTACTS_DATA_NAME,
-            password.as_deref(),
+            password,
         )
         .map_err(FrontendError::from)?;
         let mut contacts_modified = false;
@@ -548,7 +557,7 @@ pub async fn probe_contact_syncs_impl(
                 service,
                 CONTACTS_DATA_NAME,
                 &fresh_ab,
-                password.as_deref(),
+                password,
             )
             .map_err(FrontendError::from)?;
             state.set_cached_contacts_for_service(service, Some(fresh_ab.clone()));
@@ -563,7 +572,7 @@ pub async fn probe_contact_syncs_impl(
     if !probed_endpoints.is_empty() {
         let mut auto_activated = false;
         let updated_policy =
-            state.mutate_security_policy_for_session(&session, password.as_deref(), |policy| {
+            state.mutate_security_policy_for_session(session, password, |policy| {
                 let mut modified = false;
                 let mut current_healthy = has_own_sync
                     || policy.market_selected_syncs.iter().any(|d| {
@@ -617,12 +626,12 @@ pub async fn probe_contact_syncs_impl(
         let _ = has_healthy_sync;
         if auto_activated {
             if let Some(policy) = updated_policy {
-                let _ = state.with_session(&session, |service| {
+                let _ = state.with_session(session, |service| {
                     sync_own_card_drops_on_settings_change(
                         state,
                         service,
                         &policy.market_selected_syncs,
-                        password.as_deref(),
+                        password,
                     );
                     Ok(())
                 });
@@ -632,8 +641,8 @@ pub async fn probe_contact_syncs_impl(
 
     save_channel_max_bytes_updates(
         state,
-        &session,
-        password.as_deref(),
+        session,
+        password,
         &channel_max_bytes_updates,
     );
 

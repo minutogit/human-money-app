@@ -864,57 +864,76 @@ pub(crate) async fn finalize_restored_wallet_and_reconcile_l2(
             local_instance_id,
             &mut service,
         )?;
-        let pending_lock = if replace_folder_name == Some(outcome.folder_name.as_str()) {
-            replace_lock
-                .take()
-                .unwrap_or_else(|| crate::state::PendingProfileLock::None)
-        } else {
-            state.acquire_profile_lock(&outcome.folder_name)?
-        };
+        let setup_res = (|| -> Result<_, FrontendError> {
+            let pending_lock = if replace_folder_name == Some(outcome.folder_name.as_str()) {
+                replace_lock
+                    .take()
+                    .unwrap_or_else(|| crate::state::PendingProfileLock::None)
+            } else {
+                state.acquire_profile_lock(&outcome.folder_name)?
+            };
 
-        let restored_identity = service
-            .with_wallet_and_identity(|_, id| id.clone())
-            .map_err(FrontendError::from)?;
+            let restored_identity = service
+                .with_wallet_and_identity(|_, id| id.clone())
+                .map_err(FrontendError::from)?;
 
-        let resolved_name = if let Some(old_folder) = replace_folder_name {
-            if let Some(app) = app_opt {
-                if let Ok(config_dir) = app.path().app_config_dir() {
-                    let _ = crate::pin_keystore::remove_entry(&config_dir, old_folder);
-                    let _ = crate::pin_keystore::remove_entry(&config_dir, &outcome.folder_name);
+            let resolved_name = if let Some(old_folder) = replace_folder_name {
+                if let Some(app) = app_opt {
+                    if let Ok(config_dir) = app.path().app_config_dir() {
+                        let _ = crate::pin_keystore::remove_entry(&config_dir, old_folder);
+                        let _ = crate::pin_keystore::remove_entry(&config_dir, &outcome.folder_name);
+                    }
                 }
-            }
-            let name = replace_local_profile_with_restored(
+                let name = replace_local_profile_with_restored(
+                    wallet_data_dir,
+                    old_folder,
+                    &outcome.folder_name,
+                    &restored_identity,
+                    &user_ids_by_folder,
+                    profile_name,
+                );
+                if old_folder != outcome.folder_name {
+                    state.release_profile_lock_if_matching(old_folder);
+                }
+                name
+            } else {
+                profile_name
+            };
+
+            if let Err(e) = record_profile_metadata_in_dir(
                 wallet_data_dir,
-                old_folder,
                 &outcome.folder_name,
-                &restored_identity,
-                &user_ids_by_folder,
-                profile_name,
-            );
-            if old_folder != outcome.folder_name {
-                state.release_profile_lock_if_matching(old_folder);
+                Some(restored_identity.user_id.clone()),
+            ) {
+                log::warn!("Failed to update profile metadata: {}", e);
             }
-            name
-        } else {
-            profile_name
-        };
 
-        if let Err(e) = record_profile_metadata_in_dir(
-            wallet_data_dir,
-            &outcome.folder_name,
-            Some(restored_identity.user_id.clone()),
-        ) {
-            log::warn!("Failed to update profile metadata: {}", e);
+            state
+                .initialize_profile_session(&mut service, new_password)
+                .map_err(FrontendError::from)?;
+            let restored_session = state.session_token_for_service(&service)?;
+
+            Ok((
+                restored_session,
+                outcome,
+                resolved_name,
+                custom_standards,
+                pending_lock,
+            ))
+        })();
+        match setup_res {
+            Ok((restored_session, outcome, resolved_name, custom_standards, pending_lock)) => {
+                drop(service);
+                state.commit_profile_lock(pending_lock);
+                (restored_session, outcome, resolved_name, custom_standards)
+            }
+            Err(err) => {
+                service.logout();
+                state.clear_all_caches();
+                state.clear_sync_cooldown();
+                return Err(err);
+            }
         }
-
-        if let Err(e) = state.initialize_profile_session(&mut service, new_password) {
-            log::warn!("Failed to initialize profile session after restore: {}", e);
-        }
-        let restored_session = state.session_token_for_service(&service)?;
-        drop(service);
-        state.commit_profile_lock(pending_lock);
-
-        (restored_session, outcome, resolved_name, custom_standards)
     };
 
     if profile_name.is_empty() {
