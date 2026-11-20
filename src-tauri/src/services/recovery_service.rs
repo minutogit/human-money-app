@@ -39,7 +39,7 @@ use crate::services::{
     common::are_dids_equal,
     fs_helpers::{record_profile_metadata_in_dir, write_file_atomic},
     post_service::{
-        collect_own_reply_syncs, flush_post_slots_impl, load_post_state, merge_and_save_post_state,
+        collect_own_reply_syncs, flush_post_slots_impl, merge_and_save_post_state,
         sync_post_channels_impl,
     },
     sync_engine::save_public_sync_impl,
@@ -198,11 +198,14 @@ fn is_same_account_id(a: &str, b: &str) -> bool {
     }
 }
 
-pub fn collect_candidate_backup_sync_descriptors(
+pub(crate) fn collect_candidate_backup_sync_descriptors_with_service(
     state: &AppState,
+    service: &mut human_money_core::app_service::AppService,
     password: Option<&str>,
 ) -> Result<Vec<DropDescriptor>, FrontendError> {
-    let security_policy = state.get_or_load_security_policy_locked(password)?;
+    let security_policy = state
+        .get_or_load_security_policy(service, password)
+        .map_err(FrontendError::from)?;
     let mut candidate_targets: Vec<DropDescriptor> = security_policy
         .market_selected_syncs
         .iter()
@@ -210,18 +213,14 @@ pub fn collect_candidate_backup_sync_descriptors(
         .map(Into::into)
         .collect();
 
-    let (admin_opt, my_prefix) = {
-        let mut service = state.lock_service()?;
-        let pfx = service
-            .with_wallet_and_identity(|_w, i| {
-                human_money_core::crypto::get_prefix_from_user_id(&i.user_id).map(|s| s.to_string())
-            })
-            .ok()
-            .flatten();
-        let admin = match crate::services::sync_engine::admin::load_stored_sync_admin_opt(
-            &mut service,
-            password,
-        ) {
+    let pfx = service
+        .with_wallet_and_identity(|_w, i| {
+            human_money_core::crypto::get_prefix_from_user_id(&i.user_id).map(|s| s.to_string())
+        })
+        .ok()
+        .flatten();
+    let admin_opt =
+        match crate::services::sync_engine::admin::load_stored_sync_admin_opt(service, password) {
             Ok(admin) => admin,
             Err(err)
                 if password.is_none()
@@ -232,8 +231,6 @@ pub fn collect_candidate_backup_sync_descriptors(
             }
             Err(err) => return Err(err),
         };
-        (admin, pfx)
-    };
     if let Some(admin) = admin_opt {
         if !admin.descriptor.write_url.is_empty()
             && !candidate_targets
@@ -251,7 +248,7 @@ pub fn collect_candidate_backup_sync_descriptors(
                 .iter()
                 .any(|d| d.write_url == pd.write_url)
         {
-            let slot_id = humoco_market::format_slot_id(&pd.access_pubkey, my_prefix.as_deref())
+            let slot_id = humoco_market::format_slot_id(&pd.access_pubkey, pfx.as_deref())
                 .unwrap_or_else(|_| pd.access_pubkey.clone());
             candidate_targets.push(DropDescriptor {
                 write_url: pd.write_url.clone(),
@@ -263,6 +260,14 @@ pub fn collect_candidate_backup_sync_descriptors(
     }
 
     Ok(candidate_targets)
+}
+
+pub fn collect_candidate_backup_sync_descriptors(
+    state: &AppState,
+    password: Option<&str>,
+) -> Result<Vec<DropDescriptor>, FrontendError> {
+    let mut service = state.lock_service()?;
+    collect_candidate_backup_sync_descriptors_with_service(state, &mut service, password)
 }
 
 fn seal_recovery_container(
@@ -376,9 +381,21 @@ pub async fn enqueue_guardian_locator_updates_if_configured(
         (session, id, owner.guardians, owner.rotation_epoch)
     };
 
-    let candidate_descriptors =
-        collect_candidate_backup_sync_descriptors(state, password.as_deref())?;
-    let security_policy = state.get_or_load_security_policy_locked(password.as_deref())?;
+    let (candidate_descriptors, security_policy) = state.with_session_required(
+        &session,
+        "Active wallet session changed during guardian locator update",
+        |service| {
+            let descriptors = collect_candidate_backup_sync_descriptors_with_service(
+                state,
+                service,
+                password.as_deref(),
+            )?;
+            let policy = state
+                .get_or_load_security_policy(service, password.as_deref())
+                .map_err(FrontendError::from)?;
+            Ok((descriptors, policy))
+        },
+    )?;
     let reply_drops: Vec<DropDescriptor> = collect_own_reply_syncs(
         &security_policy,
         human_money_core::crypto::get_prefix_from_user_id(&my_identity.user_id),
@@ -392,7 +409,16 @@ pub async fn enqueue_guardian_locator_updates_if_configured(
 
     let _post_guard = state.post_op_lock.lock().await;
     let now_secs = Utc::now().timestamp() as u64;
-    let mut post_state = load_post_state(state, password.as_deref())?;
+    let mut post_state = state.with_session_required(
+        &session,
+        "Active wallet session changed before loading post state for locator update",
+        |service| {
+            crate::services::post_service::load_post_state_with_service(
+                service,
+                password.as_deref(),
+            )
+        },
+    )?;
     let mut baseline = post_state.clone();
     let mut enqueued = 0;
 
@@ -754,9 +780,10 @@ pub async fn confirm_emergency_sheet_saved_impl(
     state: &AppState,
     app: Option<&tauri::AppHandle>,
 ) -> Result<ConfirmEmergencySheetResultDto, FrontendError> {
-    let phrase = {
+    let (phrase, session) = {
         let service =
             state.authorize_and_lock(crate::state::RequiredAccess::Full, Some(&password))?;
+        let session = state.session_token_for_service(&service)?;
         let exp = service
             .export_mnemonic(&password)
             .map_err(FrontendError::from)?;
@@ -765,7 +792,7 @@ pub async fn confirm_emergency_sheet_saved_impl(
                 "Wiederherstellungsphrase nicht auf diesem Gerät gespeichert.".to_string(),
             )
         })?;
-        ph
+        (ph, session)
     };
 
     let words: Vec<&str> = phrase.split_whitespace().collect();
@@ -787,12 +814,17 @@ pub async fn confirm_emergency_sheet_saved_impl(
     let now_secs = Utc::now().timestamp() as u64;
     {
         let _recovery_guard = state.recovery_op_lock.lock().await;
-        let mut service = state.lock_service()?;
-        let mut owner_state =
-            load_recovery_owner_state_with_cache(state, &mut service, Some(&password))?
-                .unwrap_or_default();
-        owner_state.emergency_sheet_confirmed_at = Some(now_secs);
-        save_recovery_owner_state_with_cache(state, &mut service, &owner_state, Some(&password))?;
+        state.with_session_required(
+            &session,
+            "Active wallet session changed before confirming emergency sheet",
+            |service| {
+                let mut owner_state =
+                    load_recovery_owner_state_with_cache(state, service, Some(&password))?
+                        .unwrap_or_default();
+                owner_state.emergency_sheet_confirmed_at = Some(now_secs);
+                save_recovery_owner_state_with_cache(state, service, &owner_state, Some(&password))
+            },
+        )?;
     }
 
     let backup_sync_result = match app {
@@ -933,9 +965,11 @@ pub fn verify_recovery_rehearsal_with_password_impl(
     password: Option<&str>,
     state: &AppState,
 ) -> Result<RehearsalCheckResultDto, FrontendError> {
-    let mut service = state.authorize_and_lock(crate::state::RequiredAccess::DailyPay, password)?;
+    let (mut service, resolved_pw) =
+        state.authorize_and_lock_secret(crate::state::RequiredAccess::DailyPay, password)?;
+    let pw = resolved_pw.as_deref().map(String::as_str);
 
-    let mut owner_state = load_recovery_owner_state_with_cache(state, &mut service, password)?
+    let mut owner_state = load_recovery_owner_state_with_cache(state, &mut service, pw)?
         .ok_or_else(|| {
             FrontendError::from("Social recovery is not configured for this profile.".to_string())
         })?;
@@ -981,7 +1015,7 @@ pub fn verify_recovery_rehearsal_with_password_impl(
         let next_at = now_secs.saturating_add(interval);
         owner_state.rehearsal_stage = next_stage;
         owner_state.next_rehearsal_at = Some(next_at);
-        save_recovery_owner_state_with_cache(state, &mut service, &owner_state, password)?;
+        save_recovery_owner_state_with_cache(state, &mut service, &owner_state, pw)?;
         Ok(RehearsalCheckResultDto {
             all_correct: true,
             question_matches,
@@ -1012,16 +1046,18 @@ pub fn snooze_recovery_rehearsal_with_password_impl(
     password: Option<&str>,
     state: &AppState,
 ) -> Result<u64, FrontendError> {
-    let mut service = state.authorize_and_lock(crate::state::RequiredAccess::DailyPay, password)?;
+    let (mut service, resolved_pw) =
+        state.authorize_and_lock_secret(crate::state::RequiredAccess::DailyPay, password)?;
+    let pw = resolved_pw.as_deref().map(String::as_str);
 
-    let mut owner_state = load_recovery_owner_state_with_cache(state, &mut service, password)?
+    let mut owner_state = load_recovery_owner_state_with_cache(state, &mut service, pw)?
         .ok_or_else(|| {
             FrontendError::from("Social recovery is not configured for this profile.".to_string())
         })?;
     let snooze_secs = hours.unwrap_or(24).clamp(1, 168) * 3600;
     let next_at = now_secs.saturating_add(snooze_secs);
     owner_state.next_rehearsal_at = Some(next_at);
-    save_recovery_owner_state_with_cache(state, &mut service, &owner_state, password)?;
+    save_recovery_owner_state_with_cache(state, &mut service, &owner_state, pw)?;
     Ok(next_at)
 }
 
@@ -1202,7 +1238,21 @@ pub async fn setup_social_recovery_guardians_with_params(
         let new_epoch = old_epoch + 1;
         let now_secs = Utc::now().timestamp() as u64;
 
-        let security_policy = state.get_or_load_security_policy_locked(Some(password.as_str()))?;
+        let (security_policy, backup_descriptors) = state.with_session_required(
+            &session,
+            "Active wallet session changed during social recovery setup",
+            |service| {
+                let sp = state
+                    .get_or_load_security_policy(service, Some(password.as_str()))
+                    .map_err(FrontendError::from)?;
+                let bd = collect_candidate_backup_sync_descriptors_with_service(
+                    state,
+                    service,
+                    Some(&password),
+                )?;
+                Ok((sp, bd))
+            },
+        )?;
         let reply_drops: Vec<DropDescriptor> = collect_own_reply_syncs(
             &security_policy,
             human_money_core::crypto::get_prefix_from_user_id(&my_identity.user_id),
@@ -1213,8 +1263,6 @@ pub async fn setup_social_recovery_guardians_with_params(
 
         let owner_account_id =
             canonicalize_owner_account_id(&my_identity.user_id).map_err(FrontendError::from)?;
-        let backup_descriptors =
-            collect_candidate_backup_sync_descriptors(state, Some(&password))?;
 
         let master_payload = RecoveryMasterPayload::new(
             &owner_account_id,
@@ -1260,7 +1308,16 @@ pub async fn setup_social_recovery_guardians_with_params(
         let mut assignment_records = Vec::with_capacity(guardian_dids.len());
         {
             let _post_guard = state.post_op_lock.lock().await;
-            let mut post_state = load_post_state(state, Some(&password))?;
+            let mut post_state = state.with_session_required(
+                &session,
+                "Active wallet session changed before writing recovery outbox",
+                |service| {
+                    crate::services::post_service::load_post_state_with_service(
+                        service,
+                        Some(&password),
+                    )
+                },
+            )?;
             let baseline = post_state.clone();
 
             // Send revoke to any old guardians being removed
@@ -1397,7 +1454,11 @@ pub async fn revoke_social_recovery_impl(
 
         let new_epoch = old_epoch + 1;
         let now_secs = Utc::now().timestamp() as u64;
-        let security_policy = state.get_or_load_security_policy_locked(password.as_deref())?;
+        let security_policy = state.with_session_required(
+            &session,
+            "Active wallet session changed before recovery revocation could load policy",
+            |service| state.get_or_load_security_policy(service, password.as_deref()).map_err(FrontendError::from),
+        )?;
         let reply_drops: Vec<DropDescriptor> = collect_own_reply_syncs(
             &security_policy,
             human_money_core::crypto::get_prefix_from_user_id(&my_identity.user_id),
@@ -1411,7 +1472,16 @@ pub async fn revoke_social_recovery_impl(
 
         {
             let _post_guard = state.post_op_lock.lock().await;
-            let mut post_state = load_post_state(state, password.as_deref())?;
+            let mut post_state = state.with_session_required(
+                &session,
+                "Active wallet session changed before loading post state for recovery revocation",
+                |service| {
+                    crate::services::post_service::load_post_state_with_service(
+                        service,
+                        password.as_deref(),
+                    )
+                },
+            )?;
             let baseline = post_state.clone();
 
             enqueue_guardian_revocations(
@@ -1883,6 +1953,7 @@ pub async fn complete_social_recovery_impl(
     let fe_lang = core_to_frontend_language(lang);
     let allow_empty = allow_empty_fallback.unwrap_or(false);
 
+    let start_generation = state.current_session_generation();
     let (resolved_targets, local_collision) = if has_sync_inputs {
         let probe = probe_sync_backup_impl(
             sync_inputs,
@@ -1948,24 +2019,38 @@ pub async fn complete_social_recovery_impl(
                 )
                 .await?;
 
-                {
-                    let mut service = state.lock_service()?;
-                    if let Ok(Some(mut local_state)) = load_recovery_owner_state_with_cache(
-                        state,
-                        &mut service,
-                        Some(&new_password),
-                    ) {
-                        if local_state.rotation_epoch < rotation_epoch {
-                            local_state.rotation_epoch = rotation_epoch;
-                            let _ = save_recovery_owner_state_with_cache(
-                                state,
-                                &mut service,
-                                &local_state,
-                                Some(&new_password),
-                            );
+                let expected_owner_id = derived_identity.user_id.clone();
+                state.with_session_required(
+                    &state.lock_service().and_then(|s| state.session_token_for_service(&s))?,
+                    "Restored wallet session changed before updating recovery rotation epoch",
+                    |service| {
+                        let current_owner_id = service
+                            .with_wallet(|w| w.get_user_id().to_string())
+                            .map_err(FrontendError::from)?;
+                        if !is_same_account_id(&current_owner_id, &expected_owner_id) {
+                            return Err(FrontendError::from(
+                                "Restored wallet account changed before updating recovery epoch"
+                                    .to_string(),
+                            ));
                         }
-                    }
-                }
+                        if let Ok(Some(mut local_state)) = load_recovery_owner_state_with_cache(
+                            state,
+                            service,
+                            Some(&new_password),
+                        ) {
+                            if local_state.rotation_epoch < rotation_epoch {
+                                local_state.rotation_epoch = rotation_epoch;
+                                let _ = save_recovery_owner_state_with_cache(
+                                    state,
+                                    service,
+                                    &local_state,
+                                    Some(&new_password),
+                                );
+                            }
+                        }
+                        Ok(())
+                    },
+                )?;
 
                 delete_active_session_from_path(session_file_path);
 
@@ -2023,6 +2108,11 @@ pub async fn complete_social_recovery_impl(
             }
         }
     } else {
+        if !state.is_generation_current(start_generation) {
+            return Err(FrontendError::from(
+                "Wallet session changed during social recovery".to_string(),
+            ));
+        }
         let user_ids = user_ids_from_metadata_dir(wallet_data_dir);
         let service = state.lock_service()?;
         let coll = find_local_profile_collision_impl(
@@ -2084,6 +2174,11 @@ pub async fn complete_social_recovery_impl(
     let final_name = profile_name
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| "Wiederhergestelltes Profil".to_string());
+    if !state.is_generation_current(start_generation) {
+        return Err(FrontendError::from(
+            "Wallet session changed before creating recovered profile".to_string(),
+        ));
+    }
     let created_folder = {
         let mut service = state.lock_service()?;
         service
@@ -2196,6 +2291,7 @@ pub async fn complete_social_recovery_impl(
 mod tests {
     use super::*;
     use crate::models::{FrontendContact, FrontendUserProfile, GuardianAssignmentStatus};
+    use crate::services::post_service::load_post_state;
     use crate::test_support::{
         create_test_state, setup_test_app, temp_test_dir, ALICE_PHRASE, BOB_PHRASE, CHARLIE_PHRASE,
         READER1_PHRASE, READER2_PHRASE,

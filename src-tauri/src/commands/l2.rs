@@ -114,10 +114,20 @@ pub async fn run_l2_lifecycle_tick(
     password: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<FrontendL2LifecycleStatusDto, FrontendError> {
-    state.authorize(RequiredAccess::DailyPay, password.as_deref())?;
+    let (session, resolved_pw) =
+        state.authorize_and_begin_session_secret(RequiredAccess::DailyPay, password.as_deref())?;
+    let pw = resolved_pw.as_deref().map(String::as_str);
     let client = sync_client::create_sync_probe_client();
     let now_secs = sync_client::current_unix_timestamp();
-    run_lifecycle_tick_with_now(state.inner(), &client, now_secs, force, password.as_deref()).await
+    run_lifecycle_tick_with_now(
+        state.inner(),
+        &session,
+        &client,
+        now_secs,
+        force,
+        pw,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -128,11 +138,12 @@ pub async fn discover_anchor_manifest_cmd(
     password: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<Option<FrontendAnchorDiscoveryDto>, FrontendError> {
-    state.authorize(RequiredAccess::Unlocked, None)?;
+    let session = state.authorize_and_begin_session(RequiredAccess::Unlocked, None)?;
     let anchor_id = decode_hex_fixed::<32>(anchor_id_hex.trim()).map_err(lifecycle_err)?;
     let client = sync_client::create_sync_probe_client();
     let found = discover_anchor_manifest(
         state.inner(),
+        &session,
         &client,
         &anchor_id,
         creator_did.as_deref(),
@@ -345,31 +356,32 @@ pub(crate) async fn create_guarantor_claim_bundle_impl(
         .map_err(FrontendError::from)?;
     let guarantor_id = validated_guarantor.into_string();
     let normalized_amount = amount.trim().replace(',', ".");
-    let (res, intents, pow_bits) = {
-        let mut service =
-            state.authorize_and_lock(RequiredAccess::DailyPay, password.as_deref())?;
+    let (res, intents, pow_bits, session, resolved_pw) = {
+        let (mut service, resolved_pw) =
+            state.authorize_and_lock_secret(RequiredAccess::DailyPay, password.as_deref())?;
+        let pw = resolved_pw.as_deref().map(String::as_str);
+        let session = state.session_token_for_service(&service)?;
 
         let preflight = crate::services::preflight::ValueOutflowPreflight {
             require_restore_reconciled: true,
-            check_known_offender_dids: &[],
+            check_known_offender_dids: &[guarantor_id.as_str()],
             check_blocking_intent_local_ids: &[local_instance_id.as_str()],
             check_anchor_id_quorum_health: None,
         };
         crate::services::preflight::run_value_outflow_preflight(
             state,
             &mut service,
-            password.as_deref(),
+            pw,
             &preflight,
         )?;
 
         let lifecycle = state
-            .get_or_load_internal_lifecycle(&mut service, password.as_deref())
+            .get_or_load_internal_lifecycle(&mut service, pw)
             .map_err(FrontendError::from)?;
 
-        let (sender_id, pow_bits) = service
+        let pow_bits = service
             .with_wallet(|w| {
-                let bits = w
-                    .get_voucher_instance(&local_instance_id)
+                w.get_voucher_instance(&local_instance_id)
                     .and_then(|inst| inst.voucher.layer2_anchor)
                     .and_then(|aid| w.profile.l2_anchor_manifests.get(&hex::encode(aid)))
                     .map(|m| {
@@ -378,13 +390,20 @@ pub(crate) async fn create_guarantor_claim_bundle_impl(
                             m.servers.iter().map(|s| s.write_url.as_str()),
                         )
                     })
-                    .unwrap_or(human_money_core::humoco_proto::crypto::DEFAULT_LOCK_POW_BASE_BITS);
-                (w.get_user_id().to_string(), bits)
+                    .unwrap_or(human_money_core::humoco_proto::crypto::DEFAULT_LOCK_POW_BASE_BITS)
             })
             .map_err(FrontendError::from)?;
 
+        let baseline_history = state
+            .load_history_from_disk(&mut service, pw)
+            .map_err(FrontendError::from)?;
+        let baseline_outgoing = crate::state::load_outgoing_bundles(&mut service, pw)?;
+        let next_history_cell = std::cell::RefCell::new(None::<Vec<TransactionRecord>>);
+        let next_outgoing_cell =
+            std::cell::RefCell::new(None::<crate::models::StoredOutgoingBundles>);
+
         let (res, intent_opt) = service
-            .create_guarantor_claim_bundle(
+            .create_guarantor_claim_bundle_with_companions(
                 &local_instance_id,
                 &guarantor_id,
                 &normalized_amount,
@@ -392,56 +411,84 @@ pub(crate) async fn create_guarantor_claim_bundle_impl(
                 None,
                 notes.clone(),
                 human_money_core::L2TransferMode::DurableIntent(pow_bits),
-                password.as_deref(),
+                pw,
+                |(claim_res, _intent_opt), wallet| {
+                    let mut summable_amounts = std::collections::HashMap::new();
+                    let mut countable_items = std::collections::HashMap::new();
+                    if let Some(first) = claim_res.involved_sources_details.first() {
+                        summable_amounts
+                            .insert(first.display_currency.clone(), first.amount.clone());
+                    } else {
+                        countable_items.insert("Claim".to_string(), 1);
+                    }
+
+                    let record = TransactionRecord {
+                        id: Uuid::new_v4().to_string(),
+                        direction: "sent".to_string(),
+                        recipient_id: guarantor_id.clone(),
+                        sender_id: wallet.get_user_id().to_string(),
+                        timestamp: Utc::now().to_rfc3339(),
+                        summable_amounts,
+                        countable_items,
+                        involved_vouchers: vec![local_instance_id.clone()],
+                        involved_sources_details: Some(
+                            claim_res
+                                .involved_sources_details
+                                .iter()
+                                .cloned()
+                                .map(Into::into)
+                                .collect(),
+                        ),
+                        bundle_data: Vec::new(),
+                        bundle_id: claim_res.bundle_id.clone(),
+                        notes: notes.clone(),
+                        sender_profile_name: None,
+                    };
+                    let batch = crate::state::prepare_outgoing_history_and_bundle_companions(
+                        &baseline_history,
+                        &baseline_outgoing,
+                        vec![(record, claim_res.bundle_bytes.clone())],
+                    )
+                    .map_err(|e| {
+                        human_money_core::Error::Storage(
+                            human_money_core::StorageError::InvalidFormat(e.message),
+                        )
+                    })?;
+                    *next_history_cell.borrow_mut() = Some(batch.history);
+                    *next_outgoing_cell.borrow_mut() = Some(batch.outgoing);
+                    Ok(batch.blobs)
+                },
             )
             .map_err(FrontendError::from)?;
 
-        let mut summable_amounts = std::collections::HashMap::new();
-        let mut countable_items = std::collections::HashMap::new();
-        if let Some(first) = res.involved_sources_details.first() {
-            summable_amounts.insert(first.display_currency.clone(), first.amount.clone());
-        } else {
-            countable_items.insert("Claim".to_string(), 1);
+        if let Some(next_hist) = next_history_cell.into_inner() {
+            state.write_cache_slot_for_service(&service, |c| &mut c.history, Some(next_hist));
+        }
+        if let Some(next_out) = next_outgoing_cell.into_inner() {
+            state.write_cache_slot_for_service(
+                &service,
+                |c| &mut c.outgoing_bundles,
+                Some(next_out),
+            );
+        }
+        if let Err(e) = state.refresh_events_cache(&mut service, pw) {
+            log::warn!(
+                "Guarantor claim committed; event cache refresh failed: {}",
+                e
+            );
         }
 
-        let record = TransactionRecord {
-            id: Uuid::new_v4().to_string(),
-            direction: "sent".to_string(),
-            recipient_id: guarantor_id.clone(),
-            sender_id,
-            timestamp: Utc::now().to_rfc3339(),
-            summable_amounts,
-            countable_items,
-            involved_vouchers: vec![local_instance_id.clone()],
-            involved_sources_details: Some(
-                res.involved_sources_details
-                    .iter()
-                    .cloned()
-                    .map(Into::into)
-                    .collect(),
-            ),
-            bundle_data: Vec::new(),
-            bundle_id: res.bundle_id.clone(),
-            notes,
-            sender_profile_name: None,
-        };
-        let _ = state.record_outgoing_transactions_with_batch(
-            &mut service,
-            vec![(record, res.bundle_bytes.clone())],
-            password.as_deref(),
-        );
-        let _ = state.refresh_events_cache(&mut service, password.as_deref());
-
         let intents = intent_opt.into_iter().collect::<Vec<_>>();
-        (res, intents, pow_bits)
+        (res, intents, pow_bits, session, resolved_pw)
     };
 
     if !intents.is_empty() {
         let _ = crate::services::preflight::dispatch_l2_send_intents(
             state,
+            &session,
             &intents,
             pow_bits,
-            password.as_deref(),
+            resolved_pw.as_deref().map(String::as_str),
         )
         .await?;
     }
@@ -537,8 +584,8 @@ pub async fn create_dead_quorum_swap_claim_cmd(
     let offer_digest = offer.verify().map_err(FrontendError::from)?;
 
     let (voucher, claimant_did, qcs): (Voucher, String, Vec<QuorumCertificate>) = {
-        let service = state.authorize_and_lock(RequiredAccess::DailyPay, password.as_deref())?;
-        let _ = password;
+        let (service, _resolved_pw) = state
+            .authorize_and_lock_secret(RequiredAccess::DailyPay, password.as_deref())?;
 
         service
             .with_wallet(|w| {
@@ -636,8 +683,9 @@ pub(crate) async fn adjudicate_dead_quorum_swap_impl(
 
     let now_secs = sync_client::current_unix_timestamp();
 
-    let (mut adj, staged_intents, pow_bits, offer_digest_hex) = {
+    let (mut adj, staged_intents, pow_bits, offer_digest_hex, session) = {
         let mut service = state.authorize_and_lock(RequiredAccess::Full, password.as_deref())?;
+        let session = state.session_token_for_service(&service)?;
 
         let preflight = crate::services::preflight::ValueOutflowPreflight {
             require_restore_reconciled: true,
@@ -671,96 +719,138 @@ pub(crate) async fn adjudicate_dead_quorum_swap_impl(
             })
             .map_err(FrontendError::from)?;
 
-        let sender_id = service
-            .with_wallet(|w| w.get_user_id().to_string())
+        let baseline_history = state
+            .load_history_from_disk(&mut service, password.as_deref())
             .map_err(FrontendError::from)?;
+        let baseline_outgoing =
+            crate::state::load_outgoing_bundles(&mut service, password.as_deref())?;
+        let next_history_cell = std::cell::RefCell::new(None::<Vec<TransactionRecord>>);
+        let next_outgoing_cell =
+            std::cell::RefCell::new(None::<crate::models::StoredOutgoingBundles>);
 
         let (adj, staged_intents) = service
-            .execute_dead_quorum_swap(
+            .execute_dead_quorum_swap_with_companions(
                 &offer,
                 &standard_toml,
                 &submissions,
                 now_secs,
                 human_money_core::L2TransferMode::DurableIntent(pow_bits),
                 password.as_deref(),
+                |(adj, _staged), wallet| {
+                    let sender_id = wallet.get_user_id().to_string();
+                    let mut outgoing_records = Vec::new();
+                    for approved in &adj.approved {
+                        if let (Some(bundle_id), Some(bundle_bytes)) = (
+                            &approved.replacement_bundle_id,
+                            &approved.replacement_bundle_bytes,
+                        ) {
+                            let is_test = submissions
+                                .iter()
+                                .find(|s| {
+                                    s.voucher.voucher_id == approved.voucher_id
+                                        && s.claimant_did == approved.claimant_did
+                                })
+                                .is_some_and(|s| s.voucher.non_redeemable_test_voucher);
+                            let raw_unit = &std_def.immutable.blueprint.unit;
+                            let display_currency = if is_test && !raw_unit.starts_with("TEST-") {
+                                format!("TEST-{}", raw_unit)
+                            } else {
+                                raw_unit.clone()
+                            };
+                            let mut summable_amounts = std::collections::HashMap::new();
+                            summable_amounts
+                                .insert(display_currency, approved.approved_amount.clone());
+                            let record = TransactionRecord {
+                                id: Uuid::new_v4().to_string(),
+                                direction: "sent".to_string(),
+                                recipient_id: approved.claimant_did.clone(),
+                                sender_id: sender_id.clone(),
+                                timestamp: Utc::now().to_rfc3339(),
+                                summable_amounts,
+                                countable_items: std::collections::HashMap::new(),
+                                involved_vouchers: approved
+                                    .replacement_voucher_id
+                                    .iter()
+                                    .cloned()
+                                    .collect(),
+                                involved_sources_details: None,
+                                bundle_data: Vec::new(),
+                                bundle_id: bundle_id.clone(),
+                                notes: Some(format!("swap:{}", approved.voucher_id)),
+                                sender_profile_name: None,
+                            };
+                            outgoing_records.push((record, bundle_bytes.clone()));
+                        }
+                    }
+                    if outgoing_records.is_empty() {
+                        return Ok(Vec::new());
+                    }
+                    let batch = crate::state::prepare_outgoing_history_and_bundle_companions(
+                        &baseline_history,
+                        &baseline_outgoing,
+                        outgoing_records,
+                    )
+                    .map_err(|e| {
+                        human_money_core::Error::Storage(
+                            human_money_core::StorageError::InvalidFormat(e.message),
+                        )
+                    })?;
+                    *next_history_cell.borrow_mut() = Some(batch.history);
+                    *next_outgoing_cell.borrow_mut() = Some(batch.outgoing);
+                    Ok(batch.blobs)
+                },
             )
             .map_err(FrontendError::from)?;
 
-        for proof in &adj.double_spend_proofs {
-            let _ = service.import_proof(proof.clone(), password.as_deref());
+        if let Some(next_hist) = next_history_cell.into_inner() {
+            state.write_cache_slot_for_service(&service, |c| &mut c.history, Some(next_hist));
         }
-
-        let mut outgoing_records = Vec::new();
-        for approved in &adj.approved {
-            if let (Some(ref bundle_id), Some(ref bundle_bytes)) = (
-                &approved.replacement_bundle_id,
-                &approved.replacement_bundle_bytes,
-            ) {
-                let is_test = submissions
-                    .iter()
-                    .find(|s| {
-                        s.voucher.voucher_id == approved.voucher_id
-                            && s.claimant_did == approved.claimant_did
-                    })
-                    .is_some_and(|s| s.voucher.non_redeemable_test_voucher);
-                let raw_unit = &std_def.immutable.blueprint.unit;
-                let display_currency = if is_test && !raw_unit.starts_with("TEST-") {
-                    format!("TEST-{}", raw_unit)
-                } else {
-                    raw_unit.clone()
-                };
-                let mut summable_amounts = std::collections::HashMap::new();
-                summable_amounts.insert(display_currency, approved.approved_amount.clone());
-                let record = TransactionRecord {
-                    id: Uuid::new_v4().to_string(),
-                    direction: "sent".to_string(),
-                    recipient_id: approved.claimant_did.clone(),
-                    sender_id: sender_id.clone(),
-                    timestamp: Utc::now().to_rfc3339(),
-                    summable_amounts,
-                    countable_items: std::collections::HashMap::new(),
-                    involved_vouchers: approved.replacement_voucher_id.iter().cloned().collect(),
-                    involved_sources_details: None,
-                    bundle_data: Vec::new(),
-                    bundle_id: bundle_id.clone(),
-                    notes: Some(format!("swap:{}", approved.voucher_id)),
-                    sender_profile_name: None,
-                };
-                outgoing_records.push((record, bundle_bytes.clone()));
-            }
+        if let Some(next_out) = next_outgoing_cell.into_inner() {
+            state.write_cache_slot_for_service(
+                &service,
+                |c| &mut c.outgoing_bundles,
+                Some(next_out),
+            );
         }
-        let _ = state.record_outgoing_transactions_with_batch(
-            &mut service,
-            outgoing_records,
-            password.as_deref(),
-        );
-        let _ = state.refresh_events_cache(&mut service, password.as_deref());
+        if let Err(e) = state.refresh_events_cache(&mut service, password.as_deref()) {
+            log::warn!(
+                "Dead-quorum swap committed; event cache refresh failed: {}",
+                e
+            );
+        }
 
         let offer_digest_hex = hex::encode(offer.digest());
-        (adj, staged_intents, pow_bits, offer_digest_hex)
+        (adj, staged_intents, pow_bits, offer_digest_hex, session)
     };
 
     if !staged_intents.is_empty() {
         let _ = crate::services::preflight::dispatch_l2_send_intents(
             state,
+            &session,
             &staged_intents,
             pow_bits,
             password.as_deref(),
         )
         .await?;
 
-        let service = state.lock_service()?;
-        let _ = service.with_wallet(|w| {
-            for approved in &mut adj.approved {
-                let swap_key = format!(
-                    "{offer_digest_hex}:{}:{}:{}",
-                    approved.voucher_id, approved.tip_t_id, approved.claimant_did
-                );
-                if let Some(rec) = w.profile.l2_dead_quorum_swaps.get(&swap_key) {
-                    approved.status = rec.status;
-                }
-            }
-        });
+        state.with_session_required(
+            &session,
+            "Wallet session changed during dead-quorum swap",
+            |service| {
+                let _ = service.with_wallet(|w| {
+                    for approved in &mut adj.approved {
+                        let swap_key = format!(
+                            "{offer_digest_hex}:{}:{}:{}",
+                            approved.voucher_id, approved.tip_t_id, approved.claimant_did
+                        );
+                        if let Some(rec) = w.profile.l2_dead_quorum_swaps.get(&swap_key) {
+                            approved.status = rec.status;
+                        }
+                    }
+                });
+                Ok(())
+            },
+        )?;
     }
 
     let proofs_count = adj.double_spend_proofs.len();

@@ -88,29 +88,26 @@ pub fn apply_reach_preset_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<ReachPresetDto, FrontendError> {
-    state.authorize(RequiredAccess::DailyPay, password.as_deref())?;
     let (own_list_max_hops, share_min_level, card_max_hops, media_auto_load_max_hops) =
         preset_values(&preset)?;
+    let (mut service, resolved_pw) =
+        state.authorize_and_lock_secret(RequiredAccess::DailyPay, password.as_deref())?;
+    let pw = resolved_pw.as_deref().map(String::as_str);
 
-    // Called before locking state.service because set_wot_max_hops_impl acquires it internally.
-    crate::services::wot_service::set_wot_max_hops_impl(
-        own_list_max_hops,
-        password.clone(),
+    crate::services::wot_service::set_wot_max_hops_with_service(
         state,
+        &mut service,
+        own_list_max_hops,
+        pw,
     )?;
+    set_own_card_max_hops_inner(state, &mut service, card_max_hops, pw)?;
 
-    {
-        let mut service =
-            state.authorize_and_lock(RequiredAccess::DailyPay, password.as_deref())?;
-        set_own_card_max_hops_inner(state, &mut service, card_max_hops, password.as_deref())?;
-
-        state
-            .mutate_ui_preferences(&mut service, password.as_deref(), |prefs| {
-                prefs.share_min_level = share_min_level.min(3);
-                prefs.media_auto_load_max_hops = media_auto_load_max_hops.min(3);
-            })
-            .map_err(FrontendError::from)?;
-    }
+    state
+        .mutate_ui_preferences(&mut service, pw, |prefs| {
+            prefs.share_min_level = share_min_level.min(3);
+            prefs.media_auto_load_max_hops = media_auto_load_max_hops.min(3);
+        })
+        .map_err(FrontendError::from)?;
 
     Ok(ReachPresetDto {
         preset,
@@ -133,9 +130,11 @@ pub fn patch_ui_preferences_impl(
     state: &AppState,
 ) -> Result<UiPreferences, FrontendError> {
     info!("Patching UiPreferences...");
-    let mut service = state.authorize_and_lock(RequiredAccess::DailyPay, password.as_deref())?;
+    let (mut service, resolved_pw) =
+        state.authorize_and_lock_secret(RequiredAccess::DailyPay, password.as_deref())?;
+    let pw = resolved_pw.as_deref().map(String::as_str);
     state
-        .mutate_ui_preferences(&mut service, password.as_deref(), |prefs| {
+        .mutate_ui_preferences(&mut service, pw, |prefs| {
             patch.apply_to(prefs);
         })
         .map_err(FrontendError::from)
@@ -155,6 +154,7 @@ pub fn patch_security_policy_impl(
         .map_err(FrontendError::from)?;
     if updated.session_timeout_seconds == 0 {
         service.lock_session();
+        state.clear_one_shot_pin_grant();
     }
     Ok(updated)
 }
@@ -170,10 +170,12 @@ pub fn set_conflict_local_override_impl(
         "Setting local override for conflict {} to {} with note: {:?}",
         proof_id, value, note
     );
-    let mut service = state.authorize_and_lock(RequiredAccess::DailyPay, password.as_deref())?;
+    let (mut service, resolved_pw) =
+        state.authorize_and_lock_secret(RequiredAccess::DailyPay, password.as_deref())?;
+    let pw = resolved_pw.as_deref().map(String::as_str);
 
     service
-        .set_conflict_local_override(&proof_id, value, note, password.as_deref())
+        .set_conflict_local_override(&proof_id, value, note, pw)
         .map_err(FrontendError::from)
 }
 
@@ -240,17 +242,6 @@ mod tests {
             None,
         )
         .unwrap();
-        // Activate timed PIN session
-        crate::commands::auth::unlock_session_with_pin_impl(
-            &folder,
-            "246810",
-            300,
-            &keystore_dir,
-            "dev-settings-1",
-            &state,
-        )
-        .unwrap();
-
         let ui_base = UiPreferences::default();
         let sec_base = SecurityPolicy {
             session_timeout_seconds: 300,
@@ -261,6 +252,16 @@ mod tests {
             pending_restore_l2_reconciliation: true,
             ..Default::default()
         };
+        state.set_cached_security_policy(Some(sec_base.clone()));
+        // Activate timed PIN session
+        crate::commands::auth::unlock_session_with_pin_impl(
+            &folder,
+            "246810",
+            &keystore_dir,
+            "dev-settings-1",
+            &state,
+        )
+        .unwrap();
         {
             let mut svc = state.service.lock().unwrap();
             crate::state::save_encrypted_json(

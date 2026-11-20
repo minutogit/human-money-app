@@ -134,7 +134,7 @@ export async function executeReceiveImport({
             return await transferService.receiveBundle({
                 bundleData: fileData,
                 standardDefinitionsToml,
-                password: password || walletPassword || undefined,
+                password: walletPassword || password || undefined,
                 forceAcceptToleranceBundle: false,
                 commitMode: 'onlineVerify',
             });

@@ -80,11 +80,23 @@ pub struct FrontendMarketInquiryItem {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct FrontendUnsupportedPostItem {
+    pub msg_id: String,
+    pub sender_did: String,
+    pub sender_name: Option<String>,
+    pub payload_type: String,
+    pub created_at: u64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct FrontendPostInboxSummary {
     pub pending_sign_requests: Vec<FrontendPendingSignRequest>,
     pub pending_wot_handshakes: Vec<FrontendPendingWotHandshake>,
     pub inquiries: Vec<FrontendMarketInquiryItem>,
     pub unacknowledged_payments: Vec<String>,
+    #[serde(default)]
+    pub unsupported_messages: Vec<FrontendUnsupportedPostItem>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]

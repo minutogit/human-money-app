@@ -242,4 +242,75 @@ describe('UX Glossary Linting (docs/UX_GLOSSARY.md)', () => {
 
         expect(violations).toEqual([]);
     });
+
+    it('F3: ensures es/fr/it contain zero untranslated English strings (>12 chars) outside explicit proper-noun allowlist', () => {
+        const PROPER_NOUN_OR_COGNATE_ALLOWLIST = new Set([
+            'common.appName',
+            'common.noticeSignaturesPart',
+            'common.protocolVersion',
+            'common.supportTitle',
+            'common.version',
+            'conflict.errorPrefix',
+            'marketplace.counterTotal',
+            'profile.emailPlaceholder',
+            'profile.phonePlaceholder',
+            'profile.pictureUrlPlaceholder',
+            'profile.websitePlaceholder',
+            'settings.serverUrlPlaceholder',
+            'transfer.pillars.l1FormatOnly',
+            'transfer.receiveSuccess.countableItem',
+        ]);
+
+        const secondaryLocales: Array<[string, Record<string, string>]> = [
+            ['es', esJson as Record<string, string>],
+            ['fr', frJson as Record<string, string>],
+            ['it', itJson as Record<string, string>],
+        ];
+        const untranslated: string[] = [];
+
+        for (const [key, enVal] of Object.entries(en)) {
+            if (typeof enVal !== 'string' || enVal.length <= 12) continue;
+            if (PROPER_NOUN_OR_COGNATE_ALLOWLIST.has(key)) continue;
+            for (const [lang, locObj] of secondaryLocales) {
+                if (locObj[key] === enVal) {
+                    untranslated.push(`[${lang}] ${key}: "${enVal}"`);
+                }
+            }
+        }
+
+        expect(untranslated).toEqual([]);
+    });
+
+    it('F3: ensures es/fr/it respect UX glossary without forbidden technical jargon in standard keys', () => {
+        const FORBIDDEN_INTL_PATTERNS: Array<{ name: string; pattern: RegExp }> = [
+            { name: 'did:key', pattern: /did:key/i },
+            { name: 'DID', pattern: /\bDID\b/ },
+            { name: 'Hop/Hops', pattern: /\bHops?\b/i },
+            { name: 'Wallet', pattern: /\bWallet\b/i },
+            { name: 'Listing', pattern: /\bListing\b/i },
+            { name: '.wot', pattern: /\.wot/i },
+        ];
+
+        const secondaryLocales: Array<[string, Record<string, string>]> = [
+            ['es', esJson as Record<string, string>],
+            ['fr', frJson as Record<string, string>],
+            ['it', itJson as Record<string, string>],
+        ];
+        const violations: string[] = [];
+
+        for (const [lang, locObj] of secondaryLocales) {
+            for (const [key, value] of Object.entries(locObj)) {
+                if (typeof value !== 'string') continue;
+                if (isAllowlisted(key)) continue;
+                const cleanText = stripPlaceholders(value);
+                for (const { name, pattern } of FORBIDDEN_INTL_PATTERNS) {
+                    if (pattern.test(cleanText)) {
+                        violations.push(`[${lang}] (${name}) ${key}: "${value}"`);
+                    }
+                }
+            }
+        }
+
+        expect(violations).toEqual([]);
+    });
 });

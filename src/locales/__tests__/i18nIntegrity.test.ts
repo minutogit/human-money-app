@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { describe, it, expect } from 'vitest';
 import deJson from '../de.json';
 import enJson from '../en.json';
@@ -99,6 +101,47 @@ describe('i18n Key & Placeholder Integrity', () => {
         for (const [lang, obj] of locales) {
             for (const key of requiredKeys) {
                 expect(obj[key], `Missing key ${key} in ${lang}.json`).toBeDefined();
+                expect(obj[key].trim().length, `Empty key ${key} in ${lang}.json`).toBeGreaterThan(0);
+            }
+        }
+    });
+
+    it('F2: translates every backend GUARANTOR_ANCHOR_ISSUE_CODES constant in all 5 locales', () => {
+        const vouchersRsPath = path.resolve(__dirname, '../../../src-tauri/src/commands/vouchers.rs');
+        const rustSrc = fs.readFileSync(vouchersRsPath, 'utf-8');
+
+        const constValues = new Map<string, string>();
+        for (const m of rustSrc.matchAll(
+            /pub const (GUARANTOR_ISSUE_[A-Z0-9_]+):\s*&str\s*=\s*"([^"]+)";/g,
+        )) {
+            constValues.set(m[1], m[2]);
+        }
+
+        const listMatch = rustSrc.match(
+            /pub const GUARANTOR_ANCHOR_ISSUE_CODES:\s*&\[&str\]\s*=\s*&\[([\s\S]*?)\];/,
+        );
+        expect(listMatch, 'GUARANTOR_ANCHOR_ISSUE_CODES missing in vouchers.rs').toBeTruthy();
+
+        const issueCodes = listMatch![1]
+            .split(',')
+            .map((s) => s.trim())
+            .filter(Boolean)
+            .map((ident) => constValues.get(ident) ?? ident.replace(/^"|"$/g, ''));
+
+        expect(issueCodes.length).toBeGreaterThanOrEqual(7);
+
+        const locales: Array<[string, Record<string, string>]> = [
+            ['en', en],
+            ['de', de],
+            ['fr', fr],
+            ['es', es],
+            ['it', itLocale],
+        ];
+
+        for (const code of issueCodes) {
+            const key = `voucher.signRequest.anchorIssue.${code}`;
+            for (const [lang, obj] of locales) {
+                expect(obj[key], `Missing F2 anchor issue key ${key} in ${lang}.json`).toBeDefined();
                 expect(obj[key].trim().length, `Empty key ${key} in ${lang}.json`).toBeGreaterThan(0);
             }
         }

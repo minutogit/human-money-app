@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { voucherService } from '../../services/voucherService';
 import { settingsService } from '../../services/settingsService';
 import { backupService } from '../../services/backupService';
+import { marketService } from '../../services/marketService';
 import { useSession } from '../../context/SessionContext';
 import { useNavigation } from '../../context/NavigationContext';
 import { useVoucherSelection } from '../../hooks/useVoucherSelection';
@@ -335,7 +336,7 @@ export function useSendTransfer({
         applyPaymentRequest(initialPaymentUri);
     }, [isDataLoaded, initialPaymentUri, applyPaymentRequest]);
 
-    const handleApplyRawCode = (rawText: string): boolean => {
+    const handleApplyRawCode = async (rawText: string): Promise<boolean> => {
         const trimmed = rawText.trim();
         if (!trimmed) {
             dispatch({ type: 'SET_FEEDBACK', msg: t('transfer.emptyClipboard') });
@@ -353,13 +354,15 @@ export function useSendTransfer({
             return true;
         }
         if (parsed?.kind === 'card') {
-            if (parsed.did) {
+            try {
+                const resolved = await marketService.resolveCardRecipient(parsed.payload);
                 dispatch({ type: 'SET_FEEDBACK', msg: '' });
-                dispatch({ type: 'SET_RECIPIENT', id: parsed.did });
+                dispatch({ type: 'SET_RECIPIENT', id: resolved.recipientId });
                 return true;
+            } catch (e) {
+                dispatch({ type: 'SET_FEEDBACK', msg: translateError(e, t) });
+                return false;
             }
-            dispatch({ type: 'SET_FEEDBACK', msg: t('transfer.invalidPaymentRequest') });
-            return false;
         }
         if (parsed?.kind === 'did') {
             dispatch({ type: 'SET_FEEDBACK', msg: '' });
@@ -375,7 +378,7 @@ export function useSendTransfer({
             const { text, error } = await readFromClipboard();
             if (error) return dispatch({ type: 'SET_FEEDBACK', msg: t('transfer.clipboardReadFailed') });
             if (!text.trim()) return dispatch({ type: 'SET_FEEDBACK', msg: t('transfer.emptyClipboard') });
-            handleApplyRawCode(text);
+            await handleApplyRawCode(text);
         } catch (e) {
             logger.error(`Failed to read clipboard for payment request: ${stringifyError(e)}`);
             dispatch({ type: 'SET_FEEDBACK', msg: t('transfer.clipboardReadFailed') });

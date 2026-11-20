@@ -131,7 +131,13 @@ export const AddContactModal: React.FC<AddContactModalProps> = ({
 
             if (res && res.status === 'accepted') {
                 await onContactAdded();
-                marketService.probeContactSyncs?.(false, actionPassword || undefined)
+                // H1: never forward a consumed hmc_grant_* one-shot token to an unlocked background probe
+                const capturedPassword = actionPassword as string | null;
+                const probePassword =
+                    typeof capturedPassword === 'string' && !capturedPassword.startsWith('hmc_grant_')
+                        ? capturedPassword
+                        : undefined;
+                marketService.probeContactSyncs?.(false, probePassword)
                     ?.then(() => notifySyncStatusUpdated())
                     ?.catch(() => {});
                 onSuccess(

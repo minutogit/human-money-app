@@ -43,10 +43,11 @@ export interface UseReceiveFlowOptions {
         payload: ReceiveSuccessPayload | VoucherDetails,
         pendingCommit?: PendingReceiveCommit,
     ) => void;
-    droppedFile?: { name: string; bytes: number[] };
+    droppedFile?: { name: string; bytes: number[]; launchItem?: string };
+    onFinishLaunchItem?: (launchItem: string) => void;
 }
 
-export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseReceiveFlowOptions) {
+export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile, onFinishLaunchItem }: UseReceiveFlowOptions) {
     const { t } = useTranslation();
     const { protectAction } = useSession();
     const nav = useOptionalNavigation();
@@ -55,7 +56,6 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseRec
     const [ownUserId, setOwnUserId] = useState('');
     const [ownProfile, setOwnProfile] = useState<PublicProfile | null>(null);
     const [bundleName, setBundleName] = useState<string | null>(null);
-    const [droppedFileContent, setDroppedFileContent] = useState<number[] | null>(null);
     const [voucherStandards, setVoucherStandards] = useState<VoucherStandardInfo[]>([]);
     const [feedbackMsg, setFeedbackMsg] = useState('');
     const [isProcessing, setIsProcessing] = useState(false);
@@ -63,16 +63,25 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseRec
     const [config, setConfig] = useState<AppConfigDto | null>(null);
     const [isCheckingPost, setIsCheckingPost] = useState(false);
     const [postCheckStatus, setPostCheckStatus] = useState<{ variant: 'info' | 'success' | 'error'; message: string } | null>(null);
-    const processedDroppedFileRef = useRef<{ name: string; bytes: number[] } | null>(null);
+    const processedDroppedFileRef = useRef<{ name: string; bytes: number[]; launchItem?: string } | null>(null);
+    const activeLaunchItemRef = useRef<string | null>(null);
 
     const modalsRef = useRef<ReturnType<typeof useReceiveModals> | null>(null);
     const wotRef = useRef<ReturnType<typeof useReceiveWotImport> | null>(null);
 
+    const finishPendingLaunchItem = useCallback(() => {
+        const item = activeLaunchItemRef.current;
+        if (item) {
+            activeLaunchItemRef.current = null;
+            onFinishLaunchItem?.(item);
+        }
+    }, [onFinishLaunchItem]);
+
     const clearSelection = useCallback(() => {
         setBundleName(null);
-        setDroppedFileContent(null);
         modalsRef.current?.clearModalSelections();
-    }, []);
+        finishPendingLaunchItem();
+    }, [finishPendingLaunchItem]);
 
     const resetAllSelections = useCallback(() => {
         clearSelection();
@@ -111,6 +120,12 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseRec
                 });
 
                 if (outcome.kind === 'success') {
+                    if (outcome.pendingCommit) {
+                        // ReceiveSuccessView owns finishing the launchItem once committed/dismissed
+                        activeLaunchItemRef.current = null;
+                    } else {
+                        finishPendingLaunchItem();
+                    }
                     onReceiveSuccess(outcome.payload, outcome.pendingCommit);
                 } else if (outcome.kind === 'signatureAttached') {
                     modalsRef.current?.setResultModal({
@@ -125,6 +140,7 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseRec
                         voucherId: outcome.voucherId,
                     });
                 } else if (outcome.kind === 'wotImported') {
+                    finishPendingLaunchItem();
                     wotRef.current?.openWotImportResult(outcome.result);
                 } else if (outcome.kind === 'proofImported') {
                     modalsRef.current?.setResultModal({
@@ -139,6 +155,7 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseRec
                         proofId: outcome.proofId,
                     });
                 } else if (outcome.kind === 'cardImported') {
+                    finishPendingLaunchItem();
                     if (outcome.status === 'accepted' && outcome.did && navigate) {
                         navigate({ view: 'marketplace', selectedDid: outcome.did });
                     } else {
@@ -173,9 +190,16 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseRec
                     const isCritical =
                         (isBackendError(e) && e.code === 'error.transfer.bundleRecoveryZone') ||
                         errorStr.includes('Extended');
+                    const standardDefinitionsToml = await ensureStandardsToml();
                     modalsRef.current?.setToleranceModal({
                         type: isCritical ? 'Critical' : 'Soft',
                         message: translateError(e, t),
+                        pendingCommit: {
+                            bundleData: fileData,
+                            standardDefinitionsToml,
+                            bundlePassword: password || undefined,
+                            forceAcceptToleranceBundle: true,
+                        },
                     });
                     return;
                 }
@@ -207,6 +231,7 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseRec
         [
             clearSelection,
             ensureStandardsToml,
+            finishPendingLaunchItem,
             navigate,
             onReceiveSuccess,
             protectAction,
@@ -217,10 +242,9 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseRec
     const modals = useReceiveModals({
         onBack,
         onReceiveSuccess,
+        onFinishPendingLaunchItem: finishPendingLaunchItem,
         navigate,
         protectAction,
-        ensureStandardsToml,
-        droppedFileContent,
         setFeedbackMsg,
         setIsProcessing,
         resetAllSelections,
@@ -286,7 +310,6 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseRec
     const processIncomingFile = useCallback(
         async (fileName: string, bytes: number[]) => {
             setBundleName(fileName);
-            setDroppedFileContent(bytes);
             const classification = classifyHumocoFile({ fileName, bytes });
             if (classification.kind === 'deeplink' && classification.deepLink) {
                 clearSelection();
@@ -319,9 +342,14 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseRec
     useEffect(() => {
         if (droppedFile && processedDroppedFileRef.current !== droppedFile) {
             processedDroppedFileRef.current = droppedFile;
-            void processIncomingFile(droppedFile.name, droppedFile.bytes);
+            activeLaunchItemRef.current = droppedFile.launchItem ?? null;
+            void processIncomingFile(droppedFile.name, droppedFile.bytes).then((handled) => {
+                if (!handled) {
+                    finishPendingLaunchItem();
+                }
+            });
         }
-    }, [droppedFile, processIncomingFile]);
+    }, [droppedFile, finishPendingLaunchItem, processIncomingFile]);
 
     useEffect(() => {
         const preventGlobalDefaults = (e: Event) => e.preventDefault();
@@ -457,7 +485,14 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile }: UseRec
         handleCheckPostNow,
         handlePasteRawInput,
         clearSelection: resetAllSelections,
-        closeImportStandardModal: () => modals.setImportStandardModalData(null),
+        handleBack: () => {
+            finishPendingLaunchItem();
+            onBack();
+        },
+        closeImportStandardModal: () => {
+            modals.setImportStandardModalData(null);
+            finishPendingLaunchItem();
+        },
         refreshStandards: () => {
             standardsService.getStandards().then(setVoucherStandards).catch(() => {});
         },

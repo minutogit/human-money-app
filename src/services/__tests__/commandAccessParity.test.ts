@@ -34,6 +34,10 @@ describe("Tauri command access policy parity (F3)", () => {
         expect(protectCommandOptions("register_guarantor_anchor_role")).toEqual({
             requireFullAccess: true,
         });
+        expect(protectCommandOptions("sync_wallet_backup_folder")).toEqual({
+            requireFullAccess: true,
+        });
+        expect(protectCommandOptions("resolve_card_recipient")).toEqual({});
         expect(protectCommandOptions("create_transfer_bundle")).toEqual({});
         expect(protectCommandOptions("dismiss_wallet_sync_alert")).toEqual({});
         expect(protectCommandOptions("get_app_config")).toEqual({});

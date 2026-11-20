@@ -532,6 +532,77 @@ struct SlotDecodeContext<'a> {
     errors: &'a mut Vec<String>,
 }
 
+pub(crate) fn index_etag_key(read_url: &str) -> String {
+    format!("index:{}", normalize_sync_url(read_url))
+}
+
+pub(crate) fn direct_card_full_etag_key(read_url: &str, base_slot_pk: &str, pfx: &str) -> String {
+    format!(
+        "direct_card_full:{}:{}:{}",
+        normalize_sync_url(read_url),
+        base_slot_pk,
+        pfx
+    )
+}
+
+pub(crate) fn direct_card_delta_etag_key(
+    read_url: &str,
+    base_slot_pk: &str,
+    delta_pfx: &str,
+) -> String {
+    format!(
+        "direct_card_delta:{}:{}:{}",
+        normalize_sync_url(read_url),
+        base_slot_pk,
+        delta_pfx
+    )
+}
+
+pub(crate) fn direct_wot_etag_key(read_url: &str, base_slot_pk: &str) -> String {
+    format!("direct_wot:{}:{}", normalize_sync_url(read_url), base_slot_pk)
+}
+
+pub(crate) fn index_card_etag_key(read_url: &str, entry_id: &str, pfx: &str) -> String {
+    format!(
+        "index_card:{}:{}:{}",
+        normalize_sync_url(read_url),
+        entry_id,
+        pfx
+    )
+}
+
+pub(crate) fn index_wot_etag_key(read_url: &str, entry_id: &str) -> String {
+    format!("index_wot:{}:{}", normalize_sync_url(read_url), entry_id)
+}
+
+pub(crate) fn prune_index_slot_etags(
+    slot_etags: &mut std::collections::BTreeMap<String, String>,
+    read_url: &str,
+    entries: &[crate::sync_client::SyncIndexEntry],
+) {
+    let norm = normalize_sync_url(read_url);
+    let present_keys: HashSet<String> = entries
+        .iter()
+        .filter(|e| e.channel == "card" || e.channel == "wot")
+        .map(|e| {
+            if e.channel == "wot" {
+                index_wot_etag_key(read_url, &e.id)
+            } else {
+                index_card_etag_key(read_url, &e.id, e.prefix.as_deref().unwrap_or(""))
+            }
+        })
+        .collect();
+    let card_prefix = format!("index_card:{}:", norm);
+    let wot_prefix = format!("index_wot:{}:", norm);
+    slot_etags.retain(|k, _| {
+        if k.starts_with(&card_prefix) || k.starts_with(&wot_prefix) {
+            present_keys.contains(k)
+        } else {
+            true
+        }
+    });
+}
+
 fn process_card_slot_blob(
     ctx: &mut SlotDecodeContext<'_>,
     blob: &[u8],
@@ -658,7 +729,7 @@ pub(crate) async fn poll_sync_channels(
 
         if ui_prefs.market_sync_enabled {
             let base_pfx_str = card_prefix.unwrap_or("");
-            let base_etag_key = format!("{}:card:{}:{}", read_url, base_slot_pk, base_pfx_str);
+            let base_etag_key = direct_card_full_etag_key(&read_url, &base_slot_pk, base_pfx_str);
             let base_cached_etag = decode_ctx
                 .sync_state
                 .slot_etags
@@ -710,7 +781,7 @@ pub(crate) async fn poll_sync_channels(
             }
 
             let delta_pfx = humoco_market::derive_delta_prefix(card_prefix);
-            let delta_etag_key = format!("{}:card:{}:{}", read_url, base_slot_pk, delta_pfx);
+            let delta_etag_key = direct_card_delta_etag_key(&read_url, &base_slot_pk, &delta_pfx);
             let delta_cached_etag = decode_ctx
                 .sync_state
                 .slot_etags
@@ -746,7 +817,7 @@ pub(crate) async fn poll_sync_channels(
         }
 
         // Fetch WoT slot
-        let wot_etag_key = format!("{}:wot:{}:", read_url, base_slot_pk);
+        let wot_etag_key = direct_wot_etag_key(&read_url, &base_slot_pk);
         let wot_cached_etag = decode_ctx
             .sync_state
             .slot_etags
@@ -804,15 +875,16 @@ pub(crate) async fn poll_sync_channels(
             break;
         }
         decode_ctx.outcome.polled_syncs += 1;
+        let idx_key = index_etag_key(&read_url);
         let cached_etag = decode_ctx
             .sync_state
             .etags_by_read_url
-            .get(&read_url)
+            .get(&idx_key)
             .map(|s| s.as_str());
         let cached_lm = decode_ctx
             .sync_state
             .last_modified_by_read_url
-            .get(&read_url)
+            .get(&idx_key)
             .map(|s| s.as_str());
 
         match sync_client::list_index(client, &read_url, cached_etag, cached_lm).await {
@@ -835,13 +907,13 @@ pub(crate) async fn poll_sync_channels(
                     decode_ctx
                         .sync_state
                         .etags_by_read_url
-                        .insert(read_url.clone(), et);
+                        .insert(idx_key.clone(), et);
                 }
                 if let Some(lm) = last_modified {
                     decode_ctx
                         .sync_state
                         .last_modified_by_read_url
-                        .insert(read_url.clone(), lm);
+                        .insert(idx_key, lm);
                 }
 
                 // Order Base card entries before Delta card entries
@@ -863,27 +935,9 @@ pub(crate) async fn poll_sync_channels(
                     (ch_rank, delta_rank)
                 });
 
-                // Prune slot ETags for entries no longer advertised by this read_url index
-                let present_keys: HashSet<String> = entries
-                    .iter()
-                    .filter(|e| e.channel == "card" || e.channel == "wot")
-                    .map(|e| {
-                        let pfx = if e.channel == "wot" {
-                            ""
-                        } else {
-                            e.prefix.as_deref().unwrap_or("")
-                        };
-                        format!("{}:{}:{}:{}", read_url, e.channel, e.id, pfx)
-                    })
-                    .collect();
-                let url_prefix = format!("{}:", read_url);
-                decode_ctx.sync_state.slot_etags.retain(|k, _| {
-                    if k.starts_with(&url_prefix) {
-                        present_keys.contains(k)
-                    } else {
-                        true
-                    }
-                });
+                // Prune ONLY index-listed slot ETags for entries no longer advertised by this read_url index;
+                // direct O(1) slot ETags on the same read_url remain intact.
+                prune_index_slot_etags(&mut decode_ctx.sync_state.slot_etags, &read_url, &entries);
 
                 for entry in entries {
                     if !state.is_generation_current(session.generation) {
@@ -900,9 +954,11 @@ pub(crate) async fn poll_sync_channels(
                     } else {
                         entry.prefix.as_deref()
                     };
-                    let pfx_str = pfx_opt.unwrap_or("");
-                    let etag_key =
-                        format!("{}:{}:{}:{}", read_url, entry.channel, entry.id, pfx_str);
+                    let etag_key = if entry.channel == "wot" {
+                        index_wot_etag_key(&read_url, &entry.id)
+                    } else {
+                        index_card_etag_key(&read_url, &entry.id, pfx_opt.unwrap_or(""))
+                    };
                     let cached_slot_etag = decode_ctx
                         .sync_state
                         .slot_etags
@@ -1157,10 +1213,11 @@ pub async fn probe_public_sync_impl(
         .await
         .map_err(FrontendError::from)?;
 
-    let id_ctx = {
-        let service = state.lock_service()?;
-        SyncIdentityContext::from_service(&service)?
-    };
+    let id_ctx = state.with_session_required(
+        &session,
+        "Wallet session changed before public sync probe completed",
+        |service| SyncIdentityContext::from_service(service),
+    )?;
 
     let (_r_sk, _r_vk, access_pubkey) =
         humoco_market::derive_public_drop_keypair(&id_ctx.master_seed, &canonical_url)
@@ -1435,4 +1492,69 @@ pub async fn remove_public_sync_impl(
     let _ = enqueue_guardian_locator_updates_if_configured(state, password.clone()).await;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn h6_prune_index_slot_etags_preserves_direct_card_and_wot_etags() {
+        let mut etags = BTreeMap::new();
+        let url1 = "https://sync1.example.org/sync.php";
+        let url2 = "https://sync2.example.org/sync.php";
+
+        let keep_card = index_card_etag_key(url1, "slot-1", "p1");
+        let stale_card = index_card_etag_key(url1, "slot-stale", "p2");
+        let keep_wot = index_wot_etag_key(url1, "wot-1");
+        let stale_wot = index_wot_etag_key(url1, "wot-stale");
+        let other_server_card = index_card_etag_key(url2, "slot-9", "p9");
+        let direct_full = direct_card_full_etag_key(url1, "pk1", "pfx1");
+        let direct_delta = direct_card_delta_etag_key(url1, "pk1", "dpfx1");
+        let direct_wot = direct_wot_etag_key(url1, "hash1");
+
+        for key in [
+            &keep_card,
+            &stale_card,
+            &keep_wot,
+            &stale_wot,
+            &other_server_card,
+            &direct_full,
+            &direct_delta,
+            &direct_wot,
+        ] {
+            etags.insert(key.clone(), "etag-val".to_string());
+        }
+
+        let entries = vec![
+            crate::sync_client::SyncIndexEntry {
+                id: "slot-1".to_string(),
+                channel: "card".to_string(),
+                prefix: Some("p1".to_string()),
+                mtime: 100,
+                size: 128,
+                etag: None,
+            },
+            crate::sync_client::SyncIndexEntry {
+                id: "wot-1".to_string(),
+                channel: "wot".to_string(),
+                prefix: None,
+                mtime: 100,
+                size: 64,
+                etag: None,
+            },
+        ];
+
+        prune_index_slot_etags(&mut etags, url1, &entries);
+
+        assert!(etags.contains_key(&keep_card));
+        assert!(!etags.contains_key(&stale_card));
+        assert!(etags.contains_key(&keep_wot));
+        assert!(!etags.contains_key(&stale_wot));
+        assert!(etags.contains_key(&other_server_card));
+        assert!(etags.contains_key(&direct_full));
+        assert!(etags.contains_key(&direct_delta));
+        assert!(etags.contains_key(&direct_wot));
+    }
 }

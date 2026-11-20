@@ -13,7 +13,9 @@ use human_money_core::humoco_proto::{
     types::LockPubKey,
 };
 use human_money_core::models::conflict::TrustStatus;
-use human_money_core::models::layer2_api::{CheckoutReleaseVerdict, L2ProcessingOutcome};
+use human_money_core::models::layer2_api::{
+    CheckoutReleaseVerdict, L2ProcessingOutcome, LockEntry,
+};
 use human_money_core::services::{bundle_processor, l2_gateway};
 
 use crate::{
@@ -355,15 +357,9 @@ fn build_receive_payload_and_record(
             .map(|s| s.immutable.features.allow_partial_transfers)
             .unwrap_or(false);
 
-        if balances_are_summable {
-            transfer_summary
-                .summable_amounts
-                .insert(display_currency.clone(), last_tx.amount.clone());
-        } else {
-            transfer_summary
-                .countable_items
-                .insert(display_currency.clone(), 1);
-        }
+        transfer_summary
+            .add_voucher_entry(display_currency.clone(), &last_tx.amount, balances_are_summable)
+            .map_err(FrontendError::from)?;
 
         involved_vouchers_details.push(human_money_core::wallet::types::InvolvedVoucherInfo {
             local_instance_id: local_id,
@@ -525,7 +521,7 @@ pub(crate) async fn checkout_bundle(
                 None
             };
 
-            let receive_payload = build_receive_payload_and_record(
+            let (receive_payload, replay_record_opt) = build_receive_payload_and_record(
                 state,
                 &mut service,
                 purchase_id,
@@ -537,8 +533,22 @@ pub(crate) async fn checkout_bundle(
                 replay_l2_quorum,
                 password,
             )
-            .map(|(payload, _)| payload)
-            .ok();
+            .map(|(payload, rec)| (Some(payload), rec))
+            .unwrap_or((None, None));
+            if let Some(rec) = replay_record_opt {
+                let history = state
+                    .load_history_from_disk(&mut service, password)
+                    .map_err(FrontendError::from)?;
+                let already_recorded = !rec.bundle_id.is_empty()
+                    && history
+                        .iter()
+                        .any(|r| r.bundle_id == rec.bundle_id && r.direction == rec.direction);
+                if !already_recorded {
+                    state
+                        .append_to_history(&mut service, rec, password)
+                        .map_err(FrontendError::from)?;
+                }
+            }
 
             return Ok(PurchaseCompletion {
                 purchase_id: completion.purchase_id,
@@ -686,6 +696,7 @@ pub(crate) async fn checkout_bundle(
         Err(_) => {
             let discovered = crate::l2_lifecycle::discover_anchor_manifest(
                 state,
+                &session,
                 &client,
                 &anchor_id,
                 voucher.creator_profile.id.as_deref(),
@@ -700,22 +711,23 @@ pub(crate) async fn checkout_bundle(
                         m.servers.iter().map(|s| s.write_url.as_str()),
                     ));
             }
-            let mut service = state.lock_service()?;
-            let known_heads = crate::state::load_known_head_receipts_for_anchor(
-                &mut service,
-                &anchor_id,
-                password,
-            )?;
-            service
-                .prepare_checkout_requests(
-                    purchase_id,
-                    bundle,
-                    pow_base_bits,
-                    now()?,
-                    &known_heads,
+            state.with_session_required(&session, "Wallet changed during checkout", |service| {
+                let known_heads = crate::state::load_known_head_receipts_for_anchor(
+                    service,
+                    &anchor_id,
                     password,
-                )
-                .map_err(FrontendError::from)?
+                )?;
+                service
+                    .prepare_checkout_requests(
+                        purchase_id,
+                        bundle,
+                        pow_base_bits,
+                        now()?,
+                        &known_heads,
+                        password,
+                    )
+                    .map_err(FrontendError::from)
+            })?
         }
     };
 
@@ -776,6 +788,7 @@ pub(crate) async fn checkout_bundle(
         {
             if let Ok(Some(discovered)) = crate::l2_lifecycle::discover_anchor_manifest(
                 state,
+                &session,
                 &client,
                 &anchor_id,
                 voucher.creator_profile.id.as_deref(),
@@ -844,16 +857,17 @@ pub(crate) async fn checkout_bundle(
     }
 
     if let Some(equiv_proof) = l2_gateway::detect_equivocation(&dispatch.receipts) {
-        if let Ok(mut service) = state.service.lock() {
+        let _ = state.with_session(&session, |service| {
             let now_secs = sync_client::current_unix_timestamp().max(1);
             let _ = crate::l2_lifecycle::record_equivocation_proof(
-                &mut service,
+                service,
                 None,
                 &equiv_proof,
                 now_secs,
                 password,
             );
-        }
+            Ok(())
+        });
     }
 
     // 5. Evaluate outcome under Green-Rule & LÜCKE-03 isolation
@@ -914,8 +928,12 @@ pub(crate) async fn checkout_bundle(
                 details: None,
             });
 
+            let baseline_history = state
+                .load_history_from_disk(&mut service, password)
+                .map_err(FrontendError::from)?;
+            let next_history_cell = std::cell::RefCell::new(None::<Vec<crate::models::TransactionRecord>>);
             let completion = service
-                .complete_checkout_purchase(
+                .complete_checkout_purchase_with_companions(
                     purchase_id,
                     bundle,
                     &dispatch.receipts,
@@ -924,9 +942,61 @@ pub(crate) async fn checkout_bundle(
                     standards,
                     now()?,
                     password,
+                    |res, wallet| {
+                        let involved_vouchers_ids: Vec<String> = res
+                            .involved_vouchers_details
+                            .iter()
+                            .map(|d| d.local_instance_id.clone())
+                            .collect();
+                        let record = crate::models::TransactionRecord {
+                            id: uuid::Uuid::new_v4().to_string(),
+                            direction: "received".to_string(),
+                            recipient_id: wallet.get_user_id().to_string(),
+                            sender_id: res.header.sender_id.clone(),
+                            timestamp: chrono::Utc::now().to_rfc3339(),
+                            summable_amounts: res.transfer_summary.summable_amounts.clone(),
+                            countable_items: res.transfer_summary.countable_items.clone(),
+                            involved_vouchers: if involved_vouchers_ids.is_empty() {
+                                res.involved_vouchers.clone()
+                            } else {
+                                involved_vouchers_ids
+                            },
+                            involved_sources_details: Some(
+                                res.involved_vouchers_details
+                                    .iter()
+                                    .cloned()
+                                    .map(Into::into)
+                                    .collect(),
+                            ),
+                            bundle_data: Vec::new(),
+                            bundle_id: res.header.bundle_id.clone(),
+                            notes: res
+                                .header
+                                .notes
+                                .as_deref()
+                                .map(str::trim)
+                                .filter(|s| !s.is_empty())
+                                .map(str::to_string),
+                            sender_profile_name: res.header.sender_profile_name.clone(),
+                        };
+                        let (blobs, next_hist) = crate::state::prepare_receive_history_companion(
+                            &baseline_history,
+                            record,
+                        )
+                        .map_err(|e| {
+                            human_money_core::Error::Storage(
+                                human_money_core::StorageError::InvalidFormat(e.message),
+                            )
+                        })?;
+                        *next_history_cell.borrow_mut() = Some(next_hist);
+                        Ok(blobs)
+                    },
                 )
                 .map_err(FrontendError::from)?;
 
+            if let Some(next_hist) = next_history_cell.into_inner() {
+                state.write_cache_slot_for_service(&service, |c| &mut c.history, Some(next_hist));
+            }
             if let Err(error) = state.refresh_events_cache(&mut service, password) {
                 log::warn!("Checkout committed; event cache refresh failed: {}", error);
             }
@@ -936,7 +1006,7 @@ pub(crate) async fn checkout_bundle(
             verdict_fe.reduced_guarantor_protection = reduced_guarantor_protection;
             verdict_fe.manifest_revision = manifest_revision;
 
-            let (receive_payload, record_opt) = build_receive_payload_and_record(
+            let (receive_payload, _) = build_receive_payload_and_record(
                 state,
                 &mut service,
                 purchase_id,
@@ -948,17 +1018,6 @@ pub(crate) async fn checkout_bundle(
                 l2_quorum,
                 password,
             )?;
-
-            if completion.newly_committed {
-                if let Some(record) = record_opt {
-                    if let Err(e) = state.append_to_history(&mut service, record, password) {
-                        log::warn!(
-                            "Checkout committed; transaction history recording failed: {}",
-                            e
-                        );
-                    }
-                }
-            }
 
             // Catch-up background completion for any committee servers that timed out during Green checkout
             if !dispatch.pending_retries.is_empty() {
@@ -1043,26 +1102,44 @@ pub(crate) async fn checkout_bundle(
     }
 }
 
-/// Runs non-blocking L2 committee verification for an already-committed bundle (e.g. PoST auto-import),
-/// pinning signed heads via K2 fail-closed loader and recording any detected upstream double-spends.
-/// Returns `Ok(true)` if at least one new upstream double-spend conflict was recorded.
-pub(crate) async fn verify_committed_bundle_l2(
+pub(crate) enum PrecommitL2Verification {
+    OfflineOnly,
+    CleanQuorum {
+        quorum_certificates:
+            Vec<(String, Vec<human_money_core::humoco_proto::types::QuorumCertificate>)>,
+        pow_base_bits: u32,
+    },
+    ConflictDetected {
+        quorum_certificates:
+            Vec<(String, Vec<human_money_core::humoco_proto::types::QuorumCertificate>)>,
+        competing_entries: Vec<LockEntry>,
+        pow_base_bits: u32,
+    },
+    RetryLater {
+        reason: String,
+    },
+}
+
+/// Verifies an incoming `TransactionBundle` against its Layer-2 Sync-Lock committee(s) BEFORE
+/// committing any voucher into `VoucherStore` (K2 fail-closed pre-commit verification).
+pub(crate) async fn verify_bundle_l2_precommit(
     state: &AppState,
     session: &crate::session::SessionToken,
     bundle: &[u8],
     password: Option<&str>,
-) -> Result<bool, FrontendError> {
-    let opened_opt = state.with_session(session, |service| {
-        service
-            .with_wallet_and_identity(|_, identity| {
-                bundle_processor::open_and_verify_bundle(identity, bundle)
-            })
-            .map_err(FrontendError::from)?
-            .map_err(FrontendError::from)
-    })?;
-    let Some(opened_bundle) = opened_opt else {
-        return Ok(false);
-    };
+) -> Result<PrecommitL2Verification, FrontendError> {
+    let opened_bundle = state.with_session_required(
+        session,
+        "Wallet session changed before pre-commit L2 verification",
+        |service| {
+            service
+                .with_wallet_and_identity(|_, identity| {
+                    bundle_processor::open_and_verify_bundle(identity, bundle)
+                })
+                .map_err(FrontendError::from)?
+                .map_err(FrontendError::from)
+        },
+    )?;
 
     let anchored_vouchers: Vec<human_money_core::Voucher> = opened_bundle
         .vouchers
@@ -1071,20 +1148,32 @@ pub(crate) async fn verify_committed_bundle_l2(
         .cloned()
         .collect();
     if anchored_vouchers.is_empty() {
-        return Ok(false);
+        return Ok(PrecommitL2Verification::OfflineOnly);
     }
 
     let lifecycle = state
         .get_cached_internal_lifecycle()
         .map_err(FrontendError::from)?;
     let client = sync_client::create_sync_http_client();
-    let mut conflict_recorded = false;
+
+    let mut quorum_certificates: Vec<(
+        String,
+        Vec<human_money_core::humoco_proto::types::QuorumCertificate>,
+    )> = Vec::new();
+    let mut competing_entries: Vec<LockEntry> = Vec::new();
+    let mut max_pow_bits = DEFAULT_LOCK_POW_BASE_BITS;
+    let mut retry_reason: Option<String> = None;
 
     for voucher in &anchored_vouchers {
         let Some(anchor_id) = voucher.layer2_anchor else {
             continue;
         };
         let anchor_hex = hex::encode(anchor_id);
+        let init_t_id = voucher
+            .transactions
+            .first()
+            .map(|t| t.t_id.clone())
+            .unwrap_or_default();
         let guarantor_dids: Vec<String> = voucher
             .signatures
             .iter()
@@ -1093,27 +1182,31 @@ pub(crate) async fn verify_committed_bundle_l2(
             .collect();
 
         let local_manifest = state
-            .with_session(session, |service| {
-                let bundled = opened_bundle
-                    .anchor_manifest
-                    .as_ref()
-                    .filter(|m| m.verify_anchor_id(&anchor_id).is_ok())
-                    .cloned();
-                let stored = service
-                    .with_wallet(|w| w.profile.l2_anchor_manifests.get(&anchor_hex).cloned())
-                    .map_err(FrontendError::from)?;
-                Ok(match (bundled, stored) {
-                    (Some(b), Some(s)) if s.revision > b.revision => Some(s),
-                    (Some(b), _) => Some(b),
-                    (None, s) => s,
-                })
-            })?
-            .flatten();
+            .with_session_required(
+                session,
+                "Wallet session changed during pre-commit L2 verification",
+                |service| {
+                    let bundled = opened_bundle
+                        .anchor_manifest
+                        .as_ref()
+                        .filter(|m| m.verify_anchor_id(&anchor_id).is_ok())
+                        .cloned();
+                    let stored = service
+                        .with_wallet(|w| w.profile.l2_anchor_manifests.get(&anchor_hex).cloned())
+                        .map_err(FrontendError::from)?;
+                    Ok(match (bundled, stored) {
+                        (Some(b), Some(s)) if s.revision > b.revision => Some(s),
+                        (Some(b), _) => Some(b),
+                        (None, s) => s,
+                    })
+                },
+            )?;
 
         let manifest = match local_manifest {
             Some(m) => m,
             None => match crate::l2_lifecycle::discover_anchor_manifest(
                 state,
+                session,
                 &client,
                 &anchor_id,
                 voucher.creator_profile.id.as_deref(),
@@ -1123,7 +1216,15 @@ pub(crate) async fn verify_committed_bundle_l2(
             .await?
             {
                 Some(m) => m,
-                None => continue,
+                None => {
+                    if retry_reason.is_none() {
+                        retry_reason = Some(format!(
+                            "Anchor manifest unavailable for voucher {}",
+                            voucher.voucher_id
+                        ));
+                    }
+                    continue;
+                }
             },
         };
 
@@ -1131,96 +1232,180 @@ pub(crate) async fn verify_committed_bundle_l2(
             &lifecycle,
             manifest.servers.iter().map(|s| s.write_url.as_str()),
         );
+        max_pow_bits = max_pow_bits.max(pow_base_bits);
 
-        let prepared = state.with_session(session, |service| {
-            // K2 fail-closed: corrupt sidecar aborts dispatch rather than sending None known_head
-            let known_heads =
-                crate::state::load_known_head_receipts_for_anchor(service, &anchor_id, password)?;
-            let first_unconfirmed = l2_gateway::first_unconfirmed_hop_index(
-                voucher,
-                &manifest,
-                &opened_bundle.quorum_certificates,
-            )
-            .map_err(FrontendError::from)?;
-            let entries = l2_gateway::build_voucher_lock_batch(
-                voucher,
-                first_unconfirmed,
-                &opened_bundle.causal_outputs,
-                if first_unconfirmed == 0 {
-                    opened_bundle.root_mig_sig
-                } else {
-                    None
-                },
-                pow_base_bits,
-            )
-            .map_err(FrontendError::from)?;
-            let mut nonce = [0u8; 32];
-            nonce[..16].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
-            nonce[16..].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
-            l2_gateway::build_committee_batch_requests(
-                &anchor_id,
-                &manifest,
-                &opened_bundle.genesis_tickets,
-                &entries,
-                &nonce,
-                &known_heads,
-            )
-            .map_err(FrontendError::from)
-        })?;
-        let Some(requests) = prepared else {
-            return Ok(false);
-        };
-
-        let dispatch = crate::gateway_resolver::dispatch_lock_committee_batches(
-            &client,
-            &requests,
-            CHECKOUT_BATCH_TIMEOUT,
+        let first_unconfirmed = l2_gateway::first_unconfirmed_hop_index(
+            voucher,
+            &manifest,
+            &opened_bundle.quorum_certificates,
         )
-        .await;
-        let equiv_proof = l2_gateway::detect_equivocation(&dispatch.receipts);
+        .map_err(FrontendError::from)?;
 
-        let applied = state.with_session(session, |service| {
-            if let Some(ref eq) = equiv_proof {
-                let now_secs = sync_client::current_unix_timestamp().max(1);
-                let _ = crate::l2_lifecycle::record_equivocation_proof(
-                    service,
-                    None,
-                    eq,
-                    now_secs,
-                    password,
-                );
+        let mut voucher_qcs: Vec<human_money_core::humoco_proto::types::QuorumCertificate> =
+            Vec::new();
+        for tx in &voucher.transactions[..first_unconfirmed] {
+            if let Ok(child) = human_money_core::crypto::decode_bs58_fixed::<32>(&tx.t_id, "t_id") {
+                if let Some(qc) = opened_bundle
+                    .quorum_certificates
+                    .iter()
+                    .find(|q| q.child_lock == child)
+                {
+                    voucher_qcs.push(qc.clone());
+                }
             }
-            crate::state::record_known_head_receipts(
-                service,
-                &anchor_id,
-                &dispatch.receipts,
-                password,
+        }
+
+        if first_unconfirmed < voucher.transactions.len() {
+            let (entries, requests) = state.with_session_required(
+                session,
+                "Wallet session changed during pre-commit L2 verification",
+                |service| {
+                    let known_heads = crate::state::load_known_head_receipts_for_anchor(
+                        service, &anchor_id, password,
+                    )?;
+                    let entries = l2_gateway::build_voucher_lock_batch(
+                        voucher,
+                        first_unconfirmed,
+                        &opened_bundle.causal_outputs,
+                        if first_unconfirmed == 0 {
+                            opened_bundle.root_mig_sig
+                        } else {
+                            None
+                        },
+                        pow_base_bits,
+                    )
+                    .map_err(FrontendError::from)?;
+                    let mut nonce = [0u8; 32];
+                    nonce[..16].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
+                    nonce[16..].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
+                    let requests = l2_gateway::build_committee_batch_requests(
+                        &anchor_id,
+                        &manifest,
+                        &opened_bundle.genesis_tickets,
+                        &entries,
+                        &nonce,
+                        &known_heads,
+                    )
+                    .map_err(FrontendError::from)?;
+                    Ok((entries, requests))
+                },
             )?;
-            let mut recorded_here = false;
-            for competing_entry in &dispatch.competing_entries {
-                match service.record_checkout_upstream_conflict(
-                    bundle,
-                    competing_entry,
-                    pow_base_bits,
-                    password,
-                ) {
-                    Ok(true) => recorded_here = true,
-                    Ok(false) => {}
-                    Err(err) => {
-                        log::warn!("Recording PoST background L2 conflict failed: {}", err);
+
+            let dispatch = crate::gateway_resolver::dispatch_lock_committee_batches(
+                &client,
+                &requests,
+                CHECKOUT_BATCH_TIMEOUT,
+            )
+            .await;
+            let equiv_proof = l2_gateway::detect_equivocation(&dispatch.receipts);
+
+            state.with_session_required(
+                session,
+                "Wallet session changed before recording PoST L2 check receipts",
+                |service| {
+                    if let Some(ref eq) = equiv_proof {
+                        let now_secs = sync_client::current_unix_timestamp().max(1);
+                        let _ = crate::l2_lifecycle::record_equivocation_proof(
+                            service, None, eq, now_secs, password,
+                        );
+                    }
+                    crate::state::record_known_head_receipts(
+                        service,
+                        &anchor_id,
+                        &dispatch.receipts,
+                        password,
+                    )
+                },
+            )?;
+
+            let submitted_slots: HashSet<[u8; 32]> = entries.iter().map(|e| e.slot).collect();
+            let matching_conflicts: Vec<_> = dispatch
+                .competing_entries
+                .into_iter()
+                .filter(|ce| submitted_slots.contains(&ce.slot))
+                .collect();
+            if !matching_conflicts.is_empty() {
+                competing_entries.extend(matching_conflicts);
+                if !init_t_id.is_empty() && !voucher_qcs.is_empty() {
+                    quorum_certificates.push((init_t_id, voucher_qcs));
+                }
+                continue;
+            }
+
+            let committee = match manifest.committee() {
+                Ok(c) => c,
+                Err(e) => {
+                    if retry_reason.is_none() {
+                        retry_reason = Some(format!(
+                            "PoST L2 committee manifest invalid for voucher {}: {}",
+                            voucher.voucher_id, e
+                        ));
+                    }
+                    continue;
+                }
+            };
+            let mut voucher_ok = equiv_proof.is_none();
+            if voucher_ok {
+                for entry_req in &entries {
+                    let mut valid_receipts = Vec::new();
+                    let mut seen_pubs = HashSet::new();
+                    for r in &dispatch.receipts {
+                        if matches!(
+                            r.kind,
+                            human_money_core::humoco_proto::types::LockReceiptKind::FirstWrite
+                        ) && r.slot == entry_req.slot
+                            && r.child_lock == entry_req.child_lock
+                            && committee.contains(&r.lock_pub)
+                            && r.verify_signature()
+                            && seen_pubs.insert(r.lock_pub)
+                        {
+                            valid_receipts.push(r.clone());
+                        }
+                    }
+                    let qc = human_money_core::humoco_proto::types::QuorumCertificate {
+                        slot: entry_req.slot,
+                        child_lock: entry_req.child_lock,
+                        receipts: valid_receipts,
+                    };
+                    if qc
+                        .verify_with_anchor(&committee, &anchor_id, manifest.retain_until_quarter)
+                        .is_ok()
+                    {
+                        voucher_qcs.push(qc);
+                    } else {
+                        voucher_ok = false;
+                        break;
                     }
                 }
             }
-            Ok(recorded_here)
-        })?;
 
-        match applied {
-            Some(recorded_here) => conflict_recorded |= recorded_here,
-            None => return Ok(false),
+            if !voucher_ok && retry_reason.is_none() {
+                retry_reason = Some(format!(
+                    "PoST L2 committee verification incomplete for voucher {} (threshold Q={})",
+                    voucher.voucher_id, manifest.threshold
+                ));
+            }
+        }
+
+        if !init_t_id.is_empty() && !voucher_qcs.is_empty() {
+            quorum_certificates.push((init_t_id, voucher_qcs));
         }
     }
 
-    Ok(conflict_recorded)
+    if !competing_entries.is_empty() {
+        return Ok(PrecommitL2Verification::ConflictDetected {
+            quorum_certificates,
+            competing_entries,
+            pow_base_bits: max_pow_bits,
+        });
+    }
+    if let Some(reason) = retry_reason {
+        return Ok(PrecommitL2Verification::RetryLater { reason });
+    }
+    Ok(PrecommitL2Verification::CleanQuorum {
+        quorum_certificates,
+        pow_base_bits: max_pow_bits,
+    })
 }
 
 #[cfg(test)]
@@ -1719,5 +1904,331 @@ mod tests {
         drop(svc_alice);
         let _ = std::fs::remove_dir_all(dir_alice);
         let _ = std::fs::remove_dir_all(dir_bob);
+    }
+
+    #[tokio::test]
+    async fn k2_precommit_l2_verification_retries_without_quorum_and_detects_conflict() {
+        use human_money_core::humoco_proto::crypto::DEFAULT_LOCK_POW_BASE_BITS;
+        use human_money_core::humoco_proto::types::LockReceiptKind;
+        use human_money_core::models::layer2_api::{SyncLockBatchRequest, SyncLockBatchResponse, SyncLockConflict};
+        use human_money_core::VoucherStatus;
+
+        fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) {
+            std::fs::create_dir_all(dst).unwrap();
+            for entry in std::fs::read_dir(src).unwrap() {
+                let entry = entry.unwrap();
+                let target = dst.join(entry.file_name());
+                if entry.file_type().unwrap().is_dir() {
+                    copy_dir_recursive(&entry.path(), &target);
+                } else {
+                    std::fs::copy(entry.path(), target).unwrap();
+                }
+            }
+        }
+
+        let dir_alice = temp_dir("app-k2-alice");
+        let dir_bob = temp_dir("app-k2-bob");
+        let dir_eve = temp_dir("app-k2-eve");
+        let pw = "test-password";
+
+        let (mut svc_alice, _) =
+            test_utils::setup_service_with_profile(&dir_alice, &ACTORS.alice, "Alice", pw);
+        let (mut svc_bob, _) =
+            test_utils::setup_service_with_profile(&dir_bob, &ACTORS.bob, "Bob", pw);
+        let (mut svc_eve, _) =
+            test_utils::setup_service_with_profile(&dir_eve, &ACTORS.charlie, "Eve", pw);
+        svc_alice.unlock_session(pw, 600).unwrap();
+        svc_bob.unlock_session(pw, 600).unwrap();
+        svc_eve.unlock_session(pw, 600).unwrap();
+
+        let alice_id = svc_alice.with_wallet(|w| w.get_user_id().to_string()).unwrap();
+        let bob_id = svc_bob.with_wallet(|w| w.get_user_id().to_string()).unwrap();
+        let eve_id_str = svc_eve.with_wallet(|w| w.get_user_id().to_string()).unwrap();
+        let eve_identity = svc_eve.with_wallet_and_identity(|_, id| id.clone()).unwrap();
+
+        let std_toml = test_utils::generate_signed_standard_toml(
+            "voucher_standards/freetaler_v1/standard.toml",
+        );
+        let (std_def, _) = VoucherStandardDefinition::from_toml(&std_toml).unwrap();
+        let std_uuid = std_def.immutable.identity.uuid;
+        let mut standards = HashMap::new();
+        standards.insert(std_uuid, std_toml.clone());
+
+        let sk1 = SigningKey::from_bytes(&[61u8; 32]);
+        let sk2 = SigningKey::from_bytes(&[62u8; 32]);
+        let l1 = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let p1 = l1.local_addr().unwrap().port();
+        let l2 = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let p2 = l2.local_addr().unwrap().port();
+
+        let anchor_nonce = [55u8; 32];
+        let creator_mig_pub = svc_alice
+            .with_wallet_and_identity(|_, id| {
+                l2_gateway::derive_anchor_mig_signing_key(id, &anchor_nonce)
+                    .map(|k| k.verifying_key().to_bytes())
+            })
+            .unwrap()
+            .unwrap();
+        let retain_q = encode_quarter(2035, 4).unwrap();
+        let manifest = AnchorManifest {
+            revision: 1,
+            threshold: 2,
+            servers: vec![(&sk1, p1), (&sk2, p2)]
+                .into_iter()
+                .map(|(sk, port)| ServerEntry {
+                    write_url: format!("http://127.0.0.1:{}/sync.php", port),
+                    read_url: format!("http://127.0.0.1:{}/d", port),
+                    admin_pub: sk.verifying_key().to_bytes(),
+                    lock_pub: sk.verifying_key().to_bytes(),
+                    nominated_by: NominatedBy::Guarantor(0),
+                })
+                .collect(),
+            successors: vec![],
+            authority: AnchorAuthority {
+                creator_mig_pub,
+                guarantor_mig_pubs: vec![SigningKey::from_bytes(&[98u8; 32]).verifying_key().to_bytes()],
+            },
+            migration_chain: vec![],
+            issued_at_ms: 1_760_000_000_000,
+            retain_until_quarter: retain_q,
+        };
+        let anchor_id = manifest.rev1_anchor_id().unwrap();
+        let tickets: Vec<GenesisTicket> = [&sk1, &sk2]
+            .into_iter()
+            .map(|sk| {
+                let mut t = GenesisTicket {
+                    anchor_id,
+                    retain_until_quarter: retain_q,
+                    issued_at: 1_760_000_000,
+                    lock_pub: sk.verifying_key().to_bytes(),
+                    sig: [0u8; 64],
+                };
+                t.sig = sk.sign(&t.digest()).to_bytes();
+                t
+            })
+            .collect();
+        svc_alice
+            .register_l2_anchor_template_with_nonce(
+                manifest.clone(),
+                tickets,
+                Some(&anchor_nonce),
+                Some(pw),
+            )
+            .unwrap();
+        svc_alice
+            .create_new_voucher(
+                &std_toml,
+                NewVoucherData {
+                    creator_profile: PublicProfile {
+                        id: Some(alice_id),
+                        ..Default::default()
+                    },
+                    nominal_value: ValueDefinition {
+                        amount: "50".into(),
+                        ..Default::default()
+                    },
+                    layer2_anchor: Some(anchor_id),
+                    ..Default::default()
+                },
+                Some(pw),
+            )
+            .unwrap();
+        let local_id = svc_alice
+            .with_wallet_and_identity(|w, id| w.list_vouchers(Some(id), None, None, None))
+            .unwrap()[0]
+            .local_instance_id
+            .clone();
+
+        // Snapshot Alice's folder before first transfer to forge a genuine conflicting transfer to Eve
+        let dir_alice_clone = temp_dir("app-k2-alice-clone");
+        copy_dir_recursive(&dir_alice, &dir_alice_clone);
+        let mut svc_alice_clone =
+            human_money_core::app_service::AppService::new(&dir_alice_clone).unwrap();
+        let profile_folder = svc_alice.list_profiles().unwrap()[0].folder_name.clone();
+        svc_alice_clone
+            .login(&profile_folder, pw, false, "test-id".into())
+            .unwrap();
+
+        let transfer_bob = svc_alice
+            .create_transfer_bundle(
+                MultiTransferRequest {
+                    recipient_id: bob_id,
+                    sources: vec![SourceTransfer {
+                        local_instance_id: local_id.clone(),
+                        amount_to_send: "20".into(),
+                    }],
+                    notes: None,
+                    sender_profile_name: None,
+                    use_privacy_mode: None,
+                    wot_sync_json: None,
+                    contact_card_json: None,
+                },
+                &standards,
+                None,
+                Some(pw),
+            )
+            .unwrap();
+
+        let transfer_eve = svc_alice_clone
+            .create_transfer_bundle(
+                MultiTransferRequest {
+                    recipient_id: eve_id_str,
+                    sources: vec![SourceTransfer {
+                        local_instance_id: local_id,
+                        amount_to_send: "20".into(),
+                    }],
+                    notes: None,
+                    sender_profile_name: None,
+                    use_privacy_mode: None,
+                    wot_sync_json: None,
+                    contact_card_json: None,
+                },
+                &standards,
+                None,
+                Some(pw),
+            )
+            .unwrap();
+
+        let opened_eve =
+            bundle_processor::open_and_verify_bundle(&eve_identity, &transfer_eve.bundle_bytes)
+                .unwrap();
+        let competing_entry = l2_gateway::build_voucher_lock_batch(
+            &opened_eve.vouchers[0],
+            0,
+            &opened_eve.causal_outputs,
+            opened_eve.root_mig_sig,
+            DEFAULT_LOCK_POW_BASE_BITS,
+        )
+        .unwrap()
+        .into_iter()
+        .last()
+        .unwrap();
+        let competing_hex = hex::encode(competing_entry.to_wire_bytes().unwrap());
+
+        // 1. Offline / unreachable committee MUST return RetryLater before touching Bob's store
+        let state_bob = AppState::new(svc_bob);
+        state_bob.set_cached_security_policy(Some(SecurityPolicy::default()));
+        state_bob.set_cached_internal_lifecycle(Some(InternalLifecycleState::default()));
+        let bob_session = {
+            let s = state_bob.service.lock().unwrap();
+            state_bob.session_token_for_service(&s).unwrap()
+        };
+        let offline_pre =
+            verify_bundle_l2_precommit(&state_bob, &bob_session, &transfer_bob.bundle_bytes, Some(pw))
+                .await
+                .unwrap();
+        assert!(matches!(
+            offline_pre,
+            PrecommitL2Verification::RetryLater { .. }
+        ));
+
+        // 2. Committee reporting a conflicting entry MUST return ConflictDetected and atomically Quarantine on commit
+        let spawn_conflict_srv = |listener: tokio::net::TcpListener, sk: SigningKey, comp_hex: String, comp_entry: LockEntry| {
+            tokio::spawn(async move {
+                loop {
+                    let Ok((mut stream, _)) = listener.accept().await else {
+                        break;
+                    };
+                    let mut buf = [0u8; 65_536];
+                    let n = stream.read(&mut buf).await.unwrap_or(0);
+                    let raw = String::from_utf8_lossy(&buf[..n]);
+                    let body_str = raw.split("\r\n\r\n").nth(1).unwrap_or("");
+                    let req: SyncLockBatchRequest = serde_json::from_str(body_str).unwrap();
+                    let mut receipt = LockReceipt {
+                        kind: LockReceiptKind::ConflictSeen,
+                        lock_pub: sk.verifying_key().to_bytes(),
+                        bucket: req.bucket,
+                        slot: comp_entry.slot,
+                        child_lock: comp_entry.child_lock,
+                        entry_hash: comp_entry.entry_hash().unwrap(),
+                        retain_until_quarter: retain_q,
+                        write_seq: 1,
+                        bucket_head: [9u8; 32],
+                        recipient_nonce: req.recipient_nonce,
+                        sig: [0u8; 64],
+                    };
+                    receipt.sig = sk.sign(&receipt.digest()).to_bytes();
+                    let resp_json = serde_json::to_string(&SyncLockBatchResponse {
+                        status: "conflict".to_string(),
+                        bucket: req.bucket,
+                        retain_until_quarter: retain_q,
+                        receipts: vec![receipt.clone()],
+                        conflict: Some(SyncLockConflict {
+                            entry_index: 0,
+                            slot: comp_entry.slot,
+                            receipt,
+                            competing_entry: comp_hex.clone(),
+                        }),
+                    })
+                    .unwrap();
+                    let http = format!(
+                        "HTTP/1.1 409 Conflict\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                        resp_json.len(),
+                        resp_json
+                    );
+                    let _ = stream.write_all(http.as_bytes()).await;
+                }
+            })
+        };
+
+        let h1 = spawn_conflict_srv(l1, sk1, competing_hex.clone(), competing_entry.clone());
+        let h2 = spawn_conflict_srv(l2, sk2, competing_hex, competing_entry);
+
+        let conflict_pre = verify_bundle_l2_precommit(
+            &state_bob,
+            &bob_session,
+            &transfer_bob.bundle_bytes,
+            Some(pw),
+        )
+        .await
+        .unwrap();
+        let (qcs, comp_entries, pow_bits) = match conflict_pre {
+            PrecommitL2Verification::ConflictDetected {
+                quorum_certificates,
+                competing_entries,
+                pow_base_bits,
+            } => (quorum_certificates, competing_entries, pow_base_bits),
+            _ => panic!("Expected ConflictDetected"),
+        };
+        assert!(!comp_entries.is_empty());
+
+        let evidence = human_money_core::ReceiveL2Evidence {
+            quorum_certificates: &qcs,
+            competing_entries: &comp_entries,
+            pow_base_bits: pow_bits,
+        };
+        {
+            let mut s = state_bob.service.lock().unwrap();
+            s.receive_bundle_with_companions(
+                &transfer_bob.bundle_bytes,
+                &standards,
+                None,
+                Some(pw),
+                false,
+                Some(&evidence),
+                |_, _| Ok(vec![]),
+            )
+            .unwrap();
+            let vouchers = s
+                .with_wallet_and_identity(|w, id| w.list_vouchers(Some(id), None, None, None))
+                .unwrap();
+            assert_eq!(vouchers.len(), 1);
+            assert!(
+                matches!(vouchers[0].status, VoucherStatus::Quarantined { .. }),
+                "K2: Conflicting anchored PoST voucher MUST commit atomically as Quarantined, never Active (got {:?})",
+                vouchers[0].status
+            );
+        }
+
+        h1.abort();
+        h2.abort();
+        drop(state_bob);
+        drop(svc_alice);
+        drop(svc_alice_clone);
+        drop(svc_eve);
+        let _ = std::fs::remove_dir_all(dir_alice);
+        let _ = std::fs::remove_dir_all(dir_alice_clone);
+        let _ = std::fs::remove_dir_all(dir_bob);
+        let _ = std::fs::remove_dir_all(dir_eve);
     }
 }

@@ -361,7 +361,7 @@ describe('SessionContext and Session Timeout UX (APP-017)', () => {
 
     expect(screen.getByText('Authentication Required')).toBeInTheDocument();
     expect(screen.getByText('Invalid password')).toBeInTheDocument();
-    expect(authService.unlockSession).toHaveBeenCalledWith('wrong-pass', 300);
+    expect(authService.unlockSession).toHaveBeenCalledWith('wrong-pass');
 
     fireEvent.change(screen.getByPlaceholderText('Profile Password'), {
       target: { value: 'right-pass' },
@@ -540,7 +540,7 @@ describe('SessionContext and Session Timeout UX (APP-017)', () => {
     });
 
     await expect(actionPromise).resolves.toBe('pin-reunlocked-ok');
-    expect(authService.unlockSessionWithPin).toHaveBeenLastCalledWith('246810', 300, 'alice_folder');
+    expect(authService.unlockSessionWithPin).toHaveBeenLastCalledWith('246810', 'alice_folder');
     expect(authService.unlockSession).not.toHaveBeenCalled();
     expect(screen.getByTestId('has-cached-session').textContent).toBe('true');
   });
@@ -592,10 +592,14 @@ describe('SessionContext and Session Timeout UX (APP-017)', () => {
     expect(authService.elevateSessionWithPassword).toHaveBeenCalledWith('master-pw');
   });
 
-  it('handles timeout=0 dailyPay action via ephemeral PIN unlock+lock and passes null instead of raw PIN', async () => {
+  it('handles timeout=0 dailyPay action via single-use backend grant and passes grant instead of raw PIN', async () => {
+    const mockGrant = 'hmc_grant_0123456789abcdef0123456789abcdef';
     (authService.getSessionStatus as Mock).mockResolvedValue(dailyPayStatus(false));
     (settingsService.getConfig as Mock).mockResolvedValue(makeAppConfig(0));
-    (authService.unlockSessionWithPin as Mock).mockResolvedValue(dailyPayStatus(false));
+    (authService.unlockSessionWithPin as Mock).mockResolvedValue({
+      ...dailyPayStatus(false),
+      oneShotGrant: mockGrant,
+    });
 
     let sessionCtx!: ReturnType<typeof useSession>;
     render(
@@ -627,9 +631,9 @@ describe('SessionContext and Session Timeout UX (APP-017)', () => {
     });
 
     await expect(actionPromise).resolves.toBe('ephemeral-pin-ok');
-    expect(seenPwd).toBeNull();
-    expect(authService.unlockSessionWithPin).toHaveBeenCalledWith('246810', 30, 'alice_folder');
-    expect(authService.lockSession).toHaveBeenCalled();
+    expect(seenPwd).toBe(mockGrant);
+    expect(authService.unlockSessionWithPin).toHaveBeenCalledWith('246810', 'alice_folder');
+    expect(authService.lockSession).not.toHaveBeenCalled();
     expect(screen.getByTestId('has-cached-session').textContent).toBe('false');
   });
 
@@ -671,7 +675,7 @@ describe('SessionContext and Session Timeout UX (APP-017)', () => {
 
     expect(screen.getByText('Invalid password')).toBeInTheDocument();
     expect(actionCalls).toBe(0);
-    expect(authService.unlockSession).toHaveBeenCalledWith('wrong-secret', 0);
+    expect(authService.unlockSession).toHaveBeenCalledWith('wrong-secret');
 
     fireEvent.change(await screen.findByPlaceholderText('Profile Password'), {
       target: { value: 'full-secret' },
@@ -683,7 +687,7 @@ describe('SessionContext and Session Timeout UX (APP-017)', () => {
     await expect(actionPromise).resolves.toBe('t0-full-ok');
     expect(actionCalls).toBe(1);
     expect(seenPwd).toBe('full-secret');
-    expect(authService.unlockSession).toHaveBeenLastCalledWith('full-secret', 0);
+    expect(authService.unlockSession).toHaveBeenLastCalledWith('full-secret');
     expect(screen.getByTestId('has-cached-session').textContent).toBe('false');
   });
 
@@ -817,5 +821,50 @@ describe('SessionContext and Session Timeout UX (APP-017)', () => {
     await expect(actionPromise).resolves.toBe('switched-master-ok');
     expect(authService.elevateSessionWithPassword).toHaveBeenCalledWith('master-pw');
     expect(screen.getByTestId('has-cached-session').textContent).toBe('true');
+  });
+
+  it('does not coalesce queued stepUp actions when timeout=0', async () => {
+    (authService.getSessionStatus as Mock).mockResolvedValue(dailyPayStatus(false));
+    (settingsService.getConfig as Mock).mockResolvedValue(makeAppConfig(0));
+    (authService.elevateSessionWithPassword as Mock).mockResolvedValue(dailyPayStatus(false, true));
+
+    let sessionCtx!: ReturnType<typeof useSession>;
+    render(
+      <SessionProvider>
+        <SessionConsumer onContextReady={(ctx) => { sessionCtx = ctx; }} />
+      </SessionProvider>
+    );
+
+    await act(async () => {
+      screen.getByText('Login Alice').click();
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('base-access-mode').textContent).toBe('dailyPay');
+    });
+
+    let p1!: Promise<unknown>;
+    let p2!: Promise<unknown>;
+    await act(async () => {
+      p1 = sessionCtx.requireFullAccess(async (pwd) => `first:${pwd}`);
+      p2 = sessionCtx.requireFullAccess(async (pwd) => `second:${pwd}`);
+    });
+
+    fireEvent.change(await screen.findByPlaceholderText('Profile Password'), {
+      target: { value: 'pw-1' },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    });
+    await expect(p1).resolves.toBe('first:pw-1');
+
+    // Second queued stepUp must prompt independently when timeout === 0
+    fireEvent.change(await screen.findByPlaceholderText('Profile Password'), {
+      target: { value: 'pw-2' },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    });
+    await expect(p2).resolves.toBe('second:pw-2');
+    expect(authService.elevateSessionWithPassword).toHaveBeenCalledTimes(2);
   });
 });

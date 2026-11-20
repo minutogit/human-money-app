@@ -16,7 +16,7 @@ import { Contact, TrustStatus } from '../../types';
 interface RecipientSelectorProps {
   recipientId: string;
   onRecipientChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
-  onApplyRawCode?: (raw: string) => boolean;
+  onApplyRawCode?: (raw: string) => boolean | Promise<boolean>;
   onSelectContact: (contact: Contact) => void;
   contacts: Contact[];
   trustStatus: TrustStatus;
@@ -58,18 +58,19 @@ export function RecipientSelector({
 
   const currentContact = contacts.find(c => c.did === recipientId);
 
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleInputChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const rawVal = e.target.value;
+    const inputEl = e.target;
     const trimmed = rawVal.trim();
     const lower = trimmed.toLowerCase();
 
     const parsed = parseHumocoInput(rawVal);
     if (onApplyRawCode && parsed) {
-      const ok = onApplyRawCode(rawVal);
+      const ok = await onApplyRawCode(rawVal);
       if (ok) {
         const normalized = normalizeUserIdInput(rawVal);
         if (normalized) {
-          e.target.value = normalized;
+          inputEl.value = normalized;
         }
         setSearchQuery('');
         return;
@@ -98,7 +99,7 @@ export function RecipientSelector({
     try {
       const { text } = await readFromClipboard();
       if (text && text.trim()) {
-        const ok = onApplyRawCode(text.trim());
+        const ok = await onApplyRawCode(text.trim());
         if (ok) {
           setSearchQuery('');
         }

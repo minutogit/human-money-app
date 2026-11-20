@@ -21,6 +21,7 @@ import type {
     WalletEvent,
     FrontendPendingSignRequest,
     FrontendPendingWotHandshake,
+    FrontendUnsupportedPostItem,
     RecoveryProtectionStatusDto,
 } from '../../../types';
 
@@ -50,6 +51,7 @@ export function useDashboardData() {
 
     const [pendingSignRequests, setPendingSignRequests] = useState<FrontendPendingSignRequest[]>([]);
     const [pendingWotHandshakes, setPendingWotHandshakes] = useState<FrontendPendingWotHandshake[]>([]);
+    const [unsupportedMessages, setUnsupportedMessages] = useState<FrontendUnsupportedPostItem[]>([]);
     const [openSellerInquiriesCount, setOpenSellerInquiriesCount] = useState(0);
     const [isOpeningSignRequest, setIsOpeningSignRequest] = useState<string | null>(null);
     const [expiringSoonCount, setExpiringSoonCount] = useState(0);
@@ -189,6 +191,7 @@ export function useDashboardData() {
                     if (!active) return;
                     setPendingSignRequests(summary.pendingSignRequests || []);
                     setPendingWotHandshakes(summary.pendingWotHandshakes || []);
+                    setUnsupportedMessages(summary.unsupportedMessages || []);
                     setOpenSellerInquiriesCount(
                         (summary.inquiries || []).filter(
                             (inq) => inq.unread || (inq.role === 'seller' && inq.status === 'open'),
@@ -245,6 +248,21 @@ export function useDashboardData() {
                 setPendingSignRequests((prev) => prev.filter((r) => r.msgId !== msgId));
             } catch (e) {
                 logger.error(`Failed to dismiss sign request: ${stringifyError(e)}`);
+                setFeedbackMsg(translateError(e, t));
+            }
+        },
+        [protectAction, t],
+    );
+
+    const handleDismissUnsupportedPost = useCallback(
+        async (msgId: string) => {
+            try {
+                await protectAction(async (pwd) => {
+                    await postService.dismissPendingPostItem('unsupported', msgId, pwd || undefined);
+                });
+                setUnsupportedMessages((prev) => prev.filter((m) => m.msgId !== msgId));
+            } catch (e) {
+                logger.error(`Failed to dismiss unsupported PoST item: ${stringifyError(e)}`);
                 setFeedbackMsg(translateError(e, t));
             }
         },
@@ -340,6 +358,7 @@ export function useDashboardData() {
         quarantinedCount,
         pendingSignRequests,
         pendingWotHandshakes,
+        unsupportedMessages,
         openSellerInquiriesCount,
         isOpeningSignRequest,
         expiringSoonCount,
@@ -361,6 +380,7 @@ export function useDashboardData() {
         handleViewModeChange,
         handleOpenSignRequest,
         handleDismissSignRequest,
+        handleDismissUnsupportedPost,
         handleProtectedNavigate,
         navigate,
     };

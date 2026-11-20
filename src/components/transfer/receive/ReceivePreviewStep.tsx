@@ -10,7 +10,12 @@ import { Advanced } from '../../ui/Advanced';
 import { TechId } from '../../ui/TechId';
 import { ImportStandardModal } from '../../standards/ImportStandardModal';
 import ContactDialog from '../../contacts/ContactDialog';
-import type { Contact, VoucherStandardDefinition, WotImportResultDto } from '../../../types';
+import type {
+    Contact,
+    ToleranceReceiveConfirmation,
+    VoucherStandardDefinition,
+    WotImportResultDto,
+} from '../../../types';
 import type { PendingPasswordImportState, ResultModalState } from './useReceiveFlow';
 
 interface ReceivePreviewStepProps {
@@ -21,7 +26,7 @@ interface ReceivePreviewStepProps {
     onConfirmPassword: () => void;
     onCancelPassword: () => void;
     isProcessing: boolean;
-    toleranceModal: { type: 'Soft' | 'Critical'; message: string } | null;
+    toleranceModal: ToleranceReceiveConfirmation | null;
     confirmText: string;
     onConfirmTextChange: (val: string) => void;
     onConfirmTolerance: () => void;

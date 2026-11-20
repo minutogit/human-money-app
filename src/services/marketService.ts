@@ -8,6 +8,7 @@ import {
     FrontendAdInput,
     FrontendForwardCardExport,
     FrontendImportCardResult,
+    FrontendResolvedCardRecipient,
     FrontendMemberPolicyDto,
     FrontendSyncSetupDraft,
     FrontendSyncAdminStatus,
@@ -92,6 +93,10 @@ export const marketService = {
 
     exportForwardCard: async (did: string, password?: string): Promise<FrontendForwardCardExport> => {
         return await invoke<FrontendForwardCardExport>("export_forward_card", { did, password: password || undefined });
+    },
+
+    resolveCardRecipient: async (payload: string): Promise<FrontendResolvedCardRecipient> => {
+        return await invoke<FrontendResolvedCardRecipient>("resolve_card_recipient", { payload });
     },
 
     importContactCard: async (payload: string, password?: string): Promise<FrontendImportCardResult> => {

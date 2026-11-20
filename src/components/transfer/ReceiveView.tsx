@@ -14,18 +14,19 @@ interface ReceiveViewProps {
         payload: ReceiveSuccessPayload | VoucherDetails,
         pendingCommit?: PendingReceiveCommit,
     ) => void;
-    droppedFile?: { name: string; bytes: number[] };
+    droppedFile?: { name: string; bytes: number[]; launchItem?: string };
+    onFinishLaunchItem?: (launchItem: string) => void;
 }
 
-export function ReceiveView({ onBack, onReceiveSuccess, droppedFile }: ReceiveViewProps) {
+export function ReceiveView({ onBack, onReceiveSuccess, droppedFile, onFinishLaunchItem }: ReceiveViewProps) {
     const { t } = useTranslation();
-    const flow = useReceiveFlow({ onBack, onReceiveSuccess, droppedFile });
+    const flow = useReceiveFlow({ onBack, onReceiveSuccess, droppedFile, onFinishLaunchItem });
 
     return (
         <PageLayout
             title={t('transfer.receiveTitle')}
             description={t('transfer.myCodeDesc')}
-            onBack={onBack}
+            onBack={flow.handleBack}
         >
             <div className="max-w-3xl mx-auto space-y-8">
                 {flow.feedbackMsg && (

@@ -1,8 +1,8 @@
 use crate::models::{
     FieldAudience, FrontendAdInput, FrontendBoardItem, FrontendError, FrontendForwardCardExport,
     FrontendImportCardResult, FrontendMarketPerson, FrontendMarketSnapshot,
-    FrontendMyMarketProfile, FrontendSaveMyMarketProfileRequest, FrontendSyncDescriptor,
-    FrontendTrustTier, StoredAppNotices, StoredOwnMarketProfile,
+    FrontendMyMarketProfile, FrontendResolvedCardRecipient, FrontendSaveMyMarketProfileRequest,
+    FrontendSyncDescriptor, FrontendTrustTier, StoredAppNotices, StoredOwnMarketProfile,
 };
 use crate::services::common::DropChannelSigner;
 use crate::settings::StoredPublicSync;
@@ -199,11 +199,16 @@ fn encode_media_data_uri(media_bytes: &[u8]) -> String {
 fn try_load_cached_media(
     service: &mut AppService,
     storage_key: &str,
+    is_local_sidecar: bool,
     password: Option<&str>,
 ) -> Result<Option<String>, FrontendError> {
-    let Some(media_bytes) = crate::state::load_encrypted_bytes_opt(service, storage_key, password)
-        .map_err(FrontendError::from)?
-    else {
+    let media_bytes_opt = if is_local_sidecar {
+        crate::state::load_local_sidecar_bytes_opt(service, storage_key, password)
+    } else {
+        crate::state::load_encrypted_bytes_opt(service, storage_key, password)
+    }
+    .map_err(FrontendError::from)?;
+    let Some(media_bytes) = media_bytes_opt else {
         return Ok(None);
     };
     if media_bytes.is_empty() || humoco_market::validate_ad_media(&media_bytes).is_err() {
@@ -880,14 +885,17 @@ pub async fn set_card_published_impl(
     state: &AppState,
 ) -> Result<FrontendMyMarketProfile, FrontendError> {
     let now = chrono::Utc::now().timestamp().max(0) as u64;
-    {
-        let mut service = state
-            .authorize_and_lock(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
-        let mut stored = load_own_market_profile_for_write(&mut service, password.as_deref())?;
+    let resolved_pw_owned = {
+        let (mut service, resolved_pw) = state.authorize_and_lock_secret(
+            crate::state::RequiredAccess::DailyPay,
+            password.as_deref(),
+        )?;
+        let pw = resolved_pw.as_deref().map(String::as_str);
+        let mut stored = load_own_market_profile_for_write(&mut service, pw)?;
 
         if published {
             stored.published = true;
-            let drops = load_drops_from_settings(state, &mut service, None, password.as_deref())?;
+            let drops = load_drops_from_settings(state, &mut service, None, pw)?;
             rebuild_and_sign_own_card_with_drops(&mut service, &mut stored, now, Some(drops))?;
         } else {
             stored.published = false;
@@ -900,14 +908,15 @@ pub async fn set_card_published_impl(
             }
         }
 
-        save_own_market_profile_state(state, &mut service, &stored, password.as_deref())?;
-    }
+        save_own_market_profile_state(state, &mut service, &stored, pw)?;
+        resolved_pw
+    };
 
     if !published && delete_remote {
-        delete_remote_card_slots(state, password.as_deref()).await;
+        delete_remote_card_slots(state, resolved_pw_owned.as_deref().map(String::as_str)).await;
     }
 
-    get_my_market_profile_impl(password, state)
+    get_my_market_profile_impl(resolved_pw_owned.as_deref().cloned(), state)
 }
 
 pub fn upsert_ad_impl(
@@ -954,16 +963,17 @@ pub fn upsert_ad_impl(
     }
 
     let now = chrono::Utc::now().timestamp().max(0) as u64;
-    let mut service =
-        state.authorize_and_lock(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
-    let mut stored = load_own_market_profile_for_write(&mut service, password.as_deref())?;
+    let (mut service, resolved_pw) = state
+        .authorize_and_lock_secret(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
+    let pw = resolved_pw.as_deref().map(String::as_str);
+    let mut stored = load_own_market_profile_for_write(&mut service, pw)?;
 
     let existing_idx = ad_input
         .id
         .as_ref()
         .and_then(|id| stored.ads.iter().position(|a| &a.id == id));
 
-    let new_image_token: Option<String> = match ad_input.image_webp_data_uri {
+    let new_media: Option<(String, Vec<u8>)> = match ad_input.image_webp_data_uri {
         Some(None) => None,
         Some(Some(ref uri)) if uri.trim().is_empty() => None,
         Some(Some(ref uri)) => {
@@ -992,24 +1002,23 @@ pub fn upsert_ad_impl(
                 humoco_market::seal_media_blob(&root_did, &media_bytes)
                     .map_err(|e| FrontendError::from(e.to_string()))?;
 
-            crate::state::save_encrypted_bytes(
-                &mut service,
-                &crate::state::own_media_storage_key(&token),
-                &media_bytes,
-                password.as_deref(),
-            )
-            .map_err(FrontendError::from)?;
-
-            Some(token)
+            Some((token, media_bytes))
         }
         None => {
             if let Some(idx) = existing_idx {
-                stored.ads[idx].image_token.clone()
+                stored.ads[idx]
+                    .image_token
+                    .clone()
+                    .map(|t| (t, Vec::new()))
             } else {
                 None
             }
         }
     };
+    let new_image_token = new_media.as_ref().map(|(t, _)| t.clone());
+    let pending_media_blob: Option<(String, Vec<u8>)> = new_media
+        .filter(|(_, bytes)| !bytes.is_empty())
+        .map(|(t, bytes)| (crate::state::own_media_storage_key(&t), bytes));
 
     let mut old_token_to_clean: Option<String> = None;
     if let Some(idx) = existing_idx {
@@ -1058,14 +1067,24 @@ pub fn upsert_ad_impl(
         rebuild_and_sign_own_card(&mut service, &mut stored, now)?;
     }
 
-    save_own_market_profile_state(state, &mut service, &stored, password.as_deref())?;
+    let stored_bytes = serde_json::to_vec(&stored)
+        .map_err(|e| FrontendError::from(format!("Failed to serialize own market profile: {}", e)))?;
+    let mut batch: Vec<(&str, &[u8])> = Vec::with_capacity(2);
+    if let Some((ref media_key, ref media_bytes)) = pending_media_blob {
+        batch.push((media_key.as_str(), media_bytes.as_slice()));
+    }
+    batch.push((crate::state::MARKET_OWN_PROFILE_KEY, stored_bytes.as_slice()));
+    service
+        .save_encrypted_batch(&batch, pw)
+        .map_err(FrontendError::from)?;
+    state.set_cached_own_market_profile_for_service(&service, Some(stored.clone()));
 
     if let Some(ref old_t) = old_token_to_clean {
-        cleanup_unused_own_media(&mut service, &stored.ads, old_t, password.as_deref());
+        cleanup_unused_own_media(&mut service, &stored.ads, old_t, pw);
     }
 
     drop(service);
-    get_my_market_profile_impl(password, state)
+    get_my_market_profile_impl(resolved_pw.as_deref().cloned(), state)
 }
 
 pub fn renew_ad_impl(
@@ -1081,9 +1100,10 @@ pub fn renew_ad_impl(
     }
 
     let now = chrono::Utc::now().timestamp().max(0) as u64;
-    let mut service =
-        state.authorize_and_lock(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
-    let mut stored = load_own_market_profile_for_write(&mut service, password.as_deref())?;
+    let (mut service, resolved_pw) = state
+        .authorize_and_lock_secret(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
+    let pw = resolved_pw.as_deref().map(String::as_str);
+    let mut stored = load_own_market_profile_for_write(&mut service, pw)?;
 
     let ad_idx = stored
         .ads
@@ -1111,10 +1131,10 @@ pub fn renew_ad_impl(
         rebuild_and_sign_own_card(&mut service, &mut stored, now)?;
     }
 
-    save_own_market_profile_state(state, &mut service, &stored, password.as_deref())?;
+    save_own_market_profile_state(state, &mut service, &stored, pw)?;
 
     drop(service);
-    get_my_market_profile_impl(password, state)
+    get_my_market_profile_impl(resolved_pw.as_deref().cloned(), state)
 }
 
 pub fn delete_ad_impl(
@@ -1123,9 +1143,10 @@ pub fn delete_ad_impl(
     state: &AppState,
 ) -> Result<FrontendMyMarketProfile, FrontendError> {
     let now = chrono::Utc::now().timestamp().max(0) as u64;
-    let mut service =
-        state.authorize_and_lock(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
-    let mut stored = load_own_market_profile_for_write(&mut service, password.as_deref())?;
+    let (mut service, resolved_pw) = state
+        .authorize_and_lock_secret(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
+    let pw = resolved_pw.as_deref().map(String::as_str);
+    let mut stored = load_own_market_profile_for_write(&mut service, pw)?;
 
     let old_token_opt = stored
         .ads
@@ -1135,17 +1156,22 @@ pub fn delete_ad_impl(
     stored.ads.retain(|a| a.id != id);
 
     if let Some(ref old_t) = old_token_opt {
-        cleanup_unused_own_media(&mut service, &stored.ads, old_t, password.as_deref());
+        cleanup_unused_own_media(&mut service, &stored.ads, old_t, pw);
     }
 
     if stored.published {
         rebuild_and_sign_own_card(&mut service, &mut stored, now)?;
     }
 
-    save_own_market_profile_state(state, &mut service, &stored, password.as_deref())?;
+    save_own_market_profile_state(state, &mut service, &stored, pw)?;
 
     drop(service);
-    get_my_market_profile_impl(password, state)
+    get_my_market_profile_impl(resolved_pw.as_deref().cloned(), state)
+}
+
+enum AdImageLookup {
+    Cached(String),
+    RemoteUrls(Vec<String>),
 }
 
 pub async fn get_ad_image_impl(
@@ -1154,7 +1180,8 @@ pub async fn get_ad_image_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<Option<String>, FrontendError> {
-    state.authorize(crate::state::RequiredAccess::Unlocked, None)?;
+    let session =
+        state.authorize_and_begin_session(crate::state::RequiredAccess::Unlocked, None)?;
     if !humoco_market::is_valid_image_token(&image_token) {
         return Ok(None);
     }
@@ -1164,26 +1191,21 @@ pub async fn get_ad_image_impl(
         Err(_) => return Ok(None),
     };
 
-    let read_urls = {
-        let mut service = match state.service.lock() {
-            Ok(s) => s,
-            Err(_) => return Ok(None),
-        };
-
+    let lookup = match state.with_session(&session, |service| {
         let own_key = crate::state::own_media_storage_key(&image_token);
-        if let Some(uri) = try_load_cached_media(&mut service, &own_key, password.as_deref())? {
-            return Ok(Some(uri));
+        if let Some(uri) = try_load_cached_media(service, &own_key, false, password.as_deref())? {
+            return Ok(AdImageLookup::Cached(uri));
         }
 
         let cache_key = crate::state::cached_media_storage_key(&blob_id);
-        if let Some(uri) = try_load_cached_media(&mut service, &cache_key, password.as_deref())? {
-            return Ok(Some(uri));
+        if let Some(uri) = try_load_cached_media(service, &cache_key, true, password.as_deref())? {
+            return Ok(AdImageLookup::Cached(uri));
         }
 
         let mut candidate_urls = Vec::new();
 
         let card_store: humoco_market::CardStore = crate::state::load_encrypted_json_or_default(
-            &mut service,
+            service,
             MARKET_CARD_STORE_KEY,
             password.as_deref(),
         )
@@ -1211,7 +1233,7 @@ pub async fn get_ad_image_impl(
         }
 
         let security_policy = state
-            .get_or_load_security_policy(&mut service, password.as_deref())
+            .get_or_load_security_policy(service, password.as_deref())
             .map_err(FrontendError::from)?;
 
         for s in &security_policy.market_selected_syncs {
@@ -1227,46 +1249,49 @@ pub async fn get_ad_image_impl(
 
         let mut seen = std::collections::HashSet::new();
         candidate_urls.retain(|u| seen.insert(u.clone()));
-        candidate_urls
+        Ok(AdImageLookup::RemoteUrls(candidate_urls))
+    })? {
+        Some(res) => res,
+        None => return Ok(None),
     };
 
-    let now = chrono::Utc::now().timestamp().max(0) as u64;
-
-    {
-        if let Ok(neg_cache) = state.media_negative_cache.lock() {
-            if let Some(&ts) = neg_cache.get(&blob_id) {
-                if now.saturating_sub(ts) < 86_400 {
-                    return Ok(None);
-                }
-            }
-        }
-    }
+    let read_urls = match lookup {
+        AdImageLookup::Cached(uri) => return Ok(Some(uri)),
+        AdImageLookup::RemoteUrls(urls) => urls,
+    };
 
     if read_urls.is_empty() {
         return Ok(None);
     }
 
+    let now = chrono::Utc::now().timestamp().max(0) as u64;
     let client = sync_client::create_sync_http_client();
     for read_url in &read_urls {
+        if state.is_media_negatively_cached(&session, &blob_id, read_url, now, 86_400) {
+            continue;
+        }
         if let Ok(Some(ciphertext)) = sync_client::get_media_blob(&client, read_url, &blob_id).await
         {
             if let Ok(media_bytes) = humoco_market::open_media_blob(&image_token, &ciphertext) {
                 let cache_key = crate::state::cached_media_storage_key(&blob_id);
-                if let Ok(mut service) = state.service.lock() {
-                    let _ = crate::state::save_encrypted_bytes(
-                        &mut service,
-                        &cache_key,
-                        &media_bytes,
-                        password.as_deref(),
-                    );
+                let cached_for_session = state
+                    .with_session(&session, |service| {
+                        let _ = crate::state::save_local_sidecar_bytes(
+                            service,
+                            &cache_key,
+                            &media_bytes,
+                            password.as_deref(),
+                        );
+                        Ok(())
+                    })?
+                    .is_some();
+                if !cached_for_session {
+                    return Ok(None);
                 }
                 return Ok(Some(encode_media_data_uri(&media_bytes)));
             }
         }
-    }
-
-    if let Ok(mut neg_cache) = state.media_negative_cache.lock() {
-        neg_cache.insert(blob_id, now);
+        state.record_media_negative_cache(&session, blob_id.clone(), read_url.clone(), now);
     }
 
     Ok(None)
@@ -1549,14 +1574,9 @@ pub fn export_forward_card_impl(
     })
 }
 
-pub fn import_contact_card_impl(
-    payload: String,
-    password: Option<String>,
-    state: &AppState,
-) -> Result<FrontendImportCardResult, FrontendError> {
-    let mut service =
-        state.authorize_and_lock(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
-
+fn parse_card_envelope_payload(
+    payload: &str,
+) -> Result<humoco_market::CardEnvelope, FrontendError> {
     let trimmed_payload = payload.trim();
     let lower_payload = trimmed_payload.to_ascii_lowercase();
     let json_str = if let Some(pos) = lower_payload.find("?env=") {
@@ -1572,7 +1592,7 @@ pub fn import_contact_card_impl(
         String::from_utf8(bytes)
             .map_err(|e| FrontendError::from(format!("Invalid UTF-8 in card share URI: {}", e)))?
     } else {
-        payload
+        payload.to_string()
     };
 
     let json_trimmed = json_str.trim();
@@ -1582,11 +1602,62 @@ pub fn import_contact_card_impl(
         ));
     }
 
-    let env: humoco_market::CardEnvelope = serde_json::from_str(json_trimmed)
-        .map_err(|e| FrontendError::from(format!("Failed to parse CardEnvelope: {}", e)))?;
+    serde_json::from_str(json_trimmed)
+        .map_err(|e| FrontendError::from(format!("Failed to parse CardEnvelope: {}", e)))
+}
+
+fn format_card_display_name(
+    profile: &human_money_core::models::profile::PublicProfile,
+) -> Option<String> {
+    let full = [
+        profile.first_name.as_deref().map(str::trim),
+        profile.last_name.as_deref().map(str::trim),
+    ]
+    .into_iter()
+    .flatten()
+    .filter(|s| !s.is_empty())
+    .collect::<Vec<_>>()
+    .join(" ");
+    if !full.is_empty() {
+        return Some(full);
+    }
+    profile
+        .organization
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+pub fn resolve_card_recipient_impl(
+    payload: String,
+    state: &AppState,
+) -> Result<FrontendResolvedCardRecipient, FrontendError> {
+    state.authorize(crate::state::RequiredAccess::Unlocked, None)?;
+    let env = parse_card_envelope_payload(&payload)?;
+    let card = humoco_market::verify_sd_card(&env.card_wire)
+        .map_err(|e| FrontendError::from(format!("Invalid contact card: {}", e)))?;
+    let profile = humoco_market::extract_public_profile(&card);
+    Ok(FrontendResolvedCardRecipient {
+        recipient_id: card.payload.recipient_id().to_string(),
+        did: card.payload.did,
+        display_name: format_card_display_name(&profile),
+    })
+}
+
+pub fn import_contact_card_impl(
+    payload: String,
+    password: Option<String>,
+    state: &AppState,
+) -> Result<FrontendImportCardResult, FrontendError> {
+    let (mut service, resolved_pw) = state
+        .authorize_and_lock_secret(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
+    let pw = resolved_pw.as_deref().map(String::as_str);
+
+    let env = parse_card_envelope_payload(&payload)?;
 
     let ui_prefs = state
-        .get_or_load_ui_preferences(&mut service, password.as_deref())
+        .get_or_load_ui_preferences(&mut service, pw)
         .map_err(FrontendError::from)?;
     let max_stored_cards = ui_prefs.max_stored_cards.clamp(100, 10_000);
     let now = chrono::Utc::now().timestamp().max(0) as u64;
@@ -1594,7 +1665,7 @@ pub fn import_contact_card_impl(
     let mut store: humoco_market::CardStore = crate::state::load_encrypted_json_or_default(
         &mut service,
         MARKET_CARD_STORE_KEY,
-        password.as_deref(),
+        pw,
     )
     .map_err(FrontendError::from)?;
 
@@ -1626,7 +1697,7 @@ pub fn import_contact_card_impl(
                 &mut service,
                 MARKET_CARD_STORE_KEY,
                 &store,
-                password.as_deref(),
+                pw,
             )
             .map_err(FrontendError::from)?;
             if let Some(stored) = store.cards.get(&did) {
@@ -1661,7 +1732,7 @@ pub fn import_contact_card_impl(
                         crate::state::load_encrypted_json_or_default(
                             &mut service,
                             CONTACTS_DATA_NAME,
-                            password.as_deref(),
+                            pw,
                         )
                         .map_err(FrontendError::from)?;
 
@@ -1695,7 +1766,7 @@ pub fn import_contact_card_impl(
                                         &mut service,
                                         CONTACTS_DATA_NAME,
                                         &address_book,
-                                        password.as_deref(),
+                                        pw,
                                     )
                                     .map_err(FrontendError::from)?;
                                     state.set_cached_contacts_for_service(&service, Some(address_book));
@@ -1707,7 +1778,7 @@ pub fn import_contact_card_impl(
                                 &did,
                                 &card_syncs,
                                 Some(&card_profile),
-                                password.as_deref(),
+                                pw,
                             );
                         }
                     }
@@ -1752,13 +1823,14 @@ pub fn delete_foreign_contact_card_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<(), FrontendError> {
-    let mut service =
-        state.authorize_and_lock(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
+    let (mut service, resolved_pw) = state
+        .authorize_and_lock_secret(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
+    let pw = resolved_pw.as_deref().map(String::as_str);
 
     let mut store: humoco_market::CardStore = crate::state::load_encrypted_json_or_default(
         &mut service,
         MARKET_CARD_STORE_KEY,
-        password.as_deref(),
+        pw,
     )
     .map_err(FrontendError::from)?;
 
@@ -1793,7 +1865,7 @@ pub fn delete_foreign_contact_card_impl(
             &mut service,
             MARKET_CARD_STORE_KEY,
             &store,
-            password.as_deref(),
+            pw,
         )
         .map_err(FrontendError::from)?;
     }
@@ -1814,12 +1886,13 @@ pub fn mark_app_notices_read_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<StoredAppNotices, FrontendError> {
-    let mut service =
-        state.authorize_and_lock(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
+    let (mut service, resolved_pw) = state
+        .authorize_and_lock_secret(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
+    let pw = resolved_pw.as_deref().map(String::as_str);
     let mut store: StoredAppNotices = crate::state::load_encrypted_json_or_default(
         &mut service,
         crate::state::APP_NOTICES_KEY,
-        password.as_deref(),
+        pw,
     )
     .map_err(FrontendError::from)?;
     let mut changed = false;
@@ -1834,7 +1907,7 @@ pub fn mark_app_notices_read_impl(
         }
     }
     if changed {
-        state.save_app_notices(&mut service, &store, password.as_deref())?;
+        state.save_app_notices(&mut service, &store, pw)?;
     }
     Ok(store)
 }
@@ -1843,17 +1916,18 @@ pub fn clear_app_notices_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<StoredAppNotices, FrontendError> {
-    let mut service =
-        state.authorize_and_lock(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
+    let (mut service, resolved_pw) = state
+        .authorize_and_lock_secret(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
+    let pw = resolved_pw.as_deref().map(String::as_str);
     let mut store: StoredAppNotices = crate::state::load_encrypted_json_or_default(
         &mut service,
         crate::state::APP_NOTICES_KEY,
-        password.as_deref(),
+        pw,
     )
     .map_err(FrontendError::from)?;
     if !store.notices.is_empty() {
         store.notices.clear();
-        state.save_app_notices(&mut service, &store, password.as_deref())?;
+        state.save_app_notices(&mut service, &store, pw)?;
     }
     Ok(store)
 }
@@ -2610,13 +2684,16 @@ mod tests {
         .unwrap();
         assert_eq!(unknown_res, None);
 
-        // Negative cache must contain blob_id
+        // Negative cache must contain (blob_id, mirror_url) inside session-scoped ActiveProfileCaches
         let blob_id = humoco_market::derive_media_blob_id(&unknown_token).unwrap();
         assert!(alice_state
-            .media_negative_cache
+            .profile_caches
             .lock()
             .unwrap()
-            .contains_key(&blob_id));
+            .as_ref()
+            .unwrap()
+            .media_negative_cache
+            .contains_key(&(blob_id, "http://127.0.0.1:9999".to_string())));
 
         // Subsequent call hits negative cache immediately
         let hit_neg_cache = get_ad_image_impl(
@@ -2978,6 +3055,110 @@ mod tests {
             Some("Clean Org"),
             "Core profile organization must stay untouched when card signing fails"
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn h3_h4_negative_cache_clears_on_logout_and_foreign_media_skips_wallet_seal() {
+        let dir = crate::test_support::temp_test_dir("h3_h4_cache_and_seal");
+        let pw = "pw-h3h4-test";
+        let state = crate::test_support::create_test_state(crate::test_support::setup_test_app(
+            &dir.join("alice"),
+            "Alice",
+            crate::test_support::ALICE_PHRASE,
+            pw,
+        ));
+
+        let session = {
+            let s = state.service.lock().unwrap();
+            state.session_token_for_service(&s).unwrap()
+        };
+
+        // H3: Negative cache entry lives inside ActiveProfileCaches and is evicted on clear_all_caches()
+        let blob_id = "ab".repeat(32);
+        let url = "http://127.0.0.1:9999/sync.php".to_string();
+        state.record_media_negative_cache(&session, blob_id.clone(), url.clone(), 1_760_000_000);
+        assert!(state.is_media_negatively_cached(&session, &blob_id, &url, 1_760_000_010, 86_400));
+
+        state.clear_all_caches();
+        assert!(state.profile_caches.lock().unwrap().is_none());
+
+        // H4: Caching foreign ad media in .local_* sidecar MUST NOT advance WalletSeal
+        let seal_before = state.service.lock().unwrap().get_current_seal().unwrap();
+        let cache_key = crate::state::cached_media_storage_key(&blob_id);
+        {
+            let mut s = state.service.lock().unwrap();
+            crate::state::save_local_sidecar_bytes(&mut s, &cache_key, b"webp-payload", Some(pw))
+                .unwrap();
+        }
+        let seal_after = state.service.lock().unwrap().get_current_seal().unwrap();
+        assert_eq!(seal_before, seal_after);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn h5_resolve_card_recipient_preserves_subaccount_and_rejects_tamper() {
+        use human_money_core::app_service::AppService;
+        use human_money_core::services::mnemonic::MnemonicLanguage;
+
+        let dir = crate::test_support::temp_test_dir("h5_resolve_subaccount");
+        let pw = "pw-h5-test";
+        let mut service = AppService::new(&dir).unwrap();
+        let mnemonic = AppService::generate_mnemonic(12, MnemonicLanguage::English).unwrap();
+        service
+            .create_profile(
+                "Alice Shop",
+                &mnemonic,
+                None,
+                Some("shop"),
+                pw,
+                MnemonicLanguage::English,
+                "dev-h5".into(),
+                true,
+            )
+            .unwrap();
+        let expected_uid = service.with_wallet(|w| w.get_user_id().to_string()).unwrap();
+        assert!(expected_uid.starts_with("shop:"));
+
+        let state = crate::test_support::create_test_state(service);
+        let profile = save_my_market_profile_impl(
+            FrontendSaveMyMarketProfileRequest {
+                profile: FrontendUserProfile {
+                    first_name: Some("Alice".to_string()),
+                    last_name: Some("Shop".to_string()),
+                    ..Default::default()
+                },
+                visibility: CardFieldVisibility::default(),
+                skills: vec![],
+                max_hops: 2,
+                validity_years: 2,
+                allow_inquiries: true,
+                published: Some(true),
+            },
+            Some(pw.to_string()),
+            &state,
+        )
+        .unwrap();
+        let share_uri = profile.share_uri.expect("published card must have share_uri");
+
+        let resolved = resolve_card_recipient_impl(share_uri.clone(), &state).unwrap();
+        assert_eq!(resolved.recipient_id, expected_uid);
+        assert_eq!(resolved.display_name.as_deref(), Some("Alice Shop"));
+
+        // Tampering the JWT payload inside card_wire MUST fail signature verification
+        let b64_part = share_uri.split("env=").nth(1).unwrap();
+        let env_bytes = human_money_core::crypto::decode_base64(b64_part).unwrap();
+        let mut env: humoco_market::CardEnvelope = serde_json::from_slice(&env_bytes).unwrap();
+        let mut parts: Vec<String> = env.card_wire.split('.').map(str::to_string).collect();
+        let payload_bytes = human_money_core::crypto::decode_base64(&parts[1]).unwrap();
+        let mut payload_val: serde_json::Value = serde_json::from_slice(&payload_bytes).unwrap();
+        payload_val["did"] = serde_json::json!(format!("evil:999@{}", resolved.did));
+        parts[1] = human_money_core::crypto::encode_base64(&serde_json::to_vec(&payload_val).unwrap());
+        env.card_wire = parts.join(".");
+        let tampered_json = serde_json::to_string(&env).unwrap();
+        assert!(resolve_card_recipient_impl(tampered_json, &state).is_err());
 
         let _ = std::fs::remove_dir_all(&dir);
     }

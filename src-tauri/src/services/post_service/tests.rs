@@ -1845,8 +1845,13 @@ async fn test_unreachable_recipient_returns_error_and_locked_dispatch_defers_msg
         vec![1, 2, 3],
     );
     let tag16 = [0u8; 16];
+    let locked_session = crate::session::SessionToken {
+        generation: locked_state.current_session_generation(),
+        owner_did: String::new(),
+    };
     let ctx = super::handlers::PostEnvelopeContext {
         state: &locked_state,
+        session: &locked_session,
         app: None,
         extra_standards: None,
         password: None,
@@ -1861,14 +1866,16 @@ async fn test_unreachable_recipient_returns_error_and_locked_dispatch_defers_msg
     };
     let mut post_state = StoredPostState::default();
     let mut stats = super::handlers::PostDispatchStats::default();
-    let may_mark_processed = super::handlers::dispatch_post_payload(
+    let outcome = super::handlers::dispatch_post_payload(
         &ctx,
         &PayloadType::DetachedSignature,
         &mut post_state,
         &mut stats,
-    );
-    assert!(
-        !may_mark_processed,
+    )
+    .await;
+    assert_eq!(
+        outcome,
+        super::handlers::PostDispatchOutcome::RetryLater,
         "Locked wallet must defer DetachedSignature processing instead of marking msg_id processed"
     );
     assert!(!stats.errors.is_empty());

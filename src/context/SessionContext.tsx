@@ -392,6 +392,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     }, []);
 
     const notifyLogin = useCallback((name?: string, folder?: string) => {
+        channelMembersSyncManager.reset();
         setIsAuthenticated(true);
         isAuthenticatedRef.current = true;
         accessModeRef.current = 'full';
@@ -606,16 +607,18 @@ export function SessionProvider({ children }: { children: ReactNode }) {
                     { entry: currentPending, pwd: credential },
                 ];
 
-                while (pendingQueueRef.current.length > 0) {
-                    const next = pendingQueueRef.current[0];
-                    if (next.mode === 'stepUp') {
-                        pendingQueueRef.current.shift();
-                        toRun.push({ entry: next, pwd: credential });
-                    } else if (next.mode === 'session' && timeout > 0 && hasCachedSessionRef.current) {
-                        pendingQueueRef.current.shift();
-                        toRun.push({ entry: next, pwd: null });
-                    } else {
-                        break;
+                if (timeout > 0) {
+                    while (pendingQueueRef.current.length > 0) {
+                        const next = pendingQueueRef.current[0];
+                        if (next.mode === 'stepUp') {
+                            pendingQueueRef.current.shift();
+                            toRun.push({ entry: next, pwd: credential });
+                        } else if (next.mode === 'session' && hasCachedSessionRef.current) {
+                            pendingQueueRef.current.shift();
+                            toRun.push({ entry: next, pwd: null });
+                        } else {
+                            break;
+                        }
                     }
                 }
 
@@ -642,7 +645,6 @@ export function SessionProvider({ children }: { children: ReactNode }) {
                     try {
                         const status = await authService.unlockSessionWithPin(
                             credential,
-                            timeout,
                             folderArg,
                         );
                         applySessionStatus(status);
@@ -666,7 +668,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
                         if (baseAccessModeRef.current !== 'full') {
                             await elevateSession(credential);
                         } else {
-                            const status = await authService.unlockSession(credential, timeout);
+                            const status = await authService.unlockSession(credential);
                             if ((status as unknown) === false) {
                                 throw new Error('Invalid password');
                             }
@@ -707,10 +709,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
                 isModalSubmittingRef.current = false;
                 await Promise.all(toRun.map((entry) => runPendingEntry(entry, null)));
             } else {
-                // Mode A (timeout === 0): prompt per action; PIN uses ephemeral backend unlock + lock
+                // Mode A (timeout === 0): prompt per action; PIN uses a single-use backend grant token
                 if (currentPending.credentialKind === 'pin') {
+                    let status: Awaited<ReturnType<typeof authService.unlockSessionWithPin>>;
                     try {
-                        await authService.unlockSessionWithPin(credential, 30, folderArg);
+                        status = await authService.unlockSessionWithPin(credential, folderArg);
                     } catch (err) {
                         const code = isBackendError(err) ? err.code : '';
                         const msg = stringifyError(err);
@@ -730,15 +733,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
                     pendingQueueRef.current.shift();
                     setActivePending(pendingQueueRef.current[0] ?? null);
                     isModalSubmittingRef.current = false;
-                    try {
-                        await runPendingEntry(currentPending, null);
-                    } finally {
-                        await authService.lockSession().catch(() => undefined);
-                        hasCachedSessionRef.current = false;
-                        accessModeRef.current = baseAccessModeRef.current;
-                        setHasCachedSession(false);
-                        setAccessMode(baseAccessModeRef.current);
-                    }
+                    await runPendingEntry(currentPending, status.oneShotGrant ?? null);
                 } else {
                     if (baseAccessModeRef.current !== 'full') {
                         try {
@@ -750,7 +745,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
                         }
                     } else {
                         try {
-                            const status = await authService.unlockSession(credential, 0);
+                            const status = await authService.unlockSession(credential);
                             if ((status as unknown) === false) {
                                 throw new Error('Invalid password');
                             }

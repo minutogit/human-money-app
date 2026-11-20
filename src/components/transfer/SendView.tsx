@@ -229,7 +229,7 @@ export function SendView({
                             const rawVal = e.target.value;
                             const parsed = parseHumocoInput(rawVal);
                             if (parsed) {
-                                flow.handleApplyRawCode(rawVal);
+                                void flow.handleApplyRawCode(rawVal);
                                 return;
                             }
                             if (rawVal.toLowerCase().includes('humoco://pay')) {

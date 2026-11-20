@@ -106,6 +106,7 @@ pub fn run_value_outflow_preflight(
 /// (including multi-hop conflict receipts and server equivocation proofs), and returns observations.
 pub async fn dispatch_l2_send_intents(
     state: &AppState,
+    session: &crate::session::SessionToken,
     intents: &[L2SendIntent],
     pow_base_bits: u32,
     password: Option<&str>,
@@ -121,26 +122,28 @@ pub async fn dispatch_l2_send_intents(
     let mut l2_dispatch = Vec::with_capacity(intents.len());
 
     for intent in intents {
-        let nonce = random_non_zero_nonce();
-        let known_heads = {
-            let mut service = state.lock_service()?;
-            crate::state::load_known_head_receipts_for_anchor(
-                &mut service,
-                &intent.anchor_id,
-                password,
-            )?
-        };
-        let reqs_res = {
-            let service = state.lock_service()?;
-            service
-                .build_intent_committee_requests(
-                    &intent.local_instance_id,
-                    &nonce,
-                    &known_heads,
-                    true,
-                )
-                .map_err(FrontendError::from)
-        };
+        let (known_heads, nonce, reqs_res) = state.with_session_required(
+            session,
+            "Wallet session changed during L2 dispatch",
+            |service| {
+                let nonce = random_non_zero_nonce();
+                let known_heads = crate::state::load_known_head_receipts_for_anchor(
+                    service,
+                    &intent.anchor_id,
+                    password,
+                )?;
+                let reqs_res = service
+                    .build_intent_committee_requests(
+                        &intent.local_instance_id,
+                        &nonce,
+                        &known_heads,
+                        true,
+                    )
+                    .map_err(FrontendError::from);
+                Ok((known_heads, nonce, reqs_res))
+            },
+        )?;
+        let _ = known_heads;
 
         let Ok(requests) = reqs_res else {
             l2_dispatch.push(IntentDispatchObservation {
@@ -166,43 +169,49 @@ pub async fn dispatch_l2_send_intents(
             || !dispatch.competing_entries.is_empty()
             || !dispatch.receipts.is_empty()
         {
-            let mut service = state.lock_service()?;
-            crate::state::record_known_head_receipts(
-                &mut service,
-                &intent.anchor_id,
-                &dispatch.receipts,
-                password,
-            )?;
-            if !matching_receipts.is_empty() || !dispatch.competing_entries.is_empty() {
-                match service.record_intent_server_receipts(
-                    &intent.local_instance_id,
-                    &nonce,
-                    &matching_receipts,
-                    dispatch.competing_entries.first(),
-                    pow_base_bits,
-                    now_ms,
-                    password,
-                ) {
-                    Ok((_, Some(equiv_proof))) => {
-                        if let Err(err) = record_equivocation_proof(
-                            &mut service,
-                            None,
-                            &equiv_proof,
-                            now_secs,
+            state.with_session_required(
+                session,
+                "Wallet session changed before L2 intent receipts could be persisted",
+                |service| {
+                    crate::state::record_known_head_receipts(
+                        service,
+                        &intent.anchor_id,
+                        &dispatch.receipts,
+                        password,
+                    )?;
+                    if !matching_receipts.is_empty() || !dispatch.competing_entries.is_empty() {
+                        match service.record_intent_server_receipts(
+                            &intent.local_instance_id,
+                            &nonce,
+                            &matching_receipts,
+                            dispatch.competing_entries.first(),
+                            pow_base_bits,
+                            now_ms,
                             password,
                         ) {
-                            log::warn!(
-                                "Failed to persist server equivocation proof: {}",
-                                err.message
-                            );
+                            Ok((_, Some(equiv_proof))) => {
+                                if let Err(err) = record_equivocation_proof(
+                                    service,
+                                    None,
+                                    &equiv_proof,
+                                    now_secs,
+                                    password,
+                                ) {
+                                    log::warn!(
+                                        "Failed to persist server equivocation proof: {}",
+                                        err.message
+                                    );
+                                }
+                            }
+                            Ok((_, None)) => {}
+                            Err(err) => {
+                                log::warn!("Recording L2 send intent receipts failed: {}", err);
+                            }
                         }
                     }
-                    Ok((_, None)) => {}
-                    Err(err) => {
-                        log::warn!("Recording L2 send intent receipts failed: {}", err);
-                    }
-                }
-            }
+                    Ok(())
+                },
+            )?;
         }
 
         l2_dispatch.push(summarize_intent_dispatch(
@@ -341,8 +350,18 @@ mod tests {
             .unwrap();
 
         let state = crate::test_support::create_test_state(service);
-        let res = dispatch_l2_send_intents(&state, &[intent], DEFAULT_LOCK_POW_BASE_BITS, Some(pw))
-            .await;
+        let session = {
+            let s = state.lock_service().unwrap();
+            state.session_token_for_service(&s).unwrap()
+        };
+        let res = dispatch_l2_send_intents(
+            &state,
+            &session,
+            &[intent],
+            DEFAULT_LOCK_POW_BASE_BITS,
+            Some(pw),
+        )
+        .await;
 
         server_task.abort();
         assert!(

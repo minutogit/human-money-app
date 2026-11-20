@@ -69,9 +69,11 @@ pub fn import_double_spend_proof(
     let proof: human_money_core::models::conflict::ProofOfDoubleSpend =
         serde_json::from_slice(&proof_bytes).map_err(|e| FrontendError::from(e.to_string()))?;
     let proof_id = proof.proof_id.clone();
-    let mut service = state.authorize_and_lock(RequiredAccess::DailyPay, password.as_deref())?;
+    let (mut service, resolved_pw) =
+        state.authorize_and_lock_secret(RequiredAccess::DailyPay, password.as_deref())?;
+    let pw = resolved_pw.as_deref().map(String::as_str);
     service
-        .import_proof(proof, password.as_deref())
+        .import_proof(proof, pw)
         .map_err(FrontendError::from)?;
     info!("Double spend proof imported successfully: {}", proof_id);
     Ok(proof_id)

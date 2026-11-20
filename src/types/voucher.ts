@@ -241,7 +241,7 @@ export interface L2QuorumInfo {
 }
 
 export interface VoucherL2StatusDto {
-    status: "offline_only" | "no_servers" | "offline" | "unspent" | "spent" | "conflict";
+    status: "offline_only" | "no_servers" | "offline" | "inconclusive" | "unspent" | "spent" | "conflict";
     archived: boolean;
     successorTId?: string;
     reducedGuarantorProtection?: boolean;

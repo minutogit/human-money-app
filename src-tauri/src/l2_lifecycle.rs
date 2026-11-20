@@ -475,6 +475,7 @@ fn collect_did_drop_urls(
 /// keeps the highest `revision`, and updates wallet storage via `update_l2_anchor_manifest`.
 pub async fn discover_anchor_manifest(
     state: &AppState,
+    session: &crate::session::SessionToken,
     client: &reqwest::Client,
     anchor_id: &[u8; 32],
     creator_did: Option<&str>,
@@ -493,60 +494,60 @@ pub async fn discover_anchor_manifest(
         resolved_guarantors,
         security_policy,
         lifecycle,
-    ) = {
-        let mut service = state
-            .service
-            .lock()
-            .map_err(|_| lifecycle_err("Wallet service unavailable"))?;
-
-        let security_policy = state
-            .get_or_load_security_policy(&mut service, password)
-            .map_err(FrontendError::from)?;
-        let lifecycle = state
-            .get_or_load_internal_lifecycle(&mut service, password)
-            .map_err(FrontendError::from)?;
-
-        let local_manifest = service
-            .with_wallet(|w| w.profile.l2_anchor_manifests.get(&anchor_hex).cloned())
-            .map_err(FrontendError::from)?;
-        let local_manifest = local_manifest.filter(|m| m.verify_anchor_id(anchor_id).is_ok());
-        let local_rev = local_manifest.as_ref().map(|m| m.revision).unwrap_or(0);
-
-        let card_store: CardStore = crate::state::load_encrypted_json_or_default(
-            &mut service,
-            MARKET_CARD_STORE_KEY,
-            password,
-        )
-        .map_err(FrontendError::from)?;
-        let disk_contacts: Option<FrontendAddressBook> =
-            crate::state::load_encrypted_json_opt(&mut service, CONTACTS_DATA_NAME, password)
+    ) = state.with_session_required(
+        session,
+        "Wallet session changed during anchor discovery",
+        |service| {
+            let security_policy = state
+                .get_or_load_security_policy(service, password)
+                .map_err(FrontendError::from)?;
+            let lifecycle = state
+                .get_or_load_internal_lifecycle(service, password)
                 .map_err(FrontendError::from)?;
 
-        let resolved_creator = match creator_did {
-            Some(c) => {
-                let resolved = resolve_current_did(&mut service, c, now_secs, password)?;
-                Some((c.to_string(), resolved))
-            }
-            None => None,
-        };
-        let mut resolved_guarantors: Vec<(String, String)> =
-            Vec::with_capacity(guarantor_dids.len());
-        for g in guarantor_dids {
-            let resolved = resolve_current_did(&mut service, g, now_secs, password)?;
-            resolved_guarantors.push((g.clone(), resolved));
-        }
+            let local_manifest = service
+                .with_wallet(|w| w.profile.l2_anchor_manifests.get(&anchor_hex).cloned())
+                .map_err(FrontendError::from)?;
+            let local_manifest =
+                local_manifest.filter(|m| m.verify_anchor_id(anchor_id).is_ok());
+            let local_rev = local_manifest.as_ref().map(|m| m.revision).unwrap_or(0);
 
-        (
-            local_manifest,
-            local_rev,
-            card_store,
-            disk_contacts,
-            resolved_creator,
-            resolved_guarantors,
-            security_policy,
-            lifecycle,
-        )
-    };
+            let card_store: CardStore = crate::state::load_encrypted_json_or_default(
+                service,
+                MARKET_CARD_STORE_KEY,
+                password,
+            )
+            .map_err(FrontendError::from)?;
+            let disk_contacts: Option<FrontendAddressBook> =
+                crate::state::load_encrypted_json_opt(service, CONTACTS_DATA_NAME, password)
+                    .map_err(FrontendError::from)?;
+
+            let resolved_creator = match creator_did {
+                Some(c) => {
+                    let resolved = resolve_current_did(service, c, now_secs, password)?;
+                    Some((c.to_string(), resolved))
+                }
+                None => None,
+            };
+            let mut resolved_guarantors: Vec<(String, String)> =
+                Vec::with_capacity(guarantor_dids.len());
+            for g in guarantor_dids {
+                let resolved = resolve_current_did(service, g, now_secs, password)?;
+                resolved_guarantors.push((g.clone(), resolved));
+            }
+
+            Ok((
+                local_manifest,
+                local_rev,
+                card_store,
+                disk_contacts,
+                resolved_creator,
+                resolved_guarantors,
+                security_policy,
+                lifecycle,
+            ))
+        },
+    )?;
 
     let cached_contacts = state.cache_contacts();
     let address_book_ref = cached_contacts.as_ref().or(address_book_opt.as_ref());
@@ -635,11 +636,10 @@ pub async fn discover_anchor_manifest(
 
     if let Some(ref found) = best_manifest {
         if found.revision > local_rev {
-            let mut service = state
-                .service
-                .lock()
-                .map_err(|_| lifecycle_err("Wallet service unavailable"))?;
-            let _ = service.update_l2_anchor_manifest(found.clone(), password);
+            let _ = state.with_session(session, |service| {
+                let _ = service.update_l2_anchor_manifest(found.clone(), password);
+                Ok(())
+            })?;
         }
     }
 
@@ -866,29 +866,31 @@ pub(crate) fn record_guarantor_veto_sent(lc: &mut StoredL2LifecycleState, reason
 
 async fn check_guarantor_vetoes(
     state: &AppState,
+    session: &crate::session::SessionToken,
     client: &reqwest::Client,
     now_secs: u64,
     password: Option<&str>,
 ) -> Result<(), FrontendError> {
-    let roles_and_manifests: Vec<(String, AnchorManifest, u8, Vec<u8>)> = {
-        let mut service = state
-            .service
-            .lock()
-            .map_err(|_| lifecycle_err("Wallet service unavailable"))?;
-        let lc = load_lifecycle_state(&mut service, password)?;
-        service
-            .with_wallet(|w| {
-                lc.guarantor_roles
-                    .values()
-                    .filter_map(|r| {
-                        let m = w.profile.l2_anchor_manifests.get(&r.anchor_id)?.clone();
-                        let nonce = hex::decode(&r.context_nonce_hex).ok()?;
-                        Some((r.anchor_id.clone(), m, r.guarantor_index, nonce))
+    let roles_and_manifests: Vec<(String, AnchorManifest, u8, Vec<u8>)> = state
+        .with_session_required(
+            session,
+            "Wallet session changed during guarantor veto scan",
+            |service| {
+                let lc = load_lifecycle_state(service, password)?;
+                service
+                    .with_wallet(|w| {
+                        lc.guarantor_roles
+                            .values()
+                            .filter_map(|r| {
+                                let m = w.profile.l2_anchor_manifests.get(&r.anchor_id)?.clone();
+                                let nonce = hex::decode(&r.context_nonce_hex).ok()?;
+                                Some((r.anchor_id.clone(), m, r.guarantor_index, nonce))
+                            })
+                            .collect::<Vec<_>>()
                     })
-                    .collect::<Vec<_>>()
-            })
-            .map_err(FrontendError::from)?
-    };
+                    .map_err(FrontendError::from)
+            },
+        )?;
 
     for (anchor_hex, manifest, g_idx, ctx_nonce) in roles_and_manifests {
         let Ok(anchor_id) = decode_hex_fixed::<32>(&anchor_hex) else {
@@ -911,24 +913,25 @@ async fn check_guarantor_vetoes(
             reason,
         } in evaluate_polled_proposals_for_veto(&manifest, &polled_proposals, g_idx)
         {
-            let veto_res = {
-                let service = state
-                    .service
-                    .lock()
-                    .map_err(|_| lifecycle_err("Wallet service unavailable"))?;
-                service
-                    .with_wallet_and_identity(|_, id| {
-                        let g_sk = l2_rotation::derive_guarantor_mig_signing_key(id, &ctx_nonce)?;
-                        l2_rotation::sign_migration_veto(
-                            &g_sk,
-                            anchor_id,
-                            manifest.revision,
-                            prop_hash,
-                            now_secs.max(1),
-                        )
-                    })
-                    .map_err(FrontendError::from)?
-            };
+            let veto_res = state.with_session_required(
+                session,
+                "Wallet session changed while signing guarantor veto",
+                |service| {
+                    service
+                        .with_wallet_and_identity(|_, id| {
+                            let g_sk =
+                                l2_rotation::derive_guarantor_mig_signing_key(id, &ctx_nonce)?;
+                            l2_rotation::sign_migration_veto(
+                                &g_sk,
+                                anchor_id,
+                                manifest.revision,
+                                prop_hash,
+                                now_secs.max(1),
+                            )
+                        })
+                        .map_err(FrontendError::from)
+                },
+            )?;
 
             let Ok(veto) = veto_res else {
                 continue;
@@ -947,13 +950,15 @@ async fn check_guarantor_vetoes(
                 }
             }
             if sent_any {
-                let mut service = state
-                    .service
-                    .lock()
-                    .map_err(|_| lifecycle_err("Wallet service unavailable"))?;
-                let mut lc = load_lifecycle_state(&mut service, password)?;
-                record_guarantor_veto_sent(&mut lc, reason);
-                save_lifecycle_state(&mut service, &lc, password)?;
+                state.with_session_required(
+                    session,
+                    "Wallet session changed after dispatching guarantor veto",
+                    |service| {
+                        let mut lc = load_lifecycle_state(service, password)?;
+                        record_guarantor_veto_sent(&mut lc, reason);
+                        save_lifecycle_state(service, &lc, password)
+                    },
+                )?;
             }
         }
     }
@@ -1141,6 +1146,7 @@ pub(crate) fn apply_rotation_step_outcome(
 #[derive(Clone, Copy)]
 struct RotationEnv<'a> {
     state: &'a AppState,
+    session: &'a crate::session::SessionToken,
     security_policy: &'a SecurityPolicy,
     lifecycle: &'a InternalLifecycleState,
     client: &'a reqwest::Client,
@@ -1156,6 +1162,7 @@ async fn drive_active_rotation(
 ) -> Result<Option<StoredRotationPhase>, FrontendError> {
     let RotationEnv {
         state,
+        session,
         security_policy,
         lifecycle,
         client,
@@ -1203,22 +1210,22 @@ async fn drive_active_rotation(
                 }
             }
 
-            let qcs: Vec<QuorumCertificate> = {
-                let service = state
-                    .service
-                    .lock()
-                    .map_err(|_| lifecycle_err("Wallet service unavailable"))?;
-                service
-                    .with_wallet(|w| {
-                        w.profile
-                            .l2_quorum_certificates
-                            .values()
-                            .flatten()
-                            .cloned()
-                            .collect::<Vec<_>>()
-                    })
-                    .map_err(FrontendError::from)?
-            };
+            let qcs: Vec<QuorumCertificate> = state.with_session_required(
+                session,
+                "Wallet session changed while driving L2 rotation",
+                |service| {
+                    service
+                        .with_wallet(|w| {
+                            w.profile
+                                .l2_quorum_certificates
+                                .values()
+                                .flatten()
+                                .cloned()
+                                .collect::<Vec<_>>()
+                        })
+                        .map_err(FrontendError::from)
+                },
+            )?;
             let pow_bits = max_pow_base_bits_for_servers(
                 lifecycle,
                 manifest.servers.iter().map(|srv| srv.write_url.as_str()),
@@ -1323,15 +1330,15 @@ async fn drive_active_rotation(
             sync_client::post_lock_commit_finalize(client, &url, &anchor_id, &next_manifest).await;
     }
 
-    {
-        let mut service = state
-            .service
-            .lock()
-            .map_err(|_| lifecycle_err("Wallet service unavailable"))?;
-        service
-            .update_l2_anchor_manifest(next_manifest.clone(), password)
-            .map_err(FrontendError::from)?;
-    }
+    state.with_session_required(
+        session,
+        "Wallet session changed before committing rotated anchor manifest",
+        |service| {
+            service
+                .update_l2_anchor_manifest(next_manifest.clone(), password)
+                .map_err(FrontendError::from)
+        },
+    )?;
 
     mirror_manifest_to_own_syncs(client, security_policy, &anchor_id, &next_manifest).await;
     Ok(None)
@@ -1340,44 +1347,67 @@ async fn drive_active_rotation(
 /// Executes one health check, guarantor-veto scan, and crash-resumable rotation step using `now_secs`.
 pub(crate) async fn run_lifecycle_tick_with_now(
     state: &AppState,
+    session: &crate::session::SessionToken,
     client: &reqwest::Client,
     now_secs: u64,
     force: bool,
     password: Option<&str>,
 ) -> Result<FrontendL2LifecycleStatusDto, FrontendError> {
-    let security_policy = state.get_or_load_security_policy_locked(password)?;
-    let internal_lc = state.get_or_load_internal_lifecycle_locked(password)?;
+    let (security_policy, internal_lc) = state.with_session_required(
+        session,
+        "Wallet session changed before starting L2 lifecycle tick",
+        |service| {
+            let sp = state
+                .get_or_load_security_policy(service, password)
+                .map_err(FrontendError::from)?;
+            let lc = state
+                .get_or_load_internal_lifecycle(service, password)
+                .map_err(FrontendError::from)?;
+            Ok((sp, lc))
+        },
+    )?;
 
     // 1. Online Guarantor Automatic Veto check (§5.4)
-    check_guarantor_vetoes(state, client, now_secs, password).await?;
+    check_guarantor_vetoes(state, session, client, now_secs, password).await?;
 
     // 2. Collect tracked anchors
-    let (anchors_to_check, offenders) = {
-        let mut service = state
-            .service
-            .lock()
-            .map_err(|_| lifecycle_err("Wallet service unavailable"))?;
-        let mut lc = load_lifecycle_state(&mut service, password)?;
-        if !force && now_secs.saturating_sub(lc.last_tick_secs) < HEALTH_CHECK_INTERVAL_SECS {
-            return build_status_dto(&mut service, &lc, password);
-        }
-        lc.last_tick_secs = now_secs;
-        let anchors: Vec<(String, AnchorManifest, Option<StoredGuarantorRole>, bool)> = service
-            .with_wallet(|w| {
-                w.profile
-                    .l2_anchor_manifests
-                    .iter()
-                    .map(|(aid, m)| {
-                        let has_creator = w.profile.l2_anchor_nonces.contains_key(aid);
-                        let g_role = lc.guarantor_roles.get(aid).cloned();
-                        (aid.clone(), m.clone(), g_role, has_creator)
-                    })
-                    .collect()
-            })
-            .map_err(FrontendError::from)?;
-        save_lifecycle_state(&mut service, &lc, password)?;
-        let offenders = load_server_offender_list(&mut service, password)?;
-        (anchors, offenders)
+    enum CollectOutcome {
+        Early(FrontendL2LifecycleStatusDto),
+        Ready(
+            Vec<(String, AnchorManifest, Option<StoredGuarantorRole>, bool)>,
+            ServerOffenderList,
+        ),
+    }
+    let (anchors_to_check, offenders) = match state.with_session_required(
+        session,
+        "Wallet session changed during L2 lifecycle tick",
+        |service| {
+            let mut lc = load_lifecycle_state(service, password)?;
+            if !force && now_secs.saturating_sub(lc.last_tick_secs) < HEALTH_CHECK_INTERVAL_SECS
+            {
+                return build_status_dto(service, &lc, password).map(CollectOutcome::Early);
+            }
+            lc.last_tick_secs = now_secs;
+            let anchors: Vec<(String, AnchorManifest, Option<StoredGuarantorRole>, bool)> = service
+                .with_wallet(|w| {
+                    w.profile
+                        .l2_anchor_manifests
+                        .iter()
+                        .map(|(aid, m)| {
+                            let has_creator = w.profile.l2_anchor_nonces.contains_key(aid);
+                            let g_role = lc.guarantor_roles.get(aid).cloned();
+                            (aid.clone(), m.clone(), g_role, has_creator)
+                        })
+                        .collect()
+                })
+                .map_err(FrontendError::from)?;
+            save_lifecycle_state(service, &lc, password)?;
+            let offenders = load_server_offender_list(service, password)?;
+            Ok(CollectOutcome::Ready(anchors, offenders))
+        },
+    )? {
+        CollectOutcome::Early(dto) => return Ok(dto),
+        CollectOutcome::Ready(anchors, offenders) => (anchors, offenders),
     };
 
     for (anchor_hex, manifest, g_role_opt, has_creator) in anchors_to_check {
@@ -1385,22 +1415,24 @@ pub(crate) async fn run_lifecycle_tick_with_now(
             continue;
         };
 
-        let existing_phase = {
-            let mut service = state
-                .service
-                .lock()
-                .map_err(|_| lifecycle_err("Wallet service unavailable"))?;
-            let lc = load_lifecycle_state(&mut service, password)?;
-            lc.anchors
-                .get(&anchor_hex)
-                .and_then(|h| h.active_rotation.clone())
-        };
+        let existing_phase = state.with_session_required(
+            session,
+            "Wallet session changed during L2 lifecycle tick",
+            |service| {
+                let lc = load_lifecycle_state(service, password)?;
+                Ok(lc
+                    .anchors
+                    .get(&anchor_hex)
+                    .and_then(|h| h.active_rotation.clone()))
+            },
+        )?;
 
         // Resume active crash-safe rotation phase if any
         if let Some(phase) = existing_phase {
             let step_result = drive_active_rotation(
                 RotationEnv {
                     state,
+                    session,
                     security_policy: &security_policy,
                     lifecycle: &internal_lc,
                     client,
@@ -1412,29 +1444,36 @@ pub(crate) async fn run_lifecycle_tick_with_now(
                 phase,
             )
             .await;
-            let mut service = state
-                .service
-                .lock()
-                .map_err(|_| lifecycle_err("Wallet service unavailable"))?;
-            let mut lc = load_lifecycle_state(&mut service, password)?;
-            let entry = lc
-                .anchors
-                .entry(anchor_hex.clone())
-                .or_insert_with(|| StoredAnchorHealth::new(anchor_hex.clone()));
-            match &step_result {
-                Ok(next_phase) => {
-                    apply_rotation_step_outcome(entry, Ok(next_phase), manifest.revision, now_secs);
-                }
-                Err(err) => {
-                    apply_rotation_step_outcome(
-                        entry,
-                        Err(err.message.as_str()),
-                        manifest.revision,
-                        now_secs,
-                    );
-                }
-            }
-            save_lifecycle_state(&mut service, &lc, password)?;
+            state.with_session_required(
+                session,
+                "Wallet session changed after driving active L2 rotation",
+                |service| {
+                    let mut lc = load_lifecycle_state(service, password)?;
+                    let entry = lc
+                        .anchors
+                        .entry(anchor_hex.clone())
+                        .or_insert_with(|| StoredAnchorHealth::new(anchor_hex.clone()));
+                    match &step_result {
+                        Ok(next_phase) => {
+                            apply_rotation_step_outcome(
+                                entry,
+                                Ok(next_phase),
+                                manifest.revision,
+                                now_secs,
+                            );
+                        }
+                        Err(err) => {
+                            apply_rotation_step_outcome(
+                                entry,
+                                Err(err.message.as_str()),
+                                manifest.revision,
+                                now_secs,
+                            );
+                        }
+                    }
+                    save_lifecycle_state(service, &lc, password)
+                },
+            )?;
             continue;
         }
 
@@ -1476,56 +1515,60 @@ pub(crate) async fn run_lifecycle_tick_with_now(
         }
 
         // Update hysteresis state and collect servers triggering rotation
-        let failed_lock_pubs: HashSet<LockPubKey> = {
-            let mut service = state
-                .service
-                .lock()
-                .map_err(|_| lifecycle_err("Wallet service unavailable"))?;
-            let mut lc = load_lifecycle_state(&mut service, password)?;
-            let health = lc
-                .anchors
-                .entry(anchor_hex.clone())
-                .or_insert_with(|| StoredAnchorHealth::new(anchor_hex.clone()));
-            let failed = apply_health_observations_and_collect_demotions(
-                health,
-                &unhealthy_now,
-                &revoked_now,
-                now_secs,
-            );
-            save_lifecycle_state(&mut service, &lc, password)?;
-            failed
-        };
+        let failed_lock_pubs: HashSet<LockPubKey> = state.with_session_required(
+            session,
+            "Wallet session changed after probing anchor servers",
+            |service| {
+                let mut lc = load_lifecycle_state(service, password)?;
+                let health = lc
+                    .anchors
+                    .entry(anchor_hex.clone())
+                    .or_insert_with(|| StoredAnchorHealth::new(anchor_hex.clone()));
+                let failed = apply_health_observations_and_collect_demotions(
+                    health,
+                    &unhealthy_now,
+                    &revoked_now,
+                    now_secs,
+                );
+                save_lifecycle_state(service, &lc, password)?;
+                Ok(failed)
+            },
+        )?;
 
         if failed_lock_pubs.is_empty() {
             continue;
         }
 
         // Derive signing authority keys if present in wallet
-        let (creator_sk_opt, guarantor_sk_opt): (Option<SigningKey>, Option<(u8, SigningKey)>) = {
-            let service = state
-                .service
-                .lock()
-                .map_err(|_| lifecycle_err("Wallet service unavailable"))?;
-            service
-                .with_wallet_and_identity(|w, id| {
-                    let c_sk = if has_creator {
-                        w.profile
-                            .l2_anchor_nonces
-                            .get(&anchor_hex)
-                            .and_then(|h| hex::decode(h).ok())
-                            .and_then(|b| l2_gateway::derive_anchor_mig_signing_key(id, &b).ok())
-                    } else {
-                        None
-                    };
-                    let g_sk = g_role_opt.as_ref().and_then(|r| {
-                        let nb = hex::decode(&r.context_nonce_hex).ok()?;
-                        let sk = l2_rotation::derive_guarantor_mig_signing_key(id, &nb).ok()?;
-                        Some((r.guarantor_index, sk))
-                    });
-                    (c_sk, g_sk)
-                })
-                .map_err(FrontendError::from)?
-        };
+        let (creator_sk_opt, guarantor_sk_opt): (Option<SigningKey>, Option<(u8, SigningKey)>) =
+            state.with_session_required(
+                session,
+                "Wallet session changed before deriving L2 rotation authority keys",
+                |service| {
+                    service
+                        .with_wallet_and_identity(|w, id| {
+                            let c_sk = if has_creator {
+                                w.profile
+                                    .l2_anchor_nonces
+                                    .get(&anchor_hex)
+                                    .and_then(|h| hex::decode(h).ok())
+                                    .and_then(|b| {
+                                        l2_gateway::derive_anchor_mig_signing_key(id, &b).ok()
+                                    })
+                            } else {
+                                None
+                            };
+                            let g_sk = g_role_opt.as_ref().and_then(|r| {
+                                let nb = hex::decode(&r.context_nonce_hex).ok()?;
+                                let sk =
+                                    l2_rotation::derive_guarantor_mig_signing_key(id, &nb).ok()?;
+                                Some((r.guarantor_index, sk))
+                            });
+                            (c_sk, g_sk)
+                        })
+                        .map_err(FrontendError::from)
+                },
+            )?;
 
         let guarantor_tuple = guarantor_sk_opt
             .as_ref()
@@ -1571,26 +1614,27 @@ pub(crate) async fn run_lifecycle_tick_with_now(
                 } => *effective_at_secs,
                 StoredRotationPhase::Imported { .. } => now_secs,
             };
-            {
-                let mut service = state
-                    .service
-                    .lock()
-                    .map_err(|_| lifecycle_err("Wallet service unavailable"))?;
-                let mut lc = load_lifecycle_state(&mut service, password)?;
-                let health = lc
-                    .anchors
-                    .entry(anchor_hex.clone())
-                    .or_insert_with(|| StoredAnchorHealth::new(anchor_hex.clone()));
-                health.active_rotation = Some(phase.clone());
-                health.last_error = None;
-                save_lifecycle_state(&mut service, &lc, password)?;
-            }
+            state.with_session_required(
+                session,
+                "Wallet session changed after proposing L2 rotation",
+                |service| {
+                    let mut lc = load_lifecycle_state(service, password)?;
+                    let health = lc
+                        .anchors
+                        .entry(anchor_hex.clone())
+                        .or_insert_with(|| StoredAnchorHealth::new(anchor_hex.clone()));
+                    health.active_rotation = Some(phase.clone());
+                    health.last_error = None;
+                    save_lifecycle_state(service, &lc, password)
+                },
+            )?;
 
             // If timelock is already elapsed (e.g., short dev/test timelock = 0), advance immediately
             if is_proposal_timelock_elapsed(phase_effective_at, now_secs) {
                 if let Ok(next_phase) = drive_active_rotation(
                     RotationEnv {
                         state,
+                        session,
                         security_policy: &security_policy,
                         lifecycle: &internal_lc,
                         client,
@@ -1603,33 +1647,37 @@ pub(crate) async fn run_lifecycle_tick_with_now(
                 )
                 .await
                 {
-                    let mut service = state
-                        .service
-                        .lock()
-                        .map_err(|_| lifecycle_err("Wallet service unavailable"))?;
-                    let mut lc = load_lifecycle_state(&mut service, password)?;
-                    let health = lc
-                        .anchors
-                        .entry(anchor_hex.clone())
-                        .or_insert_with(|| StoredAnchorHealth::new(anchor_hex.clone()));
-                    apply_rotation_step_outcome(
-                        health,
-                        Ok(&next_phase),
-                        manifest.revision,
-                        now_secs,
-                    );
-                    save_lifecycle_state(&mut service, &lc, password)?;
+                    state.with_session_required(
+                        session,
+                        "Wallet session changed after driving L2 rotation step",
+                        |service| {
+                            let mut lc = load_lifecycle_state(service, password)?;
+                            let health = lc
+                                .anchors
+                                .entry(anchor_hex.clone())
+                                .or_insert_with(|| StoredAnchorHealth::new(anchor_hex.clone()));
+                            apply_rotation_step_outcome(
+                                health,
+                                Ok(&next_phase),
+                                manifest.revision,
+                                now_secs,
+                            );
+                            save_lifecycle_state(service, &lc, password)
+                        },
+                    )?;
                 }
             }
         }
     }
 
-    let mut service = state
-        .service
-        .lock()
-        .map_err(|_| lifecycle_err("Wallet service unavailable"))?;
-    let lc = load_lifecycle_state(&mut service, password)?;
-    build_status_dto(&mut service, &lc, password)
+    state.with_session_required(
+        session,
+        "Wallet session changed before completing L2 lifecycle status",
+        |service| {
+            let lc = load_lifecycle_state(service, password)?;
+            build_status_dto(service, &lc, password)
+        },
+    )
 }
 
 pub(crate) fn build_status_dto(
@@ -1688,13 +1736,16 @@ pub(crate) fn build_status_dto(
 }
 
 pub(crate) async fn maybe_run_background_lifecycle_tick(state: &AppState) {
-    let should_run = {
+    let session = {
         let Ok(mut service) = state.service.lock() else {
             return;
         };
         if !service.is_wallet_unlocked() {
             return;
         }
+        let Ok(session) = state.session_token_for_service(&service) else {
+            return;
+        };
         let lc = match load_lifecycle_state(&mut service, None) {
             Ok(lc) => lc,
             Err(e) => {
@@ -1706,14 +1757,16 @@ pub(crate) async fn maybe_run_background_lifecycle_tick(state: &AppState) {
             }
         };
         let now_secs = sync_client::current_unix_timestamp();
-        now_secs.saturating_sub(lc.last_tick_secs) >= HEALTH_CHECK_INTERVAL_SECS
+        if now_secs.saturating_sub(lc.last_tick_secs) < HEALTH_CHECK_INTERVAL_SECS {
+            return;
+        }
+        session
     };
-    if !should_run {
-        return;
-    }
     let client = sync_client::create_sync_probe_client();
     let now_secs = sync_client::current_unix_timestamp();
-    if let Err(err) = run_lifecycle_tick_with_now(state, &client, now_secs, false, None).await {
+    if let Err(err) =
+        run_lifecycle_tick_with_now(state, &session, &client, now_secs, false, None).await
+    {
         log::debug!(
             "Background L2 lifecycle tick skipped/failed: {}",
             err.message
@@ -2104,10 +2157,15 @@ mod tests {
         .unwrap();
 
         let state = AppState::new(svc);
+        let session = {
+            let s = state.lock_service().unwrap();
+            state.session_token_for_service(&s).unwrap()
+        };
         let client = sync_client::create_sync_probe_client();
 
         let discovered = discover_anchor_manifest(
             &state,
+            &session,
             &client,
             &anchor_id,
             Some(&old_creator_did),
@@ -2410,21 +2468,32 @@ mod tests {
         );
 
         let state = AppState::new(svc);
+        let session = {
+            let s = state.lock_service().unwrap();
+            state.session_token_for_service(&s).unwrap()
+        };
         let client = sync_client::create_sync_probe_client();
 
         // Trigger immediate rotation on SyncRevocationNotice from S1
         s1_revoked.store(true, Ordering::Relaxed);
-        let status1 = run_lifecycle_tick_with_now(&state, &client, 1_760_000_050, true, Some(pw))
-            .await
-            .unwrap();
+        let status1 =
+            run_lifecycle_tick_with_now(&state, &session, &client, 1_760_000_050, true, Some(pw))
+                .await
+                .unwrap();
         assert_eq!(
             status1.anchors[0].active_rotation_phase.as_deref(),
             Some("proposed")
         );
 
         // Advance past timelock -> finishes Rev 2 automatically!
-        let status2 =
-            run_lifecycle_tick_with_now(&state, &client, effective_ts + 10, true, Some(pw))
+        let status2 = run_lifecycle_tick_with_now(
+            &state,
+            &session,
+            &client,
+            effective_ts + 10,
+            true,
+            Some(pw),
+        )
                 .await
                 .unwrap();
         assert_eq!(status2.anchors[0].revision, 2);
@@ -2610,9 +2679,14 @@ mod tests {
         );
 
         let state = AppState::new(svc);
+        let session = {
+            let s = state.lock_service().unwrap();
+            state.session_token_for_service(&s).unwrap()
+        };
         let client = sync_client::create_sync_probe_client();
 
-        let dto = run_lifecycle_tick_with_now(&state, &client, 1_760_000_050, true, Some(pw))
+        let dto =
+            run_lifecycle_tick_with_now(&state, &session, &client, 1_760_000_050, true, Some(pw))
             .await
             .unwrap();
         assert!(veto_received.load(Ordering::Relaxed));
@@ -2768,25 +2842,42 @@ mod tests {
         let h4 = spawn_alive(l4, s4_sk.clone(), Arc::clone(&stop));
 
         let state = AppState::new(svc);
+        let session = {
+            let s = state.lock_service().unwrap();
+            state.session_token_for_service(&s).unwrap()
+        };
         let client = sync_client::create_sync_probe_client();
 
         // Day 0: S1 marked unhealthy, no rotation triggered yet
         let t0 = 1_760_000_000u64;
-        let d0 = run_lifecycle_tick_with_now(&state, &client, t0, true, Some(pw))
+        let d0 = run_lifecycle_tick_with_now(&state, &session, &client, t0, true, Some(pw))
             .await
             .unwrap();
         assert_eq!(d0.anchors[0].unhealthy_servers.len(), 1);
         assert!(d0.anchors[0].active_rotation_phase.is_none());
 
         // Day 4: still < 5 days hysteresis -> MUST NOT propose rotation yet
-        let d4 =
-            run_lifecycle_tick_with_now(&state, &client, t0 + 4 * 86_400 + 3_600, true, Some(pw))
-                .await
-                .unwrap();
+        let d4 = run_lifecycle_tick_with_now(
+            &state,
+            &session,
+            &client,
+            t0 + 4 * 86_400 + 3_600,
+            true,
+            Some(pw),
+        )
+        .await
+        .unwrap();
         assert!(d4.anchors[0].active_rotation_phase.is_none());
 
         // Day 5: >= 5 days elapsed -> proposes Phase 1 rotation!
-        let d5 = run_lifecycle_tick_with_now(&state, &client, t0 + 5 * 86_400, true, Some(pw))
+        let d5 = run_lifecycle_tick_with_now(
+            &state,
+            &session,
+            &client,
+            t0 + 5 * 86_400,
+            true,
+            Some(pw),
+        )
             .await
             .unwrap();
         assert_eq!(

@@ -9,7 +9,6 @@ import {
   parseHumocoInput,
   normalizeUserIdInput,
   extractCardPayload,
-  extractDidFromCardEnvelopeJson,
   isValidUserIdFormat,
   extractHumocoDeepLink,
 } from '../humocoUri';
@@ -304,21 +303,6 @@ describe('humocoUri Utilities', () => {
       expect(extractHumocoDeepLink(null)).toBeNull();
     });
 
-    it('extractDidFromCardEnvelopeJson extracts DID exclusively from card_wire JWT payload (F6)', () => {
-      const header = toBase64Url({ alg: 'EdDSA' });
-      const payload = toBase64Url({ did: sampleSai });
-      const envelopeJson = JSON.stringify({ card_wire: `${header}.${payload}.sig` });
-      expect(extractDidFromCardEnvelopeJson(envelopeJson)).toBe(sampleSai);
-
-      // Legacy direct top-level did without card_wire must be rejected
-      expect(extractDidFromCardEnvelopeJson(JSON.stringify({ did: sampleDid }))).toBeNull();
-      const invalidPrefixEnvelope = JSON.stringify({
-        card_wire: `${header}.${toBase64Url({ did: `badprefix@${sampleDid}` })}.sig`,
-      });
-      expect(extractDidFromCardEnvelopeJson(invalidPrefixEnvelope)).toBeNull();
-      expect(extractDidFromCardEnvelopeJson('{not-json')).toBeNull();
-    });
-
     it('extractCardPayload extracts card URIs and JSON envelopes while rejecting arbitrary HTTP env links', () => {
       const envJson = JSON.stringify({ card_wire: 'hdr.payload.sig', did: sampleDid });
       const envB64Url = toBase64Url(JSON.parse(envJson));
@@ -356,22 +340,22 @@ describe('humocoUri Utilities', () => {
       const cardUriRes = parseHumocoInput(`humoco://card?env=${cardB64}`);
       expect(cardUriRes?.kind).toBe('card');
       if (cardUriRes?.kind === 'card') {
-        expect(cardUriRes.did).toBe(sampleDid);
         expect(cardUriRes.payload).toBe(`humoco://card?env=${cardB64}`);
+        expect('did' in cardUriRes).toBe(false);
       }
 
       const cardJsonRes = parseHumocoInput(cardJson);
       expect(cardJsonRes?.kind).toBe('card');
       if (cardJsonRes?.kind === 'card') {
-        expect(cardJsonRes.did).toBe(sampleDid);
         expect(cardJsonRes.payload).toBe(cardJson);
+        expect('did' in cardJsonRes).toBe(false);
       }
 
       expect(parseHumocoInput('plain text without humoco uri')).toBeNull();
       expect(parseHumocoInput(`invalid@${sampleDid}`)).toBeNull();
     });
 
-    it('normalizeUserIdInput extracts canonical user IDs across all input formats', () => {
+    it('normalizeUserIdInput extracts canonical user IDs and leaves signed card envelopes to backend verification', () => {
       const header = toBase64Url({ alg: 'EdDSA' });
       const payload = toBase64Url({ did: sampleDid });
       const cardJson = JSON.stringify({ card_wire: `${header}.${payload}.sig` });
@@ -379,8 +363,8 @@ describe('humocoUri Utilities', () => {
 
       expect(normalizeUserIdInput(`humoco://pay?to=${encodeURIComponent(sampleDid)}&amount=5`)).toBe(sampleDid);
       expect(normalizeUserIdInput(`humoco://contact?did=${encodeURIComponent(sampleSai)}`)).toBe(sampleSai);
-      expect(normalizeUserIdInput(`humoco://card?env=${cardB64}`)).toBe(sampleDid);
-      expect(normalizeUserIdInput(cardJson)).toBe(sampleDid);
+      expect(normalizeUserIdInput(`humoco://card?env=${cardB64}`)).toBeNull();
+      expect(normalizeUserIdInput(cardJson)).toBeNull();
       expect(normalizeUserIdInput(`Sende an ${sampleDid}!`)).toBe(sampleDid);
       expect(normalizeUserIdInput(`kasse@${sampleDid}`)).toBeNull();
     });
@@ -417,10 +401,11 @@ describe('humocoUri Utilities', () => {
       // Embedded chat text with punctuation prefix must never fall back to bare root did:key
       expect(parseContactCard(`Bitte an bad!prefix@${sampleDid} zahlen`)).toBeNull();
 
-      // F6: Legacy card+sig, envelope, or bare top-level env.did without card_wire must be rejected
+      // F6: Legacy card+sig or envelope without card_wire must be rejected
       expect(extractCardPayload(JSON.stringify({ card: { name: 'Legacy' }, sig: 'abc' }))).toBeNull();
       expect(extractCardPayload(JSON.stringify({ envelope: { did: sampleDid } }))).toBeNull();
-      expect(extractDidFromCardEnvelopeJson(JSON.stringify({ did: sampleDid }))).toBeNull();
+      expect(extractCardPayload(JSON.stringify({ did: sampleDid }))).toBeNull();
+      expect(parseHumocoInput(JSON.stringify({ card: { name: 'Legacy' }, sig: 'abc' }))).toBeNull();
     });
   });
 });

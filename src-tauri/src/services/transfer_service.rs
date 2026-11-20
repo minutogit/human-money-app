@@ -34,9 +34,13 @@ pub async fn create_transfer_bundle_impl(
     let recipient_id = validated_recipient.into_string();
     log::debug!("Creating transfer bundle (sources={})", sources.len());
 
-    {
-        let mut service = state
-            .authorize_and_lock(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
+    let (session, resolved_pw) = {
+        let (mut service, resolved_pw) = state.authorize_and_lock_secret(
+            crate::state::RequiredAccess::DailyPay,
+            password.as_deref(),
+        )?;
+        let pw = resolved_pw.as_deref().map(String::as_str);
+        let session = state.session_token_for_service(&service)?;
         let blocking_ids: Vec<&str> = sources
             .iter()
             .map(|s| s.local_instance_id.as_str())
@@ -50,10 +54,12 @@ pub async fn create_transfer_bundle_impl(
         crate::services::preflight::run_value_outflow_preflight(
             state,
             &mut service,
-            password.as_deref(),
+            pw,
             &preflight,
         )?;
-    }
+        (session, resolved_pw)
+    };
+    let pw = resolved_pw.as_deref().map(String::as_str);
 
     let source_transfers: Vec<SourceTransfer> = sources
         .into_iter()
@@ -63,8 +69,10 @@ pub async fn create_transfer_bundle_impl(
         })
         .collect();
 
-    let (result, intents, pow_base_bits) = {
-        let mut service = state.lock_service()?;
+    let (result, intents, pow_base_bits) = state.with_session_required(
+        &session,
+        "Wallet session changed before creating transfer bundle",
+        |service| {
 
         let mut wot_sync_json: Option<String> = None;
         let mut pending_receipt: Option<humoco_wot::SyncReceipt> = None;
@@ -73,10 +81,10 @@ pub async fn create_transfer_bundle_impl(
         let mut pending_card_sent: Option<([u8; 32], u64)> = None;
 
         let loaded_ui_prefs = state
-            .get_or_load_ui_preferences(&mut service, password.as_deref())
+            .get_or_load_ui_preferences(service, pw)
             .map_err(FrontendError::from)?;
         let loaded_lifecycle = state
-            .get_or_load_internal_lifecycle(&mut service, password.as_deref())
+            .get_or_load_internal_lifecycle(service, pw)
             .map_err(FrontendError::from)?;
 
         let should_send_card =
@@ -86,8 +94,8 @@ pub async fn create_transfer_bundle_impl(
             let own_profile_opt: Option<crate::models::StoredOwnMarketProfile> =
                 crate::services::market_service::load_own_market_profile_state(
                     state,
-                    &mut service,
-                    password.as_deref(),
+                    service,
+                    pw,
                 )
                 .ok();
 
@@ -100,9 +108,9 @@ pub async fn create_transfer_bundle_impl(
                                 let store_res = crate::state::load_encrypted_json_or_default::<
                                     humoco_market::CardStore,
                                 >(
-                                    &mut service,
+                                    service,
                                     crate::state::MARKET_CARD_STORE_KEY,
-                                    password.as_deref(),
+                                    pw,
                                 );
                                 match store_res {
                                     Ok(store) => {
@@ -155,16 +163,16 @@ pub async fn create_transfer_bundle_impl(
         }
 
         if let Ok(can_recipient) = crate::state::canonicalize_did(&recipient_id) {
-            if let Ok(mut reg) = state.get_or_load_wot_register(&mut service, password.as_deref()) {
+            if let Ok(mut reg) = state.get_or_load_wot_register(service, password.as_deref()) {
                 if reg
                     .own_contacts
                     .get(&can_recipient)
                     .is_some_and(|e| e.level >= 1)
                 {
-                    if let Ok(changed) = state.ensure_wot_list_signed(&mut service, &mut reg) {
+                    if let Ok(changed) = state.ensure_wot_list_signed(service, &mut reg) {
                         if changed {
                             let _ =
-                                state.save_wot_register(&mut service, &reg, password.as_deref());
+                                state.save_wot_register(service, &reg, password.as_deref());
                         }
                     }
                     if let Ok((pkg, receipt)) =
@@ -215,10 +223,10 @@ pub async fn create_transfer_bundle_impl(
             .map(|(def, _)| (def.immutable.identity.name, def.immutable.features.balances_are_summable))
             .collect();
         let baseline_history = state
-            .load_history_from_disk(&mut service, password.as_deref())
+            .load_history_from_disk(service, pw)
             .map_err(FrontendError::from)?;
         let baseline_outgoing =
-            crate::state::load_outgoing_bundles(&mut service, password.as_deref())?;
+            crate::state::load_outgoing_bundles(service, pw)?;
         let next_history_cell = std::cell::RefCell::new(None::<Vec<TransactionRecord>>);
         let next_outgoing_cell =
             std::cell::RefCell::new(None::<crate::models::StoredOutgoingBundles>);
@@ -232,13 +240,13 @@ pub async fn create_transfer_bundle_impl(
             contact_card_json,
         };
 
-        let archive = app.and_then(|a| crate::services::common::open_wallet_archive(a, &service));
+        let archive = app.and_then(|a| crate::services::common::open_wallet_archive(a, service));
         let result = service
             .create_transfer_bundle_with_l2_intents_and_companions(
                 request,
                 &standard_definitions_toml,
                 archive.as_ref(),
-                password.as_deref(),
+                pw,
                 pow_bits,
                 |res, wallet| {
                     let record = build_sent_transaction_record(
@@ -273,11 +281,11 @@ pub async fn create_transfer_bundle_impl(
             })?;
 
         if let Some(next_hist) = next_history_cell.into_inner() {
-            state.write_cache_slot_for_service(&service, |c| &mut c.history, Some(next_hist));
+            state.write_cache_slot_for_service(service, |c| &mut c.history, Some(next_hist));
         }
         if let Some(next_out) = next_outgoing_cell.into_inner() {
             state.write_cache_slot_for_service(
-                &service,
+                service,
                 |c| &mut c.outgoing_bundles,
                 Some(next_out),
             );
@@ -292,17 +300,17 @@ pub async fn create_transfer_bundle_impl(
 
         if let Some((peer_pk_bytes, own_v)) = pending_card_sent {
             match crate::state::load_encrypted_json_or_default::<humoco_market::CardStore>(
-                &mut service,
+                service,
                 crate::state::MARKET_CARD_STORE_KEY,
-                password.as_deref(),
+                pw,
             ) {
                 Ok(mut store) => {
                     humoco_market::mark_sent(&mut store, peer_pk_bytes, own_v);
                     if let Err(e) = crate::state::save_encrypted_json(
-                        &mut service,
+                        service,
                         crate::state::MARKET_CARD_STORE_KEY,
                         &store,
-                        password.as_deref(),
+                        pw,
                     ) {
                         log::warn!("Failed to save CardStore after sending card: {}", e);
                     }
@@ -317,10 +325,10 @@ pub async fn create_transfer_bundle_impl(
         }
 
         if let Some(receipt) = pending_receipt {
-            if let Ok(mut reg) = state.get_or_load_wot_register(&mut service, password.as_deref()) {
+            if let Ok(mut reg) = state.get_or_load_wot_register(service, pw) {
                 let now_secs = chrono::Utc::now().timestamp() as u64;
                 reg.commit_sync_receipt(receipt, now_secs);
-                if let Err(e) = state.save_wot_register(&mut service, &reg, password.as_deref()) {
+                if let Err(e) = state.save_wot_register(service, &reg, pw) {
                     log::warn!(
                         "Failed to save WoT register after committing sync receipt: {}",
                         e
@@ -329,19 +337,20 @@ pub async fn create_transfer_bundle_impl(
             }
         }
 
-        if let Err(error) = state.refresh_events_cache(&mut service, password.as_deref()) {
+        if let Err(error) = state.refresh_events_cache(service, pw) {
             error!("Failed to refresh events after transfer commit: {}", error);
         }
 
-        (result, intents, pow_bits)
-    };
+        Ok((result, intents, pow_bits))
+    })?;
 
     // Service mutex released; L1 + durable L2 intents are committed before network fan-out.
     let l2_dispatch = crate::services::preflight::dispatch_l2_send_intents(
         state,
+        &session,
         &intents,
         pow_base_bits,
-        password.as_deref(),
+        pw,
     )
     .await?;
 
@@ -447,7 +456,11 @@ pub async fn receive_bundle_impl(
     state: &AppState,
 ) -> Result<ReceiveSuccessPayload, FrontendError> {
     info!("Attempting to receive and process a transfer bundle...");
-    state.authorize(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
+    let (session, resolved_pw) = state.authorize_and_begin_session_secret(
+        crate::state::RequiredAccess::DailyPay,
+        password.as_deref(),
+    )?;
+    let pw = resolved_pw.as_deref().map(String::as_str);
 
     let effective_purchase_id = purchase_id
         .as_deref()
@@ -466,7 +479,7 @@ pub async fn receive_bundle_impl(
             &effective_purchase_id,
             &bundle_data,
             &standard_definitions_toml,
-            password.as_deref(),
+            pw,
         )
         .await?;
         return completion.receive_payload.ok_or_else(|| {
@@ -474,19 +487,71 @@ pub async fn receive_bundle_impl(
         });
     }
 
-    let mut service =
-        state.authorize_and_lock(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
+    let mut service = state.lock_service()?;
+    if !state.is_session_current(&session, &service) {
+        return Err(FrontendError::from(
+            "Wallet session changed before receiving bundle".to_string(),
+        ));
+    }
     let archive = app.and_then(|a| crate::services::common::open_wallet_archive(a, &service));
+    let baseline_history = state
+        .load_history_from_disk(&mut service, pw)
+        .map_err(FrontendError::from)?;
+    let next_history_cell = std::cell::RefCell::new(None::<Vec<TransactionRecord>>);
 
-    match service.receive_bundle(
+    match service.receive_bundle_with_companions(
         &bundle_data,
         &standard_definitions_toml,
         archive.as_ref(),
-        password.as_deref(),
+        pw,
         force_accept_tolerance_bundle,
+        None,
+        |result, wallet| {
+            let transfer_summary = &result.transfer_summary;
+            let involved_vouchers_ids: Vec<String> = result
+                .involved_vouchers_details
+                .iter()
+                .map(|d| d.local_instance_id.clone())
+                .collect();
+            let record = TransactionRecord {
+                id: Uuid::new_v4().to_string(),
+                direction: "received".to_string(),
+                recipient_id: wallet.get_user_id().to_string(),
+                sender_id: result.header.sender_id.clone(),
+                timestamp: Utc::now().to_rfc3339(),
+                summable_amounts: transfer_summary.summable_amounts.clone(),
+                countable_items: transfer_summary.countable_items.clone(),
+                involved_vouchers: involved_vouchers_ids,
+                involved_sources_details: Some(
+                    result
+                        .involved_vouchers_details
+                        .iter()
+                        .cloned()
+                        .map(Into::into)
+                        .collect(),
+                ),
+                bundle_data: Vec::new(),
+                bundle_id: result.header.bundle_id.clone(),
+                notes: result.header.notes.clone(),
+                sender_profile_name: result.header.sender_profile_name.clone(),
+            };
+            let (blobs, next_hist) =
+                crate::state::prepare_receive_history_companion(&baseline_history, record)
+                    .map_err(|e| {
+                        human_money_core::Error::Storage(
+                            human_money_core::StorageError::InvalidFormat(e.message),
+                        )
+                    })?;
+            *next_history_cell.borrow_mut() = Some(next_hist);
+            Ok(blobs)
+        },
     ) {
         Ok(result) => {
-            info!("Bundle processed successfully. Creating transaction record.");
+            info!("Bundle processed successfully with atomic history commit.");
+
+            if let Some(next_hist) = next_history_cell.into_inner() {
+                state.write_cache_slot_for_service(&service, |c| &mut c.history, Some(next_hist));
+            }
 
             let conflict_count = result.check_result.verifiable_conflicts.len();
             let warning_count = result.check_result.unverifiable_warnings.len();
@@ -499,7 +564,6 @@ pub async fn receive_bundle_impl(
                 );
             }
 
-            let transfer_summary = result.transfer_summary.clone();
             let involved_vouchers_details = result.involved_vouchers_details.clone();
             let involved_vouchers_ids: Vec<String> = involved_vouchers_details
                 .iter()
@@ -507,38 +571,8 @@ pub async fn receive_bundle_impl(
                 .collect();
             let notes = result.header.notes.clone();
             let sender_profile_name = result.header.sender_profile_name.clone();
-            let bundle_id = result.header.bundle_id.clone();
-            let recipient_id = service
-                .with_wallet(|w| w.get_user_id().to_string())
-                .map_err(FrontendError::from)?;
 
-            let record = TransactionRecord {
-                id: Uuid::new_v4().to_string(),
-                direction: "received".to_string(),
-                recipient_id,
-                sender_id: result.header.sender_id.clone(),
-                timestamp: Utc::now().to_rfc3339(),
-                summable_amounts: transfer_summary.summable_amounts.clone(),
-                countable_items: transfer_summary.countable_items.clone(),
-                involved_vouchers: involved_vouchers_ids.clone(),
-                involved_sources_details: Some(
-                    involved_vouchers_details
-                        .iter()
-                        .cloned()
-                        .map(Into::into)
-                        .collect(),
-                ),
-                bundle_data: Vec::new(),
-                bundle_id,
-                notes: notes.clone(),
-                sender_profile_name: sender_profile_name.clone(),
-            };
-
-            state
-                .append_to_history(&mut service, record.clone(), password.as_deref())
-                .map_err(FrontendError::from)?;
-
-            if let Err(e) = state.refresh_events_cache(&mut service, password.as_deref()) {
+            if let Err(e) = state.refresh_events_cache(&mut service, pw) {
                 error!("Failed to refresh events cache after receive_bundle: {}", e);
             }
 
@@ -547,7 +581,7 @@ pub async fn receive_bundle_impl(
                     &mut service,
                     wot_json,
                     &result.header.sender_id,
-                    password.as_deref(),
+                    pw,
                 )
             } else {
                 None
@@ -557,7 +591,7 @@ pub async fn receive_bundle_impl(
                 state.try_import_piggybacked_contact_card(
                     &mut service,
                     Some(card_json),
-                    password.as_deref(),
+                    pw,
                 );
             }
 
@@ -1939,19 +1973,19 @@ mod offline_and_degraded_transfer_tests {
         assert_eq!(replay.newly_committed, Some(false));
         assert_eq!(replay.is_replay, Some(true));
 
-        // verify_committed_bundle_l2 aborts cleanly when SessionToken generation changed
+        // verify_bundle_l2_precommit aborts cleanly when SessionToken generation changed
         let stale_token = crate::session::SessionToken {
             generation: bob_state.current_session_generation().saturating_sub(1),
             owner_did: bob_did.clone(),
         };
-        assert!(!crate::checkout::verify_committed_bundle_l2(
+        assert!(crate::checkout::verify_bundle_l2_precommit(
             &bob_state,
             &stale_token,
             &tx_anchored.bundle_data,
             Some(password),
         )
         .await
-        .unwrap());
+        .is_err());
 
         // 2. Unanchored (N=0) OnlineVerify -> returns OfflineOnly uncommitted -> ForceTrustOffline commits
         let v_unanchored_id = issue_100_voucher(&alice_state, &standard_toml, password);

@@ -9,6 +9,7 @@ export interface SessionStatusDto {
     hasCachedSession: boolean;
     accessMode: SessionAccessMode | 'locked';
     baseAccessMode: SessionAccessMode | 'locked';
+    oneShotGrant?: string | null;
 }
 
 export interface ProfilePinStatusDto {
@@ -87,18 +88,16 @@ export const authService = {
         return await invoke<SessionStatusDto>("get_session_status");
     },
 
-    unlockSession: async (password: string, timeout: number): Promise<SessionStatusDto> => {
-        return await invoke<SessionStatusDto>("unlock_session", { password, durationSeconds: timeout });
+    unlockSession: async (password: string): Promise<SessionStatusDto> => {
+        return await invoke<SessionStatusDto>("unlock_session", { password });
     },
 
     unlockSessionWithPin: async (
         pin: string,
-        timeout: number,
         folderName?: string
     ): Promise<SessionStatusDto> => {
         return await invoke<SessionStatusDto>("unlock_session_with_pin", {
             pin,
-            durationSeconds: timeout,
             folderName: folderName ?? null,
         });
     },

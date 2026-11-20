@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { classifyHumocoFile } from '../humocoFileClassifier';
+import {
+    classifyHumocoFile,
+    extractDetachedSignatureVoucherId,
+} from '../humocoFileClassifier';
 
 describe('humocoFileClassifier', () => {
     it('classifies wot-provider-filter+v1 JSON payloads as wot packages', () => {
@@ -28,5 +31,51 @@ describe('humocoFileClassifier', () => {
 
         const res = classifyHumocoFile({ fileName: 'minuto.toml', bytes });
         expect(res.kind).toBe('standard');
+    });
+
+    it('F6: classifies canonical snake_case proof JSON and rejects camelCase legacy proof JSON', () => {
+        const canonicalProof = JSON.stringify({
+            proof_id: 'proof-1',
+            conflicting_transactions: [],
+        });
+        const camelProof = JSON.stringify({
+            proofId: 'proof-1',
+            conflictingTransactions: [],
+        });
+
+        expect(
+            classifyHumocoFile({
+                fileName: 'conflict.proof',
+                bytes: Array.from(new TextEncoder().encode(canonicalProof)),
+            }).kind,
+        ).toBe('proof');
+
+        expect(
+            classifyHumocoFile({
+                fileName: 'legacy.json',
+                bytes: Array.from(new TextEncoder().encode(camelProof)),
+            }).kind,
+        ).toBe('unknown');
+    });
+
+    it('F6: extracts voucher_id from canonical wrapped DetachedSignature only and rejects flat legacy signature JSON', () => {
+        const toB64Url = (obj: unknown) =>
+            Buffer.from(JSON.stringify(obj), 'utf8').toString('base64url');
+        const canonicalContainer = JSON.stringify({
+            ciphertext: toB64Url({ Signature: { voucher_id: 'v-123' } }),
+        });
+        const flatLegacyContainer = JSON.stringify({
+            ciphertext: toB64Url({ voucher_id: 'v-legacy' }),
+        });
+        const canonicalBytes = Array.from(new TextEncoder().encode(canonicalContainer));
+        const flatBytes = Array.from(new TextEncoder().encode(flatLegacyContainer));
+
+        expect(classifyHumocoFile({ fileName: 'reply.sig', bytes: canonicalBytes }).kind).toBe(
+            'sig',
+        );
+        expect(extractDetachedSignatureVoucherId(canonicalBytes)).toBe('v-123');
+
+        expect(classifyHumocoFile({ fileName: 'reply.sig', bytes: flatBytes }).kind).toBe('sig');
+        expect(extractDetachedSignatureVoucherId(flatBytes)).toBeNull();
     });
 });

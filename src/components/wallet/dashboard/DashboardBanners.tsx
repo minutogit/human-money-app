@@ -23,6 +23,7 @@ import type {
     AggregatedBalance,
     FrontendPendingSignRequest,
     FrontendPendingWotHandshake,
+    FrontendUnsupportedPostItem,
     IntegrityReport,
     RecoveryProtectionStatusDto,
     WalletSyncAlert,
@@ -39,6 +40,7 @@ interface DashboardBannersProps {
     expiringSoonCount: number;
     pendingSignRequests: FrontendPendingSignRequest[];
     pendingWotHandshakes: FrontendPendingWotHandshake[];
+    unsupportedMessages?: FrontendUnsupportedPostItem[];
     openSellerInquiriesCount: number;
     isOpeningSignRequest: string | null;
     integrityReport: IntegrityReport | null;
@@ -49,6 +51,7 @@ interface DashboardBannersProps {
     onNavigate: NavigateFn;
     onOpenSignRequest: (req: FrontendPendingSignRequest) => void;
     onDismissSignRequest: (msgId: string) => void;
+    onDismissUnsupportedPost?: (msgId: string) => void;
     onOpenIntegrityModal: () => void;
     onSnoozeRehearsal: () => void;
     onOpenRehearsalModal: () => void;
@@ -67,6 +70,7 @@ export function DashboardBanners({
     expiringSoonCount,
     pendingSignRequests,
     pendingWotHandshakes,
+    unsupportedMessages = [],
     openSellerInquiriesCount,
     isOpeningSignRequest,
     integrityReport,
@@ -77,6 +81,7 @@ export function DashboardBanners({
     onNavigate,
     onOpenSignRequest,
     onDismissSignRequest,
+    onDismissUnsupportedPost,
     onOpenIntegrityModal,
     onSnoozeRehearsal,
     onOpenRehearsalModal,
@@ -406,6 +411,64 @@ export function DashboardBanners({
                     </Card>
                 );
             })}
+
+            {unsupportedMessages.length > 0 && (
+                <Card
+                    variant="glass"
+                    className="py-3 px-4 border-l-4 border-l-amber-500 bg-amber-50/50 space-y-2"
+                    data-testid="unsupported-post-messages-banner"
+                >
+                    <div className="flex items-start gap-3">
+                        <div className="p-2 rounded-xl bg-amber-500 text-white shrink-0">
+                            <AlertCircle size={20} />
+                        </div>
+                        <div className="min-w-0 flex-1 space-y-1">
+                            <p className="font-bold text-sm text-theme-secondary">
+                                {t('dashboard.unsupportedPostTitle')}
+                            </p>
+                            <p className="text-xs text-theme-light">
+                                {t('dashboard.unsupportedPostDesc')}
+                            </p>
+                            <div className="pt-1 space-y-1.5">
+                                {unsupportedMessages.map((item) => {
+                                    const senderLabel =
+                                        item.senderName ||
+                                        resolveIdentity(item.senderDid, null) ||
+                                        truncateUserId(item.senderDid);
+                                    return (
+                                        <div
+                                            key={item.msgId}
+                                            className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-white/80 border border-amber-200 px-3 py-1.5 text-xs"
+                                        >
+                                            <span className="font-medium text-theme-secondary truncate">
+                                                {senderLabel} ·{' '}
+                                                {t('dashboard.unsupportedPostItemLabel', {
+                                                    payloadType: item.payloadType,
+                                                })}
+                                            </span>
+                                            {onDismissUnsupportedPost && (
+                                                <Button
+                                                    variant="outline"
+                                                    size="xs"
+                                                    onClick={() =>
+                                                        onDismissUnsupportedPost(item.msgId)
+                                                    }
+                                                    className="text-theme-light hover:text-rose-600 gap-1"
+                                                >
+                                                    <X size={12} />
+                                                    <span>
+                                                        {t('dashboard.unsupportedPostDismiss')}
+                                                    </span>
+                                                </Button>
+                                            )}
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    </div>
+                </Card>
+            )}
 
             {pendingWotHandshakes.length > 0 && (
                 <Card

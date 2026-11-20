@@ -26,6 +26,8 @@ pub const MAX_APP_NOTICES: usize = 50;
 pub const RECOVERY_OWNER_STATE_KEY: &str = "recovery_owner_state";
 pub const RECOVERY_GUARDIAN_VAULT_KEY: &str = "recovery_guardian_vault";
 pub const BUNDLE_RETENTION_DAYS: i64 = 90;
+pub const ONE_SHOT_PIN_GRANT_PREFIX: &str = "hmc_grant_";
+const ONE_SHOT_PIN_GRANT_TTL: std::time::Duration = std::time::Duration::from_secs(15);
 
 pub fn own_media_storage_key(image_token: &str) -> String {
     format!("market_own_media_{}", image_token)
@@ -77,6 +79,8 @@ pub struct StoredPostState {
     pub pending_wot_packages_by_msg_id: std::collections::BTreeMap<String, String>,
     #[serde(default)]
     pub inquiries: Vec<crate::models::FrontendMarketInquiryItem>,
+    #[serde(default)]
+    pub unsupported_messages: Vec<crate::models::FrontendUnsupportedPostItem>,
     #[serde(default)]
     pub inquiry_rate_tracker: humoco_market::InquiryRateTracker,
 }
@@ -425,13 +429,22 @@ impl Default for SyncCoordinatorControl {
     }
 }
 
+/// Ephemeral single-use server-side grant issued when unlocking with Quick-PIN under `timeout == 0`.
+struct OneShotPinGrant {
+    token: String,
+    secret: zeroize::Zeroizing<String>,
+    generation: u64,
+    owner_did: String,
+    expires_at: std::time::Instant,
+}
+
 /// Central application state shared across Tauri commands and background workers.
 ///
 /// # Lock Ordering Invariant
 /// Whenever multiple mutexes on `AppState` must be acquired simultaneously,
 /// acquire them strictly in the following total order to prevent deadlocks:
-/// `recovery_op_lock -> post_op_lock -> service -> profile_caches -> media_negative_cache`.
-/// `active_profile_lock` and `sync_control` are leaf mutexes never held while acquiring `service` or across `.await`.
+/// `recovery_op_lock -> post_op_lock -> service -> profile_caches`.
+/// `active_profile_lock`, `sync_control`, and `one_shot_pin_grant` are leaf mutexes never held while acquiring `service` or across `.await`.
 ///
 /// Never hold any `std::sync::MutexGuard` across an `.await` point.
 pub struct AppState {
@@ -441,12 +454,12 @@ pub struct AppState {
     session_gen_tx: tokio::sync::watch::Sender<u64>,
     pub recovery_op_lock: tokio::sync::Mutex<()>,
     pub post_op_lock: tokio::sync::Mutex<()>,
-    pub media_negative_cache: Mutex<std::collections::HashMap<String, u64>>,
     pub startup_launch_items: Mutex<Vec<String>>,
     pub sync_control: Mutex<SyncCoordinatorControl>,
     pub sync_coordinator_wake: std::sync::Arc<tokio::sync::Notify>,
     session_lock_dir: Option<std::path::PathBuf>,
     active_profile_lock: Mutex<Option<ProfileSessionLock>>,
+    one_shot_pin_grant: Mutex<Option<OneShotPinGrant>>,
 }
 
 fn load_bytes_opt_inner(
@@ -539,6 +552,25 @@ pub fn save_encrypted_bytes(
     password: Option<&str>,
 ) -> Result<(), AppFacadeError> {
     service.save_encrypted_data(key, bytes, password)
+}
+
+/// Loads device-local encrypted raw bytes (`.local_<key>.enc`), returning `Ok(None)` only on `StorageError::NotFound`.
+pub fn load_local_sidecar_bytes_opt(
+    service: &mut AppService,
+    key: &str,
+    password: Option<&str>,
+) -> Result<Option<Vec<u8>>, AppFacadeError> {
+    load_bytes_opt_inner(service, key, password, true)
+}
+
+/// Saves device-local encrypted raw bytes (`.local_<key>.enc`) without touching `WalletSeal`.
+pub fn save_local_sidecar_bytes(
+    service: &mut AppService,
+    key: &str,
+    bytes: &[u8],
+    password: Option<&str>,
+) -> Result<(), AppFacadeError> {
+    service.save_local_sidecar_data(key, bytes, password)
 }
 
 /// Serializes `value` as JSON and saves it to the encrypted store under `key`.
@@ -645,6 +677,35 @@ pub fn prepare_outgoing_history_and_bundle_companions(
         history: next_history,
         outgoing: next_outgoing,
     })
+}
+
+pub type CompanionBlobBatch = (Vec<(String, Vec<u8>)>, Vec<TransactionRecord>);
+
+/// Prepares the encrypted `transaction_history` companion blob alongside the next in-memory
+/// history list for atomic `CommitWithCompanionBlobs` receive transactions.
+pub fn prepare_receive_history_companion(
+    baseline_history: &[TransactionRecord],
+    mut record: TransactionRecord,
+) -> Result<CompanionBlobBatch, crate::models::FrontendError> {
+    record.bundle_data.clear();
+    let mut next_history = baseline_history.to_vec();
+    let duplicate = !record.bundle_id.is_empty()
+        && next_history
+            .iter()
+            .any(|r| r.bundle_id == record.bundle_id && r.direction == record.direction);
+    if !duplicate {
+        next_history.push(record);
+    }
+    let history_bytes = serde_json::to_vec(&next_history).map_err(|e| {
+        crate::models::FrontendError::from(format!(
+            "Failed to serialize transaction_history: {}",
+            e
+        ))
+    })?;
+    Ok((
+        vec![(TRANSACTION_HISTORY_KEY.to_string(), history_bytes)],
+        next_history,
+    ))
 }
 
 /// Serializes `value` as JSON and saves it to a device-local encrypted sidecar (`.local_<key>.enc`).
@@ -770,12 +831,12 @@ impl AppState {
             session_gen_tx,
             recovery_op_lock: tokio::sync::Mutex::new(()),
             post_op_lock: tokio::sync::Mutex::new(()),
-            media_negative_cache: Mutex::new(std::collections::HashMap::new()),
             startup_launch_items: Mutex::new(Vec::new()),
             sync_control: Mutex::new(SyncCoordinatorControl::default()),
             sync_coordinator_wake: std::sync::Arc::new(tokio::sync::Notify::new()),
             session_lock_dir: None,
             active_profile_lock: Mutex::new(None),
+            one_shot_pin_grant: Mutex::new(None),
         }
     }
 
@@ -783,11 +844,12 @@ impl AppState {
         let should_notify = {
             let mut guard = self.sync_control.lock().unwrap();
             let became_online = !guard.is_online && is_online;
+            let became_wifi = !guard.is_wifi && is_wifi;
             let became_visible = !guard.is_visible && is_visible;
             guard.is_online = is_online;
             guard.is_wifi = is_wifi;
             guard.is_visible = is_visible;
-            became_online || became_visible
+            became_online || became_wifi || became_visible
         };
         if should_notify {
             self.sync_coordinator_wake.notify_one();
@@ -907,6 +969,63 @@ impl AppState {
             .ok_or_else(|| crate::models::FrontendError::from(superseded_msg.to_string()))
     }
 
+    pub fn is_media_negatively_cached(
+        &self,
+        session: &SessionToken,
+        blob_id: &str,
+        read_url: &str,
+        now_secs: u64,
+        ttl_secs: u64,
+    ) -> bool {
+        if self.current_session_generation() != session.generation {
+            return false;
+        }
+        let key = (
+            blob_id.to_string(),
+            read_url.trim_end_matches('/').to_string(),
+        );
+        let guard = self.profile_caches.lock().unwrap();
+        let Some(ref caches) = *guard else {
+            return false;
+        };
+        if caches.generation != session.generation || caches.owner_did != session.owner_did {
+            return false;
+        }
+        caches
+            .media_negative_cache
+            .get(&key)
+            .is_some_and(|&ts| now_secs.saturating_sub(ts) < ttl_secs)
+    }
+
+    pub fn record_media_negative_cache(
+        &self,
+        session: &SessionToken,
+        blob_id: String,
+        read_url: String,
+        now_secs: u64,
+    ) {
+        if self.current_session_generation() != session.generation {
+            return;
+        }
+        let key = (blob_id, read_url.trim_end_matches('/').to_string());
+        let mut guard = self.profile_caches.lock().unwrap();
+        let needs_init = guard.as_ref().is_none_or(|c| {
+            c.generation != session.generation || c.owner_did != session.owner_did
+        });
+        if needs_init {
+            *guard = Some(ActiveProfileCaches::new(
+                session.generation,
+                session.owner_did.clone(),
+            ));
+        }
+        if let Some(ref mut caches) = *guard {
+            if caches.media_negative_cache.len() >= 1024 {
+                caches.media_negative_cache.clear();
+            }
+            caches.media_negative_cache.insert(key, now_secs);
+        }
+    }
+
     pub fn with_session_lock_dir(mut self, dir: std::path::PathBuf) -> Self {
         self.session_lock_dir = Some(dir);
         self
@@ -977,6 +1096,161 @@ impl AppState {
         })
     }
 
+    pub fn clear_one_shot_pin_grant(&self) {
+        *self.one_shot_pin_grant.lock().unwrap() = None;
+    }
+
+    pub fn issue_one_shot_pin_grant(
+        &self,
+        service: &AppService,
+        secret: String,
+    ) -> Result<String, crate::models::FrontendError> {
+        if !service.is_wallet_unlocked() {
+            return Err(crate::models::FrontendError::from(
+                AppFacadeError::WalletLocked,
+            ));
+        }
+        let owner_did = service
+            .with_wallet(|w| w.get_user_id().to_string())
+            .map_err(crate::models::FrontendError::from)?;
+        let generation = self.current_session_generation();
+        let mut rnd = [0u8; 16];
+        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut rnd);
+        let token = format!("{}{}", ONE_SHOT_PIN_GRANT_PREFIX, hex::encode(rnd));
+        let grant = OneShotPinGrant {
+            token: token.clone(),
+            secret: zeroize::Zeroizing::new(secret),
+            generation,
+            owner_did,
+            expires_at: std::time::Instant::now() + ONE_SHOT_PIN_GRANT_TTL,
+        };
+        *self.one_shot_pin_grant.lock().unwrap() = Some(grant);
+        Ok(token)
+    }
+
+    fn consume_one_shot_pin_grant(
+        &self,
+        service: &AppService,
+        token: &str,
+    ) -> Result<zeroize::Zeroizing<String>, crate::models::FrontendError> {
+        let taken = self.one_shot_pin_grant.lock().unwrap().take();
+        let Some(grant) = taken else {
+            return Err(crate::models::FrontendError::from(
+                human_money_core::Error::App(human_money_core::error::AppError::SessionExpired {
+                    reason: "One-shot PIN grant missing or already used.".to_string(),
+                }),
+            ));
+        };
+        let owner_matches = service
+            .with_wallet(|w| w.get_user_id() == grant.owner_did)
+            .unwrap_or(false);
+        if grant.token != token
+            || std::time::Instant::now() > grant.expires_at
+            || self.current_session_generation() != grant.generation
+            || !service.is_wallet_unlocked()
+            || !owner_matches
+        {
+            return Err(crate::models::FrontendError::from(
+                human_money_core::Error::App(human_money_core::error::AppError::SessionExpired {
+                    reason: "One-shot PIN grant expired or bound to a different session."
+                        .to_string(),
+                }),
+            ));
+        }
+        Ok(grant.secret)
+    }
+
+    /// Enforces `required` access and resolves any single-use `hmc_grant_*` PIN grant into its
+    /// underlying zeroizing secret for `DailyPay` operations.
+    pub fn authorize_and_lock_secret(
+        &self,
+        required: RequiredAccess,
+        password: Option<&str>,
+    ) -> Result<
+        (
+            MutexGuard<'_, AppService>,
+            Option<zeroize::Zeroizing<String>>,
+        ),
+        crate::models::FrontendError,
+    > {
+        let service = self.lock_service()?;
+        if let Some(raw) = password {
+            if raw.starts_with(ONE_SHOT_PIN_GRANT_PREFIX) {
+                match required {
+                    RequiredAccess::Full => {
+                        return Err(crate::models::FrontendError::from(
+                            human_money_core::Error::App(
+                                human_money_core::error::AppError::InsufficientAccessMode {
+                                    required: human_money_core::AccessMode::Full
+                                        .as_str()
+                                        .to_string(),
+                                    current: human_money_core::AccessMode::DailyPay
+                                        .as_str()
+                                        .to_string(),
+                                },
+                            ),
+                        ));
+                    }
+                    RequiredAccess::DailyPay => {
+                        let secret = self.consume_one_shot_pin_grant(&service, raw)?;
+                        service
+                            .require_access_mode(
+                                human_money_core::AccessMode::DailyPay,
+                                Some(secret.as_str()),
+                            )
+                            .map_err(crate::models::FrontendError::from)?;
+                        return Ok((service, Some(secret)));
+                    }
+                    RequiredAccess::Unlocked => {
+                        return Err(crate::models::FrontendError::from(
+                            human_money_core::Error::App(
+                                human_money_core::error::AppError::SessionExpired {
+                                    reason: "One-shot PIN grant cannot authorize Unlocked access."
+                                        .to_string(),
+                                },
+                            ),
+                        ));
+                    }
+                }
+            }
+        }
+
+        match required {
+            RequiredAccess::Unlocked => {
+                if !service.is_wallet_unlocked() {
+                    return Err(crate::models::FrontendError::from(
+                        AppFacadeError::WalletLocked,
+                    ));
+                }
+            }
+            RequiredAccess::DailyPay => {
+                service
+                    .require_access_mode(human_money_core::AccessMode::DailyPay, password)
+                    .map_err(crate::models::FrontendError::from)?;
+            }
+            RequiredAccess::Full => {
+                service
+                    .require_access_mode(human_money_core::AccessMode::Full, password)
+                    .map_err(crate::models::FrontendError::from)?;
+            }
+        }
+        Ok((
+            service,
+            password.map(|p| zeroize::Zeroizing::new(p.to_string())),
+        ))
+    }
+
+    pub fn authorize_and_begin_session_secret(
+        &self,
+        required: RequiredAccess,
+        password: Option<&str>,
+    ) -> Result<(SessionToken, Option<zeroize::Zeroizing<String>>), crate::models::FrontendError>
+    {
+        let (service, resolved_secret) = self.authorize_and_lock_secret(required, password)?;
+        let session = self.session_token_for_service(&service)?;
+        Ok((session, resolved_secret))
+    }
+
     /// Enforces `required` access at the Tauri boundary and returns the locked `AppService`.
     pub fn authorize_and_lock(
         &self,
@@ -984,6 +1258,28 @@ impl AppState {
         password: Option<&str>,
     ) -> Result<MutexGuard<'_, AppService>, crate::models::FrontendError> {
         let service = self.lock_service()?;
+        if password.is_some_and(|p| p.starts_with(ONE_SHOT_PIN_GRANT_PREFIX)) {
+            return match required {
+                RequiredAccess::Full => Err(crate::models::FrontendError::from(
+                    human_money_core::Error::App(
+                        human_money_core::error::AppError::InsufficientAccessMode {
+                            required: human_money_core::AccessMode::Full.as_str().to_string(),
+                            current: human_money_core::AccessMode::DailyPay.as_str().to_string(),
+                        },
+                    ),
+                )),
+                RequiredAccess::DailyPay | RequiredAccess::Unlocked => {
+                    Err(crate::models::FrontendError::from(
+                        human_money_core::Error::App(
+                            human_money_core::error::AppError::SessionExpired {
+                                reason: "One-shot PIN grant must be consumed via secret guard."
+                                    .to_string(),
+                            },
+                        ),
+                    ))
+                }
+            };
+        }
         match required {
             RequiredAccess::Unlocked => {
                 if !service.is_wallet_unlocked() {
@@ -2401,6 +2697,7 @@ impl AppState {
             .saturating_add(1);
         let _ = self.session_gen_tx.send(next);
         *guard = None;
+        self.clear_one_shot_pin_grant();
     }
 
     /// Central session initializer — called after Login, Create Profile, Recovery, and Handover.
@@ -2439,6 +2736,7 @@ impl AppState {
             let _ = self.session_gen_tx.send(next);
             *guard = Some(ActiveProfileCaches::new(next, owner_did));
         }
+        self.clear_one_shot_pin_grant();
 
         // 1. Load or create split configuration stores
         let _ui_prefs = self.load_ui_preferences(service, Some(credential))?;
@@ -3056,25 +3354,8 @@ impl AppState {
                 }
             };
 
-        let mut updated = false;
-        for (k, contact) in address_book.contacts.iter_mut() {
-            if k.trim() == trimmed_card_did {
-                if !card_syncs.is_empty() {
-                    let merged = merge_contact_syncs(&contact.syncs, card_syncs);
-                    if contact.syncs != merged {
-                        contact.syncs = merged;
-                        updated = true;
-                    }
-                }
-                if let Some(prof) = card_profile {
-                    if apply_card_profile_to_contact(contact, prof) {
-                        updated = true;
-                    }
-                }
-            }
-        }
-
-        if updated {
+        if apply_contact_update_from_card(&mut address_book, trimmed_card_did, card_syncs, card_profile)
+        {
             let _ = save_encrypted_json(service, CONTACTS_DATA_NAME, &address_book, password);
             self.set_cached_contacts_for_service(service, Some(address_book));
         }
@@ -3103,7 +3384,7 @@ impl AppState {
                 }
             };
 
-        let policy_opt = match self.get_or_load_security_policy(service, password) {
+        let mut policy_opt = match self.get_or_load_security_policy(service, password) {
             Ok(p) => Some(p),
             Err(e) => {
                 log::warn!(
@@ -3114,113 +3395,20 @@ impl AppState {
             }
         };
 
-        let mut updated = false;
-        for (url, success) in results {
-            let norm_target = crate::services::common::normalize_sync_url(url);
-            if norm_target.is_empty() {
-                continue;
-            }
-            for contact in address_book.contacts.values_mut() {
-                for sync_ep in &mut contact.syncs {
-                    let norm_read = crate::services::common::normalize_sync_url(&sync_ep.read_url);
-                    let norm_write =
-                        crate::services::common::normalize_sync_url(&sync_ep.write_url);
-                    if norm_read == norm_target || norm_write == norm_target {
-                        if sync_ep.status == "deprecating"
-                            && sync_ep.sunset_at.is_some_and(|eff| now_secs >= eff)
-                        {
-                            sync_ep.status = "revoked".to_string();
-                        }
-                        let is_revocation_state =
-                            sync_ep.status == "deprecating" || sync_ep.status == "revoked";
-                        if *success {
-                            sync_ep.last_seen_at = Some(now_secs);
-                            sync_ep.fail_count = 0;
-                            if !is_revocation_state {
-                                if sync_ep.status == "active" {
-                                    // remains active
-                                } else if sync_ep.status == "unreachable" {
-                                    let is_selected = policy_opt
-                                        .as_ref()
-                                        .map(|s| {
-                                            s.market_selected_syncs.iter().any(|sel| {
-                                                endpoints_overlap(
-                                                    &sel.read_url,
-                                                    &sel.write_url,
-                                                    &norm_read,
-                                                    &norm_write,
-                                                )
-                                            })
-                                        })
-                                        .unwrap_or(false);
-                                    if is_selected {
-                                        sync_ep.status = "active".to_string();
-                                    } else {
-                                        sync_ep.status = "unverified".to_string();
-                                    }
-                                } else if sync_ep.status.is_empty() {
-                                    sync_ep.status = "unverified".to_string();
-                                }
-                                // pending_auth and unverified remain unchanged on list_index read success!
-                            }
-                        } else {
-                            sync_ep.last_error_at = Some(now_secs);
-                            sync_ep.fail_count = sync_ep.fail_count.saturating_add(1);
-                            if !is_revocation_state
-                                && (sync_ep.status != "pending_auth" || sync_ep.fail_count >= 3)
-                            {
-                                sync_ep.status = "unreachable".to_string();
-                            }
-                        }
-                        updated = true;
-                    }
-                }
-            }
-        }
+        let (updated, policy_updated) = apply_contact_sync_health_batch(
+            &mut address_book,
+            policy_opt.as_mut(),
+            results,
+            now_secs,
+        );
 
         if updated {
             let _ = save_encrypted_json(service, CONTACTS_DATA_NAME, &address_book, password);
             self.set_cached_contacts_for_service(service, Some(address_book));
         }
 
-        if let Some(mut policy) = policy_opt {
-            let mut policy_updated = false;
-            for (url, success) in results {
-                let norm_target = crate::services::common::normalize_sync_url(url);
-                if norm_target.is_empty() {
-                    continue;
-                }
-                for sel in &mut policy.market_selected_syncs {
-                    let norm_read = crate::services::common::normalize_sync_url(&sel.read_url);
-                    let norm_write = crate::services::common::normalize_sync_url(&sel.write_url);
-                    if norm_read == norm_target || norm_write == norm_target {
-                        if sel.status == "deprecating"
-                            && sel.sunset_at.is_some_and(|eff| now_secs >= eff)
-                        {
-                            sel.status = "revoked".to_string();
-                        }
-                        let is_revocation_state =
-                            sel.status == "deprecating" || sel.status == "revoked";
-                        if *success {
-                            sel.last_seen_at = Some(now_secs);
-                            sel.fail_count = 0;
-                            if !is_revocation_state {
-                                sel.status = "active".to_string();
-                            }
-                        } else {
-                            sel.last_error_at = Some(now_secs);
-                            sel.fail_count = sel.fail_count.saturating_add(1);
-                            if !is_revocation_state {
-                                sel.status = "unreachable".to_string();
-                            }
-                        }
-                        policy_updated = true;
-                    }
-                }
-            }
-            if policy_updated {
-                let _ = self.save_security_policy(service, policy, password);
-            }
+        if let (true, Some(policy)) = (policy_updated, policy_opt) {
+            let _ = self.save_security_policy(service, policy, password);
         }
         updated
     }
@@ -3573,7 +3761,7 @@ impl AppState {
         &self,
         service: &mut AppService,
         last_sync_at: Option<u64>,
-        mut new_items: Vec<crate::models::FrontendAppNotice>,
+        new_items: Vec<crate::models::FrontendAppNotice>,
         password: Option<&str>,
     ) {
         if last_sync_at.is_none() && new_items.is_empty() {
@@ -3587,14 +3775,7 @@ impl AppState {
                     return;
                 }
             };
-        if let Some(ts) = last_sync_at {
-            store.last_sync_at = Some(store.last_sync_at.map_or(ts, |prev| prev.max(ts)));
-        }
-        if !new_items.is_empty() {
-            new_items.extend(store.notices);
-            new_items.truncate(MAX_APP_NOTICES);
-            store.notices = new_items;
-        }
+        apply_app_notices_update(&mut store, last_sync_at, new_items);
         if let Err(e) = self.save_app_notices(service, &store, password) {
             log::warn!("Failed to persist app notices: {:?}", e);
         }
@@ -3613,6 +3794,161 @@ impl AppState {
         let mut service = self.service.lock().unwrap();
         self.append_app_notices_with_service(&mut service, last_sync_at, new_items, password);
     }
+}
+
+pub(crate) fn apply_app_notices_update(
+    store: &mut crate::models::StoredAppNotices,
+    last_sync_at: Option<u64>,
+    mut new_items: Vec<crate::models::FrontendAppNotice>,
+) {
+    if let Some(ts) = last_sync_at {
+        store.last_sync_at = Some(store.last_sync_at.map_or(ts, |prev| prev.max(ts)));
+    }
+    if !new_items.is_empty() {
+        new_items.extend(std::mem::take(&mut store.notices));
+        new_items.truncate(MAX_APP_NOTICES);
+        store.notices = new_items;
+    }
+}
+
+pub(crate) fn apply_contact_update_from_card(
+    address_book: &mut FrontendAddressBook,
+    card_did: &str,
+    card_syncs: &[crate::models::FrontendSyncDescriptor],
+    card_profile: Option<&human_money_core::models::profile::PublicProfile>,
+) -> bool {
+    let trimmed_card_did = card_did.trim();
+    if (card_syncs.is_empty() && card_profile.is_none()) || trimmed_card_did.is_empty() {
+        return false;
+    }
+    let mut updated = false;
+    for (k, contact) in address_book.contacts.iter_mut() {
+        if k.trim() == trimmed_card_did {
+            if !card_syncs.is_empty() {
+                let merged = merge_contact_syncs(&contact.syncs, card_syncs);
+                if contact.syncs != merged {
+                    contact.syncs = merged;
+                    updated = true;
+                }
+            }
+            if let Some(prof) = card_profile {
+                if apply_card_profile_to_contact(contact, prof) {
+                    updated = true;
+                }
+            }
+        }
+    }
+    updated
+}
+
+pub(crate) fn apply_contact_sync_health_batch(
+    address_book: &mut FrontendAddressBook,
+    mut policy_opt: Option<&mut SecurityPolicy>,
+    results: &[(String, bool)],
+    now_secs: u64,
+) -> (bool, bool) {
+    if results.is_empty() {
+        return (false, false);
+    }
+    let mut updated = false;
+    for (url, success) in results {
+        let norm_target = crate::services::common::normalize_sync_url(url);
+        if norm_target.is_empty() {
+            continue;
+        }
+        for contact in address_book.contacts.values_mut() {
+            for sync_ep in &mut contact.syncs {
+                let norm_read = crate::services::common::normalize_sync_url(&sync_ep.read_url);
+                let norm_write = crate::services::common::normalize_sync_url(&sync_ep.write_url);
+                if norm_read == norm_target || norm_write == norm_target {
+                    if sync_ep.status == "deprecating"
+                        && sync_ep.sunset_at.is_some_and(|eff| now_secs >= eff)
+                    {
+                        sync_ep.status = "revoked".to_string();
+                    }
+                    let is_revocation_state =
+                        sync_ep.status == "deprecating" || sync_ep.status == "revoked";
+                    if *success {
+                        sync_ep.last_seen_at = Some(now_secs);
+                        sync_ep.fail_count = 0;
+                        if !is_revocation_state {
+                            if sync_ep.status == "active" {
+                                // remains active
+                            } else if sync_ep.status == "unreachable" {
+                                let is_selected = policy_opt
+                                    .as_deref()
+                                    .map(|s| {
+                                        s.market_selected_syncs.iter().any(|sel| {
+                                            endpoints_overlap(
+                                                &sel.read_url,
+                                                &sel.write_url,
+                                                &norm_read,
+                                                &norm_write,
+                                            )
+                                        })
+                                    })
+                                    .unwrap_or(false);
+                                if is_selected {
+                                    sync_ep.status = "active".to_string();
+                                } else {
+                                    sync_ep.status = "unverified".to_string();
+                                }
+                            } else if sync_ep.status.is_empty() {
+                                sync_ep.status = "unverified".to_string();
+                            }
+                        }
+                    } else {
+                        sync_ep.last_error_at = Some(now_secs);
+                        sync_ep.fail_count = sync_ep.fail_count.saturating_add(1);
+                        if !is_revocation_state
+                            && (sync_ep.status != "pending_auth" || sync_ep.fail_count >= 3)
+                        {
+                            sync_ep.status = "unreachable".to_string();
+                        }
+                    }
+                    updated = true;
+                }
+            }
+        }
+    }
+
+    let mut policy_updated = false;
+    if let Some(ref mut policy) = policy_opt {
+        for (url, success) in results {
+            let norm_target = crate::services::common::normalize_sync_url(url);
+            if norm_target.is_empty() {
+                continue;
+            }
+            for sel in &mut policy.market_selected_syncs {
+                let norm_read = crate::services::common::normalize_sync_url(&sel.read_url);
+                let norm_write = crate::services::common::normalize_sync_url(&sel.write_url);
+                if norm_read == norm_target || norm_write == norm_target {
+                    if sel.status == "deprecating"
+                        && sel.sunset_at.is_some_and(|eff| now_secs >= eff)
+                    {
+                        sel.status = "revoked".to_string();
+                    }
+                    let is_revocation_state =
+                        sel.status == "deprecating" || sel.status == "revoked";
+                    if *success {
+                        sel.last_seen_at = Some(now_secs);
+                        sel.fail_count = 0;
+                        if !is_revocation_state {
+                            sel.status = "active".to_string();
+                        }
+                    } else {
+                        sel.last_error_at = Some(now_secs);
+                        sel.fail_count = sel.fail_count.saturating_add(1);
+                        if !is_revocation_state {
+                            sel.status = "unreachable".to_string();
+                        }
+                    }
+                    policy_updated = true;
+                }
+            }
+        }
+    }
+    (updated, policy_updated)
 }
 
 pub fn merge_contact_syncs(

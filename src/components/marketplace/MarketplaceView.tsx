@@ -505,7 +505,9 @@ export function MarketplaceView({
         return (
             snapshot.people.find((p) => isExactSameUserId(p.recipientDid || p.did, selectedPersonDid)) ||
             snapshot.people.find((p) => isExactSameUserId(p.did, selectedPersonDid)) ||
-            snapshot.people.find((p) => isSameRootIdentity(p.did, selectedPersonDid)) ||
+            (!selectedPersonDid.includes('@')
+                ? snapshot.people.find((p) => isSameRootIdentity(p.did, selectedPersonDid))
+                : undefined) ||
             null
         );
     }, [selectedPersonDid, snapshot]);
@@ -525,6 +527,7 @@ export function MarketplaceView({
     if (selectedPerson) {
         return (
             <MarketPersonView
+                key={selectedPerson.recipientDid || selectedPerson.did}
                 person={selectedPerson}
                 initialInquiryAd={inquiryTargetAd}
                 mediaAutoLoadMaxHops={mediaAutoLoadMaxHops}
@@ -542,6 +545,7 @@ export function MarketplaceView({
         pendingWotHandshakes: [],
         inquiries: [],
         unacknowledgedPayments: [],
+        unsupportedMessages: [],
     };
 
     const defaultEmptyProfile: FrontendMyMarketProfile = {

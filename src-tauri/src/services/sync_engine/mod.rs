@@ -221,7 +221,8 @@ pub async fn sync_market_channels_with_options(
     }
 
     // 4. Atomic Delta-Apply strictly gated by SessionToken: reload fresh stores on commit,
-    //    or discard everything cleanly if the session was logged out / switched / re-logged in.
+    //    compute all mutations in memory, and commit every modified blob via ONE save_encrypted_batch call.
+    //    If the session was logged out / switched / re-logged in, discard everything cleanly.
     let max_stored_cards = ui_prefs.max_stored_cards.clamp(100, 10_000);
     let committed = state.with_session(&session, |service| {
         let latest_sync_state: StoredSyncState = crate::state::load_encrypted_json_or_default(
@@ -229,85 +230,114 @@ pub async fn sync_market_channels_with_options(
             MARKET_SYNC_KEY,
             password.as_deref(),
         )
-        .unwrap_or_default();
-        crate::state::merge_sync_state_3way(&baseline_sync_state, &mut sync_state, &latest_sync_state);
+        .map_err(FrontendError::from)?;
+        crate::state::merge_sync_state_3way(
+            &baseline_sync_state,
+            &mut sync_state,
+            &latest_sync_state,
+        );
+
+        let mut next_card_store: Option<humoco_market::CardStore> = None;
+        let mut next_address_book: Option<crate::models::FrontendAddressBook> = None;
+        let mut address_book_changed = false;
+        let mut next_security_policy: Option<crate::settings::SecurityPolicy> = None;
+        let mut policy_changed = false;
+        let mut next_wot_reg: Option<humoco_wot::TrustRegister> = None;
+        let mut next_notices_store: Option<crate::models::StoredAppNotices> = None;
+
+        let need_address_book =
+            !decoded_card_bundles.is_empty() || !sync_health_updates.is_empty();
+        if need_address_book {
+            let ab: crate::models::FrontendAddressBook =
+                crate::state::load_encrypted_json_or_default(
+                    service,
+                    crate::state::CONTACTS_DATA_NAME,
+                    password.as_deref(),
+                )
+                .map_err(FrontendError::from)?;
+            next_address_book = Some(ab);
+        }
 
         if !decoded_card_bundles.is_empty() {
-            match crate::state::load_encrypted_json_or_default::<humoco_market::CardStore>(
-                service,
-                MARKET_CARD_STORE_KEY,
-                password.as_deref(),
-            ) {
-                Ok(mut fresh_store) => {
-                    for (read_url, bundle) in decoded_card_bundles {
-                        let (c_cnt, a_cnt) = card_sync::import_decrypted_card_bundle(
-                            bundle,
-                            &read_url,
-                            now_secs,
-                            max_stored_cards,
-                            state,
-                            service,
-                            &mut fresh_store,
-                            &mut sync_state,
-                            password.as_deref(),
-                        );
-                        imported_cards += c_cnt;
-                        new_ads += a_cnt;
-                    }
-                    if let Err(e) = crate::state::save_encrypted_json(
-                        service,
-                        MARKET_CARD_STORE_KEY,
-                        &fresh_store,
-                        password.as_deref(),
-                    ) {
-                        log::warn!("Failed to save CardStore after sync poll: {}", e);
-                    }
-                }
-                Err(e) => {
-                    log::warn!("Failed to reload CardStore before sync commit: {}", e);
-                }
+            let mut fresh_store: humoco_market::CardStore =
+                crate::state::load_encrypted_json_or_default(
+                    service,
+                    MARKET_CARD_STORE_KEY,
+                    password.as_deref(),
+                )
+                .map_err(FrontendError::from)?;
+            let ab_ref = next_address_book
+                .as_mut()
+                .expect("address book preloaded for card bundle commit");
+            for (read_url, bundle) in decoded_card_bundles {
+                let (c_cnt, a_cnt) = card_sync::import_decrypted_card_bundle(
+                    bundle,
+                    &read_url,
+                    now_secs,
+                    max_stored_cards,
+                    service,
+                    &mut fresh_store,
+                    &mut sync_state,
+                    ab_ref,
+                    &mut address_book_changed,
+                );
+                imported_cards += c_cnt;
+                new_ads += a_cnt;
             }
+            next_card_store = Some(fresh_store);
         }
 
         if !decoded_wot_packages.is_empty() {
-            if let Ok(mut reg) = state.get_or_load_wot_register(service, password.as_deref()) {
-                for (read_url, pkg) in &decoded_wot_packages {
-                    imported_wot_lists += wot_sync::import_decrypted_wot_package(
-                        pkg,
-                        read_url,
-                        now_secs,
-                        &mut reg,
-                        &mut errors,
-                    );
+            let mut reg = state
+                .load_wot_register(service, password.as_deref())
+                .map_err(FrontendError::from)?;
+            for (read_url, pkg) in &decoded_wot_packages {
+                imported_wot_lists += wot_sync::import_decrypted_wot_package(
+                    pkg,
+                    read_url,
+                    now_secs,
+                    &mut reg,
+                    &mut errors,
+                );
+            }
+            if imported_wot_lists > 0 || reg.own_list_dirty {
+                if reg.own_list_dirty {
+                    state
+                        .ensure_wot_list_signed(service, &mut reg)
+                        .map_err(FrontendError::from)?;
                 }
-                if imported_wot_lists > 0 || reg.own_list_dirty {
-                    if reg.own_list_dirty {
-                        let _ = state.ensure_wot_list_signed(service, &mut reg);
-                    }
-                    let _ = state.save_wot_register(service, &reg, password.as_deref());
-                }
+                next_wot_reg = Some(reg);
             }
         }
 
-        if let Err(e) = crate::state::save_encrypted_json(
-            service,
-            MARKET_SYNC_KEY,
-            &sync_state,
-            password.as_deref(),
-        ) {
-            log::warn!("Failed to save StoredSyncState after sync: {}", e);
-        }
-
         if !sync_health_updates.is_empty() {
-            state.record_contact_sync_health_batch(
-                service,
+            let mut policy = state
+                .get_or_load_security_policy(service, password.as_deref())
+                .map_err(FrontendError::from)?;
+            let ab_ref = next_address_book
+                .as_mut()
+                .expect("address book preloaded for health updates");
+            let (ab_dirty, pol_dirty) = crate::state::apply_contact_sync_health_batch(
+                ab_ref,
+                Some(&mut policy),
                 &sync_health_updates,
                 now_secs,
-                password.as_deref(),
             );
+            address_book_changed |= ab_dirty;
+            if pol_dirty {
+                policy_changed = true;
+                next_security_policy = Some(policy);
+            }
         }
 
         if polled_syncs > 0 || uploaded_to > 0 {
+            let mut notices_store: crate::models::StoredAppNotices =
+                crate::state::load_encrypted_json_or_default(
+                    service,
+                    crate::state::APP_NOTICES_KEY,
+                    password.as_deref(),
+                )
+                .map_err(FrontendError::from)?;
             let mut market_notices = Vec::new();
             if imported_cards > 0 || new_ads > 0 {
                 market_notices.push(FrontendAppNotice {
@@ -328,12 +358,75 @@ pub async fn sync_market_channels_with_options(
                     inquiry_id: None,
                 });
             }
-            state.append_app_notices_with_service(
-                service,
+            crate::state::apply_app_notices_update(
+                &mut notices_store,
                 Some(now_secs),
                 market_notices,
-                password.as_deref(),
             );
+            next_notices_store = Some(notices_store);
+        }
+
+        let mut owned_blobs: Vec<(&str, Vec<u8>)> = Vec::with_capacity(6);
+        let serialize = |key: &'static str, err_res: Result<Vec<u8>, serde_json::Error>| {
+            err_res
+                .map(|bytes| (key, bytes))
+                .map_err(|e| FrontendError::from(format!("Failed to serialize {}: {}", key, e)))
+        };
+
+        if let Some(ref store) = next_card_store {
+            owned_blobs.push(serialize(MARKET_CARD_STORE_KEY, serde_json::to_vec(store))?);
+        }
+        if let Some(ref reg) = next_wot_reg {
+            owned_blobs.push(serialize(crate::state::WOT_DATA_NAME, serde_json::to_vec(reg))?);
+        }
+        if address_book_changed {
+            if let Some(ref ab) = next_address_book {
+                owned_blobs.push(serialize(
+                    crate::state::CONTACTS_DATA_NAME,
+                    serde_json::to_vec(ab),
+                )?);
+            }
+        }
+        if policy_changed {
+            if let Some(ref pol) = next_security_policy {
+                owned_blobs.push(serialize(
+                    crate::settings::SECURITY_POLICY_KEY,
+                    serde_json::to_vec(pol),
+                )?);
+            }
+        }
+        if let Some(ref notices) = next_notices_store {
+            owned_blobs.push(serialize(
+                crate::state::APP_NOTICES_KEY,
+                serde_json::to_vec(notices),
+            )?);
+        }
+        owned_blobs.push(serialize(MARKET_SYNC_KEY, serde_json::to_vec(&sync_state))?);
+
+        let batch_refs: Vec<(&str, &[u8])> = owned_blobs
+            .iter()
+            .map(|(k, v)| (*k, v.as_slice()))
+            .collect();
+        service
+            .save_encrypted_batch(&batch_refs, password.as_deref())
+            .map_err(FrontendError::from)?;
+
+        // Update in-memory caches only after atomic persistence succeeded.
+        if let Some(reg) = next_wot_reg {
+            state.write_cache_slot_for_service(service, |c| &mut c.wot, Some(reg));
+        }
+        if address_book_changed {
+            if let Some(ab) = next_address_book {
+                state.set_cached_contacts_for_service(service, Some(ab));
+            }
+        }
+        if policy_changed {
+            if let Some(pol) = next_security_policy {
+                state.write_cache_slot_for_service(service, |c| &mut c.security_policy, Some(pol));
+            }
+        }
+        if let Some(notices) = next_notices_store {
+            state.write_cache_slot_for_service(service, |c| &mut c.app_notices, Some(notices));
         }
         Ok(())
     })?;
@@ -428,7 +521,7 @@ pub fn get_sync_overview_status_impl(
 
     let contacts = state
         .load_contacts(&mut service, password.as_deref())
-        .unwrap_or_default();
+        .map_err(FrontendError::from)?;
     let mut pending_keys = HashSet::new();
     for c in &contacts {
         for ep in &c.syncs {

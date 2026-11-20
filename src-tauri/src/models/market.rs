@@ -754,3 +754,12 @@ pub struct FrontendTrustChangeImpact {
     pub can_send_me_post_before: bool,
     pub can_send_me_post_after: bool,
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FrontendResolvedCardRecipient {
+    pub recipient_id: String,
+    pub did: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+}

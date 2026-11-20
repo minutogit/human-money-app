@@ -319,10 +319,10 @@ export type AppState =
     | { view: "create_voucher"; previousView?: AppState }
     | { view: "voucher_details"; voucherId: string; previousView?: AppState }
     | { view: "send_vouchers"; initialRecipientId?: string; initialVoucherId?: string; initialNote?: string; initialPaymentUri?: string }
-    | { view: "receive_bundle"; droppedFile?: { name: string; bytes: number[] } }
+    | { view: "receive_bundle"; droppedFile?: { name: string; bytes: number[]; launchItem?: string } }
     | { view: "transaction_history" }
     | { view: "transfer_success"; bundleData: number[]; recipientId: string; summary: string; l2Dispatch?: IntentDispatchObservation[]; bundleId?: string; depositedTo?: number; recipientDepositedTo?: number; depositError?: string }
-    | { view: "receive_success"; payload: ReceiveSuccessPayload; pendingCommit?: PendingReceiveCommit }
+    | { view: "receive_success"; payload: ReceiveSuccessPayload; pendingCommit?: PendingReceiveCommit; launchItem?: string }
     | { view: "address_book"; initialSearchQuery?: string; initialOpenAddModal?: boolean; initialContactPayload?: string; previousView?: AppState }
     | { view: "sign_request"; voucherData: VoucherDetails; requestMsgId?: string; senderDid?: string; anchorManifestJson?: string }
     | { view: "conflict_details"; proofId: string; previousView?: AppState }

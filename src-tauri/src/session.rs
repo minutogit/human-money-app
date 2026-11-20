@@ -34,6 +34,7 @@ pub struct ActiveProfileCaches {
     pub recovery_owner: Option<Option<crate::models::recovery::RecoveryOwnerState>>,
     pub guardian_vault: Option<humoco_market::GuardianVaultStore>,
     pub app_notices: Option<StoredAppNotices>,
+    pub media_negative_cache: std::collections::HashMap<(String, String), u64>,
 }
 
 impl ActiveProfileCaches {

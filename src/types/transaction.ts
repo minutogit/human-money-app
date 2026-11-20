@@ -90,6 +90,12 @@ export interface PendingReceiveCommit {
     forceAcceptToleranceBundle?: boolean;
 }
 
+export interface ToleranceReceiveConfirmation {
+    type: 'Soft' | 'Critical';
+    message: string;
+    pendingCommit: PendingReceiveCommit;
+}
+
 export interface ReceiveSuccessPayload {
     senderId: string;
     senderProfileName?: string;

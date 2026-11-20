@@ -41,14 +41,22 @@ pub(crate) struct PostSigningContext {
     pub own_reply_syncs: Vec<FrontendSyncDescriptor>,
 }
 
+/// Loads the encrypted Post outbox/inbox state via an already-locked `AppService`, falling back to default only on `StorageError::NotFound`.
+pub(crate) fn load_post_state_with_service(
+    service: &mut human_money_core::app_service::AppService,
+    password: Option<&str>,
+) -> Result<StoredPostState, FrontendError> {
+    crate::state::load_encrypted_json_or_default(service, MARKET_POST_STATE_KEY, password)
+        .map_err(FrontendError::from)
+}
+
 /// Loads the encrypted Post outbox/inbox state, falling back to default only on `StorageError::NotFound`.
 pub(crate) fn load_post_state(
     state: &AppState,
     password: Option<&str>,
 ) -> Result<StoredPostState, FrontendError> {
     let mut service = state.service.lock().unwrap();
-    crate::state::load_encrypted_json_or_default(&mut service, MARKET_POST_STATE_KEY, password)
-        .map_err(FrontendError::from)
+    load_post_state_with_service(&mut service, password)
 }
 
 fn merge_vec_by_id<T: Clone, F: Fn(&T) -> &str>(
@@ -185,6 +193,12 @@ pub(crate) fn merge_post_state_with_service(
             &baseline.inquiries,
             &mut working.inquiries,
             &latest.inquiries,
+        );
+        merge_vec_by_id(
+            &baseline.unsupported_messages,
+            &mut working.unsupported_messages,
+            &latest.unsupported_messages,
+            |u| u.msg_id.as_str(),
         );
         if working.inquiry_rate_tracker == baseline.inquiry_rate_tracker
             && latest.inquiry_rate_tracker != baseline.inquiry_rate_tracker
@@ -348,8 +362,10 @@ fn find_card_in_store<'a>(
 
 /// Resolves `(display_name, picture_url, is_contact)` for a DID across the
 /// address book and the local marketplace business-card store.
-pub(crate) fn resolve_counterparty_info(
+/// Resolves `(display_name, picture_url, is_contact)` for a DID using an already-locked `AppService`.
+pub(crate) fn resolve_counterparty_info_with_service(
     state: &AppState,
+    service: &mut human_money_core::app_service::AppService,
     did: &str,
     password: Option<&str>,
 ) -> (Option<String>, Option<String>, bool) {
@@ -358,8 +374,7 @@ pub(crate) fn resolve_counterparty_info(
     let mut is_contact = false;
     let trimmed = did.trim();
 
-    let mut service = state.service.lock().unwrap();
-    if let Ok(contacts) = state.load_contacts(&mut service, password) {
+    if let Ok(contacts) = state.load_contacts(service, password) {
         if let Some(c) = contacts
             .iter()
             .find(|c| c.did.trim() == trimmed)
@@ -383,7 +398,7 @@ pub(crate) fn resolve_counterparty_info(
 
     if !is_contact || name.is_none() || picture_url.is_none() {
         match crate::state::load_encrypted_json_opt::<humoco_market::CardStore>(
-            &mut service,
+            service,
             MARKET_CARD_STORE_KEY,
             password,
         ) {
@@ -418,6 +433,37 @@ pub(crate) fn resolve_counterparty_info(
     }
 
     (name, picture_url, is_contact)
+}
+
+/// Resolves `(display_name, picture_url, is_contact)` for a DID pinned to `session`.
+pub(crate) fn resolve_counterparty_info_for_session(
+    state: &AppState,
+    session: &SessionToken,
+    did: &str,
+    password: Option<&str>,
+) -> (Option<String>, Option<String>, bool) {
+    state
+        .with_session(session, |service| {
+            Ok(resolve_counterparty_info_with_service(
+                state, service, did, password,
+            ))
+        })
+        .ok()
+        .flatten()
+        .unwrap_or((None, None, false))
+}
+
+/// Resolves `(display_name, picture_url, is_contact)` for a DID across the
+/// address book and the local marketplace business-card store.
+pub(crate) fn resolve_counterparty_info(
+    state: &AppState,
+    did: &str,
+    password: Option<&str>,
+) -> (Option<String>, Option<String>, bool) {
+    let Ok(mut service) = state.lock_service() else {
+        return (None, None, false);
+    };
+    resolve_counterparty_info_with_service(state, &mut service, did, password)
 }
 
 /// Looks up Sync endpoints for a counterparty across contacts and the local card store.

@@ -503,16 +503,17 @@ pub fn process_and_attach_signature(
     state: tauri::State<AppState>,
 ) -> Result<String, FrontendError> {
     info!("Processing and attaching signature from bundle...");
-    let mut service = state.authorize_and_lock(
+    let (mut service, resolved_pw) = state.authorize_and_lock_secret(
         crate::state::RequiredAccess::DailyPay,
         wallet_password.as_deref(),
     )?;
+    let pw = resolved_pw.as_deref().map(String::as_str);
     service
         .process_and_attach_signature(
             &container_bytes,
             &standard_toml_content,
             container_password.as_deref(),
-            wallet_password.as_deref(),
+            pw,
         )
         .map_err(FrontendError::from)
 }
@@ -528,10 +529,11 @@ pub fn remove_voucher_signature(
         "Removing signature {} from voucher {}...",
         signature_id, local_instance_id
     );
-    let mut service =
-        state.authorize_and_lock(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
+    let (mut service, resolved_pw) =
+        state.authorize_and_lock_secret(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
+    let pw = resolved_pw.as_deref().map(String::as_str);
     service
-        .remove_voucher_signature(&local_instance_id, &signature_id, password.as_deref())
+        .remove_voucher_signature(&local_instance_id, &signature_id, pw)
         .map_err(FrontendError::from)
 }
 
@@ -548,6 +550,24 @@ pub struct FrontendGuarantorAnchorCheckDto {
     pub server_count: usize,
     pub issues: Vec<String>,
 }
+
+pub const GUARANTOR_ISSUE_MISSING_ANCHOR_MANIFEST: &str = "missing_anchor_manifest";
+pub const GUARANTOR_ISSUE_MANIFEST_ANCHOR_MISMATCH: &str = "manifest_anchor_mismatch";
+pub const GUARANTOR_ISSUE_RETENTION_MISMATCH: &str = "retention_does_not_cover_deletable_at";
+pub const GUARANTOR_ISSUE_OWN_SERVER_MISSING: &str = "own_nominated_server_missing";
+pub const GUARANTOR_ISSUE_NO_OWN_SERVER: &str = "no_own_nominated_server_configured";
+pub const GUARANTOR_ISSUE_SYBIL_BELOW_THRESHOLD: &str = "sybil_independent_servers_below_threshold";
+pub const GUARANTOR_ISSUE_BANNED_SERVER: &str = "banned_lock_server_in_manifest";
+
+pub const GUARANTOR_ANCHOR_ISSUE_CODES: &[&str] = &[
+    GUARANTOR_ISSUE_BANNED_SERVER,
+    GUARANTOR_ISSUE_MANIFEST_ANCHOR_MISMATCH,
+    GUARANTOR_ISSUE_MISSING_ANCHOR_MANIFEST,
+    GUARANTOR_ISSUE_NO_OWN_SERVER,
+    GUARANTOR_ISSUE_OWN_SERVER_MISSING,
+    GUARANTOR_ISSUE_RETENTION_MISMATCH,
+    GUARANTOR_ISSUE_SYBIL_BELOW_THRESHOLD,
+];
 
 /// Evaluates guarantor pre-signing L2 security requirements (Concept §5.3).
 /// Active **only** for vouched voucher standards (`additional_signatures_range[0] > 0`
@@ -630,7 +650,7 @@ pub(crate) fn evaluate_guarantor_anchor_check_impl(
         };
 
     let Some(manifest) = manifest_opt else {
-        issues.push("missing_anchor_manifest".to_string());
+        issues.push(GUARANTOR_ISSUE_MISSING_ANCHOR_MANIFEST.to_string());
         return Ok(FrontendGuarantorAnchorCheckDto {
             required: true,
             passed: false,
@@ -647,7 +667,7 @@ pub(crate) fn evaluate_guarantor_anchor_check_impl(
     let anchor_valid = manifest.rev1_anchor_id().ok() == Some(anchor_id)
         && manifest.verify_anchor_id(&anchor_id).is_ok();
     if !anchor_valid {
-        issues.push("manifest_anchor_mismatch".to_string());
+        issues.push(GUARANTOR_ISSUE_MANIFEST_ANCHOR_MISMATCH.to_string());
     } else if supplied_manifest_json.is_some() {
         if let Ok(mut service) = state.service.lock() {
             let should_cache = service
@@ -674,7 +694,7 @@ pub(crate) fn evaluate_guarantor_anchor_check_impl(
         })
         .unwrap_or(false);
     if !retention_ok {
-        issues.push("retention_does_not_cover_deletable_at".to_string());
+        issues.push(GUARANTOR_ISSUE_RETENTION_MISMATCH.to_string());
     }
 
     let security_policy = state.get_or_load_security_policy_locked(password)?;
@@ -689,11 +709,11 @@ pub(crate) fn evaluate_guarantor_anchor_check_impl(
                 )
         });
         if !present {
-            issues.push("own_nominated_server_missing".to_string());
+            issues.push(GUARANTOR_ISSUE_OWN_SERVER_MISSING.to_string());
         }
         Some(present)
     } else {
-        issues.push("no_own_nominated_server_configured".to_string());
+        issues.push(GUARANTOR_ISSUE_NO_OWN_SERVER.to_string());
         Some(false)
     };
 
@@ -721,7 +741,7 @@ pub(crate) fn evaluate_guarantor_anchor_check_impl(
         .collect();
     let folded = crate::gateway_resolver::sybil_fold_committee(&candidates);
     if folded.len() < manifest.threshold as usize {
-        issues.push("sybil_independent_servers_below_threshold".to_string());
+        issues.push(GUARANTOR_ISSUE_SYBIL_BELOW_THRESHOLD.to_string());
     }
 
     let offenders = {
@@ -741,7 +761,7 @@ pub(crate) fn evaluate_guarantor_anchor_check_impl(
     if manifest.servers.iter().any(|s| {
         crate::l2_lifecycle::is_server_key_revoked(&offenders, &s.lock_pub, Some(&s.admin_pub))
     }) {
-        issues.push("banned_lock_server_in_manifest".to_string());
+        issues.push(GUARANTOR_ISSUE_BANNED_SERVER.to_string());
     }
 
     let passed = issues.is_empty();

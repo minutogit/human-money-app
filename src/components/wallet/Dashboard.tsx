@@ -63,6 +63,7 @@ export function Dashboard() {
                     expiringSoonCount={data.expiringSoonCount}
                     pendingSignRequests={data.pendingSignRequests}
                     pendingWotHandshakes={data.pendingWotHandshakes}
+                    unsupportedMessages={data.unsupportedMessages}
                     openSellerInquiriesCount={data.openSellerInquiriesCount}
                     isOpeningSignRequest={data.isOpeningSignRequest}
                     integrityReport={data.integrityReport}
@@ -75,6 +76,7 @@ export function Dashboard() {
                     onNavigate={data.navigate}
                     onOpenSignRequest={data.handleOpenSignRequest}
                     onDismissSignRequest={data.handleDismissSignRequest}
+                    onDismissUnsupportedPost={data.handleDismissUnsupportedPost}
                     onOpenIntegrityModal={() => setShowIntegrityModal(true)}
                     onSnoozeRehearsal={() => data.setRehearsalSnoozed(true)}
                     onOpenRehearsalModal={() => setShowRehearsalModal(true)}

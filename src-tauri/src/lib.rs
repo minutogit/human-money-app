@@ -506,6 +506,7 @@ pub fn run() {
             get_ad_image,
             get_market_view,
             export_forward_card,
+            resolve_card_recipient,
             import_contact_card,
             delete_foreign_contact_card,
             get_app_notices,

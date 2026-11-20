@@ -27,7 +27,11 @@ import { HelpCenterView } from '../support/HelpCenterView';
 import { MarketplaceView } from '../marketplace/MarketplaceView';
 import { useTranslation } from 'react-i18next';
 
-export const AppRouter: React.FC = () => {
+interface AppRouterProps {
+    onFinishLaunchItem?: (launchItem: string) => void;
+}
+
+export const AppRouter: React.FC<AppRouterProps> = ({ onFinishLaunchItem }) => {
     const { t } = useTranslation();
     const { notifyLogin, isAuthenticated } = useSession();
     const { appState, navigate, goBack } = useNavigation();
@@ -138,12 +142,17 @@ export const AppRouter: React.FC = () => {
                 initialNote={appState.initialNote}
                 initialPaymentUri={appState.initialPaymentUri}
             />;
-        case "receive_bundle":
+        case "receive_bundle": {
+            const droppedLaunchItem = appState.droppedFile?.launchItem;
             return <ReceiveView
                 droppedFile={appState.droppedFile}
+                onFinishLaunchItem={onFinishLaunchItem}
                 onBack={goBack}
                 onReceiveSuccess={(payload, pendingCommit) => {
                     if ('localInstanceId' in payload) {
+                        if (droppedLaunchItem) {
+                            onFinishLaunchItem?.(droppedLaunchItem);
+                        }
                         const details = payload as VoucherDetails;
                         navigate({
                             view: "sign_request",
@@ -151,16 +160,21 @@ export const AppRouter: React.FC = () => {
                             anchorManifestJson: details.anchorManifestJson,
                         });
                     } else if (payload.isSignatureAttached && payload.voucherId) {
+                        if (droppedLaunchItem) {
+                            onFinishLaunchItem?.(droppedLaunchItem);
+                        }
                         navigate({ view: "voucher_details", voucherId: payload.voucherId });
                     } else {
                         navigate({
                             view: "receive_success",
                             payload: payload as ReceiveSuccessPayload,
                             pendingCommit,
+                            launchItem: pendingCommit ? droppedLaunchItem : undefined,
                         });
                     }
                 }}
             />;
+        }
         case "transaction_history":
             return <TransactionHistoryView />;
         case "transfer_success":
@@ -179,6 +193,8 @@ export const AppRouter: React.FC = () => {
             return <ReceiveSuccessView
                 payload={appState.payload}
                 pendingCommit={appState.pendingCommit}
+                launchItem={appState.launchItem}
+                onFinishLaunchItem={onFinishLaunchItem}
                 onDone={() => navigate({ view: "logged_in" })}
             />;
         case "sign_request":

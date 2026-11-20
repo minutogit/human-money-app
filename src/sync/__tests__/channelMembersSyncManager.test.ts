@@ -215,5 +215,47 @@ describe('ChannelMembersSyncManager', () => {
             expect(channelMembersSyncManager.getStatus().isPending).toBe(false);
             expect(channelMembersSyncManager.getStatus().isSyncing).toBe(false);
         });
+
+        it('F5: discards stale in-flight sync completion/failure after reset() on profile switch', async () => {
+            let resolveStale!: (value: number) => void;
+            let rejectStale!: (reason?: unknown) => void;
+            const firstPromise = new Promise<number>((resolve) => {
+                resolveStale = resolve;
+            });
+            vi.mocked(invoke).mockReturnValueOnce(firstPromise as unknown as Promise<number>);
+
+            channelMembersSyncManager.trigger({ delayMs: 25 });
+            await vi.advanceTimersByTimeAsync(25);
+            expect(channelMembersSyncManager.getStatus().isSyncing).toBe(true);
+
+            // User switches profile while Profile A sync is still awaiting IPC
+            channelMembersSyncManager.reset();
+            expect(channelMembersSyncManager.getStatus().isSyncing).toBe(false);
+
+            // Queue a follow-up in generation 0 would not happen after reset; even resolving stale promise leaves clean status
+            channelMembersSyncManager.trigger({ delayMs: 25 });
+            resolveStale(5);
+            await vi.advanceTimersByTimeAsync(0);
+            expect(channelMembersSyncManager.getStatus().lastSyncSuccessAt).toBeNull();
+
+            vi.mocked(invoke).mockResolvedValueOnce(1);
+            await vi.advanceTimersByTimeAsync(25);
+            expect(invoke).toHaveBeenCalledTimes(2);
+            expect(channelMembersSyncManager.getStatus().lastSyncSuccessAt).not.toBeNull();
+
+            // Also verify stale rejection from an earlier generation cannot poison retryAttempt/lastError
+            const failingPromise = new Promise<number>((_resolve, reject) => {
+                rejectStale = reject;
+            });
+            vi.mocked(invoke).mockReturnValueOnce(failingPromise as unknown as Promise<number>);
+            channelMembersSyncManager.trigger({ delayMs: 25 });
+            await vi.advanceTimersByTimeAsync(25);
+            channelMembersSyncManager.reset();
+
+            rejectStale(new Error('Stale profile error'));
+            await vi.advanceTimersByTimeAsync(0);
+            expect(channelMembersSyncManager.getStatus().lastError).toBeNull();
+            expect(channelMembersSyncManager.getStatus().retryAttempt).toBe(0);
+        });
     });
 });

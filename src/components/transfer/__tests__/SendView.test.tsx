@@ -921,14 +921,27 @@ amount_decimal_places = 4`,
     });
     expect(recipientInput).toHaveValue(contactDid);
 
-    const cardDid = 'did:key:z6MkwCardUser22222222222222222222';
+    const cardDid = 'shop:9ab@did:key:z6MkwCardUser22222222222222222222';
     const cardWirePayload = Buffer.from(JSON.stringify({ did: cardDid }), 'utf8').toString('base64url');
     const cardB64 = Buffer.from(JSON.stringify({ card_wire: `header.${cardWirePayload}.sig` }), 'utf8')
       .toString('base64url');
+    const prevImpl = (invoke as Mock).getMockImplementation();
+    (invoke as Mock).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === 'resolve_card_recipient') {
+        return Promise.resolve({
+          recipientId: cardDid,
+          did: 'did:key:z6MkwCardUser22222222222222222222',
+          displayName: 'Bob Shop',
+        });
+      }
+      return prevImpl ? prevImpl(cmd, args) : Promise.resolve(undefined);
+    });
     fireEvent.change(recipientInput, {
       target: { value: `humoco://card?env=${cardB64}` },
     });
-    expect(recipientInput).toHaveValue(cardDid);
+    await waitFor(() => {
+      expect(recipientInput).toHaveValue(cardDid);
+    });
   });
 
   it('clears knownOffender trust alert immediately on recipient change before debounce settles', async () => {

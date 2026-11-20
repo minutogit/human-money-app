@@ -161,23 +161,24 @@ pub(crate) fn export_wallet_backup_file_impl(
     state: &AppState,
     app: &tauri::AppHandle,
 ) -> Result<FrontendBackupSummaryDto, FrontendError> {
-    let (expected_mode, protection) = parse_protection_mode(protection_mode, backup_password)?;
+    let (_expected_mode, protection) = parse_protection_mode(protection_mode, backup_password)?;
     let custom_standards = collect_custom_standards(app);
-    let required = match expected_mode {
+    let required = match _expected_mode {
         "backup_password" => crate::state::RequiredAccess::Full,
         _ => crate::state::RequiredAccess::DailyPay,
     };
-    let mut service = state.authorize_and_lock(required, password)?;
+    let (mut service, resolved_pw) = state.authorize_and_lock_secret(required, password)?;
+    let pw = resolved_pw.as_deref().map(String::as_str);
     let summary = export_backup_file_impl(
         Path::new(destination_path),
         protection,
-        password,
+        pw,
         &mut service,
         custom_standards,
     )?;
 
     state
-        .mutate_internal_lifecycle(&mut service, password, |lc| {
+        .mutate_internal_lifecycle(&mut service, pw, |lc| {
             lc.last_backup_at = Some(Utc::now().to_rfc3339());
             lc.backup_dirty = false;
         })
@@ -269,11 +270,8 @@ pub(crate) fn sync_wallet_backup_folder_impl(
 ) -> Result<FrontendBackupSummaryDto, FrontendError> {
     let (expected_mode, protection) = parse_protection_mode(protection_mode, backup_password)?;
     let custom_standards = collect_custom_standards(app);
-    let required = match expected_mode {
-        "backup_password" => crate::state::RequiredAccess::Full,
-        _ => crate::state::RequiredAccess::DailyPay,
-    };
-    let mut service = state.authorize_and_lock(required, password)?;
+    // H2: Changing backup destination folder / policy requires Full access even for encrypted_wallet mode.
+    let mut service = state.authorize_and_lock(crate::state::RequiredAccess::Full, password)?;
     let summary = sync_backup_folder_impl(
         Path::new(&folder_path),
         expected_mode,
@@ -821,7 +819,7 @@ pub(crate) async fn finalize_restored_wallet_and_reconcile_l2(
         state.ensure_profile_not_locked(old_folder)?;
     }
 
-    let (outcome, mut profile_name, custom_standards) = {
+    let (restored_session, outcome, mut profile_name, custom_standards) = {
         let mut service = state.lock_service()?;
         let (outcome, profile_name, custom_standards) = restore_backup_impl(
             source_path,
@@ -870,10 +868,11 @@ pub(crate) async fn finalize_restored_wallet_and_reconcile_l2(
         if let Err(e) = state.initialize_profile_session(&mut service, new_password) {
             log::warn!("Failed to initialize profile session after restore: {}", e);
         }
+        let restored_session = state.session_token_for_service(&service)?;
         drop(service);
         state.commit_profile_lock(pending_lock);
 
-        (outcome, resolved_name, custom_standards)
+        (restored_session, outcome, resolved_name, custom_standards)
     };
 
     if profile_name.is_empty() {
@@ -895,14 +894,19 @@ pub(crate) async fn finalize_restored_wallet_and_reconcile_l2(
     let l2_reconciliation_status = summary.status;
 
     // Mandatory SST-V4 offline-spend lock (§5)
-    let pending_restore_l2 = active_voucher_queries_count > 0 && !summary.all_responded;
-    {
-        let mut service = state.lock_service()?;
-        state
-            .mutate_internal_lifecycle(&mut service, Some(new_password), |lc| {
-                lc.pending_restore_l2_reconciliation = pending_restore_l2;
-            })
-            .map_err(FrontendError::from)?;
+    let pending_restore_l2 = active_voucher_queries_count > 0 && !summary.all_resolved;
+    let updated_lc = state.mutate_internal_lifecycle_for_session(
+        &restored_session,
+        Some(new_password),
+        |lc| {
+            lc.pending_restore_l2_reconciliation = pending_restore_l2;
+            true
+        },
+    )?;
+    if updated_lc.is_none() {
+        return Err(FrontendError::from(
+            "Restored wallet session changed before saving L2 reconciliation state".to_string(),
+        ));
     }
 
     // Clean up temporary staged file if source_path was from drop/sync staging
@@ -1640,49 +1644,94 @@ pub(crate) async fn sync_backup_with_standards_impl(
     custom_standards: HashMap<String, String>,
     state: &AppState,
 ) -> Result<FrontendBackupSyncResult, FrontendError> {
-    state.authorize(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
-    let security_policy = state.get_or_load_security_policy_locked(password.as_deref())?;
-    if !security_policy.sync_backup_enabled {
-        return Ok(FrontendBackupSyncResult {
-            uploaded_to: 0,
-            authorized_targets: 0,
-            padded_bytes: 0,
-            timestamp: None,
-            errors: Vec::new(),
-            retry_after_secs: None,
-            skipped_wifi_only: false,
-        });
-    }
+    let (session, resolved_pw) = state.authorize_and_begin_session_secret(
+        crate::state::RequiredAccess::DailyPay,
+        password.as_deref(),
+    )?;
+    let password = resolved_pw.as_deref().cloned();
 
-    let ui_prefs = state.get_or_load_ui_preferences_locked(password.as_deref())?;
-    if ui_prefs.market_poll_wifi_only && is_wifi == Some(false) {
-        return Ok(FrontendBackupSyncResult {
-            uploaded_to: 0,
-            authorized_targets: 0,
-            padded_bytes: 0,
-            timestamp: None,
-            errors: Vec::new(),
-            retry_after_secs: None,
-            skipped_wifi_only: true,
-        });
-    }
-
-    let (session, my_ed_sk, master_seed, my_prefix, own_admin_opt) = {
-        let mut service = state.lock_service()?;
-        let session = state.session_token_for_service(&service)?;
-        let (my_ed_sk, my_prefix) = service
-            .with_wallet_and_identity(|_w, id| {
-                let pfx = human_money_core::crypto::get_prefix_from_user_id(&id.user_id)
-                    .map(|s| s.to_string());
-                (id.signing_key.clone(), pfx)
-            })
-            .map_err(FrontendError::from)?;
-        let master_seed = my_ed_sk.to_bytes();
-        let own_admin_opt = crate::services::sync_engine::admin::load_stored_sync_admin_opt(
-            &mut service,
-            password.as_deref(),
+    let (security_policy, my_ed_sk, master_seed, my_prefix, own_admin_opt) = {
+        struct BackupSyncReady {
+            security_policy: crate::settings::SecurityPolicy,
+            my_ed_sk: ed25519_dalek::SigningKey,
+            master_seed: [u8; 32],
+            my_prefix: Option<String>,
+            own_admin_opt: Option<crate::state::StoredSyncAdmin>,
+        }
+        enum BackupSyncPrep {
+            Disabled,
+            SkipWifi,
+            Ready(Box<BackupSyncReady>),
+        }
+        let prep = state.with_session_required(
+            &session,
+            "Active wallet session changed before starting backup sync",
+            |service| {
+                let security_policy = state
+                    .get_or_load_security_policy(service, password.as_deref())
+                    .map_err(FrontendError::from)?;
+                if !security_policy.sync_backup_enabled {
+                    return Ok(BackupSyncPrep::Disabled);
+                }
+                let ui_prefs = state
+                    .get_or_load_ui_preferences(service, password.as_deref())
+                    .map_err(FrontendError::from)?;
+                if ui_prefs.market_poll_wifi_only && is_wifi == Some(false) {
+                    return Ok(BackupSyncPrep::SkipWifi);
+                }
+                let (my_ed_sk, my_prefix) = service
+                    .with_wallet_and_identity(|_w, id| {
+                        let pfx = human_money_core::crypto::get_prefix_from_user_id(&id.user_id)
+                            .map(|s| s.to_string());
+                        (id.signing_key.clone(), pfx)
+                    })
+                    .map_err(FrontendError::from)?;
+                let master_seed = my_ed_sk.to_bytes();
+                let own_admin_opt =
+                    crate::services::sync_engine::admin::load_stored_sync_admin_opt(
+                        service,
+                        password.as_deref(),
+                    )?;
+                Ok(BackupSyncPrep::Ready(Box::new(BackupSyncReady {
+                    security_policy,
+                    my_ed_sk,
+                    master_seed,
+                    my_prefix,
+                    own_admin_opt,
+                })))
+            },
         )?;
-        (session, my_ed_sk, master_seed, my_prefix, own_admin_opt)
+        match prep {
+            BackupSyncPrep::Disabled => {
+                return Ok(FrontendBackupSyncResult {
+                    uploaded_to: 0,
+                    authorized_targets: 0,
+                    padded_bytes: 0,
+                    timestamp: None,
+                    errors: Vec::new(),
+                    retry_after_secs: None,
+                    skipped_wifi_only: false,
+                });
+            }
+            BackupSyncPrep::SkipWifi => {
+                return Ok(FrontendBackupSyncResult {
+                    uploaded_to: 0,
+                    authorized_targets: 0,
+                    padded_bytes: 0,
+                    timestamp: None,
+                    errors: Vec::new(),
+                    retry_after_secs: None,
+                    skipped_wifi_only: true,
+                });
+            }
+            BackupSyncPrep::Ready(boxed) => (
+                boxed.security_policy,
+                boxed.my_ed_sk,
+                boxed.master_seed,
+                boxed.my_prefix,
+                boxed.own_admin_opt,
+            ),
+        }
     };
 
     // Gather candidate backup drops: selected friend drops + own drop + enabled public drops
@@ -1806,40 +1855,44 @@ pub(crate) async fn sync_backup_with_standards_impl(
         .unwrap_or(humoco_market::DROP_BACKUP_MAX_BYTES);
     let now_secs = crate::sync_client::current_unix_timestamp();
 
-    let (mut backup_sync_state, local_epoch, local_tx_nonce, local_seal_hash, probe_lock_pubs) = {
-        let mut service = state.lock_service()?;
-        let current_seal = service.get_current_seal().map_err(FrontendError::from)?;
-        let (local_epoch, local_tx_nonce, local_seal_hash) = match current_seal {
-            Some(s) => {
-                let h = s.compute_hash().unwrap_or_default();
-                (s.payload.epoch, s.payload.tx_nonce, h)
-            }
-            None => (0, 0, String::new()),
-        };
-        let stored_state: crate::state::StoredBackupSyncState =
-            crate::state::load_local_sidecar_json_or_default(
-                &mut service,
-                crate::state::BACKUP_SYNC_STATE_KEY,
-                password.as_deref(),
-            )
-            .map_err(FrontendError::from)?;
-        let lc = state
-            .get_or_load_internal_lifecycle(&mut service, password.as_deref())
-            .map_err(FrontendError::from)?;
-        let mut lock_pubs = std::collections::HashMap::new();
-        for (url_key, probe) in &lc.l2_probe_cache {
-            if !probe.lock_pub.is_empty() {
-                lock_pubs.insert(url_key.clone(), probe.lock_pub.clone());
-            }
-        }
-        (
-            stored_state,
-            local_epoch,
-            local_tx_nonce,
-            local_seal_hash,
-            lock_pubs,
-        )
-    };
+    let (mut backup_sync_state, local_epoch, local_tx_nonce, local_seal_hash, probe_lock_pubs) =
+        state.with_session_required(
+            &session,
+            "Active wallet session changed before preparing backup upload",
+            |service| {
+                let current_seal = service.get_current_seal().map_err(FrontendError::from)?;
+                let (local_epoch, local_tx_nonce, local_seal_hash) = match current_seal {
+                    Some(s) => {
+                        let h = s.compute_hash().unwrap_or_default();
+                        (s.payload.epoch, s.payload.tx_nonce, h)
+                    }
+                    None => (0, 0, String::new()),
+                };
+                let stored_state: crate::state::StoredBackupSyncState =
+                    crate::state::load_local_sidecar_json_or_default(
+                        service,
+                        crate::state::BACKUP_SYNC_STATE_KEY,
+                        password.as_deref(),
+                    )
+                    .map_err(FrontendError::from)?;
+                let lc = state
+                    .get_or_load_internal_lifecycle(service, password.as_deref())
+                    .map_err(FrontendError::from)?;
+                let mut lock_pubs = std::collections::HashMap::new();
+                for (url_key, probe) in &lc.l2_probe_cache {
+                    if !probe.lock_pub.is_empty() {
+                        lock_pubs.insert(url_key.clone(), probe.lock_pub.clone());
+                    }
+                }
+                Ok((
+                    stored_state,
+                    local_epoch,
+                    local_tx_nonce,
+                    local_seal_hash,
+                    lock_pubs,
+                ))
+            },
+        )?;
 
     // Pre-Upload Remote Seal Inspection & Rollback / Unexpected-Loss Detection
     let mut errors = Vec::new();
@@ -1898,10 +1951,11 @@ pub(crate) async fn sync_backup_with_standards_impl(
                 continue;
             };
 
-            let inspect_res = {
-                let service = state.lock_service()?;
-                service.inspect_mnemonic_backup_with_unlocked_identity(&manifest_bytes)
-            };
+            let inspect_res = state.with_session_required(
+                &session,
+                "Active wallet session changed during backup inspection",
+                |service| Ok(service.inspect_mnemonic_backup_with_unlocked_identity(&manifest_bytes)),
+            )?;
             let report = match inspect_res {
                 Ok(r) => r,
                 Err(err) => {
@@ -2042,8 +2096,10 @@ pub(crate) async fn sync_backup_with_standards_impl(
         base_padded_bytes,
         delta_padded_opt,
         pending_seal_hash,
-    ) = {
-        let mut service = state.lock_service()?;
+    ) = state.with_session_required(
+        &session,
+        "Active wallet session changed before creating backup payload",
+        |service| {
 
         let pending_seal_hash = service
             .get_current_seal()
@@ -2125,14 +2181,14 @@ pub(crate) async fn sync_backup_with_standards_impl(
             (None, None, None)
         };
 
-        (
+        Ok((
             base_m_bytes,
             base_m_sha,
             base_padded,
             delta_attempt,
             pending_seal_hash,
-        )
-    };
+        ))
+    })?;
 
     let client = crate::sync_client::create_sync_http_client();
     let mut uploaded_to = 0;
@@ -2507,6 +2563,7 @@ pub(crate) async fn probe_sync_backup_impl(
     tmp_restore_dir: &Path,
     state: &AppState,
 ) -> Result<SyncBackupProbeResultDto, FrontendError> {
+    let start_generation = state.current_session_generation();
     let cleaned_prefix = user_prefix
         .as_deref()
         .map(str::trim)
@@ -2830,10 +2887,22 @@ pub(crate) async fn probe_sync_backup_impl(
         Option<ResolvedSyncTargetDto>,
     )> = Vec::new();
 
+    if !state.is_generation_current(start_generation) {
+        return Err(FrontendError::from(
+            "Wallet session changed while probing remote sync backups".to_string(),
+        ));
+    }
+
     for (unpadded, kind, source_url, fallback_target) in downloaded {
         let staged_file_name = format!("sync_restore_{}.hmcbackup", uuid::Uuid::new_v4());
         let staged_path = tmp_restore_dir.join(staged_file_name);
         if write_file_atomic(&staged_path, &unpadded).is_ok() {
+            if !state.is_generation_current(start_generation) {
+                let _ = fs::remove_file(&staged_path);
+                return Err(FrontendError::from(
+                    "Wallet session changed while inspecting downloaded backups".to_string(),
+                ));
+            }
             let service = state.lock_service()?;
             if let Ok(inspection) = inspect_backup_with_collision_impl(
                 &staged_path,
@@ -2947,8 +3016,11 @@ pub(crate) async fn reconcile_restored_wallet_l2_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendRestoreReconcileResultDto, FrontendError> {
-    let session =
-        state.authorize_and_begin_session(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
+    let (session, resolved_pw) = state.authorize_and_begin_session_secret(
+        crate::state::RequiredAccess::DailyPay,
+        password.as_deref(),
+    )?;
+    let password = resolved_pw.as_deref().cloned();
     let summary = crate::services::l2_anchor_service::reconcile_vouchers_via_static_locks(
         state,
         None,
@@ -2961,9 +3033,17 @@ pub(crate) async fn reconcile_restored_wallet_l2_impl(
     let l2_reconciliation_status = summary.status;
 
     let mut pending_restore_l2 = state
-        .get_or_load_internal_lifecycle_locked(password.as_deref())?
+        .with_session_required(
+            &session,
+            "Active wallet session changed during restore reconciliation",
+            |service| {
+                state
+                    .get_or_load_internal_lifecycle(service, password.as_deref())
+                    .map_err(FrontendError::from)
+            },
+        )?
         .pending_restore_l2_reconciliation;
-    if summary.all_responded || active_voucher_queries_count == 0 {
+    if summary.all_resolved || active_voucher_queries_count == 0 {
         let cleared = state.with_session(&session, |service| {
             crate::services::l2_anchor_service::clear_fork_lock_for_service(
                 service,
@@ -3005,10 +3085,11 @@ pub(crate) fn dismiss_wallet_sync_alert_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<(), FrontendError> {
-    let mut service =
-        state.authorize_and_lock(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
+    let (mut service, resolved_pw) = state
+        .authorize_and_lock_secret(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
+    let pw = resolved_pw.as_deref().map(String::as_str);
     state
-        .mutate_internal_lifecycle(&mut service, password.as_deref(), |lc| {
+        .mutate_internal_lifecycle(&mut service, pw, |lc| {
             if let Some(ref alert) = lc.wallet_sync_alert {
                 if alert.kind == "server_rollback" || alert.kind == "unexpected_data_loss" {
                     lc.wallet_sync_alert = None;

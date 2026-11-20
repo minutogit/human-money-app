@@ -154,9 +154,8 @@ function classifyJsonObject(obj: Record<string, unknown>): HumocoFileClassificat
     }
 
     if (
-        (typeof obj.proofId === 'string' || typeof obj.proof_id === 'string') &&
-        (Array.isArray(obj.conflictingTransactions) ||
-            Array.isArray(obj.conflicting_transactions))
+        typeof obj.proof_id === 'string' &&
+        Array.isArray(obj.conflicting_transactions)
     ) {
         return { kind: 'proof', source: 'magic', containerType: 'ProofOfDoubleSpend' };
     }
@@ -248,9 +247,8 @@ export function extractDetachedSignatureVoucherId(
             const payloadStr = window.atob(base64);
             const sigObj = JSON.parse(payloadStr) as {
                 Signature?: { voucher_id?: unknown };
-                voucher_id?: unknown;
             };
-            const inner = sigObj.Signature || sigObj;
+            const inner = sigObj.Signature;
             if (inner && typeof inner.voucher_id === 'string') {
                 return inner.voucher_id;
             }

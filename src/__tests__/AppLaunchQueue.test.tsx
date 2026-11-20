@@ -1,9 +1,11 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, act } from '@testing-library/react';
 import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
 import { invoke } from '@tauri-apps/api/core';
+import { readFile } from '@tauri-apps/plugin-fs';
 import App from '../App';
 
 const mockNavigate = vi.fn();
+let capturedOnFinishLaunchItem: ((item: string) => void) | undefined;
 const mockSetPendingDroppedFile = vi.fn();
 const mockSessionState = {
   isForkLocked: false,
@@ -57,7 +59,10 @@ vi.mock('../components/shell/Header', () => ({
   Header: () => <div data-testid="header" />,
 }));
 vi.mock('../components/shell/AppRouter', () => ({
-  AppRouter: () => <div data-testid="router" />,
+  AppRouter: ({ onFinishLaunchItem }: { onFinishLaunchItem?: (item: string) => void }) => {
+    capturedOnFinishLaunchItem = onFinishLaunchItem;
+    return <div data-testid="router" />;
+  },
 }));
 vi.mock('../components/shell/GlobalFileDropZone', () => ({
   GlobalFileDropZone: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -78,7 +83,9 @@ vi.mock('../components/auth/ForkLockOverlay', () => ({
 describe('App FIFO launch queue with deferred ack (H9)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    capturedOnFinishLaunchItem = undefined;
     mockSessionState.isAuthenticated = false;
+    mockSessionState.protectAction.mockImplementation(async (fn: (pwd: string | null) => Promise<unknown>) => fn(null));
     mockNavState.appState = { view: 'needs_login' };
   });
 
@@ -152,5 +159,104 @@ describe('App FIFO launch queue with deferred ack (H9)', () => {
       initialMethod: 'words_or_sheet',
       initialPayload: kitUri,
     });
+  });
+
+  it('H11: reserves receive_bundle launch items until finished and preserves them on logout without ack', async () => {
+    const fileItem = '/tmp/incoming-payment.transfer';
+    const followUpUri = 'humoco://pay?to=did:key:zBob&amount=9';
+    const transferBytes = new TextEncoder().encode(
+      JSON.stringify({ c: 'TransactionBundle', payload: 'abc' }),
+    );
+    (readFile as Mock).mockResolvedValue(transferBytes);
+    const acked: string[] = [];
+
+    (invoke as Mock).mockImplementation(async (cmd: string, args?: { item?: string }) => {
+      if (cmd === 'peek_startup_launch_items') return [fileItem, followUpUri];
+      if (cmd === 'ack_startup_launch_item' && args?.item) {
+        acked.push(args.item);
+        return true;
+      }
+      return undefined;
+    });
+
+    mockSessionState.isAuthenticated = true;
+    mockNavState.appState = { view: 'logged_in' };
+    const { rerender } = render(<App />);
+
+    await waitFor(() => {
+      expect(mockNavigate).toHaveBeenCalledWith({
+        view: 'receive_bundle',
+        droppedFile: {
+          name: 'incoming-payment.transfer',
+          bytes: Array.from(transferBytes),
+          launchItem: fileItem,
+        },
+      });
+    });
+
+    // Item stays reserved/un-acked and blocks follow-up queue items until finished
+    expect(acked).toEqual([]);
+    expect(mockNavigate).toHaveBeenCalledTimes(1);
+
+    // User logs out before finishing -> reserved item MUST remain un-acked in backend
+    mockSessionState.isAuthenticated = false;
+    mockNavState.appState = { view: 'needs_login' };
+    rerender(<App />);
+    await waitFor(() => {
+      expect(screen.getByTestId('pending-deeplink-banner')).toBeInTheDocument();
+    });
+    expect(acked).toEqual([]);
+
+    // User logs back in -> reserved item re-opens; only when finished does it ack & advance
+    mockNavigate.mockClear();
+    mockSessionState.isAuthenticated = true;
+    mockNavState.appState = { view: 'logged_in' };
+    rerender(<App />);
+
+    await waitFor(() => {
+      expect(mockNavigate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          view: 'receive_bundle',
+          droppedFile: expect.objectContaining({ launchItem: fileItem }),
+        }),
+      );
+    });
+    expect(acked).toEqual([]);
+
+    await act(async () => {
+      capturedOnFinishLaunchItem?.(fileItem);
+    });
+
+    await waitFor(() => {
+      expect(acked).toEqual([fileItem, followUpUri]);
+    });
+    expect(mockNavigate).toHaveBeenCalledWith({
+      view: 'send_vouchers',
+      initialPaymentUri: followUpUri,
+    });
+  });
+
+  it('H11: does not ack card deep links when protectAction is cancelled', async () => {
+    const cardUri = 'humoco://card?env=eyJjYXJkX3dpcmUiOiJhLmIuYyJ9';
+    const acked: string[] = [];
+    mockSessionState.protectAction.mockResolvedValueOnce(undefined);
+    mockSessionState.isAuthenticated = true;
+    mockNavState.appState = { view: 'logged_in' };
+
+    (invoke as Mock).mockImplementation(async (cmd: string, args?: { item?: string }) => {
+      if (cmd === 'peek_startup_launch_items') return [cardUri];
+      if (cmd === 'ack_startup_launch_item' && args?.item) {
+        acked.push(args.item);
+        return true;
+      }
+      return undefined;
+    });
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(mockSessionState.protectAction).toHaveBeenCalledTimes(1);
+    });
+    expect(acked).toEqual([]);
   });
 });

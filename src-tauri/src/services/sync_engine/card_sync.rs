@@ -688,11 +688,11 @@ pub(crate) fn import_decrypted_card_bundle(
     read_url: &str,
     now_secs: u64,
     max_stored_cards: usize,
-    state: &AppState,
-    service: &mut AppService,
+    service: &AppService,
     store: &mut humoco_market::CardStore,
     sync_state: &mut StoredSyncState,
-    password: Option<&str>,
+    address_book: &mut FrontendAddressBook,
+    contacts_changed: &mut bool,
 ) -> (usize, usize) {
     let mut count = 0;
     let mut new_ads = 0;
@@ -746,13 +746,14 @@ pub(crate) fn import_decrypted_card_bundle(
                     .map(Into::into)
                     .collect();
                 let card_profile = humoco_market::extract_public_profile(&stored.card);
-                state.update_contact_from_card(
-                    service,
+                if crate::state::apply_contact_update_from_card(
+                    address_book,
                     &did,
                     &card_syncs,
                     Some(&card_profile),
-                    password,
-                );
+                ) {
+                    *contacts_changed = true;
+                }
             }
         }
     }

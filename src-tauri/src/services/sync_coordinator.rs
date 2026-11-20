@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 
 use tauri::{Emitter, Manager};
 
+use crate::models::MarketSyncStatus;
 use crate::services::{
     backup_service, l2_anchor_service, post_service, sync_engine,
 };
@@ -41,10 +42,13 @@ pub(crate) struct CoordinatorSchedule {
     pub next_local_backup_at: Option<Instant>,
     pub next_sync_backup_at: Option<Instant>,
     pub next_sync_backup_forced: bool,
+    pub sync_backup_deferred_for_wifi: bool,
     pub last_sync_backup_success_at: Option<Instant>,
     pub next_post_at: Option<Instant>,
+    pub post_deferred_for_wifi: bool,
     pub next_market_at: Option<Instant>,
     pub next_market_force_upload: bool,
+    pub market_deferred_for_wifi: bool,
 }
 
 impl CoordinatorSchedule {
@@ -54,10 +58,13 @@ impl CoordinatorSchedule {
         self.next_local_backup_at = Some(now + LOCAL_BACKUP_INITIAL_DELAY);
         self.next_sync_backup_at = Some(now + SYNC_BACKUP_INITIAL_DELAY);
         self.next_sync_backup_forced = false;
+        self.sync_backup_deferred_for_wifi = false;
         self.last_sync_backup_success_at = None;
         self.next_post_at = Some(now + POST_INITIAL_DELAY);
+        self.post_deferred_for_wifi = false;
         self.next_market_at = Some(now + MARKET_INITIAL_DELAY);
         self.next_market_force_upload = false;
+        self.market_deferred_for_wifi = false;
     }
 
     pub fn clear(&mut self) {
@@ -66,10 +73,28 @@ impl CoordinatorSchedule {
         self.next_local_backup_at = None;
         self.next_sync_backup_at = None;
         self.next_sync_backup_forced = false;
+        self.sync_backup_deferred_for_wifi = false;
         self.last_sync_backup_success_at = None;
         self.next_post_at = None;
+        self.post_deferred_for_wifi = false;
         self.next_market_at = None;
         self.next_market_force_upload = false;
+        self.market_deferred_for_wifi = false;
+    }
+
+    pub fn promote_wifi_deferred(&mut self, is_online: bool, is_wifi: bool, now: Instant) {
+        if !(is_online && is_wifi) {
+            return;
+        }
+        if std::mem::take(&mut self.sync_backup_deferred_for_wifi) {
+            self.next_sync_backup_at = Some(now);
+        }
+        if std::mem::take(&mut self.post_deferred_for_wifi) {
+            self.next_post_at = Some(now);
+        }
+        if std::mem::take(&mut self.market_deferred_for_wifi) {
+            self.next_market_at = Some(now);
+        }
     }
 
     pub fn apply_wake(&mut self, wake: SyncWakeRequest, now: Instant) {
@@ -213,6 +238,7 @@ async fn run_coordinator_loop(app: tauri::AppHandle) {
         if !pending_wake.is_empty() {
             schedule.apply_wake(pending_wake, now);
         }
+        schedule.promote_wifi_deferred(ctrl.is_online, ctrl.is_wifi, now);
 
         // 1. WalletSeal check (local check; triggers backup immediately when PendingUpload is detected)
         if schedule.next_seal_at.is_some_and(|t| now >= t) {
@@ -264,6 +290,12 @@ async fn run_coordinator_loop(app: tauri::AppHandle) {
                 match backup_service::sync_backup_impl(None, Some(ctrl.is_wifi), &state, &app).await
                 {
                     Ok(res) if state.is_generation_current(generation) => {
+                        if res.skipped_wifi_only {
+                            if forced {
+                                schedule.next_sync_backup_forced = true;
+                            }
+                            schedule.sync_backup_deferred_for_wifi = true;
+                        }
                         if let Some(secs) = res.retry_after_secs {
                             state.record_sync_cooldown(secs);
                         }
@@ -307,6 +339,9 @@ async fn run_coordinator_loop(app: tauri::AppHandle) {
             .await
             {
                 Ok(res) if state.is_generation_current(generation) => {
+                    if res.skipped_wifi_only {
+                        schedule.post_deferred_for_wifi = true;
+                    }
                     if let Some(secs) = res.retry_after_secs {
                         state.record_sync_cooldown(secs);
                     }
@@ -364,6 +399,12 @@ async fn run_coordinator_loop(app: tauri::AppHandle) {
                 .await
                 {
                     Ok(res) if state.is_generation_current(generation) => {
+                        if res.status == MarketSyncStatus::SkippedWifiOnly {
+                            if force_upload {
+                                schedule.next_market_force_upload = true;
+                            }
+                            schedule.market_deferred_for_wifi = true;
+                        }
                         if let Some(secs) = res.retry_after_secs {
                             state.record_sync_cooldown(secs);
                         }
@@ -443,6 +484,47 @@ mod tests {
         assert_eq!(sched.active_generation, 0);
         assert!(!sched.next_sync_backup_forced);
         assert!(!sched.next_market_force_upload);
+        assert!(!sched.sync_backup_deferred_for_wifi);
+        assert!(!sched.post_deferred_for_wifi);
+        assert!(!sched.market_deferred_for_wifi);
         assert_eq!(sched.earliest_due(true, None), None);
+    }
+
+    #[test]
+    fn f4_wifi_deferred_jobs_promote_immediately_when_wifi_returns() {
+        let t0 = Instant::now();
+        let mut sched = CoordinatorSchedule::default();
+        sched.reset_for_session(1, t0);
+        sched.next_sync_backup_at = Some(t0 + SYNC_BACKUP_DAILY_INTERVAL);
+        sched.next_post_at = Some(t0 + POST_PERIODIC_INTERVAL);
+        sched.next_market_at = Some(t0 + MARKET_PERIODIC_INTERVAL);
+        sched.sync_backup_deferred_for_wifi = true;
+        sched.next_sync_backup_forced = true;
+        sched.post_deferred_for_wifi = true;
+        sched.market_deferred_for_wifi = true;
+        sched.next_market_force_upload = true;
+
+        let t1 = t0 + Duration::from_secs(10);
+        // Online on cellular (!is_wifi): deferred flags stay queued, timers stay at long interval.
+        sched.promote_wifi_deferred(true, false, t1);
+        assert!(sched.sync_backup_deferred_for_wifi);
+        assert!(sched.post_deferred_for_wifi);
+        assert!(sched.market_deferred_for_wifi);
+        assert_eq!(
+            sched.next_market_at,
+            Some(t0 + MARKET_PERIODIC_INTERVAL)
+        );
+
+        // Switching to Wi-Fi while online promotes all deferred jobs to run immediately.
+        let t2 = t0 + Duration::from_secs(15);
+        sched.promote_wifi_deferred(true, true, t2);
+        assert!(!sched.sync_backup_deferred_for_wifi);
+        assert!(!sched.post_deferred_for_wifi);
+        assert!(!sched.market_deferred_for_wifi);
+        assert!(sched.next_sync_backup_forced);
+        assert!(sched.next_market_force_upload);
+        assert_eq!(sched.next_sync_backup_at, Some(t2));
+        assert_eq!(sched.next_post_at, Some(t2));
+        assert_eq!(sched.next_market_at, Some(t2));
     }
 }

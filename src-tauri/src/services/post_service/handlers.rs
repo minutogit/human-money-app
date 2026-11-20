@@ -24,7 +24,16 @@ use crate::services::recovery_service::{
 };
 use crate::state::{AppState, StoredPostState};
 
-use super::{check_inquiry_target, queue_receipt, queue_sealed_reply, resolve_counterparty_info};
+use super::{
+    check_inquiry_target, queue_receipt, queue_sealed_reply, resolve_counterparty_info_for_session,
+};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PostDispatchOutcome {
+    Handled,
+    RetryLater,
+    UnsupportedPayload { payload_type: String },
+}
 
 /// Counters and notices accumulated while dispatching decrypted incoming Post envelopes.
 #[derive(Default)]
@@ -44,6 +53,7 @@ pub(crate) struct PostDispatchStats {
 /// Borrowed context shared by all incoming Post payload handlers.
 pub(crate) struct PostEnvelopeContext<'a> {
     pub state: &'a AppState,
+    pub session: &'a crate::session::SessionToken,
     pub app: Option<&'a tauri::AppHandle>,
     pub extra_standards: Option<&'a HashMap<String, String>>,
     pub password: Option<&'a str>,
@@ -57,51 +67,72 @@ pub(crate) struct PostEnvelopeContext<'a> {
     pub now_secs: u64,
 }
 
+fn payload_type_label(payload_type: &PayloadType) -> String {
+    match payload_type {
+        PayloadType::Generic(s) => s.clone(),
+        other => format!("{:?}", other),
+    }
+}
+
 /// Dispatches a verified and decrypted Post container payload to its domain handler.
-/// Returns `true` if `msg_id` may be marked processed, or `false` when a transient/locked-state
-/// error occurred so the message stays eligible for retry after unlock.
-pub(crate) fn dispatch_post_payload(
+/// Returns `Handled` when `msg_id` may be marked processed, `RetryLater` when a transient/locked-state
+/// error occurred so the message stays eligible for retry, or `UnsupportedPayload` when the payload
+/// type is not recognized by this client version.
+pub(crate) async fn dispatch_post_payload(
     ctx: &PostEnvelopeContext<'_>,
     payload_type: &PayloadType,
     post_state: &mut StoredPostState,
     stats: &mut PostDispatchStats,
-) -> bool {
+) -> PostDispatchOutcome {
+    let as_outcome = |ok: bool| {
+        if ok {
+            PostDispatchOutcome::Handled
+        } else {
+            PostDispatchOutcome::RetryLater
+        }
+    };
     match payload_type {
-        PayloadType::TransactionBundle => handle_transaction_bundle(ctx, post_state, stats),
+        PayloadType::TransactionBundle => {
+            handle_transaction_bundle(ctx, post_state, stats).await
+        }
         PayloadType::VoucherForSigning => {
             handle_voucher_for_signing(ctx, post_state, stats);
-            true
+            PostDispatchOutcome::Handled
         }
-        PayloadType::DetachedSignature => handle_detached_signature(ctx, post_state, stats),
+        PayloadType::DetachedSignature => {
+            as_outcome(handle_detached_signature(ctx, post_state, stats))
+        }
         PayloadType::TrustAssertion => {
             handle_trust_assertion(ctx, post_state, stats);
-            true
+            PostDispatchOutcome::Handled
         }
         PayloadType::Generic(ref s) if s == PAYLOAD_POST_RECEIPT_V1 => {
             handle_post_receipt(ctx, post_state, stats);
-            true
+            PostDispatchOutcome::Handled
         }
         PayloadType::Generic(ref s) if s == PAYLOAD_MARKET_INQUIRY_V1 => {
             handle_market_inquiry(ctx, post_state, stats);
-            true
+            PostDispatchOutcome::Handled
         }
         PayloadType::Generic(ref s) if s == PAYLOAD_MARKET_INQUIRY_MESSAGE_V1 => {
             handle_market_inquiry_message(ctx, post_state, stats);
-            true
+            PostDispatchOutcome::Handled
         }
         PayloadType::Generic(ref s) if s == humoco_market::PAYLOAD_GUARDIAN_ASSIGN_V1 => {
-            handle_guardian_assign(ctx, post_state, stats)
+            as_outcome(handle_guardian_assign(ctx, post_state, stats))
         }
         PayloadType::Generic(ref s) if s == humoco_market::PAYLOAD_GUARDIAN_ACK_V1 => {
-            handle_guardian_ack(ctx, post_state, stats)
+            as_outcome(handle_guardian_ack(ctx, post_state, stats))
         }
         PayloadType::Generic(ref s) if s == humoco_market::PAYLOAD_GUARDIAN_LOCATOR_V1 => {
-            handle_guardian_locator(ctx, post_state, stats)
+            as_outcome(handle_guardian_locator(ctx, post_state, stats))
         }
         PayloadType::Generic(ref s) if s == humoco_market::PAYLOAD_GUARDIAN_REVOKE_V1 => {
-            handle_guardian_revoke(ctx, post_state, stats)
+            as_outcome(handle_guardian_revoke(ctx, post_state, stats))
         }
-        _ => true,
+        _ => PostDispatchOutcome::UnsupportedPayload {
+            payload_type: payload_type_label(payload_type),
+        },
     }
 }
 
@@ -123,154 +154,206 @@ fn queue_ack_receipt(
     );
 }
 
-fn handle_transaction_bundle(
+async fn handle_transaction_bundle(
     ctx: &PostEnvelopeContext<'_>,
     post_state: &mut StoredPostState,
     stats: &mut PostDispatchStats,
-) -> bool {
+) -> PostDispatchOutcome {
     let all_standards = load_all_standard_tomls(ctx.app, ctx.extra_standards);
-    let archive = ctx.app.and_then(|a| {
-        let service = ctx.state.service.lock().unwrap();
-        crate::services::common::open_wallet_archive(a, &service)
-    });
+    let verification = match crate::checkout::verify_bundle_l2_precommit(
+        ctx.state,
+        ctx.session,
+        &ctx.envelope.container_bytes,
+        ctx.password,
+    )
+    .await
+    {
+        Ok(crate::checkout::PrecommitL2Verification::RetryLater { reason }) => {
+            stats.errors.push(reason);
+            return PostDispatchOutcome::RetryLater;
+        }
+        Ok(v) => v,
+        Err(err) => {
+            stats.errors.push(format!(
+                "Pre-commit L2 verification failed: {}",
+                err.message
+            ));
+            return PostDispatchOutcome::RetryLater;
+        }
+    };
 
-    let receive_outcome = {
-        let mut service = ctx.state.service.lock().unwrap();
-        service.receive_bundle(
+    let (is_conflict, l2_evidence_owned) = match verification {
+        crate::checkout::PrecommitL2Verification::OfflineOnly => (false, None),
+        crate::checkout::PrecommitL2Verification::CleanQuorum {
+            quorum_certificates,
+            pow_base_bits,
+        } => (
+            false,
+            Some((quorum_certificates, Vec::new(), pow_base_bits)),
+        ),
+        crate::checkout::PrecommitL2Verification::ConflictDetected {
+            quorum_certificates,
+            competing_entries,
+            pow_base_bits,
+        } => (
+            true,
+            Some((quorum_certificates, competing_entries, pow_base_bits)),
+        ),
+        crate::checkout::PrecommitL2Verification::RetryLater { .. } => unreachable!(),
+    };
+
+    enum BundleCommitOutcome {
+        Committed(String),
+        CoreError(human_money_core::Error),
+    }
+
+    let commit_res = ctx.state.with_session(ctx.session, |service| {
+        let archive = ctx
+            .app
+            .and_then(|a| crate::services::common::open_wallet_archive(a, service));
+        let baseline_history = ctx
+            .state
+            .load_history_from_disk(service, ctx.password)
+            .map_err(crate::models::FrontendError::from)?;
+        let l2_evidence = l2_evidence_owned.as_ref().map(|(qcs, comp, bits)| {
+            human_money_core::ReceiveL2Evidence {
+                quorum_certificates: qcs.as_slice(),
+                competing_entries: comp.as_slice(),
+                pow_base_bits: *bits,
+            }
+        });
+        let next_history_cell = std::cell::RefCell::new(None::<Vec<TransactionRecord>>);
+        match service.receive_bundle_with_companions(
             &ctx.envelope.container_bytes,
             &all_standards,
             archive.as_ref(),
             ctx.password,
             false,
-        )
+            l2_evidence.as_ref(),
+            |result, _wallet| {
+                let notes = result
+                    .header
+                    .notes
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string);
+                let record = TransactionRecord {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    direction: "received".to_string(),
+                    recipient_id: result.header.recipient_id.clone(),
+                    sender_id: result.header.sender_id.clone(),
+                    timestamp: Utc::now().to_rfc3339(),
+                    summable_amounts: result.transfer_summary.summable_amounts.clone(),
+                    countable_items: result.transfer_summary.countable_items.clone(),
+                    involved_vouchers: result.involved_vouchers.clone(),
+                    involved_sources_details: Some(
+                        result
+                            .involved_vouchers_details
+                            .iter()
+                            .cloned()
+                            .map(Into::into)
+                            .collect(),
+                    ),
+                    bundle_data: Vec::new(),
+                    bundle_id: result.header.bundle_id.clone(),
+                    notes,
+                    sender_profile_name: result.header.sender_profile_name.clone(),
+                };
+                let (blobs, next_hist) = crate::state::prepare_receive_history_companion(
+                    &baseline_history,
+                    record,
+                )
+                .map_err(|e| {
+                    human_money_core::Error::Storage(
+                        human_money_core::StorageError::InvalidFormat(e.message),
+                    )
+                })?;
+                *next_history_cell.borrow_mut() = Some(next_hist);
+                Ok(blobs)
+            },
+        ) {
+            Ok(result) => {
+                if let Some(next_hist) = next_history_cell.into_inner() {
+                    ctx.state.write_cache_slot_for_service(
+                        service,
+                        |c| &mut c.history,
+                        Some(next_hist),
+                    );
+                }
+                let _ = ctx.state.refresh_events_cache(service, ctx.password);
+                if let Some(ref wot_json) = result.wot_sync_json {
+                    ctx.state.try_import_piggybacked_wot(
+                        service,
+                        wot_json,
+                        &result.header.sender_id,
+                        ctx.password,
+                    );
+                }
+                if let Some(ref card_json) = result.contact_card_json {
+                    ctx.state.try_import_piggybacked_contact_card(
+                        service,
+                        Some(card_json),
+                        ctx.password,
+                    );
+                }
+                Ok(BundleCommitOutcome::Committed(result.header.bundle_id))
+            }
+            Err(e) => Ok(BundleCommitOutcome::CoreError(e)),
+        }
+    });
+
+    let outcome = match commit_res {
+        Ok(Some(res)) => res,
+        Ok(None) => {
+            stats.errors.push(
+                "Receive payment bundle deferred: active wallet session changed".to_string(),
+            );
+            return PostDispatchOutcome::RetryLater;
+        }
+        Err(err) => {
+            stats
+                .errors
+                .push(format!("Receive payment bundle failed: {}", err.message));
+            return PostDispatchOutcome::RetryLater;
+        }
     };
 
-    let (bundle_id, should_mark_processed) = match receive_outcome {
-        Ok(result) => {
+    match outcome {
+        BundleCommitOutcome::Committed(bundle_id) => {
             stats.imported_payments += 1;
-            let mut service = ctx.state.service.lock().unwrap();
-            let notes = result
-                .header
-                .notes
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(str::to_string);
-            let record = TransactionRecord {
-                id: uuid::Uuid::new_v4().to_string(),
-                direction: "received".to_string(),
-                recipient_id: result.header.recipient_id.clone(),
-                sender_id: result.header.sender_id.clone(),
-                timestamp: Utc::now().to_rfc3339(),
-                summable_amounts: result.transfer_summary.summable_amounts.clone(),
-                countable_items: result.transfer_summary.countable_items.clone(),
-                involved_vouchers: result.involved_vouchers.clone(),
-                involved_sources_details: Some(
-                    result
-                        .involved_vouchers_details
-                        .iter()
-                        .cloned()
-                        .map(Into::into)
-                        .collect(),
-                ),
-                bundle_data: Vec::new(),
-                bundle_id: result.header.bundle_id.clone(),
-                notes,
-                sender_profile_name: result.header.sender_profile_name.clone(),
-            };
-            let _ = ctx
-                .state
-                .append_to_history(&mut service, record, ctx.password);
-            let _ = ctx.state.refresh_events_cache(&mut service, ctx.password);
-
-            if let Some(ref wot_json) = result.wot_sync_json {
-                ctx.state.try_import_piggybacked_wot(
-                    &mut service,
-                    wot_json,
-                    &result.header.sender_id,
-                    ctx.password,
-                );
-            }
-            if let Some(ref card_json) = result.contact_card_json {
-                ctx.state.try_import_piggybacked_contact_card(
-                    &mut service,
-                    Some(card_json),
-                    ctx.password,
-                );
-            }
-            let has_l2_anchor = result.involved_vouchers.iter().any(|local_id| {
-                service
-                    .with_wallet(|w| {
-                        w.get_voucher_instance(local_id)
-                            .is_some_and(|inst| inst.voucher.layer2_anchor.is_some())
-                    })
-                    .unwrap_or(false)
-            });
-            drop(service);
-
-            if has_l2_anchor {
-                if let (Some(app_handle), Ok(_rt)) =
-                    (ctx.app.cloned(), tokio::runtime::Handle::try_current())
-                {
-                    let session = crate::session::SessionToken {
-                        generation: ctx.state.current_session_generation(),
-                        owner_did: ctx.my_identity.user_id.clone(),
-                    };
-                    let bundle_bytes = ctx.envelope.container_bytes.clone();
-                    tokio::spawn(async move {
-                        use tauri::{Emitter, Manager};
-                        let state = app_handle.state::<crate::AppState>();
-                        match crate::checkout::verify_committed_bundle_l2(
-                            &state,
-                            &session,
-                            &bundle_bytes,
-                            None,
-                        )
-                        .await
-                        {
-                            Ok(true) => {
-                                let _ = app_handle.emit("humoco://conflicts-updated", ());
-                            }
-                            Ok(false) => {}
-                            Err(err) => {
-                                log::warn!(
-                                    "Background L2 check after PoST payment failed: {}",
-                                    err.message
-                                );
-                            }
-                        }
-                    });
+            if is_conflict {
+                if let Some(app_handle) = ctx.app {
+                    use tauri::Emitter;
+                    let _ = app_handle.emit("humoco://conflicts-updated", ());
                 }
             }
-
-            (Some(result.header.bundle_id), true)
+            queue_ack_receipt(ctx, post_state, Some(&bundle_id));
+            PostDispatchOutcome::Handled
         }
-        Err(e) => {
+        BundleCommitOutcome::CoreError(e) => {
             let is_sibling_subaccount = matches!(
                 &e,
                 human_money_core::VoucherCoreError::BundleRecipientMismatch { expected, found }
                     if crate::state::canonicalize_did(expected)
                         .ok()
-                        .is_some_and(|ce| crate::state::canonicalize_did(found).ok().as_ref() == Some(&ce))
+                        .is_some_and(|ce| {
+                            crate::state::canonicalize_did(found).ok().as_ref() == Some(&ce)
+                        })
             );
             let err_lower = e.to_string().to_ascii_lowercase();
             let is_duplicate =
                 err_lower.contains("already processed") || err_lower.contains("duplicate");
             if is_sibling_subaccount || is_duplicate {
-                (None, true)
+                PostDispatchOutcome::Handled
             } else {
                 stats
                     .errors
                     .push(format!("Receive payment bundle failed: {}", e));
-                (None, false)
+                PostDispatchOutcome::RetryLater
             }
         }
-    };
-
-    if let Some(ref bid) = bundle_id {
-        queue_ack_receipt(ctx, post_state, Some(bid));
     }
-    should_mark_processed
 }
 
 fn handle_voucher_for_signing(
@@ -278,7 +361,8 @@ fn handle_voucher_for_signing(
     post_state: &mut StoredPostState,
     stats: &mut PostDispatchStats,
 ) {
-    let (sender_name, _, _) = resolve_counterparty_info(ctx.state, ctx.sender_did, ctx.password);
+    let (sender_name, _, _) =
+        resolve_counterparty_info_for_session(ctx.state, ctx.session, ctx.sender_did, ctx.password);
     post_state
         .pending_sign_requests
         .push(FrontendPendingSignRequest {
@@ -322,13 +406,11 @@ fn handle_detached_signature(
     let all_standards = load_all_standard_tomls(ctx.app, ctx.extra_standards);
     let mut attached = false;
     let mut retryable_error: Option<String> = None;
-    {
-        let mut service = ctx.state.service.lock().unwrap();
+    let lock_res = ctx.state.with_session(ctx.session, |service| {
         if !service.is_wallet_unlocked() {
-            stats.errors.push(
+            return Ok(Some(
                 "Detached signature attachment deferred: wallet session is locked".to_string(),
-            );
-            return false;
+            ));
         }
         for toml in all_standards.values() {
             match service.process_and_attach_signature(
@@ -340,6 +422,7 @@ fn handle_detached_signature(
                 Ok(_) => {
                     attached = true;
                     retryable_error = None;
+                    let _ = ctx.state.refresh_events_cache(service, ctx.password);
                     break;
                 }
                 Err(e) => {
@@ -350,13 +433,30 @@ fn handle_detached_signature(
                 }
             }
         }
+        Ok(None)
+    });
+    match lock_res {
+        Ok(Some(Some(deferred_msg))) => {
+            stats.errors.push(deferred_msg);
+            return false;
+        }
+        Ok(None) => {
+            stats.errors.push(
+                "Detached signature attachment deferred: wallet session changed".to_string(),
+            );
+            return false;
+        }
+        Err(e) => {
+            stats.errors.push(format!(
+                "Detached signature attachment deferred: {}",
+                e.message
+            ));
+            return false;
+        }
+        Ok(Some(None)) => {}
     }
     if attached {
         stats.imported_signatures += 1;
-        {
-            let mut service = ctx.state.service.lock().unwrap();
-            let _ = ctx.state.refresh_events_cache(&mut service, ctx.password);
-        }
         queue_ack_receipt(ctx, post_state, None);
         return true;
     }
@@ -390,36 +490,39 @@ fn handle_trust_assertion(
         return;
     }
 
-    let is_known_trusted_contact = {
-        let mut service = ctx.state.service.lock().unwrap();
-        ctx.state
-            .load_contacts(&mut service, ctx.password)
-            .map(|list| {
-                list.iter().any(|c| {
-                    are_dids_equal(&c.did, &assertion.sender_did) && c.trust_level.unwrap_or(0) >= 1
+    let is_known_trusted_contact = ctx
+        .state
+        .with_session(ctx.session, |service| {
+            Ok(ctx
+                .state
+                .load_contacts(service, ctx.password)
+                .map(|list| {
+                    list.iter().any(|c| {
+                        are_dids_equal(&c.did, &assertion.sender_did)
+                            && c.trust_level.unwrap_or(0) >= 1
+                    })
                 })
-            })
-            .unwrap_or(false)
-    };
+                .unwrap_or(false))
+        })
+        .ok()
+        .flatten()
+        .unwrap_or(false);
 
     if is_known_trusted_contact {
         // Silent auto-accept for established contacts (Zero-Click).
         if let Ok(pkg) =
             serde_json::from_str::<humoco_wot::WotSyncPackage>(&assertion.wot_sync_json)
         {
-            let mut service = ctx.state.service.lock().unwrap();
-            if let Ok(mut reg) = ctx
-                .state
-                .get_or_load_wot_register(&mut service, ctx.password)
-            {
-                let can_sender_did = crate::state::canonicalize_did(&assertion.sender_did)
-                    .unwrap_or_else(|_| assertion.sender_did.clone());
-                let _ = reg.import_sync_package(&pkg, Some(&can_sender_did), ctx.now_secs);
-                let _ = ctx.state.ensure_wot_list_signed(&mut service, &mut reg);
-                let _ = ctx
-                    .state
-                    .save_wot_register(&mut service, &reg, ctx.password);
-            }
+            let _ = ctx.state.with_session(ctx.session, |service| {
+                if let Ok(mut reg) = ctx.state.get_or_load_wot_register(service, ctx.password) {
+                    let can_sender_did = crate::state::canonicalize_did(&assertion.sender_did)
+                        .unwrap_or_else(|_| assertion.sender_did.clone());
+                    let _ = reg.import_sync_package(&pkg, Some(&can_sender_did), ctx.now_secs);
+                    let _ = ctx.state.ensure_wot_list_signed(service, &mut reg);
+                    let _ = ctx.state.save_wot_register(service, &reg, ctx.password);
+                }
+                Ok(())
+            });
         }
 
         queue_ack_receipt(ctx, post_state, None);
@@ -428,24 +531,29 @@ fn handle_trust_assertion(
         if assertion.reply_requested {
             let can_recipient = crate::state::canonicalize_did(ctx.sender_did)
                 .unwrap_or_else(|_| ctx.sender_did.to_string());
-            let reply_data = {
-                let mut service = ctx.state.service.lock().unwrap();
-                ctx.state
-                    .get_or_load_wot_register(&mut service, ctx.password)
-                    .ok()
-                    .and_then(|reg| {
-                        reg.prepare_sync_package(Some(&can_recipient), None, true)
-                            .ok()
-                    })
-                    .and_then(|(pkg, _)| serde_json::to_string(&pkg).ok())
-                    .map(|wot_sync_json| {
-                        let my_name = service
-                            .with_wallet(|w| w.profile.first_name.clone())
-                            .ok()
-                            .flatten();
-                        (wot_sync_json, my_name)
-                    })
-            };
+            let reply_data = ctx
+                .state
+                .with_session(ctx.session, |service| {
+                    Ok(ctx
+                        .state
+                        .get_or_load_wot_register(service, ctx.password)
+                        .ok()
+                        .and_then(|reg| {
+                            reg.prepare_sync_package(Some(&can_recipient), None, true)
+                                .ok()
+                        })
+                        .and_then(|(pkg, _)| serde_json::to_string(&pkg).ok())
+                        .map(|wot_sync_json| {
+                            let my_name = service
+                                .with_wallet(|w| w.profile.first_name.clone())
+                                .ok()
+                                .flatten();
+                            (wot_sync_json, my_name)
+                        }))
+                })
+                .ok()
+                .flatten()
+                .flatten();
             if let Some((wot_sync_json, my_name)) = reply_data {
                 let auto_reply_assertion = WotHandshakeAssertion {
                     sender_did: ctx.my_identity.user_id.clone(),
@@ -603,7 +711,7 @@ fn handle_market_inquiry(
     }
 
     let (sender_name, sender_pic, is_contact) =
-        resolve_counterparty_info(ctx.state, ctx.sender_did, ctx.password);
+        resolve_counterparty_info_for_session(ctx.state, ctx.session, ctx.sender_did, ctx.password);
     if !post_state
         .inquiries
         .iter()
@@ -736,7 +844,8 @@ fn handle_market_inquiry_message(
     }
 
     if let Some(inq_id) = notice_inquiry_id {
-        let cp_name = resolve_counterparty_info(ctx.state, ctx.sender_did, ctx.password).0;
+        let cp_name =
+            resolve_counterparty_info_for_session(ctx.state, ctx.session, ctx.sender_did, ctx.password).0;
         stats.last_inquiry_notice_target = Some((inq_id, cp_name));
     }
     queue_ack_receipt(ctx, post_state, None);
@@ -765,29 +874,34 @@ fn handle_guardian_assign(
         return true;
     }
 
-    let is_trusted_non_offender = {
-        let mut service = ctx.state.service.lock().unwrap();
-        let is_offender = service
-            .with_wallet(|w| {
-                matches!(
-                    w.check_reputation(ctx.sender_did),
-                    human_money_core::models::conflict::TrustStatus::KnownOffender(_)
-                )
-            })
-            .unwrap_or(false);
-        if is_offender {
-            false
-        } else {
-            ctx.state
-                .load_contacts(&mut service, ctx.password)
-                .map(|list| {
-                    list.iter().any(|c| {
-                        are_dids_equal(&c.did, ctx.sender_did) && c.trust_level.unwrap_or(0) >= 1
-                    })
+    let is_trusted_non_offender = ctx
+        .state
+        .with_session(ctx.session, |service| {
+            let is_offender = service
+                .with_wallet(|w| {
+                    matches!(
+                        w.check_reputation(ctx.sender_did),
+                        human_money_core::models::conflict::TrustStatus::KnownOffender(_)
+                    )
                 })
-                .unwrap_or(false)
-        }
-    };
+                .unwrap_or(false);
+            if is_offender {
+                Ok(false)
+            } else {
+                Ok(ctx
+                    .state
+                    .load_contacts(service, ctx.password)
+                    .map(|list| {
+                        list.iter().any(|c| {
+                            are_dids_equal(&c.did, ctx.sender_did) && c.trust_level.unwrap_or(0) >= 1
+                        })
+                    })
+                    .unwrap_or(false))
+            }
+        })
+        .ok()
+        .flatten()
+        .unwrap_or(false);
 
     if !is_trusted_non_offender {
         stats.errors.push(format!(
@@ -804,26 +918,34 @@ fn handle_guardian_assign(
         return true;
     }
 
-    let save_res: Result<(), (String, bool)> = {
-        let mut service = ctx.state.service.lock().unwrap();
-        match load_guardian_vault_with_cache(ctx.state, &mut service, ctx.password) {
-            Ok(mut vault) => match vault.upsert_ward(entry.clone()) {
-                Ok(()) => {
-                    save_guardian_vault_with_cache(ctx.state, &mut service, &vault, ctx.password)
-                        .map_err(|e| {
-                            (
-                                format!("Failed to save guardian vault: {}", e.message),
-                                false,
-                            )
-                        })
-                }
-                Err(e) => Err((format!("Failed to upsert guardian ward: {}", e), true)),
+    let save_res: Result<(), (String, bool)> = match ctx.state.with_session(ctx.session, |service| {
+        Ok(
+            match load_guardian_vault_with_cache(ctx.state, service, ctx.password) {
+                Ok(mut vault) => match vault.upsert_ward(entry.clone()) {
+                    Ok(()) => {
+                        save_guardian_vault_with_cache(ctx.state, service, &vault, ctx.password)
+                            .map_err(|e| {
+                                (
+                                    format!("Failed to save guardian vault: {}", e.message),
+                                    false,
+                                )
+                            })
+                    }
+                    Err(e) => Err((format!("Failed to upsert guardian ward: {}", e), true)),
+                },
+                Err(e) => Err((
+                    format!("Failed to load guardian vault: {}", e.message),
+                    false,
+                )),
             },
-            Err(e) => Err((
-                format!("Failed to load guardian vault: {}", e.message),
-                false,
-            )),
-        }
+        )
+    }) {
+        Ok(Some(res)) => res,
+        Ok(None) => Err((
+            "Guardian assign deferred: active wallet session changed".to_string(),
+            false,
+        )),
+        Err(e) => Err((format!("Guardian assign failed: {}", e.message), false)),
     };
 
     match save_res {
@@ -869,17 +991,15 @@ fn handle_guardian_ack(
             return true;
         }
     };
-    {
-        let mut service = ctx.state.service.lock().unwrap();
+    match ctx.state.with_session(ctx.session, |service| {
         let owner_opt =
-            match load_recovery_owner_state_with_cache(ctx.state, &mut service, ctx.password) {
+            match load_recovery_owner_state_with_cache(ctx.state, service, ctx.password) {
                 Ok(opt) => opt,
                 Err(e) => {
-                    stats.errors.push(format!(
+                    return Ok(Err(format!(
                         "Failed to load recovery owner state: {}",
                         e.message
-                    ));
-                    return false;
+                    )));
                 }
             };
         if let Some(mut owner_state) = owner_opt {
@@ -903,18 +1023,29 @@ fn handle_guardian_ack(
                 if modified {
                     if let Err(e) = save_recovery_owner_state_with_cache(
                         ctx.state,
-                        &mut service,
+                        service,
                         &owner_state,
                         ctx.password,
                     ) {
-                        stats.errors.push(format!(
+                        return Ok(Err(format!(
                             "Failed to save recovery owner state: {}",
                             e.message
-                        ));
-                        return false;
+                        )));
                     }
                 }
             }
+        }
+        Ok(Ok(()))
+    }) {
+        Ok(Some(Ok(()))) => {}
+        Ok(Some(Err(msg))) => {
+            stats.errors.push(msg);
+            return false;
+        }
+        Ok(None) => return false,
+        Err(e) => {
+            stats.errors.push(e.message);
+            return false;
         }
     }
     queue_ack_receipt(ctx, post_state, None);
@@ -944,35 +1075,38 @@ fn handle_guardian_locator(
         return true;
     }
 
-    let update_res: Result<(), (String, bool)> = {
-        let mut service = ctx.state.service.lock().unwrap();
-        match load_guardian_vault_with_cache(ctx.state, &mut service, ctx.password) {
-            Ok(mut vault) => match vault.update_locator(&update) {
-                Ok(updated) => {
-                    if updated {
-                        save_guardian_vault_with_cache(
-                            ctx.state,
-                            &mut service,
-                            &vault,
-                            ctx.password,
-                        )
-                        .map_err(|e| {
-                            (
-                                format!("Failed to save guardian vault: {}", e.message),
-                                false,
-                            )
-                        })
-                    } else {
-                        Ok(())
+    let update_res: Result<(), (String, bool)> = match ctx.state.with_session(ctx.session, |service| {
+        Ok(
+            match load_guardian_vault_with_cache(ctx.state, service, ctx.password) {
+                Ok(mut vault) => match vault.update_locator(&update) {
+                    Ok(updated) => {
+                        if updated {
+                            save_guardian_vault_with_cache(ctx.state, service, &vault, ctx.password)
+                                .map_err(|e| {
+                                    (
+                                        format!("Failed to save guardian vault: {}", e.message),
+                                        false,
+                                    )
+                                })
+                        } else {
+                            Ok(())
+                        }
                     }
-                }
-                Err(e) => Err((format!("Failed to update guardian locator: {}", e), true)),
+                    Err(e) => Err((format!("Failed to update guardian locator: {}", e), true)),
+                },
+                Err(e) => Err((
+                    format!("Failed to load guardian vault: {}", e.message),
+                    false,
+                )),
             },
-            Err(e) => Err((
-                format!("Failed to load guardian vault: {}", e.message),
-                false,
-            )),
-        }
+        )
+    }) {
+        Ok(Some(res)) => res,
+        Ok(None) => Err((
+            "Guardian locator update deferred: wallet session changed".to_string(),
+            false,
+        )),
+        Err(e) => Err((format!("Guardian locator update failed: {}", e.message), false)),
     };
 
     match update_res {
@@ -1010,38 +1144,41 @@ fn handle_guardian_revoke(
         return true;
     }
 
-    let revoke_res: Result<(), (String, bool)> = {
-        let mut service = ctx.state.service.lock().unwrap();
-        match load_guardian_vault_with_cache(ctx.state, &mut service, ctx.password) {
-            Ok(mut vault) => match vault.revoke_ward(&revoke) {
-                Ok(revoked) => {
-                    if revoked {
-                        save_guardian_vault_with_cache(
-                            ctx.state,
-                            &mut service,
-                            &vault,
-                            ctx.password,
-                        )
-                        .map_err(|e| {
-                            (
-                                format!("Failed to save guardian vault: {}", e.message),
-                                false,
-                            )
-                        })
-                    } else {
-                        Ok(())
+    let revoke_res: Result<(), (String, bool)> = match ctx.state.with_session(ctx.session, |service| {
+        Ok(
+            match load_guardian_vault_with_cache(ctx.state, service, ctx.password) {
+                Ok(mut vault) => match vault.revoke_ward(&revoke) {
+                    Ok(revoked) => {
+                        if revoked {
+                            save_guardian_vault_with_cache(ctx.state, service, &vault, ctx.password)
+                                .map_err(|e| {
+                                    (
+                                        format!("Failed to save guardian vault: {}", e.message),
+                                        false,
+                                    )
+                                })
+                        } else {
+                            Ok(())
+                        }
                     }
-                }
+                    Err(e) => Err((
+                        format!("Failed to revoke ward from guardian vault: {}", e),
+                        true,
+                    )),
+                },
                 Err(e) => Err((
-                    format!("Failed to revoke ward from guardian vault: {}", e),
-                    true,
+                    format!("Failed to load guardian vault: {}", e.message),
+                    false,
                 )),
             },
-            Err(e) => Err((
-                format!("Failed to load guardian vault: {}", e.message),
-                false,
-            )),
-        }
+        )
+    }) {
+        Ok(Some(res)) => res,
+        Ok(None) => Err((
+            "Guardian revoke deferred: wallet session changed".to_string(),
+            false,
+        )),
+        Err(e) => Err((format!("Guardian revoke failed: {}", e.message), false)),
     };
 
     match revoke_res {
@@ -1062,15 +1199,16 @@ mod tests {
     use crate::state::RECOVERY_GUARDIAN_VAULT_KEY;
     use crate::test_support::{create_test_state, setup_test_app, temp_test_dir, ALICE_PHRASE};
 
-    #[test]
-    fn test_corrupt_guardian_vault_returns_false_and_preserves_bytes() {
+    #[tokio::test]
+    async fn test_corrupt_guardian_vault_returns_retry_later_and_preserves_bytes() {
         let base_dir = temp_test_dir("handlers_corrupt_guardian_vault");
         let password = "TestPassword123!";
         let service = setup_test_app(&base_dir, "Alice", ALICE_PHRASE, password);
         let state = create_test_state(service);
 
-        let (my_identity, sender_did) = {
+        let (session, my_identity, sender_did) = {
             let mut s = state.service.lock().unwrap();
+            let session = state.session_token_for_service(&s).unwrap();
             crate::state::save_encrypted_bytes(
                 &mut s,
                 RECOVERY_GUARDIAN_VAULT_KEY,
@@ -1080,7 +1218,7 @@ mod tests {
             .unwrap();
             let id = s.with_wallet_and_identity(|_, id| id.clone()).unwrap();
             let did = id.user_id.clone();
-            (id, did)
+            (session, id, did)
         };
 
         let update = humoco_market::GuardianLocatorUpdate {
@@ -1101,6 +1239,7 @@ mod tests {
         let my_ed_sk = my_identity.signing_key.clone();
         let ctx = PostEnvelopeContext {
             state: &state,
+            session: &session,
             app: None,
             extra_standards: None,
             password: Some(password),
@@ -1116,16 +1255,18 @@ mod tests {
 
         let mut post_state = StoredPostState::default();
         let mut stats = PostDispatchStats::default();
-        let mark_processed = dispatch_post_payload(
+        let outcome = dispatch_post_payload(
             &ctx,
             &PayloadType::Generic(humoco_market::PAYLOAD_GUARDIAN_LOCATOR_V1.to_string()),
             &mut post_state,
             &mut stats,
-        );
+        )
+        .await;
 
-        assert!(
-            !mark_processed,
-            "Corrupt guardian vault store must return false so msg_id stays retryable"
+        assert_eq!(
+            outcome,
+            PostDispatchOutcome::RetryLater,
+            "Corrupt guardian vault store must return RetryLater so msg_id stays retryable"
         );
         assert!(!stats.errors.is_empty());
 
@@ -1140,6 +1281,112 @@ mod tests {
             .unwrap()
         };
         assert_eq!(stored_raw, b"{corrupt-vault");
+
+        let _ = std::fs::remove_dir_all(&base_dir);
+    }
+
+    #[tokio::test]
+    async fn h14_unknown_post_payload_records_unsupported_and_dismisses() {
+        let base_dir = temp_test_dir("h14_unsupported_payload");
+        let password = "TestPassword123!";
+        let service = setup_test_app(&base_dir, "Alice", ALICE_PHRASE, password);
+        let state = create_test_state(service);
+
+        let (session, my_identity, sender_did) = {
+            let s = state.service.lock().unwrap();
+            let session = state.session_token_for_service(&s).unwrap();
+            let id = s.with_wallet_and_identity(|_, id| id.clone()).unwrap();
+            let did = id.user_id.clone();
+            (session, id, did)
+        };
+
+        let envelope = humoco_market::PostEnvelope::new(
+            "msg-unsupported-v99",
+            sender_did.clone(),
+            1_750_000_001,
+            Vec::new(),
+            Vec::new(),
+        );
+        let tag16 = [3u8; 16];
+        let my_ed_sk = my_identity.signing_key.clone();
+        let ctx = PostEnvelopeContext {
+            state: &state,
+            session: &session,
+            app: None,
+            extra_standards: None,
+            password: Some(password),
+            my_identity: &my_identity,
+            my_ed_sk: &my_ed_sk,
+            own_reply_syncs: &[],
+            sender_did: &sender_did,
+            envelope: &envelope,
+            tag16: &tag16,
+            decrypted_bytes: br#"{"future":true}"#,
+            now_secs: 1_750_000_001,
+        };
+
+        let mut post_state = StoredPostState::default();
+        let mut stats = PostDispatchStats::default();
+        let outcome = dispatch_post_payload(
+            &ctx,
+            &PayloadType::Generic("future-feature+v99".to_string()),
+            &mut post_state,
+            &mut stats,
+        )
+        .await;
+
+        assert_eq!(
+            outcome,
+            PostDispatchOutcome::UnsupportedPayload {
+                payload_type: "future-feature+v99".to_string()
+            }
+        );
+
+        // Mirror inbox_poller persistence when UnsupportedPayload is returned
+        post_state
+            .unsupported_messages
+            .push(crate::models::FrontendUnsupportedPostItem {
+                msg_id: envelope.msg_id.clone(),
+                sender_did: sender_did.clone(),
+                sender_name: None,
+                payload_type: "future-feature+v99".to_string(),
+                created_at: envelope.created_at,
+            });
+        {
+            let mut s = state.service.lock().unwrap();
+            crate::state::save_encrypted_json(
+                &mut s,
+                crate::state::MARKET_POST_STATE_KEY,
+                &post_state,
+                Some(password),
+            )
+            .unwrap();
+        }
+
+        let summary = super::super::inbox_poller::get_post_inbox_summary_impl(
+            Some(password.to_string()),
+            &state,
+        )
+        .unwrap();
+        assert_eq!(summary.unsupported_messages.len(), 1);
+        assert_eq!(
+            summary.unsupported_messages[0].payload_type,
+            "future-feature+v99"
+        );
+
+        super::super::inbox_poller::dismiss_pending_post_item_impl(
+            "unsupported".to_string(),
+            envelope.msg_id.clone(),
+            Some(password.to_string()),
+            &state,
+        )
+        .unwrap();
+        let after = super::super::inbox_poller::get_post_inbox_summary_impl(
+            Some(password.to_string()),
+            &state,
+        )
+        .unwrap();
+        assert!(after.unsupported_messages.is_empty());
 
         let _ = std::fs::remove_dir_all(&base_dir);
     }

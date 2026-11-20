@@ -27,9 +27,10 @@ pub async fn save_contact(
         .iter()
         .any(|d| d.drop_pub.trim().is_empty() || d.read_url.trim().is_empty());
     info!("Saving contact for DID: {}", contact_did);
-    let is_own_root = {
-        let mut service =
-            state.authorize_and_lock(RequiredAccess::DailyPay, password.as_deref())?;
+    let (is_own_root, resolved_pw) = {
+        let (mut service, resolved_pw) =
+            state.authorize_and_lock_secret(RequiredAccess::DailyPay, password.as_deref())?;
+        let pw = resolved_pw.as_deref().map(String::as_str);
         let own_can = service
             .with_wallet(|w| crate::state::canonicalize_did(w.get_user_id()).ok())
             .ok()
@@ -37,17 +38,18 @@ pub async fn save_contact(
         let contact_can = crate::state::canonicalize_did(&contact.did).ok();
         let same_root = own_can.is_some() && own_can == contact_can;
         state
-            .save_contact(&mut service, contact, password.as_deref())
+            .save_contact(&mut service, contact, pw)
             .map_err(FrontendError::from)?;
-        same_root
+        (same_root, resolved_pw)
     };
+    let follow_pw = resolved_pw.as_deref().cloned();
 
     // Probe unverified contact syncs if needed, then send initial WoT handshake (never to own root).
     if !is_own_root {
         if needs_sync_probe {
             let _ = crate::services::sync_engine::probe_contact_syncs_impl(
                 false,
-                password.clone(),
+                follow_pw.clone(),
                 &state,
             )
             .await;
@@ -58,7 +60,7 @@ pub async fn save_contact(
                     contact_did,
                     lvl.min(1),
                     true,
-                    password,
+                    follow_pw,
                     &state,
                 )
                 .await;
@@ -77,9 +79,11 @@ pub fn delete_contact(
 ) -> Result<(), FrontendError> {
     let did = did.trim().to_string();
     info!("Deleting contact for DID: {}", did);
-    let mut service = state.authorize_and_lock(RequiredAccess::DailyPay, password.as_deref())?;
+    let (mut service, resolved_pw) =
+        state.authorize_and_lock_secret(RequiredAccess::DailyPay, password.as_deref())?;
+    let pw = resolved_pw.as_deref().map(String::as_str);
     state
-        .delete_contact(&mut service, &did, password.as_deref())
+        .delete_contact(&mut service, &did, pw)
         .map_err(FrontendError::from)
 }
 

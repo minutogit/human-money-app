@@ -184,6 +184,25 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
     }, [existingContact, initialProfile, initialDid, initialSyncUrls, isOpen]);
 
     const applyContactCard = async (rawText: string) => {
+        const parsedInput = parseHumocoInput(rawText);
+        if (parsedInput?.kind === 'card') {
+            try {
+                const resolved = await marketService.resolveCardRecipient(parsedInput.payload);
+                setDid(resolved.recipientId);
+                if (resolved.displayName && !firstName && !lastName && !organization) {
+                    const parts = resolved.displayName.trim().split(/\s+/);
+                    if (parts.length === 1) {
+                        setFirstName(parts[0]);
+                    } else {
+                        setFirstName(parts[0]);
+                        setLastName(parts.slice(1).join(' '));
+                    }
+                }
+            } catch (e) {
+                setError(translateError(e, t));
+            }
+            return;
+        }
         const parsed = parseContactCard(rawText);
         if (parsed) {
             setDid(parsed.did);
@@ -228,8 +247,9 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                 setError(t('contacts.emptyClipboard'));
                 return;
             }
+            const parsedInput = parseHumocoInput(text);
             const parsed = parseContactCard(text);
-            if (!parsed) {
+            if (!parsed && parsedInput?.kind !== 'card') {
                 setError(t('contacts.invalidClipboardContent'));
                 return;
             }
@@ -420,8 +440,8 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                                             applyContactCard(rawVal);
                                             return;
                                         }
-                                        if (parsed?.kind === 'card' && parsed.did) {
-                                            setDid(parsed.did);
+                                        if (parsed?.kind === 'card') {
+                                            void applyContactCard(rawVal);
                                             return;
                                         }
                                         if (parsed?.kind === 'did') {

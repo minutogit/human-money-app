@@ -51,6 +51,7 @@ export class ChannelMembersSyncManager {
     };
 
     private syncTimer: ReturnType<typeof setTimeout> | null = null;
+    private generation = 0;
     private listeners = new Set<(status: ChannelMembersSyncStatus) => void>();
     private pendingPassword?: string;
 
@@ -130,7 +131,9 @@ export class ChannelMembersSyncManager {
             delay = 0;
         }
 
+        const scheduledGeneration = this.generation;
         this.syncTimer = setTimeout(async () => {
+            if (scheduledGeneration !== this.generation) return;
             this.syncTimer = null;
             await this.executeSync();
         }, delay);
@@ -142,6 +145,7 @@ export class ChannelMembersSyncManager {
             return 0;
         }
 
+        const runGeneration = this.generation;
         this.status.isSyncing = true;
         this.status.isPending = false;
         this.notify();
@@ -151,6 +155,9 @@ export class ChannelMembersSyncManager {
 
         try {
             const count = await marketService.syncChannelMembers(pwd || undefined);
+            if (runGeneration !== this.generation) {
+                return 0;
+            }
 
             this.status.isSyncing = false;
             this.status.retryAttempt = 0;
@@ -167,6 +174,9 @@ export class ChannelMembersSyncManager {
 
             return count;
         } catch (err: unknown) {
+            if (runGeneration !== this.generation) {
+                return 0;
+            }
             this.status.isSyncing = false;
             const errMsg = String((err as { message?: unknown })?.message || err || 'Unknown sync error');
             this.status.lastError = errMsg;
@@ -175,7 +185,7 @@ export class ChannelMembersSyncManager {
                 const waitSecs = parseRetryAfterSeconds(errMsg) ?? 15;
                 this.status.rateLimitedUntil = Date.now() + waitSecs * 1000;
                 this.status.retryAttempt++;
-                this.scheduleNextAttempt(waitSecs * 1000);
+                this.scheduleNextAttempt(waitSecs * 1000, runGeneration);
             } else if (isQuotaError(errMsg)) {
                 this.status.quotaExceeded = true;
                 this.status.retryAttempt = 0;
@@ -183,7 +193,7 @@ export class ChannelMembersSyncManager {
             } else {
                 this.status.retryAttempt++;
                 const backoff = BACKOFF_DELAYS_MS[Math.min(this.status.retryAttempt - 1, BACKOFF_DELAYS_MS.length - 1)];
-                this.scheduleNextAttempt(backoff);
+                this.scheduleNextAttempt(backoff, runGeneration);
             }
 
             this.notify();
@@ -191,12 +201,13 @@ export class ChannelMembersSyncManager {
         }
     }
 
-    private scheduleNextAttempt(delayMs: number): void {
-        if (typeof window === 'undefined') return;
+    private scheduleNextAttempt(delayMs: number, expectedGeneration: number): void {
+        if (typeof window === 'undefined' || expectedGeneration !== this.generation) return;
         if (this.syncTimer !== null) {
             clearTimeout(this.syncTimer);
         }
         this.syncTimer = setTimeout(async () => {
+            if (expectedGeneration !== this.generation) return;
             this.syncTimer = null;
             await this.executeSync();
         }, delayMs);
@@ -220,6 +231,7 @@ export class ChannelMembersSyncManager {
     }
 
     public reset(): void {
+        this.generation += 1;
         this.cancelTimer();
         this.status = {
             isSyncing: false,

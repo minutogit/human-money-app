@@ -18,10 +18,12 @@ use crate::settings::{SecurityPolicy, UiPreferences};
 use crate::state::{AppState, StoredPostState, MARKET_CARD_STORE_KEY};
 use crate::sync_client;
 
-use super::handlers::{dispatch_post_payload, PostDispatchStats, PostEnvelopeContext};
+use super::handlers::{
+    dispatch_post_payload, PostDispatchOutcome, PostDispatchStats, PostEnvelopeContext,
+};
 use super::{
-    load_post_signing_context, load_post_state, merge_and_save_post_state,
-    resolve_counterparty_info,
+    load_post_state, merge_and_save_post_state,
+    resolve_counterparty_info, resolve_counterparty_info_for_session,
 };
 use crate::services::post_service::outbox::flush_post_slots_impl;
 
@@ -31,12 +33,13 @@ pub fn mark_inquiry_read_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<(), FrontendError> {
-    let mut service =
-        state.authorize_and_lock(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
+    let (mut service, resolved_pw) = state
+        .authorize_and_lock_secret(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
+    let pw = resolved_pw.as_deref().map(String::as_str);
     let mut post_state: StoredPostState = crate::state::load_encrypted_json_or_default(
         &mut service,
         crate::state::MARKET_POST_STATE_KEY,
-        password.as_deref(),
+        pw,
     )
     .map_err(FrontendError::from)?;
     let mut changed = false;
@@ -51,26 +54,27 @@ pub fn mark_inquiry_read_impl(
             &mut service,
             crate::state::MARKET_POST_STATE_KEY,
             &post_state,
-            password.as_deref(),
+            pw,
         )
         .map_err(FrontendError::from)?;
     }
     Ok(())
 }
 
-/// Dismisses a pending sign request, WoT handshake, or inquiry atomically under `state.service`.
+/// Dismisses a pending sign request, WoT handshake, inquiry, or unsupported notice atomically under `state.service`.
 pub fn dismiss_pending_post_item_impl(
     item_kind: String,
     id: String,
     password: Option<String>,
     state: &AppState,
 ) -> Result<(), FrontendError> {
-    let mut service =
-        state.authorize_and_lock(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
+    let (mut service, resolved_pw) = state
+        .authorize_and_lock_secret(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
+    let pw = resolved_pw.as_deref().map(String::as_str);
     let mut post_state: StoredPostState = crate::state::load_encrypted_json_or_default(
         &mut service,
         crate::state::MARKET_POST_STATE_KEY,
-        password.as_deref(),
+        pw,
     )
     .map_err(FrontendError::from)?;
     match item_kind.as_str() {
@@ -84,6 +88,9 @@ pub fn dismiss_pending_post_item_impl(
         "inquiry" => {
             post_state.inquiries.retain(|i| i.inquiry_id != id);
         }
+        "unsupported" => {
+            post_state.unsupported_messages.retain(|u| u.msg_id != id);
+        }
         other => {
             return Err(FrontendError::from(format!(
                 "Unknown pending post item kind: {}",
@@ -95,7 +102,7 @@ pub fn dismiss_pending_post_item_impl(
         &mut service,
         crate::state::MARKET_POST_STATE_KEY,
         &post_state,
-        password.as_deref(),
+        pw,
     )
     .map_err(FrontendError::from)
 }
@@ -124,11 +131,20 @@ pub fn get_post_inbox_summary_impl(
         .inquiries
         .sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
 
+    for item in &mut post_state.unsupported_messages {
+        if item.sender_name.is_none() {
+            let (name, _, _) =
+                resolve_counterparty_info(state, &item.sender_did, password.as_deref());
+            item.sender_name = name;
+        }
+    }
+
     Ok(FrontendPostInboxSummary {
         pending_sign_requests: post_state.pending_sign_requests,
         pending_wot_handshakes: post_state.pending_wot_handshakes,
         inquiries: post_state.inquiries,
         unacknowledged_payments,
+        unsupported_messages: post_state.unsupported_messages,
     })
 }
 
@@ -160,187 +176,202 @@ struct AuthorizedSenders {
 
 fn collect_candidate_slot_sources(
     state: &AppState,
+    session: &crate::session::SessionToken,
     security_policy: &SecurityPolicy,
     my_did: &str,
     my_prefix: Option<&str>,
     post_state: &StoredPostState,
     password: Option<&str>,
-) -> PollSlotTargets {
-    let mut service = state.service.lock().unwrap();
-    let mut direct: Vec<(String, String, Option<String>)> = Vec::new();
-    let mut index_urls = Vec::new();
+) -> Result<PollSlotTargets, FrontendError> {
+    state.with_session_required(
+        session,
+        "Active wallet session changed while collecting post slot sources",
+        |service| {
+            let mut direct: Vec<(String, String, Option<String>)> = Vec::new();
+            let mut index_urls = Vec::new();
 
-    push_sync_slot_targets(
-        &mut direct,
-        &mut index_urls,
-        &security_policy.market_selected_syncs,
-        my_prefix,
-    );
+            push_sync_slot_targets(
+                &mut direct,
+                &mut index_urls,
+                &security_policy.market_selected_syncs,
+                my_prefix,
+            );
 
-    for pd in &security_policy.public_syncs {
-        if pd.enabled && !pd.read_url.is_empty() {
-            direct.push((
-                pd.read_url.clone(),
-                pd.access_pubkey.clone(),
-                my_prefix.map(str::to_string),
-            ));
-        }
-    }
-
-    let own_can_did = crate::state::canonicalize_did(my_did).ok();
-    if let Ok(contacts) = state.load_contacts(&mut service, password) {
-        for c in contacts {
-            let c_prefix = human_money_core::crypto::get_prefix_from_user_id(&c.did);
-            if own_can_did.is_some() && crate::state::canonicalize_did(&c.did).ok() == own_can_did {
-                // Also poll sibling own-subaccount compartments on configured O(1) public syncs.
-                for pd in &security_policy.public_syncs {
-                    if pd.enabled && !pd.read_url.is_empty() {
-                        direct.push((
-                            pd.read_url.clone(),
-                            pd.access_pubkey.clone(),
-                            c_prefix.map(str::to_string),
-                        ));
-                    }
+            for pd in &security_policy.public_syncs {
+                if pd.enabled && !pd.read_url.is_empty() {
+                    direct.push((
+                        pd.read_url.clone(),
+                        pd.access_pubkey.clone(),
+                        my_prefix.map(str::to_string),
+                    ));
                 }
             }
-            push_sync_slot_targets(&mut direct, &mut index_urls, &c.syncs, c_prefix);
-        }
-    }
 
-    match crate::state::load_encrypted_json_opt::<humoco_market::CardStore>(
-        &mut service,
-        MARKET_CARD_STORE_KEY,
-        password,
-    ) {
-        Ok(Some(store)) => {
-            for sc in store.cards.values() {
-                for d in &sc.card.payload.drops {
-                    if !d.read_url.is_empty() {
-                        if let Some(ref sid) = d.slot_id {
-                            direct.push((d.read_url.clone(), sid.clone(), None));
-                        } else {
-                            index_urls.push(d.read_url.clone());
+            let own_can_did = crate::state::canonicalize_did(my_did).ok();
+            if let Ok(contacts) = state.load_contacts(service, password) {
+                for c in contacts {
+                    let c_prefix = human_money_core::crypto::get_prefix_from_user_id(&c.did);
+                    if own_can_did.is_some()
+                        && crate::state::canonicalize_did(&c.did).ok() == own_can_did
+                    {
+                        // Also poll sibling own-subaccount compartments on configured O(1) public syncs.
+                        for pd in &security_policy.public_syncs {
+                            if pd.enabled && !pd.read_url.is_empty() {
+                                direct.push((
+                                    pd.read_url.clone(),
+                                    pd.access_pubkey.clone(),
+                                    c_prefix.map(str::to_string),
+                                ));
+                            }
+                        }
+                    }
+                    push_sync_slot_targets(&mut direct, &mut index_urls, &c.syncs, c_prefix);
+                }
+            }
+
+            match crate::state::load_encrypted_json_opt::<humoco_market::CardStore>(
+                service,
+                MARKET_CARD_STORE_KEY,
+                password,
+            ) {
+                Ok(Some(store)) => {
+                    for sc in store.cards.values() {
+                        for d in &sc.card.payload.drops {
+                            if !d.read_url.is_empty() {
+                                if let Some(ref sid) = d.slot_id {
+                                    direct.push((d.read_url.clone(), sid.clone(), None));
+                                } else {
+                                    index_urls.push(d.read_url.clone());
+                                }
+                            }
                         }
                     }
                 }
+                Ok(None) => {}
+                Err(e) => {
+                    log::warn!(
+                        "Failed to load CardStore in collect_post_poll_targets: {}",
+                        e
+                    );
+                }
             }
-        }
-        Ok(None) => {}
-        Err(e) => {
-            log::warn!(
-                "Failed to load CardStore in collect_post_poll_targets: {}",
-                e
-            );
-        }
-    }
 
-    for req in &post_state.pending_sign_requests {
-        push_sync_slot_targets(&mut direct, &mut index_urls, &req.reply_syncs, None);
-    }
-    for inq in &post_state.inquiries {
-        push_sync_slot_targets(&mut direct, &mut index_urls, &inq.reply_syncs, None);
-    }
+            for req in &post_state.pending_sign_requests {
+                push_sync_slot_targets(&mut direct, &mut index_urls, &req.reply_syncs, None);
+            }
+            for inq in &post_state.inquiries {
+                push_sync_slot_targets(&mut direct, &mut index_urls, &inq.reply_syncs, None);
+            }
 
-    direct.sort();
-    direct.dedup();
-    index_urls.sort();
-    index_urls.dedup();
+            direct.sort();
+            direct.dedup();
+            index_urls.sort();
+            index_urls.dedup();
 
-    (direct, index_urls)
+            Ok((direct, index_urls))
+        },
+    )
 }
 
 fn collect_authorized_post_senders(
     state: &AppState,
+    session: &crate::session::SessionToken,
     ui_prefs: &UiPreferences,
     post_state: &StoredPostState,
     now_secs: u64,
     password: Option<&str>,
-) -> AuthorizedSenders {
-    let mut service = state.service.lock().unwrap();
-    let mut auth = Vec::new();
-    let mut card_signers = Vec::new();
-    let mut inquiry = Vec::new();
+) -> Result<AuthorizedSenders, FrontendError> {
+    state.with_session_required(
+        session,
+        "Active wallet session changed while collecting authorized post senders",
+        |service| {
+            let mut auth = Vec::new();
+            let mut card_signers = Vec::new();
+            let mut inquiry = Vec::new();
 
-    if ui_prefs.post_accept_from_contacts {
-        if let Ok(contacts) = state.load_contacts(&mut service, password) {
-            for c in contacts {
-                // Allow all explicitly saved AddressBook contacts (including unrated)
-                // so initial WotHandshakeAssertion packages reach pending_wot_handshakes.
-                if let Ok(vk) = get_pubkey_from_user_id(&c.did) {
-                    auth.push((c.did.clone(), vk));
+            if ui_prefs.post_accept_from_contacts {
+                if let Ok(contacts) = state.load_contacts(service, password) {
+                    for c in contacts {
+                        // Allow all explicitly saved AddressBook contacts (including unrated)
+                        // so initial WotHandshakeAssertion packages reach pending_wot_handshakes.
+                        if let Ok(vk) = get_pubkey_from_user_id(&c.did) {
+                            auth.push((c.did.clone(), vk));
+                        }
+                    }
                 }
             }
-        }
-    }
 
-    for entry in &post_state.outbox_entries {
-        if let Ok(vk) = get_pubkey_from_user_id(&entry.recipient_did) {
-            auth.push((entry.recipient_did.clone(), vk));
-        }
-    }
+            for entry in &post_state.outbox_entries {
+                if let Ok(vk) = get_pubkey_from_user_id(&entry.recipient_did) {
+                    auth.push((entry.recipient_did.clone(), vk));
+                }
+            }
 
-    for item in &post_state.inquiries {
-        if let Ok(vk) = get_pubkey_from_user_id(&item.counterparty_did) {
-            auth.push((item.counterparty_did.clone(), vk));
-        }
-    }
+            for item in &post_state.inquiries {
+                if let Ok(vk) = get_pubkey_from_user_id(&item.counterparty_did) {
+                    auth.push((item.counterparty_did.clone(), vk));
+                }
+            }
 
-    let has_inquiry_listing = crate::services::market_service::load_own_market_profile_state(
-        state,
-        &mut service,
-        password,
+            let has_inquiry_listing =
+                crate::services::market_service::load_own_market_profile_state(
+                    state,
+                    service,
+                    password,
+                )
+                .ok()
+                .map(|stored| {
+                    stored.published
+                        && (stored.allow_inquiries
+                            || stored
+                                .ads
+                                .iter()
+                                .any(|a| a.expires_at > now_secs && a.allow_inquiries))
+                })
+                .unwrap_or(false);
+
+            match crate::state::load_encrypted_json_opt::<humoco_market::CardStore>(
+                service,
+                MARKET_CARD_STORE_KEY,
+                password,
+            ) {
+                Ok(Some(cs)) => {
+                    for sc in cs.cards.values() {
+                        if let Ok(vk) = get_pubkey_from_user_id(&sc.card.payload.did) {
+                            if ui_prefs.post_accept_from_contacts && sc.hops <= 2 {
+                                card_signers.push((sc.card.payload.did.clone(), vk));
+                            }
+                            if has_inquiry_listing {
+                                inquiry.push((sc.card.payload.did.clone(), vk));
+                            }
+                        }
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    log::warn!(
+                        "Failed to load CardStore in collect_authorized_post_senders: {}",
+                        e
+                    );
+                }
+            }
+
+            auth.sort_by(|a, b| a.1.as_bytes().cmp(b.1.as_bytes()));
+            auth.dedup_by(|a, b| a.1.as_bytes() == b.1.as_bytes());
+
+            card_signers.sort_by(|a, b| a.1.as_bytes().cmp(b.1.as_bytes()));
+            card_signers.dedup_by(|a, b| a.1.as_bytes() == b.1.as_bytes());
+
+            inquiry.sort_by(|a, b| a.1.as_bytes().cmp(b.1.as_bytes()));
+            inquiry.dedup_by(|a, b| a.1.as_bytes() == b.1.as_bytes());
+
+            Ok(AuthorizedSenders {
+                full: auth,
+                card_signers,
+                inquiry,
+            })
+        },
     )
-    .ok()
-    .map(|stored| {
-        stored.published
-            && (stored.allow_inquiries
-                || stored
-                    .ads
-                    .iter()
-                    .any(|a| a.expires_at > now_secs && a.allow_inquiries))
-    })
-    .unwrap_or(false);
-
-    match crate::state::load_encrypted_json_opt::<humoco_market::CardStore>(
-        &mut service,
-        MARKET_CARD_STORE_KEY,
-        password,
-    ) {
-        Ok(Some(cs)) => {
-            for sc in cs.cards.values() {
-                if let Ok(vk) = get_pubkey_from_user_id(&sc.card.payload.did) {
-                    if ui_prefs.post_accept_from_contacts && sc.hops <= 2 {
-                        card_signers.push((sc.card.payload.did.clone(), vk));
-                    }
-                    if has_inquiry_listing {
-                        inquiry.push((sc.card.payload.did.clone(), vk));
-                    }
-                }
-            }
-        }
-        Ok(None) => {}
-        Err(e) => {
-            log::warn!(
-                "Failed to load CardStore in collect_authorized_post_senders: {}",
-                e
-            );
-        }
-    }
-
-    auth.sort_by(|a, b| a.1.as_bytes().cmp(b.1.as_bytes()));
-    auth.dedup_by(|a, b| a.1.as_bytes() == b.1.as_bytes());
-
-    card_signers.sort_by(|a, b| a.1.as_bytes().cmp(b.1.as_bytes()));
-    card_signers.dedup_by(|a, b| a.1.as_bytes() == b.1.as_bytes());
-
-    inquiry.sort_by(|a, b| a.1.as_bytes().cmp(b.1.as_bytes()));
-    inquiry.dedup_by(|a, b| a.1.as_bytes() == b.1.as_bytes());
-
-    AuthorizedSenders {
-        full: auth,
-        card_signers,
-        inquiry,
-    }
 }
 
 async fn download_post_slots(
@@ -593,11 +624,35 @@ pub async fn sync_post_channels_impl(
 
     let _post_guard = state.post_op_lock.lock().await;
     let client = sync_client::create_sync_http_client();
-    let mut post_state = load_post_state(state, password.as_deref())?;
+    let (signing_ctx, mut post_state) = state.with_session_required(
+        &session,
+        "Active wallet session changed while preparing post sync",
+        |service| {
+            let ps = crate::services::post_service::load_post_state_with_service(
+                service,
+                password.as_deref(),
+            )?;
+            let my_identity = service
+                .with_wallet_and_identity(|_w, id| id.clone())
+                .map_err(FrontendError::from)?;
+            let sync_ctx = crate::services::common::SyncIdentityContext::from_service(service)?;
+            let own_reply_syncs = crate::services::post_service::collect_own_reply_syncs(
+                &security_policy,
+                sync_ctx.my_prefix.as_deref(),
+            );
+            Ok((
+                super::PostSigningContext {
+                    identity: my_identity,
+                    sync_ctx,
+                    own_reply_syncs,
+                },
+                ps,
+            ))
+        },
+    )?;
     let mut baseline_post_state = post_state.clone();
     let now_secs = sync_client::current_unix_timestamp();
 
-    let signing_ctx = load_post_signing_context(state, password.as_deref())?;
     let mut stats = PostDispatchStats::default();
 
     // 1. Pruning pass (§6.2)
@@ -612,21 +667,23 @@ pub async fn sync_post_channels_impl(
     // 2. Build candidate direct fetches and index URLs
     let (direct_slot_fetches, candidate_read_urls) = collect_candidate_slot_sources(
         state,
+        &session,
         &security_policy,
         &signing_ctx.identity.user_id,
         signing_ctx.sync_ctx.my_prefix.as_deref(),
         &post_state,
         password.as_deref(),
-    );
+    )?;
 
     // 3. Build authorized_senders, card_signers, and inquiry_only_senders
     let authorized_groups = collect_authorized_post_senders(
         state,
+        &session,
         &ui_prefs,
         &post_state,
         now_secs,
         password.as_deref(),
-    );
+    )?;
     let authorized_senders = authorized_groups.full;
     let card_signer_senders = authorized_groups.card_signers;
     let inquiry_only_senders = authorized_groups.inquiry;
@@ -844,6 +901,7 @@ pub async fn sync_post_channels_impl(
 
             let env_ctx = PostEnvelopeContext {
                 state,
+                session: &session,
                 app,
                 extra_standards,
                 password: password.as_deref(),
@@ -856,8 +914,39 @@ pub async fn sync_post_channels_impl(
                 decrypted_bytes: &decrypted_bytes,
                 now_secs,
             };
-            if dispatch_post_payload(&env_ctx, &container.c, &mut post_state, &mut stats) {
-                post_state.processed_msg_ids.insert(envelope.msg_id.clone());
+            match dispatch_post_payload(&env_ctx, &container.c, &mut post_state, &mut stats).await
+            {
+                PostDispatchOutcome::Handled => {
+                    post_state.processed_msg_ids.insert(envelope.msg_id.clone());
+                }
+                PostDispatchOutcome::UnsupportedPayload { payload_type } => {
+                    let (sender_name, _, _) = resolve_counterparty_info_for_session(
+                        state,
+                        &session,
+                        &sender_did,
+                        password.as_deref(),
+                    );
+                    if !post_state
+                        .unsupported_messages
+                        .iter()
+                        .any(|u| u.msg_id == envelope.msg_id)
+                    {
+                        if post_state.unsupported_messages.len() >= 50 {
+                            post_state.unsupported_messages.remove(0);
+                        }
+                        post_state
+                            .unsupported_messages
+                            .push(crate::models::FrontendUnsupportedPostItem {
+                                msg_id: envelope.msg_id.clone(),
+                                sender_did: sender_did.clone(),
+                                sender_name,
+                                payload_type,
+                                created_at: envelope.created_at,
+                            });
+                    }
+                    post_state.processed_msg_ids.insert(envelope.msg_id.clone());
+                }
+                PostDispatchOutcome::RetryLater => {}
             }
         }
     }

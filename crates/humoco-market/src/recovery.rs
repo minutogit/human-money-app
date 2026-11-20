@@ -1081,14 +1081,8 @@ fn extract_query_from_uri_text<'a>(uri: &'a str, action: &str) -> Option<&'a str
     let trimmed = uri.trim();
     let lower = trimmed.to_ascii_lowercase();
     let full_prefix = format!("humoco://{}?", action);
-    let short_prefix = format!("{}?", action);
-    let raw_query = if let Some(idx) = lower.find(&full_prefix) {
-        &trimmed[idx + full_prefix.len()..]
-    } else if lower.starts_with(&short_prefix) {
-        &trimmed[short_prefix.len()..]
-    } else {
-        return None;
-    };
+    let idx = lower.find(&full_prefix)?;
+    let raw_query = &trimmed[idx + full_prefix.len()..];
     Some(
         raw_query
             .split(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '>' | ')'))

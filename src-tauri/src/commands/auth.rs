@@ -378,6 +378,8 @@ pub struct SessionStatusDto {
     pub has_cached_session: bool,
     pub access_mode: String,
     pub base_access_mode: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub one_shot_grant: Option<String>,
 }
 
 pub fn build_session_status(
@@ -389,6 +391,7 @@ pub fn build_session_status(
             has_cached_session: false,
             access_mode: "locked".to_string(),
             base_access_mode: "locked".to_string(),
+            one_shot_grant: None,
         };
     }
     let access_mode = service
@@ -404,6 +407,7 @@ pub fn build_session_status(
         has_cached_session: service.is_session_active(),
         access_mode,
         base_access_mode,
+        one_shot_grant: None,
     }
 }
 
@@ -422,19 +426,45 @@ pub fn get_session_status(
     get_session_status_impl(&state)
 }
 
+fn resolve_policy_session_timeout(
+    state: &AppState,
+    service: &mut human_money_core::app_service::AppService,
+    credential: &str,
+) -> u64 {
+    state
+        .get_cached_security_policy()
+        .map(|p| p.session_timeout_seconds)
+        .or_else(|_| {
+            state
+                .get_or_load_security_policy(service, Some(credential))
+                .map(|p| p.session_timeout_seconds)
+        })
+        .unwrap_or(0)
+}
+
+pub fn unlock_session_impl(
+    password: &str,
+    state: &AppState,
+) -> Result<SessionStatusDto, FrontendError> {
+    let mut service = state.authorize_and_lock(RequiredAccess::Unlocked, None)?;
+    let timeout_seconds = resolve_policy_session_timeout(state, &mut service, password);
+    info!("Unlocking session for {} seconds...", timeout_seconds);
+    service
+        .unlock_session(password, timeout_seconds)
+        .map_err(FrontendError::from)?;
+    state.clear_one_shot_pin_grant();
+    if timeout_seconds > 0 {
+        state.notify_sync_coordinator();
+    }
+    Ok(build_session_status(&service))
+}
+
 #[tauri::command]
 pub fn unlock_session(
     password: String,
-    duration_seconds: u64,
     state: tauri::State<AppState>,
 ) -> Result<SessionStatusDto, FrontendError> {
-    info!("Unlocking session for {} seconds...", duration_seconds);
-    let mut service = state.authorize_and_lock(RequiredAccess::Unlocked, None)?;
-    service
-        .unlock_session(&password, duration_seconds)
-        .map_err(FrontendError::from)?;
-    state.notify_sync_coordinator();
-    Ok(build_session_status(&service))
+    unlock_session_impl(&password, &state)
 }
 
 #[tauri::command]
@@ -442,6 +472,7 @@ pub fn lock_session(state: tauri::State<AppState>) {
     info!("Locking session manually.");
     let mut service = state.service.lock().unwrap();
     service.lock_session();
+    state.clear_one_shot_pin_grant();
 }
 
 #[tauri::command]
@@ -618,7 +649,6 @@ pub fn get_profile_pin_status(
 pub fn unlock_session_with_pin_impl(
     folder_name: &str,
     pin: &str,
-    duration_seconds: u64,
     keystore_dir: &Path,
     device_binding_id: &str,
     state: &AppState,
@@ -647,17 +677,26 @@ pub fn unlock_session_with_pin_impl(
             })?;
 
     let mut service = state.authorize_and_lock(RequiredAccess::Unlocked, None)?;
-    match service.unlock_secondary_session(&secret, duration_seconds) {
+    let timeout_seconds = resolve_policy_session_timeout(state, &mut service, &secret);
+    match service.unlock_secondary_session(&secret, timeout_seconds) {
         Ok(()) => {
             let _ = pin_keystore::reset_failed_attempts(keystore_dir, folder_name);
-            state.notify_sync_coordinator();
-            Ok(build_session_status(&service))
+            let mut status = build_session_status(&service);
+            if timeout_seconds == 0 {
+                status.one_shot_grant =
+                    Some(state.issue_one_shot_pin_grant(&service, secret.to_string())?);
+            } else {
+                state.clear_one_shot_pin_grant();
+                state.notify_sync_coordinator();
+            }
+            Ok(status)
         }
         Err(_) => {
             if attempt >= MAX_PIN_ATTEMPTS {
                 let _ = service.wipe_secondary_auth_slot(folder_name);
                 let _ = pin_keystore::remove_entry(keystore_dir, folder_name);
                 service.lock_session();
+                state.clear_one_shot_pin_grant();
                 return Err(FrontendError {
                     code: "error.auth.pinWipedMaxAttempts".to_string(),
                     message: "PIN disabled after 5 failed attempts. Please sign in with your master password.".to_string(),
@@ -680,7 +719,6 @@ pub fn unlock_session_with_pin_impl(
 #[tauri::command]
 pub fn unlock_session_with_pin(
     pin: String,
-    duration_seconds: u64,
     folder_name: Option<String>,
     state: tauri::State<AppState>,
     app: tauri::AppHandle,
@@ -700,7 +738,6 @@ pub fn unlock_session_with_pin(
     unlock_session_with_pin_impl(
         &resolved_folder,
         &pin,
-        duration_seconds,
         &keystore_dir,
         &device_id,
         &state,
@@ -948,6 +985,7 @@ pub fn elevate_session_with_password_impl(
     service
         .elevate_session(master_password, timeout_seconds)
         .map_err(FrontendError::from)?;
+    state.clear_one_shot_pin_grant();
     Ok(build_session_status(&service))
 }
 
@@ -1126,7 +1164,6 @@ mod tests {
         let full_pin_err = unlock_session_with_pin_impl(
             &folder,
             "000000",
-            300,
             &keystore_dir,
             "dev-pin-1",
             &app_state,
@@ -1180,6 +1217,7 @@ mod tests {
                 has_cached_session: true,
                 access_mode: "full".to_string(),
                 base_access_mode: "dailyPay".to_string(),
+                one_shot_grant: None,
             }
         );
         app_state.service.lock().unwrap().lock_session();
@@ -1191,14 +1229,18 @@ mod tests {
                 has_cached_session: false,
                 access_mode: "dailyPay".to_string(),
                 base_access_mode: "dailyPay".to_string(),
+                one_shot_grant: None,
             }
         );
 
-        // Ephemeral PIN re-unlock (duration_seconds == 0) leaves has_cached_session == false
+        // Ephemeral PIN re-unlock when backend policy timeout == 0 leaves has_cached_session == false and issues one-shot grant
+        app_state.set_cached_security_policy(Some(SecurityPolicy {
+            session_timeout_seconds: 0,
+            ..Default::default()
+        }));
         let ephemeral = unlock_session_with_pin_impl(
             &folder,
             "246810",
-            0,
             &keystore_dir,
             "dev-pin-1",
             &app_state,
@@ -1206,12 +1248,19 @@ mod tests {
         .unwrap();
         assert!(!ephemeral.has_cached_session);
         assert_eq!(ephemeral.access_mode, "dailyPay");
+        assert!(ephemeral
+            .one_shot_grant
+            .as_deref()
+            .is_some_and(|g| g.starts_with(crate::state::ONE_SHOT_PIN_GRANT_PREFIX)));
 
-        // Timed PIN re-unlock (duration_seconds > 0) activates DailyPay cache & resets strike counter
+        // Timed PIN re-unlock when backend policy timeout > 0 activates DailyPay cache & resets strike counter
+        app_state.set_cached_security_policy(Some(SecurityPolicy {
+            session_timeout_seconds: 300,
+            ..Default::default()
+        }));
         let wrong_once = unlock_session_with_pin_impl(
             &folder,
             "000000",
-            300,
             &keystore_dir,
             "dev-pin-1",
             &app_state,
@@ -1226,13 +1275,13 @@ mod tests {
         let cached_pin = unlock_session_with_pin_impl(
             &folder,
             "246810",
-            300,
             &keystore_dir,
             "dev-pin-1",
             &app_state,
         )
         .unwrap();
         assert!(cached_pin.has_cached_session);
+        assert!(cached_pin.one_shot_grant.is_none());
         assert_eq!(cached_pin.access_mode, "dailyPay");
         assert_eq!(cached_pin.base_access_mode, "dailyPay");
         assert_eq!(
@@ -1314,7 +1363,6 @@ mod tests {
             let err = unlock_session_with_pin_impl(
                 &folder,
                 "000000",
-                300,
                 &keystore_dir,
                 "dev-pin-1",
                 &app_state,
@@ -1329,7 +1377,6 @@ mod tests {
         let wipe_reauth_err = unlock_session_with_pin_impl(
             &folder,
             "000000",
-            300,
             &keystore_dir,
             "dev-pin-1",
             &app_state,
@@ -1401,5 +1448,139 @@ mod tests {
             .unwrap()
             .login(&folder, master_pw, false, "dev-pin-1".into())
             .unwrap();
+    }
+
+    #[test]
+    fn h1_h2_one_shot_pin_grant_single_use_rejects_full_and_clear_invalidates() {
+        use human_money_core::app_service::AppService;
+        use human_money_core::services::mnemonic::MnemonicLanguage;
+
+        let dir = crate::test_support::temp_test_dir("h1_h2_grant_matrix");
+        let wallet_dir = dir.join("wallet_data");
+        let keystore_dir = dir.join("keystore");
+        std::fs::create_dir_all(&wallet_dir).unwrap();
+
+        let master_pw = "MasterPass-H1H2-2026!";
+        let mut service = AppService::new(&wallet_dir).unwrap();
+        let mnemonic = AppService::generate_mnemonic(12, MnemonicLanguage::English).unwrap();
+        service
+            .create_profile(
+                "Matrix Tester",
+                &mnemonic,
+                None,
+                Some("mx"),
+                master_pw,
+                MnemonicLanguage::English,
+                "dev-h1".into(),
+                true,
+            )
+            .unwrap();
+        let folder = service.list_profiles().unwrap()[0].folder_name.clone();
+        let app_state = AppState::new(service);
+
+        enable_profile_pin_impl(
+            master_pw,
+            "246810",
+            "dailyPay",
+            &folder,
+            &keystore_dir,
+            "dev-h1",
+            &app_state,
+        )
+        .unwrap();
+
+        app_state.service.lock().unwrap().logout();
+        login_with_pin_impl(
+            &folder,
+            "246810",
+            false,
+            "dev-h1".into(),
+            &keystore_dir,
+            "dev-h1",
+            &app_state,
+            None,
+        )
+        .unwrap();
+        // Force DailyPay cache expiration so timeout=0 unlock issues a single-use grant
+        app_state.service.lock().unwrap().lock_session();
+        app_state.set_cached_security_policy(Some(SecurityPolicy {
+            session_timeout_seconds: 0,
+            ..Default::default()
+        }));
+
+        // Locked DailyPay session denies Full and DailyPay calls without grant
+        let denied_daily = app_state.authorize(RequiredAccess::DailyPay, None).unwrap_err();
+        assert!(
+            denied_daily.code == "error.auth.passwordRequired"
+                || denied_daily.code == "error.auth.sessionNotActive",
+            "unexpected locked error code: {}",
+            denied_daily.code
+        );
+
+        let unlocked = unlock_session_with_pin_impl(
+            &folder,
+            "246810",
+            &keystore_dir,
+            "dev-h1",
+            &app_state,
+        )
+        .unwrap();
+        let grant = unlocked
+            .one_shot_grant
+            .expect("timeout=0 PIN unlock must issue a single-use grant");
+        assert!(grant.starts_with(crate::state::ONE_SHOT_PIN_GRANT_PREFIX));
+
+        // 1. Grant is REJECTED for RequiredAccess::Full (H1/H2: DailyPay-only grant cannot elevate)
+        let full_err = app_state
+            .authorize_and_lock_secret(RequiredAccess::Full, Some(&grant))
+            .err()
+            .unwrap();
+        assert_eq!(full_err.code, "error.auth.insufficientAccessMode");
+
+        // 2. Grant is accepted ONCE for RequiredAccess::DailyPay and immediately consumed
+        assert!(app_state
+            .authorize_and_lock_secret(RequiredAccess::DailyPay, Some(&grant))
+            .is_ok());
+        let reuse_err = app_state
+            .authorize_and_lock_secret(RequiredAccess::DailyPay, Some(&grant))
+            .err()
+            .unwrap();
+        assert_eq!(
+            reuse_err.code, "error.auth.sessionTimeout",
+            "expected sessionTimeout on one-shot grant reuse, got {}",
+            reuse_err.code
+        );
+
+        // 3. Issuing a new grant and logging out / clearing caches invalidates it
+        let grant2 = unlock_session_with_pin_impl(
+            &folder,
+            "246810",
+            &keystore_dir,
+            "dev-h1",
+            &app_state,
+        )
+        .unwrap()
+        .one_shot_grant
+        .unwrap();
+        app_state.clear_all_caches();
+        assert!(app_state
+            .authorize_and_lock_secret(RequiredAccess::DailyPay, Some(&grant2))
+            .is_err());
+
+        // 4. H2: Timed DailyPay session satisfies DailyPay, NOT Full
+        app_state.set_cached_security_policy(Some(SecurityPolicy {
+            session_timeout_seconds: 300,
+            ..Default::default()
+        }));
+        unlock_session_with_pin_impl(&folder, "246810", &keystore_dir, "dev-h1", &app_state)
+            .unwrap();
+        assert!(app_state.authorize(RequiredAccess::DailyPay, None).is_ok());
+        let daily_full_err = app_state.authorize(RequiredAccess::Full, None).unwrap_err();
+        assert_eq!(daily_full_err.code, "error.auth.insufficientAccessMode");
+        assert!(app_state
+            .authorize(RequiredAccess::Full, Some(master_pw))
+            .is_ok());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

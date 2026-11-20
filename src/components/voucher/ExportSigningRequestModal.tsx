@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { voucherService, SigningRequestConfig } from "../../services/voucherService";
 import { postService } from "../../services/postService";
+import { marketService } from "../../services/marketService";
 import { settingsService } from "../../services/settingsService";
 import { contactService } from "../../services/contactService";
 import { save } from "@tauri-apps/plugin-dialog";
@@ -11,7 +12,7 @@ import { ConfirmationModal } from "../ui/ConfirmationModal";
 import { Button } from "../ui/Button";
 import { AppConfigDto, Contact } from "../../types";
 import { updateLastUsedDirectory } from "../../utils/settingsUtils";
-import { normalizeUserIdInput } from "../../utils/humocoUri";
+import { normalizeUserIdInput, parseHumocoInput } from "../../utils/humocoUri";
 import { RefreshCw, UploadCloud, CheckCircle2 } from "lucide-react";
 
 interface ExportSigningRequestModalProps {
@@ -58,6 +59,15 @@ export function ExportSigningRequestModal({
         }
     }, [contacts, isOpen]);
 
+    const resolveTargetRecipientId = async (raw: string): Promise<string | null> => {
+        const parsed = parseHumocoInput(raw);
+        if (parsed?.kind === 'card') {
+            const resolved = await marketService.resolveCardRecipient(parsed.payload);
+            return resolved.recipientId;
+        }
+        return normalizeUserIdInput(raw) ?? (raw.trim() || null);
+    };
+
     const handleExportSigningRequest = async () => {
         if (!voucherId) return;
         setIsExporting(true);
@@ -65,7 +75,7 @@ export function ExportSigningRequestModal({
         try {
             let requestConfig: SigningRequestConfig;
             if (encryptToDid) {
-                const normalizedDid = normalizeUserIdInput(recipientId) ?? recipientId.trim();
+                const normalizedDid = await resolveTargetRecipientId(recipientId);
                 if (!normalizedDid) {
                     setExportError(t('voucher.errorEnterRecipientDid'));
                     setIsExporting(false);
@@ -135,7 +145,13 @@ export function ExportSigningRequestModal({
 
     const handleSendSigningRequestViaPost = async () => {
         if (!voucherId) return;
-        const normalizedDid = normalizeUserIdInput(recipientId) ?? recipientId.trim();
+        let normalizedDid: string | null = null;
+        try {
+            normalizedDid = await resolveTargetRecipientId(recipientId);
+        } catch (e) {
+            setExportError(translateError(e, t));
+            return;
+        }
         if (!normalizedDid) {
             setExportError(t('voucher.errorEnterRecipientDid'));
             return;
@@ -235,8 +251,21 @@ export function ExportSigningRequestModal({
                                     type="text"
                                     value={recipientId}
                                     onChange={(e) => {
-                                        const normalized = normalizeUserIdInput(e.target.value);
-                                        setRecipientId(normalized ?? e.target.value);
+                                        const rawVal = e.target.value;
+                                        const parsed = parseHumocoInput(rawVal);
+                                        if (parsed?.kind === 'card') {
+                                            setRecipientId(rawVal);
+                                            void marketService
+                                                .resolveCardRecipient(parsed.payload)
+                                                .then((resolved) => {
+                                                    setExportError("");
+                                                    setRecipientId(resolved.recipientId);
+                                                })
+                                                .catch((err) => setExportError(translateError(err, t)));
+                                            return;
+                                        }
+                                        const normalized = normalizeUserIdInput(rawVal);
+                                        setRecipientId(normalized ?? rawVal);
                                     }}
                                     placeholder={t('contacts.didPlaceholder')}
                                     className="w-full px-4 py-3 border border-theme-subtle rounded-xl bg-bg-input text-theme-primary focus:outline-none focus:ring-2 focus:ring-theme-primary/20 focus:border-theme-primary shadow-inner-soft transition-all"

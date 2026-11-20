@@ -57,11 +57,16 @@ function AppContent() {
 
     const appStateViewRef = useRef(appState.view);
     appStateViewRef.current = appState.view;
+    const isAuthReadyRef = useRef(isAuthReady);
+    isAuthReadyRef.current = isAuthReady;
     const hasCheckedStartupItemsRef = useRef(false);
     const isProcessingLaunchQueueRef = useRef(false);
     const classifiedLaunchCacheRef = useRef<Map<string, ClassifiedLaunchItem>>(new Map());
     const deferredLaunchItemsRef = useRef<Set<string>>(new Set());
+    const reservedLaunchItemRef = useRef<string | null>(null);
+    const skippedLaunchItemsRef = useRef<Set<string>>(new Set());
 
+    const [reservedLaunchItem, setReservedLaunchItem] = useState<string | null>(null);
     const [releaseModalOpen, setReleaseModalOpen] = useState(false);
     const [releaseRequestUri, setReleaseRequestUri] = useState<string | undefined>(undefined);
     const [releaseInitialOwnerDid, setReleaseInitialOwnerDid] = useState<string | undefined>(undefined);
@@ -94,8 +99,30 @@ function AppContent() {
         await Promise.resolve(invoke<boolean>("ack_startup_launch_item", { item })).catch(() => false);
     }, []);
 
-    const dispatchDeepLinkUri = useCallback(async (uri: string) => {
-        if (!uri) return;
+    const finishLaunchItem = useCallback(async (item: string) => {
+        if (!item) return;
+        if (isAuthReadyRef.current) {
+            await ackLaunchItem(item);
+        }
+        if (reservedLaunchItemRef.current === item) {
+            reservedLaunchItemRef.current = null;
+            setReservedLaunchItem(null);
+        }
+        setLaunchQueueKick((k) => k + 1);
+    }, [ackLaunchItem]);
+
+    useEffect(() => {
+        if (!isAuthReady) {
+            reservedLaunchItemRef.current = null;
+            setReservedLaunchItem(null);
+            skippedLaunchItemsRef.current.clear();
+        }
+    }, [isAuthReady]);
+
+    type LaunchDispatchOutcome = 'ack' | 'reserved' | 'keep_unacked';
+
+    const dispatchDeepLinkUri = useCallback(async (uri: string): Promise<LaunchDispatchOutcome> => {
+        if (!uri) return 'ack';
         setDeepLinkFeedback(null);
         const normalizedUri = extractHumocoDeepLink(uri) || uri;
         const lowerUri = normalizedUri.toLowerCase();
@@ -107,16 +134,23 @@ function AppContent() {
                     const res = await protectAction(async (pwd) => {
                         return await marketService.importContactCard(normalizedUri, pwd || undefined);
                     });
-                    if (res && res.status === 'accepted' && res.did) {
+                    if (!res) {
+                        return 'keep_unacked';
+                    }
+                    if (res.status === 'accepted' && res.did) {
                         navigate({ view: 'marketplace', selectedDid: res.did });
-                    } else if (res) {
+                    } else {
                         setDeepLinkFeedback(formatCardImportStatusFeedback(res.status, t));
                     }
                 } catch (err) {
+                    if (!isAuthReadyRef.current) {
+                        return 'keep_unacked';
+                    }
                     logger.error("Failed to import card from URI: " + String(err));
                     setDeepLinkFeedback(translateError(err, t));
                 }
             }
+            return 'ack';
         } else if (lowerUri.includes('humoco://pay')) {
             navigate({ view: 'send_vouchers', initialPaymentUri: normalizedUri });
         } else if (lowerUri.includes('humoco://contact')) {
@@ -142,6 +176,7 @@ function AppContent() {
             setReleaseRequestUri(normalizedUri);
             setReleaseModalOpen(true);
         }
+        return 'ack';
     }, [navigate, protectAction, t]);
 
     const classifyLaunchItem = useCallback(async (item: string): Promise<ClassifiedLaunchItem> => {
@@ -182,9 +217,9 @@ function AppContent() {
         return resolved;
     }, []);
 
-    const executeClassifiedItem = useCallback(async (classified: ClassifiedLaunchItem) => {
+    const executeClassifiedItem = useCallback(async (classified: ClassifiedLaunchItem, launchItem: string): Promise<LaunchDispatchOutcome> => {
         if (classified.kind === 'uri') {
-            await dispatchDeepLinkUri(classified.uri);
+            return await dispatchDeepLinkUri(classified.uri);
         } else if (classified.kind === 'backup') {
             const stagedPath = await backupService.stageDroppedBackupBytes(classified.bytes);
             navigate({
@@ -192,6 +227,7 @@ function AppContent() {
                 initialMethod: 'file_or_folder',
                 initialBackupPath: stagedPath,
             });
+            return 'ack';
         } else if (classified.kind === 'file') {
             if (classified.classification.kind === 'card') {
                 const text = new TextDecoder().decode(new Uint8Array(classified.bytes));
@@ -199,26 +235,37 @@ function AppContent() {
                     const res = await protectAction(async (pwd) => {
                         return await marketService.importContactCard(text, pwd || undefined);
                     });
-                    if (res && res.status === 'accepted' && res.did) {
+                    if (!res) {
+                        return 'keep_unacked';
+                    }
+                    if (res.status === 'accepted' && res.did) {
                         navigate({ view: 'marketplace', selectedDid: res.did });
-                    } else if (res) {
+                    } else {
                         setDeepLinkFeedback(formatCardImportStatusFeedback(res.status, t));
                     }
                 } catch (err) {
+                    if (!isAuthReadyRef.current) {
+                        return 'keep_unacked';
+                    }
                     setDeepLinkFeedback(translateError(err, t));
                 }
+                return 'ack';
             } else {
+                reservedLaunchItemRef.current = launchItem;
+                setReservedLaunchItem(launchItem);
                 navigate({
                     view: 'receive_bundle',
-                    droppedFile: { name: classified.fileName, bytes: classified.bytes },
+                    droppedFile: { name: classified.fileName, bytes: classified.bytes, launchItem },
                 });
+                return 'reserved';
             }
         }
+        return 'ack';
     }, [dispatchDeepLinkUri, navigate, protectAction, t]);
 
     // Process FIFO launch queue:
     // - Pre-login items (kit, recovery-reply, backup) process & ack immediately.
-    // - Auth-required items stay persisted & un-acked in backend until login is complete.
+    // - Auth-required items stay persisted & un-acked in backend until login & import finish.
     useEffect(() => {
         if (launchQueue.length === 0) {
             setHasDeferredLink(false);
@@ -228,7 +275,7 @@ function AppContent() {
         if (isProcessingLaunchQueueRef.current) return;
 
         let cancelled = false;
-        let didAck = false;
+        let didAdvance = false;
         const processNext = async () => {
             isProcessingLaunchQueueRef.current = true;
             try {
@@ -239,9 +286,9 @@ function AppContent() {
                         if (cancelled) break;
                         const classified = await classifyLaunchItem(item);
                         if (classified.preLogin) {
-                            await executeClassifiedItem(classified);
+                            await executeClassifiedItem(classified, item);
                             await ackLaunchItem(item);
-                            didAck = true;
+                            didAdvance = true;
                             break;
                         } else {
                             deferredLaunchItemsRef.current.add(item);
@@ -260,20 +307,29 @@ function AppContent() {
                     deferredLaunchItemsRef.current.clear();
                     setHasDeferredFile(false);
                     setHasDeferredLink(false);
-                    const nextItem = launchQueue[0];
+                    if (reservedLaunchItemRef.current) {
+                        return;
+                    }
+                    const nextItem = launchQueue.find((item) => !skippedLaunchItemsRef.current.has(item));
                     if (nextItem) {
                         const classified = await classifyLaunchItem(nextItem);
-                        try {
-                            await executeClassifiedItem(classified);
-                        } finally {
-                            await ackLaunchItem(nextItem);
-                            didAck = true;
+                        const outcome = await executeClassifiedItem(classified, nextItem);
+                        if (outcome === 'ack') {
+                            if (classified.preLogin || isAuthReadyRef.current) {
+                                await ackLaunchItem(nextItem);
+                                didAdvance = true;
+                            }
+                        } else if (outcome === 'keep_unacked') {
+                            if (isAuthReadyRef.current) {
+                                skippedLaunchItemsRef.current.add(nextItem);
+                                didAdvance = true;
+                            }
                         }
                     }
                 }
             } finally {
                 isProcessingLaunchQueueRef.current = false;
-                if (didAck && !cancelled) {
+                if (didAdvance && !cancelled) {
                     setLaunchQueueKick((k) => k + 1);
                 }
             }
@@ -283,7 +339,7 @@ function AppContent() {
         return () => {
             cancelled = true;
         };
-    }, [launchQueue, launchQueueKick, isAuthReady, classifyLaunchItem, executeClassifiedItem, ackLaunchItem]);
+    }, [launchQueue, launchQueueKick, reservedLaunchItem, isAuthReady, classifyLaunchItem, executeClassifiedItem, ackLaunchItem]);
 
     useEffect(() => {
         if (!isLoggedIn || appState.view === 'needs_profile' || !pendingDroppedFile) return;
@@ -428,7 +484,7 @@ function AppContent() {
                                         </AlertBanner>
                                     </div>
                                 )}
-                                <AppRouter />
+                                <AppRouter onFinishLaunchItem={(item) => void finishLaunchItem(item)} />
                             </main>
                         </div>
                     </div>

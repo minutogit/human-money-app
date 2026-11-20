@@ -1189,4 +1189,9 @@ fn test_sloppy_kit_uri_and_prefixed_vault_lookup() {
     assert_eq!(store.len(), 1);
     assert!(store.get_ward(&shop_did).is_some());
     assert!(store.get_ward(&phone_did).is_none());
+
+    // F6 Zero-Compat: short recovery URI without `humoco://` scheme must be rejected.
+    let canonical = build_recovery_request_uri(&[7u8; 32], 1700000500, Some("Alice"));
+    let legacy_short = canonical.strip_prefix("humoco://").unwrap();
+    assert!(parse_recovery_request_uri(legacy_short).is_err());
 }

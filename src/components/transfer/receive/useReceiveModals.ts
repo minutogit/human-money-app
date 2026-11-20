@@ -3,11 +3,13 @@ import React, { useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { transferService } from '../../../services/transferService';
 import { translateError } from '../../../utils/errorHelper';
+import { APP_EVENTS, emitAppEvent } from '../../../utils/appEvents';
 import type { ProtectActionFn } from '../../../utils/fileIo';
 import type { ReceiveImportKind } from '../../../utils/humocoFileClassifier';
 import type {
     AppState,
     ReceiveSuccessPayload,
+    ToleranceReceiveConfirmation,
     VoucherDetails,
     VoucherStandardDefinition,
 } from '../../../types';
@@ -30,10 +32,9 @@ export interface PendingPasswordImportState {
 export function useReceiveModals({
     onBack,
     onReceiveSuccess,
+    onFinishPendingLaunchItem,
     navigate,
     protectAction,
-    ensureStandardsToml,
-    droppedFileContent,
     setFeedbackMsg,
     setIsProcessing,
     resetAllSelections,
@@ -41,10 +42,9 @@ export function useReceiveModals({
 }: {
     onBack: () => void;
     onReceiveSuccess: (payload: ReceiveSuccessPayload | VoucherDetails) => void;
+    onFinishPendingLaunchItem?: () => void;
     navigate?: (state: AppState) => void;
     protectAction: ProtectActionFn;
-    ensureStandardsToml: () => Promise<Record<string, string>>;
-    droppedFileContent: number[] | null;
     setFeedbackMsg: (msg: string) => void;
     setIsProcessing: (v: boolean) => void;
     resetAllSelections: () => void;
@@ -59,10 +59,7 @@ export function useReceiveModals({
     const [showConfirm, setShowConfirm] = useState(false);
     const [bundlePassword, setBundlePassword] = useState('');
     const [resultModal, setResultModal] = useState<ResultModalState | null>(null);
-    const [toleranceModal, setToleranceModal] = useState<{
-        type: 'Soft' | 'Critical';
-        message: string;
-    } | null>(null);
+    const [toleranceModal, setToleranceModal] = useState<ToleranceReceiveConfirmation | null>(null);
     const [confirmText, setConfirmText] = useState('');
     const [pendingPasswordImport, setPendingPasswordImport] =
         useState<PendingPasswordImportState | null>(null);
@@ -92,28 +89,39 @@ export function useReceiveModals({
         setBundlePassword('');
         setIsProcessing(false);
         resetAllSelections();
+        onFinishPendingLaunchItem?.();
     };
 
     const confirmToleranceImport = async () => {
-        const bundleBytes = droppedFileContent;
-        if (!toleranceModal || !bundleBytes) return;
+        const modal = toleranceModal;
+        if (!modal) return;
+        const { pendingCommit } = modal;
         setIsProcessing(true);
         try {
-            const standardDefinitionsToml = await ensureStandardsToml();
-            const payload = await protectAction(async (password) => {
+            const payload = await protectAction(async (walletPassword) => {
                 return await transferService.receiveBundle({
-                    bundleData: bundleBytes,
-                    standardDefinitionsToml,
-                    password: password || undefined,
+                    bundleData: pendingCommit.bundleData,
+                    standardDefinitionsToml: pendingCommit.standardDefinitionsToml,
+                    password: walletPassword || pendingCommit.bundlePassword || undefined,
                     forceAcceptToleranceBundle: true,
                     commitMode: 'forceTrustOffline',
                 });
             });
             if (payload) {
+                if (
+                    (payload.verifiableConflicts &&
+                        Object.keys(payload.verifiableConflicts).length > 0) ||
+                    (payload.conflictSummaries?.some((c) => !c.isResolved && !c.localOverride) ??
+                        false)
+                ) {
+                    emitAppEvent(APP_EVENTS.CONFLICTS_UPDATED);
+                }
                 onReceiveSuccess(payload);
+                onFinishPendingLaunchItem?.();
             }
         } catch (e) {
             setFeedbackMsg(translateError(e, t));
+            onFinishPendingLaunchItem?.();
         } finally {
             setIsProcessing(false);
             setToleranceModal(null);
@@ -146,9 +154,11 @@ export function useReceiveModals({
             setConfirmText('');
             setIsProcessing(false);
             setShowConfirm(false);
+            onFinishPendingLaunchItem?.();
         },
         confirmResultModal: () => {
             if (!resultModal) return;
+            onFinishPendingLaunchItem?.();
             if (resultModal.proofId && navigate) {
                 navigate({
                     view: 'conflict_details',
@@ -168,6 +178,7 @@ export function useReceiveModals({
         },
         dismissResultModal: () => {
             setResultModal(null);
+            onFinishPendingLaunchItem?.();
             onBack();
         },
     };

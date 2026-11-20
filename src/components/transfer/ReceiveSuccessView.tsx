@@ -31,11 +31,13 @@ import {
 interface ReceiveSuccessViewProps {
     payload: ReceiveSuccessPayload;
     pendingCommit?: PendingReceiveCommit;
+    launchItem?: string;
+    onFinishLaunchItem?: (launchItem: string) => void;
     onApproveOnTrust?: () => Promise<ReceiveSuccessPayload | void>;
     onDone: () => void;
 }
 
-export function ReceiveSuccessView({ payload, pendingCommit, onApproveOnTrust, onDone }: ReceiveSuccessViewProps) {
+export function ReceiveSuccessView({ payload, pendingCommit, launchItem, onFinishLaunchItem, onApproveOnTrust, onDone }: ReceiveSuccessViewProps) {
     const { t } = useTranslation();
     const session = useOptionalSession();
     const [activePayload, setActivePayload] = useState<ReceiveSuccessPayload>(payload);
@@ -112,6 +114,9 @@ export function ReceiveSuccessView({ payload, pendingCommit, onApproveOnTrust, o
                 const updated = await onApproveOnTrust();
                 if (updated) {
                     setActivePayload(updated);
+                    if (launchItem) {
+                        onFinishLaunchItem?.(launchItem);
+                    }
                 }
                 setManualApprovalGranted(true);
                 return;
@@ -121,7 +126,7 @@ export function ReceiveSuccessView({ payload, pendingCommit, onApproveOnTrust, o
                     await transferService.receiveBundle({
                         bundleData: pendingCommit.bundleData,
                         standardDefinitionsToml: pendingCommit.standardDefinitionsToml,
-                        password: pendingCommit.bundlePassword || walletPassword || undefined,
+                        password: walletPassword || pendingCommit.bundlePassword || undefined,
                         forceAcceptToleranceBundle: Boolean(pendingCommit.forceAcceptToleranceBundle),
                         commitMode: 'forceTrustOffline',
                         purchaseId: activePayload.purchaseId,
@@ -140,11 +145,17 @@ export function ReceiveSuccessView({ payload, pendingCommit, onApproveOnTrust, o
                     ) {
                         emitAppEvent(APP_EVENTS.CONFLICTS_UPDATED);
                     }
+                    if (launchItem) {
+                        onFinishLaunchItem?.(launchItem);
+                    }
                 }
                 return;
             }
             if (activePayload.newlyCommitted !== false) {
                 setManualApprovalGranted(true);
+                if (launchItem) {
+                    onFinishLaunchItem?.(launchItem);
+                }
             }
         } catch (err) {
             setApprovalError(translateError(err, t));
@@ -575,7 +586,12 @@ export function ReceiveSuccessView({ payload, pendingCommit, onApproveOnTrust, o
                 <div className="flex flex-col items-center gap-4">
                     <Button 
                         size="lg" 
-                        onClick={onDone} 
+                        onClick={() => {
+                            if (launchItem) {
+                                onFinishLaunchItem?.(launchItem);
+                            }
+                            onDone();
+                        }} 
                         className="w-full max-w-sm py-4 rounded-3xl shadow-premium-lg text-lg gap-2 cursor-pointer"
                     >
                         {t('transfer.receiveSuccess.backToDashboard')}

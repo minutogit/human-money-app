@@ -402,11 +402,26 @@ export interface FrontendMarketInquiryItem {
     messages: FrontendInquiryChatMessage[];
 }
 
+export interface FrontendResolvedCardRecipient {
+    recipientId: string;
+    did: string;
+    displayName?: string | null;
+}
+
+export interface FrontendUnsupportedPostItem {
+    msgId: string;
+    senderDid: string;
+    senderName?: string | null;
+    payloadType: string;
+    createdAt: number;
+}
+
 export interface FrontendPostInboxSummary {
     pendingSignRequests: FrontendPendingSignRequest[];
     pendingWotHandshakes: FrontendPendingWotHandshake[];
     inquiries: FrontendMarketInquiryItem[];
     unacknowledgedPayments: string[];
+    unsupportedMessages?: FrontendUnsupportedPostItem[];
 }
 
 export interface FrontendPostSyncResult {

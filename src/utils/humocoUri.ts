@@ -116,7 +116,7 @@ export interface ParsedCardUri {
 
 export type ParsedHumocoInput =
   | { kind: 'payment'; payment: ParsedPaymentRequest; uri: string }
-  | { kind: 'card'; card: ParsedCardUri; payload: string; did?: string }
+  | { kind: 'card'; card: ParsedCardUri; payload: string }
   | { kind: 'contact'; contact: ParsedContactCard }
   | { kind: 'did'; did: string };
 
@@ -479,34 +479,6 @@ export function extractCardPayload(raw: string): string | null {
 }
 
 /**
- * Extracts and validates the subject DID from a decoded CardEnvelope JSON string.
- */
-export function extractDidFromCardEnvelopeJson(envelopeJson: string): string | null {
-  try {
-    const env = JSON.parse(envelopeJson) as Record<string, unknown>;
-    let candidate = '';
-    if (typeof env.card_wire === 'string') {
-      const seg = env.card_wire.split('.')[1];
-      if (seg) {
-        const payloadText = decodeBase64UrlToUtf8(seg);
-        if (payloadText) {
-          const payload = JSON.parse(payloadText) as { did?: unknown };
-          if (typeof payload.did === 'string') {
-            candidate = canonicalizeUserIdCandidate(payload.did);
-          }
-        }
-      }
-    }
-    if (candidate && isValidUserIdFormat(candidate)) {
-      return candidate;
-    }
-  } catch {
-    // Malformed envelope JSON
-  }
-  return null;
-}
-
-/**
  * Central input normalizer/parser for Human Money URIs (`humoco://pay`, `humoco://card`,
  * `humoco://contact`), raw JSON CardEnvelopes, and standalone or chat-embedded User IDs.
  */
@@ -524,20 +496,15 @@ export function parseHumocoInput(raw: string): ParsedHumocoInput | null {
   const parsedCardUri = parseCardUri(trimmed);
   if (parsedCardUri) {
     const payload = `humoco://card?env=${parsedCardUri.envBase64}`;
-    const did = parsedCardUri.envelopeJson
-      ? extractDidFromCardEnvelopeJson(parsedCardUri.envelopeJson) ?? undefined
-      : undefined;
-    return { kind: 'card', card: parsedCardUri, payload, did };
+    return { kind: 'card', card: parsedCardUri, payload };
   }
 
   const cardJsonPayload = extractCardPayload(trimmed);
   if (cardJsonPayload && cardJsonPayload.startsWith('{')) {
-    const did = extractDidFromCardEnvelopeJson(cardJsonPayload) ?? undefined;
     return {
       kind: 'card',
       card: { envBase64: '', envelopeJson: cardJsonPayload },
       payload: cardJsonPayload,
-      did,
     };
   }
 
@@ -555,7 +522,8 @@ export function parseHumocoInput(raw: string): ParsedHumocoInput | null {
 
 /**
  * Extracts and validates a canonical User ID (`did:key:z...` or `prefix:checksum@did:key:z...`)
- * from any supported Humoco URI, card envelope, or chat/email paste.
+ * from URIs, contact links, or chat/email paste.
+ * Signed card envelopes require canonical Ed25519 verification via `marketService.resolveCardRecipient`.
  */
 export function normalizeUserIdInput(raw: string): string | null {
   const parsed = parseHumocoInput(raw);
@@ -566,7 +534,7 @@ export function normalizeUserIdInput(raw: string): string | null {
     case 'contact':
       return parsed.contact.did;
     case 'card':
-      return parsed.did ?? null;
+      return null;
     case 'did':
       return parsed.did;
   }
