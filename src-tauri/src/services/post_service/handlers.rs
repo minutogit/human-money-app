@@ -45,6 +45,7 @@ pub(crate) struct PostDispatchStats {
     pub new_wot_handshakes: usize,
     pub new_inquiries: usize,
     pub new_inquiry_messages: usize,
+    pub new_tolerance_payments: usize,
     pub pruned_boxes: usize,
     pub last_inquiry_notice_target: Option<(String, Option<String>)>,
     pub errors: Vec<String>,
@@ -154,6 +155,94 @@ fn queue_ack_receipt(
     );
 }
 
+const MAX_PENDING_TOLERANCE_PAYMENTS: usize = 20;
+const MAX_PENDING_TOLERANCE_TOTAL_B64_BYTES: usize = 4 * 1024 * 1024;
+
+pub(crate) enum PostBundleCommitResult {
+    Committed(Box<human_money_core::wallet::types::ProcessBundleResult>),
+    CoreError(human_money_core::Error),
+}
+
+/// Commits an incoming PoST transaction bundle together with its history companion
+/// and stored/precommit L2 evidence on an already-locked `AppService`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn commit_post_transaction_bundle(
+    service: &mut human_money_core::app_service::AppService,
+    state: &AppState,
+    app: Option<&tauri::AppHandle>,
+    container_bytes: &[u8],
+    all_standards: &HashMap<String, String>,
+    l2_evidence: Option<&crate::state::StoredPrecommitL2Evidence>,
+    force_accept_tolerance_bundle: bool,
+    password: Option<&str>,
+) -> Result<PostBundleCommitResult, crate::models::FrontendError> {
+    let archive = app.and_then(|a| crate::services::common::open_wallet_archive(a, service));
+    let baseline_history = state
+        .load_history_from_disk(service, password)
+        .map_err(crate::models::FrontendError::from)?;
+    let core_l2_evidence = l2_evidence.map(|ev| human_money_core::ReceiveL2Evidence {
+        quorum_certificates: ev.quorum_certificates.as_slice(),
+        competing_entries: ev.competing_entries.as_slice(),
+    });
+    let next_history_cell = std::cell::RefCell::new(None::<Vec<TransactionRecord>>);
+    match service.receive_bundle_with_companions(
+        container_bytes,
+        all_standards,
+        archive.as_ref(),
+        password,
+        force_accept_tolerance_bundle,
+        core_l2_evidence.as_ref(),
+        |result, _wallet| {
+            let notes = result
+                .header
+                .notes
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string);
+            let record = TransactionRecord {
+                id: uuid::Uuid::new_v4().to_string(),
+                direction: "received".to_string(),
+                recipient_id: result.header.recipient_id.clone(),
+                sender_id: result.header.sender_id.clone(),
+                timestamp: Utc::now().to_rfc3339(),
+                summable_amounts: result.transfer_summary.summable_amounts.clone(),
+                countable_items: result.transfer_summary.countable_items.clone(),
+                involved_vouchers: result.involved_vouchers.clone(),
+                involved_sources_details: Some(
+                    result
+                        .involved_vouchers_details
+                        .iter()
+                        .cloned()
+                        .map(Into::into)
+                        .collect(),
+                ),
+                bundle_data: Vec::new(),
+                bundle_id: result.header.bundle_id.clone(),
+                notes,
+                sender_profile_name: result.header.sender_profile_name.clone(),
+            };
+            let (blobs, next_hist) =
+                crate::state::prepare_receive_history_companion(&baseline_history, record)
+                    .map_err(|e| {
+                        human_money_core::Error::Storage(
+                            human_money_core::StorageError::InvalidFormat(e.message),
+                        )
+                    })?;
+            *next_history_cell.borrow_mut() = Some(next_hist);
+            Ok(blobs)
+        },
+    ) {
+        Ok(result) => {
+            if let Some(next_hist) = next_history_cell.into_inner() {
+                state.write_cache_slot_for_service(service, |c| &mut c.history, Some(next_hist));
+            }
+            Ok(PostBundleCommitResult::Committed(Box::new(result)))
+        }
+        Err(e) => Ok(PostBundleCommitResult::CoreError(e)),
+    }
+}
+
 async fn handle_transaction_bundle(
     ctx: &PostEnvelopeContext<'_>,
     post_state: &mut StoredPostState,
@@ -182,124 +271,54 @@ async fn handle_transaction_bundle(
         }
     };
 
-    let (is_conflict, l2_evidence_owned) = match verification {
-        crate::checkout::PrecommitL2Verification::OfflineOnly => (false, None),
+    let l2_evidence_owned = match verification {
+        crate::checkout::PrecommitL2Verification::OfflineOnly => None,
         crate::checkout::PrecommitL2Verification::CleanQuorum {
             quorum_certificates,
-            pow_base_bits,
-        } => (
-            false,
-            Some((quorum_certificates, Vec::new(), pow_base_bits)),
-        ),
+        } => Some(crate::state::StoredPrecommitL2Evidence {
+            quorum_certificates,
+            competing_entries: Vec::new(),
+            is_conflict: false,
+        }),
         crate::checkout::PrecommitL2Verification::ConflictDetected {
             quorum_certificates,
             competing_entries,
-            pow_base_bits,
-        } => (
-            true,
-            Some((quorum_certificates, competing_entries, pow_base_bits)),
-        ),
+        } => Some(crate::state::StoredPrecommitL2Evidence {
+            quorum_certificates,
+            competing_entries,
+            is_conflict: true,
+        }),
         crate::checkout::PrecommitL2Verification::RetryLater { .. } => unreachable!(),
     };
+    let is_conflict = l2_evidence_owned.as_ref().is_some_and(|e| e.is_conflict);
 
-    enum BundleCommitOutcome {
+    enum HandleCommitOutcome {
         Committed(String),
         CoreError(human_money_core::Error),
     }
 
     let commit_res = ctx.state.with_session(ctx.session, |service| {
-        let archive = ctx
-            .app
-            .and_then(|a| crate::services::common::open_wallet_archive(a, service));
-        let baseline_history = ctx
-            .state
-            .load_history_from_disk(service, ctx.password)
-            .map_err(crate::models::FrontendError::from)?;
-        let l2_evidence = l2_evidence_owned.as_ref().map(|(qcs, comp, bits)| {
-            human_money_core::ReceiveL2Evidence {
-                quorum_certificates: qcs.as_slice(),
-                competing_entries: comp.as_slice(),
-                pow_base_bits: *bits,
-            }
-        });
-        let next_history_cell = std::cell::RefCell::new(None::<Vec<TransactionRecord>>);
-        match service.receive_bundle_with_companions(
+        match commit_post_transaction_bundle(
+            service,
+            ctx.state,
+            ctx.app,
             &ctx.envelope.container_bytes,
             &all_standards,
-            archive.as_ref(),
-            ctx.password,
+            l2_evidence_owned.as_ref(),
             false,
-            l2_evidence.as_ref(),
-            |result, _wallet| {
-                let notes = result
-                    .header
-                    .notes
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())
-                    .map(str::to_string);
-                let record = TransactionRecord {
-                    id: uuid::Uuid::new_v4().to_string(),
-                    direction: "received".to_string(),
-                    recipient_id: result.header.recipient_id.clone(),
-                    sender_id: result.header.sender_id.clone(),
-                    timestamp: Utc::now().to_rfc3339(),
-                    summable_amounts: result.transfer_summary.summable_amounts.clone(),
-                    countable_items: result.transfer_summary.countable_items.clone(),
-                    involved_vouchers: result.involved_vouchers.clone(),
-                    involved_sources_details: Some(
-                        result
-                            .involved_vouchers_details
-                            .iter()
-                            .cloned()
-                            .map(Into::into)
-                            .collect(),
-                    ),
-                    bundle_data: Vec::new(),
-                    bundle_id: result.header.bundle_id.clone(),
-                    notes,
-                    sender_profile_name: result.header.sender_profile_name.clone(),
-                };
-                let (blobs, next_hist) = crate::state::prepare_receive_history_companion(
-                    &baseline_history,
-                    record,
-                )
-                .map_err(|e| {
-                    human_money_core::Error::Storage(
-                        human_money_core::StorageError::InvalidFormat(e.message),
-                    )
-                })?;
-                *next_history_cell.borrow_mut() = Some(next_hist);
-                Ok(blobs)
-            },
-        ) {
-            Ok(result) => {
-                if let Some(next_hist) = next_history_cell.into_inner() {
-                    ctx.state.write_cache_slot_for_service(
-                        service,
-                        |c| &mut c.history,
-                        Some(next_hist),
-                    );
-                }
-                let _ = ctx.state.refresh_events_cache(service, ctx.password);
-                if let Some(ref wot_json) = result.wot_sync_json {
-                    ctx.state.try_import_piggybacked_wot(
-                        service,
-                        wot_json,
-                        &result.header.sender_id,
-                        ctx.password,
-                    );
-                }
-                if let Some(ref card_json) = result.contact_card_json {
-                    ctx.state.try_import_piggybacked_contact_card(
-                        service,
-                        Some(card_json),
-                        ctx.password,
-                    );
-                }
-                Ok(BundleCommitOutcome::Committed(result.header.bundle_id))
+            ctx.password,
+        )? {
+            PostBundleCommitResult::Committed(result) => {
+                let bundle_id = result.header.bundle_id.clone();
+                crate::services::transfer_service::apply_receive_companion_side_effects(
+                    service,
+                    ctx.state,
+                    &result,
+                    ctx.password,
+                );
+                Ok(HandleCommitOutcome::Committed(bundle_id))
             }
-            Err(e) => Ok(BundleCommitOutcome::CoreError(e)),
+            PostBundleCommitResult::CoreError(e) => Ok(HandleCommitOutcome::CoreError(e)),
         }
     });
 
@@ -320,7 +339,7 @@ async fn handle_transaction_bundle(
     };
 
     match outcome {
-        BundleCommitOutcome::Committed(bundle_id) => {
+        HandleCommitOutcome::Committed(bundle_id) => {
             stats.imported_payments += 1;
             if is_conflict {
                 if let Some(app_handle) = ctx.app {
@@ -331,7 +350,66 @@ async fn handle_transaction_bundle(
             queue_ack_receipt(ctx, post_state, Some(&bundle_id));
             PostDispatchOutcome::Handled
         }
-        BundleCommitOutcome::CoreError(e) => {
+        HandleCommitOutcome::CoreError(e) => {
+            let tolerance_zone = match &e {
+                human_money_core::Error::BundleInRecoveryToleranceZone => Some("soft"),
+                human_money_core::Error::BundleInExtendedRecoveryToleranceZone => Some("critical"),
+                _ => None,
+            };
+            if let Some(zone) = tolerance_zone {
+                if post_state
+                    .pending_tolerance_payments
+                    .iter()
+                    .any(|p| p.msg_id == ctx.envelope.msg_id)
+                {
+                    return PostDispatchOutcome::Handled;
+                }
+                use base64::Engine as _;
+                let container_b64 =
+                    base64::engine::general_purpose::STANDARD.encode(&ctx.envelope.container_bytes);
+                let current_total_b64: usize = post_state
+                    .pending_tolerance_payments
+                    .iter()
+                    .map(|p| p.container_b64.len())
+                    .sum();
+                if post_state.pending_tolerance_payments.len() >= MAX_PENDING_TOLERANCE_PAYMENTS
+                    || current_total_b64.saturating_add(container_b64.len())
+                        > MAX_PENDING_TOLERANCE_TOTAL_B64_BYTES
+                {
+                    stats.errors.push(
+                        "Pending tolerance payment queue limit reached; confirm or dismiss pending payments first".to_string(),
+                    );
+                    return PostDispatchOutcome::RetryLater;
+                }
+                let (sender_name, _, _) = resolve_counterparty_info_for_session(
+                    ctx.state,
+                    ctx.session,
+                    ctx.sender_did,
+                    ctx.password,
+                );
+                post_state.pending_tolerance_payments.push(
+                    crate::state::StoredPendingTolerancePayment {
+                        msg_id: ctx.envelope.msg_id.clone(),
+                        sender_did: ctx.sender_did.to_string(),
+                        sender_name,
+                        created_at: ctx.envelope.created_at,
+                        zone: zone.to_string(),
+                        error_message: e.to_string(),
+                        tag16_hex: hex::encode(ctx.tag16),
+                        container_b64,
+                        l2_evidence: l2_evidence_owned,
+                    },
+                );
+                stats.new_tolerance_payments += 1;
+                return PostDispatchOutcome::Handled;
+            }
+            if matches!(e, human_money_core::Error::BundlePredatesCurrentEpoch) {
+                stats.errors.push(format!(
+                    "Receive payment bundle rejected (predates current recovery epoch): {}",
+                    e
+                ));
+                return PostDispatchOutcome::Handled;
+            }
             let is_sibling_subaccount = matches!(
                 &e,
                 human_money_core::VoucherCoreError::BundleRecipientMismatch { expected, found }

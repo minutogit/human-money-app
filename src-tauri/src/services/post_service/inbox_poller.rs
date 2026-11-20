@@ -11,8 +11,8 @@ use humoco_market::{
 use log::warn;
 
 use crate::models::{
-    FrontendAppNotice, FrontendError, FrontendPostInboxSummary, FrontendPostSyncResult,
-    FrontendSyncDescriptor,
+    FrontendAppNotice, FrontendError, FrontendPendingTolerancePayment, FrontendPostInboxSummary,
+    FrontendPostSyncResult, FrontendSyncDescriptor,
 };
 use crate::settings::{SecurityPolicy, UiPreferences};
 use crate::state::{AppState, StoredPostState, MARKET_CARD_STORE_KEY};
@@ -61,7 +61,172 @@ pub fn mark_inquiry_read_impl(
     Ok(())
 }
 
-/// Dismisses a pending sign request, WoT handshake, inquiry, or unsupported notice atomically under `state.service`.
+/// Confirms and commits a parked PoST payment that was held for recovery tolerance confirmation.
+pub async fn confirm_pending_post_payment_impl(
+    app: Option<&tauri::AppHandle>,
+    msg_id: String,
+    password: Option<String>,
+    state: &AppState,
+) -> Result<crate::models::ReceiveSuccessPayload, FrontendError> {
+    let (session, resolved_pw) = state.authorize_and_begin_session_secret(
+        crate::state::RequiredAccess::DailyPay,
+        password.as_deref(),
+    )?;
+    let pw = resolved_pw.as_deref().map(String::as_str);
+    let all_standards = crate::services::common::load_all_standard_tomls(app, None);
+
+    let _post_guard = state.post_op_lock.lock().await;
+    let now_secs = sync_client::current_unix_timestamp();
+
+    enum ConfirmCommitOutcome {
+        Committed {
+            payload: Box<crate::models::ReceiveSuccessPayload>,
+            is_conflict: bool,
+        },
+        CoreError(human_money_core::Error),
+    }
+
+    let outcome = state.with_session_required(
+        &session,
+        "Active wallet session changed before pending tolerance payment could be confirmed",
+        |service| {
+            let mut post_state = super::load_post_state_with_service(service, pw)?;
+            let baseline = post_state.clone();
+            let item = post_state
+                .pending_tolerance_payments
+                .iter()
+                .find(|p| p.msg_id == msg_id)
+                .cloned()
+                .ok_or_else(|| {
+                    FrontendError::from("Pending tolerance payment not found".to_string())
+                })?;
+
+            use base64::Engine as _;
+            let container_bytes = base64::engine::general_purpose::STANDARD
+                .decode(&item.container_b64)
+                .map_err(|e| {
+                    FrontendError::from(format!(
+                        "Corrupt stored pending tolerance payment bytes: {}",
+                        e
+                    ))
+                })?;
+
+            let is_conflict = item.l2_evidence.as_ref().is_some_and(|e| e.is_conflict);
+            match super::handlers::commit_post_transaction_bundle(
+                service,
+                state,
+                app,
+                &container_bytes,
+                &all_standards,
+                item.l2_evidence.as_ref(),
+                true,
+                pw,
+            )? {
+                super::handlers::PostBundleCommitResult::Committed(result) => {
+                    let bundle_id = result.header.bundle_id.clone();
+                    post_state
+                        .pending_tolerance_payments
+                        .retain(|p| p.msg_id != msg_id);
+                    if let Ok(tag16_bytes) = hex::decode(&item.tag16_hex) {
+                        if tag16_bytes.len() == 16 {
+                            let mut tag16 = [0u8; 16];
+                            tag16.copy_from_slice(&tag16_bytes);
+                            if let (Ok(my_identity), Ok(sync_ctx), Ok(security_policy)) = (
+                                service
+                                    .with_wallet_and_identity(|_, id| id.clone())
+                                    .map_err(FrontendError::from),
+                                crate::services::common::SyncIdentityContext::from_service(service),
+                                state
+                                    .get_or_load_security_policy(service, pw)
+                                    .map_err(FrontendError::from),
+                            ) {
+                                let own_reply_syncs = super::collect_own_reply_syncs(
+                                    &security_policy,
+                                    sync_ctx.my_prefix.as_deref(),
+                                );
+                                super::queue_receipt(
+                                    &mut post_state,
+                                    &my_identity,
+                                    &sync_ctx.my_ed_sk,
+                                    &item.sender_did,
+                                    &item.msg_id,
+                                    &tag16,
+                                    Some(&bundle_id),
+                                    &own_reply_syncs,
+                                    now_secs,
+                                );
+                            }
+                        }
+                    }
+                    super::merge_post_state_with_service(service, &baseline, &mut post_state, pw)?;
+                    crate::state::save_encrypted_json(
+                        service,
+                        crate::state::MARKET_POST_STATE_KEY,
+                        &post_state,
+                        pw,
+                    )
+                    .map_err(FrontendError::from)?;
+                    let payload =
+                        crate::services::transfer_service::build_receive_success_payload_from_result(
+                            service,
+                            state,
+                            &container_bytes,
+                            *result,
+                            format!("post-{}", item.msg_id),
+                            pw,
+                        )?;
+                    Ok(ConfirmCommitOutcome::Committed {
+                        payload: Box::new(payload),
+                        is_conflict,
+                    })
+                }
+                super::handlers::PostBundleCommitResult::CoreError(e) => {
+                    let err_lower = e.to_string().to_ascii_lowercase();
+                    let is_stale = matches!(e, human_money_core::Error::BundlePredatesCurrentEpoch)
+                        || err_lower.contains("already processed")
+                        || err_lower.contains("duplicate");
+                    if is_stale {
+                        post_state
+                            .pending_tolerance_payments
+                            .retain(|p| p.msg_id != msg_id);
+                        super::merge_post_state_with_service(
+                            service,
+                            &baseline,
+                            &mut post_state,
+                            pw,
+                        )?;
+                        crate::state::save_encrypted_json(
+                            service,
+                            crate::state::MARKET_POST_STATE_KEY,
+                            &post_state,
+                            pw,
+                        )
+                        .map_err(FrontendError::from)?;
+                    }
+                    Ok(ConfirmCommitOutcome::CoreError(e))
+                }
+            }
+        },
+    )?;
+
+    match outcome {
+        ConfirmCommitOutcome::Committed {
+            payload,
+            is_conflict,
+        } => {
+            if is_conflict {
+                if let Some(app_handle) = app {
+                    use tauri::Emitter;
+                    let _ = app_handle.emit("humoco://conflicts-updated", ());
+                }
+            }
+            Ok(*payload)
+        }
+        ConfirmCommitOutcome::CoreError(err) => Err(FrontendError::from(err)),
+    }
+}
+
+/// Dismisses a pending sign request, WoT handshake, inquiry, unsupported notice, or tolerance payment atomically under `state.service`.
 pub fn dismiss_pending_post_item_impl(
     item_kind: String,
     id: String,
@@ -90,6 +255,11 @@ pub fn dismiss_pending_post_item_impl(
         }
         "unsupported" => {
             post_state.unsupported_messages.retain(|u| u.msg_id != id);
+        }
+        "tolerance_payment" => {
+            post_state
+                .pending_tolerance_payments
+                .retain(|p| p.msg_id != id);
         }
         other => {
             return Err(FrontendError::from(format!(
@@ -139,12 +309,34 @@ pub fn get_post_inbox_summary_impl(
         }
     }
 
+    let pending_tolerance_payments = post_state
+        .pending_tolerance_payments
+        .into_iter()
+        .map(|p| {
+            let sender_name = p.sender_name.or_else(|| {
+                let (name, _, _) =
+                    resolve_counterparty_info(state, &p.sender_did, password.as_deref());
+                name
+            });
+            FrontendPendingTolerancePayment {
+                msg_id: p.msg_id,
+                sender_did: p.sender_did,
+                sender_name,
+                created_at: p.created_at,
+                zone: p.zone,
+                error_message: p.error_message,
+                has_conflict: p.l2_evidence.is_some_and(|e| e.is_conflict),
+            }
+        })
+        .collect();
+
     Ok(FrontendPostInboxSummary {
         pending_sign_requests: post_state.pending_sign_requests,
         pending_wot_handshakes: post_state.pending_wot_handshakes,
         inquiries: post_state.inquiries,
         unacknowledged_payments,
         unsupported_messages: post_state.unsupported_messages,
+        pending_tolerance_payments,
     })
 }
 
@@ -605,20 +797,8 @@ pub async fn sync_post_channels_impl(
 
     if ui_prefs.market_poll_wifi_only && is_wifi == Some(false) {
         return Ok(FrontendPostSyncResult {
-            uploaded_to: 0,
-            polled_syncs: 0,
-            imported_payments: 0,
-            imported_receipts: 0,
-            imported_signatures: 0,
-            new_sign_requests: 0,
-            new_wot_handshakes: 0,
-            new_inquiries: 0,
-            new_inquiry_messages: 0,
-            pruned_boxes: 0,
-            deferred_outbox_boxes: 0,
             skipped_wifi_only: true,
-            errors: Vec::new(),
-            retry_after_secs: None,
+            ..Default::default()
         });
     }
 
@@ -692,22 +872,7 @@ pub async fn sync_post_channels_impl(
     let (fetched_slots, post_sync_health_updates, polled_syncs, download_errors) =
         download_post_slots(&client, direct_slot_fetches, candidate_read_urls).await;
     if !state.is_generation_current(session.generation) {
-        return Ok(FrontendPostSyncResult {
-            uploaded_to: 0,
-            polled_syncs: 0,
-            imported_payments: 0,
-            imported_receipts: 0,
-            imported_signatures: 0,
-            new_sign_requests: 0,
-            new_wot_handshakes: 0,
-            new_inquiries: 0,
-            new_inquiry_messages: 0,
-            pruned_boxes: 0,
-            deferred_outbox_boxes: 0,
-            skipped_wifi_only: false,
-            errors: Vec::new(),
-            retry_after_secs: None,
-        });
+        return Ok(FrontendPostSyncResult::default());
     }
     stats.errors.extend(download_errors);
 
@@ -722,22 +887,7 @@ pub async fn sync_post_channels_impl(
             Ok(())
         })?;
         if committed.is_none() {
-            return Ok(FrontendPostSyncResult {
-                uploaded_to: 0,
-                polled_syncs: 0,
-                imported_payments: 0,
-                imported_receipts: 0,
-                imported_signatures: 0,
-                new_sign_requests: 0,
-                new_wot_handshakes: 0,
-                new_inquiries: 0,
-                new_inquiry_messages: 0,
-                pruned_boxes: 0,
-                deferred_outbox_boxes: 0,
-                skipped_wifi_only: false,
-                errors: Vec::new(),
-                retry_after_secs: None,
-            });
+            return Ok(FrontendPostSyncResult::default());
         }
     }
 
@@ -885,13 +1035,18 @@ pub async fn sync_post_channels_impl(
                     .map(Into::into)
                     .collect();
                 let committed = state.with_session(&session, |service| {
-                    state.update_contact_from_card(
+                    if let Err(e) = state.update_contact_from_card(
                         service,
                         &sender_did,
                         &reply_dtos,
                         None,
                         password.as_deref(),
-                    );
+                    ) {
+                        warn!(
+                            "Failed to update contact from PoST reply syncs: {}",
+                            e.message
+                        );
+                    }
                     Ok(())
                 })?;
                 if committed.is_none() {
@@ -953,22 +1108,7 @@ pub async fn sync_post_channels_impl(
 
     // 6. Merge any concurrent local writes before flushing, then flush and persist atomically.
     if !state.is_generation_current(session.generation) {
-        return Ok(FrontendPostSyncResult {
-            uploaded_to: 0,
-            polled_syncs: 0,
-            imported_payments: 0,
-            imported_receipts: 0,
-            imported_signatures: 0,
-            new_sign_requests: 0,
-            new_wot_handshakes: 0,
-            new_inquiries: 0,
-            new_inquiry_messages: 0,
-            pruned_boxes: 0,
-            deferred_outbox_boxes: 0,
-            skipped_wifi_only: false,
-            errors: Vec::new(),
-            retry_after_secs: None,
-        });
+        return Ok(FrontendPostSyncResult::default());
     }
     merge_and_save_post_state(
         state,
@@ -986,22 +1126,7 @@ pub async fn sync_post_channels_impl(
     stats.errors.extend(flush_outcome.errors);
 
     if !state.is_generation_current(session.generation) {
-        return Ok(FrontendPostSyncResult {
-            uploaded_to: 0,
-            polled_syncs: 0,
-            imported_payments: 0,
-            imported_receipts: 0,
-            imported_signatures: 0,
-            new_sign_requests: 0,
-            new_wot_handshakes: 0,
-            new_inquiries: 0,
-            new_inquiry_messages: 0,
-            pruned_boxes: 0,
-            deferred_outbox_boxes: 0,
-            skipped_wifi_only: false,
-            errors: Vec::new(),
-            retry_after_secs: None,
-        });
+        return Ok(FrontendPostSyncResult::default());
     }
     merge_and_save_post_state(
         state,
@@ -1049,6 +1174,7 @@ pub async fn sync_post_channels_impl(
         new_wot_handshakes: stats.new_wot_handshakes,
         new_inquiries: stats.new_inquiries,
         new_inquiry_messages: stats.new_inquiry_messages,
+        new_tolerance_payments: stats.new_tolerance_payments,
         pruned_boxes: stats.pruned_boxes,
         deferred_outbox_boxes: flush_outcome.deferred_count,
         skipped_wifi_only: false,

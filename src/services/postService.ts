@@ -8,6 +8,7 @@ import {
     FrontendMarketInquiryItem,
     FrontendSyncDescriptor,
     InquiryTarget,
+    ReceiveSuccessPayload,
 } from "../types";
 import { afterWalletMutation, triggerAutoBackup } from "../sync/syncBridge";
 import { APP_EVENTS, emitAppEvent, POST_INBOX_UPDATED_EVENT } from "../utils/appEvents";
@@ -159,7 +160,7 @@ export const postService = {
     },
 
     dismissPendingPostItem: async (
-        itemKind: 'sign_request' | 'wot_handshake' | 'inquiry' | 'unsupported',
+        itemKind: 'sign_request' | 'wot_handshake' | 'inquiry' | 'unsupported' | 'tolerance_payment',
         id: string,
         password?: string
     ): Promise<void> => {
@@ -169,6 +170,21 @@ export const postService = {
             password: password || undefined,
         });
         notifyPostInboxUpdated();
+    },
+
+    confirmPendingPostPayment: async (
+        msgId: string,
+        password?: string
+    ): Promise<ReceiveSuccessPayload> => {
+        const res = await invoke<ReceiveSuccessPayload>("confirm_pending_post_payment", {
+            msgId,
+            password: password || undefined,
+        });
+        if (res?.newlyCommitted !== false) {
+            afterWalletMutation(password);
+        }
+        notifyPostInboxUpdated();
+        return res;
     },
 
     getPostInboxSummary: async (
@@ -196,7 +212,8 @@ export const postService = {
             res.newSignRequests > 0 ||
             res.newWotHandshakes > 0 ||
             res.newInquiries > 0 ||
-            res.newInquiryMessages > 0;
+            res.newInquiryMessages > 0 ||
+            (res.newTolerancePayments ?? 0) > 0;
         const hasInboxChanges = hasBackupChanges || res.prunedBoxes > 0;
 
         if (hasBackupChanges) {

@@ -416,12 +416,23 @@ export interface FrontendUnsupportedPostItem {
     createdAt: number;
 }
 
+export interface FrontendPendingTolerancePayment {
+    msgId: string;
+    senderDid: string;
+    senderName?: string | null;
+    createdAt: number;
+    zone: 'soft' | 'critical';
+    errorMessage: string;
+    hasConflict: boolean;
+}
+
 export interface FrontendPostInboxSummary {
     pendingSignRequests: FrontendPendingSignRequest[];
     pendingWotHandshakes: FrontendPendingWotHandshake[];
     inquiries: FrontendMarketInquiryItem[];
     unacknowledgedPayments: string[];
     unsupportedMessages?: FrontendUnsupportedPostItem[];
+    pendingTolerancePayments?: FrontendPendingTolerancePayment[];
 }
 
 export interface FrontendPostSyncResult {
@@ -434,6 +445,7 @@ export interface FrontendPostSyncResult {
     newWotHandshakes: number;
     newInquiries: number;
     newInquiryMessages: number;
+    newTolerancePayments?: number;
     prunedBoxes: number;
     deferredOutboxBoxes?: number;
     skippedWifiOnly?: boolean;

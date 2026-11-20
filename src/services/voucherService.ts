@@ -108,6 +108,7 @@ export const voucherService = {
         amount: string;
         standardToml: string;
         notes?: string | null;
+        depositToPost?: boolean;
         password?: string | null;
     }) => {
         const result = await invoke<ClaimBundleDto>("create_guarantor_claim_bundle", {
@@ -116,6 +117,7 @@ export const voucherService = {
             amount: args.amount,
             standardToml: args.standardToml,
             notes: args.notes ?? null,
+            depositToPost: args.depositToPost ?? false,
             password: args.password ?? null,
         });
         afterWalletMutation(args.password);
@@ -154,12 +156,14 @@ export const voucherService = {
         offerJson: string;
         submissionsJson: string[];
         standardToml: string;
+        depositToPost?: boolean;
         password?: string | null;
     }) => {
         const result = await invoke<DeadQuorumAdjudicationDto>("adjudicate_dead_quorum_swap_cmd", {
             offerJson: args.offerJson,
             submissionsJson: args.submissionsJson,
             standardToml: args.standardToml,
+            depositToPost: args.depositToPost ?? false,
             password: args.password ?? null,
         });
         afterWalletMutation(args.password);

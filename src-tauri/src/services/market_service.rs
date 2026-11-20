@@ -1693,13 +1693,9 @@ pub fn import_contact_card_impl(
 
     match outcome {
         humoco_market::AcceptOutcome::Accepted { did, replaced } => {
-            crate::state::save_encrypted_json(
-                &mut service,
-                MARKET_CARD_STORE_KEY,
-                &store,
-                pw,
-            )
-            .map_err(FrontendError::from)?;
+            let mut updated_address_book: Option<crate::models::FrontendAddressBook> = None;
+            let mut updated_address_book_bytes: Option<Vec<u8>> = None;
+
             if let Some(stored) = store.cards.get(&did) {
                 let card_syncs: Vec<FrontendSyncDescriptor> = stored
                     .card
@@ -1710,24 +1706,11 @@ pub fn import_contact_card_impl(
                     .map(Into::into)
                     .collect();
 
-                let can_card_did =
-                    crate::state::canonicalize_did(&did).unwrap_or_else(|_| did.clone());
-                let own_ids: Option<(String, String)> = service
-                    .with_wallet(|w| {
-                        let uid = w.get_user_id().trim().to_string();
-                        let can =
-                            crate::state::canonicalize_did(&uid).unwrap_or_else(|_| uid.clone());
-                        (uid, can)
-                    })
-                    .ok();
-                let is_exact_own_profile = own_ids
-                    .as_ref()
-                    .is_some_and(|(own_uid, _)| own_uid == did.trim());
+                let is_exact_own_profile = service
+                    .with_wallet(|w| w.get_user_id().trim() == did.trim())
+                    .unwrap_or(false);
 
                 if !is_exact_own_profile {
-                    let is_own_root = own_ids
-                        .as_ref()
-                        .is_some_and(|(_, own_can)| *own_can == can_card_did);
                     let mut address_book: crate::models::FrontendAddressBook =
                         crate::state::load_encrypted_json_or_default(
                             &mut service,
@@ -1736,54 +1719,42 @@ pub fn import_contact_card_impl(
                         )
                         .map_err(FrontendError::from)?;
 
-                    let exists = address_book.contacts.keys().any(|k| k.trim() == did.trim());
-
-                    if exists {
+                    if address_book.contacts.keys().any(|k| k.trim() == did.trim()) {
                         let card_profile = humoco_market::extract_public_profile(&stored.card);
-                        if is_own_root {
-                            if let Some(existing_contact) = address_book
-                                .contacts
-                                .values_mut()
-                                .find(|c| c.did.trim() == did.trim())
-                            {
-                                let merged = crate::state::merge_contact_syncs(
-                                    &existing_contact.syncs,
-                                    &card_syncs,
-                                );
-                                let mut changed = false;
-                                if existing_contact.syncs != merged {
-                                    existing_contact.syncs = merged;
-                                    changed = true;
-                                }
-                                if crate::state::apply_card_profile_to_contact(
-                                    existing_contact,
-                                    &card_profile,
-                                ) {
-                                    changed = true;
-                                }
-                                if changed {
-                                    crate::state::save_encrypted_json(
-                                        &mut service,
-                                        CONTACTS_DATA_NAME,
-                                        &address_book,
-                                        pw,
-                                    )
-                                    .map_err(FrontendError::from)?;
-                                    state.set_cached_contacts_for_service(&service, Some(address_book));
-                                }
-                            }
-                        } else {
-                            state.update_contact_from_card(
-                                &mut service,
-                                &did,
-                                &card_syncs,
-                                Some(&card_profile),
-                                pw,
-                            );
+                        if crate::state::apply_contact_update_from_card(
+                            &mut address_book,
+                            &did,
+                            &card_syncs,
+                            Some(&card_profile),
+                        ) {
+                            let bytes = serde_json::to_vec(&address_book).map_err(|e| {
+                                FrontendError::from(format!(
+                                    "Failed to serialize updated contacts: {}",
+                                    e
+                                ))
+                            })?;
+                            updated_address_book = Some(address_book);
+                            updated_address_book_bytes = Some(bytes);
                         }
                     }
                 }
             }
+
+            let card_store_bytes = serde_json::to_vec(&store).map_err(|e| {
+                FrontendError::from(format!("Failed to serialize CardStore: {}", e))
+            })?;
+            let mut batch: Vec<(&str, &[u8])> = vec![(MARKET_CARD_STORE_KEY, &card_store_bytes)];
+            if let Some(ref ab_bytes) = updated_address_book_bytes {
+                batch.push((CONTACTS_DATA_NAME, ab_bytes));
+            }
+            service
+                .save_encrypted_batch(&batch, pw)
+                .map_err(FrontendError::from)?;
+
+            if let Some(address_book) = updated_address_book {
+                state.set_cached_contacts_for_service(&service, Some(address_book));
+            }
+
             Ok(FrontendImportCardResult {
                 status: "accepted".to_string(),
                 did: Some(did),
@@ -3161,5 +3132,134 @@ mod tests {
         assert!(resolve_card_recipient_impl(tampered_json, &state).is_err());
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn h10_import_contact_card_updates_contacts_atomically_and_rolls_back_cache_on_write_fault() {
+        use human_money_core::app_service::AppService;
+        use human_money_core::services::mnemonic::MnemonicLanguage;
+
+        let dir_alice = crate::test_support::temp_test_dir("h10_alice");
+        let dir_bob = crate::test_support::temp_test_dir("h10_bob");
+        let pw = "StrongPw-H10-2026!";
+
+        let alice_svc = crate::test_support::setup_test_app(
+            &dir_alice,
+            "Alice",
+            crate::test_support::ALICE_PHRASE,
+            pw,
+        );
+        let alice_state = crate::test_support::create_test_state(alice_svc);
+        let alice_did = alice_state
+            .service
+            .lock()
+            .unwrap()
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
+        let alice_prof = save_my_market_profile_impl(
+            FrontendSaveMyMarketProfileRequest {
+                profile: FrontendUserProfile {
+                    first_name: Some("Alice Updated".to_string()),
+                    ..Default::default()
+                },
+                visibility: CardFieldVisibility::default(),
+                skills: vec![],
+                max_hops: 2,
+                validity_years: 2,
+                allow_inquiries: true,
+                published: Some(true),
+            },
+            Some(pw.to_string()),
+            &alice_state,
+        )
+        .unwrap();
+        let share_uri = alice_prof.share_uri.unwrap();
+
+        let bob_svc = AppService::new(&dir_bob).unwrap();
+        let bob_state = crate::test_support::create_test_state(crate::test_support::setup_test_app(
+            &dir_bob.join("w"),
+            "Bob",
+            crate::test_support::BOB_PHRASE,
+            pw,
+        ));
+        drop(bob_svc);
+        {
+            let mut s = bob_state.service.lock().unwrap();
+            bob_state
+                .save_contact(
+                    &mut s,
+                    crate::models::FrontendContact {
+                        did: alice_did.clone(),
+                        profile: FrontendUserProfile::default(),
+                        tags: vec![],
+                        added_at: chrono::Utc::now().to_rfc3339(),
+                        notes: None,
+                        trust_level: Some(1),
+                        desired_hops: None,
+                        has_peer_list: false,
+                        peer_list_updated_at: None,
+                        syncs: vec![],
+                    },
+                    Some(pw),
+                )
+                .unwrap();
+            // Warm cache
+            assert_eq!(
+                bob_state.load_contacts(&mut s, Some(pw)).unwrap()[0]
+                    .profile
+                    .first_name,
+                None
+            );
+        }
+
+        // Inject write fault on batch save -> card + contact update must abort together AND cache stay untouched!
+        human_money_core::storage::file_storage::inject_write_fault_once("seal.enc");
+        assert!(import_contact_card_impl(share_uri.clone(), Some(pw.to_string()), &bob_state).is_err());
+        {
+            let mut s = bob_state.service.lock().unwrap();
+            assert_eq!(
+                bob_state.load_contacts(&mut s, Some(pw)).unwrap()[0]
+                    .profile
+                    .first_name,
+                None,
+                "H10: Contacts cache must NOT reflect unpersisted card update after batch failure"
+            );
+            assert!(
+                crate::state::load_encrypted_json_opt::<humoco_market::CardStore>(
+                    &mut s,
+                    crate::state::MARKET_CARD_STORE_KEY,
+                    Some(pw),
+                )
+                .unwrap()
+                .is_none(),
+                "H10: CardStore must roll back when batch commit fails"
+            );
+        }
+
+        // Clean retry -> both CardStore & Contact cache commit atomically!
+        let ok = import_contact_card_impl(share_uri, Some(pw.to_string()), &bob_state).unwrap();
+        assert_eq!(ok.status, "accepted");
+        {
+            let mut s = bob_state.service.lock().unwrap();
+            assert_eq!(
+                bob_state.load_contacts(&mut s, Some(pw)).unwrap()[0]
+                    .profile
+                    .first_name
+                    .as_deref(),
+                Some("Alice Updated")
+            );
+            assert!(
+                crate::state::load_encrypted_json_opt::<humoco_market::CardStore>(
+                    &mut s,
+                    crate::state::MARKET_CARD_STORE_KEY,
+                    Some(pw),
+                )
+                .unwrap()
+                .is_some()
+            );
+        }
+
+        let _ = (MnemonicLanguage::English, std::fs::remove_dir_all(&dir_alice));
+        let _ = std::fs::remove_dir_all(&dir_bob);
     }
 }

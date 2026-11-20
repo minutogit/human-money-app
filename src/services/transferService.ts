@@ -1,6 +1,16 @@
 import { invoke } from "@tauri-apps/api/core";
 import { afterWalletMutation } from "../sync/syncBridge";
-import { TransactionRecord, AssetClassSummary, ReceiveCommitMode, ReceiveSuccessPayload, WalletEvent, SourceTransfer, IntentDispatchObservation } from "../types";
+import { notifyPostInboxUpdated } from "./postService";
+import {
+    TransactionRecord,
+    AssetClassSummary,
+    ReceiveCommitMode,
+    ReceiveSuccessPayload,
+    WalletEvent,
+    SourceTransfer,
+    IntentDispatchObservation,
+    FrontendPostDepositResult,
+} from "../types";
 
 interface ReceiveBundleArgs {
     bundleData: number[];
@@ -19,6 +29,7 @@ export interface CreateBundleArgs {
     standardDefinitionsToml: Record<string, string>;
     usePrivacyMode: boolean;
     sendCardOverride?: boolean | null;
+    depositToPost?: boolean;
     password?: string | null;
 }
 
@@ -27,6 +38,8 @@ export interface CreateBundleResult {
     bundleId: string;
     involvedSourcesDetails: unknown[];
     l2Dispatch?: IntentDispatchObservation[];
+    postDeposit?: FrontendPostDepositResult;
+    postDepositError?: string;
 }
 
 export interface ScoreBreakdown {
@@ -88,9 +101,13 @@ export const transferService = {
             standardDefinitionsToml: args.standardDefinitionsToml,
             usePrivacyMode: args.usePrivacyMode,
             sendCardOverride: args.sendCardOverride ?? null,
+            depositToPost: args.depositToPost ?? false,
             password: args.password
         });
         afterWalletMutation(args.password);
+        if (result?.postDeposit) {
+            notifyPostInboxUpdated();
+        }
         return result;
     },
 

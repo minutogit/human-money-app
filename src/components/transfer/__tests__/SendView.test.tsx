@@ -668,14 +668,15 @@ amount_decimal_places = 4`,
           bundleId: 'bundle-123',
           involvedSourcesDetails: [],
           l2Dispatch: [],
+          postDepositError: {
+            code: 'error.network.l2Offline',
+            message: 'Sync server unreachable',
+            details: {},
+          },
         });
       }
       if (cmd === 'deposit_transfer_to_post') {
-        return Promise.reject({
-          code: 'error.network.l2Offline',
-          message: 'Sync server unreachable',
-          details: {},
-        });
+        return Promise.reject(new Error('deposit_transfer_to_post should not be called separately when depositToPost is atomic'));
       }
       return baseImpl ? baseImpl(cmd, args) : Promise.resolve(undefined);
     });
@@ -696,9 +697,14 @@ amount_decimal_places = 4`,
     fireEvent.click(confirmBtn);
 
     await waitFor(() => {
-      expect(invoke).toHaveBeenCalledWith('create_transfer_bundle', expect.any(Object));
-      expect(invoke).toHaveBeenCalledWith('deposit_transfer_to_post', expect.objectContaining({ bundleId: 'bundle-123' }));
+      expect(invoke).toHaveBeenCalledWith(
+        'create_transfer_bundle',
+        expect.objectContaining({
+          depositToPost: true,
+        }),
+      );
     });
+    expect(invoke).not.toHaveBeenCalledWith('deposit_transfer_to_post', expect.any(Object));
     expect(invoke).not.toHaveBeenCalledWith('save_transaction_record', expect.any(Object));
     expect(screen.queryByText(/Transfer failed/i)).not.toBeInTheDocument();
 
@@ -1001,6 +1007,138 @@ amount_decimal_places = 4`,
     expect(switchedStd.privacyMode).toBeNull();
     expect(switchedStd.privacyError).toBe(false);
     expect(switchedStd.targetAmountStr).toBe('');
+  });
+
+  it('H5: locks Send while amount preview is pending after 10 -> 1 change and confirms exact snapshot', async () => {
+    const baseImpl = (invoke as Mock).getMockImplementation();
+    (invoke as Mock).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === 'prepare_transfer_plan') {
+        const target = String(args?.targetAmount ?? '');
+        const amt = target === '10' ? '10.00' : '1.00';
+        return Promise.resolve({
+          selected: [
+            {
+              localInstanceId: 'voucher1',
+              score: 5000,
+              breakdown: {
+                sBoomerang: 0,
+                sEigen: 0,
+                sCorridor: 0,
+                sAge: 0,
+                sChain: 0,
+                sFit: 0,
+                sWot: 5000,
+              },
+              reason: 'greedy',
+              amount: amt,
+              standardUuid: 'a1b2c3d4-e5f6-4789-8012-3456789abcde',
+            },
+          ],
+          totalSelected: amt,
+          target,
+          needsSplit: true,
+          planReason: 'greedy',
+          minRecipientTrustPercent: 100,
+        });
+      }
+      if (cmd === 'create_transfer_bundle') {
+        return Promise.resolve({
+          bundleData: [1, 2, 3],
+          bundleId: 'bundle-h5',
+          involvedSourcesDetails: [],
+          l2Dispatch: [],
+        });
+      }
+      return baseImpl ? baseImpl(cmd, args) : Promise.resolve(undefined);
+    });
+
+    render(<UiModeProvider initialMode="expert"><SendView /></UiModeProvider>);
+    const recipientInput = await screen.findByTestId('recipient-search-input');
+    fireEvent.change(recipientInput, { target: { value: 'did:key:z4567890123' } });
+
+    const amountInput = document.getElementById('target-amount') as HTMLInputElement;
+    fireEvent.change(amountInput, { target: { value: '10' } });
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith(
+        'prepare_transfer_plan',
+        expect.objectContaining({ targetAmount: '10' }),
+      );
+      expect(screen.getByRole('button', { name: /Send Vouchers/i })).not.toBeDisabled();
+    });
+
+    fireEvent.change(amountInput, { target: { value: '1' } });
+    // Immediately after editing amount (before debounce settles), Send MUST be disabled
+    expect(screen.getByRole('button', { name: /Send Vouchers/i })).toBeDisabled();
+
+    await waitFor(
+      () => {
+        expect(invoke).toHaveBeenCalledWith(
+          'prepare_transfer_plan',
+          expect.objectContaining({ targetAmount: '1' }),
+        );
+        expect(screen.getByRole('button', { name: /Send Vouchers/i })).not.toBeDisabled();
+      },
+      { timeout: 2500 },
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Send Vouchers/i }));
+    const executeBtn = await screen.findByRole('button', { name: /Execute/i });
+    fireEvent.click(executeBtn);
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith(
+        'create_transfer_bundle',
+        expect.objectContaining({
+          sources: [expect.objectContaining({ localInstanceId: 'voucher1', amountToSend: '1.0000' })],
+        }),
+      );
+    });
+  });
+
+  it('H6: discards stale resolve_card_recipient response when recipient is changed mid-flight', async () => {
+    const baseImpl = (invoke as Mock).getMockImplementation();
+    let resolveStaleCard!: (val: unknown) => void;
+    const staleCardPromise = new Promise((resolve) => {
+      resolveStaleCard = resolve;
+    });
+
+    (invoke as Mock).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === 'resolve_card_recipient') {
+        return staleCardPromise;
+      }
+      return baseImpl ? baseImpl(cmd, args) : Promise.resolve(undefined);
+    });
+
+    const cardPayloadB64 = Buffer.from(
+      JSON.stringify({ card_wire: 'hdr.payload.sig' }),
+      'utf8',
+    ).toString('base64url');
+
+    render(<UiModeProvider initialMode="expert"><SendView /></UiModeProvider>);
+    const recipientInput = await screen.findByTestId('recipient-search-input');
+
+    fireEvent.change(recipientInput, {
+      target: { value: `humoco://card?env=${cardPayloadB64}` },
+    });
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('resolve_card_recipient', expect.any(Object));
+    });
+
+    const newerDid = 'did:key:z6MkuManualOverride99999999999999';
+    fireEvent.change(recipientInput, { target: { value: newerDid } });
+    expect(recipientInput).toHaveValue(newerDid);
+
+    resolveStaleCard({
+      recipientId: 'did:key:z6MkuStaleCard0000000000000000000',
+      did: 'did:key:z6MkuStaleCard0000000000000000000',
+      displayName: 'Stale Card',
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(recipientInput).toHaveValue(newerDid);
   });
 });
 

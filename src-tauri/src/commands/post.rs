@@ -2,13 +2,14 @@ use tauri::State;
 
 use crate::models::{
     FrontendError, FrontendMarketInquiryItem, FrontendPostDepositResult, FrontendPostInboxSummary,
-    FrontendPostSyncResult, FrontendSyncDescriptor,
+    FrontendPostSyncResult, FrontendSyncDescriptor, ReceiveSuccessPayload,
 };
 use crate::services::post_service::{
-    accept_wot_handshake_impl, deposit_transfer_to_post_impl, dismiss_pending_post_item_impl,
-    get_post_inbox_summary_impl, mark_inquiry_read_impl, reply_detached_signature_via_post_impl,
-    send_market_inquiry_message_via_post_impl, send_market_inquiry_via_post_impl,
-    send_signing_request_via_post_impl, send_wot_handshake_via_post_impl, sync_post_channels_impl,
+    accept_wot_handshake_impl, confirm_pending_post_payment_impl, deposit_transfer_to_post_impl,
+    dismiss_pending_post_item_impl, get_post_inbox_summary_impl, mark_inquiry_read_impl,
+    reply_detached_signature_via_post_impl, send_market_inquiry_message_via_post_impl,
+    send_market_inquiry_via_post_impl, send_signing_request_via_post_impl,
+    send_wot_handshake_via_post_impl, sync_post_channels_impl,
 };
 use crate::state::AppState;
 
@@ -148,6 +149,16 @@ pub fn dismiss_pending_post_item(
     state: State<'_, AppState>,
 ) -> Result<(), FrontendError> {
     dismiss_pending_post_item_impl(item_kind, id, password, &state)
+}
+
+#[tauri::command]
+pub async fn confirm_pending_post_payment(
+    app: tauri::AppHandle,
+    msg_id: String,
+    password: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<ReceiveSuccessPayload, FrontendError> {
+    confirm_pending_post_payment_impl(Some(&app), msg_id, password, &state).await
 }
 
 #[tauri::command]

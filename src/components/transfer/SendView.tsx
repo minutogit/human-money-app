@@ -241,14 +241,14 @@ export function SendView({
                             }
                             const val = rawVal.replace(/\s+/g, '');
                             e.target.value = val;
-                            dispatch({ type: 'SET_RECIPIENT', id: val });
+                            flow.setRecipient(val);
                         }}
                         onApplyRawCode={flow.handleApplyRawCode}
-                        onSelectContact={(c) => dispatch({ type: 'SET_RECIPIENT', id: c.did })}
+                        onSelectContact={(c) => flow.setRecipient(c.did)}
                         contacts={flow.contacts}
                         trustStatus={flow.trustStatus}
                         recipientError={state.recipientError}
-                        onClearRecipient={() => dispatch({ type: 'SET_RECIPIENT', id: '' })}
+                        onClearRecipient={flow.clearRecipient}
                     />
 
                     <AssetInventory
@@ -365,10 +365,12 @@ export function SendView({
                         uuidToPrecisionMap={flow.uuidToPrecisionMap}
                         privacyMode={state.privacyMode}
                         isProcessing={state.isProcessing}
+                        isPreviewPending={flow.isPreviewPending}
                         showConfirm={state.showConfirm}
+                        confirmedSnapshot={flow.confirmedSnapshot}
                         onPrepareTransfer={flow.handlePrepareTransfer}
                         onConfirmExecute={flow.executeTransfer}
-                        onCancelConfirm={() => dispatch({ type: 'TOGGLE_CONFIRM', value: false })}
+                        onCancelConfirm={flow.closeConfirm}
                     />
                 </div>
             </div>

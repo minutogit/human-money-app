@@ -4,7 +4,6 @@ import { useTranslation } from 'react-i18next';
 import { X, AlertTriangle, Save, RefreshCw } from 'lucide-react';
 import { voucherService } from '../../services/voucherService';
 import { backupService } from '../../services/backupService';
-import { postService } from '../../services/postService';
 import { saveBytesToFile, type ProtectActionFn } from '../../utils/fileIo';
 import { translateError } from '../../utils/errorHelper';
 import { Button } from '../ui/Button';
@@ -13,7 +12,6 @@ import { ConfirmationModal } from '../ui/ConfirmationModal';
 import type {
     AppConfigDto,
     ClaimBundleDto,
-    FrontendPostDepositResult,
     VoucherDetails,
     VoucherSignature,
 } from '../../types';
@@ -121,27 +119,19 @@ export function GuarantorClaimPanel({
         onFeedback(null);
         try {
             const standardToml = await findMatchingStandardToml();
-            const outcome = await protectAction(async (pwd) => {
-                const bundleRes = await voucherService.createGuarantorClaimBundle({
+            const bundleRes = await protectAction(async (pwd) => {
+                return await voucherService.createGuarantorClaimBundle({
                     localInstanceId: details.localInstanceId,
                     guarantorId: targetGuarantor,
                     amount: normalizedAmount,
                     standardToml,
                     notes: t('voucher.claimNoteDefault'),
+                    depositToPost: true,
                     password: pwd || null,
                 });
-                let postRes: FrontendPostDepositResult | null = null;
-                if (bundleRes?.bundleId) {
-                    try {
-                        postRes = await postService.depositTransferToPost(bundleRes.bundleId, pwd || undefined);
-                    } catch {
-                        postRes = null;
-                    }
-                }
-                return { bundleRes, postRes };
             });
-            const res = outcome?.bundleRes;
-            const postRes = outcome?.postRes ?? null;
+            const res = bundleRes;
+            const postRes = bundleRes?.postDeposit ?? null;
             if (res) {
                 setPendingBundle(res);
                 await onRefreshDetails();

@@ -139,6 +139,10 @@ pub struct FrontendClaimBundleDto {
     pub bundle_id: String,
     pub guarantor_id: String,
     pub claimed_amount: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub post_deposit: Option<crate::models::FrontendPostDepositResult>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub post_deposit_error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -159,6 +163,10 @@ pub struct FrontendApprovedSwapClaimDto {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replacement_intent_local_id: Option<String>,
     pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub post_deposit: Option<crate::models::FrontendPostDepositResult>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub post_deposit_error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

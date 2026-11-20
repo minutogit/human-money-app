@@ -679,48 +679,44 @@ async fn persist_and_flush_post_box(
     })
 }
 
-/// Deposits a previously created outgoing transfer bundle (verbatim bytes) into Post slots.
-pub async fn deposit_transfer_to_post_impl(
+/// Deposits a previously created outgoing transfer bundle (verbatim bytes) into Post slots
+/// using an already-authorized session without re-consuming a one-shot PIN grant.
+pub(crate) async fn deposit_transfer_to_post_with_session(
+    session: &SessionToken,
     bundle_id: String,
-    password: Option<String>,
+    password: Option<&str>,
     state: &AppState,
 ) -> Result<FrontendPostDepositResult, FrontendError> {
-    let (session, resolved_pw, record, bundle_bytes) = {
-        let (mut service, resolved_pw) = state.authorize_and_lock_secret(
-            crate::state::RequiredAccess::DailyPay,
-            password.as_deref(),
-        )?;
-        let pw = resolved_pw.as_deref().map(String::as_str);
-        let session = state.session_token_for_service(&service)?;
-        let history = state
-            .load_history_from_disk(&mut service, pw)
-            .map_err(FrontendError::from)?;
-        let record = history
-            .into_iter()
-            .find(|r| r.bundle_id == bundle_id || r.id == bundle_id)
-            .ok_or_else(|| {
-                FrontendError::from(format!(
-                    "Transaction record with bundle_id {} not found",
-                    bundle_id
-                ))
-            })?;
-        let bundle_bytes = crate::state::get_outgoing_bundle_bytes(
-            &mut service,
-            &record.bundle_id,
-            pw,
-        )?
-        .filter(|b| !b.is_empty())
-        .ok_or_else(|| {
-            FrontendError::from(
-                "Outgoing bundle bytes not found (expired or not retained)".to_string(),
-            )
-        })?;
-        (session, resolved_pw, record, bundle_bytes)
-    };
-    let pw = resolved_pw.as_deref().map(String::as_str);
+    let (record, bundle_bytes) = state.with_session_required(
+        session,
+        "Active wallet session changed before PoST deposit",
+        |service| {
+            let history = state
+                .load_history_from_disk(service, password)
+                .map_err(FrontendError::from)?;
+            let record = history
+                .into_iter()
+                .find(|r| r.bundle_id == bundle_id || r.id == bundle_id)
+                .ok_or_else(|| {
+                    FrontendError::from(format!(
+                        "Transaction record with bundle_id {} not found",
+                        bundle_id
+                    ))
+                })?;
+            let bundle_bytes =
+                crate::state::get_outgoing_bundle_bytes(service, &record.bundle_id, password)?
+                    .filter(|b| !b.is_empty())
+                    .ok_or_else(|| {
+                        FrontendError::from(
+                            "Outgoing bundle bytes not found (expired or not retained)".to_string(),
+                        )
+                    })?;
+            Ok((record, bundle_bytes))
+        },
+    )?;
 
     let _post_guard = state.post_op_lock.lock().await;
-    let mut post_state = load_post_state(state, pw)?;
+    let mut post_state = load_post_state(state, password)?;
     let baseline = post_state.clone();
 
     let msg_id = if let Some(existing) = post_state.outbox_entries.iter().find(|e| {
@@ -732,7 +728,7 @@ pub async fn deposit_transfer_to_post_impl(
         let validated_recipient =
             ValidatedUserId::parse(&record.recipient_id).map_err(FrontendError::from)?;
         let recipient_ed_pk = validated_recipient.public_key();
-        let signing_ctx = load_post_signing_context(state, pw)?;
+        let signing_ctx = load_post_signing_context(state, password)?;
         let now_secs = sync_client::current_unix_timestamp();
         let fresh_msg_id = uuid::Uuid::new_v4().to_string();
 
@@ -753,15 +749,21 @@ pub async fn deposit_transfer_to_post_impl(
         fresh_msg_id
     };
 
-    persist_and_flush_post_box(
-        state,
-        &session,
-        &baseline,
-        &mut post_state,
-        msg_id,
-        pw,
-    )
-    .await
+    persist_and_flush_post_box(state, session, &baseline, &mut post_state, msg_id, password).await
+}
+
+/// Deposits a previously created outgoing transfer bundle (verbatim bytes) into Post slots.
+pub async fn deposit_transfer_to_post_impl(
+    bundle_id: String,
+    password: Option<String>,
+    state: &AppState,
+) -> Result<FrontendPostDepositResult, FrontendError> {
+    let (session, resolved_pw) = state.authorize_and_begin_session_secret(
+        crate::state::RequiredAccess::DailyPay,
+        password.as_deref(),
+    )?;
+    let pw = resolved_pw.as_deref().map(String::as_str);
+    deposit_transfer_to_post_with_session(&session, bundle_id, pw, state).await
 }
 
 fn resolve_signing_request_anchor_manifest(
@@ -921,13 +923,18 @@ pub async fn reply_detached_signature_via_post_impl(
                         &session,
                         "Active wallet session changed before reply syncs could be updated",
                         |service| {
-                            state.update_contact_from_card(
+                            if let Err(e) = state.update_contact_from_card(
                                 service,
                                 &recipient_did,
                                 &req.reply_syncs,
                                 None,
                                 password.as_deref(),
-                            );
+                            ) {
+                                warn!(
+                                    "Failed to update contact from signing request reply syncs: {}",
+                                    e.message
+                                );
+                            }
                             Ok(())
                         },
                     )?;
@@ -1225,13 +1232,18 @@ pub async fn send_market_inquiry_via_post_impl(
             &session,
             "Wallet session changed before saving inquiry recipient syncs",
             |service| {
-                state.update_contact_from_card(
+                if let Err(e) = state.update_contact_from_card(
                     service,
                     &recipient_did,
                     &recipient_syncs,
                     None,
                     pw,
-                );
+                ) {
+                    warn!(
+                        "Failed to save inquiry recipient syncs on contact: {}",
+                        e.message
+                    );
+                }
                 Ok(())
             },
         )?;

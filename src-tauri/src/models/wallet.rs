@@ -303,6 +303,10 @@ pub struct CreateBundleResult {
     pub bundle_id: String,
     pub involved_sources_details: Vec<crate::models::FrontendInvolvedVoucherInfo>,
     pub l2_dispatch: Vec<crate::gateway_resolver::IntentDispatchObservation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub post_deposit: Option<crate::models::FrontendPostDepositResult>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub post_deposit_error: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

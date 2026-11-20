@@ -869,11 +869,9 @@ pub struct GuardianRevoke {
 pub struct GuardianVaultStore {
     pub wards: BTreeMap<String, GuardianVaultEntry>,
     /// Monotonic high-water mark of seen `rotation_epoch` per canonical owner DID.
-    #[serde(default)]
     pub highest_epoch_by_owner: BTreeMap<String, u32>,
     /// Highest revoked `rotation_epoch` per canonical owner DID to block assign replays after revoke
     /// or out-of-order assigns arriving after an earlier revoke.
-    #[serde(default)]
     pub revoked_epoch_by_owner: BTreeMap<String, u32>,
 }
 

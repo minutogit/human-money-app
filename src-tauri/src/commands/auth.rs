@@ -2,7 +2,7 @@ use crate::models::{FrontendError, MnemonicLanguage, ProfileInfo};
 use crate::pin_keystore::{self, ProfilePinStatusDto, MAX_PIN_ATTEMPTS};
 use crate::services::fs_helpers::{
     load_profile_metadata, load_profile_metadata_map_from_dir, record_profile_metadata,
-    remove_profile_metadata_entry, resolve_or_create_local_instance_id,
+    resolve_or_create_local_instance_id,
 };
 use crate::settings::{
     InternalLifecycleState, SecurityPolicy, UiPreferences, INTERNAL_LIFECYCLE_STATE_KEY,
@@ -24,8 +24,14 @@ pub fn list_profiles(
     info!("Listing available profiles...");
     let service = state.service.lock().unwrap();
 
-    // Load profile metadata for last_used timestamps
-    let metadata = load_profile_metadata(&app).unwrap_or_default();
+    // Load profile metadata for last_used timestamps without mutating disk on read errors
+    let metadata = match load_profile_metadata(&app) {
+        Ok(m) => m,
+        Err(e) => {
+            log::warn!("Ignoring unreadable profile metadata for listing: {}", e);
+            HashMap::new()
+        }
+    };
 
     service
         .list_profiles()
@@ -413,6 +419,7 @@ pub fn build_session_status(
 
 pub fn get_session_status_impl(state: &AppState) -> Result<SessionStatusDto, FrontendError> {
     let mut service = state.lock_service()?;
+    state.sync_if_core_locked(&service);
     if service.is_wallet_unlocked() && !service.is_session_active() {
         let _ = service.refresh_session_activity();
     }
@@ -498,6 +505,56 @@ pub fn verify_profile_password(
         .map_err(FrontendError::from)
 }
 
+pub(crate) fn delete_profile_impl(
+    folder_name: &str,
+    password: &str,
+    state: &AppState,
+    metadata_wallet_dir: Option<&Path>,
+    config_dir: Option<&Path>,
+) -> Result<(), FrontendError> {
+    info!(
+        "Attempting to delete profile in folder '{}'...",
+        folder_name
+    );
+
+    // Hold the exclusive RAII profile lock across the entire delete + cleanup lifecycle.
+    let _delete_lock = state.acquire_profile_lock(folder_name)?;
+
+    // 1. Delete in Core (verifies password, holds WalletLockGuard, resets Core if active)
+    let was_active = {
+        let mut service = state.lock_service()?;
+        let active = service.is_active_profile(folder_name);
+        service
+            .delete_profile(folder_name, password)
+            .map_err(FrontendError::from)?;
+        if active || !service.is_wallet_unlocked() {
+            state.clear_all_caches();
+        }
+        active
+    };
+
+    // 2. Remove metadata entry & device-local PIN keystore entry while still holding `_delete_lock`
+    if let Some(dir) = metadata_wallet_dir {
+        if let Err(e) = crate::services::fs_helpers::remove_profile_metadata_entry_in_dir(
+            dir,
+            folder_name,
+        ) {
+            log::warn!("Failed to remove deleted profile metadata entry: {}", e);
+        }
+    }
+    if let Some(cfg_dir) = config_dir {
+        let _ = pin_keystore::remove_entry(cfg_dir, folder_name);
+    }
+
+    state.release_profile_lock_if_matching(folder_name);
+    if was_active {
+        state.clear_sync_cooldown();
+    }
+
+    info!("Profile '{}' deleted successfully.", folder_name);
+    Ok(())
+}
+
 #[tauri::command]
 pub fn delete_profile(
     folder_name: String,
@@ -505,31 +562,15 @@ pub fn delete_profile(
     state: tauri::State<AppState>,
     app: tauri::AppHandle,
 ) -> Result<(), FrontendError> {
-    info!(
-        "Attempting to delete profile in folder '{}'...",
-        folder_name
-    );
-
-    state.ensure_profile_not_locked(&folder_name)?;
-
-    // 1. Delete in Core (this also verifies password)
-    {
-        let mut service = state.service.lock().unwrap();
-        service
-            .delete_profile(&folder_name, &password)
-            .map_err(FrontendError::from)?;
-    }
-
-    state.cleanup_deleted_profile_lock(&folder_name);
-
-    // 2. Remove metadata entry & device-local PIN keystore entry
-    let _ = remove_profile_metadata_entry(&app, &folder_name);
-    if let Ok(config_dir) = app.path().app_config_dir() {
-        let _ = pin_keystore::remove_entry(&config_dir, &folder_name);
-    }
-
-    info!("Profile '{}' deleted successfully.", folder_name);
-    Ok(())
+    let metadata_dir = crate::services::fs_helpers::get_wallet_data_dir(&app).ok();
+    let config_dir = app.path().app_config_dir().ok();
+    delete_profile_impl(
+        &folder_name,
+        &password,
+        &state,
+        metadata_dir.as_deref(),
+        config_dir.as_deref(),
+    )
 }
 
 // ============================================================================
@@ -1580,6 +1621,90 @@ mod tests {
         assert!(app_state
             .authorize(RequiredAccess::Full, Some(master_pw))
             .is_ok());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn k2_h2_delete_profile_enforces_lock_contention_and_tears_down_active_session() {
+        use human_money_core::app_service::AppService;
+        use human_money_core::MnemonicLanguage;
+
+        let dir = crate::test_support::temp_test_dir("k2_h2_delete_profile");
+        let wallet_dir = dir.join("wallet_data");
+        let lock_dir = dir.join("session_locks");
+        let config_dir = dir.join("config");
+        std::fs::create_dir_all(&wallet_dir).unwrap();
+        std::fs::create_dir_all(&config_dir).unwrap();
+
+        let pw = "DeleteProfileStrongPw-2026!";
+        let mut svc_a = AppService::new(&wallet_dir).unwrap();
+        let mnemonic = AppService::generate_mnemonic(12, MnemonicLanguage::English).unwrap();
+        svc_a
+            .create_profile(
+                "VictimProfile",
+                &mnemonic,
+                None,
+                None,
+                pw,
+                MnemonicLanguage::English,
+                "dev-a".into(),
+                true,
+            )
+            .unwrap();
+        let folder = svc_a.list_profiles().unwrap()[0].folder_name.clone();
+        crate::services::fs_helpers::record_profile_metadata_in_dir(
+            &wallet_dir,
+            &folder,
+            Some("did:key:zExample".to_string()),
+        )
+        .unwrap();
+
+        let state_a = AppState::new(svc_a).with_session_lock_dir(lock_dir.clone());
+        let svc_b = AppService::new(&wallet_dir).unwrap();
+        let state_b = AppState::new(svc_b).with_session_lock_dir(lock_dir.clone());
+
+        // B holds the profile lock -> A's delete_profile MUST fail closed before touching files!
+        let lock_b = state_b.acquire_profile_lock(&folder).unwrap();
+        state_b.commit_profile_lock(lock_b);
+        let contention_err = delete_profile_impl(
+            &folder,
+            pw,
+            &state_a,
+            Some(&wallet_dir),
+            Some(&config_dir),
+        )
+        .unwrap_err();
+        assert_eq!(contention_err.code, "error.auth.profileAlreadyOpen");
+        assert!(wallet_dir.join(&folder).exists());
+
+        // After B releases and A opens the same active profile, A's delete clears caches/session & removes dir
+        state_b.release_profile_lock();
+        let lock_a = state_a.acquire_profile_lock(&folder).unwrap();
+        state_a.commit_profile_lock(lock_a);
+        let gen_before = state_a.current_session_generation();
+
+        delete_profile_impl(
+            &folder,
+            pw,
+            &state_a,
+            Some(&wallet_dir),
+            Some(&config_dir),
+        )
+        .expect("Active profile delete after lock release must succeed");
+
+        assert!(!wallet_dir.join(&folder).exists());
+        assert!(
+            state_a.current_session_generation() > gen_before,
+            "K2/H2: deleting active profile must bump session_generation"
+        );
+        assert!(
+            !state_a.service.lock().unwrap().is_wallet_unlocked(),
+            "H2: Core session must be locked after deleting active profile"
+        );
+        // K2: flock-backed .lock file stays on disk and is never unlinked while another instance can re-lock
+        assert!(lock_dir.join(format!("{}.lock", folder)).exists());
+        assert!(state_b.acquire_profile_lock(&folder).is_ok());
 
         let _ = std::fs::remove_dir_all(&dir);
     }

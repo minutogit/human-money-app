@@ -237,20 +237,30 @@ export function parseContactCard(input: string): ParsedContactCard | null {
     return null;
   }
 
-  const standalone = canonicalizeUserIdCandidate(input);
+  // Normalize line wraps placed directly between '@' and 'did:key:' without ever stripping broken prefixes.
+  const normalizedInput = input.replace(/@[ \t]*\r?\n[ \t]*(?=did:key:)/gi, '@');
+  const standalone = canonicalizeUserIdCandidate(normalizedInput);
   // Check if the trimmed/unwrapped input is a standalone DID or subaccount ID
   if (standalone && !/\s/.test(standalone) && (standalone.startsWith('did:') || standalone.includes('@did:'))) {
     return isValidUserIdFormat(standalone) ? { did: standalone } : null;
   }
 
   // Fallback: extract embedded user ID (including any prefix before @did:key:) from chat/email text.
-  // Never strip an invalid prefix and fall back to the root DID.
-  const embeddedDidMatch = input.trim().match(
+  // Never strip an invalid prefix or whitespace-separated '@' prefix and fall back to the root DID.
+  const trimmedNormalized = normalizedInput.trim();
+  const embeddedDidMatch = trimmedNormalized.match(
     /(?:^|[\s"'`„“”‚‘’«»‹›<(\[])((?:[^\s"'`„“”‚‘’«»‹›<(\[\]]+@)?did:key:[a-zA-Z0-9]+)/i
   );
   if (embeddedDidMatch?.[1]) {
     const candidate = canonicalizeUserIdCandidate(embeddedDidMatch[1]);
-    return candidate && isValidUserIdFormat(candidate) ? { did: candidate } : null;
+    if (!candidate) return null;
+    const tokenStart =
+      (embeddedDidMatch.index ?? 0) + (embeddedDidMatch[0].length - embeddedDidMatch[1].length);
+    const beforeToken = trimmedNormalized.slice(0, tokenStart);
+    if (!candidate.includes('@') && /@[ \t\r\n]*$/.test(beforeToken)) {
+      return null;
+    }
+    return isValidUserIdFormat(candidate) ? { did: candidate } : null;
   }
 
   return null;

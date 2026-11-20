@@ -63,6 +63,31 @@ pub struct PostOutboxEntry {
     pub created_at: u64,
 }
 
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct StoredPrecommitL2Evidence {
+    pub quorum_certificates: Vec<(
+        String,
+        Vec<human_money_core::humoco_proto::types::QuorumCertificate>,
+    )>,
+    pub competing_entries: Vec<(human_money_core::models::layer2_api::LockEntry, u32)>,
+    pub is_conflict: bool,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct StoredPendingTolerancePayment {
+    pub msg_id: String,
+    pub sender_did: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sender_name: Option<String>,
+    pub created_at: u64,
+    pub zone: String,
+    pub error_message: String,
+    pub tag16_hex: String,
+    pub container_b64: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub l2_evidence: Option<StoredPrecommitL2Evidence>,
+}
+
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 pub struct StoredPostState {
     #[serde(default)]
@@ -81,6 +106,8 @@ pub struct StoredPostState {
     pub inquiries: Vec<crate::models::FrontendMarketInquiryItem>,
     #[serde(default)]
     pub unsupported_messages: Vec<crate::models::FrontendUnsupportedPostItem>,
+    #[serde(default)]
+    pub pending_tolerance_payments: Vec<StoredPendingTolerancePayment>,
     #[serde(default)]
     pub inquiry_rate_tracker: humoco_market::InquiryRateTracker,
 }
@@ -932,6 +959,18 @@ impl AppState {
         self.session_token_for_service(&service)
     }
 
+    /// Synchronizes host session caches, one-shot grants, and generation when Core
+    /// intentionally locks itself (e.g. post-mutation failure in `TransactionOrchestrator`).
+    pub fn sync_if_core_locked(&self, service: &AppService) {
+        if !service.is_wallet_unlocked() {
+            let has_host_state = self.profile_caches.lock().unwrap().is_some()
+                || self.one_shot_pin_grant.lock().unwrap().is_some();
+            if has_host_state {
+                self.clear_all_caches();
+            }
+        }
+    }
+
     pub fn is_session_current(&self, token: &SessionToken, service: &AppService) -> bool {
         if self.current_session_generation() != token.generation || !service.is_wallet_unlocked() {
             return false;
@@ -950,10 +989,13 @@ impl AppState {
         F: FnOnce(&mut AppService) -> Result<R, crate::models::FrontendError>,
     {
         let mut service = self.lock_service()?;
+        self.sync_if_core_locked(&service);
         if !self.is_session_current(token, &service) {
             return Ok(None);
         }
-        f(&mut service).map(Some)
+        let res = f(&mut service);
+        self.sync_if_core_locked(&service);
+        res.map(Some)
     }
 
     pub fn with_session_required<F, R>(
@@ -1060,28 +1102,15 @@ impl AppState {
         *self.active_profile_lock.lock().unwrap() = None;
     }
 
-    pub fn ensure_profile_not_locked(
-        &self,
-        folder_name: &str,
-    ) -> Result<(), crate::models::FrontendError> {
-        let _ = self.acquire_profile_lock(folder_name)?;
-        Ok(())
-    }
-
-    pub fn cleanup_deleted_profile_lock(&self, folder_name: &str) {
+    /// Releases the held `ProfileSessionLock` guard iff it belongs to `folder_name`.
+    /// Never unlinks the underlying `.lock` file path so live `flock` inodes stay intact.
+    pub fn release_profile_lock_if_matching(&self, folder_name: &str) {
+        let mut guard = self.active_profile_lock.lock().unwrap();
+        if guard
+            .as_ref()
+            .is_some_and(|existing| existing.folder_name == folder_name)
         {
-            let mut guard = self.active_profile_lock.lock().unwrap();
-            if guard
-                .as_ref()
-                .is_some_and(|existing| existing.folder_name == folder_name)
-            {
-                *guard = None;
-            }
-        }
-        if let Some(ref lock_dir) = self.session_lock_dir {
-            if validate_lock_folder_name(folder_name).is_ok() {
-                let _ = std::fs::remove_file(lock_dir.join(format!("{folder_name}.lock")));
-            }
+            *guard = None;
         }
     }
 
@@ -1174,6 +1203,7 @@ impl AppState {
         crate::models::FrontendError,
     > {
         let service = self.lock_service()?;
+        self.sync_if_core_locked(&service);
         if let Some(raw) = password {
             if raw.starts_with(ONE_SHOT_PIN_GRANT_PREFIX) {
                 match required {
@@ -1258,6 +1288,7 @@ impl AppState {
         password: Option<&str>,
     ) -> Result<MutexGuard<'_, AppService>, crate::models::FrontendError> {
         let service = self.lock_service()?;
+        self.sync_if_core_locked(&service);
         if password.is_some_and(|p| p.starts_with(ONE_SHOT_PIN_GRANT_PREFIX)) {
             return match required {
                 RequiredAccess::Full => Err(crate::models::FrontendError::from(
@@ -2184,8 +2215,18 @@ impl AppState {
     pub fn save_contact(
         &self,
         service: &mut AppService,
+        contact: FrontendContact,
+        password: Option<&str>,
+    ) -> Result<(), AppFacadeError> {
+        self.save_contact_with_options(service, contact, password, false)
+    }
+
+    pub fn save_contact_with_options(
+        &self,
+        service: &mut AppService,
         mut contact: FrontendContact,
         password: Option<&str>,
+        preserve_manual_card: bool,
     ) -> Result<(), AppFacadeError> {
         let validated_did = human_money_core::ValidatedUserId::parse(&contact.did)
             .map_err(|e| AppFacadeError::Generic(format!("Invalid contact DID: {}", e)))?;
@@ -2392,6 +2433,7 @@ impl AppState {
                         &mut reg,
                         Some(&can_did),
                         password,
+                        preserve_manual_card,
                     );
                 } else {
                     reg.prune_unreachable_lists();
@@ -2410,6 +2452,7 @@ impl AppState {
                         &mut reg,
                         Some(&can_did),
                         password,
+                        preserve_manual_card,
                     );
                     if reg.own_list_dirty {
                         self.ensure_wot_list_signed(service, &mut reg)?;
@@ -2469,6 +2512,16 @@ impl AppState {
         did: &str,
         password: Option<&str>,
     ) -> Result<(), AppFacadeError> {
+        self.delete_contact_with_options(service, did, password, false)
+    }
+
+    pub fn delete_contact_with_options(
+        &self,
+        service: &mut AppService,
+        did: &str,
+        password: Option<&str>,
+        preserve_manual_card: bool,
+    ) -> Result<(), AppFacadeError> {
         let did = did.trim();
         let mut address_book: FrontendAddressBook =
             load_encrypted_json_or_default(service, CONTACTS_DATA_NAME, password)?;
@@ -2527,6 +2580,7 @@ impl AppState {
                             &mut reg,
                             Some(target_key),
                             password,
+                            preserve_manual_card,
                         );
                         if reg.own_list_dirty {
                             self.ensure_wot_list_signed(service, &mut reg)?;
@@ -2881,6 +2935,7 @@ impl AppState {
         reg: &mut humoco_wot::TrustRegister,
         revoked_did: Option<&str>,
         password: Option<&str>,
+        preserve_manual_card: bool,
     ) {
         let can_revoked = revoked_did.and_then(|d| canonicalize_did(d).ok());
         if let Some(ref can) = can_revoked {
@@ -2897,13 +2952,23 @@ impl AppState {
         ) {
             Ok(mut store) => {
                 let before = store.cards.len();
-                if let Some(ref can) = can_revoked {
-                    store.cards.retain(|_, sc| {
-                        canonicalize_did(&sc.card.payload.did).ok().as_deref() != Some(can.as_str())
-                    });
+                if !preserve_manual_card {
+                    if let Some(ref can) = can_revoked {
+                        store.cards.retain(|_, sc| {
+                            canonicalize_did(&sc.card.payload.did).ok().as_deref()
+                                != Some(can.as_str())
+                        });
+                    }
                 }
                 store.cards.retain(|_, sc| {
                     if sc.hops < 2 {
+                        return true;
+                    }
+                    if preserve_manual_card
+                        && can_revoked.as_deref().is_some_and(|rev| {
+                            canonicalize_did(&sc.card.payload.did).ok().as_deref() == Some(rev)
+                        })
+                    {
                         return true;
                     }
                     reg.evaluate_did(&sc.card.payload.did, None)
@@ -3308,13 +3373,19 @@ impl AppState {
                         .map(Into::into)
                         .collect();
                     let card_profile = humoco_market::extract_public_profile(&stored.card);
-                    self.update_contact_from_card(
+                    if let Err(e) = self.update_contact_from_card(
                         service,
                         &did,
                         &card_syncs,
                         Some(&card_profile),
                         password,
-                    );
+                    ) {
+                        log::warn!(
+                            "Failed to persist piggybacked contact update for {}: {}",
+                            did,
+                            e.message
+                        );
+                    }
                 }
             }
             Ok(other) => {
@@ -3336,29 +3407,28 @@ impl AppState {
         card_syncs: &[crate::models::FrontendSyncDescriptor],
         card_profile: Option<&human_money_core::models::profile::PublicProfile>,
         password: Option<&str>,
-    ) {
+    ) -> Result<bool, crate::models::FrontendError> {
         let trimmed_card_did = card_did.trim();
         if (card_syncs.is_empty() && card_profile.is_none()) || trimmed_card_did.is_empty() {
-            return;
+            return Ok(false);
         }
 
         let mut address_book: FrontendAddressBook =
-            match load_encrypted_json_or_default(service, CONTACTS_DATA_NAME, password) {
-                Ok(ab) => ab,
-                Err(e) => {
-                    log::warn!(
-                        "Failed to load address book in update_contact_from_card: {}",
-                        e
-                    );
-                    return;
-                }
-            };
+            load_encrypted_json_or_default(service, CONTACTS_DATA_NAME, password)
+                .map_err(crate::models::FrontendError::from)?;
 
-        if apply_contact_update_from_card(&mut address_book, trimmed_card_did, card_syncs, card_profile)
-        {
-            let _ = save_encrypted_json(service, CONTACTS_DATA_NAME, &address_book, password);
+        if apply_contact_update_from_card(
+            &mut address_book,
+            trimmed_card_did,
+            card_syncs,
+            card_profile,
+        ) {
+            save_encrypted_json(service, CONTACTS_DATA_NAME, &address_book, password)
+                .map_err(crate::models::FrontendError::from)?;
             self.set_cached_contacts_for_service(service, Some(address_book));
+            return Ok(true);
         }
+        Ok(false)
     }
 
     pub fn record_contact_sync_health_batch(
@@ -5549,13 +5619,16 @@ mod tests {
         );
 
         // 3. update_contact_from_card for bob_privat never mutates bob_laden syncs
-        state.update_contact_from_card(
-            &mut service,
-            &bob_privat,
-            &[mk_sync("https://sync-privat-2.example.com")],
-            None,
-            Some(password),
-        );
+        let updated = state
+            .update_contact_from_card(
+                &mut service,
+                &bob_privat,
+                &[mk_sync("https://sync-privat-2.example.com")],
+                None,
+                Some(password),
+            )
+            .unwrap();
+        assert!(updated);
         let after_card = state.load_contacts(&mut service, Some(password)).unwrap();
         assert_eq!(
             after_card
@@ -5721,11 +5794,9 @@ mod tests {
         let pending1 = state1.acquire_profile_lock("profile_a").unwrap();
         state1.commit_profile_lock(pending1);
 
-        // 2. Instance 2 is blocked on profile_a (both acquire and ensure_profile_not_locked)
+        // 2. Instance 2 is blocked on profile_a while Instance 1 holds the RAII lock
         let err = state2.acquire_profile_lock("profile_a").err().unwrap();
         assert_eq!(err.code, "error.auth.profileAlreadyOpen");
-        let ensure_err = state2.ensure_profile_not_locked("profile_a").unwrap_err();
-        assert_eq!(ensure_err.code, "error.auth.profileAlreadyOpen");
 
         // 3. Instance 2 can open profile_b in parallel
         let pending_b = state2.acquire_profile_lock("profile_b").unwrap();
@@ -5753,8 +5824,10 @@ mod tests {
         }
         let after_rollback = state1.acquire_profile_lock("profile_a").unwrap();
         state1.commit_profile_lock(after_rollback);
-        state1.cleanup_deleted_profile_lock("profile_a");
-        assert!(!lock_dir.join("profile_a.lock").exists());
+        state1.release_profile_lock_if_matching("profile_a");
+        // K2: flock-backed .lock file stays on disk and is never unlinked while Instance 2 can acquire cleanly.
+        assert!(lock_dir.join("profile_a.lock").exists());
+        assert!(state2.acquire_profile_lock("profile_a").is_ok());
 
         // 6. Path traversal / invalid folder names are rejected
         assert!(state1.acquire_profile_lock("../escape").is_err());
@@ -5762,5 +5835,119 @@ mod tests {
         assert!(state1.acquire_profile_lock("").is_err());
 
         let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn h1_save_contact_preserve_manual_card_keeps_card_on_trust_reset() {
+        use humoco_market::CardStore;
+
+        let dir_alice = crate::test_support::temp_test_dir("h1_card_alice");
+        let dir_bob = crate::test_support::temp_test_dir("h1_card_bob");
+        let pw = "StrongPw-H1-Card!";
+
+        let alice_state = super::AppState::new(crate::test_support::setup_test_app(
+            &dir_alice,
+            "Alice",
+            crate::test_support::ALICE_PHRASE,
+            pw,
+        ));
+        let bob_state = super::AppState::new(crate::test_support::setup_test_app(
+            &dir_bob,
+            "Bob",
+            crate::test_support::BOB_PHRASE,
+            pw,
+        ));
+        let alice_did = alice_state
+            .service
+            .lock()
+            .unwrap()
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
+
+        let prof = crate::services::market_service::save_my_market_profile_impl(
+            crate::models::FrontendSaveMyMarketProfileRequest {
+                profile: crate::models::FrontendUserProfile {
+                    first_name: Some("Alice".to_string()),
+                    ..Default::default()
+                },
+                visibility: Default::default(),
+                skills: vec![],
+                max_hops: 2,
+                validity_years: 2,
+                allow_inquiries: true,
+                published: Some(true),
+            },
+            Some(pw.to_string()),
+            &alice_state,
+        )
+        .unwrap();
+        let share_uri = prof.share_uri.unwrap();
+
+        crate::services::market_service::import_contact_card_impl(
+            share_uri,
+            Some(pw.to_string()),
+            &bob_state,
+        )
+        .unwrap();
+
+        {
+            let mut s = bob_state.service.lock().unwrap();
+            let trusted = crate::models::FrontendContact {
+                did: alice_did.clone(),
+                profile: crate::models::FrontendUserProfile {
+                    first_name: Some("Alice".to_string()),
+                    ..Default::default()
+                },
+                tags: vec![],
+                added_at: chrono::Utc::now().to_rfc3339(),
+                notes: None,
+                trust_level: Some(2),
+                desired_hops: None,
+                has_peer_list: false,
+                peer_list_updated_at: None,
+                syncs: vec![],
+            };
+            bob_state
+                .save_contact_with_options(&mut s, trusted, Some(pw), true)
+                .unwrap();
+
+            let reset = crate::models::FrontendContact {
+                did: alice_did.clone(),
+                profile: crate::models::FrontendUserProfile {
+                    first_name: Some("Alice".to_string()),
+                    ..Default::default()
+                },
+                tags: vec![],
+                added_at: chrono::Utc::now().to_rfc3339(),
+                notes: None,
+                trust_level: None,
+                desired_hops: None,
+                has_peer_list: false,
+                peer_list_updated_at: None,
+                syncs: vec![],
+            };
+            bob_state
+                .save_contact_with_options(&mut s, reset, Some(pw), true)
+                .unwrap();
+
+            let store: CardStore = super::load_encrypted_json_opt(
+                &mut s,
+                super::MARKET_CARD_STORE_KEY,
+                Some(pw),
+            )
+            .unwrap()
+            .unwrap();
+            let can_alice = super::canonicalize_did(&alice_did).unwrap();
+            assert!(
+                store.cards.values().any(|sc| {
+                    super::canonicalize_did(&sc.card.payload.did).ok().as_deref()
+                        == Some(can_alice.as_str())
+                }),
+                "H1: preserve_manual_card=true must keep manually imported card in CardStore"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&dir_alice);
+        let _ = std::fs::remove_dir_all(&dir_bob);
     }
 }

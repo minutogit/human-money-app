@@ -16,7 +16,9 @@ import { formatAmount } from '../../utils/format';
 import { readFromClipboard } from '../../utils/clipboard';
 import { parseHumocoInput } from '../../utils/humocoUri';
 import {
+    buildSendDraftKey,
     commitAndDepositTransfer,
+    type ConfirmedTransferSnapshot,
     initialSendState,
     resolvePaymentRequestInput,
     sendReducer,
@@ -60,6 +62,7 @@ export function useSendTransfer({
     const paymentSuccessTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const reputationSeqRef = useRef(0);
     const autoSelectSeqRef = useRef(0);
+    const recipientGenRef = useRef(0);
     const prevProfileRef = useRef(profileName);
     const isMountedRef = useRef(true);
 
@@ -76,6 +79,11 @@ export function useSendTransfer({
     const [isReconcilingL2, setIsReconcilingL2] = useState(false);
     const [hasPublishedCard, setHasPublishedCard] = useState(false);
     const [sendCardOverride, setSendCardOverride] = useState<boolean | null>(null);
+    const [selectionMode, setSelectionMode] = useState<'auto' | 'manual'>(() =>
+        initialVoucherId ? 'manual' : 'auto',
+    );
+    const [isResolvingCard, setIsResolvingCard] = useState(false);
+    const [confirmedSnapshot, setConfirmedSnapshot] = useState<ConfirmedTransferSnapshot | null>(null);
 
     const {
         selectedMap,
@@ -84,10 +92,41 @@ export function useSendTransfer({
         setVoucherAmount,
         selectAmount,
         clearSelection,
+        invalidatePreview,
+        resolvedDraftKey,
         selectionStats,
         currentPlan,
         autoSelectGravitational,
     } = useVoucherSelection(availableVouchers);
+
+    const selectedStandardUuid = useMemo(
+        () =>
+            state.selectedStandardId
+                ? standardIdToUuidMap.get(state.selectedStandardId) || state.selectedStandardId
+                : null,
+        [state.selectedStandardId, standardIdToUuidMap],
+    );
+
+    const currentDraftKey = useMemo(
+        () =>
+            buildSendDraftKey({
+                recipientId: state.recipientId,
+                targetAmountStr: state.targetAmountStr,
+                standardUuid: selectedStandardUuid,
+                isTest: state.selectedIsTest,
+            }),
+        [state.recipientId, state.targetAmountStr, selectedStandardUuid, state.selectedIsTest],
+    );
+
+    const parsedTargetAmount = parseFloat(state.targetAmountStr.trim().replace(',', '.'));
+    const isPreviewPending =
+        isResolvingCard ||
+        (selectionMode === 'auto' &&
+            !preserveInitialVoucherRef.current &&
+            !isNaN(parsedTargetAmount) &&
+            parsedTargetAmount > 0 &&
+            Boolean(selectedStandardUuid) &&
+            resolvedDraftKey !== currentDraftKey);
 
     const detectedPrivacy = usePrivacyDetection(
         Array.from(selectedMap.keys()),
@@ -108,6 +147,9 @@ export function useSendTransfer({
 
     useEffect(() => {
         preserveInitialVoucherRef.current = Boolean(initialVoucherId);
+        if (initialVoucherId) {
+            setSelectionMode('manual');
+        }
     }, [initialVoucherId]);
 
     useEffect(() => {
@@ -115,8 +157,12 @@ export function useSendTransfer({
         prevProfileRef.current = profileName;
         autoSelectSeqRef.current += 1;
         reputationSeqRef.current += 1;
+        recipientGenRef.current += 1;
         appliedInitialUriRef.current = null;
         preserveInitialVoucherRef.current = Boolean(initialVoucherId);
+        setSelectionMode(initialVoucherId ? 'manual' : 'auto');
+        setIsResolvingCard(false);
+        setConfirmedSnapshot(null);
         clearSelection();
         dispatch({ type: 'RESET', recipientId: initialRecipientId, notes: initialNote });
         setSendCardOverride(null);
@@ -237,7 +283,13 @@ export function useSendTransfer({
     }, [availableVouchers, state.selectedStandardId, state.selectedIsTest, standardIdToUuidMap]);
 
     useEffect(() => {
-        if (preserveInitialVoucherRef.current) return;
+        if (
+            selectionMode === 'manual' ||
+            preserveInitialVoucherRef.current ||
+            isResolvingCard
+        ) {
+            return;
+        }
         const seq = ++autoSelectSeqRef.current;
         let active = true;
         const amountStr = state.targetAmountStr.trim().replace(',', '.');
@@ -245,16 +297,36 @@ export function useSendTransfer({
         if (isNaN(amt) || amt <= 0 || !state.selectedStandardId) return;
         const standardUuid = standardIdToUuidMap.get(state.selectedStandardId) || state.selectedStandardId;
         if (!standardUuid) return;
+        const draftKey = buildSendDraftKey({
+            recipientId: state.recipientId,
+            targetAmountStr: state.targetAmountStr,
+            standardUuid,
+            isTest: state.selectedIsTest,
+        });
         const voucher = filteredVouchers[0];
         const precision = voucher ? (uuidToPrecisionMap.get(voucher.voucherStandardUuid) ?? 4) : 4;
         const timer = setTimeout(() => {
             if (!active || seq !== autoSelectSeqRef.current) return;
-            autoSelectGravitational(amountStr, state.recipientId.trim(), standardUuid, precision, state.selectedIsTest).catch((e) => {
+            autoSelectGravitational(
+                amountStr,
+                state.recipientId.trim(),
+                standardUuid,
+                precision,
+                state.selectedIsTest,
+                draftKey,
+            ).catch((e) => {
                 if (!active || seq !== autoSelectSeqRef.current) return;
                 logger.error(`Gravitational auto-select failed: ${stringifyError(e)}`);
                 const val = parseFloat(amountStr);
                 if (!isNaN(val) && val > 0 && voucher) {
-                    selectAmount(val, voucher.displayCurrency, precision, state.selectedIsTest, standardUuid);
+                    selectAmount(
+                        val,
+                        voucher.displayCurrency,
+                        precision,
+                        state.selectedIsTest,
+                        standardUuid,
+                        draftKey,
+                    );
                 }
             });
         }, 400);
@@ -262,11 +334,44 @@ export function useSendTransfer({
             active = false;
             clearTimeout(timer);
         };
-    }, [state.targetAmountStr, state.recipientId, state.selectedStandardId, state.selectedIsTest, filteredVouchers, standardIdToUuidMap, uuidToPrecisionMap, autoSelectGravitational, selectAmount]);
+    }, [
+        selectionMode,
+        isResolvingCard,
+        state.targetAmountStr,
+        state.recipientId,
+        state.selectedStandardId,
+        state.selectedIsTest,
+        filteredVouchers,
+        standardIdToUuidMap,
+        uuidToPrecisionMap,
+        autoSelectGravitational,
+        selectAmount,
+    ]);
+
+    const setRecipient = useCallback(
+        (id: string) => {
+            recipientGenRef.current += 1;
+            setIsResolvingCard(false);
+            setConfirmedSnapshot(null);
+            if (selectionMode === 'auto') {
+                autoSelectSeqRef.current += 1;
+                invalidatePreview();
+            }
+            dispatch({ type: 'SET_RECIPIENT', id });
+        },
+        [selectionMode, invalidatePreview],
+    );
+
+    const clearRecipient = useCallback(() => {
+        setRecipient('');
+    }, [setRecipient]);
 
     const handleTargetAmountChange = (valStr: string) => {
         preserveInitialVoucherRef.current = false;
         autoSelectSeqRef.current += 1;
+        setSelectionMode('auto');
+        setConfirmedSnapshot(null);
+        invalidatePreview();
         dispatch({ type: 'SET_TARGET_AMOUNT', amount: valStr });
         let effectiveStdId = state.selectedStandardId;
         let effectiveIsTest = state.selectedIsTest;
@@ -290,7 +395,20 @@ export function useSendTransfer({
                 (v) => (!effUuid || v.voucherStandardUuid === effUuid) && (effectiveIsTest === null || v.isTestVoucher === effectiveIsTest),
             );
             if (match) {
-                selectAmount(val, match.displayCurrency, uuidToPrecisionMap.get(match.voucherStandardUuid) ?? 4, effectiveIsTest, effUuid);
+                const nextDraftKey = buildSendDraftKey({
+                    recipientId: state.recipientId,
+                    targetAmountStr: valStr,
+                    standardUuid: effUuid,
+                    isTest: effectiveIsTest,
+                });
+                selectAmount(
+                    val,
+                    match.displayCurrency,
+                    uuidToPrecisionMap.get(match.voucherStandardUuid) ?? 4,
+                    effectiveIsTest,
+                    effUuid,
+                    nextDraftKey,
+                );
             }
         }
     };
@@ -299,8 +417,13 @@ export function useSendTransfer({
         (rawText: string): boolean => {
             const res = resolvePaymentRequestInput(rawText, standardIdToUuidMap, voucherStandards, state.selectedStandardId);
             if (!res.matched || !res.to) return false;
+            recipientGenRef.current += 1;
+            setIsResolvingCard(false);
             preserveInitialVoucherRef.current = false;
             autoSelectSeqRef.current += 1;
+            setSelectionMode('auto');
+            setConfirmedSnapshot(null);
+            invalidatePreview();
             dispatch({ type: 'SET_FEEDBACK', msg: '' });
             dispatch({ type: 'SET_RECIPIENT', id: res.to });
             if (res.note) dispatch({ type: 'SET_NOTES', notes: res.note });
@@ -327,7 +450,7 @@ export function useSendTransfer({
             }, 3500);
             return true;
         },
-        [standardIdToUuidMap, voucherStandards, state.selectedStandardId, state.selectedIsTest, clearSelection, t],
+        [standardIdToUuidMap, voucherStandards, state.selectedStandardId, state.selectedIsTest, clearSelection, invalidatePreview, t],
     );
 
     useEffect(() => {
@@ -350,23 +473,40 @@ export function useSendTransfer({
         }
         if (parsed?.kind === 'contact') {
             dispatch({ type: 'SET_FEEDBACK', msg: '' });
-            dispatch({ type: 'SET_RECIPIENT', id: parsed.contact.did });
+            setRecipient(parsed.contact.did);
             return true;
         }
         if (parsed?.kind === 'card') {
+            const gen = ++recipientGenRef.current;
+            setConfirmedSnapshot(null);
+            setIsResolvingCard(true);
+            if (selectionMode === 'auto') {
+                autoSelectSeqRef.current += 1;
+                invalidatePreview();
+            }
             try {
                 const resolved = await marketService.resolveCardRecipient(parsed.payload);
+                if (!isMountedRef.current || gen !== recipientGenRef.current) {
+                    return false;
+                }
                 dispatch({ type: 'SET_FEEDBACK', msg: '' });
                 dispatch({ type: 'SET_RECIPIENT', id: resolved.recipientId });
                 return true;
             } catch (e) {
+                if (!isMountedRef.current || gen !== recipientGenRef.current) {
+                    return false;
+                }
                 dispatch({ type: 'SET_FEEDBACK', msg: translateError(e, t) });
                 return false;
+            } finally {
+                if (isMountedRef.current && gen === recipientGenRef.current) {
+                    setIsResolvingCard(false);
+                }
             }
         }
         if (parsed?.kind === 'did') {
             dispatch({ type: 'SET_FEEDBACK', msg: '' });
-            dispatch({ type: 'SET_RECIPIENT', id: parsed.did });
+            setRecipient(parsed.did);
             return true;
         }
         dispatch({ type: 'SET_FEEDBACK', msg: t('transfer.invalidPaymentRequest') });
@@ -387,6 +527,9 @@ export function useSendTransfer({
 
     const handlePrepareTransfer = (e: FormEvent) => {
         e.preventDefault();
+        if (isPreviewPending || isResolvingCard) {
+            return;
+        }
         if (appConfig?.lifecycle.pendingRestoreL2Reconciliation) {
             dispatch({ type: 'SET_FEEDBACK', msg: t('transfer.pendingL2ReconciliationBlocked', 'Ausgaben sind vorübergehend gesperrt, bis der Online-Sicherheitsabgleich durchgeführt wurde.') });
             return;
@@ -425,25 +568,53 @@ export function useSendTransfer({
             document.getElementById('privacyMode')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
             return;
         }
+
+        const clonedStats: Record<string, { total: number; count: number }> = {};
+        for (const [k, stat] of Object.entries(selectionStats)) {
+            clonedStats[k] = { ...stat };
+        }
+        setConfirmedSnapshot({
+            draftKey: currentDraftKey,
+            recipientId: state.recipientId,
+            selectedMap: new Map(selectedMap),
+            selectionStats: clonedStats,
+            notes: state.notes,
+            sendProfileName: state.sendProfileName,
+            customSenderName: state.customSenderName,
+            privacyMode: state.privacyMode,
+            sendCardOverride,
+        });
         dispatch({ type: 'TOGGLE_CONFIRM', value: true });
     };
 
+    const closeConfirm = useCallback(() => {
+        setConfirmedSnapshot(null);
+        dispatch({ type: 'TOGGLE_CONFIRM', value: false });
+    }, []);
+
     const executeTransfer = async () => {
+        const snapshot = confirmedSnapshot;
+        if (!snapshot) return;
         dispatch({ type: 'SET_PROCESSING', value: true });
         try {
             const txOutcome = await commitAndDepositTransfer({
-                state, selectedMap, voucherStandards, standardIdToUuidMap,
-                sendCardOverride, protectAction, checkAndTriggerCooldown, translate: t,
+                snapshot,
+                voucherStandards,
+                standardIdToUuidMap,
+                protectAction,
+                checkAndTriggerCooldown,
+                translate: t,
             });
             if (!isMountedRef.current || !txOutcome) return;
-            const summaryString = Object.entries(selectionStats)
+            const summaryString = Object.entries(snapshot.selectionStats)
                 .map(([currency, stat]) => `${formatAmount(stat.total.toString())} ${currency}`)
                 .join(', ');
+            setConfirmedSnapshot(null);
             dispatch({ type: 'TOGGLE_CONFIRM', value: false });
             navigate({
                 view: 'transfer_success',
                 bundleData: txOutcome.bundleResult.bundleData,
-                recipientId: state.recipientId,
+                recipientId: snapshot.recipientId,
                 summary: summaryString,
                 l2Dispatch: txOutcome.bundleResult.l2Dispatch,
                 bundleId: txOutcome.bundleResult.bundleId,
@@ -456,6 +627,7 @@ export function useSendTransfer({
             checkAndTriggerCooldown(e);
             logger.error(`Transfer failed: ${stringifyError(e)}`);
             dispatch({ type: 'SET_FEEDBACK', msg: t('transfer.transferFailed', { error: translateError(e, t) }) });
+            setConfirmedSnapshot(null);
             dispatch({ type: 'TOGGLE_CONFIRM', value: false });
         } finally {
             if (isMountedRef.current) {
@@ -508,12 +680,29 @@ export function useSendTransfer({
         appConfig, contacts, standardIdToUuidMap, uuidToPrecisionMap,
         isReconcilingL2, hasPublishedCard, sendCardOverride, setSendCardOverride,
         selectedMap, selectionStats, currentPlan, detectedPrivacy,
+        isResolvingCard, isPreviewPending, confirmedSnapshot, closeConfirm,
+        setRecipient, clearRecipient,
         applyPaymentRequest, handlePastePaymentRequest, handleApplyRawCode, handleTargetAmountChange,
-        handleVoucherToggle: (v: VoucherSummary) => { preserveInitialVoucherRef.current = false; autoSelectSeqRef.current += 1; toggleVoucher(v.localInstanceId, v.currentAmount); },
-        handleAmountChange: (id: string, amt: string) => { preserveInitialVoucherRef.current = false; autoSelectSeqRef.current += 1; setVoucherAmount(id, amt); },
+        handleVoucherToggle: (v: VoucherSummary) => {
+            preserveInitialVoucherRef.current = false;
+            autoSelectSeqRef.current += 1;
+            setSelectionMode('manual');
+            setConfirmedSnapshot(null);
+            toggleVoucher(v.localInstanceId, v.currentAmount);
+        },
+        handleAmountChange: (id: string, amt: string) => {
+            preserveInitialVoucherRef.current = false;
+            autoSelectSeqRef.current += 1;
+            setSelectionMode('manual');
+            setConfirmedSnapshot(null);
+            setVoucherAmount(id, amt);
+        },
         handleStandardSelect: (id: string | null, isTest: boolean | null) => {
             preserveInitialVoucherRef.current = false;
             autoSelectSeqRef.current += 1;
+            setSelectionMode('auto');
+            setConfirmedSnapshot(null);
+            invalidatePreview();
             if (id !== state.selectedStandardId || isTest !== state.selectedIsTest) {
                 clearSelection();
             }

@@ -751,109 +751,65 @@ pub(crate) async fn checkout_bundle(
     .await;
 
     // 4b. Handle `409 epoch_frozen`, `410 revoked`, or total NXDOMAIN committee failure via Discovery Cascade
+    if let Some((newer_manifest, upgraded_pow_bits)) = resolve_manifest_upgrade_after_dispatch(
+        state,
+        &session,
+        &client,
+        &anchor_id,
+        voucher.creator_profile.id.as_deref(),
+        &guarantor_dids,
+        &lifecycle,
+        &context.manifest,
+        &dispatch,
+        password,
+    )
+    .await?
     {
-        let now_secs = sync_client::current_unix_timestamp();
-        if !dispatch.revoked_notices.is_empty() {
-            let _ = state.with_session(&session, |service| {
-                let _ = crate::l2_lifecycle::record_revoked_servers(
+        pow_base_bits = pow_base_bits.max(upgraded_pow_bits);
+        let upgraded_pair = state.with_session_required(
+            &session,
+            "Wallet changed during checkout",
+            |service| {
+                service
+                    .update_l2_anchor_manifest(newer_manifest, password)
+                    .map_err(FrontendError::from)?;
+                let known_heads = crate::state::load_known_head_receipts_for_anchor(
                     service,
                     &anchor_id,
-                    &dispatch.revoked_notices,
-                    &context.manifest.servers,
-                    now_secs,
                     password,
-                );
-                Ok(())
-            });
-        }
-
-        let mut best_upgraded: Option<AnchorManifest> = None;
-        for m in &dispatch.epoch_frozen_manifests {
-            if m.revision > context.manifest.revision
-                && m.verify_anchor_id(&anchor_id).is_ok()
-                && best_upgraded
-                    .as_ref()
-                    .map(|b| m.revision > b.revision)
-                    .unwrap_or(true)
-            {
-                best_upgraded = Some(m.clone());
-            }
-        }
-
-        let all_unreachable = dispatch.receipts.is_empty()
-            && dispatch.competing_entries.is_empty()
-            && (!dispatch.transport_errors.is_empty() || !dispatch.rejected_errors.is_empty());
-        if best_upgraded.is_none()
-            && (all_unreachable || !dispatch.epoch_frozen_manifests.is_empty())
-        {
-            if let Ok(Some(discovered)) = crate::l2_lifecycle::discover_anchor_manifest(
-                state,
-                &session,
-                &client,
-                &anchor_id,
-                voucher.creator_profile.id.as_deref(),
-                &guarantor_dids,
-                password,
-            )
-            .await
-            {
-                if discovered.revision > context.manifest.revision {
-                    best_upgraded = Some(discovered);
-                }
-            }
-        }
-
-        if let Some(newer_manifest) = best_upgraded {
-            pow_base_bits =
-                pow_base_bits.max(crate::services::common::max_pow_base_bits_for_servers(
-                    &lifecycle,
-                    newer_manifest.servers.iter().map(|s| s.write_url.as_str()),
-                ));
-            let upgraded_pair = state.with_session_required(
-                &session,
-                "Wallet changed during checkout",
-                |service| {
-                    service
-                        .update_l2_anchor_manifest(newer_manifest, password)
-                        .map_err(FrontendError::from)?;
-                    let known_heads = crate::state::load_known_head_receipts_for_anchor(
-                        service,
-                        &anchor_id,
+                )?;
+                service
+                    .prepare_checkout_requests(
+                        purchase_id,
+                        bundle,
+                        pow_base_bits,
+                        now()?,
+                        &known_heads,
                         password,
-                    )?;
-                    service
-                        .prepare_checkout_requests(
-                            purchase_id,
-                            bundle,
-                            pow_base_bits,
-                            now()?,
-                            &known_heads,
-                            password,
-                        )
-                        .map_err(FrontendError::from)
-                },
-            )?;
-            context = upgraded_pair.0;
-            requests = upgraded_pair.1;
-            let keys = resolve_trusted_lock_keys(
-                state,
-                &security_policy,
-                &lifecycle,
-                &client,
-                voucher.creator_profile.id.as_deref(),
-                Some(&context.manifest),
-                password,
-            )
-            .await?;
-            base_trusted_keys = keys.0;
-            independently_pinned_creator_keys = keys.1;
-            dispatch = crate::gateway_resolver::dispatch_lock_committee_batches(
-                &client,
-                &requests,
-                CHECKOUT_BATCH_TIMEOUT,
-            )
-            .await;
-        }
+                    )
+                    .map_err(FrontendError::from)
+            },
+        )?;
+        context = upgraded_pair.0;
+        requests = upgraded_pair.1;
+        let keys = resolve_trusted_lock_keys(
+            state,
+            &security_policy,
+            &lifecycle,
+            &client,
+            voucher.creator_profile.id.as_deref(),
+            Some(&context.manifest),
+            password,
+        )
+        .await?;
+        base_trusted_keys = keys.0;
+        independently_pinned_creator_keys = keys.1;
+        dispatch = crate::gateway_resolver::dispatch_lock_committee_batches(
+            &client,
+            &requests,
+            CHECKOUT_BATCH_TIMEOUT,
+        )
+        .await;
     }
 
     if let Some(equiv_proof) = l2_gateway::detect_equivocation(&dispatch.receipts) {
@@ -1102,26 +1058,188 @@ pub(crate) async fn checkout_bundle(
     }
 }
 
+/// Records `410 revoked` notices and resolves any verified newer `AnchorManifest` from
+/// `409 epoch_frozen` responses or manifest discovery (H7 shared path for checkout & PoST).
+#[allow(clippy::too_many_arguments)]
+async fn resolve_manifest_upgrade_after_dispatch(
+    state: &AppState,
+    session: &crate::session::SessionToken,
+    client: &reqwest::Client,
+    anchor_id: &[u8; 32],
+    creator_id: Option<&str>,
+    guarantor_dids: &[String],
+    lifecycle: &InternalLifecycleState,
+    current_manifest: &AnchorManifest,
+    dispatch: &crate::gateway_resolver::CommitteeDispatchResult,
+    password: Option<&str>,
+) -> Result<Option<(AnchorManifest, u32)>, FrontendError> {
+    let now_secs = sync_client::current_unix_timestamp();
+    if !dispatch.revoked_notices.is_empty() {
+        let _ = state.with_session(session, |service| {
+            let _ = crate::l2_lifecycle::record_revoked_servers(
+                service,
+                anchor_id,
+                &dispatch.revoked_notices,
+                &current_manifest.servers,
+                now_secs,
+                password,
+            );
+            Ok(())
+        });
+    }
+
+    let mut best_upgraded: Option<AnchorManifest> = None;
+    for m in &dispatch.epoch_frozen_manifests {
+        if m.revision > current_manifest.revision
+            && m.verify_anchor_id(anchor_id).is_ok()
+            && best_upgraded
+                .as_ref()
+                .map(|b| m.revision > b.revision)
+                .unwrap_or(true)
+        {
+            best_upgraded = Some(m.clone());
+        }
+    }
+
+    let all_unreachable = dispatch.receipts.is_empty()
+        && dispatch.competing_entries.is_empty()
+        && (!dispatch.transport_errors.is_empty() || !dispatch.rejected_errors.is_empty());
+    if best_upgraded.is_none() && (all_unreachable || !dispatch.epoch_frozen_manifests.is_empty()) {
+        if let Ok(Some(discovered)) = crate::l2_lifecycle::discover_anchor_manifest(
+            state,
+            session,
+            client,
+            anchor_id,
+            creator_id,
+            guarantor_dids,
+            password,
+        )
+        .await
+        {
+            if discovered.revision > current_manifest.revision
+                && discovered.verify_anchor_id(anchor_id).is_ok()
+            {
+                best_upgraded = Some(discovered);
+            }
+        }
+    }
+
+    Ok(best_upgraded.map(|m| {
+        let pow_bits = crate::services::common::max_pow_base_bits_for_servers(
+            lifecycle,
+            m.servers.iter().map(|s| s.write_url.as_str()),
+        );
+        (m, pow_bits)
+    }))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) enum PrecommitL2Verification {
     OfflineOnly,
     CleanQuorum {
         quorum_certificates:
             Vec<(String, Vec<human_money_core::humoco_proto::types::QuorumCertificate>)>,
-        pow_base_bits: u32,
     },
     ConflictDetected {
         quorum_certificates:
             Vec<(String, Vec<human_money_core::humoco_proto::types::QuorumCertificate>)>,
-        competing_entries: Vec<LockEntry>,
-        pow_base_bits: u32,
+        competing_entries: Vec<(LockEntry, u32)>,
     },
     RetryLater {
         reason: String,
     },
 }
 
+enum VoucherPrecommitState {
+    CleanQuorum,
+    VerifiedConflict(Vec<(LockEntry, u32)>),
+    Unsettled(String),
+}
+
+type PrecommitBatchPayload = (
+    Vec<human_money_core::humoco_proto::types::QuorumCertificate>,
+    Vec<LockEntry>,
+    Vec<(
+        human_money_core::humoco_proto::manifest::ServerEntry,
+        human_money_core::models::layer2_api::SyncLockBatchRequest,
+    )>,
+);
+
+#[allow(clippy::too_many_arguments)]
+fn collect_prefix_qcs_and_build_precommit_batch(
+    state: &AppState,
+    session: &crate::session::SessionToken,
+    opened_bundle: &human_money_core::models::profile::TransactionBundle,
+    voucher: &human_money_core::Voucher,
+    anchor_id: &[u8; 32],
+    manifest: &AnchorManifest,
+    pow_base_bits: u32,
+    password: Option<&str>,
+) -> Result<PrecommitBatchPayload, FrontendError> {
+    let first_unconfirmed = l2_gateway::first_unconfirmed_hop_index(
+        voucher,
+        manifest,
+        &opened_bundle.quorum_certificates,
+    )
+    .map_err(FrontendError::from)?;
+
+    let mut voucher_qcs = Vec::new();
+    for tx in &voucher.transactions[..first_unconfirmed] {
+        if let Ok(child) = human_money_core::crypto::decode_bs58_fixed::<32>(&tx.t_id, "t_id") {
+            if let Some(qc) = opened_bundle
+                .quorum_certificates
+                .iter()
+                .find(|q| q.child_lock == child)
+            {
+                voucher_qcs.push(qc.clone());
+            }
+        }
+    }
+
+    if first_unconfirmed >= voucher.transactions.len() {
+        return Ok((voucher_qcs, Vec::new(), Vec::new()));
+    }
+
+    let (entries, requests) = state.with_session_required(
+        session,
+        "Wallet session changed during pre-commit L2 verification",
+        |service| {
+            let known_heads = crate::state::load_known_head_receipts_for_anchor(
+                service, anchor_id, password,
+            )?;
+            let entries = l2_gateway::build_voucher_lock_batch(
+                voucher,
+                first_unconfirmed,
+                &opened_bundle.causal_outputs,
+                if first_unconfirmed == 0 {
+                    opened_bundle.root_mig_sig
+                } else {
+                    None
+                },
+                pow_base_bits,
+            )
+            .map_err(FrontendError::from)?;
+            let mut nonce = [0u8; 32];
+            nonce[..16].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
+            nonce[16..].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
+            let requests = l2_gateway::build_committee_batch_requests(
+                anchor_id,
+                manifest,
+                &opened_bundle.genesis_tickets,
+                &entries,
+                &nonce,
+                &known_heads,
+            )
+            .map_err(FrontendError::from)?;
+            Ok((entries, requests))
+        },
+    )?;
+
+    Ok((voucher_qcs, entries, requests))
+}
+
 /// Verifies an incoming `TransactionBundle` against its Layer-2 Sync-Lock committee(s) BEFORE
-/// committing any voucher into `VoucherStore` (K2 fail-closed pre-commit verification).
+/// committing any voucher into `VoucherStore` (K1 fail-closed per-voucher pre-commit contract).
 pub(crate) async fn verify_bundle_l2_precommit(
     state: &AppState,
     session: &crate::session::SessionToken,
@@ -1160,8 +1278,7 @@ pub(crate) async fn verify_bundle_l2_precommit(
         String,
         Vec<human_money_core::humoco_proto::types::QuorumCertificate>,
     )> = Vec::new();
-    let mut competing_entries: Vec<LockEntry> = Vec::new();
-    let mut max_pow_bits = DEFAULT_LOCK_POW_BASE_BITS;
+    let mut competing_entries: Vec<(LockEntry, u32)> = Vec::new();
     let mut retry_reason: Option<String> = None;
 
     for voucher in &anchored_vouchers {
@@ -1181,28 +1298,27 @@ pub(crate) async fn verify_bundle_l2_precommit(
             .map(|s| s.signer_id.clone())
             .collect();
 
-        let local_manifest = state
-            .with_session_required(
-                session,
-                "Wallet session changed during pre-commit L2 verification",
-                |service| {
-                    let bundled = opened_bundle
-                        .anchor_manifest
-                        .as_ref()
-                        .filter(|m| m.verify_anchor_id(&anchor_id).is_ok())
-                        .cloned();
-                    let stored = service
-                        .with_wallet(|w| w.profile.l2_anchor_manifests.get(&anchor_hex).cloned())
-                        .map_err(FrontendError::from)?;
-                    Ok(match (bundled, stored) {
-                        (Some(b), Some(s)) if s.revision > b.revision => Some(s),
-                        (Some(b), _) => Some(b),
-                        (None, s) => s,
-                    })
-                },
-            )?;
+        let local_manifest = state.with_session_required(
+            session,
+            "Wallet session changed during pre-commit L2 verification",
+            |service| {
+                let bundled = opened_bundle
+                    .anchor_manifest
+                    .as_ref()
+                    .filter(|m| m.verify_anchor_id(&anchor_id).is_ok())
+                    .cloned();
+                let stored = service
+                    .with_wallet(|w| w.profile.l2_anchor_manifests.get(&anchor_hex).cloned())
+                    .map_err(FrontendError::from)?;
+                Ok(match (bundled, stored) {
+                    (Some(b), Some(s)) if s.revision > b.revision => Some(s),
+                    (Some(b), _) => Some(b),
+                    (None, s) => s,
+                })
+            },
+        )?;
 
-        let manifest = match local_manifest {
+        let mut manifest = match local_manifest {
             Some(m) => m,
             None => match crate::l2_lifecycle::discover_anchor_manifest(
                 state,
@@ -1228,162 +1344,223 @@ pub(crate) async fn verify_bundle_l2_precommit(
             },
         };
 
-        let pow_base_bits = crate::services::common::max_pow_base_bits_for_servers(
+        let mut pow_base_bits = crate::services::common::max_pow_base_bits_for_servers(
             &lifecycle,
             manifest.servers.iter().map(|s| s.write_url.as_str()),
         );
-        max_pow_bits = max_pow_bits.max(pow_base_bits);
 
-        let first_unconfirmed = l2_gateway::first_unconfirmed_hop_index(
-            voucher,
-            &manifest,
-            &opened_bundle.quorum_certificates,
-        )
-        .map_err(FrontendError::from)?;
-
-        let mut voucher_qcs: Vec<human_money_core::humoco_proto::types::QuorumCertificate> =
-            Vec::new();
-        for tx in &voucher.transactions[..first_unconfirmed] {
-            if let Ok(child) = human_money_core::crypto::decode_bs58_fixed::<32>(&tx.t_id, "t_id") {
-                if let Some(qc) = opened_bundle
-                    .quorum_certificates
-                    .iter()
-                    .find(|q| q.child_lock == child)
-                {
-                    voucher_qcs.push(qc.clone());
-                }
-            }
-        }
-
-        if first_unconfirmed < voucher.transactions.len() {
-            let (entries, requests) = state.with_session_required(
+        let (mut voucher_qcs, mut entries, mut requests) =
+            collect_prefix_qcs_and_build_precommit_batch(
+                state,
                 session,
-                "Wallet session changed during pre-commit L2 verification",
-                |service| {
-                    let known_heads = crate::state::load_known_head_receipts_for_anchor(
-                        service, &anchor_id, password,
-                    )?;
-                    let entries = l2_gateway::build_voucher_lock_batch(
-                        voucher,
-                        first_unconfirmed,
-                        &opened_bundle.causal_outputs,
-                        if first_unconfirmed == 0 {
-                            opened_bundle.root_mig_sig
-                        } else {
-                            None
-                        },
-                        pow_base_bits,
-                    )
-                    .map_err(FrontendError::from)?;
-                    let mut nonce = [0u8; 32];
-                    nonce[..16].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
-                    nonce[16..].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
-                    let requests = l2_gateway::build_committee_batch_requests(
-                        &anchor_id,
-                        &manifest,
-                        &opened_bundle.genesis_tickets,
-                        &entries,
-                        &nonce,
-                        &known_heads,
-                    )
-                    .map_err(FrontendError::from)?;
-                    Ok((entries, requests))
-                },
+                &opened_bundle,
+                voucher,
+                &anchor_id,
+                &manifest,
+                pow_base_bits,
+                password,
             )?;
 
-            let dispatch = crate::gateway_resolver::dispatch_lock_committee_batches(
+        let voucher_state = if entries.is_empty() {
+            VoucherPrecommitState::CleanQuorum
+        } else {
+            let mut dispatch = crate::gateway_resolver::dispatch_lock_committee_batches(
                 &client,
                 &requests,
                 CHECKOUT_BATCH_TIMEOUT,
             )
             .await;
-            let equiv_proof = l2_gateway::detect_equivocation(&dispatch.receipts);
 
-            state.with_session_required(
-                session,
-                "Wallet session changed before recording PoST L2 check receipts",
-                |service| {
-                    if let Some(ref eq) = equiv_proof {
-                        let now_secs = sync_client::current_unix_timestamp().max(1);
-                        let _ = crate::l2_lifecycle::record_equivocation_proof(
-                            service, None, eq, now_secs, password,
-                        );
-                    }
-                    crate::state::record_known_head_receipts(
-                        service,
-                        &anchor_id,
-                        &dispatch.receipts,
-                        password,
+            // H7: Bounded single retry after `409 epoch_frozen` / `410 revoked` / unreachable manifest upgrade
+            if let Some((newer_manifest, upgraded_pow_bits)) =
+                resolve_manifest_upgrade_after_dispatch(
+                    state,
+                    session,
+                    &client,
+                    &anchor_id,
+                    voucher.creator_profile.id.as_deref(),
+                    &guarantor_dids,
+                    &lifecycle,
+                    &manifest,
+                    &dispatch,
+                    password,
+                )
+                .await?
+            {
+                manifest = newer_manifest.clone();
+                pow_base_bits = pow_base_bits.max(upgraded_pow_bits);
+                state.with_session_required(
+                    session,
+                    "Wallet session changed during pre-commit manifest upgrade",
+                    |service| {
+                        service
+                            .update_l2_anchor_manifest(newer_manifest, password)
+                            .map_err(FrontendError::from)?;
+                        Ok(())
+                    },
+                )?;
+                let rebuilt = collect_prefix_qcs_and_build_precommit_batch(
+                    state,
+                    session,
+                    &opened_bundle,
+                    voucher,
+                    &anchor_id,
+                    &manifest,
+                    pow_base_bits,
+                    password,
+                )?;
+                voucher_qcs = rebuilt.0;
+                entries = rebuilt.1;
+                requests = rebuilt.2;
+                if !requests.is_empty() {
+                    dispatch = crate::gateway_resolver::dispatch_lock_committee_batches(
+                        &client,
+                        &requests,
+                        CHECKOUT_BATCH_TIMEOUT,
                     )
-                },
-            )?;
-
-            let submitted_slots: HashSet<[u8; 32]> = entries.iter().map(|e| e.slot).collect();
-            let matching_conflicts: Vec<_> = dispatch
-                .competing_entries
-                .into_iter()
-                .filter(|ce| submitted_slots.contains(&ce.slot))
-                .collect();
-            if !matching_conflicts.is_empty() {
-                competing_entries.extend(matching_conflicts);
-                if !init_t_id.is_empty() && !voucher_qcs.is_empty() {
-                    quorum_certificates.push((init_t_id, voucher_qcs));
+                    .await;
                 }
-                continue;
             }
 
-            let committee = match manifest.committee() {
-                Ok(c) => c,
-                Err(e) => {
-                    if retry_reason.is_none() {
-                        retry_reason = Some(format!(
+            if entries.is_empty() {
+                VoucherPrecommitState::CleanQuorum
+            } else {
+                let equiv_proof = l2_gateway::detect_equivocation(&dispatch.receipts);
+                state.with_session_required(
+                    session,
+                    "Wallet session changed before recording PoST L2 check receipts",
+                    |service| {
+                        if let Some(ref eq) = equiv_proof {
+                            let now_secs = sync_client::current_unix_timestamp().max(1);
+                            let _ = crate::l2_lifecycle::record_equivocation_proof(
+                                service, None, eq, now_secs, password,
+                            );
+                        }
+                        crate::state::record_known_head_receipts(
+                            service,
+                            &anchor_id,
+                            &dispatch.receipts,
+                            password,
+                        )
+                    },
+                )?;
+
+                // K1: Verify each competing entry cryptographically against this voucher's hops
+                // and creator_mig_pub before counting it as VerifiedConflict.
+                let mut verified_conflicts: Vec<(LockEntry, u32)> = Vec::new();
+                for ce in &dispatch.competing_entries {
+                    let is_valid_conflict = voucher.transactions.iter().any(|hop_tx| {
+                        let Ok(ds_tag) = l2_gateway::derive_challenge_tag_bytes(hop_tx) else {
+                            return false;
+                        };
+                        if human_money_core::humoco_proto::derive_slot(&anchor_id, &ds_tag) != ce.slot {
+                            return false;
+                        }
+                        let Ok(local_t_id) =
+                            human_money_core::crypto::decode_bs58_fixed::<32>(&hop_tx.t_id, "hop.t_id")
+                        else {
+                            return false;
+                        };
+                        if ce.child_lock == local_t_id {
+                            return false;
+                        }
+                        l2_gateway::verify_competing_entry_and_build_fingerprint(
+                            &anchor_id,
+                            &ds_tag,
+                            ce,
+                            voucher,
+                            Some(&manifest.authority.creator_mig_pub),
+                            pow_base_bits,
+                        )
+                        .is_ok()
+                    });
+                    if is_valid_conflict
+                        && !verified_conflicts.iter().any(|(existing, _)| existing == ce)
+                    {
+                        verified_conflicts.push((ce.clone(), pow_base_bits));
+                    }
+                }
+
+                if !verified_conflicts.is_empty() {
+                    VoucherPrecommitState::VerifiedConflict(verified_conflicts)
+                } else if equiv_proof.is_some() {
+                    VoucherPrecommitState::Unsettled(format!(
+                        "PoST L2 committee equivocation detected for voucher {}",
+                        voucher.voucher_id
+                    ))
+                } else {
+                    match manifest.committee() {
+                        Err(e) => VoucherPrecommitState::Unsettled(format!(
                             "PoST L2 committee manifest invalid for voucher {}: {}",
                             voucher.voucher_id, e
-                        ));
-                    }
-                    continue;
-                }
-            };
-            let mut voucher_ok = equiv_proof.is_none();
-            if voucher_ok {
-                for entry_req in &entries {
-                    let mut valid_receipts = Vec::new();
-                    let mut seen_pubs = HashSet::new();
-                    for r in &dispatch.receipts {
-                        if matches!(
-                            r.kind,
-                            human_money_core::humoco_proto::types::LockReceiptKind::FirstWrite
-                        ) && r.slot == entry_req.slot
-                            && r.child_lock == entry_req.child_lock
-                            && committee.contains(&r.lock_pub)
-                            && r.verify_signature()
-                            && seen_pubs.insert(r.lock_pub)
-                        {
-                            valid_receipts.push(r.clone());
+                        )),
+                        Ok(committee) => {
+                            let mut all_entries_ok = true;
+                            for entry_req in &entries {
+                                let mut valid_receipts = Vec::new();
+                                let mut seen_pubs = HashSet::new();
+                                for r in &dispatch.receipts {
+                                    if matches!(
+                                        r.kind,
+                                        human_money_core::humoco_proto::types::LockReceiptKind::FirstWrite
+                                    ) && r.slot == entry_req.slot
+                                        && r.child_lock == entry_req.child_lock
+                                        && committee.contains(&r.lock_pub)
+                                        && r.verify_signature()
+                                        && seen_pubs.insert(r.lock_pub)
+                                    {
+                                        valid_receipts.push(r.clone());
+                                    }
+                                }
+                                let qc = human_money_core::humoco_proto::types::QuorumCertificate {
+                                    slot: entry_req.slot,
+                                    child_lock: entry_req.child_lock,
+                                    receipts: valid_receipts,
+                                };
+                                if qc
+                                    .verify_with_anchor(
+                                        &committee,
+                                        &anchor_id,
+                                        manifest.retain_until_quarter,
+                                    )
+                                    .is_ok()
+                                {
+                                    voucher_qcs.push(qc);
+                                } else {
+                                    all_entries_ok = false;
+                                    break;
+                                }
+                            }
+                            if all_entries_ok {
+                                VoucherPrecommitState::CleanQuorum
+                            } else {
+                                VoucherPrecommitState::Unsettled(format!(
+                                    "PoST L2 committee verification incomplete for voucher {} (threshold Q={})",
+                                    voucher.voucher_id, manifest.threshold
+                                ))
+                            }
                         }
-                    }
-                    let qc = human_money_core::humoco_proto::types::QuorumCertificate {
-                        slot: entry_req.slot,
-                        child_lock: entry_req.child_lock,
-                        receipts: valid_receipts,
-                    };
-                    if qc
-                        .verify_with_anchor(&committee, &anchor_id, manifest.retain_until_quarter)
-                        .is_ok()
-                    {
-                        voucher_qcs.push(qc);
-                    } else {
-                        voucher_ok = false;
-                        break;
                     }
                 }
             }
+        };
 
-            if !voucher_ok && retry_reason.is_none() {
-                retry_reason = Some(format!(
-                    "PoST L2 committee verification incomplete for voucher {} (threshold Q={})",
-                    voucher.voucher_id, manifest.threshold
-                ));
+        match voucher_state {
+            VoucherPrecommitState::CleanQuorum => {}
+            VoucherPrecommitState::VerifiedConflict(conflicts) => {
+                for entry_with_pow in conflicts {
+                    if !competing_entries
+                        .iter()
+                        .any(|(existing, _)| existing == &entry_with_pow.0)
+                    {
+                        competing_entries.push(entry_with_pow);
+                    }
+                }
+            }
+            VoucherPrecommitState::Unsettled(reason) => {
+                if retry_reason.is_none() {
+                    retry_reason = Some(reason);
+                }
             }
         }
 
@@ -1392,19 +1569,19 @@ pub(crate) async fn verify_bundle_l2_precommit(
         }
     }
 
+    // K1 fail-closed: EVERY anchored voucher must be settled (CleanQuorum or VerifiedConflict).
+    // Even one Unsettled voucher prevents committing the bundle.
+    if let Some(reason) = retry_reason {
+        return Ok(PrecommitL2Verification::RetryLater { reason });
+    }
     if !competing_entries.is_empty() {
         return Ok(PrecommitL2Verification::ConflictDetected {
             quorum_certificates,
             competing_entries,
-            pow_base_bits: max_pow_bits,
         });
-    }
-    if let Some(reason) = retry_reason {
-        return Ok(PrecommitL2Verification::RetryLater { reason });
     }
     Ok(PrecommitL2Verification::CleanQuorum {
         quorum_certificates,
-        pow_base_bits: max_pow_bits,
     })
 }
 
@@ -1413,10 +1590,13 @@ mod tests {
     use super::*;
     use ed25519_dalek::{Signer, SigningKey};
     use human_money_core::humoco_proto::{
-        crypto::compute_ticket_pow_hash,
-        encode_quarter,
+        crypto::{compute_ticket_pow_hash, DEFAULT_LOCK_POW_BASE_BITS},
+        decode_hex_fixed, encode_quarter,
         manifest::{AnchorAuthority, GenesisTicket, NominatedBy, ServerEntry},
         types::{LockReceipt, LockReceiptKind},
+    };
+    use human_money_core::models::layer2_api::{
+        SyncLockBatchRequest, SyncLockBatchResponse, SyncLockConflict,
     };
     use human_money_core::models::profile::PublicProfile;
     use human_money_core::models::voucher::{NewVoucherData, ValueDefinition};
@@ -1428,6 +1608,19 @@ mod tests {
 
     fn temp_dir(prefix: &str) -> PathBuf {
         std::env::temp_dir().join(format!("{}-{}", prefix, uuid::Uuid::new_v4()))
+    }
+
+    fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) {
+        std::fs::create_dir_all(dst).unwrap();
+        for entry in std::fs::read_dir(src).unwrap() {
+            let entry = entry.unwrap();
+            let target = dst.join(entry.file_name());
+            if entry.file_type().unwrap().is_dir() {
+                copy_dir_recursive(&entry.path(), &target);
+            } else {
+                std::fs::copy(entry.path(), target).unwrap();
+            }
+        }
     }
 
     #[tokio::test]
@@ -1908,23 +2101,7 @@ mod tests {
 
     #[tokio::test]
     async fn k2_precommit_l2_verification_retries_without_quorum_and_detects_conflict() {
-        use human_money_core::humoco_proto::crypto::DEFAULT_LOCK_POW_BASE_BITS;
-        use human_money_core::humoco_proto::types::LockReceiptKind;
-        use human_money_core::models::layer2_api::{SyncLockBatchRequest, SyncLockBatchResponse, SyncLockConflict};
         use human_money_core::VoucherStatus;
-
-        fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) {
-            std::fs::create_dir_all(dst).unwrap();
-            for entry in std::fs::read_dir(src).unwrap() {
-                let entry = entry.unwrap();
-                let target = dst.join(entry.file_name());
-                if entry.file_type().unwrap().is_dir() {
-                    copy_dir_recursive(&entry.path(), &target);
-                } else {
-                    std::fs::copy(entry.path(), target).unwrap();
-                }
-            }
-        }
 
         let dir_alice = temp_dir("app-k2-alice");
         let dir_bob = temp_dir("app-k2-bob");
@@ -2182,12 +2359,11 @@ mod tests {
         )
         .await
         .unwrap();
-        let (qcs, comp_entries, pow_bits) = match conflict_pre {
+        let (qcs, comp_entries) = match conflict_pre {
             PrecommitL2Verification::ConflictDetected {
                 quorum_certificates,
                 competing_entries,
-                pow_base_bits,
-            } => (quorum_certificates, competing_entries, pow_base_bits),
+            } => (quorum_certificates, competing_entries),
             _ => panic!("Expected ConflictDetected"),
         };
         assert!(!comp_entries.is_empty());
@@ -2195,7 +2371,6 @@ mod tests {
         let evidence = human_money_core::ReceiveL2Evidence {
             quorum_certificates: &qcs,
             competing_entries: &comp_entries,
-            pow_base_bits: pow_bits,
         };
         {
             let mut s = state_bob.service.lock().unwrap();
@@ -2230,5 +2405,683 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir_alice_clone);
         let _ = std::fs::remove_dir_all(dir_bob);
         let _ = std::fs::remove_dir_all(dir_eve);
+    }
+
+    #[tokio::test]
+    async fn k1_precommit_rejects_invalid_competing_entry_and_unsettled_second_voucher() {
+        let dir_alice = temp_dir("app-k1-alice");
+        let dir_bob = temp_dir("app-k1-bob");
+        let pw = "test-password";
+
+        let (mut svc_alice, _) =
+            test_utils::setup_service_with_profile(&dir_alice, &ACTORS.alice, "Alice", pw);
+        let (svc_bob, _) = test_utils::setup_service_with_profile(&dir_bob, &ACTORS.bob, "Bob", pw);
+        let alice_id = svc_alice.with_wallet(|w| w.get_user_id().to_string()).unwrap();
+        let bob_id = svc_bob.with_wallet(|w| w.get_user_id().to_string()).unwrap();
+
+        let std_toml = test_utils::generate_signed_standard_toml(
+            "voucher_standards/freetaler_v1/standard.toml",
+        );
+        let sk1 = SigningKey::from_bytes(&[71u8; 32]);
+        let sk2 = SigningKey::from_bytes(&[72u8; 32]);
+        let l1 = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let p1 = l1.local_addr().unwrap().port();
+        let l2 = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let p2 = l2.local_addr().unwrap().port();
+
+        let anchor_nonce = [73u8; 32];
+        let creator_mig_pub = svc_alice
+            .with_wallet_and_identity(|_, id| {
+                l2_gateway::derive_anchor_mig_signing_key(id, &anchor_nonce)
+                    .map(|k| k.verifying_key().to_bytes())
+            })
+            .unwrap()
+            .unwrap();
+        let retain_q = encode_quarter(2035, 4).unwrap();
+        let manifest = AnchorManifest {
+            revision: 1,
+            threshold: 2,
+            servers: vec![(&sk1, p1), (&sk2, p2)]
+                .into_iter()
+                .map(|(sk, port)| ServerEntry {
+                    write_url: format!("http://127.0.0.1:{}/sync.php", port),
+                    read_url: format!("http://127.0.0.1:{}/d", port),
+                    admin_pub: sk.verifying_key().to_bytes(),
+                    lock_pub: sk.verifying_key().to_bytes(),
+                    nominated_by: NominatedBy::Guarantor(0),
+                })
+                .collect(),
+            successors: vec![],
+            authority: AnchorAuthority {
+                creator_mig_pub,
+                guarantor_mig_pubs: vec![SigningKey::from_bytes(&[95u8; 32]).verifying_key().to_bytes()],
+            },
+            migration_chain: vec![],
+            issued_at_ms: 1_760_000_000_000,
+            retain_until_quarter: retain_q,
+        };
+        let anchor_id = manifest.rev1_anchor_id().unwrap();
+        let tickets: Vec<GenesisTicket> = [&sk1, &sk2]
+            .into_iter()
+            .map(|sk| {
+                let mut t = GenesisTicket {
+                    anchor_id,
+                    retain_until_quarter: retain_q,
+                    issued_at: 1_760_000_000,
+                    lock_pub: sk.verifying_key().to_bytes(),
+                    sig: [0u8; 64],
+                };
+                t.sig = sk.sign(&t.digest()).to_bytes();
+                t
+            })
+            .collect();
+        svc_alice
+            .register_l2_anchor_template_with_nonce(
+                manifest.clone(),
+                tickets,
+                Some(&anchor_nonce),
+                Some(pw),
+            )
+            .unwrap();
+
+        svc_alice
+            .create_new_voucher(
+                &std_toml,
+                NewVoucherData {
+                    creator_profile: PublicProfile {
+                        id: Some(alice_id.clone()),
+                        ..Default::default()
+                    },
+                    nominal_value: ValueDefinition {
+                        amount: "50".into(),
+                        ..Default::default()
+                    },
+                    layer2_anchor: Some(anchor_id),
+                    ..Default::default()
+                },
+                Some(pw),
+            )
+            .unwrap();
+        let lid1 = svc_alice
+            .with_wallet_and_identity(|w, id| w.list_vouchers(Some(id), None, None, None))
+            .unwrap()[0]
+            .local_instance_id
+            .clone();
+
+        // Clone before spend so we have a valid competing LockEntry later for the multi-voucher check
+        let dir_clone = temp_dir("app-k1-alice-clone");
+        copy_dir_recursive(&dir_alice, &dir_clone);
+        let mut svc_clone = human_money_core::app_service::AppService::new(&dir_clone).unwrap();
+        let folder = svc_alice.list_profiles().unwrap()[0].folder_name.clone();
+        svc_clone.login(&folder, pw, false, "test-id".into()).unwrap();
+
+        // Issue a SECOND voucher on Alice ONLY (so voucher 2 goes unsettled when server 2 drops)
+        svc_alice
+            .create_new_voucher(
+                &std_toml,
+                NewVoucherData {
+                    creator_profile: PublicProfile {
+                        id: Some(alice_id),
+                        ..Default::default()
+                    },
+                    nominal_value: ValueDefinition {
+                        amount: "30".into(),
+                        ..Default::default()
+                    },
+                    layer2_anchor: Some(anchor_id),
+                    ..Default::default()
+                },
+                Some(pw),
+            )
+            .unwrap();
+        let lid2 = svc_alice
+            .with_wallet_and_identity(|w, id| w.list_vouchers(Some(id), None, None, None))
+            .unwrap()
+            .into_iter()
+            .find(|v| v.local_instance_id != lid1)
+            .unwrap()
+            .local_instance_id;
+
+        let dir_alice_pre_single = temp_dir("app-k1-alice-single");
+        copy_dir_recursive(&dir_alice, &dir_alice_pre_single);
+        let mut svc_alice_single =
+            human_money_core::app_service::AppService::new(&dir_alice_pre_single).unwrap();
+        svc_alice_single
+            .login(&folder, pw, false, "test-id".into())
+            .unwrap();
+
+        let single_bundle = svc_alice_single
+            .create_transfer_bundle(
+                MultiTransferRequest {
+                    recipient_id: bob_id.clone(),
+                    sources: vec![SourceTransfer {
+                        local_instance_id: lid1.clone(),
+                        amount_to_send: "20".into(),
+                    }],
+                    notes: None,
+                    sender_profile_name: None,
+                    use_privacy_mode: None,
+                    wot_sync_json: None,
+                    contact_card_json: None,
+                },
+                &HashMap::from([(
+                    "a1b2c3d4-e5f6-4789-8012-3456789abcde".to_string(),
+                    std_toml.clone(),
+                )]),
+                None,
+                Some(pw),
+            )
+            .unwrap();
+
+        let two_voucher_bundle = svc_alice
+            .create_transfer_bundle(
+                MultiTransferRequest {
+                    recipient_id: bob_id.clone(),
+                    sources: vec![
+                        SourceTransfer {
+                            local_instance_id: lid1.clone(),
+                            amount_to_send: "20".into(),
+                        },
+                        SourceTransfer {
+                            local_instance_id: lid2.clone(),
+                            amount_to_send: "15".into(),
+                        },
+                    ],
+                    notes: None,
+                    sender_profile_name: None,
+                    use_privacy_mode: None,
+                    wot_sync_json: None,
+                    contact_card_json: None,
+                },
+                &HashMap::from([(
+                    "a1b2c3d4-e5f6-4789-8012-3456789abcde".to_string(),
+                    std_toml.clone(),
+                )]),
+                None,
+                Some(pw),
+            )
+            .unwrap();
+
+        // Build a REAL competing LockEntry for voucher 1, plus a CORRUPTED signature copy
+        let alt_bundle = svc_clone
+            .create_transfer_bundle(
+                MultiTransferRequest {
+                    recipient_id: ACTORS.charlie.identity.user_id.clone(),
+                    sources: vec![SourceTransfer {
+                        local_instance_id: lid1.clone(),
+                        amount_to_send: "20".into(),
+                    }],
+                    notes: None,
+                    sender_profile_name: None,
+                    use_privacy_mode: None,
+                    wot_sync_json: None,
+                    contact_card_json: None,
+                },
+                &HashMap::from([(
+                    "a1b2c3d4-e5f6-4789-8012-3456789abcde".to_string(),
+                    std_toml,
+                )]),
+                None,
+                Some(pw),
+            )
+            .unwrap();
+        let opened_alt = bundle_processor::open_and_verify_bundle(
+            &ACTORS.charlie.identity,
+            &alt_bundle.bundle_bytes,
+        )
+        .unwrap();
+        let valid_comp = l2_gateway::build_voucher_lock_batch(
+            &opened_alt.vouchers[0],
+            0,
+            &opened_alt.causal_outputs,
+            opened_alt.root_mig_sig,
+            DEFAULT_LOCK_POW_BASE_BITS,
+        )
+        .unwrap()
+        .into_iter()
+        .last()
+        .unwrap();
+        let mut bogus_comp = valid_comp.clone();
+        bogus_comp.causal_sig = [0x55; 64];
+
+        let state_bob = AppState::new(svc_bob);
+        state_bob.set_cached_security_policy(Some(SecurityPolicy::default()));
+        state_bob.set_cached_internal_lifecycle(Some(InternalLifecycleState::default()));
+        let bob_session = {
+            let s = state_bob.service.lock().unwrap();
+            state_bob.session_token_for_service(&s).unwrap()
+        };
+
+        // Case A: Server 1 returns valid ConflictSeen receipt over `bogus_comp` (invalid causal_sig),
+        // Server 2 returns HTTP 500 -> NO quorum -> MUST return RetryLater!
+        let srv1_mode = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(0));
+        let srv1_mode_ref = srv1_mode.clone();
+        let valid_comp_for_srv = valid_comp.clone();
+        let bogus_comp_for_srv = bogus_comp.clone();
+        let h1 = tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = l1.accept().await else {
+                    break;
+                };
+                let mut buf = [0u8; 65_536];
+                let n = stream.read(&mut buf).await.unwrap_or(0);
+                let raw = String::from_utf8_lossy(&buf[..n]);
+                let body_str = raw.split("\r\n\r\n").nth(1).unwrap_or("");
+                let req: SyncLockBatchRequest = serde_json::from_str(body_str).unwrap();
+                let mode = srv1_mode_ref.load(std::sync::atomic::Ordering::SeqCst);
+                let chosen_entry = if mode == 0 {
+                    &bogus_comp_for_srv
+                } else {
+                    &valid_comp_for_srv
+                };
+                let resp_json = if mode == 0 || req.entries.iter().any(|h| {
+                    decode_hex_fixed::<{ human_money_core::humoco_proto::causal::LOCK_ENTRY_WIRE_LEN }>(h)
+                        .ok()
+                        .and_then(|b| LockEntry::from_wire_bytes(&b).ok())
+                        .is_some_and(|e| e.slot == chosen_entry.slot)
+                }) {
+                    let mut receipt = LockReceipt {
+                        kind: LockReceiptKind::ConflictSeen,
+                        lock_pub: sk1.verifying_key().to_bytes(),
+                        bucket: req.bucket,
+                        slot: chosen_entry.slot,
+                        child_lock: chosen_entry.child_lock,
+                        entry_hash: chosen_entry.entry_hash().unwrap(),
+                        retain_until_quarter: retain_q,
+                        write_seq: 1,
+                        bucket_head: [9u8; 32],
+                        recipient_nonce: req.recipient_nonce,
+                        sig: [0u8; 64],
+                    };
+                    receipt.sig = sk1.sign(&receipt.digest()).to_bytes();
+                    serde_json::to_string(&SyncLockBatchResponse {
+                        status: "conflict".to_string(),
+                        bucket: req.bucket,
+                        retain_until_quarter: retain_q,
+                        receipts: vec![receipt.clone()],
+                        conflict: Some(SyncLockConflict {
+                            entry_index: 0,
+                            slot: chosen_entry.slot,
+                            receipt,
+                            competing_entry: chosen_entry.to_wire_hex().unwrap(),
+                        }),
+                    })
+                    .unwrap()
+                } else {
+                    // Voucher 2 on server 1 returns FirstWrite, while server 2 fails -> Voucher 2 stays Unsettled!
+                    let b0 = decode_hex_fixed::<{ human_money_core::humoco_proto::causal::LOCK_ENTRY_WIRE_LEN }>(&req.entries[0]).unwrap();
+                    let e0 = LockEntry::from_wire_bytes(&b0).unwrap();
+                    let mut receipt = LockReceipt {
+                        kind: LockReceiptKind::FirstWrite,
+                        lock_pub: sk1.verifying_key().to_bytes(),
+                        bucket: req.bucket,
+                        slot: e0.slot,
+                        child_lock: e0.child_lock,
+                        entry_hash: e0.entry_hash().unwrap(),
+                        retain_until_quarter: retain_q,
+                        write_seq: 1,
+                        bucket_head: [8u8; 32],
+                        recipient_nonce: req.recipient_nonce,
+                        sig: [0u8; 64],
+                    };
+                    receipt.sig = sk1.sign(&receipt.digest()).to_bytes();
+                    serde_json::to_string(&SyncLockBatchResponse {
+                        status: "ok".to_string(),
+                        bucket: req.bucket,
+                        retain_until_quarter: retain_q,
+                        receipts: vec![receipt],
+                        conflict: None,
+                    })
+                    .unwrap()
+                };
+                let status_line = if resp_json.contains("\"conflict\"") {
+                    "HTTP/1.1 409 Conflict"
+                } else {
+                    "HTTP/1.1 200 OK"
+                };
+                let http = format!(
+                    "{}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                    status_line,
+                    resp_json.len(),
+                    resp_json
+                );
+                let _ = stream.write_all(http.as_bytes()).await;
+            }
+        });
+        let h2 = tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = l2.accept().await else {
+                    break;
+                };
+                let mut buf = [0u8; 65_536];
+                let _ = stream.read(&mut buf).await;
+                let http = "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 5\r\n\r\nerror";
+                let _ = stream.write_all(http.as_bytes()).await;
+            }
+        });
+
+        let res_a = verify_bundle_l2_precommit(
+            &state_bob,
+            &bob_session,
+            &single_bundle.bundle_bytes,
+            Some(pw),
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(res_a, PrecommitL2Verification::RetryLater { .. }),
+            "K1: Cryptographically invalid competing LockEntry without quorum must return RetryLater, got {:?}",
+            res_a
+        );
+
+        // Case B: Voucher 1 has VALID conflict, but Voucher 2 lacks Q=2 quorum -> MUST STILL return RetryLater!
+        srv1_mode.store(1, std::sync::atomic::Ordering::SeqCst);
+        let res_b = verify_bundle_l2_precommit(
+            &state_bob,
+            &bob_session,
+            &two_voucher_bundle.bundle_bytes,
+            Some(pw),
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(res_b, PrecommitL2Verification::RetryLater { .. }),
+            "K1: Mixed bundle with VerifiedConflict on voucher A and Unsettled voucher B must return RetryLater, got {:?}",
+            res_b
+        );
+
+        h1.abort();
+        h2.abort();
+        let _ = std::fs::remove_dir_all(dir_alice);
+        let _ = std::fs::remove_dir_all(dir_alice_pre_single);
+        let _ = std::fs::remove_dir_all(dir_clone);
+        let _ = std::fs::remove_dir_all(dir_bob);
+    }
+
+    #[tokio::test]
+    async fn h7_precommit_epoch_frozen_409_upgrades_manifest_and_retries() {
+        use human_money_core::humoco_proto::rotation::{
+            ImportAck, MigrationCert, MigrationProposal, ProposalInitiator, CommitteeSignature,
+        };
+
+        let dir_alice = temp_dir("app-h7-alice");
+        let dir_bob = temp_dir("app-h7-bob");
+        let pw = "test-password";
+
+        let (mut svc_alice, _) =
+            test_utils::setup_service_with_profile(&dir_alice, &ACTORS.alice, "Alice", pw);
+        let (svc_bob, _) = test_utils::setup_service_with_profile(&dir_bob, &ACTORS.bob, "Bob", pw);
+        let alice_id = svc_alice.with_wallet(|w| w.get_user_id().to_string()).unwrap();
+        let bob_id = svc_bob.with_wallet(|w| w.get_user_id().to_string()).unwrap();
+
+        let std_toml = test_utils::generate_signed_standard_toml(
+            "voucher_standards/freetaler_v1/standard.toml",
+        );
+
+        // Old server s1 (will return 409 epoch_frozen with rev2 manifest) + successor server s2
+        let sk1 = SigningKey::from_bytes(&[81u8; 32]);
+        let sk2 = SigningKey::from_bytes(&[82u8; 32]);
+        let l1 = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let p1 = l1.local_addr().unwrap().port();
+        let l2 = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let p2 = l2.local_addr().unwrap().port();
+
+        let anchor_nonce = [83u8; 32];
+        let creator_mig_sk = svc_alice
+            .with_wallet_and_identity(|_, id| {
+                l2_gateway::derive_anchor_mig_signing_key(id, &anchor_nonce)
+            })
+            .unwrap()
+            .unwrap();
+        let creator_mig_pub = creator_mig_sk.verifying_key().to_bytes();
+        let retain_q = encode_quarter(2035, 4).unwrap();
+        let srv1_entry = ServerEntry {
+            write_url: format!("http://127.0.0.1:{}/sync.php", p1),
+            read_url: format!("http://127.0.0.1:{}/d", p1),
+            admin_pub: sk1.verifying_key().to_bytes(),
+            lock_pub: sk1.verifying_key().to_bytes(),
+            nominated_by: NominatedBy::Creator,
+        };
+        let srv2_entry = ServerEntry {
+            write_url: format!("http://127.0.0.1:{}/sync.php", p2),
+            read_url: format!("http://127.0.0.1:{}/d", p2),
+            admin_pub: sk2.verifying_key().to_bytes(),
+            lock_pub: sk2.verifying_key().to_bytes(),
+            nominated_by: NominatedBy::Creator,
+        };
+        let rev1 = AnchorManifest {
+            revision: 1,
+            threshold: 1,
+            servers: vec![srv1_entry],
+            successors: vec![srv2_entry.clone()],
+            authority: AnchorAuthority {
+                creator_mig_pub,
+                guarantor_mig_pubs: vec![],
+            },
+            migration_chain: vec![],
+            issued_at_ms: 1_760_000_000_000,
+            retain_until_quarter: retain_q,
+        };
+        let anchor_id = rev1.rev1_anchor_id().unwrap();
+        let mut t1 = GenesisTicket {
+            anchor_id,
+            retain_until_quarter: retain_q,
+            issued_at: 1_760_000_000,
+            lock_pub: sk1.verifying_key().to_bytes(),
+            sig: [0u8; 64],
+        };
+        t1.sig = sk1.sign(&t1.digest()).to_bytes();
+
+        // Build cryptographically valid Rev-2 manifest replacing s1 with s2
+        let mut proposal = MigrationProposal {
+            anchor_id,
+            from_rev: 1,
+            to_rev: 2,
+            new_threshold: 1,
+            new_servers: vec![srv2_entry],
+            new_successors: vec![],
+            retain_until_quarter: retain_q,
+            proposed_at: 1_760_050_000,
+            initiator: ProposalInitiator::Creator,
+            proposer_sig: None,
+            guarantor_cosigs: vec![],
+        };
+        proposal.proposer_sig = Some(
+            creator_mig_sk
+                .sign(&proposal.core_digest().unwrap())
+                .to_bytes(),
+        );
+        let imported_state_hash = [0x33u8; 32];
+        let prop_hash = proposal.core_digest().unwrap();
+        let mut ack2 = ImportAck {
+            anchor_id,
+            proposal_hash: prop_hash,
+            to_rev: 2,
+            imported_state_hash,
+            retain_until_quarter: retain_q,
+            lock_pub: sk2.verifying_key().to_bytes(),
+            acked_at: 1_760_050_100,
+            sig: [0u8; 64],
+        };
+        ack2.sig = sk2.sign(&ack2.digest()).to_bytes();
+        let c_digest =
+            MigrationCert::commit_digest(&anchor_id, &prop_hash, 2, &imported_state_hash);
+        let commit_sig = CommitteeSignature {
+            lock_pub: sk1.verifying_key().to_bytes(),
+            committed_at: 1_760_050_200,
+            sig: sk1.sign(&c_digest).to_bytes(),
+        };
+        let cert = MigrationCert {
+            anchor_id,
+            genesis_manifest: Some(Box::new(rev1.clone())),
+            proposal,
+            imported_state_hash,
+            import_acks: vec![ack2],
+            commit_sigs: vec![commit_sig],
+        };
+        let (rev2, _) = cert.verify_step(&anchor_id, &rev1).unwrap();
+
+        svc_alice
+            .register_l2_anchor_template_with_nonce(
+                rev1.clone(),
+                vec![t1],
+                Some(&anchor_nonce),
+                Some(pw),
+            )
+            .unwrap();
+        svc_alice
+            .create_new_voucher(
+                &std_toml,
+                NewVoucherData {
+                    creator_profile: PublicProfile {
+                        id: Some(alice_id),
+                        ..Default::default()
+                    },
+                    nominal_value: ValueDefinition {
+                        amount: "50".into(),
+                        ..Default::default()
+                    },
+                    layer2_anchor: Some(anchor_id),
+                    ..Default::default()
+                },
+                Some(pw),
+            )
+            .unwrap();
+        let lid = svc_alice
+            .with_wallet_and_identity(|w, id| w.list_vouchers(Some(id), None, None, None))
+            .unwrap()[0]
+            .local_instance_id
+            .clone();
+        let bundle_res = svc_alice
+            .create_transfer_bundle(
+                MultiTransferRequest {
+                    recipient_id: bob_id,
+                    sources: vec![SourceTransfer {
+                        local_instance_id: lid,
+                        amount_to_send: "20".into(),
+                    }],
+                    notes: None,
+                    sender_profile_name: None,
+                    use_privacy_mode: None,
+                    wot_sync_json: None,
+                    contact_card_json: None,
+                },
+                &HashMap::from([(
+                    "a1b2c3d4-e5f6-4789-8012-3456789abcde".to_string(),
+                    std_toml,
+                )]),
+                None,
+                Some(pw),
+            )
+            .unwrap();
+
+        let rev2_for_s1 = rev2.clone();
+        let h1 = tokio::spawn(async move {
+            let Ok((mut stream, _)) = l1.accept().await else {
+                return;
+            };
+            let mut buf = [0u8; 65_536];
+            let _ = stream.read(&mut buf).await;
+            let body = serde_json::json!({
+                "error": "epoch_frozen",
+                "latest_manifest": rev2_for_s1,
+            })
+            .to_string();
+            let http = format!(
+                "HTTP/1.1 409 Conflict\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(http.as_bytes()).await;
+        });
+
+        let h2 = tokio::spawn(async move {
+            let Ok((mut stream, _)) = l2.accept().await else {
+                return;
+            };
+            let mut buf = [0u8; 65_536];
+            let n = stream.read(&mut buf).await.unwrap_or(0);
+            let raw = String::from_utf8_lossy(&buf[..n]);
+            let body_str = raw.split("\r\n\r\n").nth(1).unwrap_or("");
+            let req: SyncLockBatchRequest = serde_json::from_str(body_str).unwrap();
+            let receipts: Vec<LockReceipt> = req
+                .entries
+                .iter()
+                .enumerate()
+                .map(|(i, hex_str)| {
+                    let b = decode_hex_fixed::<{ human_money_core::humoco_proto::causal::LOCK_ENTRY_WIRE_LEN }>(hex_str).unwrap();
+                    let entry = LockEntry::from_wire_bytes(&b).unwrap();
+                    let mut r = LockReceipt {
+                        kind: LockReceiptKind::FirstWrite,
+                        lock_pub: sk2.verifying_key().to_bytes(),
+                        bucket: req.bucket,
+                        slot: entry.slot,
+                        child_lock: entry.child_lock,
+                        entry_hash: entry.entry_hash().unwrap(),
+                        retain_until_quarter: retain_q,
+                        write_seq: (i as u64) + 1,
+                        bucket_head: [7u8; 32],
+                        recipient_nonce: req.recipient_nonce,
+                        sig: [0u8; 64],
+                    };
+                    r.sig = sk2.sign(&r.digest()).to_bytes();
+                    r
+                })
+                .collect();
+            let resp = serde_json::to_string(&SyncLockBatchResponse {
+                status: "ok".to_string(),
+                bucket: req.bucket,
+                retain_until_quarter: retain_q,
+                receipts,
+                conflict: None,
+            })
+            .unwrap();
+            let http = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                resp.len(),
+                resp
+            );
+            let _ = stream.write_all(http.as_bytes()).await;
+        });
+
+        let state_bob = AppState::new(svc_bob);
+        state_bob.set_cached_security_policy(Some(SecurityPolicy::default()));
+        state_bob.set_cached_internal_lifecycle(Some(InternalLifecycleState::default()));
+        let bob_session = {
+            let s = state_bob.service.lock().unwrap();
+            state_bob.session_token_for_service(&s).unwrap()
+        };
+
+        let upgraded = verify_bundle_l2_precommit(
+            &state_bob,
+            &bob_session,
+            &bundle_res.bundle_bytes,
+            Some(pw),
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(upgraded, PrecommitL2Verification::CleanQuorum { .. }),
+            "H7: Precommit must upgrade rev-1 -> rev-2 on 409 epoch_frozen and succeed on s2, got {:?}",
+            upgraded
+        );
+
+        let stored_rev = state_bob
+            .service
+            .lock()
+            .unwrap()
+            .with_wallet(|w| {
+                w.profile
+                    .l2_anchor_manifests
+                    .get(&hex::encode(anchor_id))
+                    .map(|m| m.revision)
+            })
+            .unwrap();
+        assert_eq!(stored_rev, Some(2), "Upgraded rev-2 manifest must be persisted");
+
+        h1.abort();
+        h2.abort();
+        let _ = std::fs::remove_dir_all(dir_alice);
+        let _ = std::fs::remove_dir_all(dir_bob);
     }
 }

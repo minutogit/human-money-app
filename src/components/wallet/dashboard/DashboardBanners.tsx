@@ -1,4 +1,5 @@
 // src/components/wallet/dashboard/DashboardBanners.tsx
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
     ArrowUpRight,
@@ -15,6 +16,7 @@ import {
 } from 'lucide-react';
 import { Button } from '../../ui/Button';
 import { Card } from '../../ui/Card';
+import { ToleranceConfirmationModal } from '../../transfer/receive/ToleranceConfirmationModal';
 import { truncateUserId } from '../../../utils/userIdHelper';
 import { recoveryService } from '../../../services/recoveryService';
 import { useOptionalSession } from '../../../context/SessionContext';
@@ -22,6 +24,7 @@ import type { useNavigation } from '../../../context/NavigationContext';
 import type {
     AggregatedBalance,
     FrontendPendingSignRequest,
+    FrontendPendingTolerancePayment,
     FrontendPendingWotHandshake,
     FrontendUnsupportedPostItem,
     IntegrityReport,
@@ -40,6 +43,7 @@ interface DashboardBannersProps {
     expiringSoonCount: number;
     pendingSignRequests: FrontendPendingSignRequest[];
     pendingWotHandshakes: FrontendPendingWotHandshake[];
+    pendingTolerancePayments?: FrontendPendingTolerancePayment[];
     unsupportedMessages?: FrontendUnsupportedPostItem[];
     openSellerInquiriesCount: number;
     isOpeningSignRequest: string | null;
@@ -51,6 +55,8 @@ interface DashboardBannersProps {
     onNavigate: NavigateFn;
     onOpenSignRequest: (req: FrontendPendingSignRequest) => void;
     onDismissSignRequest: (msgId: string) => void;
+    onConfirmTolerancePayment?: (msgId: string) => Promise<boolean>;
+    onDismissTolerancePayment?: (msgId: string) => void;
     onDismissUnsupportedPost?: (msgId: string) => void;
     onOpenIntegrityModal: () => void;
     onSnoozeRehearsal: () => void;
@@ -70,6 +76,7 @@ export function DashboardBanners({
     expiringSoonCount,
     pendingSignRequests,
     pendingWotHandshakes,
+    pendingTolerancePayments = [],
     unsupportedMessages = [],
     openSellerInquiriesCount,
     isOpeningSignRequest,
@@ -81,6 +88,8 @@ export function DashboardBanners({
     onNavigate,
     onOpenSignRequest,
     onDismissSignRequest,
+    onConfirmTolerancePayment,
+    onDismissTolerancePayment,
     onDismissUnsupportedPost,
     onOpenIntegrityModal,
     onSnoozeRehearsal,
@@ -92,6 +101,10 @@ export function DashboardBanners({
 }: DashboardBannersProps) {
     const { t } = useTranslation();
     const session = useOptionalSession();
+    const [activeToleranceItem, setActiveToleranceItem] =
+        useState<FrontendPendingTolerancePayment | null>(null);
+    const [toleranceConfirmText, setToleranceConfirmText] = useState('');
+    const [isConfirmingTolerance, setIsConfirmingTolerance] = useState(false);
 
     const getIntegrityDetails = (report: IntegrityReport) => {
         switch (report.type) {
@@ -411,6 +424,114 @@ export function DashboardBanners({
                     </Card>
                 );
             })}
+
+            {pendingTolerancePayments.length > 0 && (
+                <Card
+                    variant="glass"
+                    className="py-3 px-4 border-l-4 border-l-rose-500 bg-rose-50/60 space-y-2"
+                    data-testid="pending-tolerance-payments-banner"
+                >
+                    <div className="flex items-start gap-3">
+                        <div className="p-2 rounded-xl bg-rose-500 text-white shrink-0">
+                            <ShieldAlert size={20} />
+                        </div>
+                        <div className="min-w-0 flex-1 space-y-1">
+                            <p className="font-bold text-sm text-theme-secondary">
+                                {t('dashboard.pendingToleranceTitle')}
+                            </p>
+                            <p className="text-xs text-theme-light">
+                                {t('dashboard.pendingToleranceDesc')}
+                            </p>
+                            <div className="pt-1 space-y-1.5">
+                                {pendingTolerancePayments.map((item) => {
+                                    const senderLabel =
+                                        item.senderName ||
+                                        resolveIdentity(item.senderDid, null) ||
+                                        truncateUserId(item.senderDid);
+                                    return (
+                                        <div
+                                            key={item.msgId}
+                                            className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-white/85 border border-rose-200 px-3 py-2 text-xs"
+                                        >
+                                            <div className="min-w-0 flex-1 space-y-0.5">
+                                                <div className="font-semibold text-theme-secondary truncate">
+                                                    {senderLabel} ·{' '}
+                                                    <span className="uppercase font-bold text-rose-600">
+                                                        {item.zone === 'critical'
+                                                            ? t('transfer.importFile.criticalConflict')
+                                                            : t('transfer.importFile.syncFromBackup')}
+                                                    </span>
+                                                </div>
+                                                <p className="text-[11px] text-theme-light line-clamp-2">
+                                                    {item.errorMessage}
+                                                </p>
+                                            </div>
+                                            <div className="flex items-center gap-1.5 shrink-0">
+                                                {onConfirmTolerancePayment && (
+                                                    <Button
+                                                        variant="primary"
+                                                        size="xs"
+                                                        onClick={() => {
+                                                            setToleranceConfirmText('');
+                                                            setActiveToleranceItem(item);
+                                                        }}
+                                                    >
+                                                        {t('dashboard.pendingToleranceReviewBtn')}
+                                                    </Button>
+                                                )}
+                                                {onDismissTolerancePayment && (
+                                                    <Button
+                                                        variant="outline"
+                                                        size="xs"
+                                                        onClick={() =>
+                                                            onDismissTolerancePayment(item.msgId)
+                                                        }
+                                                        className="text-theme-light hover:text-rose-600 gap-1"
+                                                    >
+                                                        <X size={12} />
+                                                        <span>
+                                                            {t('dashboard.unsupportedPostDismiss')}
+                                                        </span>
+                                                    </Button>
+                                                )}
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    </div>
+                </Card>
+            )}
+
+            {activeToleranceItem && onConfirmTolerancePayment && (
+                <ToleranceConfirmationModal
+                    isOpen={true}
+                    zone={activeToleranceItem.zone === 'critical' ? 'Critical' : 'Soft'}
+                    message={activeToleranceItem.errorMessage}
+                    hasConflict={activeToleranceItem.hasConflict}
+                    confirmText={toleranceConfirmText}
+                    onConfirmTextChange={setToleranceConfirmText}
+                    isProcessing={isConfirmingTolerance}
+                    onCancel={() => {
+                        setActiveToleranceItem(null);
+                        setToleranceConfirmText('');
+                    }}
+                    onConfirm={async () => {
+                        const targetId = activeToleranceItem.msgId;
+                        setIsConfirmingTolerance(true);
+                        try {
+                            const ok = await onConfirmTolerancePayment(targetId);
+                            if (ok) {
+                                setActiveToleranceItem(null);
+                                setToleranceConfirmText('');
+                            }
+                        } finally {
+                            setIsConfirmingTolerance(false);
+                        }
+                    }}
+                />
+            )}
 
             {unsupportedMessages.length > 0 && (
                 <Card

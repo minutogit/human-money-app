@@ -14,6 +14,7 @@ pub fn get_contacts(state: tauri::State<AppState>) -> Result<Vec<FrontendContact
 pub async fn save_contact(
     contact: FrontendContact,
     password: Option<String>,
+    preserve_manual_card: Option<bool>,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), FrontendError> {
     let mut contact = contact;
@@ -38,7 +39,12 @@ pub async fn save_contact(
         let contact_can = crate::state::canonicalize_did(&contact.did).ok();
         let same_root = own_can.is_some() && own_can == contact_can;
         state
-            .save_contact(&mut service, contact, pw)
+            .save_contact_with_options(
+                &mut service,
+                contact,
+                pw,
+                preserve_manual_card.unwrap_or(false),
+            )
             .map_err(FrontendError::from)?;
         (same_root, resolved_pw)
     };
@@ -75,6 +81,7 @@ pub async fn save_contact(
 pub fn delete_contact(
     did: String,
     password: Option<String>,
+    preserve_manual_card: Option<bool>,
     state: tauri::State<AppState>,
 ) -> Result<(), FrontendError> {
     let did = did.trim().to_string();
@@ -83,7 +90,7 @@ pub fn delete_contact(
         state.authorize_and_lock_secret(RequiredAccess::DailyPay, password.as_deref())?;
     let pw = resolved_pw.as_deref().map(String::as_str);
     state
-        .delete_contact(&mut service, &did, pw)
+        .delete_contact_with_options(&mut service, &did, pw, preserve_manual_card.unwrap_or(false))
         .map_err(FrontendError::from)
 }
 

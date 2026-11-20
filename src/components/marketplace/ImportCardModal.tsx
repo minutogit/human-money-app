@@ -120,12 +120,12 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
 
                 marketService.syncMarketChannels().catch(() => {});
             } else if (existing) {
+                const preserveManualCard = Boolean(lastImportedPayloadRef.current);
                 if (!hadExistingContactRef.current && !hadSiblingContactRef.current) {
                     await protectAction(async (pwd) => {
-                        await contactService.deleteContact(did, pwd || undefined);
-                        if (lastImportedPayloadRef.current) {
-                            await marketService.importContactCard(lastImportedPayloadRef.current, pwd || undefined);
-                        }
+                        await contactService.deleteContact(did, pwd || undefined, {
+                            preserveManualCard,
+                        });
                     });
                 } else {
                     const contactToSave: Contact = {
@@ -134,10 +134,9 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
                         desiredHops: null,
                     };
                     await protectAction(async (pwd) => {
-                        await contactService.saveContact(contactToSave, pwd || undefined);
-                        if (lastImportedPayloadRef.current) {
-                            await marketService.importContactCard(lastImportedPayloadRef.current, pwd || undefined);
-                        }
+                        await contactService.saveContact(contactToSave, pwd || undefined, {
+                            preserveManualCard,
+                        });
                     });
                 }
             }

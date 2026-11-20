@@ -2,7 +2,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { DeadQuorumSwapPanel } from '../DeadQuorumSwapPanel';
 import { voucherService } from '../../../services/voucherService';
-import { postService } from '../../../services/postService';
 import { UiModeProvider } from '../../../context/UiModeContext';
 
 vi.mock('../../../services/voucherService', () => ({
@@ -10,16 +9,6 @@ vi.mock('../../../services/voucherService', () => ({
         createDeadQuorumSwapOffer: vi.fn(),
         createDeadQuorumSwapClaim: vi.fn(),
         adjudicateDeadQuorumSwap: vi.fn(),
-    },
-}));
-
-vi.mock('../../../services/postService', () => ({
-    postService: {
-        depositTransferToPost: vi.fn().mockResolvedValue({
-            depositedTo: 1,
-            recipientDepositedTo: 1,
-            errors: [],
-        }),
     },
 }));
 
@@ -39,6 +28,12 @@ describe('DeadQuorumSwapPanel', () => {
                     replacementVoucherId: 'v-replacement-999',
                     replacementBundleId: 'bundle-swap-1',
                     status: 'completed',
+                    postDeposit: {
+                        depositedTo: 1,
+                        recipientDepositedTo: 1,
+                        msgId: 'msg-1',
+                        errors: [],
+                    },
                 },
             ],
             rejected: [
@@ -78,7 +73,12 @@ describe('DeadQuorumSwapPanel', () => {
         await waitFor(() => {
             expect(screen.getByText(/did:key:zClaimantAlice \(40\.00\)/)).toBeInTheDocument();
             expect(screen.getByText(/v-replacemen/)).toBeInTheDocument();
-            expect(postService.depositTransferToPost).toHaveBeenCalledWith('bundle-swap-1', 'test-pw');
+            expect(voucherService.adjudicateDeadQuorumSwap).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    depositToPost: true,
+                    password: 'test-pw',
+                }),
+            );
             expect(screen.getByText(/did:key:zClaimantBob: Conflicting spend proof/)).toBeInTheDocument();
             expect(screen.getByText(/Doppelausgabe-Beweise: 2|Double-spend proofs found: 2/i)).toBeInTheDocument();
         });

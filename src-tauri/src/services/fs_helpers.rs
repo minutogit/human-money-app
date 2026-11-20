@@ -29,11 +29,11 @@ pub(crate) fn load_profile_metadata_in_dir(
     wallet_data_dir: &Path,
 ) -> Result<HashMap<String, ProfileMetadata>, String> {
     let metadata_path = wallet_data_dir.join(PROFILE_METADATA_FILE);
-    if !metadata_path.exists() {
-        return Ok(HashMap::new());
-    }
-    let content = fs::read_to_string(&metadata_path)
-        .map_err(|e| format!("Failed to read profile metadata: {}", e))?;
+    let content = match fs::read_to_string(&metadata_path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(HashMap::new()),
+        Err(e) => return Err(format!("Failed to read profile metadata: {}", e)),
+    };
     serde_json::from_str(&content).map_err(|e| format!("Failed to parse profile metadata: {}", e))
 }
 
@@ -46,8 +46,7 @@ pub(crate) fn save_profile_metadata_in_dir(
     let metadata_path = wallet_data_dir.join(PROFILE_METADATA_FILE);
     let content = serde_json::to_string_pretty(metadata)
         .map_err(|e| format!("Failed to serialize profile metadata: {}", e))?;
-    fs::write(&metadata_path, content)
-        .map_err(|e| format!("Failed to write profile metadata: {}", e))
+    write_file_atomic(&metadata_path, content.as_bytes()).map_err(|e| e.message)
 }
 
 pub(crate) fn load_profile_metadata(
@@ -60,11 +59,16 @@ pub(crate) fn load_profile_metadata(
 pub(crate) fn load_profile_metadata_map_from_dir(
     wallet_data_dir: &Path,
 ) -> HashMap<String, (String, Option<String>)> {
-    load_profile_metadata_in_dir(wallet_data_dir)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|(k, v)| (k, (v.last_used, v.user_id)))
-        .collect()
+    match load_profile_metadata_in_dir(wallet_data_dir) {
+        Ok(map) => map
+            .into_iter()
+            .map(|(k, v)| (k, (v.last_used, v.user_id)))
+            .collect(),
+        Err(e) => {
+            warn!("Ignoring unreadable profile metadata for display: {}", e);
+            HashMap::new()
+        }
+    }
 }
 
 pub(crate) fn record_profile_metadata_in_dir(
@@ -72,7 +76,7 @@ pub(crate) fn record_profile_metadata_in_dir(
     folder_name: &str,
     user_id: Option<String>,
 ) -> Result<(), String> {
-    let mut metadata = load_profile_metadata_in_dir(wallet_data_dir).unwrap_or_default();
+    let mut metadata = load_profile_metadata_in_dir(wallet_data_dir)?;
     let existing_uid = metadata.get(folder_name).and_then(|m| m.user_id.clone());
     metadata.insert(
         folder_name.to_string(),
@@ -97,24 +101,11 @@ pub(crate) fn remove_profile_metadata_entry_in_dir(
     wallet_data_dir: &Path,
     folder_name: &str,
 ) -> Result<(), String> {
-    let metadata_path = wallet_data_dir.join(PROFILE_METADATA_FILE);
-    if !metadata_path.exists() {
-        return Ok(());
-    }
-    if let Ok(mut metadata) = load_profile_metadata_in_dir(wallet_data_dir) {
-        if metadata.remove(folder_name).is_some() {
-            save_profile_metadata_in_dir(wallet_data_dir, &metadata)?;
-        }
+    let mut metadata = load_profile_metadata_in_dir(wallet_data_dir)?;
+    if metadata.remove(folder_name).is_some() {
+        save_profile_metadata_in_dir(wallet_data_dir, &metadata)?;
     }
     Ok(())
-}
-
-pub(crate) fn remove_profile_metadata_entry(
-    app: &tauri::AppHandle,
-    folder_name: &str,
-) -> Result<(), String> {
-    let wallet_data_dir = get_wallet_data_dir(app)?;
-    remove_profile_metadata_entry_in_dir(&wallet_data_dir, folder_name)
 }
 
 /// Resolves the OS machine ID (on Desktop) or a persisted fallback UUID in `app_config_dir`.
@@ -280,5 +271,30 @@ pub(crate) fn cleanup_stale_tmp_restore_files(tmp_dir: &Path) {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn f4_corrupt_profile_metadata_fails_closed_without_overwrite() {
+        let dir = crate::test_support::temp_test_dir("f4_corrupt_profile_meta");
+        std::fs::create_dir_all(&dir).unwrap();
+        let meta_path = dir.join(PROFILE_METADATA_FILE);
+        let corrupt = br#"{"broken": "#;
+        std::fs::write(&meta_path, corrupt).unwrap();
+
+        assert!(load_profile_metadata_in_dir(&dir).is_err());
+        assert!(record_profile_metadata_in_dir(&dir, "p1", Some("did:key:z1".into())).is_err());
+        assert!(remove_profile_metadata_entry_in_dir(&dir, "p1").is_err());
+        assert_eq!(
+            std::fs::read(&meta_path).unwrap(),
+            corrupt,
+            "F4: corrupt profile_metadata.json must NEVER be overwritten on read/parse error"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

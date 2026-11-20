@@ -1744,6 +1744,7 @@ async fn test_deposit_transfer_to_post_persists_outbox_when_sync_server_unreacha
         std_map.clone(),
         Some(false),
         Some(false),
+        None,
         Some(password.to_string()),
         &alice_state,
     )
@@ -2087,6 +2088,7 @@ async fn test_merge_and_save_post_state_preserves_concurrent_outbox_and_auto_imp
         std_map.clone(),
         Some(false),
         Some(false),
+        None,
         Some(password.to_string()),
         &alice_state,
     )
@@ -2834,6 +2836,254 @@ async fn test_h5_outbox_holds_back_value_transfers_under_fork_lock_and_known_off
         .outbox_entries
         .iter()
         .any(|e| e.msg_id == "msg-value-1"));
+
+    let _ = std::fs::remove_dir_all(&base_dir);
+}
+
+#[tokio::test]
+async fn h8_post_tolerance_zone_parks_confirms_and_dismisses() {
+    use human_money_core::storage::{AuthMethod, FileStorage};
+
+    let base_dir = temp_test_dir("h8_post_tolerance_zone");
+    let password = "TestPassword123!";
+    let alice_state = create_test_state(setup_test_app(
+        &base_dir.join("alice"),
+        "Alice",
+        ALICE_PHRASE,
+        password,
+    ));
+    let bob_state = create_test_state(setup_test_app(
+        &base_dir.join("bob"),
+        "Bob",
+        BOB_PHRASE,
+        password,
+    ));
+
+    let alice_did = alice_state
+        .service
+        .lock()
+        .unwrap()
+        .with_wallet(|w| w.get_user_id().to_string())
+        .unwrap();
+    let bob_did = bob_state
+        .service
+        .lock()
+        .unwrap()
+        .with_wallet(|w| w.get_user_id().to_string())
+        .unwrap();
+
+    // Put Bob into recovery epoch 1 started 30 minutes IN THE FUTURE relative to bundle timestamp
+    // so Alice's transfer hits soft tolerance zone (15m..24h).
+    let bob_folder = bob_state
+        .service
+        .lock()
+        .unwrap()
+        .list_profiles()
+        .unwrap()[0]
+        .folder_name
+        .clone();
+    {
+        let mut storage = FileStorage::new(base_dir.join("bob").join(&bob_folder));
+        let auth = AuthMethod::Password(password);
+        let mut seal_rec = storage.load_seal(&auth).unwrap().unwrap();
+        seal_rec.seal.payload.epoch = 1;
+        seal_rec.seal.payload.epoch_start_time = (Utc::now() + chrono::Duration::minutes(30))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        storage.save_seal(&auth, &seal_rec).unwrap();
+    }
+
+    let server_a = MockSyncServer::start("d-alice".to_string(), ADMIN_A.to_string()).await;
+    let server_b = MockSyncServer::start("d-bob".to_string(), ADMIN_B.to_string()).await;
+    let (server_a_url, alice_drop) =
+        setup_test_sync(&server_a, DROP_PUB_A, password, &alice_state).await;
+    let (server_b_url, bob_drop) =
+        setup_test_sync(&server_b, DROP_PUB_B, password, &bob_state).await;
+
+    let make_desc = |url: &str, srv: &MockSyncServer, pub_hex: &str, access_pk: &str| FrontendSyncDescriptor {
+        write_url: url.to_string(),
+        read_url: format!("{}/{}", srv.base_url, srv.data_dir),
+        slot_id: Some(humoco_market::format_slot_id(access_pk, Some("pc")).unwrap()),
+        drop_pub: pub_hex.to_string(),
+        last_seen_at: None,
+        last_error_at: None,
+        fail_count: 0,
+        status: "active".to_string(),
+        last_probed_at: None,
+        ..Default::default()
+    };
+
+    {
+        let mut s = alice_state.service.lock().unwrap();
+        alice_state
+            .save_contact(
+                &mut s,
+                FrontendContact {
+                    did: bob_did.clone(),
+                    profile: FrontendUserProfile {
+                        first_name: Some("Bob".to_string()),
+                        ..Default::default()
+                    },
+                    tags: vec![],
+                    added_at: Utc::now().to_rfc3339(),
+                    notes: None,
+                    trust_level: Some(2),
+                    desired_hops: Some(3),
+                    has_peer_list: false,
+                    peer_list_updated_at: None,
+                    syncs: vec![make_desc(
+                        &server_b_url,
+                        &server_b,
+                        DROP_PUB_B,
+                        &bob_drop.access_pubkey,
+                    )],
+                },
+                Some(password),
+            )
+            .unwrap();
+    }
+    {
+        let mut s = bob_state.service.lock().unwrap();
+        bob_state
+            .save_contact(
+                &mut s,
+                FrontendContact {
+                    did: alice_did.clone(),
+                    profile: FrontendUserProfile {
+                        first_name: Some("Alice".to_string()),
+                        ..Default::default()
+                    },
+                    tags: vec![],
+                    added_at: Utc::now().to_rfc3339(),
+                    notes: None,
+                    trust_level: Some(2),
+                    desired_hops: Some(3),
+                    has_peer_list: false,
+                    peer_list_updated_at: None,
+                    syncs: vec![make_desc(
+                        &server_a_url,
+                        &server_a,
+                        DROP_PUB_A,
+                        &alice_drop.access_pubkey,
+                    )],
+                },
+                Some(password),
+            )
+            .unwrap();
+    }
+
+    let std_map = crate::services::common::load_all_standard_tomls(None, None);
+    let freetaler_toml = std_map
+        .get("a1b2c3d4-e5f6-4789-8012-3456789abcde")
+        .expect("embedded freetaler standard missing")
+        .clone();
+
+    let (lid1, lid2) = {
+        let mut s = alice_state.service.lock().unwrap();
+        for amt in ["40", "25"] {
+            s.create_new_voucher(
+                &freetaler_toml,
+                human_money_core::NewVoucherData {
+                    creator_profile: human_money_core::models::profile::PublicProfile {
+                        id: Some(alice_did.clone()),
+                        first_name: Some("Alice".to_string()),
+                        ..Default::default()
+                    },
+                    nominal_value: human_money_core::models::voucher::ValueDefinition {
+                        amount: amt.to_string(),
+                        unit: "Taler".to_string(),
+                        ..Default::default()
+                    },
+                    validity_duration: Some("P1Y".to_string()),
+                    ..Default::default()
+                },
+                Some(password),
+            )
+            .unwrap();
+        }
+        let vs = s
+            .with_wallet_and_identity(|w, id| w.list_vouchers(Some(id), None, None, None))
+            .unwrap();
+        (vs[0].local_instance_id.clone(), vs[1].local_instance_id.clone())
+    };
+
+    // Send 2 unanchored bundles -> both deposit over PoST and hit Bob's soft tolerance zone
+    for (lid, amt) in [(lid1, "10"), (lid2, "15")] {
+        let res = crate::services::transfer_service::create_transfer_bundle_impl(
+            None,
+            bob_did.clone(),
+            vec![crate::models::FrontendSourceTransfer {
+                local_instance_id: lid,
+                amount_to_send: amt.to_string(),
+            }],
+            None,
+            Some("Alice".to_string()),
+            std_map.clone(),
+            Some(false),
+            Some(false),
+            Some(true),
+            Some(password.to_string()),
+            &alice_state,
+        )
+        .await
+        .unwrap();
+        assert!(res.post_deposit.is_some());
+    }
+
+    // Bob syncs -> parks 2 pending tolerance payments, imports 0, queues 0 ACK receipts yet
+    let sync1 = sync_post_channels_impl(None, None, None, Some(password.to_string()), &bob_state)
+        .await
+        .unwrap();
+    assert_eq!(sync1.new_tolerance_payments, 2);
+    assert_eq!(sync1.imported_payments, 0);
+    let post_bob_after_sync1 = load_post_state(&bob_state, Some(password)).unwrap();
+    assert_eq!(post_bob_after_sync1.pending_tolerance_payments.len(), 2);
+    assert!(
+        post_bob_after_sync1.outbox_entries.is_empty(),
+        "H8: ACK must NOT be queued until user confirms parked tolerance payment"
+    );
+
+    // Re-sync must stay idempotent & deduplicated
+    let sync2 = sync_post_channels_impl(None, None, None, Some(password.to_string()), &bob_state)
+        .await
+        .unwrap();
+    assert_eq!(sync2.new_tolerance_payments, 0);
+
+    let summary = get_post_inbox_summary_impl(Some(password.to_string()), &bob_state).unwrap();
+    assert_eq!(summary.pending_tolerance_payments.len(), 2);
+    assert_eq!(summary.pending_tolerance_payments[0].zone, "soft");
+
+    let confirm_id = summary.pending_tolerance_payments[0].msg_id.clone();
+    let dismiss_id = summary.pending_tolerance_payments[1].msg_id.clone();
+
+    // Confirm #1 -> commits into Bob's wallet, removes pending item, queues ACK receipt
+    let payload = confirm_pending_post_payment_impl(
+        None,
+        confirm_id.clone(),
+        Some(password.to_string()),
+        &bob_state,
+    )
+    .await
+    .unwrap();
+    assert_eq!(payload.newly_committed, Some(true));
+
+    let post_bob_after_confirm = load_post_state(&bob_state, Some(password)).unwrap();
+    assert_eq!(post_bob_after_confirm.pending_tolerance_payments.len(), 1);
+    assert_eq!(
+        post_bob_after_confirm.outbox_entries.len(),
+        1,
+        "H8: Confirming parked tolerance payment must queue ACK receipt"
+    );
+
+    // Dismiss #2 -> removes parked item without committing or queueing ACK
+    dismiss_pending_post_item_impl(
+        "tolerance_payment".to_string(),
+        dismiss_id,
+        Some(password.to_string()),
+        &bob_state,
+    )
+    .unwrap();
+    let post_bob_final = load_post_state(&bob_state, Some(password)).unwrap();
+    assert!(post_bob_final.pending_tolerance_payments.is_empty());
 
     let _ = std::fs::remove_dir_all(&base_dir);
 }

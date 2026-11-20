@@ -461,12 +461,14 @@ describe('SettingsView Component', () => {
     const deleteButton = screen.getByRole('button', { name: /Delete Profile on this Device/i });
     await user.click(deleteButton);
 
-    // Confirmation modal is open
+    // Confirmation modal is open; confirm stays disabled until explicit password is entered
     expect(screen.getByText('Delete Profile Permanently?')).toBeInTheDocument();
     expect(screen.getByText(/All local keys, vouchers, and settings for this profile will be permanently deleted/i)).toBeInTheDocument();
 
-    // Confirm deletion
     const confirmBtn = screen.getByRole('button', { name: /^Delete$/i });
+    expect(confirmBtn).toBeDisabled();
+    await user.type(screen.getByPlaceholderText(/Enter password/i), 'test-password');
+    expect(confirmBtn).not.toBeDisabled();
     await user.click(confirmBtn);
 
     await waitFor(() => {
@@ -576,5 +578,34 @@ describe('SettingsView Component', () => {
         'test-password'
       );
     });
+  });
+
+  it('H3: requires master password for deleteProfile, skips protectAction, and keeps modal open on wrong password', async () => {
+    const user = userEvent.setup();
+    (authService.deleteProfile as Mock).mockRejectedValueOnce(new Error('Incorrect password'));
+    mockAppState = { view: 'settings', initialSection: 'security' };
+    renderSettingsView('simple');
+
+    const deleteButton = await screen.findByRole('button', { name: /Delete Profile on this Device/i });
+    await user.click(deleteButton);
+
+    expect(screen.getByText('Delete Profile Permanently?')).toBeInTheDocument();
+    const confirmBtn = screen.getByRole('button', { name: /^Delete$/i });
+    expect(confirmBtn).toBeDisabled();
+
+    const pwInput = screen.getByPlaceholderText(/Enter password/i);
+    await user.type(pwInput, 'wrong-secret');
+    expect(confirmBtn).not.toBeDisabled();
+    await user.click(confirmBtn);
+
+    await waitFor(() => {
+      expect(authService.deleteProfile).toHaveBeenCalledWith({
+        folderName: 'alice-folder',
+        password: 'wrong-secret',
+      });
+    });
+    expect(mockProtectAction).not.toHaveBeenCalled();
+    expect(screen.getByText('Delete Profile Permanently?')).toBeInTheDocument();
+    expect(screen.getByText(/Incorrect password/i)).toBeInTheDocument();
   });
 });

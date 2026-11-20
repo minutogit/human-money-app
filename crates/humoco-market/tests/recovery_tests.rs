@@ -1195,3 +1195,24 @@ fn test_sloppy_kit_uri_and_prefixed_vault_lookup() {
     let legacy_short = canonical.strip_prefix("humoco://").unwrap();
     assert!(parse_recovery_request_uri(legacy_short).is_err());
 }
+
+#[test]
+fn test_f2_guardian_vault_store_rejects_missing_epoch_watermarks() {
+    let missing_watermarks = serde_json::json!({ "wards": {} });
+    let err = serde_json::from_value::<GuardianVaultStore>(missing_watermarks).unwrap_err();
+    assert!(
+        err.to_string().contains("highest_epoch_by_owner")
+            || err.to_string().contains("revoked_epoch_by_owner")
+    );
+
+    let missing_revoked = serde_json::json!({
+        "wards": {},
+        "highest_epoch_by_owner": {}
+    });
+    assert!(serde_json::from_value::<GuardianVaultStore>(missing_revoked).is_err());
+
+    let store = GuardianVaultStore::new();
+    let encoded = serde_json::to_string(&store).unwrap();
+    let decoded: GuardianVaultStore = serde_json::from_str(&encoded).unwrap();
+    assert_eq!(decoded, store);
+}

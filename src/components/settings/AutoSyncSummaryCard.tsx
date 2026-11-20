@@ -205,7 +205,10 @@ export const AutoSyncSummaryCard: React.FC<AutoSyncSummaryCardProps> = ({
                 return hasAuth;
             };
             const hasAuth = session?.protectAction
-                ? await session.protectAction((pwd) => runSave(pwd))
+                ? await session.protectAction(
+                      (pwd) => runSave(pwd),
+                      protectCommandOptions('save_public_sync'),
+                  )
                 : await runSave();
             if (hasAuth !== null && hasAuth !== undefined) {
                 const fresh = await settingsService.getConfig().catch(() => null);

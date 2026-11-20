@@ -103,6 +103,19 @@ describe('humocoUri Utilities', () => {
         did: `kasse:7x9@${sampleDid}`,
       });
       expect(parseContactCard(`Bitte zahle an kasse@${sampleDid}`)).toBeNull();
+      expect(parseContactCard(`kasse:7x9@\n${sampleDid}`)).toEqual({
+        did: `kasse:7x9@${sampleDid}`,
+      });
+      expect(parseContactCard(`kasse:7x9@ \r\n  ${sampleDid}`)).toEqual({
+        did: `kasse:7x9@${sampleDid}`,
+      });
+      expect(parseContactCard(`kasse@\n${sampleDid}`)).toBeNull();
+      expect(parseContactCard(`kasse:7x9@ ${sampleDid}`)).toBeNull();
+      expect(parseContactCard(`Bitte zahle an kasse:7x9@\n${sampleDid} danke`)).toEqual({
+        did: `kasse:7x9@${sampleDid}`,
+      });
+      expect(parseContactCard(`Bitte zahle an bad@\n${sampleDid}`)).toBeNull();
+      expect(parseContactCard(`Bitte zahle an kasse:7x9@ ${sampleDid}`)).toBeNull();
       expect(parseContactCard(`"${sampleDid}"`)).toEqual({ did: sampleDid });
     });
 

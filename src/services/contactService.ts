@@ -7,8 +7,16 @@ export const contactService = {
         return await invoke<Contact[]>("get_contacts");
     },
 
-    saveContact: async (contact: Contact, password?: string) => {
-        const result = await invoke<void>("save_contact", { contact, password });
+    saveContact: async (
+        contact: Contact,
+        password?: string,
+        options?: { preserveManualCard?: boolean },
+    ) => {
+        const result = await invoke<void>("save_contact", {
+            contact,
+            password,
+            preserveManualCard: options?.preserveManualCard ?? false,
+        });
         afterWalletMutation(password, {
             syncMembers: true,
             scheduleMarket: (contact.trustLevel ?? 0) >= 1,
@@ -17,8 +25,16 @@ export const contactService = {
         return result;
     },
 
-    deleteContact: async (did: string, password?: string) => {
-        const result = await invoke<void>("delete_contact", { did, password });
+    deleteContact: async (
+        did: string,
+        password?: string,
+        options?: { preserveManualCard?: boolean },
+    ) => {
+        const result = await invoke<void>("delete_contact", {
+            did,
+            password,
+            preserveManualCard: options?.preserveManualCard ?? false,
+        });
         afterWalletMutation(password, {
             syncMembers: true,
             contactsUpdated: true,

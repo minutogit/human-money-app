@@ -123,7 +123,7 @@ export const COMMAND_ACCESS_POLICY = {
     create_guarantor_claim_bundle: "dailyPay",
     create_dead_quorum_swap_claim_cmd: "dailyPay",
     import_double_spend_proof: "dailyPay",
-    export_wallet_backup_file: "dailyPay",
+    export_wallet_backup_file: "full",
     sync_wallet_backup_folder: "full",
     run_auto_backup_sync: "dailyPay",
     sync_backup: "dailyPay",
@@ -151,6 +151,7 @@ export const COMMAND_ACCESS_POLICY = {
     send_market_inquiry_message_via_post: "dailyPay",
     mark_inquiry_read: "dailyPay",
     dismiss_pending_post_item: "dailyPay",
+    confirm_pending_post_payment: "dailyPay",
     verify_recovery_rehearsal: "dailyPay",
     snooze_recovery_rehearsal: "dailyPay",
 
@@ -193,6 +194,14 @@ export const COMMAND_ACCESS_POLICY = {
 } as const satisfies Record<string, CommandAccessTier>;
 
 export type RegisteredTauriCommand = keyof typeof COMMAND_ACCESS_POLICY;
+
+/**
+ * Destructive actions that always require direct master-password re-authentication
+ * inside their confirmation dialog rather than relying on an existing session or `protectAction(null)`.
+ */
+export const EXPLICIT_PASSWORD_REAUTH_COMMANDS: ReadonlySet<RegisteredTauriCommand> = new Set([
+    "delete_profile",
+]);
 
 export function protectCommandOptions(
     cmd: RegisteredTauriCommand,

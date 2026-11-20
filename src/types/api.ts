@@ -2,7 +2,7 @@
 
 import { PendingReceiveCommit, ReceiveSuccessPayload, IntentDispatchObservation } from './transaction';
 import { VoucherDetails } from './voucher';
-import { FrontendSyncDescriptor, StoredPublicSync } from './market';
+import { FrontendPostDepositResult, FrontendSyncDescriptor, StoredPublicSync } from './market';
 import type { HelpTopicId } from '../help/helpTopics';
 
 export type PrivacyDefault = 'ask' | 'stealth' | 'public';
@@ -139,6 +139,8 @@ export interface ClaimBundleDto {
     bundleId: string;
     guarantorId: string;
     claimedAmount: string;
+    postDeposit?: FrontendPostDepositResult | null;
+    postDepositError?: string | null;
 }
 
 export type DeadQuorumSwapStatus =
@@ -157,6 +159,8 @@ export interface ApprovedSwapClaimDto {
     replacementBundleBytes?: number[] | null;
     replacementIntentLocalId?: string | null;
     status: DeadQuorumSwapStatus;
+    postDeposit?: FrontendPostDepositResult | null;
+    postDepositError?: string | null;
 }
 
 export interface RejectedSwapClaimDto {

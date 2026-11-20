@@ -1,7 +1,6 @@
 // src/components/transfer/sendTransferHelpers.ts
 import type { TFunction } from 'i18next';
 import { transferService, CreateBundleResult } from '../../services/transferService';
-import { postService } from '../../services/postService';
 import { runPostSyncPass } from '../../sync/syncBridge';
 import { parsePaymentRequest } from '../../utils/humocoUri';
 import { logger } from '../../utils/log';
@@ -188,23 +187,53 @@ export function resolvePaymentRequestInput(
     };
 }
 
-export interface CommitTransferParams {
-    state: SendState;
+export interface SendDraftKeyInput {
+    recipientId: string;
+    targetAmountStr: string;
+    standardUuid: string | null;
+    isTest: boolean | null;
+}
+
+export function buildSendDraftKey({
+    recipientId,
+    targetAmountStr,
+    standardUuid,
+    isTest,
+}: SendDraftKeyInput): string {
+    const normalizedAmount = targetAmountStr.trim().replace(',', '.');
+    return [
+        recipientId.trim(),
+        normalizedAmount,
+        standardUuid ?? '',
+        isTest === null ? 'null' : String(isTest),
+    ].join('|');
+}
+
+export interface ConfirmedTransferSnapshot {
+    draftKey: string;
+    recipientId: string;
     selectedMap: Map<string, string>;
+    selectionStats: Record<string, { total: number; count: number }>;
+    notes: string;
+    sendProfileName: boolean;
+    customSenderName: string;
+    privacyMode: 'public' | 'stealth' | null;
+    sendCardOverride: boolean | null;
+}
+
+export interface CommitTransferParams {
+    snapshot: ConfirmedTransferSnapshot;
     voucherStandards: VoucherStandardInfo[];
     standardIdToUuidMap: Map<string, string>;
-    sendCardOverride: boolean | null;
     protectAction: ProtectActionFn;
     checkAndTriggerCooldown: (errOrResult: unknown) => boolean;
     translate: TFunction;
 }
 
 export async function commitAndDepositTransfer({
-    state,
-    selectedMap,
+    snapshot,
     voucherStandards,
     standardIdToUuidMap,
-    sendCardOverride,
     protectAction,
     checkAndTriggerCooldown,
     translate,
@@ -214,9 +243,9 @@ export async function commitAndDepositTransfer({
     recipientDepositedTo: number;
     depositError?: string;
 } | null> {
-    const trimmedName = state.customSenderName.trim();
-    const senderName = state.sendProfileName && trimmedName.length > 0 ? trimmedName : null;
-    const sources: SourceTransfer[] = Array.from(selectedMap.entries()).map(([id, amount]) => ({
+    const trimmedName = snapshot.customSenderName.trim();
+    const senderName = snapshot.sendProfileName && trimmedName.length > 0 ? trimmedName : null;
+    const sources: SourceTransfer[] = Array.from(snapshot.selectedMap.entries()).map(([id, amount]) => ({
         localInstanceId: id,
         amountToSend: amount.trim().replace(',', '.'),
     }));
@@ -228,24 +257,22 @@ export async function commitAndDepositTransfer({
 
     const outcome = await protectAction(async (password) => {
         const bundleResult: CreateBundleResult = await transferService.createBundle({
-            recipientId: state.recipientId,
+            recipientId: snapshot.recipientId,
             sources,
-            notes: state.notes || null,
+            notes: snapshot.notes || null,
             senderProfileName: senderName,
             standardDefinitionsToml,
-            usePrivacyMode: state.privacyMode === 'stealth',
-            sendCardOverride: sendCardOverride ?? undefined,
+            usePrivacyMode: snapshot.privacyMode === 'stealth',
+            sendCardOverride: snapshot.sendCardOverride ?? undefined,
+            depositToPost: true,
             password,
         });
 
         let depositedTo = 0;
         let recipientDepositedTo = 0;
         let depositError: string | undefined;
-        try {
-            const depositRes = await postService.depositTransferToPost(
-                bundleResult.bundleId,
-                password || undefined,
-            );
+        if (bundleResult.postDeposit) {
+            const depositRes = bundleResult.postDeposit;
             depositedTo = depositRes.depositedTo;
             recipientDepositedTo = depositRes.recipientDepositedTo;
             if (depositRes.errors?.length) {
@@ -253,10 +280,12 @@ export async function commitAndDepositTransfer({
                 logger.warn(`Post deposit completed with ${depositRes.errors.length} error(s)`);
             }
             runPostSyncPass().catch(() => {});
-        } catch (err) {
-            checkAndTriggerCooldown(err);
-            depositError = translateError(err, translate);
-            logger.warn(`Post deposit failed after transfer commit: ${stringifyError(err)}`);
+        } else if (bundleResult.postDepositError) {
+            checkAndTriggerCooldown(bundleResult.postDepositError);
+            depositError = translateError(bundleResult.postDepositError, translate);
+            logger.warn(
+                `Post deposit failed after transfer commit: ${stringifyError(bundleResult.postDepositError)}`,
+            );
         }
 
         return { bundleResult, depositedTo, recipientDepositedTo, depositError };

@@ -5,6 +5,7 @@ import { AlertTriangle, Trash2 } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { AlertBanner } from '../ui/AlertBanner';
 import { ConfirmationModal } from '../ui/ConfirmationModal';
+import { Input } from '../ui/Input';
 import { useSession } from '../../context/SessionContext';
 import { useOptionalNavigation } from '../../context/NavigationContext';
 import { authService } from '../../services/authService';
@@ -18,17 +19,16 @@ export const DangerZoneCard: React.FC = () => {
         folderName,
         notifyLogout,
         clearLocks,
-        protectAction,
-        accessMode = 'full',
-        requireFullAccess,
     } = useSession();
     const nav = useOptionalNavigation();
 
     const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+    const [deletePassword, setDeletePassword] = useState('');
     const [isDeleting, setIsDeleting] = useState(false);
     const [deleteError, setDeleteError] = useState('');
 
     const handleDeleteProfile = async () => {
+        if (!deletePassword.trim()) return;
         setIsDeleting(true);
         setDeleteError('');
         try {
@@ -50,12 +50,12 @@ export const DangerZoneCard: React.FC = () => {
             if (!active) {
                 throw new Error(t('settings.activeProfileNotFound'));
             }
-            await protectAction(async (pwd) => {
-                await authService.deleteProfile({
-                    folderName: active.folderName,
-                    password: pwd || undefined,
-                });
+            await authService.deleteProfile({
+                folderName: active.folderName,
+                password: deletePassword,
             });
+            setIsDeleteModalOpen(false);
+            setDeletePassword('');
             clearLocks();
             notifyLogout();
             const remaining = await authService.listProfiles().catch(() => []);
@@ -68,7 +68,6 @@ export const DangerZoneCard: React.FC = () => {
             setDeleteError(translateError(err, t));
         } finally {
             setIsDeleting(false);
-            setIsDeleteModalOpen(false);
         }
     };
 
@@ -87,19 +86,17 @@ export const DangerZoneCard: React.FC = () => {
                     </div>
                 </div>
 
-                {deleteError && <AlertBanner variant="error">{deleteError}</AlertBanner>}
+                {deleteError && !isDeleteModalOpen && (
+                    <AlertBanner variant="error">{deleteError}</AlertBanner>
+                )}
 
                 <div className="pt-2">
                     <Button
                         type="button"
                         variant="danger"
                         onClick={() => {
-                            if (accessMode !== 'full' && requireFullAccess) {
-                                void requireFullAccess(async () => {
-                                    setIsDeleteModalOpen(true);
-                                }).catch(() => undefined);
-                                return;
-                            }
+                            setDeleteError('');
+                            setDeletePassword('');
                             setIsDeleteModalOpen(true);
                         }}
                         className="gap-2 text-xs"
@@ -113,13 +110,40 @@ export const DangerZoneCard: React.FC = () => {
             <ConfirmationModal
                 isOpen={isDeleteModalOpen}
                 title={t('settings.deleteProfileConfirmTitle')}
-                description={t('settings.deleteProfileConfirmDesc')}
+                description={
+                    <div className="space-y-4 pt-1 text-left">
+                        <p>{t('settings.deleteProfileConfirmDesc')}</p>
+                        <div className="space-y-1.5">
+                            <label
+                                htmlFor="danger-zone-delete-password"
+                                className="block text-xs font-bold text-theme-secondary"
+                            >
+                                {t('auth.enterPasswordToContinue')}
+                            </label>
+                            <Input
+                                id="danger-zone-delete-password"
+                                type="password"
+                                value={deletePassword}
+                                onChange={(e) => {
+                                    setDeletePassword(e.target.value);
+                                    if (deleteError) setDeleteError('');
+                                }}
+                                placeholder={t('auth.passwordPlaceholder')}
+                                autoComplete="current-password"
+                                disabled={isDeleting}
+                            />
+                        </div>
+                        {deleteError && <AlertBanner variant="error">{deleteError}</AlertBanner>}
+                    </div>
+                }
                 confirmVariant="danger"
                 confirmText={t('common.delete')}
                 isProcessing={isDeleting}
+                confirmDisabled={isDeleting || !deletePassword.trim()}
                 onConfirm={handleDeleteProfile}
                 onCancel={() => {
                     setIsDeleteModalOpen(false);
+                    setDeletePassword('');
                     setDeleteError('');
                 }}
             />

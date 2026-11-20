@@ -545,6 +545,7 @@ pub fn run() {
             send_market_inquiry_message_via_post,
             mark_inquiry_read,
             dismiss_pending_post_item,
+            confirm_pending_post_payment,
             get_post_inbox_summary,
             sync_post_channels,
             export_profile_mnemonic,

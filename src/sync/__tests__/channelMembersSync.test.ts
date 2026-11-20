@@ -85,7 +85,11 @@ describe('Debounced Channel Members Sync (Task 3.1)', () => {
 
         // Saving contact
         await contactService.saveContact(dummyContact as never);
-        expect(invoke).toHaveBeenCalledWith('save_contact', { contact: dummyContact, password: undefined });
+        expect(invoke).toHaveBeenCalledWith('save_contact', {
+            contact: dummyContact,
+            password: undefined,
+            preserveManualCard: false,
+        });
 
         // Advance 1500ms
         await vi.advanceTimersByTimeAsync(1500);

@@ -23,6 +23,7 @@ pub async fn create_transfer_bundle(
     standard_definitions_toml: HashMap<String, String>,
     use_privacy_mode: Option<bool>,
     send_card_override: Option<bool>,
+    deposit_to_post: Option<bool>,
     password: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<CreateBundleResult, FrontendError> {
@@ -35,6 +36,7 @@ pub async fn create_transfer_bundle(
         standard_definitions_toml,
         use_privacy_mode,
         send_card_override,
+        deposit_to_post,
         password,
         &state,
     )

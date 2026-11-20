@@ -90,6 +90,18 @@ pub struct FrontendUnsupportedPostItem {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct FrontendPendingTolerancePayment {
+    pub msg_id: String,
+    pub sender_did: String,
+    pub sender_name: Option<String>,
+    pub created_at: u64,
+    pub zone: String, // "soft" | "critical"
+    pub error_message: String,
+    pub has_conflict: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct FrontendPostInboxSummary {
     pub pending_sign_requests: Vec<FrontendPendingSignRequest>,
     pub pending_wot_handshakes: Vec<FrontendPendingWotHandshake>,
@@ -97,9 +109,11 @@ pub struct FrontendPostInboxSummary {
     pub unacknowledged_payments: Vec<String>,
     #[serde(default)]
     pub unsupported_messages: Vec<FrontendUnsupportedPostItem>,
+    #[serde(default)]
+    pub pending_tolerance_payments: Vec<FrontendPendingTolerancePayment>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct FrontendPostSyncResult {
     pub uploaded_to: usize,
@@ -111,6 +125,8 @@ pub struct FrontendPostSyncResult {
     pub new_wot_handshakes: usize,
     pub new_inquiries: usize,
     pub new_inquiry_messages: usize,
+    #[serde(default)]
+    pub new_tolerance_payments: usize,
     pub pruned_boxes: usize,
     #[serde(default)]
     pub deferred_outbox_boxes: usize,

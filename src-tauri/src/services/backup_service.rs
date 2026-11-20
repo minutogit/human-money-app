@@ -163,11 +163,8 @@ pub(crate) fn export_wallet_backup_file_impl(
 ) -> Result<FrontendBackupSummaryDto, FrontendError> {
     let (_expected_mode, protection) = parse_protection_mode(protection_mode, backup_password)?;
     let custom_standards = collect_custom_standards(app);
-    let required = match _expected_mode {
-        "backup_password" => crate::state::RequiredAccess::Full,
-        _ => crate::state::RequiredAccess::DailyPay,
-    };
-    let (mut service, resolved_pw) = state.authorize_and_lock_secret(required, password)?;
+    let (mut service, resolved_pw) =
+        state.authorize_and_lock_secret(crate::state::RequiredAccess::Full, password)?;
     let pw = resolved_pw.as_deref().map(String::as_str);
     let summary = export_backup_file_impl(
         Path::new(destination_path),
@@ -735,6 +732,17 @@ fn replace_local_profile_with_restored(
 
     let old_dir = wallet_data_dir.join(old_folder);
     let old_storage = FileStorage::new(old_dir.clone());
+    let old_wallet_lock = match human_money_core::storage::WalletLockGuard::new(&old_storage) {
+        Ok(g) => g,
+        Err(e) => {
+            log::warn!(
+                "Refusing to replace folder '{}' because wallet lock could not be acquired: {}",
+                old_folder,
+                e
+            );
+            return current_profile_name;
+        }
+    };
     let seal_matches = old_storage
         .load_seal(&AuthMethod::RecoveryIdentity(restored_identity))
         .ok()
@@ -792,8 +800,36 @@ fn replace_local_profile_with_restored(
 
     if let Ok(updated_json) = serde_json::to_vec_pretty(&profiles) {
         if write_file_atomic(&profiles_path, &updated_json).is_ok() {
-            let _ = fs::remove_dir_all(&old_dir);
-            let _ = remove_profile_metadata_entry_in_dir(wallet_data_dir, old_folder);
+            #[cfg(not(windows))]
+            {
+                let _ = fs::remove_dir_all(&old_dir);
+                drop(old_wallet_lock);
+            }
+            #[cfg(windows)]
+            {
+                if let Ok(entries) = fs::read_dir(&old_dir) {
+                    for entry in entries.flatten() {
+                        if entry.file_name() == ".wallet.transaction.lock" {
+                            continue;
+                        }
+                        let path = entry.path();
+                        let _ = if path.is_dir() {
+                            fs::remove_dir_all(&path)
+                        } else {
+                            fs::remove_file(&path)
+                        };
+                    }
+                }
+                drop(old_wallet_lock);
+                let _ = fs::remove_dir_all(&old_dir);
+            }
+            if let Err(e) = remove_profile_metadata_entry_in_dir(wallet_data_dir, old_folder) {
+                log::warn!(
+                    "Failed to remove replaced profile metadata entry '{}': {}",
+                    old_folder,
+                    e
+                );
+            }
         }
     }
 
@@ -815,9 +851,9 @@ pub(crate) async fn finalize_restored_wallet_and_reconcile_l2(
 ) -> Result<FrontendRestoreOutcomeDto, FrontendError> {
     let user_ids_by_folder = user_ids_from_metadata_dir(wallet_data_dir);
 
-    if let Some(old_folder) = replace_folder_name {
-        state.ensure_profile_not_locked(old_folder)?;
-    }
+    let mut replace_lock = replace_folder_name
+        .map(|old_folder| state.acquire_profile_lock(old_folder))
+        .transpose()?;
 
     let (restored_session, outcome, mut profile_name, custom_standards) = {
         let mut service = state.lock_service()?;
@@ -828,7 +864,13 @@ pub(crate) async fn finalize_restored_wallet_and_reconcile_l2(
             local_instance_id,
             &mut service,
         )?;
-        let pending_lock = state.acquire_profile_lock(&outcome.folder_name)?;
+        let pending_lock = if replace_folder_name == Some(outcome.folder_name.as_str()) {
+            replace_lock
+                .take()
+                .unwrap_or_else(|| crate::state::PendingProfileLock::None)
+        } else {
+            state.acquire_profile_lock(&outcome.folder_name)?
+        };
 
         let restored_identity = service
             .with_wallet_and_identity(|_, id| id.clone())
@@ -850,7 +892,7 @@ pub(crate) async fn finalize_restored_wallet_and_reconcile_l2(
                 profile_name,
             );
             if old_folder != outcome.folder_name {
-                state.cleanup_deleted_profile_lock(old_folder);
+                state.release_profile_lock_if_matching(old_folder);
             }
             name
         } else {

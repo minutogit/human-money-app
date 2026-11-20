@@ -218,10 +218,10 @@ export function useAddressBook({
             const wasNew = !contacts.some((c) => isExactSameUserId(c.did, contact.did));
             await protectAction(async (pwd) => {
                 await contactService.saveContact(contact, pwd || undefined);
-                marketService.probeContactSyncs?.(false, pwd || undefined)
-                    ?.then(() => notifySyncStatusUpdated())
-                    ?.catch(() => {});
             });
+            marketService.probeContactSyncs?.(false)
+                ?.then(() => notifySyncStatusUpdated())
+                ?.catch(() => {});
             channelMembersSyncManager.trigger({ delayMs: 1500, resetQuota: true });
             await loadContacts();
             if (wasNew) {

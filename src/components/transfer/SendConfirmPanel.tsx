@@ -7,6 +7,7 @@ import { Advanced } from '../ui/Advanced';
 import { TechId } from '../ui/TechId';
 import { UserAvatar } from '../ui/UserAvatar';
 import { formatAmount } from '../../utils/format';
+import type { ConfirmedTransferSnapshot } from './sendTransferHelpers';
 import type { Contact, VoucherSummary } from '../../types';
 
 interface SendConfirmPanelProps {
@@ -18,7 +19,9 @@ interface SendConfirmPanelProps {
     uuidToPrecisionMap: Map<string, number>;
     privacyMode: 'public' | 'stealth' | null;
     isProcessing: boolean;
+    isPreviewPending: boolean;
     showConfirm: boolean;
+    confirmedSnapshot: ConfirmedTransferSnapshot | null;
     onPrepareTransfer: (e: React.FormEvent) => void;
     onConfirmExecute: () => void;
     onCancelConfirm: () => void;
@@ -33,13 +36,18 @@ export function SendConfirmPanel({
     uuidToPrecisionMap,
     privacyMode,
     isProcessing,
+    isPreviewPending,
     showConfirm,
+    confirmedSnapshot,
     onPrepareTransfer,
     onConfirmExecute,
     onCancelConfirm,
 }: SendConfirmPanelProps) {
     const { t } = useTranslation();
-    const matched = contacts.find((c) => c.did === recipientId);
+    const modalRecipientId = confirmedSnapshot?.recipientId ?? recipientId;
+    const modalStats = confirmedSnapshot?.selectionStats ?? selectionStats;
+    const modalPrivacyMode = confirmedSnapshot?.privacyMode ?? privacyMode;
+    const matched = contacts.find((c) => c.did === modalRecipientId);
     const matchedName = matched
         ? [`${matched.profile.firstName || ''}`, `${matched.profile.lastName || ''}`]
               .join(' ')
@@ -80,7 +88,7 @@ export function SendConfirmPanel({
                     type="button"
                     variant="primary"
                     onClick={onPrepareTransfer}
-                    disabled={isProcessing}
+                    disabled={isProcessing || isPreviewPending}
                     className="gap-2 rounded-2xl px-6 py-3 font-black text-xs uppercase tracking-widest shrink-0"
                 >
                     <Send size={15} />
@@ -89,7 +97,7 @@ export function SendConfirmPanel({
             </div>
 
             <ConfirmationModal
-                isOpen={showConfirm}
+                isOpen={showConfirm && Boolean(confirmedSnapshot)}
                 title={t('transfer.confirmTitle')}
                 description={
                     <div className="space-y-4 pt-2 text-left">
@@ -97,7 +105,7 @@ export function SendConfirmPanel({
                             <UserAvatar
                                 size={40}
                                 pictureUrl={matched?.profile.pictureUrl}
-                                name={matchedName || recipientId}
+                                name={matchedName || modalRecipientId}
                             />
                             <div className="min-w-0 flex-1 space-y-1">
                                 <p className="text-[10px] font-black text-theme-light uppercase tracking-widest">
@@ -109,11 +117,11 @@ export function SendConfirmPanel({
                                             {matchedName}
                                         </p>
                                         <Advanced>
-                                            <TechId value={recipientId} kind="did" />
+                                            <TechId value={modalRecipientId} kind="did" />
                                         </Advanced>
                                     </>
                                 ) : (
-                                    <TechId value={recipientId} kind="did" />
+                                    <TechId value={modalRecipientId} kind="did" />
                                 )}
                             </div>
                         </div>
@@ -122,7 +130,7 @@ export function SendConfirmPanel({
                                 {t('transfer.confirmAssets')}
                             </p>
                             <div className="text-lg font-black tracking-tighter text-theme-primary">
-                                {Object.entries(selectionStats)
+                                {Object.entries(modalStats)
                                     .map(
                                         ([displayCurrency, stat]) =>
                                             `${formatAmount(stat.total.toString())} ${displayCurrency}`,
@@ -135,7 +143,7 @@ export function SendConfirmPanel({
                                 <Shield
                                     size={14}
                                     className={
-                                        privacyMode === 'stealth'
+                                        modalPrivacyMode === 'stealth'
                                             ? 'text-purple-500'
                                             : 'text-blue-500'
                                     }
@@ -144,12 +152,12 @@ export function SendConfirmPanel({
                                     {t('transfer.confirmPrivacy')}{' '}
                                     <span
                                         className={
-                                            privacyMode === 'stealth'
+                                            modalPrivacyMode === 'stealth'
                                                 ? 'text-purple-600'
                                                 : 'text-blue-600'
                                         }
                                     >
-                                        {privacyMode === 'stealth'
+                                        {modalPrivacyMode === 'stealth'
                                             ? t('transfer.stealth')
                                             : t('transfer.public')}
                                     </span>

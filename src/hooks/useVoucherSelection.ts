@@ -5,12 +5,20 @@ import { transferService, TransferPlan } from '../services/transferService';
 export function useVoucherSelection(vouchers: VoucherSummary[]) {
   const [selectedMap, setSelectedMap] = useState<Map<string, string>>(new Map());
   const [currentPlan, setCurrentPlan] = useState<TransferPlan | null>(null);
+  const [resolvedDraftKey, setResolvedDraftKey] = useState<string | null>(null);
   const latestRequestId = useRef(0);
   const vouchersRef = useRef(vouchers);
   vouchersRef.current = vouchers;
 
+  const invalidatePreview = useCallback(() => {
+    latestRequestId.current += 1;
+    setResolvedDraftKey(null);
+    setCurrentPlan(null);
+  }, []);
+
   const toggleVoucher = useCallback((localInstanceId: string, amount: string) => {
     latestRequestId.current += 1;
+    setResolvedDraftKey(null);
     setCurrentPlan(null);
     const currentVouchers = vouchersRef.current;
     const targetVoucher = currentVouchers.find(v => v.localInstanceId === localInstanceId);
@@ -36,6 +44,7 @@ export function useVoucherSelection(vouchers: VoucherSummary[]) {
 
   const setVoucherAmount = useCallback((localInstanceId: string, amount: string) => {
     latestRequestId.current += 1;
+    setResolvedDraftKey(null);
     setCurrentPlan(null);
     const normalized = amount.replace(',', '.');
     setSelectedMap(prev => {
@@ -51,10 +60,12 @@ export function useVoucherSelection(vouchers: VoucherSummary[]) {
     displayCurrency: string,
     precision: number = 4,
     isTest: boolean | null = null,
-    standardUuid: string | null = null
+    standardUuid: string | null = null,
+    draftKey?: string
   ) => {
     latestRequestId.current += 1;
     setCurrentPlan(null);
+    setResolvedDraftKey(draftKey ?? null);
     const matchingActive = vouchers.filter(v => {
       const statusName = typeof v.status === 'string' ? v.status : Object.keys(v.status)[0];
       if (statusName.toLowerCase() !== 'active') return false;
@@ -116,12 +127,14 @@ export function useVoucherSelection(vouchers: VoucherSummary[]) {
 
   const selectSingleVoucher = useCallback((localInstanceId: string, amount: string) => {
     latestRequestId.current += 1;
+    setResolvedDraftKey(null);
     setCurrentPlan(null);
     setSelectedMap(new Map([[localInstanceId, amount]]));
   }, []);
 
   const clearSelection = useCallback(() => {
     latestRequestId.current += 1;
+    setResolvedDraftKey(null);
     setSelectedMap(new Map());
     setCurrentPlan(null);
   }, []);
@@ -131,7 +144,8 @@ export function useVoucherSelection(vouchers: VoucherSummary[]) {
     recipientId: string,
     standardUuid: string | null = null,
     precision: number = 4,
-    isTest: boolean | null = null
+    isTest: boolean | null = null,
+    draftKey?: string
   ) => {
     const normalizedTarget = targetAmountStr.trim().replace(',', '.');
     const target = parseFloat(normalizedTarget);
@@ -183,6 +197,7 @@ export function useVoucherSelection(vouchers: VoucherSummary[]) {
         }
       }
       setSelectedMap(next);
+      setResolvedDraftKey(draftKey ?? null);
       return plan;
     } catch (e) {
       if (requestId !== latestRequestId.current) return null;
@@ -217,6 +232,8 @@ export function useVoucherSelection(vouchers: VoucherSummary[]) {
     setVoucherAmount,
     selectAmount,
     clearSelection,
+    invalidatePreview,
+    resolvedDraftKey,
     selectionStats,
     currentPlan,
     autoSelectGravitational

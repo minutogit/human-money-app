@@ -206,21 +206,29 @@ pub async fn dispatch_lock_committee_batches(
                     }
                 }
                 if let Some(conflict) = body.conflict {
-                    if conflict.receipt.verify_signature()
+                    let valid_receipt = conflict.receipt.verify_signature()
                         && conflict.receipt.lock_pub == server.lock_pub
-                    {
-                        out.receipts.push(conflict.receipt);
+                        && matches!(conflict.receipt.kind, LockReceiptKind::ConflictSeen)
+                        && conflict.receipt.recipient_nonce == req.recipient_nonce;
+                    if valid_receipt {
+                        if let Ok(entry) = human_money_core::humoco_proto::decode_hex_fixed::<
+                            { human_money_core::humoco_proto::causal::LOCK_ENTRY_WIRE_LEN },
+                        >(&conflict.competing_entry)
+                        .map_err(|e| e.to_string())
+                        .and_then(|bytes| {
+                            LockEntry::from_wire_bytes(&bytes).map_err(|e| e.to_string())
+                        }) {
+                            let entry_matches_receipt = entry.slot == conflict.receipt.slot
+                                && entry.child_lock == conflict.receipt.child_lock
+                                && entry.entry_hash().ok() == Some(conflict.receipt.entry_hash);
+                            if entry_matches_receipt {
+                                out.receipts.push(conflict.receipt);
+                                out.competing_entries.push(entry);
+                                // No need to retry a slot already settled by verified ConflictSeen
+                                had_server_receipt = true;
+                            }
+                        }
                     }
-                    if let Ok(entry) = human_money_core::humoco_proto::decode_hex_fixed::<
-                        { human_money_core::humoco_proto::causal::LOCK_ENTRY_WIRE_LEN },
-                    >(&conflict.competing_entry)
-                    .map_err(|e| e.to_string())
-                    .and_then(|bytes| LockEntry::from_wire_bytes(&bytes).map_err(|e| e.to_string()))
-                    {
-                        out.competing_entries.push(entry);
-                    }
-                    // No need to retry a slot already settled by ConflictSeen
-                    had_server_receipt = true;
                 }
                 if !had_server_receipt {
                     out.pending_retries.push((server, req));
@@ -444,5 +452,125 @@ mod tests {
         assert_eq!(res.pending_retries.len(), 1);
         assert_eq!(res.transport_errors.len(), 1);
         server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn k1_dispatch_rejects_forged_conflict_receipt_wrong_nonce_and_hash_mismatch() {
+        use ed25519_dalek::Signer;
+        use human_money_core::humoco_proto::causal::{LockEntry, HOP_ENCRYPTED_PAYLOAD_LEN};
+
+        let sk = ed25519_dalek::SigningKey::from_bytes(&[17u8; 32]);
+        let lock_pub = sk.verifying_key().to_bytes();
+        let anchor_id = [1u8; 32];
+        let bucket = [2u8; 32];
+        let slot = [3u8; 32];
+        let child_lock = [4u8; 32];
+        let nonce = [6u8; 32];
+
+        let fake_entry = LockEntry {
+            slot,
+            parent_slot: [0u8; 32],
+            output_branch: 0,
+            depth: 0,
+            child_lock,
+            sender_pubkey: [11u8; 32],
+            receiver_pubkey_hash: [12u8; 32],
+            change_pubkey_hash: None,
+            causal_sig: [13u8; 64],
+            root_mig_sig: Some([14u8; 64]),
+            encrypted_payload: [0u8; HOP_ENCRYPTED_PAYLOAD_LEN],
+            pow_nonce: 0,
+        };
+        let entry_hex = fake_entry.to_wire_hex().unwrap();
+        let real_hash = fake_entry.entry_hash().unwrap();
+
+        let make_conflict_receipt = |recipient_nonce: [u8; 32], entry_hash: [u8; 32]| {
+            let mut r = LockReceipt {
+                kind: LockReceiptKind::ConflictSeen,
+                lock_pub,
+                bucket,
+                slot,
+                child_lock,
+                entry_hash,
+                retain_until_quarter: 8159,
+                write_seq: 1,
+                bucket_head: [9u8; 32],
+                recipient_nonce,
+                sig: [0u8; 64],
+            };
+            r.sig = sk.sign(&r.digest()).to_bytes();
+            r
+        };
+
+        // Case 1: valid signature + hash, WRONG recipient_nonce -> must ignore conflict & schedule retry
+        // Case 2: valid signature + nonce, WRONG entry_hash -> must ignore conflict & schedule retry
+        for bad_receipt in [
+            make_conflict_receipt([0xFF; 32], real_hash),
+            make_conflict_receipt(nonce, [0xEE; 32]),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let resp_body = serde_json::json!({
+                "status": "conflict",
+                "bucket": hex::encode(bucket),
+                "retain_until_quarter": 8159,
+                "receipts": [],
+                "conflict": {
+                    "entry_index": 0,
+                    "slot": hex::encode(slot),
+                    "receipt": bad_receipt,
+                    "competing_entry": entry_hex,
+                }
+            })
+            .to_string();
+
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut buf = [0u8; 4096];
+                let _ = stream.read(&mut buf).await.unwrap();
+                let http = format!(
+                    "HTTP/1.1 409 Conflict\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                    resp_body.len(),
+                    resp_body
+                );
+                stream.write_all(http.as_bytes()).await.unwrap();
+            });
+
+            let srv = ServerEntry {
+                write_url: format!("http://127.0.0.1:{}/sync.php", addr.port()),
+                read_url: format!("http://127.0.0.1:{}/d", addr.port()),
+                admin_pub: [8u8; 32],
+                lock_pub,
+                nominated_by: NominatedBy::Creator,
+            };
+            let req = SyncLockBatchRequest {
+                anchor_id,
+                bucket,
+                recipient_nonce: nonce,
+                entries: Vec::new(),
+                manifest: None,
+                genesis_ticket: None,
+                known_head_receipt: None,
+            };
+
+            let client = sync_client::create_sync_http_client();
+            let res =
+                dispatch_lock_committee_batches(&client, &[(srv, req)], Duration::from_secs(2))
+                    .await;
+            assert!(
+                res.competing_entries.is_empty(),
+                "Forged/mismatched ConflictSeen receipt must NOT yield competing_entry"
+            );
+            assert!(
+                res.receipts.is_empty(),
+                "Rejected ConflictSeen receipt must not enter receipts"
+            );
+            assert_eq!(
+                res.pending_retries.len(),
+                1,
+                "Rejected ConflictSeen must NOT satisfy had_server_receipt"
+            );
+            server.await.unwrap();
+        }
     }
 }

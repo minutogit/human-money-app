@@ -25,6 +25,7 @@ pub async fn create_transfer_bundle_impl(
     standard_definitions_toml: HashMap<String, String>,
     use_privacy_mode: Option<bool>,
     send_card_override: Option<bool>,
+    deposit_to_post: Option<bool>,
     password: Option<String>,
     state: &AppState,
 ) -> Result<CreateBundleResult, FrontendError> {
@@ -354,6 +355,22 @@ pub async fn create_transfer_bundle_impl(
     )
     .await?;
 
+    let (post_deposit, post_deposit_error) = if deposit_to_post.unwrap_or(false) {
+        match crate::services::post_service::deposit_transfer_to_post_with_session(
+            &session,
+            result.bundle_id.clone(),
+            pw,
+            state,
+        )
+        .await
+        {
+            Ok(dep) => (Some(dep), None),
+            Err(err) => (None, Some(err.message)),
+        }
+    } else {
+        (None, None)
+    };
+
     Ok(CreateBundleResult {
         bundle_data: result.bundle_bytes,
         bundle_id: result.bundle_id,
@@ -363,6 +380,8 @@ pub async fn create_transfer_bundle_impl(
             .map(Into::into)
             .collect(),
         l2_dispatch,
+        post_deposit,
+        post_deposit_error,
     })
 }
 
@@ -442,6 +461,160 @@ pub(crate) fn filter_conflicts_for_received_vouchers(
     }
 
     Ok((matching, (unrelated_open > 0).then_some(unrelated_open)))
+}
+
+pub(crate) fn apply_receive_companion_side_effects(
+    service: &mut human_money_core::app_service::AppService,
+    state: &AppState,
+    result: &human_money_core::wallet::types::ProcessBundleResult,
+    password: Option<&str>,
+) -> Option<usize> {
+    if let Err(e) = state.refresh_events_cache(service, password) {
+        error!("Failed to refresh events cache after receive_bundle: {}", e);
+    }
+
+    let wot_imported_lists = if let Some(ref wot_json) = result.wot_sync_json {
+        state.try_import_piggybacked_wot(
+            service,
+            wot_json,
+            &result.header.sender_id,
+            password,
+        )
+    } else {
+        None
+    };
+
+    if let Some(ref card_json) = result.contact_card_json {
+        state.try_import_piggybacked_contact_card(service, Some(card_json), password);
+    }
+
+    wot_imported_lists
+}
+
+pub(crate) fn build_receive_success_payload_from_result(
+    service: &mut human_money_core::app_service::AppService,
+    state: &AppState,
+    bundle_data: &[u8],
+    result: human_money_core::wallet::types::ProcessBundleResult,
+    effective_purchase_id: String,
+    password: Option<&str>,
+) -> Result<ReceiveSuccessPayload, FrontendError> {
+    let conflict_count = result.check_result.verifiable_conflicts.len();
+    let warning_count = result.check_result.unverifiable_warnings.len();
+
+    if conflict_count > 0 || warning_count > 0 {
+        log::warn!(
+            "Fraud detection during bundle import: confirmed_conflicts={}, gossip_warnings={}",
+            conflict_count,
+            warning_count
+        );
+    }
+
+    let involved_vouchers_details = result.involved_vouchers_details.clone();
+    let involved_vouchers_ids: Vec<String> = involved_vouchers_details
+        .iter()
+        .map(|d| d.local_instance_id.clone())
+        .collect();
+    let notes = result.header.notes.clone();
+    let sender_profile_name = result.header.sender_profile_name.clone();
+
+    let wot_imported_lists = apply_receive_companion_side_effects(service, state, &result, password);
+
+    let receive_kind = service
+        .with_wallet(|w| {
+            let mut types = involved_vouchers_ids
+                .iter()
+                .filter_map(|id| w.get_voucher_instance(id))
+                .filter_map(|inst| inst.voucher.transactions.last().map(|t| t.t_type.clone()))
+                .collect::<Vec<_>>();
+            if types.is_empty() {
+                return Some("transfer".to_string());
+            }
+            types.sort();
+            types.dedup();
+            if types.len() == 1 && (types[0] == "claim" || types[0] == "redeem") {
+                Some(types[0].clone())
+            } else {
+                Some("transfer".to_string())
+            }
+        })
+        .ok()
+        .flatten();
+
+    let opened_vouchers: Vec<human_money_core::Voucher> = service
+        .with_wallet_and_identity(|_, id| {
+            human_money_core::services::bundle_processor::open_and_verify_bundle(id, bundle_data)
+                .map(|b| b.vouchers)
+                .unwrap_or_default()
+        })
+        .unwrap_or_default();
+    let all_unanchored =
+        !opened_vouchers.is_empty() && opened_vouchers.iter().all(|v| v.layer2_anchor.is_none());
+    let (conflict_summaries, unrelated_open_conflicts_count) =
+        filter_conflicts_for_received_vouchers(service, &opened_vouchers)?;
+    let markers = collect_received_voucher_markers(&opened_vouchers);
+    let verifiable_conflicts: HashMap<String, Vec<crate::models::FrontendTransactionFingerprint>> =
+        result
+            .check_result
+            .verifiable_conflicts
+            .into_iter()
+            .filter(|(k, fps)| {
+                markers.prev_hashes.contains(k)
+                    || fps.iter().any(|fp| {
+                        markers.tx_ids.contains(&fp.t_id) || markers.trap_tags.contains(&fp.ds_tag)
+                    })
+            })
+            .map(|(k, fps)| {
+                (
+                    k,
+                    fps.into_iter()
+                        .map(crate::models::FrontendTransactionFingerprint::from)
+                        .collect(),
+                )
+            })
+            .collect();
+
+    let has_victim_conflict = conflict_summaries
+        .iter()
+        .any(|c| c.conflict_role == "victim" && !c.is_resolved && !c.local_override)
+        || !verifiable_conflicts.is_empty();
+    let checkout_verdict = Some(crate::models::FrontendCheckoutReleaseVerdict {
+        outcome: if has_victim_conflict {
+            "Quarantined:DoubleSpend".to_string()
+        } else if all_unanchored {
+            "OfflineOnly".to_string()
+        } else {
+            "Yellow:AcceptedOnTrust".to_string()
+        },
+        can_release_goods_automatically: false,
+        requires_merchant_approval: false,
+        is_goods_release_authorized: !has_victim_conflict,
+        merchant_warning: None,
+        reduced_guarantor_protection: false,
+        manifest_revision: None,
+    });
+
+    Ok(ReceiveSuccessPayload {
+        sender_id: result.header.sender_id,
+        sender_profile_name,
+        notes,
+        transfer_summary: result.transfer_summary.into(),
+        involved_vouchers: involved_vouchers_ids,
+        involved_vouchers_details: involved_vouchers_details
+            .into_iter()
+            .map(|d| d.into())
+            .collect(),
+        verifiable_conflicts,
+        conflict_summaries,
+        l2_quorum: None,
+        receive_kind,
+        checkout_verdict,
+        purchase_id: Some(effective_purchase_id),
+        newly_committed: Some(true),
+        is_replay: Some(false),
+        wot_imported_lists,
+        unrelated_open_conflicts_count,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -553,151 +726,16 @@ pub async fn receive_bundle_impl(
                 state.write_cache_slot_for_service(&service, |c| &mut c.history, Some(next_hist));
             }
 
-            let conflict_count = result.check_result.verifiable_conflicts.len();
-            let warning_count = result.check_result.unverifiable_warnings.len();
-
-            if conflict_count > 0 || warning_count > 0 {
-                log::warn!(
-                    "Fraud detection during bundle import: confirmed_conflicts={}, gossip_warnings={}",
-                    conflict_count,
-                    warning_count
-                );
-            }
-
-            let involved_vouchers_details = result.involved_vouchers_details.clone();
-            let involved_vouchers_ids: Vec<String> = involved_vouchers_details
-                .iter()
-                .map(|d| d.local_instance_id.clone())
-                .collect();
-            let notes = result.header.notes.clone();
-            let sender_profile_name = result.header.sender_profile_name.clone();
-
-            if let Err(e) = state.refresh_events_cache(&mut service, pw) {
-                error!("Failed to refresh events cache after receive_bundle: {}", e);
-            }
-
-            let wot_imported_lists = if let Some(ref wot_json) = result.wot_sync_json {
-                state.try_import_piggybacked_wot(
-                    &mut service,
-                    wot_json,
-                    &result.header.sender_id,
-                    pw,
-                )
-            } else {
-                None
-            };
-
-            if let Some(ref card_json) = result.contact_card_json {
-                state.try_import_piggybacked_contact_card(
-                    &mut service,
-                    Some(card_json),
-                    pw,
-                );
-            }
-
-            let receive_kind = service
-                .with_wallet(|w| {
-                    let mut types = involved_vouchers_ids
-                        .iter()
-                        .filter_map(|id| w.get_voucher_instance(id))
-                        .filter_map(|inst| {
-                            inst.voucher.transactions.last().map(|t| t.t_type.clone())
-                        })
-                        .collect::<Vec<_>>();
-                    if types.is_empty() {
-                        return Some("transfer".to_string());
-                    }
-                    types.sort();
-                    types.dedup();
-                    if types.len() == 1 && (types[0] == "claim" || types[0] == "redeem") {
-                        Some(types[0].clone())
-                    } else {
-                        Some("transfer".to_string())
-                    }
-                })
-                .ok()
-                .flatten();
-
-            let opened_vouchers: Vec<human_money_core::Voucher> = service
-                .with_wallet_and_identity(|_, id| {
-                    human_money_core::services::bundle_processor::open_and_verify_bundle(
-                        id,
-                        &bundle_data,
-                    )
-                    .map(|b| b.vouchers)
-                    .unwrap_or_default()
-                })
-                .unwrap_or_default();
-            let all_unanchored =
-                !opened_vouchers.is_empty() && opened_vouchers.iter().all(|v| v.layer2_anchor.is_none());
-            let (conflict_summaries, unrelated_open_conflicts_count) =
-                filter_conflicts_for_received_vouchers(&service, &opened_vouchers)?;
-            let markers = collect_received_voucher_markers(&opened_vouchers);
-            let verifiable_conflicts: HashMap<String, Vec<crate::models::FrontendTransactionFingerprint>> =
-                result
-                    .check_result
-                    .verifiable_conflicts
-                    .into_iter()
-                    .filter(|(k, fps)| {
-                        markers.prev_hashes.contains(k)
-                            || fps.iter().any(|fp| {
-                                markers.tx_ids.contains(&fp.t_id)
-                                    || markers.trap_tags.contains(&fp.ds_tag)
-                            })
-                    })
-                    .map(|(k, fps)| {
-                        (
-                            k,
-                            fps.into_iter()
-                                .map(crate::models::FrontendTransactionFingerprint::from)
-                                .collect(),
-                        )
-                    })
-                    .collect();
-
-            let has_victim_conflict = conflict_summaries
-                .iter()
-                .any(|c| c.conflict_role == "victim" && !c.is_resolved && !c.local_override)
-                || !verifiable_conflicts.is_empty();
-            let checkout_verdict = Some(crate::models::FrontendCheckoutReleaseVerdict {
-                outcome: if has_victim_conflict {
-                    "Quarantined:DoubleSpend".to_string()
-                } else if all_unanchored {
-                    "OfflineOnly".to_string()
-                } else {
-                    "Yellow:AcceptedOnTrust".to_string()
-                },
-                can_release_goods_automatically: false,
-                requires_merchant_approval: false,
-                is_goods_release_authorized: !has_victim_conflict,
-                merchant_warning: None,
-                reduced_guarantor_protection: false,
-                manifest_revision: None,
-            });
-
+            let payload = build_receive_success_payload_from_result(
+                &mut service,
+                state,
+                &bundle_data,
+                result,
+                effective_purchase_id,
+                pw,
+            )?;
             drop(service);
-
-            Ok(ReceiveSuccessPayload {
-                sender_id: result.header.sender_id,
-                sender_profile_name,
-                notes,
-                transfer_summary: result.transfer_summary.into(),
-                involved_vouchers: involved_vouchers_ids,
-                involved_vouchers_details: involved_vouchers_details
-                    .into_iter()
-                    .map(|d| d.into())
-                    .collect(),
-                verifiable_conflicts,
-                conflict_summaries,
-                l2_quorum: None,
-                receive_kind,
-                checkout_verdict,
-                purchase_id: Some(effective_purchase_id),
-                newly_committed: Some(true),
-                is_replay: Some(false),
-                wot_imported_lists,
-                unrelated_open_conflicts_count,
-            })
+            Ok(payload)
         }
         Err(e) => {
             error!("Failed to process bundle: {}", e);
@@ -1014,6 +1052,7 @@ mod offline_and_degraded_transfer_tests {
             std_map.clone(),
             Some(false),
             Some(false),
+            None,
             Some(password.into()),
             &alice_state,
         )
@@ -1034,6 +1073,7 @@ mod offline_and_degraded_transfer_tests {
             std_map.clone(),
             Some(false),
             Some(false),
+            None,
             Some(password.into()),
             &alice_state,
         )
@@ -1053,6 +1093,7 @@ mod offline_and_degraded_transfer_tests {
             std_map.clone(),
             Some(false),
             Some(false),
+            None,
             Some(password.into()),
             &alice_state,
         )
@@ -1262,6 +1303,7 @@ mod offline_and_degraded_transfer_tests {
             std_map,
             Some(false),
             Some(false),
+            None,
             Some(password.into()),
             &alice_state,
         )
@@ -1366,6 +1408,7 @@ mod offline_and_degraded_transfer_tests {
             std_map.clone(),
             Some(false),
             Some(false),
+            None,
             Some(password.into()),
             &carol_state,
         )
@@ -1384,6 +1427,7 @@ mod offline_and_degraded_transfer_tests {
             std_map.clone(),
             Some(false),
             Some(false),
+            None,
             Some(password.into()),
             &carol_clone_state,
         )
@@ -1432,6 +1476,7 @@ mod offline_and_degraded_transfer_tests {
             std_map.clone(),
             Some(false),
             Some(false),
+            None,
             Some(password.into()),
             &alice_state,
         )
@@ -1532,6 +1577,7 @@ mod offline_and_degraded_transfer_tests {
             std_map.clone(),
             Some(true),
             Some(false),
+            None,
             Some(password.to_string()),
             &alice_state,
         )
@@ -1589,6 +1635,7 @@ mod offline_and_degraded_transfer_tests {
             std_map,
             Some(false),
             Some(false),
+            None,
             Some(password.to_string()),
             &alice_state,
         )
@@ -1649,6 +1696,7 @@ mod offline_and_degraded_transfer_tests {
             std_map,
             Some(false),
             Some(false),
+            None,
             Some(password.into()),
             &alice_state,
         )
@@ -1927,6 +1975,7 @@ mod offline_and_degraded_transfer_tests {
             std_map.clone(),
             Some(false),
             Some(false),
+            None,
             Some(password.into()),
             &alice_state,
         )
@@ -2001,6 +2050,7 @@ mod offline_and_degraded_transfer_tests {
             std_map.clone(),
             Some(false),
             Some(false),
+            None,
             Some(password.into()),
             &alice_state,
         )
@@ -2052,6 +2102,111 @@ mod offline_and_degraded_transfer_tests {
             .is_goods_release_authorized);
 
         srv.abort();
+        let _ = std::fs::remove_dir_all(base_dir);
+    }
+
+    #[tokio::test]
+    async fn h1_one_shot_pin_grant_completes_transfer_and_post_deposit_in_single_call() {
+        let base_dir = temp_test_dir("h1_single_call_grant");
+        let keystore_dir = base_dir.join("keystore");
+        let password = "MasterPassword123!";
+        let alice_state = create_test_state(setup_test_app(
+            &base_dir.join("alice"),
+            "Alice",
+            ALICE_PHRASE,
+            password,
+        ));
+        let bob_state = create_test_state(setup_test_app(
+            &base_dir.join("bob"),
+            "Bob",
+            BOB_PHRASE,
+            password,
+        ));
+        let (std_map, standard_toml) = std_map();
+        let v_id = issue_100_voucher(&alice_state, &standard_toml, password);
+        let bob_did = bob_state
+            .service
+            .lock()
+            .unwrap()
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
+        let folder = alice_state
+            .service
+            .lock()
+            .unwrap()
+            .list_profiles()
+            .unwrap()[0]
+            .folder_name
+            .clone();
+
+        crate::commands::auth::enable_profile_pin_impl(
+            password,
+            "246810",
+            "dailyPay",
+            &folder,
+            &keystore_dir,
+            "device-drops-test",
+            &alice_state,
+        )
+        .unwrap();
+        alice_state.service.lock().unwrap().logout();
+        crate::commands::auth::login_with_pin_impl(
+            &folder,
+            "246810",
+            false,
+            "device-drops-test".into(),
+            &keystore_dir,
+            "device-drops-test",
+            &alice_state,
+            None,
+        )
+        .unwrap();
+        alice_state.service.lock().unwrap().lock_session();
+        alice_state.set_cached_security_policy(Some(crate::settings::SecurityPolicy {
+            session_timeout_seconds: 0,
+            ..Default::default()
+        }));
+
+        let grant = crate::commands::auth::unlock_session_with_pin_impl(
+            &folder,
+            "246810",
+            &keystore_dir,
+            "device-drops-test",
+            &alice_state,
+        )
+        .unwrap()
+        .one_shot_grant
+        .expect("timeout=0 PIN unlock must issue a one-shot grant");
+
+        let res = create_transfer_bundle_impl(
+            None,
+            bob_did,
+            vec![FrontendSourceTransfer {
+                local_instance_id: v_id,
+                amount_to_send: "20".into(),
+            }],
+            Some("H1 atomic".into()),
+            Some("Alice".into()),
+            std_map,
+            Some(false),
+            Some(false),
+            Some(true),
+            Some(grant.clone()),
+            &alice_state,
+        )
+        .await
+        .expect("H1: Single-call transfer + PoST outbox deposit must succeed with one-shot PIN grant");
+
+        assert!(
+            res.post_deposit.is_some(),
+            "post_deposit should be returned (outbox queued): err={:?}",
+            res.post_deposit_error
+        );
+        // Same consumed grant MUST still reject any second command
+        assert!(alice_state
+            .authorize_and_lock_secret(crate::state::RequiredAccess::DailyPay, Some(&grant))
+            .is_err());
+
         let _ = std::fs::remove_dir_all(base_dir);
     }
 }

@@ -20,6 +20,7 @@ import type {
     VoucherSummary,
     WalletEvent,
     FrontendPendingSignRequest,
+    FrontendPendingTolerancePayment,
     FrontendPendingWotHandshake,
     FrontendUnsupportedPostItem,
     RecoveryProtectionStatusDto,
@@ -51,6 +52,7 @@ export function useDashboardData() {
 
     const [pendingSignRequests, setPendingSignRequests] = useState<FrontendPendingSignRequest[]>([]);
     const [pendingWotHandshakes, setPendingWotHandshakes] = useState<FrontendPendingWotHandshake[]>([]);
+    const [pendingTolerancePayments, setPendingTolerancePayments] = useState<FrontendPendingTolerancePayment[]>([]);
     const [unsupportedMessages, setUnsupportedMessages] = useState<FrontendUnsupportedPostItem[]>([]);
     const [openSellerInquiriesCount, setOpenSellerInquiriesCount] = useState(0);
     const [isOpeningSignRequest, setIsOpeningSignRequest] = useState<string | null>(null);
@@ -191,6 +193,7 @@ export function useDashboardData() {
                     if (!active) return;
                     setPendingSignRequests(summary.pendingSignRequests || []);
                     setPendingWotHandshakes(summary.pendingWotHandshakes || []);
+                    setPendingTolerancePayments(summary.pendingTolerancePayments || []);
                     setUnsupportedMessages(summary.unsupportedMessages || []);
                     setOpenSellerInquiriesCount(
                         (summary.inquiries || []).filter(
@@ -263,6 +266,39 @@ export function useDashboardData() {
                 setUnsupportedMessages((prev) => prev.filter((m) => m.msgId !== msgId));
             } catch (e) {
                 logger.error(`Failed to dismiss unsupported PoST item: ${stringifyError(e)}`);
+                setFeedbackMsg(translateError(e, t));
+            }
+        },
+        [protectAction, t],
+    );
+
+    const handleConfirmTolerancePayment = useCallback(
+        async (msgId: string): Promise<boolean> => {
+            try {
+                const payload = await protectAction(async (pwd) => {
+                    return await postService.confirmPendingPostPayment(msgId, pwd || undefined);
+                });
+                if (!payload) return false;
+                setPendingTolerancePayments((prev) => prev.filter((p) => p.msgId !== msgId));
+                return true;
+            } catch (e) {
+                logger.error(`Failed to confirm pending tolerance payment: ${stringifyError(e)}`);
+                setFeedbackMsg(translateError(e, t));
+                return false;
+            }
+        },
+        [protectAction, t],
+    );
+
+    const handleDismissTolerancePayment = useCallback(
+        async (msgId: string) => {
+            try {
+                await protectAction(async (pwd) => {
+                    await postService.dismissPendingPostItem('tolerance_payment', msgId, pwd || undefined);
+                });
+                setPendingTolerancePayments((prev) => prev.filter((p) => p.msgId !== msgId));
+            } catch (e) {
+                logger.error(`Failed to dismiss pending tolerance payment: ${stringifyError(e)}`);
                 setFeedbackMsg(translateError(e, t));
             }
         },
@@ -358,6 +394,7 @@ export function useDashboardData() {
         quarantinedCount,
         pendingSignRequests,
         pendingWotHandshakes,
+        pendingTolerancePayments,
         unsupportedMessages,
         openSellerInquiriesCount,
         isOpeningSignRequest,
@@ -380,6 +417,8 @@ export function useDashboardData() {
         handleViewModeChange,
         handleOpenSignRequest,
         handleDismissSignRequest,
+        handleConfirmTolerancePayment,
+        handleDismissTolerancePayment,
         handleDismissUnsupportedPost,
         handleProtectedNavigate,
         navigate,

@@ -343,12 +343,14 @@ pub fn import_key_successor_attestation_cmd(
     Ok(att.new_did)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn create_guarantor_claim_bundle_impl(
     local_instance_id: String,
     guarantor_id: String,
     amount: String,
     standard_toml: String,
     notes: Option<String>,
+    deposit_to_post: Option<bool>,
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendClaimBundleDto, FrontendError> {
@@ -493,14 +495,33 @@ pub(crate) async fn create_guarantor_claim_bundle_impl(
         .await?;
     }
 
+    let (post_deposit, post_deposit_error) = if deposit_to_post.unwrap_or(false) {
+        match crate::services::post_service::deposit_transfer_to_post_with_session(
+            &session,
+            res.bundle_id.clone(),
+            resolved_pw.as_deref().map(String::as_str),
+            state,
+        )
+        .await
+        {
+            Ok(dep) => (Some(dep), None),
+            Err(err) => (None, Some(err.message)),
+        }
+    } else {
+        (None, None)
+    };
+
     Ok(FrontendClaimBundleDto {
         bundle_data: res.bundle_bytes,
         bundle_id: res.bundle_id,
         guarantor_id,
         claimed_amount: normalized_amount,
+        post_deposit,
+        post_deposit_error,
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn create_guarantor_claim_bundle(
     local_instance_id: String,
@@ -508,6 +529,7 @@ pub async fn create_guarantor_claim_bundle(
     amount: String,
     standard_toml: String,
     notes: Option<String>,
+    deposit_to_post: Option<bool>,
     password: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<FrontendClaimBundleDto, FrontendError> {
@@ -517,6 +539,7 @@ pub async fn create_guarantor_claim_bundle(
         amount,
         standard_toml,
         notes,
+        deposit_to_post,
         password,
         &state,
     )
@@ -666,6 +689,7 @@ pub(crate) async fn adjudicate_dead_quorum_swap_impl(
     offer_json: String,
     submissions_json: Vec<String>,
     standard_toml: String,
+    deposit_to_post: Option<bool>,
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendDeadQuorumAdjudicationDto, FrontendError> {
@@ -854,23 +878,45 @@ pub(crate) async fn adjudicate_dead_quorum_swap_impl(
     }
 
     let proofs_count = adj.double_spend_proofs.len();
+    let mut approved_dtos: Vec<FrontendApprovedSwapClaimDto> = adj
+        .approved
+        .into_iter()
+        .map(|a| FrontendApprovedSwapClaimDto {
+            claimant_did: a.claimant_did,
+            voucher_id: a.voucher_id,
+            tip_t_id: a.tip_t_id,
+            approved_amount: a.approved_amount,
+            replacement_voucher_id: a.replacement_voucher_id,
+            replacement_local_instance_id: a.replacement_local_instance_id,
+            replacement_bundle_id: a.replacement_bundle_id,
+            replacement_bundle_bytes: a.replacement_bundle_bytes,
+            replacement_intent_local_id: a.replacement_intent_local_id,
+            status: swap_status_to_str(a.status),
+            post_deposit: None,
+            post_deposit_error: None,
+        })
+        .collect();
+
+    if deposit_to_post.unwrap_or(false) {
+        for dto in &mut approved_dtos {
+            if let Some(ref bid) = dto.replacement_bundle_id {
+                match crate::services::post_service::deposit_transfer_to_post_with_session(
+                    &session,
+                    bid.clone(),
+                    password.as_deref(),
+                    state,
+                )
+                .await
+                {
+                    Ok(dep) => dto.post_deposit = Some(dep),
+                    Err(err) => dto.post_deposit_error = Some(err.message),
+                }
+            }
+        }
+    }
+
     Ok(FrontendDeadQuorumAdjudicationDto {
-        approved: adj
-            .approved
-            .into_iter()
-            .map(|a| FrontendApprovedSwapClaimDto {
-                claimant_did: a.claimant_did,
-                voucher_id: a.voucher_id,
-                tip_t_id: a.tip_t_id,
-                approved_amount: a.approved_amount,
-                replacement_voucher_id: a.replacement_voucher_id,
-                replacement_local_instance_id: a.replacement_local_instance_id,
-                replacement_bundle_id: a.replacement_bundle_id,
-                replacement_bundle_bytes: a.replacement_bundle_bytes,
-                replacement_intent_local_id: a.replacement_intent_local_id,
-                status: swap_status_to_str(a.status),
-            })
-            .collect(),
+        approved: approved_dtos,
         rejected: adj
             .rejected
             .into_iter()
@@ -890,11 +936,19 @@ pub async fn adjudicate_dead_quorum_swap_cmd(
     offer_json: String,
     submissions_json: Vec<String>,
     standard_toml: String,
+    deposit_to_post: Option<bool>,
     password: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<FrontendDeadQuorumAdjudicationDto, FrontendError> {
-    adjudicate_dead_quorum_swap_impl(offer_json, submissions_json, standard_toml, password, &state)
-        .await
+    adjudicate_dead_quorum_swap_impl(
+        offer_json,
+        submissions_json,
+        standard_toml,
+        deposit_to_post,
+        password,
+        &state,
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -965,6 +1019,7 @@ mod tests {
             "10.00".into(),
             ft_toml.clone(),
             None,
+            None,
             Some(pw.into()),
             &alice_state,
         )
@@ -980,6 +1035,7 @@ mod tests {
             offer_json.clone(),
             Vec::new(),
             ft_toml.clone(),
+            None,
             Some(pw.into()),
             &alice_state,
         )
@@ -1007,6 +1063,7 @@ mod tests {
             offer_json,
             Vec::new(),
             ft_toml,
+            None,
             Some("123456".into()),
             &bob_state,
         )

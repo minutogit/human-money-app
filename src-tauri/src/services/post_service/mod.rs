@@ -23,10 +23,10 @@ pub mod outbox;
 mod tests;
 
 pub use inbox_poller::{
-    dismiss_pending_post_item_impl, get_post_inbox_summary_impl, mark_inquiry_read_impl,
-    sync_post_channels_impl,
+    confirm_pending_post_payment_impl, dismiss_pending_post_item_impl, get_post_inbox_summary_impl,
+    mark_inquiry_read_impl, sync_post_channels_impl,
 };
-pub(crate) use outbox::flush_post_slots_impl;
+pub(crate) use outbox::{deposit_transfer_to_post_with_session, flush_post_slots_impl};
 pub use outbox::{
     accept_wot_handshake_impl, deposit_transfer_to_post_impl,
     reply_detached_signature_via_post_impl, send_market_inquiry_message_via_post_impl,
@@ -199,6 +199,12 @@ pub(crate) fn merge_post_state_with_service(
             &mut working.unsupported_messages,
             &latest.unsupported_messages,
             |u| u.msg_id.as_str(),
+        );
+        merge_vec_by_id(
+            &baseline.pending_tolerance_payments,
+            &mut working.pending_tolerance_payments,
+            &latest.pending_tolerance_payments,
+            |p| p.msg_id.as_str(),
         );
         if working.inquiry_rate_tracker == baseline.inquiry_rate_tracker
             && latest.inquiry_rate_tracker != baseline.inquiry_rate_tracker

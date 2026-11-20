@@ -73,7 +73,7 @@ export const authService = {
         });
     },
 
-    deleteProfile: async (args: { folderName: string; password?: string }) => {
+    deleteProfile: async (args: { folderName: string; password: string }) => {
         return await invoke<void>("delete_profile", {
             folderName: args.folderName,
             password: args.password
