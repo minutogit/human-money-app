@@ -3,7 +3,7 @@ use human_money_core::crypto::create_user_id;
 use humoco_market::{
     compute_dummy_tag16, compute_post_tag16, create_dummy_post_box, decode_post_slot,
     derive_dummy_key, derive_post_box_key, derive_post_shared_secret, encode_post_slot,
-    is_own_dummy_post_box, merge_post_slot, seal_post_box, try_open_post_box_any_sender,
+    is_own_dummy_post_box, pack_post_slot, seal_post_box, try_open_post_box_any_sender,
     try_open_post_box_from_sender, validate_market_inquiry, validate_market_inquiry_message,
     validate_post_delivery_receipt, validate_wot_handshake_assertion, DropDescriptor,
     InquiryRateTracker, InquiryTarget, MarketError, MarketInquiry, MarketInquiryDecision,
@@ -57,6 +57,7 @@ fn sample_envelope(msg_id: &str, byte_len: usize) -> PostEnvelope {
         }],
         container_bytes: vec![42u8; byte_len],
         anchor_manifest_json: None,
+        anchor_delegations_json: None,
     }
 }
 
@@ -242,17 +243,18 @@ fn test_multi_device_if_match_merge() {
     )
     .unwrap();
 
-    // Device B merges entry_2 and entry_3, acknowledging entry_1's tag
-    let merged_slot = merge_post_slot(
-        &master_seed,
-        Some(&slot_dev_a),
-        &[entry_2.clone(), entry_3.clone()],
-        &[entry_1.tag16], // remove entry_1
-        DROP_POST_MAX_BYTES,
-    )
-    .unwrap();
+    // Device B packs non-empty additions without entry_1, dropping old dummy boxes via pack_post_slot
+    let remote_real: Vec<_> = decode_post_slot(&slot_dev_a)
+        .unwrap()
+        .into_iter()
+        .filter(|e| !is_own_dummy_post_box(&master_seed, e) && e.tag16 != entry_1.tag16)
+        .collect();
+    let mut additions = remote_real;
+    additions.push(entry_2.clone());
+    additions.push(entry_3.clone());
+    let packed = pack_post_slot(&master_seed, &additions, DROP_POST_MAX_BYTES).unwrap();
 
-    let decoded = decode_post_slot(&merged_slot).unwrap();
+    let decoded = decode_post_slot(&packed.blob).unwrap();
     // entry_1 should be gone, old dummy from dev A stripped, entry_2 and entry_3 present (total 2)
     assert_eq!(decoded.len(), 2);
     assert!(!decoded.iter().any(|e| e.tag16 == entry_1.tag16));
@@ -265,16 +267,11 @@ fn test_multi_device_if_match_merge() {
         .count();
     assert_eq!(dummies, 0);
 
-    // Test idempotent re-merge of already present entries (no duplicates)
-    let re_merged = merge_post_slot(
-        &master_seed,
-        Some(&merged_slot),
-        std::slice::from_ref(&entry_2),
-        &[],
-        DROP_POST_MAX_BYTES,
-    )
-    .unwrap();
-    let decoded_re = decode_post_slot(&re_merged).unwrap();
+    // Test idempotent re-pack deduplication of already present entries (no duplicates)
+    let mut dup_input = decoded;
+    dup_input.push(entry_2);
+    let re_packed = pack_post_slot(&master_seed, &dup_input, DROP_POST_MAX_BYTES).unwrap();
+    let decoded_re = decode_post_slot(&re_packed.blob).unwrap();
     assert_eq!(decoded_re.len(), 2);
 }
 
@@ -366,7 +363,7 @@ fn test_market_inquiry_models_and_rate_limiting() {
         msg_id: "msg-1".to_string(),
         text: Some("Yes, pickup available!".to_string()),
         decision: Some(MarketInquiryDecision::Confirm),
-        payment_uri: Some("humoco:transfer?amount=5".to_string()),
+        payment_uri: Some("humoco://pay?to=did:key:zAlice&amount=5".to_string()),
         amount_hint: Some("5 Minuto".to_string()),
         standard_uuid: None,
         created_at: 1700001000,

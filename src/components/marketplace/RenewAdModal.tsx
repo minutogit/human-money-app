@@ -6,6 +6,7 @@ import { FrontendMyAd } from '../../types';
 import { ModalShell } from '../ui/ModalShell';
 import { Button } from '../ui/Button';
 import { SegmentedTabs } from '../ui/SegmentedTabs';
+import { translateError } from '../../utils/errorHelper';
 
 export interface RenewAdModalProps {
     isOpen: boolean;
@@ -42,12 +43,7 @@ export const RenewAdModal: React.FC<RenewAdModalProps> = ({
             await onRenew(ad.id, durationDays);
             onClose();
         } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            if (msg.includes('market.adLimitReached')) {
-                setError(t('marketplace.adLimitReached', 'Das Limit von 5 aktiven Inseraten ist erreicht.'));
-            } else {
-                setError(msg);
-            }
+            setError(translateError(err, t));
         } finally {
             setIsSubmitting(false);
         }
@@ -111,8 +107,9 @@ export const RenewAdModal: React.FC<RenewAdModalProps> = ({
                 <div className="p-3.5 rounded-xl bg-theme-primary/5 border border-theme-primary/15 flex items-center gap-2.5 text-xs text-theme-secondary">
                     <Clock size={16} className="text-theme-primary shrink-0" />
                     <span>
-                        {t('marketplace.renewLivePreview', 'Läuft dann bis {{date}}', {
+                        {t('marketplace.renewLivePreview', 'Neues Ablaufdatum: {{date}} (noch {{days}} Tage)', {
                             date: targetExpiryDate,
+                            days: durationDays,
                         })}
                     </span>
                 </div>

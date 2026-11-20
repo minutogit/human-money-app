@@ -69,6 +69,7 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile, onFinish
     const [postCheckStatus, setPostCheckStatus] = useState<{ variant: 'info' | 'success' | 'error'; message: string } | null>(null);
     const processedDroppedFileRef = useRef<{ name: string; bytes: number[]; launchItem?: string } | null>(null);
     const activeLaunchItemRef = useRef<string | null>(null);
+    const execInFlightRef = useRef(false);
 
     const modalsRef = useRef<ReturnType<typeof useReceiveModals> | null>(null);
     const wotRef = useRef<ReturnType<typeof useReceiveWotImport> | null>(null);
@@ -112,6 +113,8 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile, onFinish
             name: string,
             password?: string,
         ) => {
+            if (execInFlightRef.current) return;
+            execInFlightRef.current = true;
             setIsProcessing(true);
             setFeedbackMsg('');
             try {
@@ -222,6 +225,7 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile, onFinish
                 setFeedbackMsg(translateError(e, t));
                 clearSelection();
             } finally {
+                execInFlightRef.current = false;
                 setIsProcessing(false);
             }
         },
@@ -374,7 +378,11 @@ export function useReceiveFlow({ onBack, onReceiveSuccess, droppedFile, onFinish
             logger.info(`File selected via dialog: ${opened.path}`);
             if (config) settingsService.getConfig().then(setConfig).catch(() => {});
             const fileName = opened.path.split(/[/\\]/).pop() || '';
-            await processIncomingFile(fileName, opened.bytes);
+            const handled = await processIncomingFile(fileName, opened.bytes);
+            if (!handled) {
+                clearSelection();
+                setFeedbackMsg(t('transfer.importFile.invalidFileType'));
+            }
         } catch (e) {
             setFeedbackMsg(translateError(e, t));
         }

@@ -616,14 +616,7 @@ pub struct FrontendSyncAdminStatus {
     pub soft_warning: bool,
     pub card_policy: FrontendMemberPolicyDto,
     pub allow: Vec<String>,
-    pub deny: Vec<String>,
-    pub blocked_pubkeys: Vec<String>,
-    pub direct_member_count: usize,
-    pub hop2_member_count: usize,
     pub total_member_count: usize,
-    pub active_slot_ids: Vec<String>,
-    #[serde(default)]
-    pub channel_counts: std::collections::BTreeMap<String, usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revocation: Option<crate::sync_client::SyncRevocationNotice>,
 }
@@ -633,8 +626,6 @@ pub struct FrontendSyncAdminStatus {
 pub struct FrontendSyncAdminUpdateRequest {
     pub card_policy: Option<FrontendMemberPolicyDto>,
     pub allow: Option<Vec<String>>,
-    pub deny: Option<Vec<String>>,
-    pub blocked_pubkeys: Option<Vec<String>>,
     pub max_members: Option<usize>,
     pub max_total_storage_mb: Option<usize>,
     pub max_user_storage_mb: Option<usize>,

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import { COMMAND_ACCESS_POLICY } from "../commandPolicy";
 
@@ -69,6 +70,16 @@ describe("Backend command & service reachability guard", () => {
             "checkout_received_bundle",
             "save_transaction_record",
             "take_startup_launch_items",
+            "sync_channel_members",
+            "run_auto_backup_sync",
+            "get_seal_sync_status",
+            "send_wot_handshake_via_post",
+            "delete_foreign_contact_card",
+            "block_sync_slot",
+            "delete_own_sync_slots",
+            "run_l2_lifecycle_tick",
+            "create_key_successor_attestation_cmd",
+            "import_key_successor_attestation_cmd",
         ];
 
         for (const cmd of deletedCommands) {
@@ -76,13 +87,69 @@ describe("Backend command & service reachability guard", () => {
             expect(Object.keys(COMMAND_ACCESS_POLICY)).not.toContain(cmd);
         }
 
-        const bannedInProd = [...deletedCommands, "checkoutReceivedBundle"];
+        const bannedInProd = [
+            ...deletedCommands,
+            "checkoutReceivedBundle",
+            "syncChannelMembers",
+            "runAutoBackupSync",
+            "getSealSyncStatus",
+            "sendWotHandshakeViaPost",
+            "deleteForeignContactCard",
+            "blockSyncSlot",
+            "deleteOwnSyncSlots",
+            "runL2LifecycleTick",
+            "createKeySuccessorAttestation",
+            "importKeySuccessorAttestation",
+        ];
         for (const [filePath, content] of prodContents) {
             const rel = path.relative(APP_ROOT, filePath);
             for (const sym of bannedInProd) {
                 expect(content, `Removed symbol '${sym}' still present in ${rel}`).not.toContain(sym);
             }
         }
+    });
+
+    it("ensures every exported *Service method has at least one production caller outside src/services/", () => {
+        const serviceFiles = fs
+            .readdirSync(path.join(SRC_ROOT, "services"))
+            .filter((f) => f.endsWith("Service.ts"))
+            .map((f) => path.join(SRC_ROOT, "services", f));
+        const nonServiceProd = [...prodContents.entries()]
+            .filter(([p]) => !p.startsWith(path.join(SRC_ROOT, "services") + path.sep))
+            .map(([, content]) => content)
+            .join("\n");
+
+        const unusedMethods: string[] = [];
+        for (const file of serviceFiles) {
+            const rel = path.relative(APP_ROOT, file);
+            const src = fs.readFileSync(file, "utf-8");
+            const sf = ts.createSourceFile(file, src, ts.ScriptTarget.Latest, true);
+            const visit = (node: ts.Node) => {
+                if (
+                    ts.isVariableDeclaration(node) &&
+                    ts.isIdentifier(node.name) &&
+                    node.name.text.endsWith("Service") &&
+                    node.initializer &&
+                    ts.isObjectLiteralExpression(node.initializer)
+                ) {
+                    const svcName = node.name.text;
+                    for (const prop of node.initializer.properties) {
+                        if (
+                            (ts.isPropertyAssignment(prop) || ts.isMethodDeclaration(prop)) &&
+                            ts.isIdentifier(prop.name)
+                        ) {
+                            const method = prop.name.text;
+                            if (!new RegExp(`\\b${method}\\b`).test(nonServiceProd)) {
+                                unusedMethods.push(`${rel}: ${svcName}.${method}`);
+                            }
+                        }
+                    }
+                }
+                ts.forEachChild(node, visit);
+            };
+            visit(sf);
+        }
+        expect(unusedMethods).toEqual([]);
     });
 
     it("ensures key refactored service entrypoints are wired into production callers", () => {

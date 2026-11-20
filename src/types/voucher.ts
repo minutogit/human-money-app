@@ -174,6 +174,12 @@ export interface VoucherSignature {
     details?: PublicProfile;
 }
 
+export interface ExpectedL2Committee {
+    lockPubs: string[];
+    threshold: number;
+    source: string;
+}
+
 export interface NewVoucherData {
     validityDuration: string | null;
     nonRedeemableTestVoucher: boolean;
@@ -185,6 +191,9 @@ export interface NewVoucherData {
     creator: CreatorData;
     layer2Anchor?: string | null;
     allowOfflineOnly?: boolean;
+    expectedCommittee?: ExpectedL2Committee | null;
+    forceReprobe?: boolean;
+    explicitOfflineOnly?: boolean;
 }
 
 export interface TransactionHistoryEntry {

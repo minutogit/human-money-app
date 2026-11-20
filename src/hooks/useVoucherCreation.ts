@@ -12,6 +12,7 @@ import {
     CreatorData, 
     CollateralData, 
     NewVoucherData,
+    ExpectedL2Committee,
     PublicProfile,
     LockProtectionOverviewDto
 } from "../types";
@@ -117,11 +118,13 @@ export function useVoucherCreation() {
     });
 
     const [isLoading, setIsLoading] = useState(true);
+    const [isParsingStandard, setIsParsingStandard] = useState(false);
     const [coordWarning, setCoordWarning] = useState("");
     const [errors, setErrors] = useState<Record<string, boolean>>({});
     const [lockOverview, setLockOverview] = useState<LockProtectionOverviewDto | null>(null);
     const isMountedRef = useRef(true);
     const standardParseSeqRef = useRef(0);
+    const overviewSeqRef = useRef(0);
 
     useEffect(() => {
         isMountedRef.current = true;
@@ -130,21 +133,23 @@ export function useVoucherCreation() {
         };
     }, []);
 
-    useEffect(() => {
-        let active = true;
-        if (typeof settingsService?.getLockProtectionOverview === 'function') {
-            settingsService
-                .getLockProtectionOverview()
-                .then((res) => {
-                    if (!active || !res) return;
-                    setLockOverview(res);
-                })
-                .catch(() => {
-                    // Keep offline-only default if unavailable
-                });
+    const refreshLockOverview = useCallback(async () => {
+        if (typeof settingsService?.getLockProtectionOverview !== 'function') return null;
+        const seq = ++overviewSeqRef.current;
+        try {
+            const res = await settingsService.getLockProtectionOverview();
+            if (!isMountedRef.current || seq !== overviewSeqRef.current || !res) return null;
+            setLockOverview(res);
+            return res;
+        } catch {
+            // Keep offline-only default if unavailable
+            return null;
         }
-        return () => { active = false; };
     }, []);
+
+    useEffect(() => {
+        void refreshLockOverview();
+    }, [refreshLockOverview]);
 
     const refreshStandards = useCallback(async () => {
         try {
@@ -170,10 +175,12 @@ export function useVoucherCreation() {
     const handleStandardChange = useCallback(async (newId: string) => {
         const seq = ++standardParseSeqRef.current;
         setSelectedStandardId(newId);
+        setParsedStandard(null);
         setErrors(prev => ({ ...prev, standard: false }));
 
         const selectedStd = standards.find(s => s.id === newId);
         if (selectedStd) {
+            setIsParsingStandard(true);
             try {
                 const parsed = await standardsService.parseStandard(selectedStd.content);
                 if (!isMountedRef.current || standardParseSeqRef.current !== seq) return;
@@ -191,8 +198,13 @@ export function useVoucherCreation() {
                 if (!isMountedRef.current || standardParseSeqRef.current !== seq) return;
                 logger.error(`Failed to parse standard: ${stringifyError(e)}`);
                 setParsedStandard(null);
+            } finally {
+                if (isMountedRef.current && standardParseSeqRef.current === seq) {
+                    setIsParsingStandard(false);
+                }
             }
         } else {
+            setIsParsingStandard(false);
             setParsedStandard(null);
         }
     }, [standards]);
@@ -306,14 +318,37 @@ export function useVoucherCreation() {
         return newErrors;
     }, [selectedStandardId, amount, identity, parsedStandard, requiresOfflineOnlyConfirm, allowOfflineOnly]);
 
-    const prepareVoucherData = useCallback((allowOfflineOnlyOverride?: boolean): NewVoucherData => {
+    const prepareVoucherData = useCallback((
+        allowOfflineOnlyOverride?: boolean,
+        options?: {
+            forceReprobe?: boolean;
+            explicitOfflineOnly?: boolean;
+            expectedCommitteeOverride?: ExpectedL2Committee | null;
+        }
+    ): NewVoucherData => {
         const validityDuration = validityValue > 0 ? `P${validityValue}${validityUnit}` : null;
         const { street, houseNumber, zipCode, city, country } = identity.address;
         const fullAddress = `${street} ${houseNumber}, ${zipCode} ${city}, ${country}`.trim();
         const creatorGender = standardRequiresCreatorGender(parsedStandard) ? identity.gender : "0";
         const normalizedAmount = amount.trim().replace(',', '.');
         const normalizedCollateral = collateral.amount.trim().replace(',', '.');
-        
+        const effectiveOfflineOnly = allowOfflineOnlyOverride ?? allowOfflineOnly;
+        const readyTrustedServers = (lockOverview?.servers ?? []).filter(
+            (s) => s.trusted && s.status === 'ok' && Boolean(s.lockPub?.trim())
+        );
+        const derivedExpectedCommittee: ExpectedL2Committee | null =
+            !nonRedeemable && !effectiveOfflineOnly && readyTrustedServers.length === 1
+                ? {
+                      lockPubs: [readyTrustedServers[0].lockPub],
+                      threshold: 1,
+                      source: 'live',
+                  }
+                : null;
+        const expectedCommittee =
+            options?.expectedCommitteeOverride !== undefined
+                ? options.expectedCommitteeOverride
+                : derivedExpectedCommittee;
+
         return {
             validityDuration,
             nonRedeemableTestVoucher: nonRedeemable,
@@ -325,14 +360,18 @@ export function useVoucherCreation() {
                 address: { ...identity.address, fullAddress }
             },
             layer2Anchor: null,
-            allowOfflineOnly: allowOfflineOnlyOverride ?? allowOfflineOnly,
+            allowOfflineOnly: effectiveOfflineOnly,
+            expectedCommittee,
+            forceReprobe: Boolean(options?.forceReprobe),
+            explicitOfflineOnly: Boolean(options?.explicitOfflineOnly ?? effectiveOfflineOnly),
         };
-    }, [identity, collateral, amount, nonRedeemable, parsedStandard, validityValue, validityUnit, allowOfflineOnly]);
+    }, [identity, collateral, amount, nonRedeemable, parsedStandard, validityValue, validityUnit, allowOfflineOnly, lockOverview]);
 
     return {
         standards,
         selectedStandardId,
         parsedStandard,
+        isParsingStandard,
         amount,
         validityValue,
         validityUnit,
@@ -345,6 +384,7 @@ export function useVoucherCreation() {
         coordWarning,
         errors,
         lockOverview,
+        refreshLockOverview,
         setAmount,
         setValidityValue,
         setValidityUnit,

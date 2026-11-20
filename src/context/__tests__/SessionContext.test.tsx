@@ -7,7 +7,6 @@ import { NavigationProvider, useNavigation } from '../NavigationContext';
 import { Sidebar } from '../../components/shell/Sidebar';
 import App from '../../App';
 import { updateNetworkStatus } from '../../sync/syncBridge';
-import { channelMembersSyncManager } from '../../sync/channelMembersSyncManager';
 import { rateLimitManager } from '../../sync/rateLimitManager';
 import { AppConfigDto, AppState } from '../../types';
 
@@ -91,7 +90,6 @@ vi.mock('../../sync/syncBridge', () => ({
   afterWalletMutation: vi.fn(),
   runSyncBackupPass: vi.fn().mockResolvedValue(null),
   runPostSyncPass: vi.fn().mockResolvedValue(undefined),
-  BACKUP_UPDATED_EVENT: 'humoco:backup-updated',
 }));
 
 vi.mock('../../hooks/useWindowTitleSync', () => ({
@@ -99,11 +97,13 @@ vi.mock('../../hooks/useWindowTitleSync', () => ({
 }));
 
 const mockCheckIntegrity = vi.fn().mockResolvedValue(undefined);
+const mockResetIntegrity = vi.fn();
 
 vi.mock('../../hooks/useIntegrityCheck', () => ({
   useIntegrityCheck: () => ({
     integrityReport: null,
     checkIntegrity: mockCheckIntegrity,
+    resetIntegrity: mockResetIntegrity,
   }),
 }));
 
@@ -459,9 +459,8 @@ describe('SessionContext and Session Timeout UX (APP-017)', () => {
     }
   });
 
-  it('notifyLogout resets channelMembersSyncManager and rateLimitManager and emits session lock', async () => {
+  it('notifyLogout resets integrity, rateLimitManager and emits session lock', async () => {
     (authService.getSessionStatus as Mock).mockResolvedValue(fullStatus(true));
-    const membersResetSpy = vi.spyOn(channelMembersSyncManager, 'reset');
     const cooldownClearSpy = vi.spyOn(rateLimitManager, 'clearCooldown');
     const lockedSpy = vi.fn();
     window.addEventListener('humoco:session-locked', lockedSpy);
@@ -476,7 +475,7 @@ describe('SessionContext and Session Timeout UX (APP-017)', () => {
       screen.getByText('Login Alice').click();
     });
 
-    membersResetSpy.mockClear();
+    mockResetIntegrity.mockClear();
     cooldownClearSpy.mockClear();
     lockedSpy.mockClear();
 
@@ -484,12 +483,11 @@ describe('SessionContext and Session Timeout UX (APP-017)', () => {
       screen.getByText('Logout').click();
     });
 
-    expect(membersResetSpy).toHaveBeenCalledTimes(1);
+    expect(mockResetIntegrity).toHaveBeenCalledTimes(1);
     expect(cooldownClearSpy).toHaveBeenCalledTimes(1);
     expect(lockedSpy).toHaveBeenCalledTimes(1);
 
     window.removeEventListener('humoco:session-locked', lockedSpy);
-    membersResetSpy.mockRestore();
     cooldownClearSpy.mockRestore();
   });
 

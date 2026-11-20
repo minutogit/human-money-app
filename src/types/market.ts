@@ -221,21 +221,13 @@ export interface FrontendSyncAdminStatus {
     softWarning: boolean;
     cardPolicy: FrontendMemberPolicyDto;
     allow: string[];
-    deny: string[];
-    blockedPubkeys: string[];
-    directMemberCount: number;
-    hop2MemberCount: number;
     totalMemberCount: number;
-    activeSlotIds: string[];
-    channelCounts?: Record<string, number>;
     revocation?: SyncRevocationNotice | null;
 }
 
 export interface FrontendSyncAdminUpdateRequest {
     cardPolicy?: FrontendMemberPolicyDto | null;
     allow?: string[] | null;
-    deny?: string[] | null;
-    blockedPubkeys?: string[] | null;
     maxMembers?: number | null;
     maxTotalStorageMb?: number | null;
     maxUserStorageMb?: number | null;

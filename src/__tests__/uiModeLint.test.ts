@@ -43,9 +43,11 @@ function collectSourceFiles(dir: string): string[] {
 }
 
 describe('UI Mode Architecture Guardrail (APP-UX-09)', () => {
-    it('restricts direct useUiMode() usage to UiModeContext, UI primitives, Header, Sidebar, and HelpCenterView', () => {
+    it('restricts direct useUiMode(), UiModeContext, and .uiMode reads to allowed primitives and shell components', () => {
         const files = collectSourceFiles(SRC_ROOT);
-        const violations: string[] = [];
+        const useUiModeViolations: string[] = [];
+        const contextImportViolations: string[] = [];
+        const propertyAccessViolations: string[] = [];
 
         for (const file of files) {
             const relPath = path.relative(SRC_ROOT, file).split(path.sep).join('/');
@@ -56,10 +58,22 @@ describe('UI Mode Architecture Guardrail (APP-UX-09)', () => {
 
             const content = fs.readFileSync(file, 'utf8');
             if (/\buseUiMode\b/.test(content)) {
-                violations.push(relPath);
+                useUiModeViolations.push(relPath);
+            }
+            if (/\bUiModeContext\b/.test(content) && relPath !== 'App.tsx') {
+                contextImportViolations.push(relPath);
+            }
+            if (
+                /\.uiMode\b/.test(content) &&
+                relPath !== 'utils/tourBridge.ts' &&
+                !relPath.startsWith('types/')
+            ) {
+                propertyAccessViolations.push(relPath);
             }
         }
 
-        expect(violations).toEqual([]);
+        expect(useUiModeViolations).toEqual([]);
+        expect(contextImportViolations).toEqual([]);
+        expect(propertyAccessViolations).toEqual([]);
     });
 });

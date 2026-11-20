@@ -7,9 +7,12 @@ import { stringifyError } from '../utils/errorHelper';
 export function useSessionHeartbeat(
     hasCachedSession: boolean,
     onStatusSync: (status: SessionStatusDto) => void,
-    lastHeartbeatRef: React.MutableRefObject<number>
+    lastHeartbeatRef: React.MutableRefObject<number>,
+    getSessionGen?: () => number
 ) {
     const hasCachedSessionRef = useRef(hasCachedSession);
+    const getSessionGenRef = useRef(getSessionGen);
+    getSessionGenRef.current = getSessionGen;
 
     // Sync Ref
     useEffect(() => {
@@ -43,8 +46,15 @@ export function useSessionHeartbeat(
     useEffect(() => {
         const checkStatus = async () => {
             if (hasCachedSessionRef.current) {
+                const expectedGen = getSessionGenRef.current?.();
                 try {
                     const status = await authService.getSessionStatus();
+                    if (
+                        expectedGen !== undefined &&
+                        getSessionGenRef.current?.() !== expectedGen
+                    ) {
+                        return;
+                    }
                     if (!status.hasCachedSession) {
                         logger.info("Session background check: Session expired.");
                         onStatusSync(status);

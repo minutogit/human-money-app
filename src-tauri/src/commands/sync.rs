@@ -11,14 +11,6 @@ use crate::services::sync_engine;
 use crate::AppState;
 
 #[tauri::command]
-pub async fn sync_channel_members(
-    password: Option<String>,
-    state: State<'_, AppState>,
-) -> Result<usize, FrontendError> {
-    sync_engine::sync_channel_members_impl(password.as_deref(), &state).await
-}
-
-#[tauri::command]
 pub fn prepare_sync_setup(
     policy: Option<FrontendMemberPolicyDto>,
     max_members: Option<usize>,
@@ -91,15 +83,6 @@ pub async fn update_sync_admin_config(
 }
 
 #[tauri::command]
-pub async fn block_sync_slot(
-    pubkey_hex64: String,
-    password: Option<String>,
-    state: State<'_, AppState>,
-) -> Result<FrontendSyncAdminStatus, FrontendError> {
-    sync_engine::block_sync_slot_impl(pubkey_hex64, password, &state).await
-}
-
-#[tauri::command]
 pub fn delete_sync_admin(
     password: Option<String>,
     state: State<'_, AppState>,
@@ -167,14 +150,6 @@ pub async fn sync_market_channels(
         &state,
     )
     .await
-}
-
-#[tauri::command]
-pub async fn delete_own_sync_slots(
-    password: Option<String>,
-    state: State<'_, AppState>,
-) -> Result<usize, FrontendError> {
-    sync_engine::delete_own_sync_slots_impl(password, &state).await
 }
 
 #[tauri::command]

@@ -95,6 +95,13 @@ pub struct SyncLockSelftestReportDto {
     pub sig: String,
 }
 
+fn deserialize_u32_null_default<'de, D>(deserializer: D) -> Result<u32, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<u32>::deserialize(deserializer)?.unwrap_or_else(default_ticket_pow_bits))
+}
+
 fn default_ticket_pow_bits() -> u32 {
     16
 }
@@ -114,7 +121,10 @@ pub struct SyncLockInfoDto {
     pub pow_base_bits: u32,
     #[serde(default)]
     pub allow_pow_tickets: bool,
-    #[serde(default = "default_ticket_pow_bits")]
+    #[serde(
+        default = "default_ticket_pow_bits",
+        deserialize_with = "deserialize_u32_null_default"
+    )]
     pub ticket_pow_bits: u32,
     #[serde(default)]
     pub selftest: Option<SyncLockSelftestReportDto>,
@@ -439,7 +449,7 @@ pub async fn push_lock_delegation(
     let url = append_sync_query(write_url, "lock_delegate")?;
     let clean_write = write_url.trim().to_string();
     let clean_read = read_url.trim().to_string();
-    if validate_sync_url(&clean_write).is_err() || validate_sync_url(&clean_read).is_err() {
+    if validate_sync_url(&clean_write).is_err() || validate_sync_read_url(&clean_read).is_err() {
         return Err("Invalid write_url or read_url for lock delegation".to_string());
     }
     let admin_pub = hex::encode(admin_sk.verifying_key().as_bytes());
@@ -496,7 +506,10 @@ fn is_blocked_v4(v4: std::net::Ipv4Addr, allow_loopback: bool) -> bool {
         || o[0] == 0
         || (o[0] == 100 && (o[1] & 0b1100_0000) == 64)
         || (o[0] == 192 && o[1] == 0 && o[2] == 0)
+        || (o[0] == 192 && o[1] == 0 && o[2] == 2)
         || (o[0] == 198 && (o[1] & 0b1111_1110) == 18)
+        || (o[0] == 198 && o[1] == 51 && o[2] == 100)
+        || (o[0] == 203 && o[1] == 0 && o[2] == 113)
         || o[0] >= 240
 }
 
@@ -508,8 +521,10 @@ pub(crate) fn is_blocked_ip(ip: std::net::IpAddr, allow_loopback: bool) -> bool 
                 return is_blocked_v4(v4, allow_loopback);
             }
             let seg = v6.segments();
-            // NAT64 well-known prefix (64:ff9b::/96) and IPv4-compatible IPv6 (::/96 except :: and ::1)
+            // NAT64 well-known (64:ff9b::/96), IPv4-translated (::ffff:0:0:0/96),
+            // and IPv4-compatible IPv6 (::/96 except :: and ::1)
             if (seg[0] == 0x0064 && seg[1] == 0xff9b && seg[2..6] == [0, 0, 0, 0])
+                || (seg[0..4] == [0, 0, 0, 0] && seg[4] == 0xffff && seg[5] == 0)
                 || (seg[0..6] == [0, 0, 0, 0, 0, 0] && (seg[6] != 0 || seg[7] > 1))
             {
                 let embedded_v4 = std::net::Ipv4Addr::new(
@@ -525,9 +540,17 @@ pub(crate) fn is_blocked_ip(ip: std::net::IpAddr, allow_loopback: bool) -> bool 
             } else {
                 v6.is_unspecified()
                     || v6.is_multicast()
+                    || (seg[0] == 0x0064 && seg[1] == 0xff9b && seg[2] == 0x0001) // NAT64 local-use 64:ff9b:1::/48
                     || (seg[0] & 0xfe00) == 0xfc00
                     || (seg[0] & 0xffc0) == 0xfe80
+                    || (seg[0] & 0xffc0) == 0xfec0 // Site-local
+                    || seg[0] == 0x2002 // 6to4
+                    || (seg[0] == 0x2001 && seg[1] == 0x0000) // Teredo
+                    || (seg[0] == 0x0100 && seg[1..4] == [0, 0, 0]) // Discard-Only 100::/64
+                    || (seg[0] == 0x2001 && seg[1] == 0x0002 && seg[2] == 0) // Benchmarking
+                    || (seg[0] == 0x2001 && ((seg[1] & 0xfff0) == 0x0010 || (seg[1] & 0xfff0) == 0x0020)) // ORCHID
                     || (seg[0] == 0x2001 && seg[1] == 0x0db8)
+                    || (seg[0] == 0x3fff && seg[1] < 0x1000) // Documentation 3fff::/20
             }
         }
     }
@@ -590,6 +613,19 @@ pub fn validate_sync_url(url: &str) -> Result<(), String> {
     validate_sync_url_strict(url, loopback_sync_allowed())
 }
 
+pub fn validate_sync_read_url(url: &str) -> Result<(), String> {
+    validate_sync_url(url)?;
+    let parsed = reqwest::Url::parse(url.trim())
+        .map_err(|e| format!("Invalid Sync read URL '{}': {}", url, e))?;
+    if parsed.query().is_some() {
+        return Err(format!(
+            "Sync read URL must not contain a query string: '{}'",
+            url
+        ));
+    }
+    Ok(())
+}
+
 pub fn validate_sync_url_strict(url: &str, allow_loopback: bool) -> Result<(), String> {
     let trimmed = url.trim();
     if trimmed.is_empty()
@@ -611,6 +647,7 @@ pub fn validate_sync_url_strict(url: &str, allow_loopback: bool) -> Result<(), S
     };
     let host_lower = host
         .trim_matches(|c| c == '[' || c == ']')
+        .trim_end_matches('.')
         .to_ascii_lowercase();
     let is_loopback_name = host_lower == "localhost"
         || host_lower.ends_with(".localhost")
@@ -651,7 +688,7 @@ pub fn create_sync_http_client() -> reqwest::Client {
         )))
         .timeout(std::time::Duration::from_secs(15))
         .build()
-        .unwrap_or_else(|_| reqwest::Client::new())
+        .expect("failed to build SSRF-safe sync HTTP client")
 }
 
 pub fn create_sync_probe_client() -> reqwest::Client {
@@ -662,7 +699,7 @@ pub fn create_sync_probe_client() -> reqwest::Client {
         )))
         .timeout(std::time::Duration::from_secs(6))
         .build()
-        .unwrap_or_else(|_| reqwest::Client::new())
+        .expect("failed to build SSRF-safe sync probe HTTP client")
 }
 
 pub fn generate_sync_nonce() -> String {
@@ -1453,13 +1490,37 @@ pub async fn probe_lock_server(
         failed.latency_ms = start.elapsed().as_millis() as u64;
         return failed;
     }
-    if let Err(e) = validate_sync_url(&failed.read_url) {
+    if let Err(e) = validate_sync_read_url(&failed.read_url) {
         failed.error = Some(format!(
             "Invalid server read_url '{}': {}",
             failed.read_url, e
         ));
         failed.latency_ms = start.elapsed().as_millis() as u64;
         return failed;
+    }
+
+    if let Some(ref rev) = info.revocation {
+        let rev_admin = expected_admin_pub
+            .map(|s| s.trim().to_ascii_lowercase())
+            .filter(|s| !s.is_empty())
+            .or_else(|| {
+                info.lock
+                    .as_ref()
+                    .and_then(|l| l.delegation.as_ref())
+                    .map(|d| d.admin_pub.trim().to_ascii_lowercase())
+                    .filter(|s| !s.is_empty())
+            })
+            .unwrap_or_else(|| failed.drop_pub.clone());
+        if !rev_admin.is_empty()
+            && verify_revocation_notice(rev, &rev_admin).is_ok()
+            && rev.effective_at <= now_secs
+        {
+            failed.admin_pub = rev_admin;
+            failed.passed = false;
+            failed.error = Some("Server is revoked".to_string());
+            failed.latency_ms = start.elapsed().as_millis() as u64;
+            return failed;
+        }
     }
 
     let Some(lock_info) = info.lock else {
@@ -1490,7 +1551,7 @@ pub async fn probe_lock_server(
             let d_read = d.read_url.trim();
             let valid = verify_lock_delegation(&lock_pub, d, expected_admin_pub)
                 && validate_sync_url(d_write).is_ok()
-                && validate_sync_url(d_read).is_ok()
+                && validate_sync_read_url(d_read).is_ok()
                 && crate::services::common::normalize_sync_url(d_write) == norm_probe_write
                 && crate::services::common::normalize_sync_url(d_read) == norm_probe_read;
             if valid {
@@ -1532,11 +1593,13 @@ pub async fn probe_lock_server(
         }
     }
 
-    let base_read = normalize_lock_read_base(&failed.read_url);
-    let key_probe_url = format!("{}/.lock_key.php", base_read);
-    if let Ok(resp) = client.get(&key_probe_url).send().await {
-        let code = resp.status().as_u16();
-        failed.key_leak_safe = code == 403 || code == 404;
+    if failed.delegation_valid {
+        let base_read = normalize_lock_read_base(&failed.read_url);
+        let key_probe_url = format!("{}/.lock_key.php", base_read);
+        if let Ok(resp) = client.get(&key_probe_url).send().await {
+            let code = resp.status().as_u16();
+            failed.key_leak_safe = code == 403 || code == 404;
+        }
     }
 
     failed.passed = failed.delegation_valid
@@ -1568,9 +1631,17 @@ pub enum LockTicketAuth {
     },
 }
 
+struct CancelFlagDropGuard(std::sync::Arc<std::sync::atomic::AtomicBool>);
+impl Drop for CancelFlagDropGuard {
+    fn drop(&mut self) {
+        self.0.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 pub async fn request_genesis_ticket(
     client: &reqwest::Client,
     write_url: &str,
+    expected_lock_pub: [u8; 32],
     anchor_id: &[u8; 32],
     retain_until_quarter: u16,
     auth: LockTicketAuth,
@@ -1580,15 +1651,46 @@ pub async fn request_genesis_ticket(
 
     let (pow_ts, pow_nonce) = match &auth {
         LockTicketAuth::Pow { pow_bits } => {
-            let found = solve_ticket_pow(
-                anchor_id,
-                retain_until_quarter,
-                now_secs,
-                *pow_bits,
-                0,
-                2_000_000,
-            )
-            .ok_or_else(|| format!("Failed to solve GenesisTicket PoW ({} bits)", pow_bits))?;
+            if *pow_bits > human_money_core::humoco_proto::crypto::MAX_LOCK_POW_BITS {
+                return Err(format!("Unsupported GenesisTicket PoW bits: {}", pow_bits));
+            }
+            let bits = *pow_bits;
+            let aid = *anchor_id;
+            let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let _cancel_guard = CancelFlagDropGuard(cancel.clone());
+            let mut start_bytes = [0u8; 8];
+            rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut start_bytes);
+            let start_nonce = u64::from_le_bytes(start_bytes);
+            let max_total = if bits <= 18 {
+                2_000_000u64
+            } else {
+                8_000_000u64
+            };
+            let found = tokio::task::spawn_blocking(move || {
+                let mut offset = 0u64;
+                let chunk = 50_000u64;
+                while offset < max_total {
+                    if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                        return None;
+                    }
+                    let step = (max_total - offset).min(chunk);
+                    if let Some(nonce) = solve_ticket_pow(
+                        &aid,
+                        retain_until_quarter,
+                        now_secs,
+                        bits,
+                        start_nonce.wrapping_add(offset),
+                        step,
+                    ) {
+                        return Some(nonce);
+                    }
+                    offset += step;
+                }
+                None
+            })
+            .await
+            .map_err(|e| format!("PoW solver join error: {}", e))?
+            .ok_or_else(|| format!("Failed to solve GenesisTicket PoW ({} bits)", bits))?;
             (Some(now_secs), Some(found))
         }
         LockTicketAuth::Direct(_) | LockTicketAuth::Stealth { .. } => (None, None),
@@ -1653,10 +1755,13 @@ pub async fn request_genesis_ticket(
         .await
         .map_err(|e| format!("Failed to parse GenesisTicket JSON: {}", e))?;
     if !parsed.ticket.verify()
+        || parsed.ticket.lock_pub != expected_lock_pub
         || parsed.ticket.anchor_id != *anchor_id
         || parsed.ticket.retain_until_quarter != retain_until_quarter
     {
-        return Err("Returned GenesisTicket failed verification or anchor binding".to_string());
+        return Err(
+            "Returned GenesisTicket failed verification or lock_pub/anchor binding".to_string(),
+        );
     }
     Ok(parsed.ticket)
 }
@@ -2737,6 +2842,7 @@ mod tests {
         let t_direct = request_genesis_ticket(
             &client,
             &write_url,
+            lock_pub,
             &anchor_id,
             retain_q,
             LockTicketAuth::Direct(admin_sk),
@@ -2750,6 +2856,7 @@ mod tests {
         let t_stealth = request_genesis_ticket(
             &client,
             &write_url,
+            lock_pub,
             &anchor_id,
             retain_q,
             LockTicketAuth::Stealth {
@@ -2766,6 +2873,7 @@ mod tests {
         let err_pow = request_genesis_ticket(
             &client,
             &write_url,
+            lock_pub,
             &anchor_id,
             retain_q,
             LockTicketAuth::Pow { pow_bits: 1 },

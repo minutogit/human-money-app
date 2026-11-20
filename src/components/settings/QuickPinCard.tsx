@@ -18,7 +18,7 @@ import { translateError } from '../../utils/errorHelper';
 
 export const QuickPinCard: React.FC = () => {
     const { t } = useTranslation();
-    const { folderName, accessMode = 'full', elevateSession } = useSession();
+    const { folderName, accessMode = 'full', elevateSession, refreshSessionStatus } = useSession();
 
     const [status, setStatus] = useState<ProfilePinStatusDto | null>(null);
     const [isLoading, setIsLoading] = useState(true);
@@ -95,6 +95,7 @@ export const QuickPinCard: React.FC = () => {
             if (accessMode !== 'full' && elevateSession) {
                 await elevateSession(masterPassword).catch(() => undefined);
             }
+            await refreshSessionStatus?.();
             setIsConfiguring(false);
             setPin('');
             setConfirmPin('');
@@ -127,6 +128,7 @@ export const QuickPinCard: React.FC = () => {
                 maxAttempts: status?.maxAttempts ?? 5,
                 remainingAttempts: status?.maxAttempts ?? 5,
             });
+            await refreshSessionStatus?.();
             setIsDisablingOpen(false);
             setDisablePassword('');
             setSuccessMsg(t('settings.pinDisabledSuccess'));

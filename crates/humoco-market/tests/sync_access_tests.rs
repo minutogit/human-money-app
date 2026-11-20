@@ -6,8 +6,33 @@ use humoco_market::{
     derive_public_drop_keypair, format_admin_request_message, format_member_request_message,
     format_slot_id, parse_slot_id, sign_admin_request, sign_delete_account_request,
     sign_member_request_direct, sign_member_request_stealth, sign_member_stealth_message,
-    validate_sync_prefix, verify_ed25519_detached_hex, MemberPolicy, SignedDropHeaders,
+    validate_sync_prefix, MemberPolicy, SignedDropHeaders,
 };
+
+fn verify_ed25519_detached_hex(
+    pubkey_hex64: &str,
+    message: &[u8],
+    sig_hex128: &str,
+) -> Result<(), String> {
+    let pk_bytes: [u8; 32] = hex::decode(pubkey_hex64)
+        .map_err(|e| e.to_string())?
+        .try_into()
+        .map_err(|_| "pubkey must be 32 bytes".to_string())?;
+    let vk = ed25519_dalek::VerifyingKey::from_bytes(&pk_bytes).map_err(|e| e.to_string())?;
+    if sig_hex128.len() != 128
+        || !sig_hex128
+            .bytes()
+            .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+    {
+        return Err("Signature must be 128 lowercase hex chars".to_string());
+    }
+    let sig_bytes: [u8; 64] = hex::decode(sig_hex128)
+        .map_err(|e| e.to_string())?
+        .try_into()
+        .map_err(|_| "sig must be 64 bytes".to_string())?;
+    let sig = ed25519_dalek::Signature::from_bytes(&sig_bytes);
+    vk.verify_strict(message, &sig).map_err(|e| e.to_string())
+}
 use proptest::prelude::*;
 use serde::{Deserialize, Serialize};
 

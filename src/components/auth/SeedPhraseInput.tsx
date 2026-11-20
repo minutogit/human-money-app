@@ -193,7 +193,9 @@ export const SeedPhraseInput: React.FC<SeedPhraseInputProps> = ({
 
         if (filledCount < wordCount || sliced.some((w) => !w)) {
             setIsValid(false);
-            setValidationError('');
+            if (filledCount > 0) {
+                setValidationError('');
+            }
             return () => {
                 active = false;
             };
@@ -480,19 +482,19 @@ export const SeedPhraseInput: React.FC<SeedPhraseInputProps> = ({
                     </div>
                 )}
 
-                {/* Live validation status */}
-                {filledCount === wordCount && (
+                {/* Live validation / kit import status */}
+                {(filledCount === wordCount || Boolean(validationError)) && (
                     <div
                         data-testid="seed-validation-status"
                         className={`flex items-center gap-2 text-xs font-semibold pt-1 ${
-                            isValid
+                            isValid && filledCount === wordCount
                                 ? 'text-emerald-700'
                                 : validationError
                                   ? 'text-rose-600'
                                   : 'text-theme-light'
                         }`}
                     >
-                        {isValid ? (
+                        {isValid && filledCount === wordCount ? (
                             <>
                                 <CheckCircle2 size={14} className="shrink-0" />
                                 <span>{t('auth.seedPhraseValid')}</span>

@@ -477,21 +477,6 @@ pub(crate) fn inspect_backup_with_collision_impl(
     })
 }
 
-pub fn inspect_backup_impl(
-    source_path: &Path,
-    credentials: &BackupRestoreCredentials<'_>,
-    service: &AppService,
-) -> Result<FrontendBackupInspectionDto, FrontendError> {
-    inspect_backup_with_collision_impl(
-        source_path,
-        credentials,
-        service,
-        None,
-        None,
-        &HashMap::new(),
-    )
-}
-
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn inspect_wallet_backup_impl(
     source_path: &str,
@@ -881,7 +866,8 @@ pub(crate) async fn finalize_restored_wallet_and_reconcile_l2(
                 if let Some(app) = app_opt {
                     if let Ok(config_dir) = app.path().app_config_dir() {
                         let _ = crate::pin_keystore::remove_entry(&config_dir, old_folder);
-                        let _ = crate::pin_keystore::remove_entry(&config_dir, &outcome.folder_name);
+                        let _ =
+                            crate::pin_keystore::remove_entry(&config_dir, &outcome.folder_name);
                     }
                 }
                 let name = replace_local_profile_with_restored(
@@ -928,9 +914,7 @@ pub(crate) async fn finalize_restored_wallet_and_reconcile_l2(
                 (restored_session, outcome, resolved_name, custom_standards)
             }
             Err(err) => {
-                service.logout();
-                state.clear_all_caches();
-                state.clear_sync_cooldown();
+                state.rollback_failed_session(&mut service);
                 return Err(err);
             }
         }
@@ -945,6 +929,7 @@ pub(crate) async fn finalize_restored_wallet_and_reconcile_l2(
 
     let summary = crate::services::l2_anchor_service::reconcile_vouchers_via_static_locks(
         state,
+        &restored_session,
         Some(&outcome.voucher_ids_to_check),
         Some(new_password),
     )
@@ -979,7 +964,11 @@ pub(crate) async fn finalize_restored_wallet_and_reconcile_l2(
     }
 
     if let Some(app) = app_opt {
-        crate::services::common::spawn_pending_l2_reconciliation(app, new_password);
+        crate::services::common::spawn_pending_l2_reconciliation(
+            app,
+            restored_session,
+            new_password,
+        );
     }
 
     Ok(FrontendRestoreOutcomeDto {
@@ -1059,7 +1048,7 @@ fn recover_local_profile_with_mnemonic(
     wallet_data_dir: &Path,
     state: &AppState,
     app_opt: Option<&tauri::AppHandle>,
-) -> Result<(), FrontendError> {
+) -> Result<crate::session::SessionToken, FrontendError> {
     let pending_lock = state.acquire_profile_lock(target_folder_name)?;
     let mut service = state.lock_service()?;
     service
@@ -1081,12 +1070,17 @@ fn recover_local_profile_with_mnemonic(
         .with_wallet_and_identity(|_, id| id.user_id.clone())
         .ok();
     let _ = record_profile_metadata_in_dir(wallet_data_dir, target_folder_name, user_id);
-    state
+    if let Err(err) = state
         .initialize_profile_session(&mut service, new_password)
-        .map_err(FrontendError::from)?;
+        .map_err(FrontendError::from)
+    {
+        state.rollback_failed_session(&mut service);
+        return Err(err);
+    }
+    let session = state.session_token_for_service(&service)?;
     drop(service);
     state.commit_profile_lock(pending_lock);
-    Ok(())
+    Ok(session)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1121,7 +1115,7 @@ pub(crate) fn reset_local_password_via_backup_impl(
         ));
     }
 
-    if credential_mode == "mnemonic" {
+    let restored_session = if credential_mode == "mnemonic" {
         let phrase = mnemonic
             .map(str::trim)
             .filter(|s| !s.is_empty())
@@ -1139,7 +1133,7 @@ pub(crate) fn reset_local_password_via_backup_impl(
             wallet_data_dir,
             state,
             app_opt,
-        )?;
+        )?
     } else if credential_mode == "password" {
         let pwd = backup_password
             .filter(|s| !s.is_empty())
@@ -1180,7 +1174,7 @@ pub(crate) fn reset_local_password_via_backup_impl(
                 wallet_data_dir,
                 state,
                 app_opt,
-            )?;
+            )?
         } else {
             let local_dir = wallet_data_dir.join(target_folder_name);
             if !local_dir.exists() {
@@ -1308,21 +1302,31 @@ pub(crate) fn reset_local_password_via_backup_impl(
                 target_folder_name,
                 Some(local_identity.user_id.clone()),
             );
-            state
+            if let Err(err) = state
                 .initialize_profile_session(&mut service, new_password)
-                .map_err(FrontendError::from)?;
+                .map_err(FrontendError::from)
+            {
+                state.rollback_failed_session(&mut service);
+                return Err(err);
+            }
+            let session = state.session_token_for_service(&service)?;
             drop(service);
             state.commit_profile_lock(pending_lock);
+            session
         }
     } else {
         return Err(FrontendError::from(format!(
             "Invalid credential mode: {}",
             credential_mode
         )));
-    }
+    };
 
     if let Some(app) = app_opt {
-        crate::services::common::spawn_pending_l2_reconciliation(app, new_password);
+        crate::services::common::spawn_pending_l2_reconciliation(
+            app,
+            restored_session,
+            new_password,
+        );
     }
 
     Ok(())
@@ -1464,9 +1468,22 @@ pub(crate) fn run_auto_backup_sync_impl(
     state: &AppState,
     app: &tauri::AppHandle,
 ) -> Result<FrontendAutoBackupStatusDto, FrontendError> {
-    state.authorize(crate::state::RequiredAccess::DailyPay, None)?;
-    let security_policy = state.get_or_load_security_policy_locked(None)?;
-    let mut lifecycle = state.get_or_load_internal_lifecycle_locked(None)?;
+    let (session, resolved_pw) =
+        state.authorize_and_begin_session_secret(crate::state::RequiredAccess::DailyPay, None)?;
+    let pw = resolved_pw.as_deref().map(String::as_str);
+    let (security_policy, mut lifecycle) = state.with_session_required(
+        &session,
+        "Active wallet session changed before auto-backup sync",
+        |service| {
+            let sp = state
+                .get_or_load_security_policy(service, pw)
+                .map_err(FrontendError::from)?;
+            let lc = state
+                .get_or_load_internal_lifecycle(service, pw)
+                .map_err(FrontendError::from)?;
+            Ok((sp, lc))
+        },
+    )?;
 
     let has_own_sync = has_own_sync_target(state)?;
 
@@ -1495,12 +1512,13 @@ pub(crate) fn run_auto_backup_sync_impl(
     // Crucial USB safety check: verify is_dir(), NEVER call fs::create_dir_all if the folder is missing.
     if !folder_path.is_dir() {
         if !lifecycle.backup_dirty {
-            if let Ok(mut service) = state.service.lock() {
-                if let Ok(updated) = state.mutate_internal_lifecycle(&mut service, None, |lc| {
+            if let Ok(Some(updated)) =
+                state.mutate_internal_lifecycle_for_session(&session, pw, |lc| {
                     lc.backup_dirty = true;
-                }) {
-                    lifecycle = updated;
-                }
+                    true
+                })
+            {
+                lifecycle = updated;
             }
         }
         return Ok(compute_backup_status_dto(
@@ -1510,23 +1528,55 @@ pub(crate) fn run_auto_backup_sync_impl(
         ));
     }
 
-    let mut service = state.authorize_and_lock(crate::state::RequiredAccess::DailyPay, None)?;
     let custom_standards = collect_custom_standards(app);
 
-    match sync_backup_folder_impl(
-        folder_path,
-        "mnemonic",
-        BackupProtection::MnemonicOnly,
-        None,
-        false,
-        &mut service,
-        custom_standards,
-    ) {
-        Ok(summary) => {
-            if let Ok(updated) = state.mutate_internal_lifecycle(&mut service, None, |lc| {
-                lc.last_backup_at = Some(summary.timestamp.clone());
-                lc.backup_dirty = false;
-            }) {
+    let sync_res = state.with_session(&session, |service| {
+        if let Err(e) = service.require_access_mode(human_money_core::AccessMode::DailyPay, pw) {
+            return Ok(Err(FrontendError::from(e)));
+        }
+        let outcome = sync_backup_folder_impl(
+            folder_path,
+            "mnemonic",
+            BackupProtection::MnemonicOnly,
+            None,
+            false,
+            service,
+            custom_standards,
+        );
+        match outcome {
+            Ok(summary) => {
+                let updated_lc = state
+                    .mutate_internal_lifecycle(service, pw, |lc| {
+                        lc.last_backup_at = Some(summary.timestamp.clone());
+                        lc.backup_dirty = false;
+                    })
+                    .ok();
+                Ok(Ok((summary, updated_lc)))
+            }
+            Err(e) => {
+                let is_locked = e.code == "error.wallet.locked"
+                    || e.code == "error.auth.sessionTimeout"
+                    || e.message.to_lowercase().contains("locked")
+                    || e.message.to_lowercase().contains("session");
+                if !is_locked && !lifecycle.backup_dirty {
+                    let _ = state.mutate_internal_lifecycle(service, pw, |lc| {
+                        lc.backup_dirty = true;
+                    });
+                }
+                Ok(Err(e))
+            }
+        }
+    })?;
+
+    let Some(inner_res) = sync_res else {
+        let mut dto = compute_backup_status_dto(&security_policy, &lifecycle, has_own_sync);
+        dto.status = "locked".to_string();
+        return Ok(dto);
+    };
+
+    match inner_res {
+        Ok((summary, updated_lc)) => {
+            if let Some(updated) = updated_lc {
                 lifecycle = updated;
             }
             let mut dto = compute_backup_status_dto(&security_policy, &lifecycle, has_own_sync);
@@ -1543,11 +1593,6 @@ pub(crate) fn run_auto_backup_sync_impl(
                 dto.status = "locked".to_string();
                 Ok(dto)
             } else {
-                if !lifecycle.backup_dirty {
-                    let _ = state.mutate_internal_lifecycle(&mut service, None, |lc| {
-                        lc.backup_dirty = true;
-                    });
-                }
                 Err(e)
             }
         }
@@ -1709,6 +1754,7 @@ pub(crate) async fn sync_backup_with_standards_impl(
         crate::state::RequiredAccess::DailyPay,
         password.as_deref(),
     )?;
+    let _backup_guard = state.backup_op_lock.lock().await;
     let password = resolved_pw.as_deref().cloned();
 
     let (security_policy, my_ed_sk, master_seed, my_prefix, own_admin_opt) = {
@@ -2528,6 +2574,9 @@ pub(crate) async fn sync_backup_with_standards_impl(
             retry_after_secs = Some(retry_after_secs.map_or(secs, |prev| prev.max(secs)));
         }
     }
+    if let Some(secs) = retry_after_secs {
+        state.record_sync_cooldown(secs);
+    }
 
     Ok(FrontendBackupSyncResult {
         uploaded_to,
@@ -3091,6 +3140,7 @@ pub(crate) async fn reconcile_restored_wallet_l2_impl(
     let password = resolved_pw.as_deref().cloned();
     let summary = crate::services::l2_anchor_service::reconcile_vouchers_via_static_locks(
         state,
+        &session,
         None,
         password.as_deref(),
     )
@@ -3100,18 +3150,27 @@ pub(crate) async fn reconcile_restored_wallet_l2_impl(
     let reconciled_spent_count = summary.reconciled_spent_count;
     let l2_reconciliation_status = summary.status;
 
-    let mut pending_restore_l2 = state
+    let (mut pending_restore_l2, fork_or_stale_alert, has_active_offline_vouchers) = state
         .with_session_required(
             &session,
             "Active wallet session changed during restore reconciliation",
             |service| {
-                state
+                let lc = state
                     .get_or_load_internal_lifecycle(service, password.as_deref())
-                    .map_err(FrontendError::from)
+                    .map_err(FrontendError::from)?;
+                let (fork_or_stale, has_offline) =
+                    crate::services::l2_anchor_service::has_fork_or_stale_alert_and_offline_vouchers(
+                        service,
+                        &lc,
+                        password.as_deref(),
+                    );
+                Ok((lc.pending_restore_l2_reconciliation, fork_or_stale, has_offline))
             },
-        )?
-        .pending_restore_l2_reconciliation;
-    if summary.all_resolved || active_voucher_queries_count == 0 {
+        )?;
+    let can_clear = (active_voucher_queries_count > 0 && summary.all_resolved)
+        || (active_voucher_queries_count == 0
+            && !(fork_or_stale_alert && has_active_offline_vouchers));
+    if can_clear {
         let cleared = state.with_session(&session, |service| {
             crate::services::l2_anchor_service::clear_fork_lock_for_service(
                 service,
@@ -3237,7 +3296,15 @@ mod tests {
             prefix: Some("pc"),
             language: human_money_core::MnemonicLanguage::English,
         };
-        let inspect1 = inspect_backup_impl(&mnemonic_export_file, &creds_mn, &service).unwrap();
+        let inspect1 = inspect_backup_with_collision_impl(
+            &mnemonic_export_file,
+            &creds_mn,
+            &service,
+            None,
+            None,
+            &HashMap::new(),
+        )
+        .unwrap();
         assert_eq!(inspect1.profile_name, "Alice Test");
 
         // Restore mnemonic backup into a new service
@@ -3275,11 +3342,19 @@ mod tests {
 
         // Inspect with password
         let creds_pwd = BackupRestoreCredentials::BackupPassword(backup_pwd);
-        let inspect2 = inspect_backup_impl(&pwd_export_file, &creds_pwd, &service).unwrap();
+        let inspect2 = inspect_backup_with_collision_impl(
+            &pwd_export_file,
+            &creds_pwd,
+            &service,
+            None,
+            None,
+            &HashMap::new(),
+        )
+        .unwrap();
         assert_eq!(inspect2.profile_name, "Alice Test");
 
         // Inspect with mnemonic (dual recovery slot!)
-        let inspect2_mn = inspect_backup_impl(
+        let inspect2_mn = inspect_backup_with_collision_impl(
             &pwd_export_file,
             &BackupRestoreCredentials::Mnemonic {
                 phrase: PHRASE,
@@ -3288,6 +3363,9 @@ mod tests {
                 language: human_money_core::MnemonicLanguage::English,
             },
             &service,
+            None,
+            None,
+            &HashMap::new(),
         )
         .unwrap();
         assert_eq!(inspect2_mn.profile_name, "Alice Test");
@@ -4575,6 +4653,93 @@ mod tests {
         .await
         .unwrap();
         assert!(!manual_res.skipped_wifi_only);
+
+        let _ = fs::remove_dir_all(base_dir);
+    }
+
+    #[tokio::test]
+    async fn k3_reconcile_restored_wallet_honors_fork_alert_vs_honest_offline() {
+        let base_dir = crate::test_support::temp_test_dir("k3_restore_reconcile");
+        let password = "TestPassword123!";
+        let svc = crate::test_support::setup_test_app(
+            &base_dir,
+            "Alice",
+            crate::test_support::ALICE_PHRASE,
+            password,
+        );
+        let state = crate::test_support::create_test_state(svc);
+
+        // 1. Honest wallet without fork/stale alert and 0 anchored vouchers clears pending_restore_l2_reconciliation
+        {
+            let mut s = state.lock_service().unwrap();
+            state
+                .save_internal_lifecycle(
+                    &mut s,
+                    crate::settings::InternalLifecycleState {
+                        pending_restore_l2_reconciliation: true,
+                        wallet_sync_alert: None,
+                        ..Default::default()
+                    },
+                    Some(password),
+                )
+                .unwrap();
+        }
+        let res_honest =
+            super::reconcile_restored_wallet_l2_impl(Some(password.to_string()), &state)
+                .await
+                .unwrap();
+        assert!(!res_honest.pending_restore_l2_reconciliation);
+
+        // 2. Wallet with an active offline (N=0) voucher AND active stale_local_backup alert stays blocked
+        {
+            let ft_toml = human_money_core::test_utils::generate_signed_standard_toml(
+                "voucher_standards/freetaler_v1/standard.toml",
+            );
+            let mut s = state.lock_service().unwrap();
+            let creator = s.with_wallet(|w| w.profile.to_public_profile()).unwrap();
+            let v_data = human_money_core::models::voucher::NewVoucherData {
+                validity_duration: Some("P1Y".to_string()),
+                non_redeemable_test_voucher: false,
+                nominal_value: human_money_core::models::voucher::ValueDefinition {
+                    amount: "50.00".to_string(),
+                    unit: "FT".to_string(),
+                    ..Default::default()
+                },
+                collateral: None,
+                creator_profile: creator,
+                layer2_anchor: None,
+            };
+            s.create_new_voucher(&ft_toml, v_data, Some(password))
+                .unwrap();
+            state
+                .save_internal_lifecycle(
+                    &mut s,
+                    crate::settings::InternalLifecycleState {
+                        pending_restore_l2_reconciliation: true,
+                        wallet_sync_alert: Some(crate::settings::WalletSyncAlert {
+                            kind: "stale_local_backup".to_string(),
+                            mirror_write_url: "https://sync.example/sync.php".to_string(),
+                            remote_epoch: Some(1),
+                            remote_tx_nonce: Some(5),
+                            local_epoch: 1,
+                            local_tx_nonce: 2,
+                            detected_at: "2026-11-20T00:00:00Z".to_string(),
+                            has_signed_ack_proof: true,
+                        }),
+                        ..Default::default()
+                    },
+                    Some(password),
+                )
+                .unwrap();
+        }
+        let res_alert =
+            super::reconcile_restored_wallet_l2_impl(Some(password.to_string()), &state)
+                .await
+                .unwrap();
+        assert!(
+            res_alert.pending_restore_l2_reconciliation,
+            "K3: stale_local_backup / fork alert must keep pending_restore_l2_reconciliation locked when offline vouchers exist"
+        );
 
         let _ = fs::remove_dir_all(base_dir);
     }

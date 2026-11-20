@@ -168,7 +168,7 @@ export function SignRequestView({ voucherData, requestMsgId, senderDid, anchorMa
                 };
                 await profileService.saveProfile(updated, pwd || undefined);
                 setUserProfile(updated);
-            });
+            }, { requireFullAccess: true });
             if (selectedRole && standardContent) {
                 setIsImpactLoading(true);
                 standardsService.evaluateSignatureSuitability({
@@ -292,55 +292,63 @@ export function SignRequestView({ voucherData, requestMsgId, senderDid, anchorMa
         try {
             const targetCreatorDid = senderDid || voucherData.voucher?.creator?.id;
             const bundleKey = `${voucherData.voucher.voucherId}:${selectedRole}:${includeDetails}`;
+            const recipient = senderDid || voucherData.voucher?.creator?.id;
+            const needsPostReply = Boolean((senderDid || requestMsgId) && recipient);
             let bundleBytes: number[] | undefined =
                 cachedSigBundle?.key === bundleKey ? cachedSigBundle.bytes : undefined;
             let capturedPassword: string | undefined;
-            if (!bundleBytes) {
-                const generatedBytes = await protectAction(async (password) => {
+            let postDeposited = false;
+
+            if (!bundleBytes || needsPostReply) {
+                const outcome = await protectAction(async (password) => {
                     capturedPassword = password || undefined;
-                    return await voucherService.createDetachedSignatureResponseBundle({
-                        voucher: voucherData.voucher,
-                        role: selectedRole,
-                        includeDetails: includeDetails,
-                        config: { type: "TargetDid", value: [targetCreatorDid!, "TrialDecryption"] },
-                        password: password || undefined,
-                        anchorManifestJson: effectiveManifestJson ?? null,
-                    });
+                    let signedBytes = bundleBytes;
+                    if (!signedBytes) {
+                        const generatedBytes = await voucherService.createDetachedSignatureResponseBundle({
+                            voucher: voucherData.voucher,
+                            role: selectedRole,
+                            includeDetails: includeDetails,
+                            config: { type: "TargetDid", value: [targetCreatorDid!, "TrialDecryption"] },
+                            password: password || undefined,
+                            anchorManifestJson: effectiveManifestJson ?? null,
+                        });
+                        if (Array.isArray(generatedBytes)) {
+                            signedBytes = generatedBytes;
+                            setCachedSigBundle({ key: bundleKey, bytes: generatedBytes });
+                        }
+                    }
+                    if (!signedBytes) {
+                        return { bytes: undefined as number[] | undefined, postDeposited: false };
+                    }
+                    let delivered = false;
+                    if (needsPostReply && recipient) {
+                        try {
+                            const res = await postService.replyDetachedSignatureViaPost(
+                                requestMsgId || undefined,
+                                recipient,
+                                signedBytes,
+                                password || undefined
+                            );
+                            const deliveredCount = res?.recipientDepositedTo ?? res?.depositedTo ?? 0;
+                            if (deliveredCount > 0) {
+                                delivered = true;
+                            }
+                        } catch (err) {
+                            logger.warn(`Failed to reply detached signature via post: ${stringifyError(err)}`);
+                        }
+                    }
+                    return { bytes: signedBytes, postDeposited: delivered };
                 }, { requireFullAccess: true });
-                if (Array.isArray(generatedBytes)) {
-                    bundleBytes = generatedBytes;
-                    setCachedSigBundle({ key: bundleKey, bytes: generatedBytes });
-                }
+
+                if (!outcome) return;
+                bundleBytes = outcome.bytes;
+                postDeposited = outcome.postDeposited;
             }
 
             if (!bundleBytes) return;
-
-            let postDeposited = false;
-            if (senderDid || requestMsgId) {
-                try {
-                    const recipient = senderDid || voucherData.voucher?.creator?.id;
-                    if (recipient) {
-                        const res = await protectAction(async (password) => {
-                            if (!capturedPassword && password) {
-                                capturedPassword = password;
-                            }
-                            return await postService.replyDetachedSignatureViaPost(
-                                requestMsgId || undefined,
-                                recipient,
-                                bundleBytes,
-                                password || undefined
-                            );
-                        }, { requireFullAccess: true });
-                        const deliveredCount = res?.recipientDepositedTo ?? res?.depositedTo ?? 0;
-                        if (deliveredCount > 0) {
-                            postDeposited = true;
-                            triggerAutoBackup();
-                            setPostSentSuccess(true);
-                        }
-                    }
-                } catch (err) {
-                    logger.warn(`Failed to reply detached signature via post: ${stringifyError(err)}`);
-                }
+            if (postDeposited) {
+                triggerAutoBackup();
+                setPostSentSuccess(true);
             }
 
             // Asymmetry Rule (§6.2): If not deposited to any sync endpoint (Bob has NO writable sync endpoint or network error)
@@ -716,8 +724,9 @@ export function SignRequestView({ voucherData, requestMsgId, senderDid, anchorMa
                                                     const untrusted = guarantorCheck.servers.filter((s) => !s.trusted);
                                                     if (untrusted.length === 0) return;
                                                     setIsTrustingServers(true);
+                                                    const succeededAdminPubs = new Set<string>();
                                                     try {
-                                                        await protectAction(
+                                                        const trustedAll = await protectAction(
                                                             async (password) => {
                                                                 for (const s of untrusted) {
                                                                     await settingsService.setLockServerTrust(
@@ -725,27 +734,34 @@ export function SignRequestView({ voucherData, requestMsgId, senderDid, anchorMa
                                                                         true,
                                                                         password ?? null
                                                                     );
+                                                                    succeededAdminPubs.add(s.adminPub);
                                                                 }
+                                                                return true;
                                                             },
                                                             { requireFullAccess: true }
                                                         );
-                                                        setGuarantorCheck((prev) =>
-                                                            prev
-                                                                ? {
-                                                                      ...prev,
-                                                                      untrustedServersCount: 0,
-                                                                      servers: prev.servers.map((s) => ({
-                                                                          ...s,
-                                                                          trusted: true,
-                                                                      })),
-                                                                  }
-                                                                : prev
-                                                        );
-                                                        await handleSign();
+                                                        if (trustedAll) {
+                                                            await handleSign();
+                                                        }
                                                     } catch (e) {
                                                         setFeedbackMsg(stringifyError(e));
                                                         setFeedbackType('error');
                                                     } finally {
+                                                        if (succeededAdminPubs.size > 0) {
+                                                            setGuarantorCheck((prev) => {
+                                                                if (!prev) return prev;
+                                                                const updatedServers = prev.servers.map((s) =>
+                                                                    succeededAdminPubs.has(s.adminPub)
+                                                                        ? { ...s, trusted: true }
+                                                                        : s
+                                                                );
+                                                                return {
+                                                                    ...prev,
+                                                                    untrustedServersCount: updatedServers.filter((s) => !s.trusted).length,
+                                                                    servers: updatedServers,
+                                                                };
+                                                            });
+                                                        }
                                                         setIsTrustingServers(false);
                                                     }
                                                 }}

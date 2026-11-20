@@ -271,24 +271,7 @@ fn classify_error(msg: &str) -> (String, HashMap<String, String>) {
     if msg.contains("Recipient sync inbox unreachable") {
         return ("error.post.recipientUnreachable".into(), details);
     }
-    if msg.contains("Keine aktive Wiederherstellungssitzung") {
-        return ("error.recovery.noActiveSession".into(), details);
-    }
-    if msg.contains("gehört zu einem anderen Profil") {
-        return ("error.recovery.wrongProfile".into(), details);
-    }
-    if msg.contains("veralteten Wiederherstellungs-Stand") {
-        return ("error.recovery.staleEpoch".into(), details);
-    }
-    if msg.contains("Noch nicht genügend Sicherheitskontakte") {
-        return ("error.recovery.insufficientReplies".into(), details);
-    }
-    if msg.contains("Sicherheitsfrage stimmt nicht") {
-        return ("error.recovery.wrongSecurityAnswer".into(), details);
-    }
-    if msg.contains("Antworten auf die Sicherheitsfragen sind nicht korrekt")
-        || msg.contains("answers to the security questions")
-    {
+    if msg.contains("answers to the security questions") {
         return ("error.recovery.wrongAnswers".into(), details);
     }
     if msg.contains("BIP39_PASSPHRASE_REQUIRED") {

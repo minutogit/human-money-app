@@ -7,9 +7,8 @@ use humoco_market::media::{
     compute_image_token, derive_media_blob_id, derive_media_key_and_nonce,
     detect_media_data_uri_prefix, extract_media_bytes, is_supported_media_data_uri,
     is_valid_image_token, open_media_blob, parse_image_dimensions, parse_jpeg_dimensions,
-    parse_png_dimensions, parse_webp_dimensions, seal_media_blob, sign_media_request,
-    validate_ad_media, validate_avatar_data_uri, JPEG_DATA_URI_PREFIX, MEDIA_DATA_URI_PREFIX,
-    PNG_DATA_URI_PREFIX,
+    parse_png_dimensions, parse_webp_dimensions, seal_media_blob, validate_ad_media,
+    validate_avatar_data_uri, JPEG_DATA_URI_PREFIX, MEDIA_DATA_URI_PREFIX, PNG_DATA_URI_PREFIX,
 };
 use humoco_market::model::{
     Ad, AdKind, CardPayloadInput, DropDescriptor, WireFilter, AVATAR_IMAGE_DIM, MAX_AD_IMAGE_DIM,
@@ -400,7 +399,7 @@ fn test_seal_open_media_blob_roundtrip_and_tampering() {
     assert!(!ciphertext.is_empty());
 
     // Successful decrypt
-    let decrypted = open_media_blob(&token, &ciphertext).unwrap();
+    let decrypted = open_media_blob(&did, &token, &ciphertext).unwrap();
     assert_eq!(decrypted, webp_bytes);
 
     // Tampered ciphertext fails
@@ -408,27 +407,34 @@ fn test_seal_open_media_blob_roundtrip_and_tampering() {
     let len = tampered.len();
     tampered[len - 1] ^= 0xff;
     assert!(matches!(
-        open_media_blob(&token, &tampered),
+        open_media_blob(&did, &token, &tampered),
+        Err(MarketError::Crypto(_))
+    ));
+
+    // Wrong owner DID fails content-owner token binding
+    let other_did = create_user_id(&make_key(43).verifying_key(), None).unwrap();
+    assert!(matches!(
+        open_media_blob(&other_did, &token, &ciphertext),
         Err(MarketError::Crypto(_))
     ));
 
     // Wrong token fails
     let wrong_token = "00000000000000000000000000000000";
     assert!(matches!(
-        open_media_blob(wrong_token, &ciphertext),
+        open_media_blob(&did, wrong_token, &ciphertext),
         Err(MarketError::Crypto(_))
     ));
 
     // Empty ciphertext fails
     assert!(matches!(
-        open_media_blob(&token, &[]),
+        open_media_blob(&did, &token, &[]),
         Err(MarketError::Validation(_))
     ));
 
     // Oversized ciphertext fails
     let oversized = vec![0u8; MAX_AD_MEDIA_BYTES + 65];
     assert!(matches!(
-        open_media_blob(&token, &oversized),
+        open_media_blob(&did, &token, &oversized),
         Err(MarketError::Validation(_))
     ));
 }
@@ -501,7 +507,7 @@ fn test_resigning_card_preserves_image_token_and_decryptability() {
     assert_eq!(decoded_token2, &token);
 
     // The previously sealed blob is still 100% decryptable with the token from wire2!
-    let decrypted = open_media_blob(decoded_token2, &ciphertext).unwrap();
+    let decrypted = open_media_blob(&did, decoded_token2, &ciphertext).unwrap();
     assert_eq!(decrypted, webp_bytes);
     assert_eq!(derive_media_blob_id(decoded_token2).unwrap(), blob_id);
 }
@@ -587,33 +593,4 @@ fn test_fit_bytes_wire_filter_excludes_picture_and_ad() {
     assert!(decoded
         .iter()
         .any(|(item, _)| matches!(item, CardItem::City { .. })));
-}
-
-#[test]
-fn test_sign_media_request() {
-    let sk = make_key(88);
-    let blob_id = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-    let timestamp = 1700000000;
-    let nonce = "a1b2c3d4";
-    let body = b"test payload";
-
-    let signed = sign_media_request(sk.as_bytes(), "PUT", blob_id, timestamp, nonce, body).unwrap();
-    assert_eq!(
-        signed.pubkey_hex,
-        hex::encode(sk.verifying_key().as_bytes())
-    );
-    assert_eq!(signed.timestamp, timestamp);
-    assert_eq!(signed.nonce_hex, nonce);
-    assert_eq!(signed.signature_hex.len(), 128);
-
-    // Invalid blob_id length or uppercase rejected
-    assert!(matches!(
-        sign_media_request(sk.as_bytes(), "PUT", "too_short", timestamp, nonce, body),
-        Err(MarketError::Validation(_))
-    ));
-    let uppercase_blob = "0123456789ABCDEF0123456789abcdef0123456789abcdef0123456789abcdef";
-    assert!(matches!(
-        sign_media_request(sk.as_bytes(), "PUT", uppercase_blob, timestamp, nonce, body),
-        Err(MarketError::Validation(_))
-    ));
 }

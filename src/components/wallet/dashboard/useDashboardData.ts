@@ -9,7 +9,8 @@ import { settingsService } from '../../../services/settingsService';
 import { marketService } from '../../../services/marketService';
 import { recoveryService } from '../../../services/recoveryService';
 import { backupService } from '../../../services/backupService';
-import { postService, POST_INBOX_UPDATED_EVENT } from '../../../services/postService';
+import { postService } from '../../../services/postService';
+import { APP_EVENTS } from '../../../utils/appEvents';
 import { useNavigation } from '../../../context/NavigationContext';
 import { useSession } from '../../../context/SessionContext';
 import { logger } from '../../../utils/log';
@@ -67,130 +68,133 @@ export function useDashboardData() {
     const [contactsCount, setContactsCount] = useState(0);
     const [syncConnectedCount, setSyncConnectedCount] = useState(0);
     const [balanceViewMode, setBalanceViewMode] = useState<'spendable' | 'net'>('spendable');
+    const mountedRef = useRef(true);
+    const fetchSeqRef = useRef(0);
+
+    const fetchData = useCallback(async () => {
+        const seq = ++fetchSeqRef.current;
+        try {
+            const [
+                id,
+                balanceList,
+                ,
+                voucherSummaries,
+                ,
+                contacts,
+                eventHistory,
+                userSettings,
+                syncOverview,
+                recoveryProtection,
+            ] = await Promise.all([
+                profileService.getUserId(),
+                voucherService.getTotalBalanceByCurrency(),
+                transferService.getHistory().catch(() => []),
+                voucherService.getSummaries().catch(() => []),
+                profileService.getProfile().catch(() => null),
+                contactService.getContacts().catch(() => []),
+                transferService.getEventHistory(0, 5).catch(() => []),
+                settingsService.getConfig().catch(() => null),
+                marketService.getSyncOverviewStatus().catch(() => null),
+                recoveryService.getRecoveryProtectionStatus().catch(() => null),
+            ]);
+            if (!mountedRef.current || seq !== fetchSeqRef.current) return;
+
+            setUserId(id);
+            setBalances(balanceList || []);
+            setRecentEvents(eventHistory || []);
+            setContactsCount((contacts || []).length);
+            setProtectionStatus(recoveryProtection);
+            setSyncConnectedCount(syncOverview?.connectedCount || 0);
+
+            const allSummaries = voucherSummaries || [];
+            const activeVoucherList = allSummaries
+                .filter((v: VoucherSummary) => v.status === 'active')
+                .sort((a: VoucherSummary, b: VoucherSummary) => {
+                    const aTime = a.validUntil
+                        ? new Date(a.validUntil).getTime()
+                        : Number.MAX_SAFE_INTEGER;
+                    const bTime = b.validUntil
+                        ? new Date(b.validUntil).getTime()
+                        : Number.MAX_SAFE_INTEGER;
+                    return aTime - bTime;
+                });
+            setActiveVouchers(activeVoucherList);
+
+            const countsByStandard: Record<string, number> = {};
+            activeVoucherList.forEach((v: VoucherSummary) => {
+                if (v.voucherStandardUuid) {
+                    countsByStandard[v.voucherStandardUuid] =
+                        (countsByStandard[v.voucherStandardUuid] || 0) + 1;
+                }
+            });
+            setVoucherCountsByStandard(countsByStandard);
+            setActiveVouchersCount(activeVoucherList.length);
+            const incompleteList = allSummaries.filter(
+                (v: VoucherSummary) => v.status === 'incomplete',
+            );
+            setIncompleteCount(incompleteList.length);
+            setFirstIncompleteVoucherId(
+                incompleteList.length === 1 ? incompleteList[0].localInstanceId : null,
+            );
+            setQuarantinedCount(
+                allSummaries.filter((v: VoucherSummary) => v.status === 'quarantined').length,
+            );
+
+            const now = new Date();
+            const thirtyDays = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+            setExpiringSoonCount(
+                allSummaries.filter((v: VoucherSummary) => {
+                    if (v.status !== 'active' || !v.validUntil) return false;
+                    const exp = new Date(v.validUntil);
+                    return exp > now && exp <= thirtyDays;
+                }).length,
+            );
+
+            setAppConfig(userSettings);
+            const initialMode =
+                (userSettings?.uiPreferences.balanceViewMode as 'spendable' | 'net') ||
+                'spendable';
+            setBalanceViewMode(initialMode);
+
+            const hasRealActiveVouchers = allSummaries.some(
+                (v: VoucherSummary) => v.status === 'active' && !v.isTestVoucher,
+            );
+            const effectiveBackupAt =
+                [userSettings?.lifecycle.lastBackupAt, userSettings?.lifecycle.lastSyncBackupAt]
+                    .filter((d): d is string => Boolean(d) && !isNaN(new Date(d as string).getTime()))
+                    .sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0] ?? null;
+            const isBackupOutdatedOrMissing =
+                !effectiveBackupAt ||
+                (() => {
+                    const backupDate = new Date(effectiveBackupAt);
+                    if (isNaN(backupDate.getTime())) return true;
+                    const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
+                    return backupDate < fourteenDaysAgo;
+                })();
+            setShowBackupReminder(
+                hasRealActiveVouchers &&
+                    !userSettings?.securityPolicy.backupSyncFolder &&
+                    isBackupOutdatedOrMissing,
+            );
+        } catch (e) {
+            if (!mountedRef.current || seq !== fetchSeqRef.current) return;
+            console.error(`Failed to fetch dashboard data: ${stringifyError(e)}`);
+            setFeedbackMsg(translateError(e, tRef.current));
+        } finally {
+            if (mountedRef.current && seq === fetchSeqRef.current) setIsLoading(false);
+        }
+    }, []);
 
     useEffect(() => {
-        let active = true;
+        mountedRef.current = true;
         logger.info('Dashboard component displayed');
-
-        async function fetchData() {
-            try {
-                const [
-                    id,
-                    balanceList,
-                    ,
-                    voucherSummaries,
-                    ,
-                    contacts,
-                    eventHistory,
-                    userSettings,
-                    syncOverview,
-                    recoveryProtection,
-                ] = await Promise.all([
-                    profileService.getUserId(),
-                    voucherService.getTotalBalanceByCurrency(),
-                    transferService.getHistory().catch(() => []),
-                    voucherService.getSummaries().catch(() => []),
-                    profileService.getProfile().catch(() => null),
-                    contactService.getContacts().catch(() => []),
-                    transferService.getEventHistory(0, 5).catch(() => []),
-                    settingsService.getConfig().catch(() => null),
-                    marketService.getSyncOverviewStatus().catch(() => null),
-                    recoveryService.getRecoveryProtectionStatus().catch(() => null),
-                ]);
-                if (!active) return;
-
-                setUserId(id);
-                setBalances(balanceList || []);
-                setRecentEvents(eventHistory || []);
-                setContactsCount((contacts || []).length);
-                setProtectionStatus(recoveryProtection);
-                setSyncConnectedCount(syncOverview?.connectedCount || 0);
-
-                const allSummaries = voucherSummaries || [];
-                const activeVoucherList = allSummaries
-                    .filter((v: VoucherSummary) => v.status === 'active')
-                    .sort((a: VoucherSummary, b: VoucherSummary) => {
-                        const aTime = a.validUntil
-                            ? new Date(a.validUntil).getTime()
-                            : Number.MAX_SAFE_INTEGER;
-                        const bTime = b.validUntil
-                            ? new Date(b.validUntil).getTime()
-                            : Number.MAX_SAFE_INTEGER;
-                        return aTime - bTime;
-                    });
-                setActiveVouchers(activeVoucherList);
-
-                const countsByStandard: Record<string, number> = {};
-                activeVoucherList.forEach((v: VoucherSummary) => {
-                    if (v.voucherStandardUuid) {
-                        countsByStandard[v.voucherStandardUuid] =
-                            (countsByStandard[v.voucherStandardUuid] || 0) + 1;
-                    }
-                });
-                setVoucherCountsByStandard(countsByStandard);
-                setActiveVouchersCount(activeVoucherList.length);
-                const incompleteList = allSummaries.filter(
-                    (v: VoucherSummary) => v.status === 'incomplete',
-                );
-                setIncompleteCount(incompleteList.length);
-                setFirstIncompleteVoucherId(
-                    incompleteList.length === 1 ? incompleteList[0].localInstanceId : null,
-                );
-                setQuarantinedCount(
-                    allSummaries.filter((v: VoucherSummary) => v.status === 'quarantined').length,
-                );
-
-                const now = new Date();
-                const thirtyDays = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
-                setExpiringSoonCount(
-                    allSummaries.filter((v: VoucherSummary) => {
-                        if (v.status !== 'active' || !v.validUntil) return false;
-                        const exp = new Date(v.validUntil);
-                        return exp > now && exp <= thirtyDays;
-                    }).length,
-                );
-
-                setAppConfig(userSettings);
-                const initialMode =
-                    (userSettings?.uiPreferences.balanceViewMode as 'spendable' | 'net') ||
-                    'spendable';
-                setBalanceViewMode(initialMode);
-
-                const hasRealActiveVouchers = allSummaries.some(
-                    (v: VoucherSummary) => v.status === 'active' && !v.isTestVoucher,
-                );
-                const effectiveBackupAt =
-                    [userSettings?.lifecycle.lastBackupAt, userSettings?.lifecycle.lastSyncBackupAt]
-                        .filter((d): d is string => Boolean(d) && !isNaN(new Date(d as string).getTime()))
-                        .sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0] ?? null;
-                const isBackupOutdatedOrMissing =
-                    !effectiveBackupAt ||
-                    (() => {
-                        const backupDate = new Date(effectiveBackupAt);
-                        if (isNaN(backupDate.getTime())) return true;
-                        const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
-                        return backupDate < fourteenDaysAgo;
-                    })();
-                setShowBackupReminder(
-                    hasRealActiveVouchers &&
-                        !userSettings?.securityPolicy.backupSyncFolder &&
-                        isBackupOutdatedOrMissing,
-                );
-            } catch (e) {
-                if (!active) return;
-                console.error(`Failed to fetch dashboard data: ${stringifyError(e)}`);
-                setFeedbackMsg(translateError(e, tRef.current));
-            } finally {
-                if (active) setIsLoading(false);
-            }
-        }
-        fetchData();
+        void fetchData();
 
         const loadPostInbox = () => {
             postService
                 .getPostInboxSummary()
                 .then((summary) => {
-                    if (!active) return;
+                    if (!mountedRef.current) return;
                     setPendingSignRequests(summary.pendingSignRequests || []);
                     setPendingWotHandshakes(summary.pendingWotHandshakes || []);
                     setPendingTolerancePayments(summary.pendingTolerancePayments || []);
@@ -211,12 +215,12 @@ export function useDashboardData() {
 
         loadPostInbox();
         postService.syncPostChannels().catch(() => {});
-        window.addEventListener(POST_INBOX_UPDATED_EVENT, handlePostInboxUpdated);
+        window.addEventListener(APP_EVENTS.POST_INBOX_UPDATED, handlePostInboxUpdated);
         return () => {
-            active = false;
-            window.removeEventListener(POST_INBOX_UPDATED_EVENT, handlePostInboxUpdated);
+            mountedRef.current = false;
+            window.removeEventListener(APP_EVENTS.POST_INBOX_UPDATED, handlePostInboxUpdated);
         };
-    }, []);
+    }, [fetchData]);
 
     const handleOpenSignRequest = useCallback(
         async (req: FrontendPendingSignRequest) => {
@@ -278,16 +282,18 @@ export function useDashboardData() {
                 const payload = await protectAction(async (pwd) => {
                     return await postService.confirmPendingPostPayment(msgId, pwd || undefined);
                 });
-                if (!payload) return false;
+                if (!payload || !mountedRef.current) return false;
                 setPendingTolerancePayments((prev) => prev.filter((p) => p.msgId !== msgId));
+                await fetchData();
                 return true;
             } catch (e) {
+                if (!mountedRef.current) return false;
                 logger.error(`Failed to confirm pending tolerance payment: ${stringifyError(e)}`);
                 setFeedbackMsg(translateError(e, t));
                 return false;
             }
         },
-        [protectAction, t],
+        [fetchData, protectAction, t],
     );
 
     const handleDismissTolerancePayment = useCallback(

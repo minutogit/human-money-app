@@ -2,7 +2,8 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { transferService } from '../../services/transferService';
-import { postService, POST_INBOX_UPDATED_EVENT } from '../../services/postService';
+import { postService } from '../../services/postService';
+import { APP_EVENTS } from '../../utils/appEvents';
 import { useNavigation } from '../../context/NavigationContext';
 import { useOptionalSession } from '../../context/SessionContext';
 import { useContactResolver } from '../../hooks/useContactResolver';
@@ -83,10 +84,10 @@ export function useTransactionHistory() {
                 .catch(() => {});
         };
         loadPostSummary();
-        window.addEventListener(POST_INBOX_UPDATED_EVENT, loadPostSummary);
+        window.addEventListener(APP_EVENTS.POST_INBOX_UPDATED, loadPostSummary);
         return () => {
             active = false;
-            window.removeEventListener(POST_INBOX_UPDATED_EVENT, loadPostSummary);
+            window.removeEventListener(APP_EVENTS.POST_INBOX_UPDATED, loadPostSummary);
         };
     }, [t]);
 

@@ -11,6 +11,7 @@ import { Advanced } from '../ui/Advanced';
 import { AdvancedDisclosure } from '../ui/AdvancedDisclosure';
 import { marketService } from '../../services/marketService';
 import { compressAdImageToWebpDataUri } from '../../utils/imageCompression';
+import { translateError } from '../../utils/errorHelper';
 
 type PriceMode = 'none' | 'free' | 'negotiable' | 'minuto' | 'freetaler' | 'freetext';
 
@@ -194,15 +195,15 @@ export const AdEditorModal: React.FC<AdEditorModalProps> = ({
             return;
         }
         if (trimmedTitle.length > 80) {
-            setError(t('marketplace.errorTitleTooLong', 'Titel darf maximal 80 Zeichen lang sein'));
+            setError(t('marketplace.errorTitleTooLong', 'Maximal {{max}} Zeichen erlaubt', { max: 80 }));
             return;
         }
         if (text.trim().length > 280) {
-            setError(t('marketplace.errorTextTooLong', 'Text darf maximal 280 Zeichen lang sein'));
+            setError(t('marketplace.errorTextTooLong', 'Maximal {{max}} Zeichen erlaubt', { max: 280 }));
             return;
         }
         if (pricing.trim().length > 40) {
-            setError(t('marketplace.errorPricingTooLong', 'Preisangabe darf maximal 40 Zeichen lang sein'));
+            setError(t('marketplace.errorPricingTooLong', 'Maximal {{max}} Zeichen erlaubt', { max: 40 }));
             return;
         }
 
@@ -225,12 +226,7 @@ export const AdEditorModal: React.FC<AdEditorModalProps> = ({
             }
         } catch (err) {
             if (sessionSeqRef.current !== submitSession) return;
-            const msg = err instanceof Error ? err.message : String(err);
-            if (msg.includes('market.adLimitReached')) {
-                setError(t('marketplace.adLimitReached', 'Das Limit von 5 aktiven Inseraten ist erreicht.'));
-            } else {
-                setError(msg);
-            }
+            setError(translateError(err, t));
         } finally {
             if (sessionSeqRef.current === submitSession) {
                 setIsSaving(false);
@@ -565,9 +561,20 @@ export const AdEditorModal: React.FC<AdEditorModalProps> = ({
                             <div className="p-3 rounded-xl bg-bg-app border border-theme-subtle flex items-center gap-2 text-xs text-theme-secondary">
                                 <Calendar size={15} className="text-theme-primary shrink-0" />
                                 <span>
-                                    {t('marketplace.adEditingDurationInfo', 'Läuft bis {{date}} (Verlängern über „Verlängern“)', {
-                                        date: formatExpiryDate(targetAd?.expiresAt || 0),
-                                    })}
+                                    {t(
+                                        'marketplace.adEditingDurationInfo',
+                                        'Restlaufzeit: noch {{days}} Tage (bis {{date}}). Eine Verlängerung ist nach dem Speichern per Klick auf „Verlängern“ möglich.',
+                                        {
+                                            days: Math.max(
+                                                0,
+                                                Math.ceil(
+                                                    ((targetAd?.expiresAt || 0) * 1000 - Date.now()) /
+                                                        86_400_000,
+                                                ),
+                                            ),
+                                            date: formatExpiryDate(targetAd?.expiresAt || 0),
+                                        },
+                                    )}
                                 </span>
                             </div>
                         )}

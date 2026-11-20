@@ -938,6 +938,19 @@ impl GuardianVaultStore {
                     entry.rotation_epoch, existing.rotation_epoch
                 )));
             }
+            if entry.rotation_epoch == existing.rotation_epoch {
+                if entry.share_commitments != existing.share_commitments
+                    || entry.r_enc != existing.r_enc
+                {
+                    return Err(MarketError::Validation(
+                        "Equivocating share commitments or r_enc for same rotation epoch"
+                            .to_string(),
+                    ));
+                }
+                if entry.updated_at < existing.updated_at {
+                    return Ok(());
+                }
+            }
         } else if self.wards.len() >= MAX_GUARDIAN_WARDS {
             return Err(MarketError::Validation(format!(
                 "Guardian vault capacity reached (maximum {} wards)",
@@ -1075,18 +1088,98 @@ pub fn build_recovery_request_uri(pk_temp: &[u8; 32], ts: u64, name_hint: Option
     format!("humoco://recovery-req?{}", query)
 }
 
-fn extract_query_from_uri_text<'a>(uri: &'a str, action: &str) -> Option<&'a str> {
+fn extract_query_from_uri_text(uri: &str, action: &str) -> Option<String> {
     let trimmed = uri.trim();
     let lower = trimmed.to_ascii_lowercase();
     let full_prefix = format!("humoco://{}?", action);
-    let idx = lower.find(&full_prefix)?;
-    let raw_query = &trimmed[idx + full_prefix.len()..];
+
+    let mut search_from = 0;
+    let start_idx = loop {
+        let rel = lower[search_from..].find(&full_prefix)?;
+        let abs = search_from + rel;
+        let boundary_ok = abs == 0
+            || trimmed[..abs].chars().next_back().is_some_and(|c| {
+                c.is_whitespace()
+                    || matches!(
+                        c,
+                        '"' | '\''
+                            | '<'
+                            | '>'
+                            | '('
+                            | '['
+                            | ','
+                            | ';'
+                            | ':'
+                            | '„'
+                            | '“'
+                            | '”'
+                            | '«'
+                            | '»'
+                            | '‹'
+                            | '›'
+                    )
+            });
+        if boundary_ok {
+            break abs;
+        }
+        search_from = abs + 1;
+    };
+
+    let after_prefix = &trimmed[start_idx + full_prefix.len()..];
+    let mut lines = after_prefix.lines();
+    let first_raw = lines.next().unwrap_or("");
+    fn stop_at_delim(s: &str) -> (&str, bool) {
+        match s.find(|c: char| {
+            matches!(
+                c,
+                '#' | '"' | '\'' | '<' | '>' | ')' | '„' | '“' | '”' | '«' | '»' | '‹' | '›'
+            ) || c.is_whitespace()
+        }) {
+            Some(pos) => (&s[..pos], true),
+            None => (s, false),
+        }
+    }
+
+    let (first_part, mut stopped) = stop_at_delim(first_raw);
+    let mut joined = first_part.to_string();
+
+    if !stopped {
+        for line in lines {
+            let t = line.trim();
+            if t.is_empty() || t.chars().any(char::is_whitespace) {
+                break;
+            }
+            let (seg, seg_stopped) = stop_at_delim(t);
+            let stripped = seg.trim_end_matches(&['.', ',', ';', ':', '!', '?', ')', ']'][..]);
+            let is_short_prose_word = t != stripped
+                && stripped.len() < 24
+                && stripped.chars().all(|c| c.is_ascii_alphabetic());
+            if !stripped.is_empty()
+                && !is_short_prose_word
+                && stripped.chars().all(|c| {
+                    c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '=' | '&' | '%' | '+')
+                })
+            {
+                joined.push_str(stripped);
+                if seg_stopped {
+                    stopped = true;
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+    }
+    let _ = stopped;
+
     Some(
-        raw_query
-            .split(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '>' | ')'))
-            .next()
-            .unwrap_or("")
-            .trim_end_matches(&['.', ',', ';', ':', '!', '?', ')', ']'][..]),
+        joined
+            .trim_end_matches(
+                &[
+                    '.', ',', ';', ':', '!', '?', ')', ']', '„', '“', '”', '«', '»', '‹', '›',
+                ][..],
+            )
+            .to_string(),
     )
 }
 
@@ -1229,45 +1322,7 @@ pub fn open_and_verify_guardian_release_reply(
     sk_temp: &[u8; 32],
     uri: &str,
 ) -> Result<GuardianReleasePayload, MarketError> {
-    // Rejoin email hard-wrapped base64url continuation lines when the URI contains humoco://recovery-reply?
-    let unwrapped;
-    let candidate = if uri
-        .trim()
-        .to_ascii_lowercase()
-        .contains("humoco://recovery-reply?")
-    {
-        let trimmed = uri.trim();
-        let lower = trimmed.to_ascii_lowercase();
-        let idx = lower.find("humoco://recovery-reply?").unwrap_or(0);
-        let slice = &trimmed[idx..];
-        let mut lines = slice.lines();
-        let mut joined = lines.next().map(str::trim).unwrap_or("").to_string();
-        for line in lines {
-            let t = line.trim();
-            if t.is_empty() {
-                break;
-            }
-            let stripped = t.trim_end_matches(&['.', ',', ';', ':', '!', '?', ')', ']'][..]);
-            let is_short_prose_word = t != stripped
-                && stripped.len() < 24
-                && stripped.chars().all(|c| c.is_ascii_alphabetic());
-            if !stripped.is_empty()
-                && !is_short_prose_word
-                && stripped
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '='))
-            {
-                joined.push_str(t);
-            } else {
-                break;
-            }
-        }
-        unwrapped = joined;
-        unwrapped.as_str()
-    } else {
-        uri
-    };
-    let query_str = extract_query_from_uri_text(candidate, "recovery-reply").ok_or_else(|| {
+    let query_str = extract_query_from_uri_text(uri, "recovery-reply").ok_or_else(|| {
         MarketError::Validation("Invalid recovery reply URI: missing 'recovery-reply?'".to_string())
     })?;
 
@@ -1502,6 +1557,18 @@ pub fn recover_master_payload_from_shares(
                 i, entry.rotation_epoch, first.rotation_epoch
             )));
         }
+        if entry.share_commitments != first.share_commitments {
+            return Err(MarketError::Validation(format!(
+                "Mismatched share_commitments in entry {}",
+                i
+            )));
+        }
+        if entry.r_enc != first.r_enc {
+            return Err(MarketError::Validation(format!(
+                "Mismatched r_enc in entry {}",
+                i
+            )));
+        }
     }
 
     // Combine shares into C
@@ -1647,6 +1714,7 @@ pub fn parse_emergency_kit_uri(uri: &str) -> Result<EmergencyKitData, MarketErro
                 }
             },
             "sync" => {
+                const MAX_KIT_SYNC_DESCRIPTORS: usize = 8;
                 let sync_bytes = URL_SAFE_NO_PAD.decode(val.as_bytes()).map_err(|e| {
                     MarketError::Validation(format!("Invalid sync base64url: {}", e))
                 })?;
@@ -1654,12 +1722,44 @@ pub fn parse_emergency_kit_uri(uri: &str) -> Result<EmergencyKitData, MarketErro
                     .map_err(|e| {
                         MarketError::Serialization(format!("Invalid sync descriptors JSON: {}", e))
                     })?;
+                if descriptors.len() > MAX_KIT_SYNC_DESCRIPTORS {
+                    return Err(MarketError::Validation(format!(
+                        "Emergency kit sync descriptor count {} exceeds maximum {}",
+                        descriptors.len(),
+                        MAX_KIT_SYNC_DESCRIPTORS
+                    )));
+                }
+                for (i, d) in descriptors.iter().enumerate() {
+                    if !d.write_url.starts_with("https://")
+                        && !crate::sd_card::is_loopback_http(&d.write_url)
+                    {
+                        return Err(MarketError::Validation(format!(
+                            "kit sync[{}] write_url must be HTTPS or loopback HTTP",
+                            i
+                        )));
+                    }
+                    if !d.read_url.starts_with("https://")
+                        && !crate::sd_card::is_loopback_http(&d.read_url)
+                    {
+                        return Err(MarketError::Validation(format!(
+                            "kit sync[{}] read_url must be HTTPS or loopback HTTP",
+                            i
+                        )));
+                    }
+                    let dp = d.drop_pub.trim();
+                    if dp.is_empty() || dp.len() > 128 {
+                        return Err(MarketError::Validation(format!(
+                            "kit sync[{}] drop_pub must be 1..=128 chars",
+                            i
+                        )));
+                    }
+                }
                 sync = Some(descriptors);
             }
             "prefix" => {
-                let p = val.trim().to_string();
+                let p = val.trim().to_ascii_lowercase();
                 if !p.is_empty() {
-                    prefix = Some(p);
+                    prefix = crate::sync_access::validate_sync_prefix(Some(&p))?;
                 }
             }
             _ => {}

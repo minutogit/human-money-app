@@ -10,8 +10,29 @@ use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
-pub const MAX_PIN_ATTEMPTS: u8 = 5;
 const PIN_KEYSTORE_FILE: &str = "pin_keystore.json";
+const PIN_KEYSTORE_LOCK_FILE: &str = "pin_keystore.lock";
+pub const MAX_PIN_ATTEMPTS: u8 = 5;
+
+fn with_keystore_lock<T>(
+    keystore_dir: &Path,
+    f: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    fs::create_dir_all(keystore_dir)
+        .map_err(|e| format!("Failed to create PIN keystore directory: {}", e))?;
+    let lock_path = keystore_dir.join(PIN_KEYSTORE_LOCK_FILE);
+    let lock_file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)
+        .map_err(|e| format!("Failed to open PIN keystore lock: {}", e))?;
+    lock_file
+        .lock()
+        .map_err(|e| format!("Failed to lock PIN keystore: {}", e))?;
+    f()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -133,16 +154,19 @@ pub fn create_and_store_pepper(
     let encrypted = crypto::encrypt_data(&wrap_key, pepper.as_ref())
         .map_err(|e| format!("Failed to encrypt device pepper: {}", e))?;
 
-    let mut store = load_keystore_file(keystore_dir)?;
-    store.entries.insert(
-        folder_name.to_string(),
-        PinKeystoreEntry {
-            encrypted_pepper_b64: B64.encode(encrypted),
-            failed_attempts: 0,
-            scope,
-        },
-    );
-    save_keystore_file(keystore_dir, &store)?;
+    with_keystore_lock(keystore_dir, || {
+        let mut store = load_keystore_file(keystore_dir)?;
+        store.entries.insert(
+            folder_name.to_string(),
+            PinKeystoreEntry {
+                encrypted_pepper_b64: B64.encode(encrypted),
+                failed_attempts: 0,
+                scope,
+            },
+        );
+        save_keystore_file(keystore_dir, &store)?;
+        Ok(())
+    })?;
 
     Ok(derive_pin_secret(&pepper, folder_name, pin))
 }
@@ -151,16 +175,39 @@ pub fn get_entry(
     keystore_dir: &Path,
     folder_name: &str,
 ) -> Result<Option<PinKeystoreEntry>, String> {
-    let store = load_keystore_file(keystore_dir)?;
-    Ok(store.entries.get(folder_name).cloned())
+    with_keystore_lock(keystore_dir, || {
+        let store = load_keystore_file(keystore_dir)?;
+        Ok(store.entries.get(folder_name).cloned())
+    })
 }
 
 pub fn remove_entry(keystore_dir: &Path, folder_name: &str) -> Result<(), String> {
-    let mut store = load_keystore_file(keystore_dir)?;
-    if store.entries.remove(folder_name).is_some() {
-        save_keystore_file(keystore_dir, &store)?;
-    }
-    Ok(())
+    with_keystore_lock(keystore_dir, || {
+        let mut store = load_keystore_file(keystore_dir)?;
+        if store.entries.remove(folder_name).is_some() {
+            save_keystore_file(keystore_dir, &store)?;
+        }
+        Ok(())
+    })
+}
+
+pub fn restore_entry(
+    keystore_dir: &Path,
+    folder_name: &str,
+    previous: Option<PinKeystoreEntry>,
+) -> Result<(), String> {
+    with_keystore_lock(keystore_dir, || {
+        let mut store = load_keystore_file(keystore_dir)?;
+        match previous {
+            Some(entry) => {
+                store.entries.insert(folder_name.to_string(), entry);
+            }
+            None => {
+                store.entries.remove(folder_name);
+            }
+        }
+        save_keystore_file(keystore_dir, &store)
+    })
 }
 
 /// Increments `failed_attempts` BEFORE attempting PIN unlock (crash-safe strike counter) and
@@ -172,16 +219,19 @@ pub fn begin_pin_attempt(
     pin: &str,
 ) -> Result<(Zeroizing<String>, u8), String> {
     validate_pin_format(pin)?;
-    let mut store = load_keystore_file(keystore_dir)?;
-    let entry = store
-        .entries
-        .get_mut(folder_name)
-        .ok_or_else(|| "PIN is not enabled for this profile on this device.".to_string())?;
+    let (current_attempt, enc_b64) = with_keystore_lock(keystore_dir, || {
+        let mut store = load_keystore_file(keystore_dir)?;
+        let entry = store
+            .entries
+            .get_mut(folder_name)
+            .ok_or_else(|| "PIN is not enabled for this profile on this device.".to_string())?;
 
-    entry.failed_attempts = entry.failed_attempts.saturating_add(1);
-    let current_attempt = entry.failed_attempts;
-    let enc_b64 = entry.encrypted_pepper_b64.clone();
-    save_keystore_file(keystore_dir, &store)?;
+        entry.failed_attempts = entry.failed_attempts.saturating_add(1);
+        let current_attempt = entry.failed_attempts;
+        let enc_b64 = entry.encrypted_pepper_b64.clone();
+        save_keystore_file(keystore_dir, &store)?;
+        Ok((current_attempt, enc_b64))
+    })?;
 
     let encrypted = B64
         .decode(&enc_b64)
@@ -203,12 +253,14 @@ pub fn begin_pin_attempt(
 }
 
 pub fn reset_failed_attempts(keystore_dir: &Path, folder_name: &str) -> Result<(), String> {
-    let mut store = load_keystore_file(keystore_dir)?;
-    if let Some(entry) = store.entries.get_mut(folder_name) {
-        entry.failed_attempts = 0;
-        save_keystore_file(keystore_dir, &store)?;
-    }
-    Ok(())
+    with_keystore_lock(keystore_dir, || {
+        let mut store = load_keystore_file(keystore_dir)?;
+        if let Some(entry) = store.entries.get_mut(folder_name) {
+            entry.failed_attempts = 0;
+            save_keystore_file(keystore_dir, &store)?;
+        }
+        Ok(())
+    })
 }
 
 #[cfg(test)]

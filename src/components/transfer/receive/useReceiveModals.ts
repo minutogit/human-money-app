@@ -1,5 +1,5 @@
 // src/components/transfer/receive/useReceiveModals.ts
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { translateError } from '../../../utils/errorHelper';
 import { commitPendingReceiveBundle } from './receiveImportService';
@@ -67,19 +67,26 @@ export function useReceiveModals({
         definition?: VoucherStandardDefinition;
     } | null>(null);
 
+    const actionInFlightRef = useRef(false);
+
     const clearModalSelections = useCallback(() => {
         setPendingPasswordImport(null);
         setImportStandardModalData(null);
     }, []);
 
     const handleConfirmPassword = async () => {
-        if (!pendingPasswordImport) return;
+        if (!pendingPasswordImport || actionInFlightRef.current) return;
+        actionInFlightRef.current = true;
         const { fileData, type, name } = pendingPasswordImport;
         setIsProcessing(true);
         setPendingPasswordImport(null);
         setShowConfirm(false);
-        await executeReceiveDirectly(fileData, type, name, bundlePassword);
-        setBundlePassword('');
+        try {
+            await executeReceiveDirectly(fileData, type, name, bundlePassword);
+            setBundlePassword('');
+        } finally {
+            actionInFlightRef.current = false;
+        }
     };
 
     const handleCancelPassword = () => {
@@ -93,7 +100,8 @@ export function useReceiveModals({
 
     const confirmToleranceImport = async () => {
         const modal = toleranceModal;
-        if (!modal) return;
+        if (!modal || actionInFlightRef.current) return;
+        actionInFlightRef.current = true;
         const { pendingCommit } = modal;
         setIsProcessing(true);
         try {
@@ -111,6 +119,7 @@ export function useReceiveModals({
             setFeedbackMsg(translateError(e, t));
             onFinishPendingLaunchItem?.();
         } finally {
+            actionInFlightRef.current = false;
             setIsProcessing(false);
             setToleranceModal(null);
             setConfirmText('');

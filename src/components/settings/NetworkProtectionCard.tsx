@@ -1,5 +1,5 @@
 // src/components/settings/NetworkProtectionCard.tsx
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
     Network,
@@ -40,14 +40,27 @@ export const NetworkProtectionCard: React.FC<NetworkProtectionCardProps> = ({
     const [actionError, setActionError] = useState<string | null>(null);
     const [actionSuccess, setActionSuccess] = useState<string | null>(null);
 
+    const mountedRef = useRef(true);
+    const overviewSeqRef = useRef(0);
+
+    useEffect(() => {
+        mountedRef.current = true;
+        return () => {
+            mountedRef.current = false;
+        };
+    }, []);
+
     const loadOverview = useCallback(async () => {
         if (typeof settingsService.getLockProtectionOverview !== 'function') return;
+        const seq = ++overviewSeqRef.current;
         try {
             const res = await settingsService.getLockProtectionOverview();
+            if (!mountedRef.current || seq !== overviewSeqRef.current) return;
             if (res && typeof res.status === 'string') {
                 setOverview(res);
             }
         } catch (e) {
+            if (!mountedRef.current || seq !== overviewSeqRef.current) return;
             logger.warn(`Failed to load lock protection overview: ${stringifyError(e)}`);
         }
     }, []);
@@ -58,24 +71,31 @@ export const NetworkProtectionCard: React.FC<NetworkProtectionCardProps> = ({
 
     const handleRefresh = useCallback(async () => {
         if (typeof settingsService.refreshLockServers !== 'function') return;
+        const seq = ++overviewSeqRef.current;
         setIsRefreshing(true);
         setActionError(null);
         setActionSuccess(null);
         try {
             const next = await settingsService.refreshLockServers();
+            if (!mountedRef.current || seq !== overviewSeqRef.current) return;
             setOverview(next);
             const freshCfg = await settingsService.getConfig().catch(() => null);
+            if (!mountedRef.current || seq !== overviewSeqRef.current) return;
             if (freshCfg) onConfigUpdated?.(freshCfg);
         } catch (e) {
+            if (!mountedRef.current || seq !== overviewSeqRef.current) return;
             setActionError(stringifyError(e));
         } finally {
-            setIsRefreshing(false);
+            if (mountedRef.current && seq === overviewSeqRef.current) {
+                setIsRefreshing(false);
+            }
         }
     }, [onConfigUpdated]);
 
     const handleToggleTrust = useCallback(
         async (srv: LockServerItemDto) => {
             if (!srv.adminPub || typeof settingsService.setLockServerTrust !== 'function') return;
+            const seq = ++overviewSeqRef.current;
             setUpdatingAdminPub(srv.adminPub);
             setActionError(null);
             setActionSuccess(null);
@@ -90,16 +110,21 @@ export const NetworkProtectionCard: React.FC<NetworkProtectionCardProps> = ({
                     },
                     { requireFullAccess: true }
                 );
+                if (!mountedRef.current || seq !== overviewSeqRef.current) return;
                 if (next) {
                     setOverview(next);
                     setActionSuccess(t('settings.l2ModeTrustUpdated', 'Trust setting saved.'));
                     const freshCfg = await settingsService.getConfig().catch(() => null);
+                    if (!mountedRef.current || seq !== overviewSeqRef.current) return;
                     if (freshCfg) onConfigUpdated?.(freshCfg);
                 }
             } catch (e) {
+                if (!mountedRef.current || seq !== overviewSeqRef.current) return;
                 setActionError(stringifyError(e));
             } finally {
-                setUpdatingAdminPub(null);
+                if (mountedRef.current) {
+                    setUpdatingAdminPub(null);
+                }
             }
         },
         [onConfigUpdated, protectAction, t]

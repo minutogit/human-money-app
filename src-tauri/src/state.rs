@@ -117,6 +117,12 @@ pub struct StoredPostState {
     pub pending_tolerance_payments: Vec<StoredPendingTolerancePayment>,
     #[serde(default)]
     pub inquiry_rate_tracker: humoco_market::InquiryRateTracker,
+    #[serde(default)]
+    pub outbox_rotation_tick: u64,
+    #[serde(default)]
+    pub replied_sign_request_ids: std::collections::BTreeSet<String>,
+    #[serde(default)]
+    pub pruned_outbox_tag16s: std::collections::BTreeSet<String>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -426,6 +432,8 @@ pub struct SyncWakeRequest {
     pub market: bool,
     #[serde(default)]
     pub market_force_upload: bool,
+    #[serde(default)]
+    pub sync_members: bool,
 }
 
 impl SyncWakeRequest {
@@ -437,6 +445,7 @@ impl SyncWakeRequest {
         self.post |= other.post;
         self.market |= other.market;
         self.market_force_upload |= other.market_force_upload;
+        self.sync_members |= other.sync_members;
     }
 
     pub fn is_empty(&self) -> bool {
@@ -446,7 +455,8 @@ impl SyncWakeRequest {
             || self.sync_backup_force
             || self.post
             || self.market
-            || self.market_force_upload)
+            || self.market_force_upload
+            || self.sync_members)
     }
 }
 
@@ -485,7 +495,7 @@ struct OneShotPinGrant {
 /// # Lock Ordering Invariant
 /// Whenever multiple mutexes on `AppState` must be acquired simultaneously,
 /// acquire them strictly in the following total order to prevent deadlocks:
-/// `recovery_op_lock -> post_op_lock -> service -> profile_caches`.
+/// `recovery_op_lock -> backup_op_lock -> post_op_lock -> service -> profile_caches`.
 /// `active_profile_lock`, `sync_control`, and `one_shot_pin_grant` are leaf mutexes never held while acquiring `service` or across `.await`.
 ///
 /// Never hold any `std::sync::MutexGuard` across an `.await` point.
@@ -495,6 +505,7 @@ pub struct AppState {
     pub session_generation: std::sync::atomic::AtomicU64,
     session_gen_tx: tokio::sync::watch::Sender<u64>,
     pub recovery_op_lock: tokio::sync::Mutex<()>,
+    pub backup_op_lock: tokio::sync::Mutex<()>,
     pub post_op_lock: tokio::sync::Mutex<()>,
     pub startup_launch_items: Mutex<Vec<String>>,
     pub sync_control: Mutex<SyncCoordinatorControl>,
@@ -872,6 +883,7 @@ impl AppState {
             session_generation: std::sync::atomic::AtomicU64::new(initial_gen),
             session_gen_tx,
             recovery_op_lock: tokio::sync::Mutex::new(()),
+            backup_op_lock: tokio::sync::Mutex::new(()),
             post_op_lock: tokio::sync::Mutex::new(()),
             startup_launch_items: Mutex::new(Vec::new()),
             sync_control: Mutex::new(SyncCoordinatorControl::default()),
@@ -1177,19 +1189,32 @@ impl AppState {
         service: &AppService,
         token: &str,
     ) -> Result<zeroize::Zeroizing<String>, crate::models::FrontendError> {
-        let taken = self.one_shot_pin_grant.lock().unwrap().take();
-        let Some(grant) = taken else {
-            return Err(crate::models::FrontendError::from(
-                human_money_core::Error::App(human_money_core::error::AppError::SessionExpired {
-                    reason: "One-shot PIN grant missing or already used.".to_string(),
-                }),
-            ));
+        let grant = {
+            let mut guard = self.one_shot_pin_grant.lock().unwrap();
+            let Some(existing) = guard.as_ref() else {
+                return Err(crate::models::FrontendError::from(
+                    human_money_core::Error::App(
+                        human_money_core::error::AppError::SessionExpired {
+                            reason: "One-shot PIN grant missing or already used.".to_string(),
+                        },
+                    ),
+                ));
+            };
+            if existing.token != token {
+                return Err(crate::models::FrontendError::from(
+                    human_money_core::Error::App(
+                        human_money_core::error::AppError::SessionExpired {
+                            reason: "One-shot PIN grant token mismatch or superseded.".to_string(),
+                        },
+                    ),
+                ));
+            }
+            guard.take().unwrap()
         };
         let owner_matches = service
             .with_wallet(|w| w.get_user_id() == grant.owner_did)
             .unwrap_or(false);
-        if grant.token != token
-            || std::time::Instant::now() > grant.expires_at
+        if std::time::Instant::now() > grant.expires_at
             || self.current_session_generation() != grant.generation
             || !service.is_wallet_unlocked()
             || !owner_matches
@@ -1205,7 +1230,7 @@ impl AppState {
     }
 
     /// Enforces `required` access and resolves any single-use `hmc_grant_*` PIN grant into its
-    /// underlying zeroizing secret for `DailyPay` operations.
+    /// underlying zeroizing secret for `DailyPay` or `Unlocked` operations.
     pub fn authorize_and_lock_secret(
         &self,
         required: RequiredAccess,
@@ -1247,14 +1272,13 @@ impl AppState {
                         return Ok((service, Some(secret)));
                     }
                     RequiredAccess::Unlocked => {
-                        return Err(crate::models::FrontendError::from(
-                            human_money_core::Error::App(
-                                human_money_core::error::AppError::SessionExpired {
-                                    reason: "One-shot PIN grant cannot authorize Unlocked access."
-                                        .to_string(),
-                                },
-                            ),
-                        ));
+                        let secret = self.consume_one_shot_pin_grant(&service, raw)?;
+                        if !service.is_wallet_unlocked() {
+                            return Err(crate::models::FrontendError::from(
+                                AppFacadeError::WalletLocked,
+                            ));
+                        }
+                        return Ok((service, Some(secret)));
                     }
                 }
             }
@@ -1447,10 +1471,6 @@ impl AppState {
             .and_then(|c| c.wot.clone())
     }
 
-    pub fn set_cached_wot(&self, value: Option<humoco_wot::TrustRegister>) {
-        self.set_cache_slot_direct(|c| &mut c.wot, value);
-    }
-
     pub fn cache_ui_preferences(&self) -> Option<UiPreferences> {
         self.profile_caches
             .lock()
@@ -1507,13 +1527,6 @@ impl AppState {
             .and_then(|c| c.own_market_profile.clone())
     }
 
-    pub fn set_cached_own_market_profile(
-        &self,
-        value: Option<crate::models::StoredOwnMarketProfile>,
-    ) {
-        self.set_cache_slot_direct(|c| &mut c.own_market_profile, value);
-    }
-
     pub fn set_cached_own_market_profile_for_service(
         &self,
         service: &AppService,
@@ -1532,13 +1545,6 @@ impl AppState {
             .and_then(|c| c.recovery_owner.clone())
     }
 
-    pub fn set_cached_recovery_owner(
-        &self,
-        value: Option<Option<crate::models::recovery::RecoveryOwnerState>>,
-    ) {
-        self.set_cache_slot_direct(|c| &mut c.recovery_owner, value);
-    }
-
     pub fn set_cached_recovery_owner_for_service(
         &self,
         service: &AppService,
@@ -1555,10 +1561,6 @@ impl AppState {
             .and_then(|c| c.guardian_vault.clone())
     }
 
-    pub fn set_cached_guardian_vault(&self, value: Option<humoco_market::GuardianVaultStore>) {
-        self.set_cache_slot_direct(|c| &mut c.guardian_vault, value);
-    }
-
     pub fn set_cached_guardian_vault_for_service(
         &self,
         service: &AppService,
@@ -1573,10 +1575,6 @@ impl AppState {
             .unwrap()
             .as_ref()
             .and_then(|c| c.app_notices.clone())
-    }
-
-    pub fn set_cached_app_notices(&self, value: Option<crate::models::StoredAppNotices>) {
-        self.set_cache_slot_direct(|c| &mut c.app_notices, value);
     }
 
     fn set_cache_slot_direct<T>(
@@ -1807,54 +1805,6 @@ impl AppState {
         Ok(Some(value))
     }
 
-    fn mutate_store_for_owner<T>(
-        &self,
-        expected_owner_did: &str,
-        field: fn(&mut ActiveProfileCaches) -> &mut Option<T>,
-        key: &str,
-        name: &str,
-        password: Option<&str>,
-        f: impl FnOnce(&mut T) -> bool,
-    ) -> Result<Option<T>, crate::models::FrontendError>
-    where
-        T: serde::Serialize + serde::de::DeserializeOwned + Default + Clone,
-    {
-        self.mutate_store_for_owner_inner(
-            expected_owner_did,
-            None,
-            field,
-            key,
-            name,
-            password,
-            false,
-            f,
-        )
-    }
-
-    fn mutate_local_store_for_owner<T>(
-        &self,
-        expected_owner_did: &str,
-        field: fn(&mut ActiveProfileCaches) -> &mut Option<T>,
-        key: &str,
-        name: &str,
-        password: Option<&str>,
-        f: impl FnOnce(&mut T) -> bool,
-    ) -> Result<Option<T>, crate::models::FrontendError>
-    where
-        T: serde::Serialize + serde::de::DeserializeOwned + Default + Clone,
-    {
-        self.mutate_store_for_owner_inner(
-            expected_owner_did,
-            None,
-            field,
-            key,
-            name,
-            password,
-            true,
-            f,
-        )
-    }
-
     pub fn get_cached_ui_preferences(&self) -> Result<UiPreferences, AppFacadeError> {
         self.get_cached_store(|c| &mut c.ui_preferences, "UiPreferences")
     }
@@ -1866,18 +1816,6 @@ impl AppState {
     ) -> Result<UiPreferences, AppFacadeError> {
         self.get_or_load_store(
             service,
-            |c| &mut c.ui_preferences,
-            UI_PREFERENCES_KEY,
-            "UiPreferences",
-            password,
-        )
-    }
-
-    pub fn get_or_load_ui_preferences_locked(
-        &self,
-        password: Option<&str>,
-    ) -> Result<UiPreferences, crate::models::FrontendError> {
-        self.get_or_load_store_locked(
             |c| &mut c.ui_preferences,
             UI_PREFERENCES_KEY,
             "UiPreferences",
@@ -2013,22 +1951,6 @@ impl AppState {
         Ok(policy)
     }
 
-    pub fn mutate_security_policy_for_owner(
-        &self,
-        expected_owner_did: &str,
-        password: Option<&str>,
-        f: impl FnOnce(&mut SecurityPolicy) -> bool,
-    ) -> Result<Option<SecurityPolicy>, crate::models::FrontendError> {
-        self.mutate_store_for_owner(
-            expected_owner_did,
-            |c| &mut c.security_policy,
-            SECURITY_POLICY_KEY,
-            "SecurityPolicy",
-            password,
-            f,
-        )
-    }
-
     pub fn mutate_security_policy_for_session(
         &self,
         token: &SessionToken,
@@ -2117,22 +2039,6 @@ impl AppState {
         Ok(lifecycle)
     }
 
-    pub fn mutate_internal_lifecycle_for_owner(
-        &self,
-        expected_owner_did: &str,
-        password: Option<&str>,
-        f: impl FnOnce(&mut InternalLifecycleState) -> bool,
-    ) -> Result<Option<InternalLifecycleState>, crate::models::FrontendError> {
-        self.mutate_local_store_for_owner(
-            expected_owner_did,
-            |c| &mut c.internal_lifecycle,
-            INTERNAL_LIFECYCLE_STATE_KEY,
-            "InternalLifecycleState",
-            password,
-            f,
-        )
-    }
-
     pub fn mutate_internal_lifecycle_for_session(
         &self,
         token: &SessionToken,
@@ -2157,10 +2063,7 @@ impl AppState {
             .as_ref()
             .ok_or_else(|| AppFacadeError::Generic("AppConfig caches not loaded".to_string()))?;
         Ok(AppConfigDto {
-            ui_preferences: caches
-                .ui_preferences
-                .clone()
-                .ok_or_else(|| AppFacadeError::Generic("UiPreferences not loaded".to_string()))?,
+            ui_preferences: caches.ui_preferences.clone().unwrap_or_default(),
             security_policy: caches
                 .security_policy
                 .clone()
@@ -2168,10 +2071,11 @@ impl AppState {
             lifecycle: caches
                 .internal_lifecycle
                 .clone()
-                .map(Into::into)
-                .ok_or_else(|| {
-                    AppFacadeError::Generic("InternalLifecycleState not loaded".to_string())
-                })?,
+                .unwrap_or(InternalLifecycleState {
+                    pending_restore_l2_reconciliation: true,
+                    ..Default::default()
+                })
+                .into(),
         })
     }
 
@@ -2790,6 +2694,13 @@ impl AppState {
         self.initialize_profile_session_inner(service, secondary_secret, true)
     }
 
+    pub fn rollback_failed_session(&self, service: &mut AppService) {
+        service.logout();
+        self.clear_all_caches();
+        self.clear_sync_cooldown();
+        self.release_profile_lock();
+    }
+
     fn initialize_profile_session_inner(
         &self,
         service: &mut AppService,
@@ -2798,9 +2709,7 @@ impl AppState {
     ) -> Result<(), AppFacadeError> {
         let res = self.initialize_profile_session_fallible(service, credential, is_secondary);
         if let Err(err) = res {
-            service.logout();
-            self.clear_all_caches();
-            self.clear_sync_cooldown();
+            self.rollback_failed_session(service);
             return Err(err);
         }
         Ok(())
@@ -2825,10 +2734,21 @@ impl AppState {
         }
         self.clear_one_shot_pin_grant();
 
-        // 1. Load or create split configuration stores
-        let _ui_prefs = self.load_ui_preferences(service, Some(credential))?;
+        // 1. Load security policy fail-closed; leave non-vital stores uncached (`None`) on error
+        // so corrupt disk data is never overwritten and emergency seed recovery stays unblocked.
         let security_policy = self.load_security_policy(service, Some(credential))?;
-        let _lifecycle = self.load_internal_lifecycle(service, Some(credential))?;
+        if let Err(e) = self.load_ui_preferences(service, Some(credential)) {
+            log::warn!(
+                "Failed to pre-load UiPreferences during session init: {}",
+                e
+            );
+        }
+        if let Err(e) = self.load_internal_lifecycle(service, Some(credential)) {
+            log::error!(
+                "Failed to load InternalLifecycleState during session init (leaving cache unpopulated): {}",
+                e
+            );
+        }
 
         // 2. Start session timer if configured
         if security_policy.session_timeout_seconds > 0 {
@@ -2842,51 +2762,91 @@ impl AppState {
             }
         }
 
-        // 3. Load transaction history + canonical outgoing bundles and prune expired retained bundles
-        let mut history = self.load_history_from_disk(service, Some(credential))?;
-        let mut outgoing = load_outgoing_bundles(service, Some(credential))
-            .map_err(|e| AppFacadeError::Generic(e.message))?;
-        let retention_duration = Duration::days(BUNDLE_RETENTION_DAYS);
-        let now = Utc::now();
+        // 3. Load transaction history + canonical outgoing bundles and prune expired retained bundles (non-fatal)
+        match (
+            self.load_history_from_disk(service, Some(credential)),
+            load_outgoing_bundles(service, Some(credential))
+                .map_err(|e| AppFacadeError::Generic(e.message)),
+        ) {
+            (Ok(mut history), Ok(mut outgoing)) => {
+                let retention_duration = Duration::days(BUNDLE_RETENTION_DAYS);
+                let now = Utc::now();
 
-        let mut history_changed = false;
-        for record in &mut history {
-            if !record.bundle_data.is_empty() {
-                record.bundle_data.clear();
-                history_changed = true;
+                let mut history_changed = false;
+                for record in &mut history {
+                    if !record.bundle_data.is_empty() {
+                        record.bundle_data.clear();
+                        history_changed = true;
+                    }
+                }
+                let prev_outgoing_len = outgoing.bundles.len();
+                outgoing.bundles.retain(|_, entry| {
+                    entry
+                        .created_at
+                        .parse::<chrono::DateTime<Utc>>()
+                        .map(|ts| now.signed_duration_since(ts) <= retention_duration)
+                        .unwrap_or(true)
+                });
+                let outgoing_changed = outgoing.bundles.len() != prev_outgoing_len;
+
+                if history_changed || outgoing_changed {
+                    info!("Saving pruned outgoing bundles / transaction history back to disk...");
+                    let outgoing_bytes = serde_json::to_vec(&outgoing).map_err(|e| {
+                        AppFacadeError::Json(format!("Failed to serialize outgoing_bundles: {}", e))
+                    })?;
+                    let history_bytes = serde_json::to_vec(&history).map_err(|e| {
+                        AppFacadeError::Json(format!(
+                            "Failed to serialize transaction_history: {}",
+                            e
+                        ))
+                    })?;
+                    service.save_encrypted_batch(
+                        &[
+                            (OUTGOING_BUNDLES_KEY, &outgoing_bytes),
+                            (TRANSACTION_HISTORY_KEY, &history_bytes),
+                        ],
+                        Some(credential),
+                    )?;
+                    self.write_cache_slot_for_service(service, |c| &mut c.history, Some(history));
+                }
+                self.write_cache_slot_for_service(
+                    service,
+                    |c| &mut c.outgoing_bundles,
+                    Some(outgoing),
+                );
+            }
+            (hist_res, out_res) => {
+                if let Err(e) = hist_res {
+                    log::warn!(
+                        "Failed to pre-load transaction history during session init: {}",
+                        e
+                    );
+                }
+                match out_res {
+                    Ok(outgoing) => {
+                        self.write_cache_slot_for_service(
+                            service,
+                            |c| &mut c.outgoing_bundles,
+                            Some(outgoing),
+                        );
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "Failed to pre-load outgoing bundles during session init: {}",
+                            e
+                        );
+                    }
+                }
             }
         }
-        let prev_outgoing_len = outgoing.bundles.len();
-        outgoing.bundles.retain(|_, entry| {
-            entry
-                .created_at
-                .parse::<chrono::DateTime<Utc>>()
-                .map(|ts| now.signed_duration_since(ts) <= retention_duration)
-                .unwrap_or(true)
-        });
-        let outgoing_changed = outgoing.bundles.len() != prev_outgoing_len;
-
-        if history_changed || outgoing_changed {
-            info!("Saving pruned outgoing bundles / transaction history back to disk...");
-            let outgoing_bytes = serde_json::to_vec(&outgoing).map_err(|e| {
-                AppFacadeError::Json(format!("Failed to serialize outgoing_bundles: {}", e))
-            })?;
-            let history_bytes = serde_json::to_vec(&history).map_err(|e| {
-                AppFacadeError::Json(format!("Failed to serialize transaction_history: {}", e))
-            })?;
-            service.save_encrypted_batch(
-                &[
-                    (OUTGOING_BUNDLES_KEY, &outgoing_bytes),
-                    (TRANSACTION_HISTORY_KEY, &history_bytes),
-                ],
-                Some(credential),
-            )?;
-            self.write_cache_slot_for_service(service, |c| &mut c.history, Some(history));
-        }
-        self.write_cache_slot_for_service(service, |c| &mut c.outgoing_bundles, Some(outgoing));
 
         // 4. Pre-cache the last 50 wallet events
-        self.refresh_events_cache(service, Some(credential))?;
+        if let Err(e) = self.refresh_events_cache(service, Some(credential)) {
+            log::warn!(
+                "Failed to pre-cache wallet events during session init: {}",
+                e
+            );
+        }
 
         // 5. Load the address book
         if let Err(e) = self.load_contacts(service, Some(credential)) {
@@ -2894,7 +2854,9 @@ impl AppState {
         }
 
         // 6. Load the Web of Trust register
-        self.load_wot_register(service, Some(credential))?;
+        if let Err(e) = self.load_wot_register(service, Some(credential)) {
+            log::warn!("Failed to pre-load WoT register during session init: {}", e);
+        }
 
         // 7. Pre-cache Social Recovery owner state and guardian vault (supports timeout = 0)
         match load_encrypted_json_opt::<crate::models::recovery::RecoveryOwnerState>(
@@ -3606,22 +3568,6 @@ impl AppState {
             );
         }
     }
-
-    pub fn update_contact_sync_health(
-        &self,
-        service: &mut AppService,
-        endpoint_url: &str,
-        success: bool,
-        now_secs: u64,
-        password: Option<&str>,
-    ) -> bool {
-        self.record_contact_sync_health_batch(
-            service,
-            &[(endpoint_url.to_string(), success)],
-            now_secs,
-            password,
-        )
-    }
 }
 
 pub fn canonicalize_did(input: &str) -> Result<String, humoco_wot::WotError> {
@@ -3882,20 +3828,6 @@ impl AppState {
         if let Err(e) = self.save_app_notices(service, &store, password) {
             log::warn!("Failed to persist app notices: {:?}", e);
         }
-    }
-
-    /// Updates `last_sync_at` and prepends new notices, truncating to `MAX_APP_NOTICES` (50).
-    pub fn append_app_notices(
-        &self,
-        last_sync_at: Option<u64>,
-        new_items: Vec<crate::models::FrontendAppNotice>,
-        password: Option<&str>,
-    ) {
-        if last_sync_at.is_none() && new_items.is_empty() {
-            return;
-        }
-        let mut service = self.service.lock().unwrap();
-        self.append_app_notices_with_service(&mut service, last_sync_at, new_items, password);
     }
 }
 
@@ -4499,10 +4431,9 @@ mod tests {
             .unwrap();
 
         // 1. Success update preserves "unverified" (does NOT overwrite with "active")
-        let updated = state.update_contact_sync_health(
+        let updated = state.record_contact_sync_health_batch(
             &mut service,
-            "https://sync-endpoint.org/sync.php",
-            true,
+            &[("https://sync-endpoint.org/sync.php".to_string(), true)],
             1000,
             Some(password),
         );
@@ -4522,10 +4453,9 @@ mod tests {
         state
             .save_contact(&mut service, bob_pending, Some(password))
             .unwrap();
-        let updated_pending = state.update_contact_sync_health(
+        let updated_pending = state.record_contact_sync_health_batch(
             &mut service,
-            "https://sync-endpoint.org/sync.php",
-            true,
+            &[("https://sync-endpoint.org/sync.php".to_string(), true)],
             1050,
             Some(password),
         );
@@ -4538,10 +4468,9 @@ mod tests {
         );
 
         // 2. Transient failure on pending_auth increments fail_count without immediately flipping to unreachable
-        let updated2 = state.update_contact_sync_health(
+        let updated2 = state.record_contact_sync_health_batch(
             &mut service,
-            "https://sync-endpoint.org/sync.php",
-            false,
+            &[("https://sync-endpoint.org/sync.php".to_string(), false)],
             1100,
             Some(password),
         );
@@ -4553,10 +4482,9 @@ mod tests {
         assert_eq!(bob.syncs[0].status, "pending_auth");
 
         // 3. Second failure still keeps pending_auth; third consecutive failure transitions to unreachable
-        let updated3 = state.update_contact_sync_health(
+        let updated3 = state.record_contact_sync_health_batch(
             &mut service,
-            "https://sync-endpoint.org/sync.php",
-            false,
+            &[("https://sync-endpoint.org/sync.php".to_string(), false)],
             1200,
             Some(password),
         );
@@ -4567,10 +4495,9 @@ mod tests {
         assert_eq!(bob.syncs[0].fail_count, 2);
         assert_eq!(bob.syncs[0].status, "pending_auth");
 
-        let updated3b = state.update_contact_sync_health(
+        let updated3b = state.record_contact_sync_health_batch(
             &mut service,
-            "https://sync-endpoint.org/sync.php",
-            false,
+            &[("https://sync-endpoint.org/sync.php".to_string(), false)],
             1250,
             Some(password),
         );
@@ -4582,10 +4509,9 @@ mod tests {
         assert_eq!(bob.syncs[0].status, "unreachable");
 
         // 4. Recovery success resets fail_count; since not in market_selected_syncs, transitions to "unverified"
-        let updated4 = state.update_contact_sync_health(
+        let updated4 = state.record_contact_sync_health_batch(
             &mut service,
-            "https://sync-endpoint.org/sync.php",
-            true,
+            &[("https://sync-endpoint.org/sync.php".to_string(), true)],
             1300,
             Some(password),
         );
@@ -4618,10 +4544,9 @@ mod tests {
             .unwrap();
 
         // Mark contact as unreachable again
-        let _ = state.update_contact_sync_health(
+        let _ = state.record_contact_sync_health_batch(
             &mut service,
-            "https://sync-endpoint.org/sync.php",
-            false,
+            &[("https://sync-endpoint.org/sync.php".to_string(), false)],
             1400,
             Some(password),
         );
@@ -4632,10 +4557,9 @@ mod tests {
         );
 
         // Now recover: should transition to "active" because it's in market_selected_syncs
-        let _ = state.update_contact_sync_health(
+        let _ = state.record_contact_sync_health_batch(
             &mut service,
-            "https://sync-endpoint.org/sync.php",
-            true,
+            &[("https://sync-endpoint.org/sync.php".to_string(), true)],
             1500,
             Some(password),
         );
@@ -5383,15 +5307,20 @@ mod tests {
                 .unwrap();
         }
 
-        // Same owner: clears flag without clobbering UiPreferences or SecurityPolicy
+        let session = crate::session::SessionToken {
+            owner_did: alice_did.clone(),
+            generation: state.current_session_generation(),
+        };
+
+        // Same owner & current generation: clears flag without clobbering UiPreferences or SecurityPolicy
         let updated = state
-            .mutate_internal_lifecycle_for_owner(&alice_did, Some(pw), |lc| {
+            .mutate_internal_lifecycle_for_session(&session, Some(pw), |lc| {
                 lc.pending_restore_l2_reconciliation = false;
                 lc.last_sync_backup_at = Some("2026-11-19T12:00:00Z".to_string());
                 true
             })
             .unwrap()
-            .expect("matching owner must mutate lifecycle");
+            .expect("matching session must mutate lifecycle");
         assert!(!updated.pending_restore_l2_reconciliation);
         assert_eq!(
             updated.last_sync_backup_at.as_deref(),
@@ -5403,8 +5332,12 @@ mod tests {
         assert_eq!(cfg.security_policy.session_timeout_seconds, 900);
 
         // Stale owner DID: returns Ok(None) and does NOT touch store
+        let stale_owner_session = crate::session::SessionToken {
+            owner_did: "did:key:zStaleOwner".to_string(),
+            generation: session.generation,
+        };
         let stale = state
-            .mutate_internal_lifecycle_for_owner("did:key:zStaleOwner", Some(pw), |lc| {
+            .mutate_internal_lifecycle_for_session(&stale_owner_session, Some(pw), |lc| {
                 lc.backup_dirty = true;
                 true
             })
@@ -5412,10 +5345,23 @@ mod tests {
         assert!(stale.is_none());
         assert!(!state.get_cached_internal_lifecycle().unwrap().backup_dirty);
 
+        // Stale generation: returns Ok(None) and does NOT touch store
+        let stale_gen_session = crate::session::SessionToken {
+            owner_did: alice_did,
+            generation: session.generation.saturating_add(99),
+        };
+        let stale_gen = state
+            .mutate_internal_lifecycle_for_session(&stale_gen_session, Some(pw), |lc| {
+                lc.backup_dirty = true;
+                true
+            })
+            .unwrap();
+        assert!(stale_gen.is_none());
+
         // Logged-out / locked wallet: returns Ok(None) and does NOT touch store
         state.lock_service().unwrap().logout();
         let locked = state
-            .mutate_internal_lifecycle_for_owner(&alice_did, Some(pw), |lc| {
+            .mutate_internal_lifecycle_for_session(&session, Some(pw), |lc| {
                 lc.backup_dirty = true;
                 true
             })

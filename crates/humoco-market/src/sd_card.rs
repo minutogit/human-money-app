@@ -161,11 +161,24 @@ pub fn new_ad_id() -> String {
     hex::encode(bytes)
 }
 
-fn is_loopback_http(url: &str) -> bool {
+pub fn is_loopback_http(url: &str) -> bool {
     let lower = url.to_ascii_lowercase();
-    lower.starts_with("http://127.0.0.1")
-        || lower.starts_with("http://localhost")
-        || lower.starts_with("http://[::1]")
+    let Some(after_scheme) = lower.strip_prefix("http://") else {
+        return false;
+    };
+    let authority = after_scheme.split(['/', '?', '#']).next().unwrap_or("");
+    for host in ["127.0.0.1", "localhost", "[::1]"] {
+        if authority == host
+            || authority.strip_prefix(host).is_some_and(|rest| {
+                rest.starts_with(':')
+                    && rest.len() > 1
+                    && rest[1..].chars().all(|c| c.is_ascii_digit())
+            })
+        {
+            return true;
+        }
+    }
+    false
 }
 
 fn validate_drops(drops: &[DropDescriptor]) -> Result<(), MarketError> {
@@ -337,16 +350,7 @@ fn validate_card_item_fields(item: &CardItem, valid_until: u64) -> Result<(), Ma
             }
         }
         CardItem::Picture(s) => {
-            if crate::media::is_supported_media_data_uri(s) {
-                crate::media::validate_avatar_data_uri(s)?;
-            } else {
-                let trimmed = s.trim();
-                if trimmed.is_empty() || trimmed.chars().count() > 200 {
-                    return Err(MarketError::Validation(
-                        "Picture must be 1..=200 characters".to_string(),
-                    ));
-                }
-            }
+            crate::media::validate_avatar_data_uri(s)?;
         }
         CardItem::Gender(s) => {
             let trimmed = s.trim();

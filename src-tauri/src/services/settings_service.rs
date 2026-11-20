@@ -133,11 +133,26 @@ pub fn patch_ui_preferences_impl(
     let (mut service, resolved_pw) =
         state.authorize_and_lock_secret(RequiredAccess::DailyPay, password.as_deref())?;
     let pw = resolved_pw.as_deref().map(String::as_str);
-    state
+    let mut should_wake_wifi = false;
+    let updated = state
         .mutate_ui_preferences(&mut service, pw, |prefs| {
+            let was_wifi_only = prefs.market_poll_wifi_only;
             patch.apply_to(prefs);
+            if was_wifi_only && !prefs.market_poll_wifi_only {
+                should_wake_wifi = true;
+            }
         })
-        .map_err(FrontendError::from)
+        .map_err(FrontendError::from)?;
+    if should_wake_wifi {
+        state.wake_sync_coordinator(crate::state::SyncWakeRequest {
+            seal: true,
+            sync_backup: true,
+            post: true,
+            market: true,
+            ..Default::default()
+        });
+    }
+    Ok(updated)
 }
 
 pub fn patch_security_policy_impl(
@@ -146,6 +161,7 @@ pub fn patch_security_policy_impl(
     state: &AppState,
 ) -> Result<SecurityPolicy, FrontendError> {
     info!("Patching SecurityPolicy...");
+    patch.validate().map_err(FrontendError::from)?;
     let mut service = state.authorize_and_lock(RequiredAccess::Full, password.as_deref())?;
     let updated = state
         .mutate_security_policy(&mut service, password.as_deref(), |policy| {

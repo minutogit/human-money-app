@@ -58,6 +58,14 @@ impl From<human_money_core::models::profile::PublicProfile> for FrontendCreatorD
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FrontendExpectedL2Committee {
+    pub lock_pubs: Vec<String>,
+    pub threshold: u8,
+    pub source: String, // "live" | "cached" | "none"
+}
+
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct FrontendNewVoucherData {
@@ -69,6 +77,12 @@ pub struct FrontendNewVoucherData {
     pub layer2_anchor: Option<String>,
     #[serde(default)]
     pub allow_offline_only: bool,
+    #[serde(default)]
+    pub expected_committee: Option<FrontendExpectedL2Committee>,
+    #[serde(default)]
+    pub force_reprobe: bool,
+    #[serde(default)]
+    pub explicit_offline_only: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -174,6 +188,8 @@ pub struct FrontendVoucherDetails {
     pub manifest_revision: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub anchor_manifest_json: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub anchor_delegations_json: Option<String>,
 }
 
 impl From<human_money_core::wallet::types::VoucherDetails> for FrontendVoucherDetails {
@@ -200,6 +216,7 @@ impl From<human_money_core::wallet::types::VoucherDetails> for FrontendVoucherDe
             reduced_guarantor_protection: false,
             manifest_revision: None,
             anchor_manifest_json: None,
+            anchor_delegations_json: None,
         }
     }
 }

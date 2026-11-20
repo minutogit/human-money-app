@@ -7,7 +7,7 @@ import { backupService } from '../../services/backupService';
 import { marketService } from '../../services/marketService';
 import { useSession } from '../../context/SessionContext';
 import { useNavigation } from '../../context/NavigationContext';
-import { useVoucherSelection } from '../../hooks/useVoucherSelection';
+import { useVoucherSelection, parseStrictPositiveDecimal } from '../../hooks/useVoucherSelection';
 import { usePrivacyDetection } from '../../hooks/usePrivacyDetection';
 import { useRateLimitCooldown } from '../../hooks/useRateLimitCooldown';
 import { logger } from '../../utils/log';
@@ -118,7 +118,7 @@ export function useSendTransfer({
         [state.recipientId, state.targetAmountStr, selectedStandardUuid, state.selectedIsTest],
     );
 
-    const parsedTargetAmount = parseFloat(state.targetAmountStr.trim().replace(',', '.'));
+    const parsedTargetAmount = parseStrictPositiveDecimal(state.targetAmountStr)?.value ?? NaN;
     const isPreviewPending =
         isResolvingCard ||
         (selectionMode === 'auto' &&
@@ -292,9 +292,17 @@ export function useSendTransfer({
         }
         const seq = ++autoSelectSeqRef.current;
         let active = true;
-        const amountStr = state.targetAmountStr.trim().replace(',', '.');
-        const amt = parseFloat(amountStr);
-        if (isNaN(amt) || amt <= 0 || !state.selectedStandardId) return;
+        const voucher = filteredVouchers[0];
+        const precision = voucher ? (uuidToPrecisionMap.get(voucher.voucherStandardUuid) ?? 4) : 4;
+        const parsedAmount = parseStrictPositiveDecimal(state.targetAmountStr, precision);
+        if (!parsedAmount || !state.selectedStandardId) {
+            if (state.targetAmountStr.trim()) {
+                clearSelection();
+                setConfirmedSnapshot(null);
+            }
+            return;
+        }
+        const amountStr = parsedAmount.normalized;
         const standardUuid = standardIdToUuidMap.get(state.selectedStandardId) || state.selectedStandardId;
         if (!standardUuid) return;
         const draftKey = buildSendDraftKey({
@@ -303,8 +311,6 @@ export function useSendTransfer({
             standardUuid,
             isTest: state.selectedIsTest,
         });
-        const voucher = filteredVouchers[0];
-        const precision = voucher ? (uuidToPrecisionMap.get(voucher.voucherStandardUuid) ?? 4) : 4;
         const timer = setTimeout(() => {
             if (!active || seq !== autoSelectSeqRef.current) return;
             autoSelectGravitational(
@@ -317,17 +323,9 @@ export function useSendTransfer({
             ).catch((e) => {
                 if (!active || seq !== autoSelectSeqRef.current) return;
                 logger.error(`Gravitational auto-select failed: ${stringifyError(e)}`);
-                const val = parseFloat(amountStr);
-                if (!isNaN(val) && val > 0 && voucher) {
-                    selectAmount(
-                        val,
-                        voucher.displayCurrency,
-                        precision,
-                        state.selectedIsTest,
-                        standardUuid,
-                        draftKey,
-                    );
-                }
+                clearSelection();
+                setConfirmedSnapshot(null);
+                dispatch({ type: 'SET_FEEDBACK', msg: translateError(e, t) });
             });
         }, 400);
         return () => {
@@ -345,7 +343,8 @@ export function useSendTransfer({
         standardIdToUuidMap,
         uuidToPrecisionMap,
         autoSelectGravitational,
-        selectAmount,
+        clearSelection,
+        t,
     ]);
 
     const setRecipient = useCallback(
@@ -383,14 +382,15 @@ export function useSendTransfer({
             dispatch({ type: 'SET_STANDARD', id: effectiveStdId, isTest: effectiveIsTest, preserveAmount: true });
         }
 
-        const val = parseFloat(valStr.replace(',', '.'));
-        if (!valStr.trim() || isNaN(val) || val <= 0) {
+        const effUuid = effectiveStdId ? standardIdToUuidMap.get(effectiveStdId) || effectiveStdId : null;
+        const previewPrecision = effUuid ? (uuidToPrecisionMap.get(effUuid) ?? 4) : 4;
+        const parsedPreview = parseStrictPositiveDecimal(valStr, previewPrecision);
+        if (!parsedPreview) {
             clearSelection();
             return;
         }
 
         if (state.recipientId.trim().length < 10) {
-            const effUuid = effectiveStdId ? standardIdToUuidMap.get(effectiveStdId) || effectiveStdId : null;
             const match = availableVouchers.find(
                 (v) => (!effUuid || v.voucherStandardUuid === effUuid) && (effectiveIsTest === null || v.isTestVoucher === effectiveIsTest),
             );
@@ -402,7 +402,7 @@ export function useSendTransfer({
                     isTest: effectiveIsTest,
                 });
                 selectAmount(
-                    val,
+                    parsedPreview.value,
                     match.displayCurrency,
                     uuidToPrecisionMap.get(match.voucherStandardUuid) ?? 4,
                     effectiveIsTest,
@@ -426,20 +426,25 @@ export function useSendTransfer({
             invalidatePreview();
             dispatch({ type: 'SET_FEEDBACK', msg: '' });
             dispatch({ type: 'SET_RECIPIENT', id: res.to });
-            if (res.note) dispatch({ type: 'SET_NOTES', notes: res.note });
+            dispatch({ type: 'SET_NOTES', notes: res.note ?? '' });
             if (res.missingStandardName) {
                 clearSelection();
+                dispatch({ type: 'SET_TARGET_AMOUNT', amount: '' });
                 setPaymentRequestSuccessMsg(null);
                 dispatch({ type: 'SET_FEEDBACK', msg: t('transfer.paymentRequestStandardMissing', { name: res.missingStandardName }) });
                 return true;
             }
-            if (res.standardId !== undefined && res.isTest !== undefined) {
-                if (res.standardId !== state.selectedStandardId || res.isTest !== state.selectedIsTest) {
+            if (res.standardId !== undefined) {
+                const nextIsTest = res.isTest ?? (res.standardId ? false : null);
+                if (res.standardId !== state.selectedStandardId || nextIsTest !== state.selectedIsTest) {
                     clearSelection();
                 }
-                dispatch({ type: 'SET_STANDARD', id: res.standardId, isTest: res.isTest });
+                dispatch({ type: 'SET_STANDARD', id: res.standardId, isTest: nextIsTest, preserveAmount: Boolean(res.amount) });
             }
-            if (res.amount) dispatch({ type: 'SET_TARGET_AMOUNT', amount: res.amount });
+            dispatch({ type: 'SET_TARGET_AMOUNT', amount: res.amount ?? '' });
+            if (!res.amount) {
+                clearSelection();
+            }
             if (paymentSuccessTimerRef.current) {
                 clearTimeout(paymentSuccessTimerRef.current);
             }
@@ -496,6 +501,9 @@ export function useSendTransfer({
                 if (!isMountedRef.current || gen !== recipientGenRef.current) {
                     return false;
                 }
+                dispatch({ type: 'SET_RECIPIENT', id: '' });
+                clearSelection();
+                setConfirmedSnapshot(null);
                 dispatch({ type: 'SET_FEEDBACK', msg: translateError(e, t) });
                 return false;
             } finally {
@@ -539,7 +547,7 @@ export function useSendTransfer({
             (document.getElementById('recipientId') || document.querySelector<HTMLElement>('[data-testid="recipient-search-input"]'))?.scrollIntoView({ behavior: 'smooth', block: 'center' });
             return;
         }
-        if (selectedMap.size === 0) {
+        if (selectedMap.size === 0 || (selectionMode === 'auto' && !preserveInitialVoucherRef.current && !currentPlan)) {
             dispatch({ type: 'SET_FEEDBACK', msg: t('transfer.assetSelectionRequired') });
             return;
         }

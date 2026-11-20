@@ -19,27 +19,41 @@ pub(crate) struct SyncIdentityContext {
 }
 
 impl SyncIdentityContext {
-    pub(crate) fn from_service(service: &AppService) -> Result<Self, FrontendError> {
+    pub(crate) fn from_service(
+        service: &AppService,
+        password: Option<&str>,
+    ) -> Result<Self, FrontendError> {
         service
-            .with_wallet_and_identity(|_w, id| {
-                let my_ed_sk = id.signing_key.clone();
-                let master_seed = my_ed_sk.to_bytes();
-                let my_prefix = get_prefix_from_user_id(&id.user_id).map(|s| s.to_string());
-                Self {
-                    my_did: id.user_id.clone(),
-                    my_ed_sk,
-                    master_seed,
-                    my_prefix,
-                }
-            })
+            .with_authorized_identity(
+                human_money_core::AccessMode::DailyPay,
+                password,
+                |_w, id| {
+                    let my_ed_sk = id.signing_key.clone();
+                    let master_seed = my_ed_sk.to_bytes();
+                    let my_prefix = get_prefix_from_user_id(&id.user_id).map(|s| s.to_string());
+                    Self {
+                        my_did: id.user_id.clone(),
+                        my_ed_sk,
+                        master_seed,
+                        my_prefix,
+                    }
+                },
+            )
             .map_err(FrontendError::from)
     }
 }
 
-/// Returns the 32-byte wallet Ed25519 master seed from an unlocked `AppService`.
-pub(crate) fn get_wallet_master_seed(service: &mut AppService) -> Result<[u8; 32], FrontendError> {
+/// Returns the 32-byte wallet Ed25519 master seed from an authorized `AppService`.
+pub(crate) fn get_wallet_master_seed(
+    service: &mut AppService,
+    password: Option<&str>,
+) -> Result<[u8; 32], FrontendError> {
     let signing_key = service
-        .with_wallet_and_identity(|_w, id| id.signing_key.clone())
+        .with_authorized_identity(
+            human_money_core::AccessMode::DailyPay,
+            password,
+            |_w, id| id.signing_key.clone(),
+        )
         .map_err(FrontendError::from)?;
     Ok(signing_key.to_bytes())
 }
@@ -118,24 +132,36 @@ pub(crate) fn load_all_standard_tomls(
     extra: Option<&HashMap<String, String>>,
 ) -> HashMap<String, String> {
     let mut map = HashMap::new();
+    let mut built_in_uuids = std::collections::HashSet::new();
     let minuto_toml =
         include_str!("../../../voucher_standards/minuto_v1/standard.toml").to_string();
     if let Ok((std, _)) = VoucherStandardDefinition::from_toml(&minuto_toml) {
+        built_in_uuids.insert(std.immutable.identity.uuid.clone());
         map.insert(std.immutable.identity.uuid, minuto_toml);
     }
     let freetaler_toml =
         include_str!("../../../voucher_standards/freetaler_v1/standard.toml").to_string();
     if let Ok((std, _)) = VoucherStandardDefinition::from_toml(&freetaler_toml) {
+        built_in_uuids.insert(std.immutable.identity.uuid.clone());
         map.insert(std.immutable.identity.uuid, freetaler_toml);
     }
     if let Some(extra_map) = extra {
-        map.extend(extra_map.clone());
+        let mut extra_entries: Vec<(&String, &String)> = extra_map.iter().collect();
+        extra_entries.sort_by(|a, b| a.0.cmp(b.0));
+        for (uuid, toml) in extra_entries {
+            if !built_in_uuids.contains(uuid) {
+                map.entry(uuid.clone()).or_insert_with(|| toml.clone());
+            }
+        }
     }
     if let Some(a) = app {
-        let custom = collect_custom_standards(a);
+        let mut custom: Vec<(String, String)> = collect_custom_standards(a).into_iter().collect();
+        custom.sort_by(|a, b| a.0.cmp(&b.0));
         for (_id, toml) in custom {
             if let Ok((std, _)) = VoucherStandardDefinition::from_toml(&toml) {
-                map.insert(std.immutable.identity.uuid, toml);
+                if !built_in_uuids.contains(&std.immutable.identity.uuid) {
+                    map.entry(std.immutable.identity.uuid).or_insert(toml);
+                }
             }
         }
     }
@@ -188,7 +214,8 @@ pub(crate) fn upsert_verified_lock_probe(
     let update_delegation = if existing.delegation_valid {
         incoming_del_valid && incoming_issued_at >= existing_issued_at
     } else {
-        incoming_del_valid || (!probe.delegation_valid && probe.probed_at_secs >= existing.probed_at_secs)
+        incoming_del_valid
+            || (!probe.delegation_valid && probe.probed_at_secs >= existing.probed_at_secs)
     };
 
     if update_delegation {
@@ -211,7 +238,12 @@ pub(crate) fn upsert_verified_lock_probe(
     let update_health = if probe.probed_at_secs > existing.probed_at_secs {
         true
     } else if probe.probed_at_secs == existing.probed_at_secs {
-        probe.passed || probe.error.is_some() || !existing.passed
+        let existing_revoked_or_errored = !existing.passed && existing.error.is_some();
+        if existing_revoked_or_errored && probe.passed {
+            false
+        } else {
+            probe.passed || probe.error.is_some() || !existing.passed
+        }
     } else {
         false
     };
@@ -238,6 +270,70 @@ pub(crate) fn upsert_verified_lock_probe(
     *existing != before
 }
 
+/// Inserts or updates ONLY cryptographically verified locator/parameter metadata (`write_url`,
+/// `read_url`, `drop_pub`, `admin_pub`, `delegation`, `max_retention_quarter`, `pow_base_bits`,
+/// `allow_pow_tickets`, `ticket_pow_bits`, inode quotas) for a `lock_pub` without touching full
+/// health-probe verdicts (`passed`, `waf_probe_passed`, `selftest_passed`, `key_leak_safe`, `error`).
+pub(crate) fn upsert_verified_locator_only(
+    cache: &mut std::collections::BTreeMap<
+        String,
+        crate::sync_client::FrontendLockServerProbeResult,
+    >,
+    mut probe: crate::sync_client::FrontendLockServerProbeResult,
+) -> bool {
+    let lock_key = probe.lock_pub.trim().to_ascii_lowercase();
+    if human_money_core::humoco_proto::decode_hex_fixed::<32>(&lock_key).is_err()
+        || !probe.delegation_valid
+        || probe.delegation.is_none()
+    {
+        return false;
+    }
+    probe.lock_pub = lock_key.clone();
+    probe.admin_pub = probe.admin_pub.trim().to_ascii_lowercase();
+    probe.drop_pub = probe.drop_pub.trim().to_ascii_lowercase();
+
+    let Some(existing) = cache.get_mut(&lock_key) else {
+        cache.insert(lock_key, probe);
+        return true;
+    };
+
+    let before = existing.clone();
+    let incoming_issued_at = probe.delegation.as_ref().map(|d| d.issued_at).unwrap_or(0);
+    let existing_issued_at = existing
+        .delegation
+        .as_ref()
+        .map(|d| d.issued_at)
+        .unwrap_or(0);
+
+    if !existing.delegation_valid || incoming_issued_at >= existing_issued_at {
+        if !probe.write_url.trim().is_empty() {
+            existing.write_url = probe.write_url;
+        }
+        if !probe.read_url.trim().is_empty() {
+            existing.read_url = probe.read_url;
+        }
+        if !probe.drop_pub.is_empty() {
+            existing.drop_pub = probe.drop_pub;
+        }
+        if !probe.admin_pub.is_empty() {
+            existing.admin_pub = probe.admin_pub;
+        }
+        existing.delegation_valid = probe.delegation_valid;
+        existing.delegation = probe.delegation;
+    }
+    if probe.max_retention_quarter > 0 {
+        existing.max_retention_quarter = probe.max_retention_quarter;
+        existing.pow_base_bits = probe.pow_base_bits;
+        existing.allow_pow_tickets = probe.allow_pow_tickets;
+        existing.ticket_pow_bits = probe.ticket_pow_bits;
+        existing.inode_warning = probe.inode_warning;
+        existing.used_inodes = probe.used_inodes;
+        existing.max_inodes = probe.max_inodes;
+    }
+
+    *existing != before
+}
+
 /// Resolves the verified live locator `(write_url, read_url)` for a manifest `ServerEntry` from
 /// `probe_cache` ONLY when a cryptographically valid 5-field delegation matching `(lock_pub, admin_pub)`
 /// exists and passes SSRF/URL validation.
@@ -259,7 +355,7 @@ pub(crate) fn resolve_verified_server_locator(
                 && normalize_sync_url(&d.write_url) == normalize_sync_url(&probe.write_url)
                 && normalize_sync_url(&d.read_url) == normalize_sync_url(&probe.read_url)
                 && crate::sync_client::validate_sync_url(d.write_url.trim()).is_ok()
-                && crate::sync_client::validate_sync_url(d.read_url.trim()).is_ok()
+                && crate::sync_client::validate_sync_read_url(d.read_url.trim()).is_ok()
         });
     if admin_matches && lock_matches && del_valid {
         Some((
@@ -269,6 +365,111 @@ pub(crate) fn resolve_verified_server_locator(
     } else {
         None
     }
+}
+
+/// Cryptographically verifies a signed 5-field `LockDelegation` against a manifest `ServerEntry`
+/// (`lock_pub`, `admin_pub`) and SSRF/URL validation rules.
+pub(crate) fn is_valid_delegation_for_entry(
+    entry: &human_money_core::humoco_proto::manifest::ServerEntry,
+    del: &crate::sync_client::SyncLockDelegationDto,
+) -> bool {
+    let lock_hex = hex::encode(entry.lock_pub);
+    let admin_hex = hex::encode(entry.admin_pub);
+    del.lock_pub.trim().eq_ignore_ascii_case(&lock_hex)
+        && del.admin_pub.trim().eq_ignore_ascii_case(&admin_hex)
+        && crate::sync_client::verify_lock_delegation(&lock_hex, del, Some(&admin_hex))
+        && crate::sync_client::validate_sync_url(del.write_url.trim()).is_ok()
+        && crate::sync_client::validate_sync_read_url(del.read_url.trim()).is_ok()
+}
+
+/// Collects all cryptographically verified 5-field `LockDelegation`s from `probe_cache` matching
+/// servers in `manifest` and serializes them as compact JSON for embedding in `.ask` / PoST requests.
+pub(crate) fn collect_verified_delegations_for_manifest(
+    manifest: &human_money_core::humoco_proto::manifest::AnchorManifest,
+    probe_cache: &std::collections::BTreeMap<
+        String,
+        crate::sync_client::FrontendLockServerProbeResult,
+    >,
+) -> Option<String> {
+    let mut delegations = Vec::new();
+    for entry in &manifest.servers {
+        let lock_hex = hex::encode(entry.lock_pub);
+        let Some(probe) = probe_cache.get(&lock_hex) else {
+            continue;
+        };
+        if !probe.delegation_valid {
+            continue;
+        }
+        let Some(ref del) = probe.delegation else {
+            continue;
+        };
+        if normalize_sync_url(&del.write_url) == normalize_sync_url(&probe.write_url)
+            && normalize_sync_url(&del.read_url) == normalize_sync_url(&probe.read_url)
+            && is_valid_delegation_for_entry(entry, del)
+        {
+            delegations.push(del.clone());
+        }
+    }
+    if delegations.is_empty() {
+        None
+    } else {
+        serde_json::to_string(&delegations).ok()
+    }
+}
+
+/// Parses and cryptographically verifies embedded 5-field `LockDelegation`s from JSON against `manifest.servers`.
+pub(crate) fn parse_and_verify_embedded_delegations(
+    raw_json: Option<&str>,
+    manifest: &human_money_core::humoco_proto::manifest::AnchorManifest,
+) -> std::collections::BTreeMap<String, crate::sync_client::SyncLockDelegationDto> {
+    let mut verified = std::collections::BTreeMap::new();
+    let Some(raw) = raw_json
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && s.len() <= 65_536)
+    else {
+        return verified;
+    };
+    let Ok(list) = serde_json::from_str::<Vec<crate::sync_client::SyncLockDelegationDto>>(raw)
+    else {
+        return verified;
+    };
+    for del in list {
+        if let Some(entry) = manifest
+            .servers
+            .iter()
+            .find(|s| hex::encode(s.lock_pub).eq_ignore_ascii_case(del.lock_pub.trim()))
+        {
+            if is_valid_delegation_for_entry(entry, &del) {
+                verified.insert(hex::encode(entry.lock_pub), del);
+            }
+        }
+    }
+    verified
+}
+
+/// Resolves a verified server `(write_url, read_url)` using EITHER local `probe_cache` OR
+/// cryptographically verified embedded delegations carried alongside an offline `.ask` request.
+pub(crate) fn resolve_locator_with_delegations(
+    entry: &human_money_core::humoco_proto::manifest::ServerEntry,
+    probe_cache: &std::collections::BTreeMap<
+        String,
+        crate::sync_client::FrontendLockServerProbeResult,
+    >,
+    embedded_delegations: &std::collections::BTreeMap<
+        String,
+        crate::sync_client::SyncLockDelegationDto,
+    >,
+) -> Option<(String, String)> {
+    resolve_verified_server_locator(entry, probe_cache).or_else(|| {
+        embedded_delegations
+            .get(&hex::encode(entry.lock_pub))
+            .map(|del| {
+                (
+                    del.write_url.trim().to_string(),
+                    del.read_url.trim().to_string(),
+                )
+            })
+    })
 }
 
 /// Resolves the live locator `(write_url, read_url)` for a manifest `ServerEntry`, preferring
@@ -339,14 +540,19 @@ pub(crate) fn ensure_restore_l2_reconciled(
 }
 
 /// Spawns asynchronous static-lock L2 reconciliation if a restored wallet still has pending checks.
-pub(crate) fn spawn_pending_l2_reconciliation(app: &tauri::AppHandle, secret: &str) {
+pub(crate) fn spawn_pending_l2_reconciliation(
+    app: &tauri::AppHandle,
+    session: crate::session::SessionToken,
+    secret: &str,
+) {
     let app_handle = app.clone();
-    let owned_secret = secret.to_string();
+    let owned_secret = zeroize::Zeroizing::new(secret.to_string());
     tauri::async_runtime::spawn(async move {
         let app_state = app_handle.state::<AppState>();
         let _ = crate::services::l2_anchor_service::reconcile_restored_wallet_if_pending(
             &app_state,
-            Some(&owned_secret),
+            &session,
+            Some(owned_secret.as_str()),
         )
         .await;
     });

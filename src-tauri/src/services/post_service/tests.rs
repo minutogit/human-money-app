@@ -1239,7 +1239,7 @@ async fn test_async_wot_handshake_and_1_step_marketplace_inquiry_cycle() {
         seller_inq.inquiry_id.clone(),
         Some("Yes, 2 jars reserved!".to_string()),
         Some("confirm".to_string()),
-        Some("humoco://pay/123".to_string()),
+        Some("humoco://pay?to=did:key:z123".to_string()),
         Some("20 Minuto".to_string()),
         None,
         Some(password.to_string()),
@@ -2208,6 +2208,7 @@ async fn test_outbox_windowed_packing_defers_overflow_past_max_bytes_and_drains_
         vec![1u8; 40_000],
         1_700_000_010,
         None,
+        None,
     )
     .unwrap();
     enqueue_post_envelope(
@@ -2223,6 +2224,7 @@ async fn test_outbox_windowed_packing_defers_overflow_past_max_bytes_and_drains_
         vec![2u8; 40_000],
         1_700_000_020,
         None,
+        None,
     )
     .unwrap();
     enqueue_post_envelope(
@@ -2237,6 +2239,7 @@ async fn test_outbox_windowed_packing_defers_overflow_past_max_bytes_and_drains_
         &signing_ctx.own_reply_syncs,
         vec![3u8; 120],
         1_700_000_030,
+        None,
         None,
     )
     .unwrap();
@@ -2701,6 +2704,7 @@ async fn test_h5_outbox_holds_back_value_transfers_under_fork_lock_and_known_off
         vec![0xAA; 64],
         1_700_000_010,
         None,
+        None,
     )
     .unwrap();
     enqueue_post_envelope(
@@ -2715,6 +2719,7 @@ async fn test_h5_outbox_holds_back_value_transfers_under_fork_lock_and_known_off
         &signing_ctx.own_reply_syncs,
         vec![0xBB; 64],
         1_700_000_020,
+        None,
         None,
     )
     .unwrap();
@@ -2814,6 +2819,7 @@ async fn test_h5_outbox_holds_back_value_transfers_under_fork_lock_and_known_off
         &signing_ctx.own_reply_syncs,
         vec![0xCC; 64],
         1_700_000_030,
+        None,
         None,
     )
     .unwrap();
@@ -3100,7 +3106,9 @@ fn test_h4_queue_receipt_is_deterministic_and_idempotent() {
     let (my_id, my_sk) = alice_svc
         .with_wallet_and_identity(|_, id| (id.clone(), id.signing_key.clone()))
         .unwrap();
-    let bob_did = bob_svc.with_wallet(|w| w.get_user_id().to_string()).unwrap();
+    let bob_did = bob_svc
+        .with_wallet(|w| w.get_user_id().to_string())
+        .unwrap();
 
     let mut post_state = StoredPostState::default();
     let tag16 = [7u8; 16];
@@ -3138,7 +3146,9 @@ async fn test_h1_h6_claim_bearing_outflow_guard_and_stale_session_rejection() {
     let pw = "TestPassword123!";
     let alice_svc = setup_test_app(&dir.join("alice"), "Alice", ALICE_PHRASE, pw);
     let bob_svc = setup_test_app(&dir.join("bob"), "Bob", BOB_PHRASE, pw);
-    let bob_did = bob_svc.with_wallet(|w| w.get_user_id().to_string()).unwrap();
+    let bob_did = bob_svc
+        .with_wallet(|w| w.get_user_id().to_string())
+        .unwrap();
     let bob_pk = *human_money_core::ValidatedUserId::parse(&bob_did)
         .unwrap()
         .public_key();
@@ -3202,10 +3212,236 @@ async fn test_h1_h6_claim_bearing_outflow_guard_and_stale_session_rejection() {
         b"claim".to_vec(),
         1_760_000_000,
         None,
+        None,
     )
     .unwrap();
-    let (blocked, _) = super::outbox::collect_flush_security_for_test(&fresh_state, &session, &ps, Some(pw));
-    assert!(blocked, "H6: ClaimBearing must be blocked when ForkDetected");
+    let (blocked, _) =
+        super::outbox::collect_flush_security_for_test(&fresh_state, &session, &ps, Some(pw));
+    assert!(
+        blocked,
+        "H6: ClaimBearing must be blocked when ForkDetected"
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn k2_h21_dispatch_rejects_spoofed_trust_assertion_and_mismatched_payment_uri() {
+    let base_dir = temp_test_dir("k2_h21_post_guards");
+    let pw = "TestPassword123!";
+    let alice_svc = setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, pw);
+    let alice_state = create_test_state(alice_svc);
+    let (my_id, my_ed_sk) = {
+        let s = alice_state.service.lock().unwrap();
+        s.with_wallet_and_identity(|_, id| (id.clone(), id.signing_key.clone()))
+            .unwrap()
+    };
+    let bob_did = human_money_core::test_utils::ACTORS.bob.user_id.clone();
+    let charlie_did = human_money_core::test_utils::ACTORS.charlie.user_id.clone();
+    let alice_did = my_id.user_id.clone();
+    let session = alice_state.begin_session_op().unwrap();
+    let now_secs = 1_760_000_000u64;
+
+    // 1. K2: TrustAssertion with assertion.sender_did != ctx.sender_did must be rejected
+    let assertion = humoco_market::WotHandshakeAssertion {
+        sender_did: alice_did.clone(),
+        sender_name: Some("Spoofed".into()),
+        proposed_level: 1,
+        wot_sync_json: "{}".into(),
+        reply_requested: false,
+        created_at: now_secs,
+    };
+    let assertion_bytes = serde_json::to_vec(&assertion).unwrap();
+    let env_k2 =
+        humoco_market::PostEnvelope::new("k2-msg", &bob_did, now_secs, Vec::new(), Vec::new());
+    let ctx_k2 = super::handlers::PostEnvelopeContext {
+        state: &alice_state,
+        session: &session,
+        app: None,
+        extra_standards: None,
+        password: Some(pw),
+        my_identity: &my_id,
+        my_ed_sk: &my_ed_sk,
+        own_reply_syncs: &[],
+        sender_did: &bob_did,
+        envelope: &env_k2,
+        tag16: &[1u8; 16],
+        decrypted_bytes: &assertion_bytes,
+        now_secs,
+    };
+    let mut ps = StoredPostState::default();
+    let mut baseline = StoredPostState::default();
+    let mut stats = super::handlers::PostDispatchStats::default();
+    super::handlers::dispatch_post_payload(
+        &ctx_k2,
+        &human_money_core::models::secure_container::PayloadType::TrustAssertion,
+        &mut ps,
+        &mut baseline,
+        &mut stats,
+    )
+    .await;
+    assert!(ps.pending_wot_handshakes.is_empty());
+    assert!(
+        stats
+            .errors
+            .iter()
+            .any(|e| e.contains("spoofed sender DID")),
+        "expected spoofed sender DID error, got {:?}",
+        stats.errors
+    );
+
+    // 2. H21: MarketInquiryMessage confirm payment_uri pointing to Charlie on Bob's thread is dropped
+    ps.inquiries.push(crate::models::FrontendMarketInquiryItem {
+        inquiry_id: "inq-1".into(),
+        role: "buyer".into(),
+        target: InquiryTarget::Person { skill_title: None },
+        counterparty_did: bob_did.clone(),
+        counterparty_name: Some("Bob".into()),
+        counterparty_picture_url: None,
+        is_contact: true,
+        status: "open".into(),
+        payment_uri: None,
+        amount_hint: None,
+        standard_uuid: None,
+        created_at: now_secs - 10,
+        updated_at: now_secs - 10,
+        unread: false,
+        reply_syncs: Vec::new(),
+        messages: Vec::new(),
+    });
+    let inq_msg = humoco_market::MarketInquiryMessage {
+        inquiry_id: "inq-1".into(),
+        msg_id: "m-1".into(),
+        text: Some("Pay here".into()),
+        decision: Some(humoco_market::MarketInquiryDecision::Confirm),
+        payment_uri: Some(format!("humoco://pay?to={}&amount=10.00", charlie_did)),
+        amount_hint: None,
+        standard_uuid: None,
+        created_at: now_secs,
+    };
+    let inq_bytes = serde_json::to_vec(&inq_msg).unwrap();
+    let env_h21 =
+        humoco_market::PostEnvelope::new("m-1", &bob_did, now_secs, Vec::new(), Vec::new());
+    let ctx_h21 = super::handlers::PostEnvelopeContext {
+        state: &alice_state,
+        session: &session,
+        app: None,
+        extra_standards: None,
+        password: Some(pw),
+        my_identity: &my_id,
+        my_ed_sk: &my_ed_sk,
+        own_reply_syncs: &[],
+        sender_did: &bob_did,
+        envelope: &env_h21,
+        tag16: &[2u8; 16],
+        decrypted_bytes: &inq_bytes,
+        now_secs,
+    };
+    let mut stats_h21 = super::handlers::PostDispatchStats::default();
+    super::handlers::dispatch_post_payload(
+        &ctx_h21,
+        &human_money_core::models::secure_container::PayloadType::Generic(
+            humoco_market::PAYLOAD_MARKET_INQUIRY_MESSAGE_V1.into(),
+        ),
+        &mut ps,
+        &mut baseline,
+        &mut stats_h21,
+    )
+    .await;
+    assert!(ps.inquiries[0].payment_uri.is_none());
+    assert!(
+        stats_h21
+            .errors
+            .iter()
+            .any(|e| e.contains("Dropped mismatched inquiry payment URI")),
+        "expected mismatched payment_uri error, got {:?}",
+        stats_h21.errors
+    );
+
+    let _ = std::fs::remove_dir_all(&base_dir);
+}
+
+#[tokio::test]
+async fn k5_flush_post_slots_412_removes_pruned_outbox_tags_with_fresh_etag() {
+    let base_dir = temp_test_dir("k5_412_remove_tags");
+    let pw = "TestPassword123!";
+    let alice_svc = setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, pw);
+    let alice_state = create_test_state(alice_svc);
+    let server = MockSyncServer::start("d-alice".to_string(), ADMIN_A.to_string()).await;
+    let (server_url, alice_drop) = setup_test_sync(&server, DROP_PUB_A, pw, &alice_state).await;
+
+    let (my_ed_sk, master_seed, my_did) = {
+        let s = alice_state.service.lock().unwrap();
+        s.with_wallet_and_identity(|_, id| {
+            (
+                id.signing_key.clone(),
+                id.signing_key.to_bytes(),
+                id.user_id.clone(),
+            )
+        })
+        .unwrap()
+    };
+    let pruned_env = humoco_market::PostEnvelope::new(
+        "pruned-1",
+        &my_did,
+        1_760_000_000,
+        Vec::new(),
+        b"acked".to_vec(),
+    );
+    let kept_env = humoco_market::PostEnvelope::new(
+        "kept-1",
+        &my_did,
+        1_760_000_001,
+        Vec::new(),
+        b"keep".to_vec(),
+    );
+    let pruned_box =
+        humoco_market::seal_post_box(&my_ed_sk, &my_ed_sk.verifying_key(), &pruned_env).unwrap();
+    let kept_box =
+        humoco_market::seal_post_box(&my_ed_sk, &my_ed_sk.verifying_key(), &kept_env).unwrap();
+    let pruned_tag = pruned_box.tag16;
+    let kept_tag = kept_box.tag16;
+    let remote_slot =
+        humoco_market::encode_post_slot(&master_seed, &[pruned_box, kept_box], DROP_POST_MAX_BYTES)
+            .unwrap();
+    let slot_key = format!("{}_pc.post", alice_drop.access_pubkey);
+    server
+        .slots
+        .lock()
+        .unwrap()
+        .insert(slot_key.clone(), remote_slot);
+    server
+        .etags
+        .lock()
+        .unwrap()
+        .insert(slot_key.clone(), "\"etag-remote-2\"".to_string());
+
+    let mut ps = load_post_state(&alice_state, Some(pw)).unwrap();
+    ps.slot_etags_by_write_url
+        .insert(server_url.clone(), "\"etag-stale-1\"".to_string());
+    ps.pruned_outbox_tag16s.insert(hex::encode(pruned_tag));
+    save_post_state(&alice_state, &ps, Some(pw)).unwrap();
+
+    let session = alice_state.begin_session_op().unwrap();
+    let outcome = flush_post_slots_impl(&alice_state, &session, &mut ps, None, &[], Some(pw)).await;
+    assert_eq!(outcome.deposited_to, 1, "errors: {:?}", outcome.errors);
+    assert!(ps.pruned_outbox_tag16s.is_empty());
+
+    let raw_after = server
+        .slots
+        .lock()
+        .unwrap()
+        .get(&slot_key)
+        .cloned()
+        .unwrap();
+    let entries_after = humoco_market::decode_post_slot(&raw_after).unwrap();
+    let real_entries_after: Vec<_> = entries_after
+        .into_iter()
+        .filter(|e| !humoco_market::is_own_dummy_post_box(&master_seed, e))
+        .collect();
+    assert_eq!(real_entries_after.len(), 1);
+    assert_eq!(real_entries_after[0].tag16, kept_tag);
+    assert!(!real_entries_after.iter().any(|e| e.tag16 == pruned_tag));
+
+    let _ = std::fs::remove_dir_all(&base_dir);
 }

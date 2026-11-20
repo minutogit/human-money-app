@@ -44,10 +44,15 @@ pub fn run_value_outflow_preflight(
         ensure_restore_l2_reconciled(state, service, password)?;
     }
 
-    if !req.check_known_offender_dids.is_empty() || !req.check_blocking_intent_local_ids.is_empty()
+    if req.require_restore_reconciled
+        || !req.check_known_offender_dids.is_empty()
+        || !req.check_blocking_intent_local_ids.is_empty()
     {
         service
             .with_wallet(|wallet| -> Result<(), FrontendError> {
+                wallet
+                    .assert_not_known_offender(wallet.get_user_id())
+                    .map_err(FrontendError::from)?;
                 for did in req.check_known_offender_dids {
                     wallet
                         .assert_not_known_offender(did)

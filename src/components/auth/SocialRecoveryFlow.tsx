@@ -85,6 +85,16 @@ export const SocialRecoveryFlow: React.FC<SocialRecoveryFlowProps> = ({
     const autoImportedRef = useRef<string | null>(null);
     const profileNameRef = useRef<string>(profileName);
     profileNameRef.current = profileName;
+    const mountedRef = useRef(true);
+    const importSeqRef = useRef(0);
+    const completeSeqRef = useRef(0);
+
+    useEffect(() => {
+        mountedRef.current = true;
+        return () => {
+            mountedRef.current = false;
+        };
+    }, []);
 
     useEffect(() => {
         if (existingSession) {
@@ -134,7 +144,7 @@ export const SocialRecoveryFlow: React.FC<SocialRecoveryFlowProps> = ({
             setSuccessMsg('');
             setInfoMsg('');
 
-            if (/humoco:\/\/recovery-req\b/i.test(uri)) {
+            if (/humoco:\/\/recovery-req\b/i.test(uri) && !/humoco:\/\/recovery-reply\b/i.test(uri)) {
                 setErrorMsg(
                     t(
                         'backup.replyWrongLinkReq',
@@ -144,7 +154,7 @@ export const SocialRecoveryFlow: React.FC<SocialRecoveryFlowProps> = ({
                 setIsSubmitting(false);
                 return;
             }
-            if (/humoco:\/\/kit\b/i.test(uri)) {
+            if (/humoco:\/\/kit\b/i.test(uri) && !/humoco:\/\/recovery-reply\b/i.test(uri)) {
                 setErrorMsg(
                     t(
                         'backup.replyWrongLinkKit',
@@ -155,8 +165,10 @@ export const SocialRecoveryFlow: React.FC<SocialRecoveryFlowProps> = ({
                 return;
             }
 
+            const seq = ++importSeqRef.current;
             try {
                 const updated = await recoveryService.importGuardianRecoveryReply(uri);
+                if (!mountedRef.current || seq !== importSeqRef.current) return;
                 setSession(updated);
                 setReplyInput('');
                 if (updated.ownerDisplayName) {
@@ -179,9 +191,12 @@ export const SocialRecoveryFlow: React.FC<SocialRecoveryFlowProps> = ({
                     );
                 }
             } catch (err) {
+                if (!mountedRef.current || seq !== importSeqRef.current) return;
                 setErrorMsg(translateError(err, t));
             } finally {
-                setIsSubmitting(false);
+                if (mountedRef.current && seq === importSeqRef.current) {
+                    setIsSubmitting(false);
+                }
             }
         },
         [replyInput, isSubmitting, t]
@@ -189,7 +204,7 @@ export const SocialRecoveryFlow: React.FC<SocialRecoveryFlowProps> = ({
 
     useEffect(() => {
         if (
-            !initialPayload?.includes('humoco://recovery-reply') ||
+            !initialPayload?.toLowerCase().includes('humoco://recovery-reply') ||
             isLoadingSession ||
             autoImportedRef.current === initialPayload
         ) {
@@ -301,6 +316,7 @@ export const SocialRecoveryFlow: React.FC<SocialRecoveryFlowProps> = ({
         const effectiveMode = options?.overrideMode ?? mode;
         const effectiveTargetFolder = options?.overrideTargetFolder ?? targetFolderName;
 
+        const seq = ++completeSeqRef.current;
         setIsSubmitting(true);
         setErrorMsg('');
         setUnreachableSyncError(false);
@@ -323,6 +339,7 @@ export const SocialRecoveryFlow: React.FC<SocialRecoveryFlowProps> = ({
                 allowEmptyFallback: options?.allowEmptyFallback,
                 replaceFolderName: options?.replaceFolderName,
             });
+            if (!mountedRef.current || completeSeqRef.current !== seq) return;
 
             if (result.outcome === 'collision_requires_choice' && result.localCollision) {
                 setCollisionResult(result);
@@ -335,6 +352,7 @@ export const SocialRecoveryFlow: React.FC<SocialRecoveryFlowProps> = ({
 
             onSuccess(result);
         } catch (err) {
+            if (!mountedRef.current || completeSeqRef.current !== seq) return;
             const code = isBackendError(err) ? err.code : '';
             const msg = stringifyError(err);
             if (
@@ -360,7 +378,9 @@ export const SocialRecoveryFlow: React.FC<SocialRecoveryFlowProps> = ({
                 setErrorMsg(translateError(err, t));
             }
         } finally {
-            setIsSubmitting(false);
+            if (mountedRef.current && completeSeqRef.current === seq) {
+                setIsSubmitting(false);
+            }
         }
     };
 

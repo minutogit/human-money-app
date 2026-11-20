@@ -6,10 +6,7 @@ import { FrontendAutoBackupStatusDto, FrontendBackupSyncResult } from '../types'
 import { APP_EVENTS, emitAppEvent } from '../utils/appEvents';
 import { detectIsWifiConnection } from '../utils/networkStatus';
 import { notifySyncStatusUpdated } from '../utils/syncEvents';
-import { channelMembersSyncManager } from './channelMembersSyncManager';
 import { rateLimitManager } from './rateLimitManager';
-
-export const BACKUP_UPDATED_EVENT = APP_EVENTS.BACKUP_UPDATED;
 
 export interface SyncWakeScopes {
     seal?: boolean;
@@ -19,13 +16,12 @@ export interface SyncWakeScopes {
     post?: boolean;
     market?: boolean;
     marketForceUpload?: boolean;
+    syncMembers?: boolean;
 }
 
 export interface WalletMutationOptions {
     syncMembers?: boolean;
-    membersDelayMs?: number;
     scheduleMarket?: boolean;
-    marketDelayMs?: number;
     contactsUpdated?: boolean;
     wotUpdated?: boolean;
 }
@@ -57,6 +53,7 @@ export async function wakeSyncCoordinator(scopes: SyncWakeScopes): Promise<void>
                 post: Boolean(scopes.post),
                 market: Boolean(scopes.market),
                 marketForceUpload: Boolean(scopes.marketForceUpload),
+                syncMembers: Boolean(scopes.syncMembers),
             },
         });
     } catch {
@@ -72,31 +69,20 @@ export function triggerAutoBackup(forceSyncBackup: boolean = true): void {
     });
 }
 
-export function triggerPostSync(): void {
-    void wakeSyncCoordinator({ post: true });
-}
-
-export function triggerMarketSync(forceUpload: boolean = false): void {
-    void wakeSyncCoordinator({
-        market: true,
-        marketForceUpload: forceUpload,
-    });
-}
-
 /**
- * Triggers standard post-mutation side effects: UI event emission, debounced backend backup +
+ * Triggers standard post-mutation side effects: UI event emission and debounced backend backup +
  * optional member/market coordinator wakes (with zero frontend interval/timer loops).
  */
 export function afterWalletMutation(
-    password?: string | null,
+    _password?: string | null,
     options?: WalletMutationOptions,
 ): void {
-    const pwd = password || undefined;
     void wakeSyncCoordinator({
         localBackup: true,
         syncBackup: true,
         syncBackupForce: true,
         ...(options?.scheduleMarket ? { market: true, marketForceUpload: true } : {}),
+        ...(options?.syncMembers ? { syncMembers: true } : {}),
     });
 
     if (options?.contactsUpdated) {
@@ -104,16 +90,6 @@ export function afterWalletMutation(
     }
     if (options?.wotUpdated) {
         emitAppEvent(APP_EVENTS.WOT_UPDATED);
-    }
-    if (options?.syncMembers) {
-        channelMembersSyncManager.trigger({
-            delayMs: options.membersDelayMs ?? 250,
-            resetQuota: true,
-            password: pwd,
-        });
-    }
-    if (options?.scheduleMarket) {
-        void channelMembersSyncManager.flushIfPending();
     }
 }
 

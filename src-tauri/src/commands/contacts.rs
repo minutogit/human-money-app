@@ -55,10 +55,7 @@ pub async fn save_contact(
     if !is_own_root && state.is_generation_current(session.generation) {
         if needs_sync_probe {
             let _ = crate::services::sync_engine::probe_contact_syncs_with_session(
-                &session,
-                false,
-                follow_pw,
-                &state,
+                &session, false, follow_pw, &state,
             )
             .await;
         }

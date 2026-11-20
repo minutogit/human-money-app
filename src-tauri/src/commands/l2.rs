@@ -1,32 +1,36 @@
 use chrono::Utc;
 use human_money_core::humoco_proto::decode_hex_fixed;
+#[cfg(test)]
 use human_money_core::services::crypto::derive_ed25519_keypair;
+#[cfg(test)]
 use humoco_wot::{KeyRotationReason, KeySuccessorAttestation};
 use uuid::Uuid;
 
 use crate::l2_lifecycle::{
-    discover_anchor_manifest, lifecycle_err, load_key_successor_attestations,
-    run_lifecycle_tick_with_now, save_key_successor_attestations, FrontendAnchorDiscoveryDto,
-    FrontendClaimBundleDto, FrontendL2LifecycleStatusDto,
+    discover_anchor_manifest, lifecycle_err, FrontendAnchorDiscoveryDto, FrontendClaimBundleDto,
 };
+#[cfg(test)]
+use crate::models::MnemonicLanguage;
 use crate::models::{
-    FrontendError, FrontendLockProtectionOverviewDto, FrontendVoucherL2StatusDto, MnemonicLanguage,
-    TransactionRecord,
+    FrontendError, FrontendLockProtectionOverviewDto, FrontendVoucherL2StatusDto, TransactionRecord,
 };
 use crate::services::l2_anchor_service;
-use crate::state::{AppState, DidWotSigner, RequiredAccess};
+#[cfg(test)]
+use crate::state::DidWotSigner;
+use crate::state::{AppState, RequiredAccess};
 use crate::sync_client;
 
 #[tauri::command]
-pub fn get_seal_sync_status(state: tauri::State<AppState>) -> Result<String, FrontendError> {
-    l2_anchor_service::get_seal_sync_status_impl(&state)
-}
-
-#[tauri::command]
 pub fn get_lock_protection_overview(
+    standard_toml: Option<String>,
+    validity_duration: Option<String>,
     state: tauri::State<AppState>,
 ) -> Result<FrontendLockProtectionOverviewDto, FrontendError> {
-    l2_anchor_service::get_lock_protection_overview_impl(&state)
+    l2_anchor_service::get_lock_protection_overview_impl(
+        standard_toml.as_deref(),
+        validity_duration.as_deref(),
+        &state,
+    )
 }
 
 #[tauri::command]
@@ -62,20 +66,6 @@ pub async fn check_voucher_l2_status(
 }
 
 #[tauri::command]
-pub async fn run_l2_lifecycle_tick(
-    force: bool,
-    password: Option<String>,
-    state: tauri::State<'_, AppState>,
-) -> Result<FrontendL2LifecycleStatusDto, FrontendError> {
-    let (session, resolved_pw) =
-        state.authorize_and_begin_session_secret(RequiredAccess::DailyPay, password.as_deref())?;
-    let pw = resolved_pw.as_deref().map(String::as_str);
-    let client = sync_client::create_sync_probe_client();
-    let now_secs = sync_client::current_unix_timestamp();
-    run_lifecycle_tick_with_now(state.inner(), &session, &client, now_secs, force, pw).await
-}
-
-#[tauri::command]
 pub async fn discover_anchor_manifest_cmd(
     anchor_id_hex: String,
     creator_did: Option<String>,
@@ -107,27 +97,7 @@ pub async fn discover_anchor_manifest_cmd(
     }))
 }
 
-#[tauri::command]
-pub fn create_key_successor_attestation_cmd(
-    new_mnemonic: String,
-    language: Option<MnemonicLanguage>,
-    passphrase: Option<String>,
-    reason: String,
-    new_creator_mig_pub_hex: Option<String>,
-    password: Option<String>,
-    state: tauri::State<AppState>,
-) -> Result<String, FrontendError> {
-    create_key_successor_attestation_impl(
-        new_mnemonic,
-        language,
-        passphrase,
-        reason,
-        new_creator_mig_pub_hex,
-        password,
-        &state,
-    )
-}
-
+#[cfg(test)]
 pub(crate) fn create_key_successor_attestation_impl(
     new_mnemonic: String,
     language: Option<MnemonicLanguage>,
@@ -194,34 +164,18 @@ pub(crate) fn create_key_successor_attestation_impl(
         )
         .map_err(FrontendError::from)??;
 
-    let mut store = load_key_successor_attestations(&mut service, password.as_deref())?;
+    let mut store =
+        crate::l2_lifecycle::load_key_successor_attestations(&mut service, password.as_deref())?;
     if !store.contains(&att) {
         store.push(att.clone());
-        save_key_successor_attestations(&mut service, &store, password.as_deref())?;
+        crate::l2_lifecycle::save_key_successor_attestations(
+            &mut service,
+            &store,
+            password.as_deref(),
+        )?;
     }
 
     serde_json::to_string_pretty(&att).map_err(|e| lifecycle_err(e.to_string()))
-}
-
-#[tauri::command]
-pub fn import_key_successor_attestation_cmd(
-    attestation_json: String,
-    password: Option<String>,
-    state: tauri::State<AppState>,
-) -> Result<String, FrontendError> {
-    let att: KeySuccessorAttestation = serde_json::from_str(attestation_json.trim())
-        .map_err(|e| lifecycle_err(format!("Invalid KeySuccessorAttestation JSON: {}", e)))?;
-    let now_secs = sync_client::current_unix_timestamp();
-    att.verify(now_secs)
-        .map_err(|e| lifecycle_err(format!("Attestation verification failed: {}", e)))?;
-
-    let mut service = state.authorize_and_lock(RequiredAccess::Full, password.as_deref())?;
-    let mut store = load_key_successor_attestations(&mut service, password.as_deref())?;
-    if !store.contains(&att) {
-        store.push(att.clone());
-        save_key_successor_attestations(&mut service, &store, password.as_deref())?;
-    }
-    Ok(att.new_did)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -366,14 +320,21 @@ pub(crate) async fn create_guarantor_claim_bundle_impl(
     };
 
     if !intents.is_empty() {
-        let _ = crate::services::preflight::dispatch_l2_send_intents(
+        if let Err(err) = crate::services::preflight::dispatch_l2_send_intents(
             state,
             &session,
             &intents,
             pow_bits,
             resolved_pw.as_deref().map(String::as_str),
         )
-        .await?;
+        .await
+        {
+            log::warn!(
+                "Guarantor claim L1 committed ({}); L2 intent dispatch pending: {}",
+                res.bundle_id,
+                err.message
+            );
+        }
     }
 
     let (post_deposit, post_deposit_error) = if deposit_to_post.unwrap_or(false) {

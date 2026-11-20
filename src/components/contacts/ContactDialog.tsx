@@ -119,8 +119,13 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
               ) || null
             : null;
 
+    const probeGenRef = useRef(0);
+
     useEffect(() => {
+        probeGenRef.current += 1;
         setHasManualTrustOverride(false);
+        setIsProbingSync(false);
+        setSyncError(null);
     }, [did, existingContact, isOpen]);
 
     const displayedTrustLevel =
@@ -317,10 +322,12 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
             setSyncError(t('contacts.syncAlreadyAdded'));
             return;
         }
+        const gen = ++probeGenRef.current;
         setIsProbingSync(true);
         setSyncError(null);
         try {
             const info = await marketService.probePublicSync(normalized);
+            if (probeGenRef.current !== gen) return;
             if (!info || !info.dropPub) {
                 setSyncError(t('contacts.syncProbeFailed'));
                 return;
@@ -337,10 +344,13 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
             setSyncs(prev => [...prev, newSync].slice(0, 2));
             setSyncInputUrl('');
         } catch (err) {
+            if (probeGenRef.current !== gen) return;
             console.error("Failed to probe sync service:", err);
             setSyncError(t('contacts.syncProbeFailed'));
         } finally {
-            setIsProbingSync(false);
+            if (probeGenRef.current === gen) {
+                setIsProbingSync(false);
+            }
         }
     };
 

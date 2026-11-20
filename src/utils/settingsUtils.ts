@@ -1,5 +1,6 @@
 // src/utils/settingsUtils.ts
 import { settingsService } from "../services/settingsService";
+import { authService } from "../services/authService";
 import { UiPreferences } from "../types";
 import { logger } from "./log";
 import { stringifyError } from "./errorHelper";
@@ -28,6 +29,11 @@ export async function updateLastUsedDirectory(
     if (!newDir) return;
 
     if (currentUiPreferences?.lastUsedDirectory === newDir) return;
+
+    const sessionStatus = await authService.getSessionStatus().catch(() => null);
+    if (!sessionStatus?.hasCachedSession || !sessionStatus.isUnlocked) {
+        return;
+    }
 
     try {
         return await protectAction(async (password) => {

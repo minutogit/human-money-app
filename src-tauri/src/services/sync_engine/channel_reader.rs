@@ -490,10 +490,17 @@ fn collect_poll_targets(
                 0
             };
             if lvl >= ui_prefs.share_min_level {
+                let sc_prefix =
+                    human_money_core::crypto::get_prefix_from_user_id(&sc.card.payload.did)
+                        .map(str::to_string);
                 for d in &sc.card.payload.drops {
                     if !d.read_url.is_empty() {
                         if let Some(ref sid) = d.slot_id {
-                            direct_fetches.push((d.read_url.clone(), sid.clone(), None));
+                            direct_fetches.push((
+                                d.read_url.clone(),
+                                sid.clone(),
+                                sc_prefix.clone(),
+                            ));
                         } else {
                             index_urls.push(d.read_url.clone());
                         }
@@ -1049,6 +1056,61 @@ pub(crate) async fn poll_sync_channels(
     outcome
 }
 
+fn purge_urls_from_sync_state(sync_state: &mut StoredSyncState, candidate_urls: &[String]) {
+    let norms: Vec<String> = candidate_urls
+        .iter()
+        .map(|u| normalize_sync_url(u))
+        .filter(|u| !u.is_empty())
+        .collect();
+    let matches_norm = |url: &str| {
+        let nu = normalize_sync_url(url);
+        !nu.is_empty() && norms.iter().any(|n| n == &nu)
+    };
+    let matches_channel_key = |key: &str| norms.iter().any(|n| key.starts_with(&format!("{}:", n)));
+    let matches_media_blob = |key: &str| key.split_once("::").is_some_and(|(u, _)| matches_norm(u));
+    let matches_slot_etag = |key: &str| {
+        key.split_once(':').is_some_and(|(_, rest)| {
+            norms
+                .iter()
+                .any(|n| rest == n || rest.starts_with(&format!("{}:", n)))
+        })
+    };
+
+    sync_state.etags_by_read_url.retain(|k, _| !matches_norm(k));
+    sync_state
+        .last_modified_by_read_url
+        .retain(|k, _| !matches_norm(k));
+    sync_state.slot_etags.retain(|k, _| !matches_slot_etag(k));
+    sync_state
+        .channel_max_bytes_by_write_url
+        .retain(|k, _| !matches_channel_key(k));
+    sync_state
+        .card_base_uploaded_at_by_write_url
+        .retain(|k, _| !matches_norm(k));
+    sync_state
+        .card_base_size_by_write_url
+        .retain(|k, _| !matches_norm(k));
+    sync_state
+        .card_base_versions_by_write_url
+        .retain(|k, _| !matches_norm(k));
+    sync_state
+        .card_delta_active_by_write_url
+        .retain(|k, _| !matches_norm(k));
+    sync_state
+        .card_last_uploaded_versions_by_write_url
+        .retain(|k, _| !matches_norm(k));
+    sync_state
+        .last_revocation_check_at
+        .retain(|k, _| !matches_norm(k));
+    sync_state
+        .uploaded_media_blobs
+        .retain(|k| !matches_media_blob(k));
+    sync_state
+        .wot_tombstone_fp_by_write_url
+        .retain(|k, _| !matches_norm(k));
+}
+
+#[cfg(test)]
 pub async fn delete_own_sync_slots_impl(
     password: Option<String>,
     state: &AppState,
@@ -1057,7 +1119,7 @@ pub async fn delete_own_sync_slots_impl(
         let mut service =
             state.authorize_and_lock(crate::state::RequiredAccess::Full, password.as_deref())?;
         let session = state.session_token_for_service(&service)?;
-        let id_ctx = SyncIdentityContext::from_service(&service)?;
+        let id_ctx = SyncIdentityContext::from_service(&service, password.as_deref())?;
         let security_policy = state
             .get_or_load_security_policy(&mut service, password.as_deref())
             .map_err(FrontendError::from)?;
@@ -1104,6 +1166,12 @@ pub async fn delete_own_sync_slots_impl(
     }
 
     // Clear drop_sent_log, sync_state, post slot ETags, and backup mirror state
+    let own_urls: Vec<String> = drops
+        .iter()
+        .flat_map(|d| [d.write_url.clone(), d.read_url.clone()])
+        .filter(|u| !u.is_empty())
+        .collect();
+    let _backup_guard = state.backup_op_lock.lock().await;
     state.with_session_required(
         &session,
         "Active wallet changed before sync state could be reset",
@@ -1123,11 +1191,7 @@ pub async fn delete_own_sync_slots_impl(
                 sync_state.last_upload_at = None;
                 sync_state.last_poll_at = None;
                 sync_state.last_readers_hash = None;
-                sync_state.card_base_uploaded_at_by_write_url.clear();
-                sync_state.card_base_size_by_write_url.clear();
-                sync_state.card_base_versions_by_write_url.clear();
-                sync_state.card_delta_active_by_write_url.clear();
-                sync_state.card_last_uploaded_versions_by_write_url.clear();
+                purge_urls_from_sync_state(&mut sync_state, &own_urls);
                 crate::state::save_encrypted_json(
                     service,
                     MARKET_SYNC_KEY,
@@ -1212,8 +1276,11 @@ pub async fn probe_public_sync_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendPublicSyncInfo, FrontendError> {
-    let session =
-        state.authorize_and_begin_session(crate::state::RequiredAccess::Unlocked, None)?;
+    let (session, resolved_pw) = state.authorize_and_begin_session_secret(
+        crate::state::RequiredAccess::Unlocked,
+        password.as_deref(),
+    )?;
+    let pw = resolved_pw.as_deref().map(String::as_str);
     let canonical_url = humoco_market::canonicalize_write_url(&url)
         .map_err(|e| FrontendError::from(e.to_string()))?;
     sync_client::validate_sync_url(&canonical_url).map_err(FrontendError::from)?;
@@ -1223,26 +1290,37 @@ pub async fn probe_public_sync_impl(
         .await
         .map_err(FrontendError::from)?;
 
-    let id_ctx = state.with_session_required(
+    let id_ctx_opt = state.with_session_required(
         &session,
         "Wallet session changed before public sync probe completed",
-        |service| SyncIdentityContext::from_service(service),
+        |service| {
+            if pw.is_some() || service.is_session_active() {
+                Ok(Some(SyncIdentityContext::from_service(service, pw)?))
+            } else {
+                Ok(None)
+            }
+        },
     )?;
 
-    let (_r_sk, _r_vk, access_pubkey) =
-        humoco_market::derive_public_drop_keypair(&id_ctx.master_seed, &canonical_url)
-            .map_err(|e| FrontendError::from(e.to_string()))?;
+    let (access_pubkey, authorized_channels) = if let Some(id_ctx) = id_ctx_opt {
+        let (_r_sk, _r_vk, access_pubkey) =
+            humoco_market::derive_public_drop_keypair(&id_ctx.master_seed, &canonical_url)
+                .map_err(|e| FrontendError::from(e.to_string()))?;
 
-    let authorized_channels = probe_public_sync_capabilities(
-        &probe_client,
-        &canonical_url,
-        &access_pubkey,
-        id_ctx.my_prefix.as_deref(),
-        state,
-        &session,
-        password.as_deref(),
-    )
-    .await;
+        let authorized_channels = probe_public_sync_capabilities(
+            &probe_client,
+            &canonical_url,
+            &access_pubkey,
+            id_ctx.my_prefix.as_deref(),
+            state,
+            &session,
+            pw,
+        )
+        .await;
+        (access_pubkey, authorized_channels)
+    } else {
+        (String::new(), Vec::new())
+    };
 
     Ok(FrontendPublicSyncInfo {
         write_url: canonical_url,
@@ -1267,7 +1345,7 @@ pub async fn save_public_sync_impl(
     let canonical_url = humoco_market::canonicalize_write_url(&write_url)
         .map_err(|e| FrontendError::from(e.to_string()))?;
     sync_client::validate_sync_url(&canonical_url).map_err(FrontendError::from)?;
-    sync_client::validate_sync_url(&read_url).map_err(FrontendError::from)?;
+    sync_client::validate_sync_read_url(&read_url).map_err(FrontendError::from)?;
     humoco_market::parse_ed25519_pubkey_hex64(&drop_pub)
         .map_err(|e| FrontendError::from(e.to_string()))?;
 
@@ -1276,7 +1354,7 @@ pub async fn save_public_sync_impl(
     let id_ctx = state.with_session_required(
         &session,
         "Active wallet changed before public sync could be prepared",
-        |service| SyncIdentityContext::from_service(service),
+        |service| SyncIdentityContext::from_service(service, password.as_deref()),
     )?;
 
     let (_r_sk, _r_vk, access_pubkey) =
@@ -1397,10 +1475,11 @@ pub async fn remove_public_sync_impl(
         .map_err(|e| FrontendError::from(e.to_string()))?;
 
     if delete_remote_slots {
-        let id_ctx = {
-            let service = state.lock_service()?;
-            SyncIdentityContext::from_service(&service)?
-        };
+        let id_ctx = state.with_session_required(
+            &session,
+            "Active wallet changed before public sync deletion could be prepared",
+            |service| SyncIdentityContext::from_service(service, password.as_deref()),
+        )?;
         let (r_sk, _, _) =
             humoco_market::derive_public_drop_keypair(&id_ctx.master_seed, &canonical_url)
                 .map_err(|e| FrontendError::from(e.to_string()))?;
@@ -1423,12 +1502,19 @@ pub async fn remove_public_sync_impl(
             })?;
     }
 
+    let _backup_guard = state.backup_op_lock.lock().await;
     state.with_session_required(
         &session,
         "Active wallet changed before public sync could be removed",
         |service| {
+            let mut removed_urls = vec![canonical_url.clone(), write_url.clone()];
             let updated_policy = state
                 .mutate_security_policy(service, password.as_deref(), |policy| {
+                    for d in &policy.public_syncs {
+                        if d.write_url == canonical_url && !d.read_url.is_empty() {
+                            removed_urls.push(d.read_url.clone());
+                        }
+                    }
                     policy.public_syncs.retain(|d| d.write_url != canonical_url);
                 })
                 .map_err(FrontendError::from)?;
@@ -1443,6 +1529,23 @@ pub async fn remove_public_sync_impl(
             if let Ok(mut reg) = state.get_or_load_wot_register(service, password.as_deref()) {
                 reg.clear_drop_sent_log(Some(&canonical_url));
                 let _ = state.save_wot_register(service, &reg, password.as_deref());
+            }
+
+            if let Some(mut sync_state) = crate::state::load_encrypted_json_opt::<StoredSyncState>(
+                service,
+                MARKET_SYNC_KEY,
+                password.as_deref(),
+            )
+            .map_err(FrontendError::from)?
+            {
+                purge_urls_from_sync_state(&mut sync_state, &removed_urls);
+                crate::state::save_encrypted_json(
+                    service,
+                    MARKET_SYNC_KEY,
+                    &sync_state,
+                    password.as_deref(),
+                )
+                .map_err(FrontendError::from)?;
             }
 
             if let Some(mut post_state) = crate::state::load_encrypted_json_opt::<StoredPostState>(

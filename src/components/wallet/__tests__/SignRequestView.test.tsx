@@ -45,7 +45,6 @@ vi.mock('../../../services/postService', () => ({
   postService: {
     replyDetachedSignatureViaPost: vi.fn(),
   },
-  POST_INBOX_UPDATED_EVENT: 'humoco://post-inbox-updated',
 }));
 
 describe('SignRequestView Component (Minuto Standard)', () => {

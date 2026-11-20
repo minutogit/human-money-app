@@ -64,7 +64,7 @@ export function ImportStandardModal({
         setError('');
         setIsImporting(true);
         try {
-            const importedId = session?.isAuthenticated
+            const importedId = session?.protectAction
                 ? await session.protectAction(
                       async (walletPwd) =>
                           await standardsService.importStandard(

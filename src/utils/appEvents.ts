@@ -14,9 +14,6 @@ export const APP_EVENTS = {
     CONFLICTS_UPDATED: 'humoco:conflicts-updated',
 } as const;
 
-export const POST_INBOX_UPDATED_EVENT = APP_EVENTS.POST_INBOX_UPDATED;
-export const BACKUP_UPDATED_EVENT = APP_EVENTS.BACKUP_UPDATED;
-
 export type AppEventName = (typeof APP_EVENTS)[keyof typeof APP_EVENTS];
 
 export interface AppEventDetailMap {

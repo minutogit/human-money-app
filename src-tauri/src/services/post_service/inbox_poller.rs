@@ -21,10 +21,7 @@ use crate::sync_client;
 use super::handlers::{
     dispatch_post_payload, PostDispatchOutcome, PostDispatchStats, PostEnvelopeContext,
 };
-use super::{
-    merge_and_save_post_state, resolve_counterparty_info,
-    resolve_counterparty_info_for_session,
-};
+use super::{merge_and_save_post_state, resolve_counterparty_info_for_session};
 use crate::services::post_service::outbox::flush_post_slots_impl;
 
 /// Marks a marketplace inquiry thread as read atomically under `state.service`.
@@ -121,7 +118,7 @@ pub async fn confirm_pending_post_payment_impl(
             let ack_ctx = tag16_opt.and_then(|tag16| {
                 let my_identity = service.with_wallet_and_identity(|_, id| id.clone()).ok()?;
                 let sync_ctx =
-                    crate::services::common::SyncIdentityContext::from_service(service).ok()?;
+                    crate::services::common::SyncIdentityContext::from_service(service, pw).ok()?;
                 let security_policy = state.get_or_load_security_policy(service, pw).ok()?;
                 let own_reply_syncs = super::collect_own_reply_syncs(
                     &security_policy,
@@ -163,7 +160,8 @@ pub async fn confirm_pending_post_payment_impl(
                 |ps, result| {
                     ps.pending_tolerance_payments
                         .retain(|p| p.msg_id != msg_id);
-                    ps.processed_msg_ids.insert(item.msg_id.clone());
+                    ps.processed_msg_ids
+                        .insert(super::scoped_processed_msg_key(&item.sender_did, &item.msg_id));
                     if queue_confirm_ack(ps, Some(&result.header.bundle_id)) {
                         queued_ack = true;
                     }
@@ -196,7 +194,12 @@ pub async fn confirm_pending_post_payment_impl(
                         post_state
                             .pending_tolerance_payments
                             .retain(|p| p.msg_id != msg_id);
-                        post_state.processed_msg_ids.insert(item.msg_id.clone());
+                        post_state
+                            .processed_msg_ids
+                            .insert(super::scoped_processed_msg_key(
+                                &item.sender_did,
+                                &item.msg_id,
+                            ));
                         if is_duplicate && queue_confirm_ack(&mut post_state, None) {
                             queued_ack = true;
                         }
@@ -287,6 +290,18 @@ pub fn dismiss_pending_post_item_impl(
                 .pending_tolerance_payments
                 .retain(|p| p.msg_id != id);
         }
+        "outbox" => {
+            post_state.outbox_entries.retain(|e| {
+                if e.msg_id == id {
+                    if post_state.pruned_outbox_tag16s.len() < 512 {
+                        post_state.pruned_outbox_tag16s.insert(e.tag16_hex.clone());
+                    }
+                    false
+                } else {
+                    true
+                }
+            });
+        }
         other => {
             return Err(FrontendError::from(format!(
                 "Unknown pending post item kind: {}",
@@ -308,10 +323,12 @@ pub fn get_post_inbox_summary_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendPostInboxSummary, FrontendError> {
-    let session =
-        state.authorize_and_begin_session(crate::state::RequiredAccess::Unlocked, None)?;
-    let mut post_state =
-        super::load_post_state_for_session(state, &session, password.as_deref())?;
+    let (session, resolved_pw) = state.authorize_and_begin_session_secret(
+        crate::state::RequiredAccess::Unlocked,
+        password.as_deref(),
+    )?;
+    let pw = resolved_pw.as_deref().map(String::as_str);
+    let mut post_state = super::load_post_state_for_session(state, &session, pw)?;
     let unacknowledged_payments = post_state
         .outbox_entries
         .iter()
@@ -320,7 +337,7 @@ pub fn get_post_inbox_summary_impl(
 
     for inq in &mut post_state.inquiries {
         let (name, pic, is_contact) =
-            resolve_counterparty_info(state, &inq.counterparty_did, password.as_deref());
+            resolve_counterparty_info_for_session(state, &session, &inq.counterparty_did, pw);
         inq.counterparty_name = name;
         inq.counterparty_picture_url = pic;
         inq.is_contact = is_contact;
@@ -332,7 +349,7 @@ pub fn get_post_inbox_summary_impl(
     for item in &mut post_state.unsupported_messages {
         if item.sender_name.is_none() {
             let (name, _, _) =
-                resolve_counterparty_info(state, &item.sender_did, password.as_deref());
+                resolve_counterparty_info_for_session(state, &session, &item.sender_did, pw);
             item.sender_name = name;
         }
     }
@@ -343,7 +360,7 @@ pub fn get_post_inbox_summary_impl(
         .map(|p| {
             let sender_name = p.sender_name.or_else(|| {
                 let (name, _, _) =
-                    resolve_counterparty_info(state, &p.sender_did, password.as_deref());
+                    resolve_counterparty_info_for_session(state, &session, &p.sender_did, pw);
                 name
             });
             FrontendPendingTolerancePayment {
@@ -809,17 +826,22 @@ pub async fn sync_post_channels_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendPostSyncResult, FrontendError> {
-    let (session, ui_prefs, security_policy) = {
-        let mut service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
+    let (session, resolved_pw, ui_prefs, security_policy) = {
+        let (mut service, resolved_pw) = state.authorize_and_lock_secret(
+            crate::state::RequiredAccess::Unlocked,
+            password.as_deref(),
+        )?;
+        let pw = resolved_pw.as_deref().map(String::as_str);
         let session = state.session_token_for_service(&service)?;
         let ui_prefs = state
-            .get_or_load_ui_preferences(&mut service, password.as_deref())
+            .get_or_load_ui_preferences(&mut service, pw)
             .map_err(FrontendError::from)?;
         let security_policy = state
-            .get_or_load_security_policy(&mut service, password.as_deref())
+            .get_or_load_security_policy(&mut service, pw)
             .map_err(FrontendError::from)?;
-        (session, ui_prefs, security_policy)
+        (session, resolved_pw, ui_prefs, security_policy)
     };
+    let pw = resolved_pw.as_deref().map(String::as_str);
 
     if ui_prefs.market_poll_wifi_only && is_wifi == Some(false) {
         return Ok(FrontendPostSyncResult {
@@ -834,14 +856,11 @@ pub async fn sync_post_channels_impl(
         &session,
         "Active wallet session changed while preparing post sync",
         |service| {
-            let ps = crate::services::post_service::load_post_state_with_service(
-                service,
-                password.as_deref(),
-            )?;
+            let ps = crate::services::post_service::load_post_state_with_service(service, pw)?;
             let my_identity = service
                 .with_wallet_and_identity(|_w, id| id.clone())
                 .map_err(FrontendError::from)?;
-            let sync_ctx = crate::services::common::SyncIdentityContext::from_service(service)?;
+            let sync_ctx = crate::services::common::SyncIdentityContext::from_service(service, pw)?;
             let own_reply_syncs = crate::services::post_service::collect_own_reply_syncs(
                 &security_policy,
                 sync_ctx.my_prefix.as_deref(),
@@ -878,18 +897,12 @@ pub async fn sync_post_channels_impl(
         &signing_ctx.identity.user_id,
         signing_ctx.sync_ctx.my_prefix.as_deref(),
         &post_state,
-        password.as_deref(),
+        pw,
     )?;
 
     // 3. Build authorized_senders, card_signers, and inquiry_only_senders
-    let authorized_groups = collect_authorized_post_senders(
-        state,
-        &session,
-        &ui_prefs,
-        &post_state,
-        now_secs,
-        password.as_deref(),
-    )?;
+    let authorized_groups =
+        collect_authorized_post_senders(state, &session, &ui_prefs, &post_state, now_secs, pw)?;
     let authorized_senders = authorized_groups.full;
     let card_signer_senders = authorized_groups.card_signers;
     let inquiry_only_senders = authorized_groups.inquiry;
@@ -908,7 +921,7 @@ pub async fn sync_post_channels_impl(
                 service,
                 &post_sync_health_updates,
                 now_secs,
-                password.as_deref(),
+                pw,
             );
             Ok(())
         })?;
@@ -917,7 +930,22 @@ pub async fn sync_post_channels_impl(
         }
     }
 
-    // 5. Decrypt and process entries
+    // 5. Decrypt all entries, sort by dependency rank & created_at, and dispatch
+    enum SenderPrivilege {
+        Full,
+        CardSignerAndMaybeInquiry(bool),
+        InquiryOnly,
+    }
+    struct DecryptedEnvelopeItem {
+        dep_rank: u8,
+        sender_did: String,
+        tag16: [u8; 16],
+        envelope: humoco_market::PostEnvelope,
+        payload_type: PayloadType,
+        decrypted_bytes: Vec<u8>,
+    }
+
+    let mut decrypted_items: Vec<DecryptedEnvelopeItem> = Vec::new();
     for slot_bytes in fetched_slots {
         if slot_bytes.len() < 10 || &slot_bytes[0..8] != POST_SLOT_MAGIC {
             continue;
@@ -951,11 +979,6 @@ pub async fn sync_post_channels_impl(
                 &authorized_senders,
                 &box_entry,
             );
-            enum SenderPrivilege {
-                Full,
-                CardSignerAndMaybeInquiry(bool),
-                InquiryOnly,
-            }
             let (matched_sender_did, envelope, privilege) = match open_attempt {
                 Ok(Some((did, env))) => (did, env, SenderPrivilege::Full),
                 Ok(None) => {
@@ -1013,7 +1036,8 @@ pub async fn sync_post_channels_impl(
                 parsed_sender.into_string()
             };
 
-            if post_state.processed_msg_ids.contains(&envelope.msg_id) {
+            let scoped_key = super::scoped_processed_msg_key(&sender_did, &envelope.msg_id);
+            if post_state.processed_msg_ids.contains(&scoped_key) {
                 continue;
             }
 
@@ -1053,89 +1077,121 @@ pub async fn sync_post_channels_impl(
                 continue;
             }
 
-            if !envelope.reply_drops.is_empty() {
-                let reply_dtos: Vec<FrontendSyncDescriptor> = envelope
-                    .reply_drops
-                    .iter()
-                    .cloned()
-                    .map(Into::into)
-                    .collect();
-                let committed = state.with_session(&session, |service| {
-                    if let Err(e) = state.update_contact_from_card(
-                        service,
-                        &sender_did,
-                        &reply_dtos,
-                        None,
-                        password.as_deref(),
-                    ) {
-                        warn!(
-                            "Failed to update contact from PoST reply syncs: {}",
-                            e.message
-                        );
-                    }
-                    Ok(())
-                })?;
-                if committed.is_none() {
-                    break;
+            let dep_rank = match &container.c {
+                PayloadType::TrustAssertion => 0,
+                PayloadType::Generic(ref s)
+                    if s == PAYLOAD_MARKET_INQUIRY_V1
+                        || s == humoco_market::PAYLOAD_GUARDIAN_ASSIGN_V1 =>
+                {
+                    0
                 }
-            }
-
-            let env_ctx = PostEnvelopeContext {
-                state,
-                session: &session,
-                app,
-                extra_standards,
-                password: password.as_deref(),
-                my_identity: &signing_ctx.identity,
-                my_ed_sk: &signing_ctx.sync_ctx.my_ed_sk,
-                own_reply_syncs: &signing_ctx.own_reply_syncs,
-                sender_did: &sender_did,
-                envelope: &envelope,
-                tag16: &box_entry.tag16,
-                decrypted_bytes: &decrypted_bytes,
-                now_secs,
+                PayloadType::Generic(ref s)
+                    if s == PAYLOAD_MARKET_INQUIRY_MESSAGE_V1
+                        || s == humoco_market::PAYLOAD_GUARDIAN_LOCATOR_V1 =>
+                {
+                    2
+                }
+                _ => 1,
             };
-            match dispatch_post_payload(
-                &env_ctx,
-                &container.c,
-                &mut post_state,
-                &mut baseline_post_state,
-                &mut stats,
-            )
-            .await
-            {
-                PostDispatchOutcome::Handled => {
-                    post_state.processed_msg_ids.insert(envelope.msg_id.clone());
-                }
-                PostDispatchOutcome::UnsupportedPayload { payload_type } => {
-                    let (sender_name, _, _) = resolve_counterparty_info_for_session(
-                        state,
-                        &session,
-                        &sender_did,
-                        password.as_deref(),
+
+            decrypted_items.push(DecryptedEnvelopeItem {
+                dep_rank,
+                sender_did,
+                tag16: box_entry.tag16,
+                envelope,
+                payload_type: container.c.clone(),
+                decrypted_bytes,
+            });
+        }
+    }
+
+    decrypted_items.sort_by(|a, b| {
+        a.dep_rank
+            .cmp(&b.dep_rank)
+            .then(a.envelope.created_at.cmp(&b.envelope.created_at))
+            .then_with(|| a.envelope.msg_id.cmp(&b.envelope.msg_id))
+    });
+
+    for item in decrypted_items {
+        let scoped_key = super::scoped_processed_msg_key(&item.sender_did, &item.envelope.msg_id);
+        if post_state.processed_msg_ids.contains(&scoped_key) {
+            continue;
+        }
+        if !item.envelope.reply_drops.is_empty() {
+            let reply_dtos: Vec<FrontendSyncDescriptor> = item
+                .envelope
+                .reply_drops
+                .iter()
+                .cloned()
+                .map(Into::into)
+                .collect();
+            let committed = state.with_session(&session, |service| {
+                if let Err(e) =
+                    state.update_contact_from_card(service, &item.sender_did, &reply_dtos, None, pw)
+                {
+                    warn!(
+                        "Failed to update contact from PoST reply syncs: {}",
+                        e.message
                     );
-                    if !post_state
-                        .unsupported_messages
-                        .iter()
-                        .any(|u| u.msg_id == envelope.msg_id)
-                    {
-                        if post_state.unsupported_messages.len() >= 50 {
-                            post_state.unsupported_messages.remove(0);
-                        }
-                        post_state.unsupported_messages.push(
-                            crate::models::FrontendUnsupportedPostItem {
-                                msg_id: envelope.msg_id.clone(),
-                                sender_did: sender_did.clone(),
-                                sender_name,
-                                payload_type,
-                                created_at: envelope.created_at,
-                            },
-                        );
-                    }
-                    post_state.processed_msg_ids.insert(envelope.msg_id.clone());
                 }
-                PostDispatchOutcome::RetryLater => {}
+                Ok(())
+            })?;
+            if committed.is_none() {
+                break;
             }
+        }
+
+        let env_ctx = PostEnvelopeContext {
+            state,
+            session: &session,
+            app,
+            extra_standards,
+            password: pw,
+            my_identity: &signing_ctx.identity,
+            my_ed_sk: &signing_ctx.sync_ctx.my_ed_sk,
+            own_reply_syncs: &signing_ctx.own_reply_syncs,
+            sender_did: &item.sender_did,
+            envelope: &item.envelope,
+            tag16: &item.tag16,
+            decrypted_bytes: &item.decrypted_bytes,
+            now_secs,
+        };
+        match dispatch_post_payload(
+            &env_ctx,
+            &item.payload_type,
+            &mut post_state,
+            &mut baseline_post_state,
+            &mut stats,
+        )
+        .await
+        {
+            PostDispatchOutcome::Handled => {
+                post_state.processed_msg_ids.insert(scoped_key);
+            }
+            PostDispatchOutcome::UnsupportedPayload { payload_type } => {
+                let (sender_name, _, _) =
+                    resolve_counterparty_info_for_session(state, &session, &item.sender_did, pw);
+                if !post_state
+                    .unsupported_messages
+                    .iter()
+                    .any(|u| u.msg_id == item.envelope.msg_id && u.sender_did == item.sender_did)
+                {
+                    if post_state.unsupported_messages.len() >= 50 {
+                        post_state.unsupported_messages.remove(0);
+                    }
+                    post_state.unsupported_messages.push(
+                        crate::models::FrontendUnsupportedPostItem {
+                            msg_id: item.envelope.msg_id.clone(),
+                            sender_did: item.sender_did.clone(),
+                            sender_name,
+                            payload_type,
+                            created_at: item.envelope.created_at,
+                        },
+                    );
+                }
+                post_state.processed_msg_ids.insert(scoped_key);
+            }
+            PostDispatchOutcome::RetryLater => {}
         }
     }
 
@@ -1143,47 +1199,23 @@ pub async fn sync_post_channels_impl(
     if !state.is_generation_current(session.generation) {
         return Ok(FrontendPostSyncResult::default());
     }
-    merge_and_save_post_state(
-        state,
-        &session,
-        &baseline_post_state,
-        &mut post_state,
-        password.as_deref(),
-    )?;
+    merge_and_save_post_state(state, &session, &baseline_post_state, &mut post_state, pw)?;
     baseline_post_state = post_state.clone();
 
-    let flush_outcome = flush_post_slots_impl(
-        state,
-        &session,
-        &mut post_state,
-        None,
-        &[],
-        password.as_deref(),
-    )
-    .await;
+    let flush_outcome =
+        flush_post_slots_impl(state, &session, &mut post_state, None, &[], pw).await;
     let uploaded_to = flush_outcome.deposited_to;
     stats.errors.extend(flush_outcome.errors);
 
     if !state.is_generation_current(session.generation) {
         return Ok(FrontendPostSyncResult::default());
     }
-    merge_and_save_post_state(
-        state,
-        &session,
-        &baseline_post_state,
-        &mut post_state,
-        password.as_deref(),
-    )?;
+    merge_and_save_post_state(state, &session, &baseline_post_state, &mut post_state, pw)?;
 
     if polled_syncs > 0 || uploaded_to > 0 {
         let post_notices = build_post_notices(&stats, now_secs);
         let _ = state.with_session(&session, |service| {
-            state.append_app_notices_with_service(
-                service,
-                Some(now_secs),
-                post_notices,
-                password.as_deref(),
-            );
+            state.append_app_notices_with_service(service, Some(now_secs), post_notices, pw);
             Ok(())
         });
     }
@@ -1193,6 +1225,9 @@ pub async fn sync_post_channels_impl(
         if let Some(secs) = sync_client::extract_retry_after_from_error_str(e) {
             retry_after_secs = Some(retry_after_secs.map_or(secs, |prev| prev.max(secs)));
         }
+    }
+    if let Some(secs) = retry_after_secs {
+        state.record_sync_cooldown(secs);
     }
 
     if !stats.errors.is_empty() {

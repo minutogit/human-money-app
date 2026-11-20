@@ -2,6 +2,47 @@ import { useState, useCallback, useMemo, useRef } from 'react';
 import { VoucherSummary } from '../types';
 import { transferService, TransferPlan } from '../services/transferService';
 
+const STRICT_POSITIVE_DECIMAL_RE = /^\d+(?:[.,]\d+)?$/;
+
+export function parseDecimalToScaledBigInt(
+  raw: string,
+  scale: number,
+): bigint | null {
+  const trimmed = raw.trim();
+  if (!STRICT_POSITIVE_DECIMAL_RE.test(trimmed)) return null;
+  const normalized = trimmed.replace(',', '.');
+  const [intPart, fracPart = ''] = normalized.split('.');
+  if (fracPart.length > scale) return null;
+  return BigInt(`${intPart}${fracPart.padEnd(scale, '0')}`);
+}
+
+export function parseStrictPositiveDecimal(
+  raw: string,
+  maxDecimals?: number,
+): { normalized: string; value: number } | null {
+  const trimmed = raw.trim();
+  if (!STRICT_POSITIVE_DECIMAL_RE.test(trimmed)) return null;
+  const normalized = trimmed.replace(',', '.');
+  const [, fracPart = ''] = normalized.split('.');
+  if (maxDecimals !== undefined && fracPart.length > maxDecimals) return null;
+  if (/^0+(?:\.0+)?$/.test(normalized)) return null;
+  const parsed = Number(normalized);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return { normalized, value: parsed };
+}
+
+function formatScaledBigInt(value: bigint, scale: number): string {
+  if (scale <= 0) return value.toString();
+  const s = value.toString().padStart(scale + 1, '0');
+  return `${s.slice(0, -scale)}.${s.slice(-scale)}`;
+}
+
+function getFracLength(raw: string): number {
+  const normalized = String(raw).trim().replace(',', '.');
+  const m = normalized.match(/^\d+(?:\.(\d+))?$/);
+  return m?.[1] ? m[1].length : 0;
+}
+
 export function useVoucherSelection(vouchers: VoucherSummary[]) {
   const [selectedMap, setSelectedMap] = useState<Map<string, string>>(new Map());
   const [currentPlan, setCurrentPlan] = useState<TransferPlan | null>(null);
@@ -147,11 +188,11 @@ export function useVoucherSelection(vouchers: VoucherSummary[]) {
     isTest: boolean | null = null,
     draftKey?: string
   ) => {
-    const normalizedTarget = targetAmountStr.trim().replace(',', '.');
-    const target = parseFloat(normalizedTarget);
-    if (!target || target <= 0) {
+    const parsedTarget = parseStrictPositiveDecimal(targetAmountStr, precision);
+    if (!parsedTarget) {
       return null;
     }
+    const normalizedTarget = parsedTarget.normalized;
     const requestId = ++latestRequestId.current;
     try {
       const plan = await transferService.prepareTransferPlan({
@@ -180,20 +221,40 @@ export function useVoucherSelection(vouchers: VoucherSummary[]) {
 
       setCurrentPlan(plan);
 
-      // Map plan to selectedMap with correct split amount handling
+      // Map plan to selectedMap using exact integer-scaled decimal subtraction for splits
       const next = new Map<string, string>();
-      let accumulated = 0;
-      const targetNum = parseFloat(plan.target);
+      const splitScale = Math.max(
+        precision,
+        getFracLength(plan.target),
+        ...plan.selected.map(rv => getFracLength(rv.amount)),
+      );
+      const targetScaled = parseDecimalToScaledBigInt(plan.target, splitScale);
+      let accumulatedScaled = 0n;
       for (let i = 0; i < plan.selected.length; i++) {
         const rv = plan.selected[i];
         const isLast = i === plan.selected.length - 1;
         if (isLast && plan.needsSplit) {
-          const remaining = targetNum - accumulated;
-          const remStr = remaining.toFixed(precision);
+          if (targetScaled === null) {
+            throw new Error('Invalid target amount in transfer plan');
+          }
+          const remainingScaled = targetScaled - accumulatedScaled;
+          if (remainingScaled <= 0n) {
+            throw new Error('Invalid split calculation in transfer plan');
+          }
+          let remStr = formatScaledBigInt(remainingScaled, splitScale);
+          if (splitScale > precision && remStr.includes('.')) {
+            const [intPart, fracPart] = remStr.split('.');
+            const trimmedExtra = fracPart.slice(precision).replace(/0+$/, '');
+            remStr = `${intPart}.${fracPart.slice(0, precision)}${trimmedExtra}`;
+          }
           next.set(rv.localInstanceId, remStr);
         } else {
           next.set(rv.localInstanceId, rv.amount);
-          accumulated += parseFloat(rv.amount);
+          const amtScaled = parseDecimalToScaledBigInt(rv.amount, splitScale);
+          if (amtScaled === null) {
+            throw new Error('Invalid selected amount in transfer plan');
+          }
+          accumulatedScaled += amtScaled;
         }
       }
       setSelectedMap(next);

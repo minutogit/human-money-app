@@ -4,21 +4,21 @@ pub mod channel_reader;
 pub mod media_sync;
 pub mod wot_sync;
 
+#[cfg(test)]
+pub(crate) use admin::{block_sync_slot_impl, sync_channel_members_impl};
 pub use admin::{
-    block_sync_slot_impl, compute_admin_sync_members_with_stats, compute_channel_members_hash,
-    delete_sync_admin_impl, finalize_sync_setup_impl, get_rust_sync_config_impl,
-    get_sync_admin_status_impl, prepare_sync_setup_impl, revoke_own_sync_server_impl,
-    save_sync_setup_zip_impl, sync_channel_members_impl, test_sync_connection_impl,
-    update_sync_admin_config_impl,
+    compute_admin_sync_members_with_stats, compute_channel_members_hash, delete_sync_admin_impl,
+    finalize_sync_setup_impl, get_rust_sync_config_impl, get_sync_admin_status_impl,
+    prepare_sync_setup_impl, revoke_own_sync_server_impl, save_sync_setup_zip_impl,
+    test_sync_connection_impl, update_sync_admin_config_impl,
 };
+pub(crate) use card_sync::probe_contact_syncs_with_session;
 pub use card_sync::{
     discover_available_syncs_impl, probe_contact_syncs_impl, set_selected_upload_syncs_impl,
 };
-pub(crate) use card_sync::probe_contact_syncs_with_session;
-pub use channel_reader::{
-    delete_own_sync_slots_impl, probe_public_sync_impl, remove_public_sync_impl,
-    save_public_sync_impl,
-};
+#[cfg(test)]
+pub(crate) use channel_reader::delete_own_sync_slots_impl;
+pub use channel_reader::{probe_public_sync_impl, remove_public_sync_impl, save_public_sync_impl};
 pub use wot_sync::preview_contact_trust_change_impl;
 
 use std::collections::HashSet;
@@ -97,7 +97,7 @@ pub async fn sync_market_channels_with_options(
 
     // 2. Load identity context and sync state
     let Some((id_ctx, mut sync_state)) = state.with_session(&session, |service| {
-        let id_ctx = SyncIdentityContext::from_service(service)?;
+        let id_ctx = SyncIdentityContext::from_service(service, password.as_deref())?;
         let sync_state: StoredSyncState = crate::state::load_encrypted_json_or_default(
             service,
             MARKET_SYNC_KEY,
@@ -455,6 +455,9 @@ pub async fn sync_market_channels_with_options(
             retry_after_secs = Some(retry_after_secs.map_or(secs, |prev| prev.max(secs)));
         }
     }
+    if let Some(secs) = retry_after_secs {
+        state.record_sync_cooldown(secs);
+    }
 
     let status = if skip_poll && uploaded_to == 0 {
         MarketSyncStatus::SkippedCooldown
@@ -751,10 +754,24 @@ pub(crate) mod tests {
         .unwrap();
 
         // Admin A authorizes B directly and C via B's SD-JWT trust list
-        assert_eq!(updated_status.direct_member_count, 2); // Alice + Bob
-        assert_eq!(updated_status.hop2_member_count, 1); // Charlie
         assert_eq!(updated_status.total_member_count, 3);
         assert_eq!(server_a.members.lock().unwrap().len(), 3);
+        {
+            let mut s = alice_state.service.lock().unwrap();
+            let admin_cfg = admin::load_stored_sync_admin_opt(&mut s, Some(password))
+                .unwrap()
+                .unwrap();
+            let (stats, _) = compute_admin_sync_members_with_stats(
+                &alice_state,
+                &mut s,
+                &admin_cfg,
+                "card",
+                Some(password),
+            )
+            .unwrap();
+            assert_eq!(stats.direct_count, 2); // Alice + Bob
+            assert_eq!(stats.hop2_count, 1); // Charlie
+        }
 
         // 4. Charlie discovers its own authorization via discover_available_syncs
         {
@@ -978,13 +995,13 @@ pub(crate) mod tests {
         // 8. Admin revoking Bob or blocking Bob's stealth pubkey removes Bob from members and purges slot
         let bob_stealth_pk_a = {
             let mut s = alice_state.service.lock().unwrap();
-            let seed = get_wallet_master_seed(&mut s).unwrap();
+            let seed = get_wallet_master_seed(&mut s, Some(password)).unwrap();
             let (admin_sk, _, _) = humoco_market::derive_drop_admin_keypair(&seed, 0);
             let bob_vk = human_money_core::crypto::get_pubkey_from_user_id(&bob_did).unwrap();
             humoco_market::derive_member_stealth_pubkey_admin(&admin_sk, &bob_vk).unwrap()
         };
 
-        let block_status = block_sync_slot_impl(
+        let _block_status = block_sync_slot_impl(
             bob_stealth_pk_a.clone(),
             Some(password.to_string()),
             &alice_state,
@@ -992,8 +1009,22 @@ pub(crate) mod tests {
         .await
         .unwrap();
 
-        assert!(block_status.blocked_pubkeys.contains(&bob_stealth_pk_a));
-        assert!(!block_status.active_slot_ids.contains(&bob_stealth_pk_a));
+        {
+            let mut s = alice_state.service.lock().unwrap();
+            let admin_after = admin::load_stored_sync_admin_opt(&mut s, Some(password))
+                .unwrap()
+                .unwrap();
+            assert!(admin_after.blocked_pubkeys.contains(&bob_stealth_pk_a));
+            let (_, active_pks) = admin::compute_admin_sync_members_with_stats(
+                &alice_state,
+                &mut s,
+                &admin_after,
+                "card",
+                Some(password),
+            )
+            .unwrap();
+            assert!(!active_pks.contains(&bob_stealth_pk_a));
+        }
         assert!(!server_a.members.lock().unwrap().contains(&bob_stealth_pk_a));
         assert!(
             !server_a

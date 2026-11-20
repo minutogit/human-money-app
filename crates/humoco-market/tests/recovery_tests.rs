@@ -977,7 +977,7 @@ fn test_emergency_kit_uri_roundtrip_12_and_24_words() {
         version: 1,
         entropy_hex: hex::encode(vec![0x12; 16]),
         language_code: 2, // German
-        user_prefix: Some("sub_account".to_string()),
+        user_prefix: Some("sub-account".to_string()),
         has_bip39_passphrase: false,
         sync_descriptors: drops.clone(),
     };
@@ -986,7 +986,7 @@ fn test_emergency_kit_uri_roundtrip_12_and_24_words() {
     assert!(uri_12.starts_with("humoco://kit?v=1&ent="));
     assert!(uri_12.contains("&lang=2"));
     assert!(uri_12.contains("&pass=0"));
-    assert!(uri_12.contains("&prefix=sub_account"));
+    assert!(uri_12.contains("&prefix=sub-account"));
 
     let parsed_12 = parse_emergency_kit_uri(&uri_12).unwrap();
     assert_eq!(parsed_12, kit_12);
@@ -1168,8 +1168,14 @@ fn test_sloppy_kit_uri_and_prefixed_vault_lookup() {
     store.upsert_ward(shop_bundle[0].clone()).unwrap();
     store.upsert_ward(phone_bundle[0].clone()).unwrap();
     assert_eq!(store.len(), 2);
-    assert_eq!(store.get_ward(&shop_did).unwrap().owner_display_name, "Laden");
-    assert_eq!(store.get_ward(&phone_did).unwrap().owner_display_name, "Privat");
+    assert_eq!(
+        store.get_ward(&shop_did).unwrap().owner_display_name,
+        "Laden"
+    );
+    assert_eq!(
+        store.get_ward(&phone_did).unwrap().owner_display_name,
+        "Privat"
+    );
     assert!(store
         .update_locator(&GuardianLocatorUpdate {
             owner_did: phone_did.clone(),
@@ -1178,8 +1184,19 @@ fn test_sloppy_kit_uri_and_prefixed_vault_lookup() {
             updated_at: 1700000050,
         })
         .unwrap());
-    assert!(store.get_ward(&shop_did).unwrap().backup_sync_descriptors.is_empty());
-    assert_eq!(store.get_ward(&phone_did).unwrap().backup_sync_descriptors.len(), 1);
+    assert!(store
+        .get_ward(&shop_did)
+        .unwrap()
+        .backup_sync_descriptors
+        .is_empty());
+    assert_eq!(
+        store
+            .get_ward(&phone_did)
+            .unwrap()
+            .backup_sync_descriptors
+            .len(),
+        1
+    );
     assert!(store
         .revoke_ward(&GuardianRevoke {
             owner_did: phone_did.clone(),

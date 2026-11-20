@@ -201,7 +201,10 @@ export const AdCard: React.FC<AdCardProps> = ({
                                 ? 'bg-amber-50 text-amber-800 border border-amber-200'
                                 : 'bg-bg-app text-theme-light border border-theme-subtle'
                         }`}
-                        title={t('marketplace.daysLeftTooltip', 'Restlaufzeit dieses Inserats')}
+                        title={t('marketplace.daysLeftTooltip', 'Gültig bis {{date}} (noch {{days}} Tage)', {
+                            date: new Date(ad.expiresAt * 1000).toLocaleDateString(),
+                            days: effectiveDaysLeft,
+                        })}
                     >
                         <Clock size={12} className={isExpiringSoon ? 'text-amber-600' : 'text-theme-light'} />
                         <span>

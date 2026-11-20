@@ -1124,10 +1124,7 @@ export function getTauriMockInitScript(initialScenario = 'normal') {
         },
         "export_forward_card": () => ({ exportPayload: "humoco://card/alice_payload", targetDid: MOCK_USER_DID }),
         "import_contact_card": () => ({ did: MOCK_CAROL_DID, importedCount: 1 }),
-        "delete_foreign_contact_card": () => null,
         "preview_contact_trust_change": () => ({ scoreDelta: 0.25, newLevel: 3, bottlenecks: [] }),
-        "sync_channel_members": () => 2,
-        "delete_own_sync_slots": () => 1,
 
         // --- Sync Services & Relays ---
         "get_sync_overview_status": () => ({
@@ -1155,10 +1152,6 @@ export function getTauriMockInitScript(initialScenario = 'normal') {
                 kind: "friendsAndContacts"
             },
             allow: [],
-            deny: [],
-            blockedPubkeys: [],
-            directMemberCount: 2,
-            hop2MemberCount: 1,
             totalMemberCount: 3
         }),
         "prepare_sync_setup": () => ({ token: "setup_token_demo" }),
@@ -1166,7 +1159,6 @@ export function getTauriMockInitScript(initialScenario = 'normal') {
         "finalize_sync_setup": () => handlers["get_sync_admin_status"](),
         "test_sync_connection": () => ({ success: true, latencyMs: 18, message: "Sync Relay OK" }),
         "update_sync_admin_config": () => handlers["get_sync_admin_status"](),
-        "block_sync_slot": () => handlers["get_sync_admin_status"](),
         "probe_public_sync": () => ({ name: "Public HuMoCo Relay Frankfurt", url: "https://sync.humoco.org", latencyMs: 18 }),
         "save_public_sync": () => ({ name: "Public HuMoCo Relay Frankfurt", url: "https://sync.humoco.org" }),
         "remove_public_sync": () => null,
@@ -1228,7 +1220,6 @@ export function getTauriMockInitScript(initialScenario = 'normal') {
             localCollision: null
         }),
         "stage_dropped_backup_bytes": () => "/tmp/staged_dropped.hmcbackup",
-        "run_auto_backup_sync": () => handlers["get_backup_status"](),
         "sync_backup": () => ({ uploadedTo: 1, authorizedTargets: 1, paddedBytes: 4096, errors: [] }),
         "probe_sync_backup": () => ({
             status: "found",
@@ -1294,7 +1285,6 @@ export function getTauriMockInitScript(initialScenario = 'normal') {
         "sync_post_channels": () => ({ fetchedItems: 1, processedItems: 1, errors: [] }),
         "send_signing_request_via_post": () => ({ success: true }),
         "reply_detached_signature_via_post": () => ({ success: true }),
-        "send_wot_handshake_via_post": () => ({ success: true }),
         "accept_wot_handshake": () => ({ success: true }),
         "send_market_inquiry_via_post": () => ({ inquiryId: "inq_01", status: "open" }),
         "send_market_inquiry_message_via_post": () => ({ inquiryId: "inq_01", status: "confirmed" }),

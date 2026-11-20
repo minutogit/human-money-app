@@ -15,7 +15,7 @@ import { translateError } from '../../utils/errorHelper';
 
 export const IdentityRecoveryCard: React.FC = () => {
     const { t } = useTranslation();
-    const { protectAction, accessMode = 'full', requireFullAccess } = useSession();
+    const { protectAction } = useSession();
 
     const [protectionStatus, setProtectionStatus] = useState<RecoveryProtectionStatusDto | null>(null);
     const [isGuardianSetupOpen, setIsGuardianSetupOpen] = useState(false);
@@ -39,22 +39,10 @@ export const IdentityRecoveryCard: React.FC = () => {
     }, [loadProtectionStatus]);
 
     const handleOpenEmergencyKit = () => {
-        if (accessMode !== 'full' && requireFullAccess) {
-            void requireFullAccess(async () => {
-                setIsEmergencyKitOpen(true);
-            }).catch(() => undefined);
-            return;
-        }
         setIsEmergencyKitOpen(true);
     };
 
     const handleOpenGuardianSetup = () => {
-        if (accessMode !== 'full' && requireFullAccess) {
-            void requireFullAccess(async () => {
-                setIsGuardianSetupOpen(true);
-            }).catch(() => undefined);
-            return;
-        }
         setIsGuardianSetupOpen(true);
     };
 
@@ -62,15 +50,9 @@ export const IdentityRecoveryCard: React.FC = () => {
         setIsRevokingGuardians(true);
         setRevokeFeedback(null);
         try {
-            if (accessMode !== 'full' && requireFullAccess) {
-                await requireFullAccess(async (masterPwd) => {
-                    await recoveryService.revokeSocialRecovery(masterPwd);
-                });
-            } else {
-                await protectAction(async (pwd) => {
-                    await recoveryService.revokeSocialRecovery(pwd || '');
-                }, { requireFullAccess: true });
-            }
+            await protectAction(async (pwd) => {
+                await recoveryService.revokeSocialRecovery(pwd || '');
+            }, { requireFullAccess: true });
             setRevokeFeedback({ type: 'success', text: t('backup.revokeGuardiansSuccess') });
             await loadProtectionStatus();
         } catch (err) {

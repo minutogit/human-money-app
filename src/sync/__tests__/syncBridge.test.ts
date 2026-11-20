@@ -5,10 +5,7 @@ import {
   wakeSyncCoordinator,
   afterWalletMutation,
   triggerAutoBackup,
-  triggerPostSync,
-  triggerMarketSync,
 } from '../syncBridge';
-import { channelMembersSyncManager } from '../channelMembersSyncManager';
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn().mockResolvedValue(undefined),
@@ -41,25 +38,24 @@ describe('syncBridge (H10 thin backend coordinator bridge)', () => {
         post: true,
         market: true,
         marketForceUpload: false,
+        syncMembers: false,
       },
     });
 
     triggerAutoBackup(true);
-    triggerPostSync();
-    triggerMarketSync(true);
 
     expect(intervalSpy).not.toHaveBeenCalled();
     intervalSpy.mockRestore();
   });
 
-  it('afterWalletMutation notifies backend coordinator, UI events, and members flush', async () => {
-    const flushSpy = vi.spyOn(channelMembersSyncManager, 'flushIfPending').mockResolvedValue();
+  it('afterWalletMutation notifies backend coordinator, UI events, and syncMembers without member timers', async () => {
     const contactsSpy = vi.fn();
     window.addEventListener('humoco:contacts-updated', contactsSpy);
 
     afterWalletMutation(null, {
       contactsUpdated: true,
       scheduleMarket: true,
+      syncMembers: true,
     });
 
     await Promise.resolve();
@@ -72,12 +68,11 @@ describe('syncBridge (H10 thin backend coordinator bridge)', () => {
         post: false,
         market: true,
         marketForceUpload: true,
+        syncMembers: true,
       },
     });
     expect(contactsSpy).toHaveBeenCalledTimes(1);
-    expect(flushSpy).toHaveBeenCalledTimes(1);
 
     window.removeEventListener('humoco:contacts-updated', contactsSpy);
-    flushSpy.mockRestore();
   });
 });

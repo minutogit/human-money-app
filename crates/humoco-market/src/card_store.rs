@@ -170,6 +170,33 @@ fn accept_envelope_inner(
         return AcceptOutcome::RejectedExpired;
     }
 
+    const MAX_CLOCK_SKEW_SECS: u64 = 300;
+    const MAX_CARD_TTL_SECS: u64 = 4 * 366 * 86_400;
+
+    if card.payload.v > now.saturating_add(MAX_CLOCK_SKEW_SECS) {
+        return AcceptOutcome::Invalid("Card version timestamp exceeds allowed skew".to_string());
+    }
+    if card.payload.valid_until > now.saturating_add(MAX_CARD_TTL_SECS) {
+        return AcceptOutcome::Invalid(
+            "Card valid_until exceeds maximum allowed lifetime".to_string(),
+        );
+    }
+    for (item, _) in decoded_items(&card) {
+        if let CardItem::Ad(ad) = item {
+            if ad.published_at > now.saturating_add(MAX_CLOCK_SKEW_SECS)
+                || ad
+                    .renewed_at
+                    .is_some_and(|r| r > now.saturating_add(MAX_CLOCK_SKEW_SECS))
+                || ad.expires_at
+                    > now.saturating_add(crate::model::AD_MAX_DURATION_SECS + MAX_CLOCK_SKEW_SECS)
+            {
+                return AcceptOutcome::Invalid(
+                    "Ad timestamps exceed allowed future bounds".to_string(),
+                );
+            }
+        }
+    }
+
     if effective_hops > card.payload.max_hops {
         return AcceptOutcome::RejectedHops;
     }

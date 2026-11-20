@@ -160,10 +160,6 @@ export const backupService = {
         return await invoke<FrontendAutoBackupStatusDto>("get_backup_status");
     },
 
-    runAutoBackupSync: async (): Promise<FrontendAutoBackupStatusDto> => {
-        return await invoke<FrontendAutoBackupStatusDto>("run_auto_backup_sync");
-    },
-
     syncBackup: async (
         password?: string | null,
         isWifi?: boolean,

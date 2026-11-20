@@ -8,7 +8,6 @@ use crate::error::MarketError;
 use crate::model::{
     AVATAR_IMAGE_DIM, MAX_AD_IMAGE_DIM, MAX_AD_MEDIA_BYTES, MAX_AVATAR_DATA_URI_CHARS,
 };
-use crate::sync_access::SignedDropHeaders;
 
 pub const MEDIA_DATA_URI_PREFIX: &str = "data:image/webp;base64,";
 pub const JPEG_DATA_URI_PREFIX: &str = "data:image/jpeg;base64,";
@@ -442,8 +441,13 @@ pub fn seal_media_blob(
     Ok((image_token, blob_id, ciphertext))
 }
 
-/// Decrypts a media blob using the image token and verifies the WebP dimensions.
-pub fn open_media_blob(image_token: &str, ciphertext: &[u8]) -> Result<Vec<u8>, MarketError> {
+/// Decrypts a media blob using the image token, verifies the WebP dimensions, and
+/// confirms the image token matches `owner_did` + plaintext content.
+pub fn open_media_blob(
+    owner_did: &str,
+    image_token: &str,
+    ciphertext: &[u8],
+) -> Result<Vec<u8>, MarketError> {
     if ciphertext.is_empty() || ciphertext.len() > MAX_AD_MEDIA_BYTES + 64 {
         return Err(MarketError::Validation(format!(
             "Invalid media ciphertext length: {}",
@@ -465,32 +469,12 @@ pub fn open_media_blob(image_token: &str, ciphertext: &[u8]) -> Result<Vec<u8>, 
         .map_err(|e| MarketError::Crypto(format!("Decryption failed: {}", e)))?;
 
     validate_ad_media(&plaintext)?;
+    let expected_token = compute_image_token(owner_did, &plaintext)?;
+    if expected_token != image_token {
+        return Err(MarketError::Crypto(
+            "Media image_token does not match owner DID and content".to_string(),
+        ));
+    }
 
     Ok(plaintext)
-}
-
-/// Signs a media drop request using a member's stealth secret key.
-pub fn sign_media_request(
-    member_stealth_sk: &[u8; 32],
-    method: &str,
-    blob_id: &str,
-    timestamp: u64,
-    nonce_hex: &str,
-    body: &[u8],
-) -> Result<SignedDropHeaders, MarketError> {
-    if blob_id.len() != 64 || !blob_id.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')) {
-        return Err(MarketError::Validation(format!(
-            "Invalid media blob_id '{}': expected 64 lowercase hex chars",
-            blob_id
-        )));
-    }
-    crate::sync_access::sign_member_request(
-        member_stealth_sk,
-        method,
-        &format!("media:{}", blob_id),
-        None,
-        timestamp,
-        nonce_hex,
-        body,
-    )
 }

@@ -20,7 +20,7 @@ import {
     WifiOff
 } from "lucide-react";
 
-import type { VoucherDetails } from "../../types";
+import type { VoucherDetails, ExpectedL2Committee } from "../../types";
 import { useVoucherCreation, standardRequiresCreatorGender } from "../../hooks/useVoucherCreation";
 import { VoucherBasicsForm } from "../voucher/VoucherBasicsForm";
 import { CreatorIdentityForm } from "../voucher/CreatorIdentityForm";
@@ -38,6 +38,7 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
         standards,
         selectedStandardId,
         parsedStandard,
+        isParsingStandard,
         amount,
         validityValue,
         validityUnit,
@@ -48,6 +49,7 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
         coordWarning,
         errors,
         lockOverview,
+        refreshLockOverview,
         setAmount,
         setValidityValue,
         setValidityUnit,
@@ -66,6 +68,13 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
     const [showConfirm, setShowConfirm] = useState(false);
     const [showTestVoucherWarning, setShowTestVoucherWarning] = useState(false);
     const [showL2UnavailableModal, setShowL2UnavailableModal] = useState(false);
+    const [l2CommitteeChangedInfo, setL2CommitteeChangedInfo] = useState<{
+        expectedThreshold: string;
+        expectedCount: string;
+        actualThreshold: string;
+        actualCount: string;
+        actualCommittee: ExpectedL2Committee;
+    } | null>(null);
 
     const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -106,7 +115,7 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
 
     const handleCreateClick = (event: FormEvent) => {
         event.preventDefault();
-        if (isLoading) return;
+        if (isLoading || isParsingStandard) return;
         
         const currentErrors = validate();
         if (Object.keys(currentErrors).length > 0) {
@@ -137,11 +146,26 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
         setShowConfirm(true);
     };
 
-    async function executeCreation(forceAllowOfflineOnly = false) {
+    async function executeCreation(
+        forceAllowOfflineOnly = false,
+        forceReprobe = false,
+        expectedCommitteeOverride?: ExpectedL2Committee | null,
+    ) {
+        const selectedStandard = standards.find(s => s.id === selectedStandardId);
+        if (!selectedStandard || isParsingStandard) {
+            return;
+        }
         setIsLoading(true);
         setShowL2UnavailableModal(false);
-        const selectedStandard = standards.find(s => s.id === selectedStandardId)!;
-        const voucherData = prepareVoucherData(forceAllowOfflineOnly ? true : undefined);
+        setL2CommitteeChangedInfo(null);
+        const voucherData = prepareVoucherData(
+            forceAllowOfflineOnly ? true : undefined,
+            {
+                forceReprobe,
+                explicitOfflineOnly: forceAllowOfflineOnly ? true : allowOfflineOnly,
+                expectedCommitteeOverride,
+            },
+        );
         
         try {
             let created: VoucherDetails | undefined;
@@ -160,6 +184,27 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
             if (!forceAllowOfflineOnly && isBackendError(e) && e.code === 'error.voucher.l2AnchorUnavailable') {
                 setShowConfirm(false);
                 setShowL2UnavailableModal(true);
+            } else if (!forceAllowOfflineOnly && isBackendError(e) && e.code === 'error.voucher.l2CommitteeChanged') {
+                setShowConfirm(false);
+                void refreshLockOverview();
+                const details = e.details ?? {};
+                const actualPubs = String(details.actualLockPubs ?? '')
+                    .split(',')
+                    .map((s) => s.trim())
+                    .filter(Boolean);
+                const actualThreshold = Math.max(1, parseInt(String(details.actualThreshold ?? '1'), 10) || 1);
+                const actualSource = String(details.actualSource ?? 'live');
+                setL2CommitteeChangedInfo({
+                    expectedThreshold: String(details.expectedThreshold ?? '0'),
+                    expectedCount: String(details.expectedCount ?? '0'),
+                    actualThreshold: String(actualThreshold),
+                    actualCount: String(details.actualCount ?? actualPubs.length),
+                    actualCommittee: {
+                        lockPubs: actualPubs,
+                        threshold: actualThreshold,
+                        source: actualSource,
+                    },
+                });
             } else {
                 setFeedback({type: 'error', msg: t('voucher.create.failed', { error: translateError(e, t) })});
                 setShowConfirm(false);
@@ -309,7 +354,7 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
                         <Button
                             variant="primary"
                             data-testid="l2-unavailable-retry-btn"
-                            onClick={() => void executeCreation(false)}
+                            onClick={() => void executeCreation(false, true)}
                             disabled={isLoading}
                             className="sm:flex-1"
                         >
@@ -318,7 +363,7 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
                         <Button
                             variant="danger"
                             data-testid="l2-unavailable-offline-btn"
-                            onClick={() => void executeCreation(true)}
+                            onClick={() => void executeCreation(true, false)}
                             disabled={isLoading}
                             className="sm:flex-1"
                         >
@@ -326,6 +371,31 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
                         </Button>
                     </div>
                 }
+            />
+
+            <ConfirmationModal
+                isOpen={l2CommitteeChangedInfo !== null}
+                title={t('voucher.create.l2CommitteeChangedTitle')}
+                description={
+                    l2CommitteeChangedInfo ? (
+                        <p className="text-sm font-medium text-theme-secondary leading-relaxed">
+                            {t('voucher.create.l2CommitteeChangedDesc', {
+                                expectedThreshold: l2CommitteeChangedInfo.expectedThreshold,
+                                expectedCount: l2CommitteeChangedInfo.expectedCount,
+                                actualThreshold: l2CommitteeChangedInfo.actualThreshold,
+                                actualCount: l2CommitteeChangedInfo.actualCount,
+                            })}
+                        </p>
+                    ) : null
+                }
+                confirmText={t('voucher.create.l2CommitteeChangedAccept')}
+                cancelText={t('common.cancel')}
+                isProcessing={isLoading}
+                onConfirm={() => {
+                    if (!l2CommitteeChangedInfo) return;
+                    void executeCreation(false, false, l2CommitteeChangedInfo.actualCommittee);
+                }}
+                onCancel={() => setL2CommitteeChangedInfo(null)}
             />
 
             <ConfirmationModal

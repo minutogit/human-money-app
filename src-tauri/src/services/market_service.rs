@@ -629,8 +629,10 @@ pub fn get_my_market_profile_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendMyMarketProfile, FrontendError> {
-    let mut service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
-    let stored = load_own_market_profile_state(state, &mut service, password.as_deref())?;
+    let (mut service, resolved_pw) = state
+        .authorize_and_lock_secret(crate::state::RequiredAccess::Unlocked, password.as_deref())?;
+    let pw = resolved_pw.as_deref().map(String::as_str);
+    let stored = load_own_market_profile_state(state, &mut service, pw)?;
 
     let core_profile = service
         .with_wallet(|w| w.profile.to_public_profile())
@@ -974,7 +976,10 @@ pub fn upsert_ad_impl(
         // Create new ad: enforce active ads limit (max 5)
         let active_count = stored.ads.iter().filter(|a| a.expires_at > now).count();
         if active_count >= humoco_market::MAX_ADS_PER_CARD {
-            return Err(FrontendError::from("market.adLimitReached".to_string()));
+            return Err(FrontendError::with_code(
+                "error.market.adLimitReached",
+                "Maximum number of active ads reached.",
+            ));
         }
 
         let id = ad_input.id.unwrap_or_else(humoco_market::new_ad_id);
@@ -1055,7 +1060,10 @@ pub fn renew_ad_impl(
             .filter(|a| a.id != id && a.expires_at > now)
             .count();
         if other_active >= humoco_market::MAX_ADS_PER_CARD {
-            return Err(FrontendError::from("market.adLimitReached".to_string()));
+            return Err(FrontendError::with_code(
+                "error.market.adLimitReached",
+                "Maximum number of active ads reached.",
+            ));
         }
     }
 
@@ -1208,7 +1216,9 @@ pub async fn get_ad_image_impl(
         }
         if let Ok(Some(ciphertext)) = sync_client::get_media_blob(&client, read_url, &blob_id).await
         {
-            if let Ok(media_bytes) = humoco_market::open_media_blob(&image_token, &ciphertext) {
+            if let Ok(media_bytes) =
+                humoco_market::open_media_blob(&owner_did, &image_token, &ciphertext)
+            {
                 let cache_key = crate::state::cached_media_storage_key(&blob_id);
                 let cached_for_session = state
                     .with_session(&session, |service| {
@@ -1461,14 +1471,13 @@ pub fn export_forward_card_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendForwardCardExport, FrontendError> {
-    let mut service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
+    let (mut service, resolved_pw) = state
+        .authorize_and_lock_secret(crate::state::RequiredAccess::Unlocked, password.as_deref())?;
+    let pw = resolved_pw.as_deref().map(String::as_str);
 
-    let store: humoco_market::CardStore = crate::state::load_encrypted_json_or_default(
-        &mut service,
-        MARKET_CARD_STORE_KEY,
-        password.as_deref(),
-    )
-    .map_err(FrontendError::from)?;
+    let store: humoco_market::CardStore =
+        crate::state::load_encrypted_json_or_default(&mut service, MARKET_CARD_STORE_KEY, pw)
+            .map_err(FrontendError::from)?;
 
     let validated_did = human_money_core::ValidatedUserId::parse(&did)
         .map_err(|e| FrontendError::from(format!("Invalid DID: {}", e)))?;
@@ -1506,35 +1515,64 @@ fn parse_card_envelope_payload(
     payload: &str,
 ) -> Result<humoco_market::CardEnvelope, FrontendError> {
     const CARD_URI_PREFIX: &str = "humoco://card?";
-    let card_token = payload
-        .split_whitespace()
-        .map(|tok| tok.trim_start_matches(['<', '"', '\'', '(', '[']))
-        .find(|tok| {
-            tok.get(..CARD_URI_PREFIX.len())
-                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(CARD_URI_PREFIX))
-        });
+    fn clean_wrappers(s: &str) -> &str {
+        s.trim_matches(|c: char| {
+            c.is_whitespace()
+                || matches!(
+                    c,
+                    '<' | '>' | '"' | '\'' | '(' | ')' | '[' | ']' | '“' | '”' | '„' | '’' | '‘'
+                )
+        })
+    }
+    let unwrapped = clean_wrappers(payload);
+    // Unwrap accidental line breaks/whitespace inside pasted card share URIs
+    let compact: String = unwrapped.split_whitespace().collect();
+    let card_token = if compact
+        .get(..CARD_URI_PREFIX.len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(CARD_URI_PREFIX))
+    {
+        Some(compact.as_str())
+    } else {
+        unwrapped
+            .split_whitespace()
+            .map(clean_wrappers)
+            .find(|tok| {
+                tok.get(..CARD_URI_PREFIX.len())
+                    .is_some_and(|prefix| prefix.eq_ignore_ascii_case(CARD_URI_PREFIX))
+            })
+    };
     let json_str = if let Some(uri_token) = card_token {
         let after_scheme = &uri_token[CARD_URI_PREFIX.len()..];
         let query_slice = after_scheme
-            .split(['#', '"', '\'', '>', '<'])
+            .split(['#', '"', '\'', '>', '<', '”', '’'])
             .next()
             .unwrap_or(after_scheme);
         let raw_b64 = query_slice
             .split('&')
             .filter_map(|pair| pair.split_once('='))
             .find(|(k, _)| k.eq_ignore_ascii_case("env"))
-            .map(|(_, v)| v.trim_end_matches(['.', ',', ';', ':', '!', '?', ')', ']']))
+            .map(|(_, v)| {
+                v.trim_end_matches([
+                    '.', ',', ';', ':', '!', '?', ')', ']', '”', '’', '"', '\'', '>',
+                ])
+            })
             .filter(|v| !v.is_empty())
             .ok_or_else(|| {
                 FrontendError::from("Card share URI is missing env query parameter".to_string())
             })?;
-        let bytes = human_money_core::crypto::decode_base64(raw_b64).map_err(|e| {
+        // Normalize both standard and URL-safe Base64 without padding before decoding.
+        let norm_b64 = raw_b64
+            .replace('+', "-")
+            .replace('/', "_")
+            .trim_end_matches('=')
+            .to_string();
+        let bytes = human_money_core::crypto::decode_base64(&norm_b64).map_err(|e| {
             FrontendError::from(format!("Failed to decode card share URI base64: {}", e))
         })?;
         String::from_utf8(bytes)
             .map_err(|e| FrontendError::from(format!("Invalid UTF-8 in card share URI: {}", e)))?
     } else {
-        payload.to_string()
+        unwrapped.to_string()
     };
 
     let json_trimmed = json_str.trim();
@@ -1728,6 +1766,7 @@ pub fn import_contact_card_impl(
     }
 }
 
+#[cfg(test)]
 pub fn delete_foreign_contact_card_impl(
     did: String,
     password: Option<String>,
@@ -1846,11 +1885,11 @@ pub fn clear_app_notices_impl(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ed25519_dalek::SigningKey;
     use crate::models::{
         CardFieldVisibility, FieldAudience, FrontendAdInput, FrontendSaveMyMarketProfileRequest,
         FrontendUserProfile,
     };
+    use ed25519_dalek::SigningKey;
     use human_money_core::app_service::AppService;
     use std::path::{Path, PathBuf};
 
@@ -1991,7 +2030,7 @@ mod tests {
             image_webp_data_uri: None,
         };
         let err = upsert_ad_impl(ad_6, Some(password.to_string()), &alice_state).unwrap_err();
-        assert!(err.message.contains("market.adLimitReached"));
+        assert_eq!(err.code, "error.market.adLimitReached");
 
         // Editing an existing ad succeeds even when 5 ads are active
         let target_id = ad_ids[0].clone();
@@ -2250,10 +2289,9 @@ mod tests {
             image_webp_data_uri: None,
         };
         upsert_ad_impl(ad_req, Some(password.to_string()), &alice_state).unwrap();
-        let alice_profile =
-            set_card_published_impl(true, Some(password.to_string()), &alice_state)
-                .await
-                .unwrap();
+        let alice_profile = set_card_published_impl(true, Some(password.to_string()), &alice_state)
+            .await
+            .unwrap();
 
         assert!(alice_profile.published);
         assert!(alice_profile.share_uri.is_some());
@@ -2642,8 +2680,7 @@ mod tests {
 
         let alice_state = crate::test_support::create_test_state(alice_service);
 
-        let res =
-            set_card_published_impl(true, Some(password.to_string()), &alice_state).await;
+        let res = set_card_published_impl(true, Some(password.to_string()), &alice_state).await;
         assert!(
             res.is_ok(),
             "Expected success publishing card with empty name, got: {:?}",
@@ -3234,7 +3271,9 @@ mod tests {
         assert!(parse_card_envelope_payload(&format!("HUMOCO://CARD?foo=bar&env={}", b64)).is_ok());
 
         // F2: arbitrary URL prefixes must NOT be accepted just for containing ?env=
-        assert!(parse_card_envelope_payload(&format!("https://evil.example/path?env={}", b64)).is_err());
+        assert!(
+            parse_card_envelope_payload(&format!("https://evil.example/path?env={}", b64)).is_err()
+        );
         assert!(parse_card_envelope_payload(&format!("humoco://pay?env={}", b64)).is_err());
 
         // F2: unknown JSON fields on CardEnvelope must be rejected (#[serde(deny_unknown_fields)])
@@ -3288,5 +3327,50 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn f8_parse_card_envelope_payload_accepts_quotes_linebreaks_and_standard_base64() {
+        use base64::Engine;
+        let (_, sib_sk) = human_money_core::services::crypto::derive_ed25519_keypair(
+            ALICE_PHRASE,
+            None,
+            human_money_core::MnemonicLanguage::English,
+        )
+        .unwrap();
+        let did = human_money_core::crypto::create_user_id(&sib_sk.verifying_key(), None).unwrap();
+        let card = humoco_market::sign_sd_card(
+            humoco_market::CardPayloadInput {
+                did,
+                v: 1,
+                valid_until: 2_000_000_000,
+                max_hops: 2,
+                ad_count: 0,
+                allow_inquiries: true,
+                drops: vec![humoco_market::DropDescriptor {
+                    write_url: "https://sync.example/sync.php".into(),
+                    read_url: "https://sync.example/d".into(),
+                    slot_id: None,
+                    drop_pub: "11".repeat(32),
+                }],
+            },
+            Vec::new(),
+            &sib_sk,
+        )
+        .unwrap();
+        let card_wire =
+            humoco_market::render_wire(&card, 1, humoco_market::WireFilter::Full).unwrap();
+        let env = humoco_market::CardEnvelope { card_wire, hops: 0 };
+        let json = serde_json::to_string(&env).unwrap();
+        let std_b64 = base64::engine::general_purpose::STANDARD.encode(json.as_bytes());
+        let split_at = std_b64.len() / 2;
+        let wrapped = format!(
+            "“humoco://card?env={}\n{}#frag”",
+            &std_b64[..split_at],
+            &std_b64[split_at..]
+        );
+        let parsed = parse_card_envelope_payload(&wrapped).expect("wrapped standard base64 URI");
+        assert_eq!(parsed.card_wire, env.card_wire);
+        assert!(parse_card_envelope_payload("humoco://card?other=1").is_err());
     }
 }

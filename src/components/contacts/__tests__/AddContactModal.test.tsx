@@ -73,11 +73,11 @@ describe('AddContactModal Component', () => {
     );
 
     // Valid DID delegates to manual add
-    fireEvent.change(screen.getByTestId('smart-contact-input'), { target: { value: 'did:key:z6MkSimpleDid' } });
+    fireEvent.change(screen.getByTestId('smart-contact-input'), { target: { value: 'did:key:z6MkSimp2eDid1111111111111111111111111111111' } });
     fireEvent.click(screen.getByTestId('smart-contact-submit'));
     await waitFor(() => {
       expect(mockOnClose).toHaveBeenCalled();
-      expect(mockOnOpenManualAdd).toHaveBeenCalledWith('did:key:z6MkSimpleDid');
+      expect(mockOnOpenManualAdd).toHaveBeenCalledWith('did:key:z6MkSimp2eDid1111111111111111111111111111111');
     });
   });
 
@@ -143,7 +143,7 @@ describe('AddContactModal Component', () => {
   });
 
   it('handles DID in clipboard by delegating directly to manual add with prefilled DID', async () => {
-    (readFromClipboard as Mock).mockResolvedValue({ text: 'did:key:z6MkhaXGzCsKoDbKyW3' });
+    (readFromClipboard as Mock).mockResolvedValue({ text: 'did:key:z6MkhaXGzCsKoDbKyW31111111111111111111111' });
 
     render(
       <UiModeProvider initialMode="expert">
@@ -162,7 +162,7 @@ describe('AddContactModal Component', () => {
 
     await waitFor(() => {
       expect(mockOnClose).toHaveBeenCalled();
-      expect(mockOnOpenManualAdd).toHaveBeenCalledWith('did:key:z6MkhaXGzCsKoDbKyW3');
+      expect(mockOnOpenManualAdd).toHaveBeenCalledWith('did:key:z6MkhaXGzCsKoDbKyW31111111111111111111111');
     });
   });
 

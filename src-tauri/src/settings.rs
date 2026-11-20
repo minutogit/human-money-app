@@ -261,7 +261,7 @@ pub struct AppConfigDto {
 }
 
 /// Partial update for `UiPreferences` (authorized with `RequiredAccess::DailyPay`).
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct UiPreferencesPatch {
     pub ui_mode: Option<String>,
@@ -289,7 +289,11 @@ impl UiPreferencesPatch {
             };
         }
         if let Some(ref dir_opt) = self.last_used_directory {
-            target.last_used_directory = dir_opt.clone();
+            target.last_used_directory = dir_opt
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string);
         }
         if let Some(ref view_mode) = self.balance_view_mode {
             target.balance_view_mode = if view_mode.trim().eq_ignore_ascii_case("net") {
@@ -330,7 +334,7 @@ impl UiPreferencesPatch {
 
 /// Partial update for `SecurityPolicy` scalar/backup policy fields (`RequiredAccess::Full`).
 /// Lock server nominations and sync endpoints use dedicated validated commands.
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct SecurityPolicyPatch {
     pub session_timeout_seconds: Option<u64>,
@@ -345,12 +349,31 @@ pub struct SecurityPolicyPatch {
 }
 
 impl SecurityPolicyPatch {
+    pub fn validate(&self) -> Result<(), String> {
+        if let Some(ref v) = self.privacy_default {
+            let trimmed = v.trim();
+            if !matches!(trimmed, "ask" | "stealth" | "public") {
+                return Err(format!("Invalid privacy_default value: {}", v));
+            }
+        }
+        if let Some(Some(ref v)) = self.backup_protection_mode {
+            let trimmed = v.trim();
+            if !trimmed.is_empty() && !matches!(trimmed, "mnemonic_only" | "custom_password") {
+                return Err(format!("Invalid backup_protection_mode value: {}", v));
+            }
+        }
+        Ok(())
+    }
+
     pub fn apply_to(&self, target: &mut SecurityPolicy) {
         if let Some(v) = self.session_timeout_seconds {
             target.session_timeout_seconds = v;
         }
         if let Some(ref v) = self.privacy_default {
-            target.privacy_default = v.clone();
+            let trimmed = v.trim();
+            if matches!(trimmed, "ask" | "stealth" | "public") {
+                target.privacy_default = trimmed.to_string();
+            }
         }
         if let Some(v) = self.dev_mode_unlocked {
             target.dev_mode_unlocked = v;
@@ -362,10 +385,19 @@ impl SecurityPolicyPatch {
             target.sync_backup_enabled = v;
         }
         if let Some(ref v) = self.backup_sync_folder {
-            target.backup_sync_folder = v.clone();
+            target.backup_sync_folder = v
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string);
         }
         if let Some(ref v) = self.backup_protection_mode {
-            target.backup_protection_mode = v.clone();
+            target.backup_protection_mode = v
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .filter(|s| matches!(*s, "mnemonic_only" | "custom_password"))
+                .map(str::to_string);
         }
     }
 }

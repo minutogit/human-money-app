@@ -226,6 +226,11 @@ describe('UX Glossary Linting (docs/UX_GLOSSARY.md)', () => {
             { name: '14/20', pattern: /14\/20/ },
             { name: '14 von 20', pattern: /14\s+von\s+20/i },
             { name: '14 of 20', pattern: /14\s+of\s+20/i },
+            { name: 'Layer-2-Knoten', pattern: /Layer-2-Knoten/i },
+            { name: 'Layer 2 nodes', pattern: /Layer 2 nodes/i },
+            { name: 'nodos activos de Capa 2', pattern: /nodos activos de Capa 2/i },
+            { name: 'nœuds actifs de Couche 2', pattern: /nœuds actifs de Couche 2/i },
+            { name: 'nodi attivi di Livello 2', pattern: /nodi attivi di Livello 2/i },
         ];
 
         const violations: string[] = [];
@@ -243,25 +248,76 @@ describe('UX Glossary Linting (docs/UX_GLOSSARY.md)', () => {
         expect(violations).toEqual([]);
     });
 
-    it('F3: ensures es/fr/it contain zero untranslated English strings (>12 chars) outside explicit proper-noun allowlist', () => {
+    it('F3: ensures es/fr/it contain zero untranslated English strings outside explicit per-language cognate allowlists', () => {
         const PROPER_NOUN_OR_COGNATE_ALLOWLIST = new Set([
             'common.appName',
+            'common.logo',
             'common.noticeSignaturesPart',
             'common.protocolVersion',
             'common.supportTitle',
             'common.version',
             'conflict.errorPrefix',
             'marketplace.counterTotal',
+            'marketplace.priceChipFreetaler',
+            'marketplace.priceChipMinuto',
             'profile.emailPlaceholder',
+            'profile.gpsButton',
             'profile.phonePlaceholder',
             'profile.pictureUrlPlaceholder',
             'profile.websitePlaceholder',
             'settings.serverUrlPlaceholder',
             'transfer.pillars.l1FormatOnly',
             'transfer.receiveSuccess.countableItem',
+            'voucher.hint.connectorComma',
         ]);
 
-        const secondaryLocales: Array<[string, Record<string, string>]> = [
+        const COGNATES_BY_LANG: Record<'es' | 'fr' | 'it', Set<string>> = {
+            es: new Set([
+                'common.error',
+                'common.no',
+                'common.uiModeSimple',
+                'contacts.syncDeleteCancelBtn',
+                'profile.errorPrefix',
+                'standards.divisibleLabel',
+                'voucher.divisibleLabel',
+                'voucher.mode.real',
+            ]),
+            fr: new Set([
+                'backup.standards',
+                'common.description',
+                'common.ok',
+                'common.uiModeSimple',
+                'contacts.addShortBtn',
+                'contacts.defaultContactName',
+                'contacts.notes',
+                'history.date',
+                'marketplace.adTextLabel',
+                'marketplace.optionsBtn',
+                'settings.l2ModeSourcePublic',
+                'settings.privacyModePublic',
+                'standards.divisibleLabel',
+                'transfer.public',
+                'transfer.receiveSuccess.note',
+                'voucher.divisibleLabel',
+                'voucher.filter.byMode',
+                'voucher.mode.test',
+                'voucher.signatures',
+                'voucher.signaturesHeader',
+                'voucher.standardLabel',
+            ]),
+            it: new Set([
+                'auth.password',
+                'common.no',
+                'common.ok',
+                'contacts.syncDeleteCancelBtn',
+                'standards.password',
+                'transfer.l2.statusOffline',
+                'voucher.mode.test',
+                'voucher.standardLabel',
+            ]),
+        };
+
+        const secondaryLocales: Array<['es' | 'fr' | 'it', Record<string, string>]> = [
             ['es', esJson as Record<string, string>],
             ['fr', frJson as Record<string, string>],
             ['it', itJson as Record<string, string>],
@@ -269,9 +325,10 @@ describe('UX Glossary Linting (docs/UX_GLOSSARY.md)', () => {
         const untranslated: string[] = [];
 
         for (const [key, enVal] of Object.entries(en)) {
-            if (typeof enVal !== 'string' || enVal.length <= 12) continue;
+            if (typeof enVal !== 'string' || enVal.length === 0) continue;
             if (PROPER_NOUN_OR_COGNATE_ALLOWLIST.has(key)) continue;
             for (const [lang, locObj] of secondaryLocales) {
+                if (COGNATES_BY_LANG[lang].has(key)) continue;
                 if (locObj[key] === enVal) {
                     untranslated.push(`[${lang}] ${key}: "${enVal}"`);
                 }
@@ -281,7 +338,7 @@ describe('UX Glossary Linting (docs/UX_GLOSSARY.md)', () => {
         expect(untranslated).toEqual([]);
     });
 
-    it('F3: ensures es/fr/it respect UX glossary without forbidden technical jargon in standard keys', () => {
+    it('F3: ensures es/fr/it respect UX glossary, localized wallet/hop prohibitions, and Italian WoT guarantor prohibition', () => {
         const FORBIDDEN_INTL_PATTERNS: Array<{ name: string; pattern: RegExp }> = [
             { name: 'did:key', pattern: /did:key/i },
             { name: 'DID', pattern: /\bDID\b/ },
@@ -291,7 +348,22 @@ describe('UX Glossary Linting (docs/UX_GLOSSARY.md)', () => {
             { name: '.wot', pattern: /\.wot/i },
         ];
 
-        const secondaryLocales: Array<[string, Record<string, string>]> = [
+        const FORBIDDEN_BY_LANG: Record<'es' | 'fr' | 'it', Array<{ name: string; pattern: RegExp }>> = {
+            es: [
+                { name: 'billetera/monedero/cartera', pattern: /\b(billetera|monedero|cartera)\b/i },
+                { name: 'salto/saltos', pattern: /\bsaltos?\b/i },
+            ],
+            fr: [
+                { name: 'portefeuille', pattern: /\bportefeuille\b/i },
+                { name: 'saut/sauts', pattern: /\bsauts?\b/i },
+            ],
+            it: [
+                { name: 'portafoglio', pattern: /\bportafoglio\b/i },
+                { name: 'salto/salti', pattern: /\bsalt[oi]\b/i },
+            ],
+        };
+
+        const secondaryLocales: Array<['es' | 'fr' | 'it', Record<string, string>]> = [
             ['es', esJson as Record<string, string>],
             ['fr', frJson as Record<string, string>],
             ['it', itJson as Record<string, string>],
@@ -299,11 +371,17 @@ describe('UX Glossary Linting (docs/UX_GLOSSARY.md)', () => {
         const violations: string[] = [];
 
         for (const [lang, locObj] of secondaryLocales) {
+            const patterns = [...FORBIDDEN_INTL_PATTERNS, ...FORBIDDEN_BY_LANG[lang]];
             for (const [key, value] of Object.entries(locObj)) {
                 if (typeof value !== 'string') continue;
-                if (isAllowlisted(key)) continue;
                 const cleanText = stripPlaceholders(value);
-                for (const { name, pattern } of FORBIDDEN_INTL_PATTERNS) {
+                if (lang === 'it' && WOT_KEY_PREFIXES.some((prefix) => key.startsWith(prefix))) {
+                    if (/\bgarant\w*\b/i.test(cleanText)) {
+                        violations.push(`[it] (WoT guarantor term) ${key}: "${value}"`);
+                    }
+                }
+                if (isAllowlisted(key)) continue;
+                for (const { name, pattern } of patterns) {
                     if (pattern.test(cleanText)) {
                         violations.push(`[${lang}] (${name}) ${key}: "${value}"`);
                     }

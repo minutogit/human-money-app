@@ -47,17 +47,6 @@ fn canonicalize_did(did: &str) -> Option<String> {
     create_user_id(&pk, None).ok()
 }
 
-pub fn compute_drop_members(
-    direct: &[(String, u8)],
-    bridges: &[BridgeContact],
-    policy: &MemberPolicy,
-    allow: &[String],
-    deny: &[String],
-    max_members: usize,
-) -> Vec<String> {
-    compute_drop_members_with_stats(direct, bridges, policy, allow, deny, max_members).member_dids
-}
-
 pub fn compute_drop_members_with_stats(
     direct: &[(String, u8)],
     bridges: &[BridgeContact],
@@ -569,30 +558,6 @@ pub fn format_lock_delegate_signature_message(
         read_url.trim(),
         issued_at
     )
-}
-
-pub fn verify_ed25519_detached_hex(
-    pubkey_hex64: &str,
-    message: &[u8],
-    sig_hex128: &str,
-) -> Result<(), MarketError> {
-    let vk = parse_ed25519_pubkey_hex64(pubkey_hex64)?;
-    if sig_hex128.len() != 128
-        || !sig_hex128
-            .bytes()
-            .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
-    {
-        return Err(MarketError::Crypto(format!(
-            "Signature must be a 128-character lowercase hex string, got '{}'",
-            sig_hex128
-        )));
-    }
-    let mut sig_bytes = [0u8; 64];
-    hex::decode_to_slice(sig_hex128, &mut sig_bytes)
-        .map_err(|e| MarketError::Crypto(format!("Invalid signature hex: {}", e)))?;
-    let sig = ed25519_dalek::Signature::from_bytes(&sig_bytes);
-    vk.verify_strict(message, &sig)
-        .map_err(|e| MarketError::Crypto(format!("Invalid Ed25519 signature: {}", e)))
 }
 
 #[allow(clippy::too_many_arguments)]

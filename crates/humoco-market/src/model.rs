@@ -17,10 +17,8 @@ pub const MAX_AD_TEXT_CHARS: usize = 280;
 pub const MAX_PRICING_CHARS: usize = 40;
 
 pub const AD_DURATION_CHOICES_DAYS: [u64; 3] = [30, 90, 180];
-pub const AD_DEFAULT_DURATION_DAYS: u64 = 90;
 pub const AD_MAX_DURATION_SECS: u64 = 180 * 86_400;
 
-pub const CARD_DEFAULT_VALIDITY_SECS: u64 = 2 * 365 * 86_400;
 pub const CARD_AUTO_RENEW_THRESHOLD_SECS: u64 = 30 * 86_400;
 pub const CARD_SD_PADDED_LEN: usize = 32;
 
@@ -31,7 +29,6 @@ pub const MAX_QR_SHARE_BYTES: usize = 2900;
 pub const DEFAULT_MAX_HOPS: u8 = 2;
 pub const MAX_CARD_DROPS: usize = 3;
 pub const MAX_CARDS_PER_PUBKEY: usize = 3;
-pub const MAX_STORED_CARDS: usize = 2000;
 pub const MAX_SLOT_RECIPIENTS: usize = 256;
 
 pub fn is_false(v: &bool) -> bool {

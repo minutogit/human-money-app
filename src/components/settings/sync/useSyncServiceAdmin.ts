@@ -1,5 +1,5 @@
 // src/components/settings/sync/useSyncServiceAdmin.ts
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
     AppConfigDto,
@@ -80,6 +80,40 @@ export function useSyncServiceAdmin({ config, onConfigUpdated }: UseSyncServiceA
     const [isDeletingAdmin, setIsDeletingAdmin] = useState(false);
     const [isRevokingServer, setIsRevokingServer] = useState(false);
 
+    const mountedRef = useRef(true);
+    const loadSeqRef = useRef(0);
+    const isHostDirtyRef = useRef(false);
+    const timersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
+
+    useEffect(() => {
+        mountedRef.current = true;
+        const timers = timersRef.current;
+        return () => {
+            mountedRef.current = false;
+            timers.forEach((id) => clearTimeout(id));
+            timers.clear();
+        };
+    }, []);
+
+    const scheduleBackupPass = useCallback(() => {
+        const timerId = setTimeout(() => {
+            timersRef.current.delete(timerId);
+            if (!mountedRef.current) return;
+            runSyncBackupPass(true).catch(() => {});
+        }, 1000);
+        timersRef.current.add(timerId);
+    }, []);
+
+    const setHostPolicyDraft: typeof setHostPolicy = useCallback((next) => {
+        isHostDirtyRef.current = true;
+        setHostPolicy(next);
+    }, []);
+
+    const setHostQuotasDraft: typeof setHostQuotas = useCallback((next) => {
+        isHostDirtyRef.current = true;
+        setHostQuotas(next);
+    }, []);
+
     useEffect(() => {
         if (!config) return;
         setChannelSettings(buildChannelSettings(config.uiPreferences));
@@ -89,6 +123,7 @@ export function useSyncServiceAdmin({ config, onConfigUpdated }: UseSyncServiceA
     }, [config]);
 
     const loadData = useCallback(async () => {
+        const seq = ++loadSeqRef.current;
         setIsLoading(true);
         try {
             const [discovered, admin, freshConfig] = await Promise.all([
@@ -96,11 +131,12 @@ export function useSyncServiceAdmin({ config, onConfigUpdated }: UseSyncServiceA
                 marketService.getSyncAdminStatus().catch(() => null),
                 settingsService.getConfig().catch(() => null),
             ]);
+            if (!mountedRef.current || seq !== loadSeqRef.current) return;
             const discList = Array.isArray(discovered) ? discovered : [];
             setDiscoveredDrops(discList);
             setAdminStatus(admin || null);
-            if (admin?.cardPolicy) setHostPolicy(admin.cardPolicy);
-            if (admin) {
+            if (admin && !isHostDirtyRef.current) {
+                if (admin.cardPolicy) setHostPolicy(admin.cardPolicy);
                 setHostQuotas({
                     maxMembers: admin.maxMembers || 300,
                     maxTotalStorageMb: admin.maxTotalStorageMb || 2048,
@@ -116,14 +152,18 @@ export function useSyncServiceAdmin({ config, onConfigUpdated }: UseSyncServiceA
             if (discList.some((d) => d.status === 'unverified') && typeof marketService.probeContactSyncs === 'function') {
                 marketService.probeContactSyncs(false).then(() => {
                     marketService.discoverAvailableSyncs().then((refreshed) => {
-                        if (Array.isArray(refreshed)) setDiscoveredDrops(refreshed);
+                        if (mountedRef.current && seq === loadSeqRef.current && Array.isArray(refreshed)) {
+                            setDiscoveredDrops(refreshed);
+                        }
                     }).catch(() => {});
                 }).catch(() => {});
             }
         } catch {
             // Silently retain last known data
         } finally {
-            setIsLoading(false);
+            if (mountedRef.current && seq === loadSeqRef.current) {
+                setIsLoading(false);
+            }
         }
     }, [config]);
 
@@ -185,19 +225,36 @@ export function useSyncServiceAdmin({ config, onConfigUpdated }: UseSyncServiceA
         key: K,
         value: ChannelSettingsState[K]
     ) => {
-        setChannelSettings((prev) => ({ ...prev, [key]: value }));
+        let prevValue: ChannelSettingsState[K] | undefined;
+        setChannelSettings((prev) => {
+            prevValue = prev[key];
+            return { ...prev, [key]: value };
+        });
+        let executed = false;
         try {
             const updatedUi = await protectAction(async (pwd) => {
+                executed = true;
                 return await settingsService.patchUiPreferences(
                     { [key]: value },
                     pwd || undefined,
                 );
             });
+            if (!mountedRef.current) return;
+            if (!executed) {
+                if (prevValue !== undefined) {
+                    setChannelSettings((prev) => ({ ...prev, [key]: prevValue! }));
+                }
+                return;
+            }
             if (updatedUi && config) {
                 onConfigUpdated?.({ ...config, uiPreferences: updatedUi });
             }
             notifySyncStatusUpdated();
         } catch (err) {
+            if (!mountedRef.current) return;
+            if (prevValue !== undefined) {
+                setChannelSettings((prev) => ({ ...prev, [key]: prevValue! }));
+            }
             setFeedback({ type: 'error', message: translateError(err, t) });
         }
     };
@@ -247,9 +304,7 @@ export function useSyncServiceAdmin({ config, onConfigUpdated }: UseSyncServiceA
                 if (res.hasAuth) {
                     setProbeResult({ status: 'success', message: t('settings.syncProbeSuccess') });
                     if (res.info.authorizedChannels.includes('backup')) {
-                        setTimeout(() => {
-                            runSyncBackupPass(true).catch(() => {});
-                        }, 1000);
+                        scheduleBackupPass();
                     }
                 } else {
                     setProbeResult({ status: 'unauthorized', message: t('settings.syncProbeUnauthorized') });
@@ -400,9 +455,7 @@ export function useSyncServiceAdmin({ config, onConfigUpdated }: UseSyncServiceA
             }, protectCommandOptions('set_selected_upload_syncs'));
             await refreshDiscoveredDrops();
             if (!isCurrentlySelected) {
-                setTimeout(() => {
-                    runSyncBackupPass(true).catch(() => {});
-                }, 1000);
+                scheduleBackupPass();
             }
         } catch (err) {
             setFeedback({ type: 'error', message: translateError(err, t) });
@@ -431,6 +484,7 @@ export function useSyncServiceAdmin({ config, onConfigUpdated }: UseSyncServiceA
                 true,
                 pwd
             );
+            isHostDirtyRef.current = false;
             setAdminStatus(updated);
             setHostQuotas({
                 maxMembers: updated.maxMembers,
@@ -443,6 +497,7 @@ export function useSyncServiceAdmin({ config, onConfigUpdated }: UseSyncServiceA
     const handleDeleteHost = () =>
         runProtected(setIsDeletingAdmin, async (pwd) => {
             await marketService.deleteSyncAdmin(pwd);
+            isHostDirtyRef.current = false;
             setAdminStatus(null);
             notifySyncStatusUpdated();
             setFeedback({ type: 'success', message: t('settings.syncHostDeletedSuccess') });
@@ -483,7 +538,7 @@ export function useSyncServiceAdmin({ config, onConfigUpdated }: UseSyncServiceA
         isDeletingPublicDrop, deletePublicDropError, clearDeletePublicDropError: () => setDeletePublicDropError(null),
         checkingPublicUrl,
         adminStatus, setAdminStatus,
-        hostPolicy, setHostPolicy, hostQuotas, setHostQuotas,
+        hostPolicy, setHostPolicy: setHostPolicyDraft, hostQuotas, setHostQuotas: setHostQuotasDraft,
         hostWebspaceUrl, setHostWebspaceUrl,
         isCopyingRustConfig, isUpdatingPolicy, isDeletingAdmin, isRevokingServer,
         handleProbeAndAdd, handleTogglePublicDrop, handleRemovePublicSync, handleAdoptReplacementUrl,

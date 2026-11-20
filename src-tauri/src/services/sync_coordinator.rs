@@ -42,8 +42,11 @@ pub(crate) struct CoordinatorSchedule {
     pub next_sync_backup_forced: bool,
     pub sync_backup_deferred_for_wifi: bool,
     pub last_sync_backup_success_at: Option<Instant>,
+    pub sync_backup_consecutive_failures: u32,
+    pub sync_backup_no_targets: bool,
     pub next_post_at: Option<Instant>,
     pub post_deferred_for_wifi: bool,
+    pub next_sync_members_at: Option<Instant>,
     pub next_market_at: Option<Instant>,
     pub next_market_force_upload: bool,
     pub market_deferred_for_wifi: bool,
@@ -59,8 +62,11 @@ impl CoordinatorSchedule {
         self.next_sync_backup_forced = false;
         self.sync_backup_deferred_for_wifi = false;
         self.last_sync_backup_success_at = None;
+        self.sync_backup_consecutive_failures = 0;
+        self.sync_backup_no_targets = false;
         self.next_post_at = Some(now + POST_INITIAL_DELAY);
         self.post_deferred_for_wifi = false;
+        self.next_sync_members_at = None;
         self.next_market_at = Some(now + MARKET_INITIAL_DELAY);
         self.next_market_force_upload = false;
         self.market_deferred_for_wifi = false;
@@ -75,8 +81,11 @@ impl CoordinatorSchedule {
         self.next_sync_backup_forced = false;
         self.sync_backup_deferred_for_wifi = false;
         self.last_sync_backup_success_at = None;
+        self.sync_backup_consecutive_failures = 0;
+        self.sync_backup_no_targets = false;
         self.next_post_at = None;
         self.post_deferred_for_wifi = false;
+        self.next_sync_members_at = None;
         self.next_market_at = None;
         self.next_market_force_upload = false;
         self.market_deferred_for_wifi = false;
@@ -110,6 +119,8 @@ impl CoordinatorSchedule {
             );
         }
         if wake.sync_backup || wake.sync_backup_force {
+            self.sync_backup_no_targets = false;
+            self.sync_backup_consecutive_failures = 0;
             if wake.sync_backup_force {
                 self.next_sync_backup_forced = true;
             }
@@ -125,6 +136,9 @@ impl CoordinatorSchedule {
         }
         if wake.post {
             self.next_post_at = Some(now);
+        }
+        if wake.sync_members {
+            self.next_sync_members_at = Some(now);
         }
         if wake.market || wake.market_force_upload {
             if wake.market_force_upload {
@@ -156,6 +170,9 @@ impl CoordinatorSchedule {
                 earliest = Some(earliest.map_or(at, |e| e.min(at)));
             }
             if let Some(at) = self.next_sync_backup_at.map(net_floor) {
+                earliest = Some(earliest.map_or(at, |e| e.min(at)));
+            }
+            if let Some(at) = self.next_sync_members_at.map(net_floor) {
                 earliest = Some(earliest.map_or(at, |e| e.min(at)));
             }
             if let Some(at) = self.next_market_at {
@@ -247,8 +264,13 @@ async fn run_coordinator_loop(app: tauri::AppHandle) {
             if let Ok(status) = l2_anchor_service::get_seal_sync_status_impl(&state) {
                 if status == "PendingUpload" {
                     schedule.next_local_backup_at = Some(now);
-                    schedule.next_sync_backup_forced = true;
-                    schedule.next_sync_backup_at = Some(now);
+                    if !schedule.sync_backup_deferred_for_wifi
+                        && !schedule.sync_backup_no_targets
+                        && schedule.sync_backup_consecutive_failures == 0
+                    {
+                        schedule.next_sync_backup_forced = true;
+                        schedule.next_sync_backup_at = Some(now);
+                    }
                 }
             }
         }
@@ -299,15 +321,31 @@ async fn run_coordinator_loop(app: tauri::AppHandle) {
                                 schedule.next_sync_backup_forced = true;
                             }
                             schedule.sync_backup_deferred_for_wifi = true;
+                        } else if res.authorized_targets == 0 && res.errors.is_empty() {
+                            schedule.sync_backup_no_targets = true;
+                            schedule.next_sync_backup_at = None;
+                            schedule.sync_backup_consecutive_failures = 0;
+                        } else {
+                            if let Some(secs) = res.retry_after_secs {
+                                state.record_sync_cooldown(secs);
+                            }
+                            if res.uploaded_to > 0 {
+                                schedule.last_sync_backup_success_at = Some(Instant::now());
+                                schedule.sync_backup_consecutive_failures = 0;
+                            } else if !res.errors.is_empty() {
+                                schedule.sync_backup_consecutive_failures =
+                                    schedule.sync_backup_consecutive_failures.saturating_add(1);
+                                let exp = schedule
+                                    .sync_backup_consecutive_failures
+                                    .saturating_sub(1)
+                                    .min(10);
+                                let backoff_secs = (30u64).saturating_mul(1u64 << exp).min(86_400);
+                                schedule.next_sync_backup_at =
+                                    Some(Instant::now() + Duration::from_secs(backoff_secs));
+                            }
+                            let _ = app.emit("humoco://backup-updated", serde_json::Value::Null);
+                            let _ = app.emit("humoco://sync-status-updated", &res);
                         }
-                        if let Some(secs) = res.retry_after_secs {
-                            state.record_sync_cooldown(secs);
-                        }
-                        if res.uploaded_to > 0 {
-                            schedule.last_sync_backup_success_at = Some(Instant::now());
-                        }
-                        let _ = app.emit("humoco://backup-updated", serde_json::Value::Null);
-                        let _ = app.emit("humoco://sync-status-updated", &res);
                     }
                     Err(e) if state.is_generation_current(generation) => {
                         if let Some(secs) =
@@ -315,6 +353,15 @@ async fn run_coordinator_loop(app: tauri::AppHandle) {
                         {
                             state.record_sync_cooldown(secs);
                         }
+                        schedule.sync_backup_consecutive_failures =
+                            schedule.sync_backup_consecutive_failures.saturating_add(1);
+                        let exp = schedule
+                            .sync_backup_consecutive_failures
+                            .saturating_sub(1)
+                            .min(10);
+                        let backoff_secs = (30u64).saturating_mul(1u64 << exp).min(86_400);
+                        schedule.next_sync_backup_at =
+                            Some(Instant::now() + Duration::from_secs(backoff_secs));
                     }
                     _ => {}
                 }
@@ -356,7 +403,8 @@ async fn run_coordinator_loop(app: tauri::AppHandle) {
                         || res.new_sign_requests > 0
                         || res.new_wot_handshakes > 0
                         || res.new_inquiries > 0
-                        || res.new_inquiry_messages > 0;
+                        || res.new_inquiry_messages > 0
+                        || res.new_tolerance_payments > 0;
                     if has_backup_changes {
                         schedule.apply_wake(
                             SyncWakeRequest {
@@ -378,6 +426,30 @@ async fn run_coordinator_loop(app: tauri::AppHandle) {
                     }
                 }
                 _ => {}
+            }
+        }
+
+        if !state.is_generation_current(generation) {
+            continue;
+        }
+
+        // 4b. Background channel members push (serialized before Market sync)
+        let now_members = Instant::now();
+        let cooldown_members = state.sync_control.lock().unwrap().cooldown_until;
+        if ctrl.is_online
+            && !is_cooling_down(cooldown_members, now_members)
+            && schedule
+                .next_sync_members_at
+                .is_some_and(|t| now_members >= t)
+            && state.is_generation_current(generation)
+        {
+            schedule.next_sync_members_at = None;
+            if let Ok(session) =
+                state.authorize_and_begin_session(crate::state::RequiredAccess::Unlocked, None)
+            {
+                let client = crate::sync_client::create_sync_http_client();
+                sync_engine::admin::refresh_own_admin_members(&client, &state, &session, None)
+                    .await;
             }
         }
 
@@ -427,10 +499,14 @@ async fn run_coordinator_loop(app: tauri::AppHandle) {
         }
 
         // 6. One-shot per-session Sync-Lock probe refresh & silent offline anchor pre-warm
-        if ctrl.is_online && !schedule.lock_refresh_done && state.is_generation_current(generation)
+        let cooldown_l2 = state.sync_control.lock().unwrap().cooldown_until;
+        if ctrl.is_online
+            && !is_cooling_down(cooldown_l2, Instant::now())
+            && !schedule.lock_refresh_done
+            && state.is_generation_current(generation)
+            && l2_anchor_service::refresh_lock_servers_for_coordinator(&state).await
         {
             schedule.lock_refresh_done = true;
-            l2_anchor_service::refresh_lock_servers_for_coordinator(&state).await;
         }
 
         let next_due = schedule.earliest_due(
@@ -537,5 +613,49 @@ mod tests {
         assert_eq!(sched.next_sync_backup_at, Some(t2));
         assert_eq!(sched.next_post_at, Some(t2));
         assert_eq!(sched.next_market_at, Some(t2));
+    }
+
+    #[test]
+    fn sync_members_wake_and_no_targets_park_clear_on_wake() {
+        let t0 = Instant::now();
+        let mut sched = CoordinatorSchedule::default();
+        sched.reset_for_session(1, t0);
+        sched.sync_backup_no_targets = true;
+        sched.sync_backup_consecutive_failures = 3;
+        sched.next_sync_backup_at = None;
+
+        // Offline ignores sync_members due
+        sched.apply_wake(
+            SyncWakeRequest {
+                sync_members: true,
+                ..Default::default()
+            },
+            t0 + Duration::from_secs(1),
+        );
+        assert_eq!(
+            sched.next_sync_members_at,
+            Some(t0 + Duration::from_secs(1))
+        );
+        assert_eq!(
+            sched.earliest_due(true, None),
+            Some(t0 + Duration::from_secs(1))
+        );
+        assert_eq!(
+            sched.earliest_due(false, None),
+            Some(t0 + SEAL_INITIAL_DELAY.min(LOCAL_BACKUP_INITIAL_DELAY))
+        );
+
+        // sync_backup wake clears no_targets park & failure backoff
+        let t2 = t0 + Duration::from_secs(5);
+        sched.apply_wake(
+            SyncWakeRequest {
+                sync_backup: true,
+                ..Default::default()
+            },
+            t2,
+        );
+        assert!(!sched.sync_backup_no_targets);
+        assert_eq!(sched.sync_backup_consecutive_failures, 0);
+        assert_eq!(sched.next_sync_backup_at, Some(t2));
     }
 }

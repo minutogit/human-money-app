@@ -106,11 +106,6 @@ export const marketService = {
         return res;
     },
 
-    deleteForeignContactCard: async (did: string, password?: string): Promise<void> => {
-        await invoke<void>("delete_foreign_contact_card", { did, password: password || undefined });
-        emitAppEvent(APP_EVENTS.MARKET_CARD_UPDATED);
-    },
-
     getAdImage: async (ownerDid: string, imageToken: string, password?: string): Promise<string | null> => {
         return await invoke<string | null>("get_ad_image", { ownerDid, imageToken, password: password || undefined });
     },
@@ -174,13 +169,6 @@ export const marketService = {
         return await invoke<FrontendSyncAdminStatus>("update_sync_admin_config", {
             update,
             pushNow,
-            password: password || undefined,
-        });
-    },
-
-    blockSyncSlot: async (pubkeyHex64: string, password?: string): Promise<FrontendSyncAdminStatus> => {
-        return await invoke<FrontendSyncAdminStatus>("block_sync_slot", {
-            pubkeyHex64,
             password: password || undefined,
         });
     },
@@ -314,10 +302,6 @@ export const marketService = {
         return await invoke<FrontendAppNoticesResponse>("clear_app_notices", password ? { password } : {});
     },
 
-    deleteOwnSyncSlots: async (password?: string): Promise<number> => {
-        return await invoke<number>("delete_own_sync_slots", password ? { password } : {});
-    },
-
     previewContactTrustChange: async (
         did: string,
         newLevel: number,
@@ -328,9 +312,5 @@ export const marketService = {
             newLevel,
             password: password || undefined,
         });
-    },
-
-    syncChannelMembers: async (password?: string): Promise<number> => {
-        return await invoke<number>("sync_channel_members", password ? { password } : {});
     },
 };

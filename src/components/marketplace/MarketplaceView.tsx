@@ -1,5 +1,5 @@
 // src/components/marketplace/MarketplaceView.tsx
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
     Plus,
@@ -25,7 +25,7 @@ import {
 import { useNavigation } from '../../context/NavigationContext';
 import { useSession } from '../../context/SessionContext';
 import { marketService } from '../../services/marketService';
-import { postService, POST_INBOX_UPDATED_EVENT } from '../../services/postService';
+import { postService } from '../../services/postService';
 import { APP_EVENTS } from '../../utils/appEvents';
 import { settingsService } from '../../services/settingsService';
 import { contactService } from '../../services/contactService';
@@ -109,11 +109,28 @@ export function MarketplaceView({
     const [mediaAutoLoadMaxHops, setMediaAutoLoadMaxHops] = useState<number>(2);
     const [marketPollWifiOnly, setMarketPollWifiOnly] = useState<boolean>(false);
 
+    const mountedRef = useRef(true);
+    const syncStatusSeqRef = useRef(0);
+    const inboxSeqRef = useRef(0);
+    const refreshSeqRef = useRef(0);
+    const noticesSeqRef = useRef(0);
+
+    useEffect(() => {
+        mountedRef.current = true;
+        return () => {
+            mountedRef.current = false;
+        };
+    }, []);
+
     // React to navigation state changes
     useEffect(() => {
         if (appState.view === 'marketplace') {
             if (appState.initialTab) {
                 setActiveTab(appState.initialTab);
+                if (appState.initialTab === 'mine' && !appState.selectedDid) {
+                    setSelectedPersonDid(null);
+                    setInquiryTargetAd(null);
+                }
             }
             if (appState.selectedDid) {
                 setSelectedPersonDid(appState.selectedDid);
@@ -125,6 +142,7 @@ export function MarketplaceView({
     }, [appState]);
 
     const refreshSyncStatus = useCallback(async () => {
+        const seq = ++syncStatusSeqRef.current;
         try {
             const [config, overview] = await Promise.all([
                 settingsService.getConfig(),
@@ -132,6 +150,7 @@ export function MarketplaceView({
                     ? marketService.getSyncOverviewStatus().catch(() => null)
                     : Promise.resolve(null),
             ]);
+            if (!mountedRef.current || seq !== syncStatusSeqRef.current) return;
             const count = overview
                 ? overview.connectedCount
                 : (config.securityPolicy.marketSelectedSyncs || []).length;
@@ -139,20 +158,31 @@ export function MarketplaceView({
             setMediaAutoLoadMaxHops(config.uiPreferences.mediaAutoLoadMaxHops ?? 2);
             setMarketPollWifiOnly(Boolean(config.uiPreferences.marketPollWifiOnly));
         } catch (err) {
+            if (!mountedRef.current || seq !== syncStatusSeqRef.current) return;
             logger.debug('Failed to check sync settings in marketplace: ' + stringifyError(err));
             setConnectedSyncCount(0);
         }
     }, []);
 
     const refreshInbox = useCallback(async () => {
+        const seq = ++inboxSeqRef.current;
         try {
             const inbox = await postService.getPostInboxSummary();
+            if (!mountedRef.current || seq !== inboxSeqRef.current) return;
             setInboxSummary(inbox);
             if (typeof contactService?.getContacts === 'function') {
-                contactService.getContacts().then((list) => setContacts(list || [])).catch(() => {});
+                contactService.getContacts().then((list) => {
+                    if (mountedRef.current && seq === inboxSeqRef.current) {
+                        setContacts(list || []);
+                    }
+                }).catch(() => {});
             }
             if (typeof marketService?.getAppNotices === 'function') {
-                marketService.getAppNotices().then((res) => setLastSyncAt(res?.lastSyncAt ?? null)).catch(() => {});
+                marketService.getAppNotices().then((res) => {
+                    if (mountedRef.current && seq === inboxSeqRef.current) {
+                        setLastSyncAt(res?.lastSyncAt ?? null);
+                    }
+                }).catch(() => {});
             }
         } catch (err) {
             logger.debug('Failed to load post inbox in marketplace: ' + stringifyError(err));
@@ -160,6 +190,7 @@ export function MarketplaceView({
     }, []);
 
     const refreshData = useCallback(async (isInitial = false) => {
+        const seq = ++refreshSeqRef.current;
         if (isInitial) setIsLoading(true);
         setError(null);
         try {
@@ -167,14 +198,18 @@ export function MarketplaceView({
                 marketService.getMarketView(),
                 marketService.getMyMarketProfile(),
             ]);
+            if (!mountedRef.current || seq !== refreshSeqRef.current) return;
             setSnapshot(snap);
             setMyProfile(profile);
             await Promise.all([refreshInbox(), refreshSyncStatus()]);
         } catch (err) {
+            if (!mountedRef.current || seq !== refreshSeqRef.current) return;
             logger.error('Failed to load market snapshot: ' + stringifyError(err));
             setError(translateError(err, t));
         } finally {
-            if (isInitial) setIsLoading(false);
+            if (isInitial && mountedRef.current && seq === refreshSeqRef.current) {
+                setIsLoading(false);
+            }
         }
     }, [refreshInbox, refreshSyncStatus, t]);
 
@@ -201,22 +236,27 @@ export function MarketplaceView({
             }
         };
         const handleNoticesUpdate = () => {
+            const seq = ++noticesSeqRef.current;
             if (typeof marketService?.getAppNotices === 'function') {
-                marketService.getAppNotices().then((res) => setLastSyncAt(res?.lastSyncAt ?? null)).catch(() => {});
+                marketService.getAppNotices().then((res) => {
+                    if (mountedRef.current && seq === noticesSeqRef.current) {
+                        setLastSyncAt(res?.lastSyncAt ?? null);
+                    }
+                }).catch(() => {});
             }
         };
         const handleMarketCardUpdate = () => {
             refreshData(false);
         };
 
-        window.addEventListener(POST_INBOX_UPDATED_EVENT, handleInboxUpdate);
+        window.addEventListener(APP_EVENTS.POST_INBOX_UPDATED, handleInboxUpdate);
         window.addEventListener(SYNC_STATUS_UPDATED_EVENT, handleSyncUpdate);
         window.addEventListener(MY_PROFILE_UPDATED_EVENT, handleProfileUpdate);
         window.addEventListener(APP_NOTICES_UPDATED_EVENT, handleNoticesUpdate);
         window.addEventListener(APP_EVENTS.MARKET_CARD_UPDATED, handleMarketCardUpdate);
 
         return () => {
-            window.removeEventListener(POST_INBOX_UPDATED_EVENT, handleInboxUpdate);
+            window.removeEventListener(APP_EVENTS.POST_INBOX_UPDATED, handleInboxUpdate);
             window.removeEventListener(SYNC_STATUS_UPDATED_EVENT, handleSyncUpdate);
             window.removeEventListener(MY_PROFILE_UPDATED_EVENT, handleProfileUpdate);
             window.removeEventListener(APP_NOTICES_UPDATED_EVENT, handleNoticesUpdate);
@@ -716,7 +756,11 @@ export function MarketplaceView({
 
                         <button
                             type="button"
-                            onClick={() => setActiveTab('mine')}
+                            onClick={() => {
+                                setActiveTab('mine');
+                                setSelectedPersonDid(null);
+                                setInquiryTargetAd(null);
+                            }}
                             className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
                                 activeTab === 'mine'
                                     ? 'bg-white text-theme-secondary shadow-xs font-black'
@@ -773,6 +817,8 @@ export function MarketplaceView({
                             onOwnerClick={(ownerDid, isOwn) => {
                                 if (isOwn || (currentProfile?.profile?.id && isExactSameUserId(ownerDid, currentProfile.profile.id))) {
                                     setActiveTab('mine');
+                                    setSelectedPersonDid(null);
+                                    setInquiryTargetAd(null);
                                 } else {
                                     setSelectedPersonDid(ownerDid);
                                 }

@@ -1,5 +1,5 @@
 // src/components/marketplace/MarketPersonView.tsx
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { UserAvatar } from '../ui/UserAvatar';
 import {
@@ -95,9 +95,16 @@ export const MarketPersonView: React.FC<MarketPersonViewProps> = ({
 
     const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const inquiryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const mountedRef = useRef(true);
+    const syncSeqRef = useRef(0);
+    const contactsSeqRef = useRef(0);
+    const forwardSeqRef = useRef(0);
+    const inquirySeqRef = useRef(0);
 
     useEffect(() => {
+        mountedRef.current = true;
         return () => {
+            mountedRef.current = false;
             if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
             if (inquiryTimerRef.current) clearTimeout(inquiryTimerRef.current);
         };
@@ -109,13 +116,16 @@ export const MarketPersonView: React.FC<MarketPersonViewProps> = ({
 
     const handleManualSync = async () => {
         if (isCoolingDown) return;
+        const seq = ++syncSeqRef.current;
         setIsManualSyncing(true);
         try {
             const res = await marketService.syncMarketChannels();
+            if (!mountedRef.current || seq !== syncSeqRef.current) return;
             if (res) {
                 checkAndTriggerCooldown(res);
             }
             const snapshot = await marketService.getMarketView();
+            if (!mountedRef.current || seq !== syncSeqRef.current) return;
             const targetId = currentPerson.recipientDid || currentPerson.did;
             const updated = (snapshot.people || []).find((p) =>
                 isExactSameUserId(p.recipientDid || p.did, targetId),
@@ -124,16 +134,21 @@ export const MarketPersonView: React.FC<MarketPersonViewProps> = ({
                 setCurrentPerson(updated);
             }
         } catch (err) {
+            if (!mountedRef.current || seq !== syncSeqRef.current) return;
             logger.error(`Manual sync failed in MarketPersonView: ${stringifyError(err)}`);
             checkAndTriggerCooldown(err);
         } finally {
-            setIsManualSyncing(false);
+            if (mountedRef.current && seq === syncSeqRef.current) {
+                setIsManualSyncing(false);
+            }
         }
     };
 
     const loadContacts = useCallback(async () => {
+        const seq = ++contactsSeqRef.current;
         try {
             const list = await contactService.getContacts();
+            if (!mountedRef.current || seq !== contactsSeqRef.current) return;
             setContacts(list || []);
         } catch {
             // Contacts might not be available
@@ -167,20 +182,25 @@ export const MarketPersonView: React.FC<MarketPersonViewProps> = ({
     const hasCardSource = currentPerson.sources.some((s) => s.kind === 'card');
 
     const handleForwardCard = async () => {
+        const seq = ++forwardSeqRef.current;
         setIsForwarding(true);
         setForwardError(null);
         try {
             const exportData = await protectAction(async (pwd) => {
                 return await marketService.exportForwardCard(paymentRecipientId, pwd || undefined);
             });
+            if (!mountedRef.current || seq !== forwardSeqRef.current) return;
             if (exportData) {
                 setForwardCardData(exportData);
                 setIsShareModalOpen(true);
             }
         } catch (err) {
+            if (!mountedRef.current || seq !== forwardSeqRef.current) return;
             setForwardError(translateError(err, t));
         } finally {
-            setIsForwarding(false);
+            if (mountedRef.current && seq === forwardSeqRef.current) {
+                setIsForwarding(false);
+            }
         }
     };
 
@@ -218,6 +238,7 @@ export const MarketPersonView: React.FC<MarketPersonViewProps> = ({
         e.preventDefault();
         if (!inquiryMessage.trim()) return;
 
+        const seq = ++inquirySeqRef.current;
         setIsSendingInquiry(true);
         setInquiryFeedback(null);
         try {
@@ -230,23 +251,34 @@ export const MarketPersonView: React.FC<MarketPersonViewProps> = ({
                     pwd || undefined
                 );
             });
+            if (!mountedRef.current || seq !== inquirySeqRef.current) return;
             setInquiryFeedback({
                 type: 'success',
                 message: t('marketplace.inquirySentSuccess', 'Anfrage erfolgreich gesendet!'),
             });
             if (inquiryTimerRef.current) clearTimeout(inquiryTimerRef.current);
             inquiryTimerRef.current = setTimeout(() => {
-                setInquiryModalOpen(false);
+                if (mountedRef.current) {
+                    setInquiryModalOpen(false);
+                }
             }, 1500);
         } catch (err) {
+            if (!mountedRef.current || seq !== inquirySeqRef.current) return;
             setInquiryFeedback({
                 type: 'error',
                 message: translateError(err, t),
             });
         } finally {
-            setIsSendingInquiry(false);
+            if (mountedRef.current && seq === inquirySeqRef.current) {
+                setIsSendingInquiry(false);
+            }
         }
     };
+
+    const initialSyncUrls = useMemo(
+        () => currentPerson.cardSyncs?.map((s) => s.writeUrl || s.readUrl).filter(Boolean),
+        [currentPerson.cardSyncs]
+    );
 
     const fullName = [currentPerson.profile.firstName, currentPerson.profile.lastName].filter(Boolean).join(' ');
     const displayName =
@@ -668,7 +700,7 @@ export const MarketPersonView: React.FC<MarketPersonViewProps> = ({
                                 <AdCard
                                     key={ad.id}
                                     ad={ad}
-                                    ownerDid={currentPerson.did}
+                                    ownerDid={paymentRecipientId}
                                     ownerName={displayName}
                                     trust={currentPerson.trust}
                                     daysLeft={daysLeft}
@@ -695,9 +727,9 @@ export const MarketPersonView: React.FC<MarketPersonViewProps> = ({
                 isOpen={isContactDialogOpen}
                 onClose={() => setIsContactDialogOpen(false)}
                 existingContact={existingContact}
-                initialDid={currentPerson.did}
+                initialDid={paymentRecipientId}
                 initialProfile={currentPerson.profile}
-                initialSyncUrls={currentPerson.cardSyncs?.map((s) => s.writeUrl || s.readUrl).filter(Boolean)}
+                initialSyncUrls={initialSyncUrls}
                 onSave={async (saved) => {
                     await protectAction(async (pwd) => {
                         await contactService.saveContact(saved, pwd || undefined);
@@ -738,7 +770,7 @@ export const MarketPersonView: React.FC<MarketPersonViewProps> = ({
                                 {t('marketplace.inquiryModalTitle', 'Anfrage senden')}
                             </h2>
                             <p className="text-xs text-theme-light truncate">
-                                {t('marketplace.inquiryTo', { name: displayName, defaultValue: `An: ${displayName}` })}
+                                {t('marketplace.inquiryTo', { name: displayName, defaultValue: 'An: {{name}}' })}
                             </p>
                         </div>
                     </div>

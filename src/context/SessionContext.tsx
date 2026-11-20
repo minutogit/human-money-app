@@ -18,7 +18,6 @@ import { listen } from '@tauri-apps/api/event';
 
 import { dispatchBackupUpdated, updateNetworkStatus } from '../sync/syncBridge';
 import { detectIsWifiConnection } from '../utils/networkStatus';
-import { channelMembersSyncManager } from '../sync/channelMembersSyncManager';
 import { rateLimitManager } from '../sync/rateLimitManager';
 import { APP_EVENTS, emitAppEvent } from '../utils/appEvents';
 import { useWindowTitleSync } from '../hooks/useWindowTitleSync';
@@ -66,6 +65,8 @@ export interface SessionContextType {
     checkIntegrity: (options?: CheckIntegrityOptions) => Promise<void>;
     clearLocks: () => void;
     lockSession: () => Promise<void>;
+    sessionTimeoutSeconds?: number | null;
+    refreshSessionStatus?: () => Promise<void>;
 }
 
 interface PendingModalRequest {
@@ -104,6 +105,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     const [lockdownKind, setLockdownKind] = useState<SecurityLockdownKind>(null);
     const [lockdownDetails, setLockdownDetails] = useState<SecurityLockdownDetails | null>(null);
     const [isRecoveryRequired, setIsRecoveryRequired] = useState(false);
+    const [sessionTimeoutSeconds, setSessionTimeoutSeconds] = useState<number | null>(null);
     const [activePending, setActivePending] = useState<PendingModalRequest | null>(null);
 
     const triggerSecurityLockdown = useCallback((kind: SecurityLockdownKind, details?: SecurityLockdownDetails) => {
@@ -127,6 +129,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     const nextPendingIdRef = useRef(1);
     const isModalSubmittingRef = useRef(false);
     const modalAttemptGenRef = useRef(0);
+    const sessionGenRef = useRef(0);
     const [isModalSubmitting, setIsModalSubmitting] = useState(false);
 
     const setFolderName = useCallback((folder: string) => {
@@ -181,9 +184,16 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         [applySessionStatus],
     );
 
-    useSessionHeartbeat(hasCachedSession, onStatusSync, lastHeartbeatRef);
+    useSessionHeartbeat(
+        hasCachedSession,
+        onStatusSync,
+        lastHeartbeatRef,
+        () => sessionGenRef.current,
+    );
 
-    const { integrityReport, checkIntegrity } = useIntegrityCheck();
+    const { integrityReport, checkIntegrity, resetIntegrity } = useIntegrityCheck({
+        getSessionGen: () => sessionGenRef.current,
+    });
 
     useEffect(() => {
         hasCachedSessionRef.current = hasCachedSession;
@@ -309,6 +319,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
                             res.newWotHandshakes > 0 ||
                             res.newInquiries > 0 ||
                             res.newInquiryMessages > 0 ||
+                            (res.newTolerancePayments ?? 0) > 0 ||
                             res.prunedBoxes > 0;
                         if (hasInboxChanges) {
                             emitAppEvent(APP_EVENTS.POST_INBOX_UPDATED);
@@ -399,14 +410,44 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         setActivePending({ ...current });
     }, []);
 
+    const clearLocks = useCallback(() => {
+        setIsForkLocked(false);
+        setIsRecoveryRequired(false);
+        setLockdownKind(null);
+        setLockdownDetails(null);
+    }, []);
+
+    const refreshSessionStatus = useCallback(async () => {
+        const expectedGen = sessionGenRef.current;
+        try {
+            const status = await authService.getSessionStatus();
+            if (sessionGenRef.current !== expectedGen || !isAuthenticatedRef.current) return;
+            applySessionStatus(status);
+        } catch {
+            // Non-blocking
+        }
+        try {
+            const cfg = await settingsService.getConfig();
+            if (sessionGenRef.current !== expectedGen || !isAuthenticatedRef.current) return;
+            const timeout = cfg?.securityPolicy?.sessionTimeoutSeconds;
+            if (typeof timeout === 'number') {
+                setSessionTimeoutSeconds(timeout);
+            }
+        } catch {
+            // Non-blocking
+        }
+    }, [applySessionStatus]);
+
     const notifyLogin = useCallback((name?: string, folder?: string) => {
-        channelMembersSyncManager.reset();
+        const loginGen = ++sessionGenRef.current;
+        const isCurrent = () => sessionGenRef.current === loginGen && isAuthenticatedRef.current;
         setIsAuthenticated(true);
         isAuthenticatedRef.current = true;
         accessModeRef.current = 'full';
         baseAccessModeRef.current = 'full';
         setAccessMode('full');
         setBaseAccessMode('full');
+        setSessionTimeoutSeconds(null);
         if (name) setProfileName(name);
         if (folder) {
             folderNameRef.current = folder;
@@ -416,21 +457,32 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         authService
             .getSessionStatus()
             .then((status) => {
-                if (!isAuthenticatedRef.current) return;
+                if (!isCurrent()) return;
                 applySessionStatus(status);
                 void checkIntegrity({
                     allowSilentRepair: status.accessMode === 'full' && status.hasCachedSession,
                 });
             })
             .catch(() => {
-                if (!isAuthenticatedRef.current) return;
+                if (!isCurrent()) return;
                 hasCachedSessionRef.current = false;
                 setHasCachedSession(false);
                 void checkIntegrity({ allowSilentRepair: false });
             });
+
+        Promise.resolve(settingsService.getConfig())
+            .then((cfg) => {
+                if (!isCurrent()) return;
+                const timeout = cfg?.securityPolicy?.sessionTimeoutSeconds;
+                if (typeof timeout === 'number') {
+                    setSessionTimeoutSeconds(timeout);
+                }
+            })
+            .catch(() => {});
     }, [applySessionStatus, checkIntegrity]);
 
     const notifyLogout = useCallback(() => {
+        sessionGenRef.current += 1;
         setIsAuthenticated(false);
         isAuthenticatedRef.current = false;
         setHasCachedSession(false);
@@ -439,12 +491,14 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         baseAccessModeRef.current = 'full';
         setAccessMode('full');
         setBaseAccessMode('full');
+        setSessionTimeoutSeconds(null);
         setProfileName("");
         setDisplayProfileName("");
         setUserAvatarUrl(null);
         folderNameRef.current = "";
         setFolderNameState("");
-        channelMembersSyncManager.reset();
+        clearLocks();
+        resetIntegrity();
         rateLimitManager.clearCooldown();
         emitAppEvent(APP_EVENTS.SESSION_LOCKED);
 
@@ -459,7 +513,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
             setModalErrorMsg('');
             remaining.forEach((entry) => entry.reject(new Error("User logged out")));
         }
-    }, []);
+    }, [clearLocks, resetIntegrity]);
 
     const elevateSession = useCallback(async (masterPassword: string) => {
         const status = await authService.elevateSessionWithPassword(masterPassword);
@@ -470,63 +524,67 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         return enqueuePendingRequest<T>('stepUp', 'password', (pwd) => action(pwd || ''));
     }, [enqueuePendingRequest]);
 
+    const executeWithSessionCheck = useCallback(async <T,>(
+        fn: (pwd: string | null) => Promise<T>,
+        pwd: string | null,
+    ): Promise<T> => {
+        try {
+            return await fn(pwd);
+        } catch (error) {
+            const errMsg = stringifyError(error);
+            const errCode = isBackendError(error) ? error.code : '';
+
+            if (errCode === 'error.wallet.locked'
+                || errCode === 'error.auth.sessionTimeout'
+                || errCode === 'error.auth.sessionNotActive'
+                || errCode === 'error.auth.passwordRequired'
+                || errMsg.includes("Password required")
+                || errMsg.includes("Session timed out")
+                || errMsg.includes("Wallet is locked")) {
+                logger.warn("Backend rejected action (wallet locked/session expired). Resetting frontend session state.");
+                hasCachedSessionRef.current = false;
+                accessModeRef.current = baseAccessModeRef.current;
+                setHasCachedSession(false);
+                setAccessMode(baseAccessModeRef.current);
+                emitAppEvent(APP_EVENTS.SESSION_LOCKED);
+                throw new Error("SESSION_EXPIRED_RETRY");
+            }
+            if (errCode === 'error.auth.insufficientAccessMode' || errMsg.includes("InsufficientAccessMode")) {
+                logger.info("Backend requires elevated session access mode; prompting step-up auth.");
+                throw new Error("STEP_UP_REQUIRED_RETRY");
+            }
+            if (errCode === 'error.security.supersededByHandover'
+                || errMsg.includes("SupersededByHandover") || errMsg.includes("transferred to another device")) {
+                logger.warn("Wallet superseded by handover on another device.");
+                const targetEpoch = isBackendError(error) && error.details?.targetEpoch ? parseInt(error.details.targetEpoch, 10) : undefined;
+                const isSeedRecovery = isBackendError(error) && error.details?.isSeedRecovery === 'true';
+                triggerSecurityLockdown('handover', { targetEpoch, isSeedRecovery });
+            } else if (errCode === 'error.security.concurrentCloneDetected'
+                || errMsg.includes("Concurrent clone detected") || errMsg.includes("WalletConcurrentCloneDetected")) {
+                logger.error("CRITICAL: Concurrent clone detected.");
+                triggerSecurityLockdown('clone');
+            } else if (errCode === 'error.security.walletLockedDueToFork'
+                || errMsg.includes("WalletLockedDueToFork") || errMsg.includes("SealForkDetected") || errMsg.includes("Security Lockdown")) {
+                logger.error("CRITICAL: Wallet is locked due to a fork.");
+                triggerSecurityLockdown('fork');
+            }
+            if (errCode === 'error.security.sealRecoveryRequired'
+                || errMsg.includes("RequiresSealRecovery") || errMsg.includes("No local security seal found")) {
+                logger.error("CRITICAL: Wallet requires seal recovery.");
+                setIsRecoveryRequired(true);
+            }
+            throw error;
+        }
+    }, [triggerSecurityLockdown]);
+
     const protectAction = useCallback(async <T,>(
         action: (password: string | null) => Promise<T>,
         options?: ProtectActionOptions,
     ): Promise<T | void> => {
-        const executeWithSessionCheck = async (pwd: string | null): Promise<T> => {
-            try {
-                return await action(pwd);
-            } catch (error) {
-                const errMsg = stringifyError(error);
-                const errCode = isBackendError(error) ? error.code : '';
-
-                if (errCode === 'error.wallet.locked'
-                    || errCode === 'error.auth.sessionTimeout'
-                    || errCode === 'error.auth.sessionNotActive'
-                    || errCode === 'error.auth.passwordRequired'
-                    || errMsg.includes("Password required")
-                    || errMsg.includes("Session timed out")
-                    || errMsg.includes("Wallet is locked")) {
-                    logger.warn("Backend rejected action (wallet locked/session expired). Resetting frontend session state.");
-                    hasCachedSessionRef.current = false;
-                    accessModeRef.current = baseAccessModeRef.current;
-                    setHasCachedSession(false);
-                    setAccessMode(baseAccessModeRef.current);
-                    emitAppEvent(APP_EVENTS.SESSION_LOCKED);
-                    throw new Error("SESSION_EXPIRED_RETRY");
-                }
-                if (errCode === 'error.auth.insufficientAccessMode' || errMsg.includes("InsufficientAccessMode")) {
-                    logger.info("Backend requires elevated session access mode; prompting step-up auth.");
-                    throw new Error("STEP_UP_REQUIRED_RETRY");
-                }
-                if (errCode === 'error.security.supersededByHandover'
-                    || errMsg.includes("SupersededByHandover") || errMsg.includes("transferred to another device")) {
-                    logger.warn("Wallet superseded by handover on another device.");
-                    const targetEpoch = isBackendError(error) && error.details?.targetEpoch ? parseInt(error.details.targetEpoch, 10) : undefined;
-                    const isSeedRecovery = isBackendError(error) && error.details?.isSeedRecovery === 'true';
-                    triggerSecurityLockdown('handover', { targetEpoch, isSeedRecovery });
-                } else if (errCode === 'error.security.concurrentCloneDetected'
-                    || errMsg.includes("Concurrent clone detected") || errMsg.includes("WalletConcurrentCloneDetected")) {
-                    logger.error("CRITICAL: Concurrent clone detected.");
-                    triggerSecurityLockdown('clone');
-                } else if (errCode === 'error.security.walletLockedDueToFork'
-                    || errMsg.includes("WalletLockedDueToFork") || errMsg.includes("SealForkDetected") || errMsg.includes("Security Lockdown")) {
-                    logger.error("CRITICAL: Wallet is locked due to a fork.");
-                    triggerSecurityLockdown('fork');
-                }
-                if (errCode === 'error.security.sealRecoveryRequired'
-                    || errMsg.includes("RequiresSealRecovery") || errMsg.includes("No local security seal found")) {
-                    logger.error("CRITICAL: Wallet requires seal recovery.");
-                    setIsRecoveryRequired(true);
-                }
-                throw error;
-            }
-        };
-
         try {
             const config = await settingsService.getConfig();
             const timeout = config.securityPolicy.sessionTimeoutSeconds;
+            setSessionTimeoutSeconds(timeout);
             const needsStepUp = Boolean(options?.requireFullAccess && accessModeRef.current !== 'full');
             const sessionCredentialKind: 'password' | 'pin' =
                 baseAccessModeRef.current === 'dailyPay' ? 'pin' : 'password';
@@ -547,7 +605,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
             // Mode B: Reuse active session when unlocked and cached
             if (hasCachedSessionRef.current) {
                 try {
-                    return await executeWithSessionCheck(null);
+                    return await executeWithSessionCheck(action, null);
                 } catch (e) {
                     if (e instanceof Error && e.message === "SESSION_EXPIRED_RETRY") {
                         return enqueuePendingRequest<T>(
@@ -568,19 +626,18 @@ export function SessionProvider({ children }: { children: ReactNode }) {
             logger.error(`Error in protectAction: ${stringifyError(e)}`);
             throw e;
         }
-    }, [enqueuePendingRequest, triggerSecurityLockdown]);
+    }, [enqueuePendingRequest, executeWithSessionCheck]);
 
     const runPendingEntry = async (entry: PendingModalRequest, password: string | null) => {
         try {
-            const result = await entry.action(password);
+            const result = await executeWithSessionCheck(entry.action, password);
             entry.resolve(result);
         } catch (actionErr) {
-            const msg = stringifyError(actionErr);
-            const code = isBackendError(actionErr) ? actionErr.code : '';
-            const isInsufficient =
-                code === 'error.auth.insufficientAccessMode' ||
-                msg.includes('InsufficientAccessMode');
-            if (entry.mode === 'session' && isInsufficient) {
+            if (
+                entry.mode === 'session' &&
+                actionErr instanceof Error &&
+                actionErr.message === 'STEP_UP_REQUIRED_RETRY'
+            ) {
                 enqueuePendingRequest('stepUp', 'password', entry.action)
                     .then(entry.resolve, entry.reject);
                 return;
@@ -761,12 +818,17 @@ export function SessionProvider({ children }: { children: ReactNode }) {
                         return;
                     }
 
+                    applySessionStatus(status);
                     setModalErrorMsg('');
                     pendingQueueRef.current.shift();
-                    setActivePending(pendingQueueRef.current[0] ?? null);
+                    setActivePending(null);
                     isModalSubmittingRef.current = false;
                     setIsModalSubmitting(false);
-                    await runPendingEntry(currentPending, status.oneShotGrant ?? null);
+                    try {
+                        await runPendingEntry(currentPending, status.oneShotGrant ?? null);
+                    } finally {
+                        setActivePending(pendingQueueRef.current[0] ?? null);
+                    }
                 } else {
                     if (baseAccessModeRef.current !== 'full') {
                         try {
@@ -837,14 +899,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         }
     }, []);
 
-    const clearLocks = useCallback(() => {
-        setIsForkLocked(false);
-        setIsRecoveryRequired(false);
-        setLockdownKind(null);
-        setLockdownDetails(null);
-    }, []);
-
     useEffect(() => {
+        let active = true;
+        const expectedGen = sessionGenRef.current;
+
         const applySummary = (mp: FrontendMyMarketProfile | undefined | null) => {
             if (!mp?.profile) return;
             const fullName = [mp.profile.firstName, mp.profile.lastName]
@@ -859,7 +917,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
             if (!isAuthenticated) return;
             if (typeof marketService?.getMyMarketProfile !== 'function') return;
             Promise.resolve(marketService.getMyMarketProfile())
-                .then((mp) => applySummary(mp))
+                .then((mp) => {
+                    if (!active || sessionGenRef.current !== expectedGen || !isAuthenticatedRef.current) return;
+                    applySummary(mp);
+                })
                 .catch(() => {});
         };
 
@@ -876,6 +937,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
         window.addEventListener(MY_PROFILE_UPDATED_EVENT, onProfileUpdated);
         return () => {
+            active = false;
             window.removeEventListener(MY_PROFILE_UPDATED_EVENT, onProfileUpdated);
         };
     }, [isAuthenticated]);
@@ -932,6 +994,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
                 checkIntegrity,
                 clearLocks,
                 lockSession,
+                sessionTimeoutSeconds,
+                refreshSessionStatus,
             }}
         >
             {children}

@@ -125,7 +125,7 @@ amount_decimal_places = 4`,
 
   beforeEach(() => {
     vi.clearAllMocks();
-    (invoke as Mock).mockImplementation((cmd: string) => {
+    (invoke as Mock).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
       if (cmd === 'get_voucher_summaries') {
         return Promise.resolve(mockVouchers);
       }
@@ -156,6 +156,34 @@ amount_decimal_places = 4`,
           organization: 'Test Org',
           firstName: 'Test',
           lastName: 'User',
+        });
+      }
+      if (cmd === 'prepare_transfer_plan') {
+        const target = String(args?.targetAmount ?? '1');
+        return Promise.resolve({
+          selected: [
+            {
+              localInstanceId: 'voucher1',
+              score: 5000,
+              breakdown: {
+                sBoomerang: 0,
+                sEigen: 0,
+                sCorridor: 0,
+                sAge: 0,
+                sChain: 0,
+                sFit: 0,
+                sWot: 5000,
+              },
+              reason: 'greedy',
+              amount: mockVouchers[0].currentAmount,
+              standardUuid: 'a1b2c3d4-e5f6-4789-8012-3456789abcde',
+            },
+          ],
+          totalSelected: target,
+          target,
+          needsSplit: true,
+          planReason: 'greedy',
+          minRecipientTrustPercent: 100,
         });
       }
       return Promise.resolve(undefined);
@@ -333,11 +361,11 @@ amount_decimal_places = 4`,
     await waitFor(() => expect(screen.getByRole('textbox', { name: /User ID/i })).toBeInTheDocument());
 
     const recipientInput = screen.getByRole('textbox', { name: /User ID/i });
-    const payUri = 'humoco://pay?to=did:key:z999&amount=42.50&std=FreeTaler&note=Honey';
+    const payUri = 'humoco://pay?to=did:key:z6MkuRecipient99999999999999999999&amount=42.50&std=FreeTaler&note=Honey';
     fireEvent.change(recipientInput, { target: { value: payUri } });
 
     await waitFor(() => {
-      expect(recipientInput).toHaveValue('did:key:z999');
+      expect(recipientInput).toHaveValue('did:key:z6MkuRecipient99999999999999999999');
     });
 
     const targetAmountInput = screen.getByPlaceholderText('0.00');
@@ -645,14 +673,14 @@ amount_decimal_places = 4`,
 
     const recipientInput = screen.getByRole('textbox', { name: /User ID/i });
     const payUri =
-      'humoco://pay?to=did:key:z999&amount=42.50&std=11111111-1111-1111-1111-111111111111&stdName=SonnenTaler';
+      'humoco://pay?to=did:key:z6MkuRecipient99999999999999999999&amount=42.50&std=11111111-1111-1111-1111-111111111111&stdName=SonnenTaler';
     fireEvent.change(recipientInput, { target: { value: payUri } });
 
     await waitFor(() => {
       expect(screen.getByText(/SonnenTaler/i)).toBeInTheDocument();
     });
 
-    expect(recipientInput).toHaveValue('did:key:z999');
+    expect(recipientInput).toHaveValue('did:key:z6MkuRecipient99999999999999999999');
     const targetAmountInput = document.getElementById('target-amount') as HTMLInputElement;
     expect(targetAmountInput.value).toBe('');
   });
@@ -888,11 +916,11 @@ amount_decimal_places = 4`,
 
     const recipientInput = screen.getByTestId('recipient-search-input');
     fireEvent.change(recipientInput, {
-      target: { value: 'humoco://pay?to=did:key:z999999999999&amount=42.50&std=FreeTaler&note=Honey' },
+      target: { value: 'humoco://pay?to=did:key:z6MkuRecipient99999999999999999999&amount=42.50&std=FreeTaler&note=Honey' },
     });
 
     await waitFor(() => {
-      expect(recipientInput).toHaveValue('did:key:z999999999999');
+      expect(recipientInput).toHaveValue('did:key:z6MkuRecipient99999999999999999999');
     });
     expect(screen.getByPlaceholderText('0.00')).toHaveValue(42.5);
     expect(screen.getByPlaceholderText(/note or reference/i)).toHaveValue('Honey');
@@ -901,7 +929,7 @@ amount_decimal_places = 4`,
       expect(invoke).toHaveBeenCalledWith(
         'prepare_transfer_plan',
         expect.objectContaining({
-          recipientId: 'did:key:z999999999999',
+          recipientId: 'did:key:z6MkuRecipient99999999999999999999',
           targetAmount: '42.50',
         })
       );
@@ -1137,6 +1165,33 @@ amount_decimal_places = 4`,
     await Promise.resolve();
 
     expect(recipientInput).toHaveValue(newerDid);
+  });
+
+  it('K6: clears selection and surfaces backend error without selectAmount fallback when prepare_transfer_plan fails', async () => {
+    const baseImpl = (invoke as Mock).getMockImplementation();
+    (invoke as Mock).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === 'prepare_transfer_plan') {
+        return Promise.reject(new Error('Plan selection blocked by backend guard'));
+      }
+      return baseImpl ? baseImpl(cmd, args) : Promise.resolve(undefined);
+    });
+
+    render(<UiModeProvider initialMode="expert"><SendView /></UiModeProvider>);
+    const recipientInput = await screen.findByTestId('recipient-search-input');
+    fireEvent.change(recipientInput, { target: { value: 'did:key:z6MkuCleanUser222222222222222222' } });
+
+    const amountInput = document.getElementById('target-amount') as HTMLInputElement;
+    fireEvent.change(amountInput, { target: { value: '25' } });
+
+    await waitFor(
+      () => {
+        expect(screen.getByText(/Plan selection blocked by backend guard/i)).toBeInTheDocument();
+      },
+      { timeout: 2500 },
+    );
+
+    expect(screen.queryByText(/1 Vouchers Selected/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Send Vouchers/i })).toBeDisabled();
   });
 });
 

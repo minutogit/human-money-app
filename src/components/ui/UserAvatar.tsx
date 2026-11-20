@@ -16,6 +16,8 @@ const ROUNDED_CLASSES: Record<NonNullable<UserAvatarProps["rounded"]>, string> =
     "2xl": "rounded-2xl",
 };
 
+const SAFE_AVATAR_DATA_URI_RE = /^data:image\/(?:webp|jpeg|jpg|png);base64,[A-Za-z0-9+/]+=*$/i;
+
 export const UserAvatar: React.FC<UserAvatarProps> = ({
     pictureUrl,
     name,
@@ -29,7 +31,8 @@ export const UserAvatar: React.FC<UserAvatarProps> = ({
         setImgError(false);
     }, [pictureUrl]);
 
-    const trimmedPic = pictureUrl?.trim();
+    const rawPic = pictureUrl?.trim();
+    const trimmedPic = rawPic && SAFE_AVATAR_DATA_URI_RE.test(rawPic) ? rawPic : undefined;
     const showImg = Boolean(trimmedPic) && !imgError;
     const roundedCls = ROUNDED_CLASSES[rounded];
     const iconSize = Math.max(10, Math.round(size * 0.52));

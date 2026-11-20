@@ -147,7 +147,7 @@ export interface WalletSyncAlert {
     hasSignedAckProof: boolean;
 }
 
-export interface InternalLifecycleState {
+export interface FrontendLifecycleStateDto {
     pendingRestoreL2Reconciliation: boolean;
     backupDirty: boolean;
     lastBackupAt?: string | null;
@@ -158,7 +158,7 @@ export interface InternalLifecycleState {
 export interface AppConfigDto {
     uiPreferences: UiPreferences;
     securityPolicy: SecurityPolicy;
-    lifecycle: InternalLifecycleState;
+    lifecycle: FrontendLifecycleStateDto;
 }
 
 export interface UiPreferencesPatch {

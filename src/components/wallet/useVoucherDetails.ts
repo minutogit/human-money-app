@@ -1,5 +1,5 @@
 // src/components/wallet/useVoucherDetails.ts
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { voucherService } from '../../services/voucherService';
 import { settingsService } from '../../services/settingsService';
@@ -64,6 +64,17 @@ export function useVoucherDetails(voucherId: string) {
         type: 'success' | 'error';
         msg: string;
     } | null>(null);
+
+    const mountedRef = useRef(true);
+    const l2CheckSeqRef = useRef(0);
+    const sigAttachSeqRef = useRef(0);
+
+    useEffect(() => {
+        mountedRef.current = true;
+        return () => {
+            mountedRef.current = false;
+        };
+    }, []);
 
     const voucher = details?.voucher;
     const isQuarantined = Boolean(details && details.status === 'quarantined');
@@ -166,7 +177,7 @@ export function useVoucherDetails(voucherId: string) {
     const refreshDetails = useCallback(async () => {
         try {
             const result = await voucherService.getDetails(voucherId);
-            setDetails(result);
+            if (mountedRef.current) setDetails(result);
         } catch (e) {
             logger.error(`Failed to refresh voucher details: ${stringifyError(e)}`);
         }
@@ -174,6 +185,7 @@ export function useVoucherDetails(voucherId: string) {
 
     const handleCheckL2Status = async () => {
         if (!details) return;
+        const seq = ++l2CheckSeqRef.current;
         setIsCheckingL2(true);
         setL2Error(null);
         try {
@@ -183,6 +195,7 @@ export function useVoucherDetails(voucherId: string) {
                     pwd || null,
                 );
             });
+            if (!mountedRef.current || seq !== l2CheckSeqRef.current) return;
             if (statusDto) {
                 setL2Status(statusDto);
                 if (statusDto.status === 'conflict') {
@@ -193,9 +206,12 @@ export function useVoucherDetails(voucherId: string) {
                 }
             }
         } catch (e) {
+            if (!mountedRef.current || seq !== l2CheckSeqRef.current) return;
             setL2Error(translateError(e, t));
         } finally {
-            setIsCheckingL2(false);
+            if (mountedRef.current && seq === l2CheckSeqRef.current) {
+                setIsCheckingL2(false);
+            }
         }
     };
 
@@ -210,6 +226,7 @@ export function useVoucherDetails(voucherId: string) {
         fileBytes: Uint8Array,
         containerPwd?: string,
     ) => {
+        const seq = ++sigAttachSeqRef.current;
         try {
             await protectAction(async (walletPassword) => {
                 return await voucherService.processAndAttachSignature(
@@ -218,7 +235,9 @@ export function useVoucherDetails(voucherId: string) {
                     walletPassword || undefined,
                 );
             });
+            if (!mountedRef.current || seq !== sigAttachSeqRef.current) return;
             const updatedDetails = await voucherService.getDetails(voucherId);
+            if (!mountedRef.current || seq !== sigAttachSeqRef.current) return;
             setDetails(updatedDetails);
             setPendingSigImport(null);
             setSigContainerPassword('');
@@ -231,6 +250,7 @@ export function useVoucherDetails(voucherId: string) {
                         : t('voucher.signatureAttachedTitle'),
             });
         } catch (e) {
+            if (!mountedRef.current || seq !== sigAttachSeqRef.current) return;
             const errStr = stringifyError(e);
             const isPasswordRequired =
                 errStr.includes('Password required') ||
@@ -243,7 +263,7 @@ export function useVoucherDetails(voucherId: string) {
             } else {
                 setSignatureImportFeedback({
                     type: 'error',
-                    msg: `${t('voucher.signatureAttachFailed')}: ${translateError(e, t)}`,
+                    msg: t('voucher.signatureAttachFailed', { error: translateError(e, t) }),
                 });
             }
         }
@@ -263,12 +283,13 @@ export function useVoucherDetails(voucherId: string) {
                     { name: t('voucher.export.allFiles'), extensions: ['*'] },
                 ],
             });
-            if (!opened) return;
+            if (!opened || !mountedRef.current) return;
             await executeSignatureAttachment(new Uint8Array(opened.bytes));
         } catch (e) {
+            if (!mountedRef.current) return;
             setSignatureImportFeedback({
                 type: 'error',
-                msg: `${t('voucher.signatureAttachFailed')}: ${translateError(e, t)}`,
+                msg: t('voucher.signatureAttachFailed', { error: translateError(e, t) }),
             });
         }
     };

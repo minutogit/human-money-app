@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import ts from 'typescript';
 
 const srcDir = path.resolve('src');
 const localesDir = path.resolve('src/locales');
@@ -128,7 +129,6 @@ const DYNAMIC_USED_PREFIXES = [
 const DYNAMIC_USED_EXACT = new Set([
   'profile.gender',
   'profile.coordinates',
-  'profile.age',
   'profile.firstName',
   'profile.lastName',
   'profile.email',
@@ -177,7 +177,18 @@ const prodTsFiles = new Set(
 );
 const missingKeys = [];
 const invalidKeys = [];
+const callSitePlaceholderIssues = [];
 const usedKeys = new Set();
+
+const requiredVarsByKey = new Map();
+for (const [k, v] of Object.entries(enData)) {
+  const vars = [
+    ...new Set(Array.from(String(v).matchAll(/\{\{([^}]+)\}\}/g), (m) => m[1].trim())),
+  ];
+  if (vars.length > 0) {
+    requiredVarsByKey.set(k, vars);
+  }
+}
 
 // Matches t('key') or t("key") or t(`key`)
 const tRegex = /\bt\(\s*(['"`])([a-zA-Z0-9_.-]+)\1/g;
@@ -237,6 +248,60 @@ for (const file of files) {
         usedKeys.add(literal);
       }
     }
+
+    const sf = ts.createSourceFile(file, content, ts.ScriptTarget.Latest, true);
+    const visitAst = (node) => {
+      if (
+        ts.isCallExpression(node) &&
+        ts.isIdentifier(node.expression) &&
+        node.expression.text === 't' &&
+        node.arguments.length >= 1
+      ) {
+        const a0 = node.arguments[0];
+        if (ts.isStringLiteral(a0) || ts.isNoSubstitutionTemplateLiteral(a0)) {
+          const key = a0.text;
+          const req = requiredVarsByKey.get(key);
+          if (req) {
+            const optArg =
+              node.arguments.length >= 3
+                ? node.arguments[2]
+                : node.arguments.length === 2 &&
+                    !ts.isStringLiteral(node.arguments[1]) &&
+                    !ts.isNoSubstitutionTemplateLiteral(node.arguments[1])
+                  ? node.arguments[1]
+                  : undefined;
+            const line = sf.getLineAndCharacterOfPosition(node.getStart()).line + 1;
+            const relFile = path.relative(process.cwd(), file);
+            if (!optArg) {
+              callSitePlaceholderIssues.push(
+                `${relFile}:${line} t('${key}') missing options for {{${req.join('}}, {{')}}}`,
+              );
+            } else if (ts.isObjectLiteralExpression(optArg)) {
+              const hasSpread = optArg.properties.some((p) => ts.isSpreadAssignment(p));
+              if (!hasSpread) {
+                const provided = new Set();
+                for (const p of optArg.properties) {
+                  if (
+                    (ts.isPropertyAssignment(p) || ts.isShorthandPropertyAssignment(p)) &&
+                    (ts.isIdentifier(p.name) || ts.isStringLiteral(p.name))
+                  ) {
+                    provided.add(p.name.text);
+                  }
+                }
+                const missing = req.filter((r) => !provided.has(r));
+                if (missing.length > 0) {
+                  callSitePlaceholderIssues.push(
+                    `${relFile}:${line} t('${key}') missing {{${missing.join('}}, {{')}}}`,
+                  );
+                }
+              }
+            }
+          }
+        }
+      }
+      ts.forEachChild(node, visitAst);
+    };
+    visitAst(sf);
   }
 }
 
@@ -288,6 +353,14 @@ if (parityIssues.length > 0) {
 if (placeholderIssues.length > 0) {
   console.error('❌ Critical Error: Placeholder mismatches detected across locales:');
   for (const msg of placeholderIssues.slice(0, 20)) {
+    console.error(`   - ${msg}`);
+  }
+  hasErrors = true;
+}
+
+if (callSitePlaceholderIssues.length > 0) {
+  console.error('❌ Critical Error: Missing i18n placeholder arguments at call sites:');
+  for (const msg of callSitePlaceholderIssues.slice(0, 20)) {
     console.error(`   - ${msg}`);
   }
   hasErrors = true;

@@ -35,4 +35,7 @@ pub struct FrontendLockProtectionOverviewDto {
     pub has_offline_cached_anchor: bool,
     pub unresolved_intents_count: usize,
     pub pending_restore_reconciliation: bool,
+    pub expected_lock_pubs: Vec<String>,
+    pub expected_threshold: u8,
+    pub expected_source: String, // "live" | "cached" | "none"
 }

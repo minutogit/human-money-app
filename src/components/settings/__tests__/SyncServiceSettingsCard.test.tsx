@@ -273,12 +273,7 @@ describe('SyncServiceSettingsCard Component', () => {
                 hop2Min: 2,
             },
             allow: [],
-            deny: [],
-            blockedPubkeys: [],
-            directMemberCount: 10,
-            hop2MemberCount: 5,
             totalMemberCount: 15,
-            activeSlotIds: [],
         };
 
         vi.mocked(marketService.getSyncAdminStatus).mockResolvedValue(mockAdmin);
@@ -323,12 +318,7 @@ describe('SyncServiceSettingsCard Component', () => {
                 hop2Min: 2,
             },
             allow: [],
-            deny: [],
-            blockedPubkeys: [],
-            directMemberCount: 10,
-            hop2MemberCount: 5,
             totalMemberCount: 15,
-            activeSlotIds: [],
         };
 
         vi.mocked(marketService.getSyncAdminStatus).mockResolvedValue(mockAdmin);

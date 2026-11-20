@@ -22,7 +22,7 @@ use crate::{
     },
     services::common::{
         get_wallet_master_seed, max_pow_base_bits_for_servers, normalize_sync_url,
-        resolve_verified_server_locator, upsert_verified_lock_probe,
+        resolve_verified_server_locator, upsert_verified_locator_only, upsert_verified_lock_probe,
     },
     settings::{is_lock_admin_trusted, InternalLifecycleState, SecurityPolicy},
     sync_client::{self, FrontendLockServerProbeResult, LockTicketAuth},
@@ -97,7 +97,7 @@ async fn verify_and_cache_static_read_locator(
     let d_read = del.read_url.trim().to_string();
     if !sync_client::verify_lock_delegation(&lock_hex, &del, Some(&admin_hex))
         || sync_client::validate_sync_url(&d_write).is_err()
-        || sync_client::validate_sync_url(&d_read).is_err()
+        || sync_client::validate_sync_read_url(&d_read).is_err()
     {
         return None;
     }
@@ -127,7 +127,7 @@ async fn verify_and_cache_static_read_locator(
         delegation: Some(del),
         error: None,
     };
-    upsert_verified_lock_probe(probe_cache, probe.clone());
+    upsert_verified_locator_only(probe_cache, probe.clone());
     learned_probes.push(probe);
     Some(d_read)
 }
@@ -152,8 +152,11 @@ async fn probe_voucher_static_lock(
     let mut any_server_answered = false;
 
     for (srv, rel_path) in dedup_paths {
-        if crate::l2_lifecycle::is_server_key_revoked(offenders, &srv.lock_pub, Some(&srv.admin_pub))
-        {
+        if crate::l2_lifecycle::is_server_key_revoked(
+            offenders,
+            &srv.lock_pub,
+            Some(&srv.admin_pub),
+        ) {
             continue;
         }
         let Some(verified_read_url) =
@@ -190,30 +193,19 @@ fn reconcile_static_probe_on_service(
     local_id: &str,
     probe: &StaticSlotProbeResult,
     pow_bits: u32,
-    allow_fork_retry: bool,
     password: Option<&str>,
 ) -> Result<StaticVoucherReconcileOutcome, FrontendError> {
     let mut had_entry_error = false;
     let mut first_error_reason: Option<String> = None;
 
     for entry in &probe.candidate_entries {
-        let mut res = service.reconcile_voucher_state(
+        let res = service.reconcile_voucher_state(
             local_id,
             ObservedSlotState::Entry(entry),
             None,
             pow_bits,
             password,
         );
-        if allow_fork_retry && matches!(res, Err(human_money_core::Error::WalletLockedDueToFork)) {
-            let _ = service.reconcile_rollback_with_diagnostics(&[], None, password);
-            res = service.reconcile_voucher_state(
-                local_id,
-                ObservedSlotState::Entry(entry),
-                None,
-                pow_bits,
-                password,
-            );
-        }
         match res {
             Ok(outcome) => return Ok(StaticVoucherReconcileOutcome::Resolved(Box::new(outcome))),
             Err(err) => {
@@ -241,15 +233,7 @@ fn reconcile_static_probe_on_service(
                 total_servers: probe.total_servers,
                 threshold: probe.threshold,
             };
-            let mut res =
-                service.reconcile_voucher_state(local_id, observed, None, pow_bits, password);
-            if allow_fork_retry
-                && matches!(res, Err(human_money_core::Error::WalletLockedDueToFork))
-            {
-                let _ = service.reconcile_rollback_with_diagnostics(&[], None, password);
-                res = service.reconcile_voucher_state(local_id, observed, None, pow_bits, password);
-            }
-            match res {
+            match service.reconcile_voucher_state(local_id, observed, None, pow_bits, password) {
                 Ok(outcome) => Ok(StaticVoucherReconcileOutcome::Resolved(Box::new(outcome))),
                 Err(err) => Err(FrontendError::from(err)),
             }
@@ -363,6 +347,76 @@ pub(crate) fn collect_known_sync_sources(
     list
 }
 
+const MAX_AUTO_POW_TICKET_BITS: u32 = 20;
+
+pub(crate) struct AssembledAutoCommittee {
+    pub anchor_id: [u8; 32],
+    pub lock_pubs: Vec<String>,
+    pub threshold: u8,
+    pub source: &'static str, // "live" | "cached"
+}
+
+fn has_usable_ticket_auth(
+    service: &mut human_money_core::app_service::AppService,
+    policy: &SecurityPolicy,
+    probe: &FrontendLockServerProbeResult,
+    password: Option<&str>,
+) -> Result<bool, FrontendError> {
+    let probe_write_norm = normalize_sync_url(&probe.write_url);
+    let probe_admin_lower = probe.admin_pub.trim().to_ascii_lowercase();
+
+    if let Some(admin) =
+        crate::services::sync_engine::admin::load_stored_sync_admin_opt(service, password)?
+    {
+        let admin_write_norm = normalize_sync_url(&admin.descriptor.write_url);
+        let admin_pub_lower = admin.descriptor.drop_pub.trim().to_ascii_lowercase();
+        let matches = (!admin_pub_lower.is_empty() && admin_pub_lower == probe_admin_lower)
+            || (!admin_write_norm.is_empty() && admin_write_norm == probe_write_norm);
+        if matches {
+            return Ok(true);
+        }
+    }
+
+    for d in &policy.market_selected_syncs {
+        if d.slot_id.is_some() {
+            continue;
+        }
+        let d_write_norm = normalize_sync_url(&d.write_url);
+        let d_drop_lower = d.drop_pub.trim().to_ascii_lowercase();
+        let matches = (!d_drop_lower.is_empty() && d_drop_lower == probe_admin_lower)
+            || (!d_write_norm.is_empty() && d_write_norm == probe_write_norm);
+        if matches && humoco_market::parse_ed25519_pubkey_hex64(&d_drop_lower).is_ok() {
+            return Ok(true);
+        }
+    }
+
+    let has_public = policy
+        .public_syncs
+        .iter()
+        .filter(|s| s.enabled && s.status != "revoked")
+        .any(|s| {
+            let s_write_norm = normalize_sync_url(&s.write_url);
+            let s_drop_lower = s.drop_pub.trim().to_ascii_lowercase();
+            (!s_drop_lower.is_empty() && s_drop_lower == probe_admin_lower)
+                || (!s_write_norm.is_empty() && s_write_norm == probe_write_norm)
+        })
+        || policy
+            .market_selected_syncs
+            .iter()
+            .filter(|d| d.slot_id.is_some())
+            .any(|d| {
+                let d_write_norm = normalize_sync_url(&d.write_url);
+                let d_drop_lower = d.drop_pub.trim().to_ascii_lowercase();
+                (!d_drop_lower.is_empty() && d_drop_lower == probe_admin_lower)
+                    || (!d_write_norm.is_empty() && d_write_norm == probe_write_norm)
+            });
+    if has_public {
+        return Ok(true);
+    }
+
+    Ok(probe.allow_pow_tickets && probe.ticket_pow_bits <= MAX_AUTO_POW_TICKET_BITS)
+}
+
 pub(crate) fn resolve_ticket_auth_for_server(
     service: &mut human_money_core::app_service::AppService,
     policy: &SecurityPolicy,
@@ -371,7 +425,7 @@ pub(crate) fn resolve_ticket_auth_for_server(
 ) -> Result<Option<LockTicketAuth>, FrontendError> {
     let probe_write_norm = normalize_sync_url(&probe.write_url);
     let probe_admin_lower = probe.admin_pub.trim().to_ascii_lowercase();
-    let master_seed = get_wallet_master_seed(service)?;
+    let master_seed = get_wallet_master_seed(service, password)?;
 
     // 1. Own Sync Admin -> Direct signature with admin_sk
     if let Some(admin) =
@@ -442,12 +496,10 @@ pub(crate) fn resolve_ticket_auth_for_server(
         return Ok(Some(LockTicketAuth::Direct(r_sk)));
     }
 
-    // 4. Open PoW fallback ONLY when server advertises `allow_pow_tickets = true`
-    if probe.allow_pow_tickets {
+    // 4. Open PoW fallback ONLY when server advertises `allow_pow_tickets = true` within auto-PoW budget
+    if probe.allow_pow_tickets && probe.ticket_pow_bits <= MAX_AUTO_POW_TICKET_BITS {
         return Ok(Some(LockTicketAuth::Pow {
-            pow_bits: probe
-                .ticket_pow_bits
-                .min(human_money_core::humoco_proto::crypto::MAX_LOCK_POW_BITS),
+            pow_bits: probe.ticket_pow_bits,
         }));
     }
 
@@ -466,15 +518,166 @@ fn required_retention_quarter(deletable_ms: u64) -> Result<u16, FrontendError> {
     Ok(q)
 }
 
+fn estimate_deletable_ms(
+    now_secs: u64,
+    standard_toml: Option<&str>,
+    validity_duration: Option<&str>,
+) -> u64 {
+    let now_dt =
+        chrono::DateTime::from_timestamp(now_secs as i64, 0).unwrap_or_else(chrono::Utc::now);
+    let fallback_ms = now_secs.saturating_add(365 * 86_400).saturating_mul(1000);
+    let Some(toml) = standard_toml.map(str::trim).filter(|s| !s.is_empty()) else {
+        return fallback_ms;
+    };
+    let Ok((std_def, _)) =
+        human_money_core::models::voucher_standard_definition::VoucherStandardDefinition::from_toml(
+            toml,
+        )
+    else {
+        return fallback_ms;
+    };
+    let dur_str = validity_duration
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            std_def
+                .mutable
+                .app_config
+                .default_validity_duration
+                .as_deref()
+                .filter(|s| !s.is_empty())
+        })
+        .or_else(|| {
+            let min_dur = std_def
+                .immutable
+                .issuance
+                .issuance_minimum_validity_duration
+                .trim();
+            (!min_dur.is_empty()).then_some(min_dur)
+        })
+        .or_else(|| {
+            std_def
+                .immutable
+                .issuance
+                .validity_duration_range
+                .get(1)
+                .or_else(|| std_def.immutable.issuance.validity_duration_range.first())
+                .map(String::as_str)
+                .filter(|s| !s.is_empty())
+        })
+        .unwrap_or("P1Y");
+    let valid_until_dt = human_money_core::services::utils::add_iso8601_duration(now_dt, dur_str)
+        .unwrap_or_else(|_| now_dt + chrono::Duration::days(365));
+    let deletable_dt = std_def
+        .mutable
+        .app_config
+        .server_history_retention
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .and_then(|ret| {
+            human_money_core::services::utils::add_iso8601_duration(valid_until_dt, ret).ok()
+        })
+        .unwrap_or(valid_until_dt);
+    u64::try_from(deletable_dt.timestamp_millis().max(0)).unwrap_or(fallback_ms)
+}
+
+fn select_expected_candidates_from_lifecycle(
+    service: &mut human_money_core::app_service::AppService,
+    policy: &SecurityPolicy,
+    lifecycle: &InternalLifecycleState,
+    offenders: &humoco_wot::ServerOffenderList,
+    sources: &[KnownSyncSource],
+    req_quarter: u16,
+    password: Option<&str>,
+) -> Result<Vec<(ServerEntry, FrontendLockServerProbeResult)>, FrontendError> {
+    let source_prio_by_url: HashMap<String, u8> = sources
+        .iter()
+        .map(|s| (normalize_sync_url(&s.write_url), s.priority))
+        .collect();
+    let source_prio_by_admin: HashMap<String, u8> = sources
+        .iter()
+        .filter(|s| !s.admin_pub.is_empty())
+        .map(|s| (s.admin_pub.clone(), s.priority))
+        .collect();
+
+    let mut entries: Vec<(
+        u8,
+        u64,
+        SybilServerCandidate,
+        ServerEntry,
+        FrontendLockServerProbeResult,
+    )> = Vec::new();
+    for probe in lifecycle.l2_probe_cache.values() {
+        if !probe.passed
+            || !probe.delegation_valid
+            || probe.max_retention_quarter < req_quarter
+            || !is_lock_admin_trusted(policy, &probe.admin_pub)
+        {
+            continue;
+        }
+        let Ok(lock_pub) = decode_hex_fixed::<32>(&probe.lock_pub) else {
+            continue;
+        };
+        let Ok(admin_pub) = decode_hex_fixed::<32>(&probe.admin_pub) else {
+            continue;
+        };
+        if crate::l2_lifecycle::is_server_key_revoked(offenders, &lock_pub, Some(&admin_pub)) {
+            continue;
+        }
+        if !has_usable_ticket_auth(service, policy, probe, password)? {
+            continue;
+        }
+        let prio = source_prio_by_url
+            .get(&normalize_sync_url(&probe.write_url))
+            .copied()
+            .or_else(|| {
+                source_prio_by_admin
+                    .get(&probe.admin_pub.trim().to_ascii_lowercase())
+                    .copied()
+            })
+            .unwrap_or(3);
+        let cand = SybilServerCandidate {
+            write_url: probe.write_url.clone(),
+            lock_pub,
+            admin_pub: Some(admin_pub),
+            asn: None,
+        };
+        let srv = ServerEntry {
+            write_url: probe.write_url.clone(),
+            read_url: probe.read_url.clone(),
+            admin_pub,
+            lock_pub,
+            nominated_by: NominatedBy::Creator,
+        };
+        entries.push((prio, probe.latency_ms, cand, srv, probe.clone()));
+    }
+
+    entries.sort_by(|a, b| {
+        a.0.cmp(&b.0)
+            .then(a.1.cmp(&b.1))
+            .then_with(|| a.3.lock_pub.cmp(&b.3.lock_pub))
+    });
+    let cands: Vec<SybilServerCandidate> = entries.iter().map(|e| e.2.clone()).collect();
+    let folded = sybil_fold_committee(&cands);
+    let allowed_keys: HashSet<[u8; 32]> = folded.into_iter().map(|c| c.lock_pub).collect();
+    let selected: Vec<(ServerEntry, FrontendLockServerProbeResult)> = entries
+        .into_iter()
+        .filter(|(_, _, c, _, _)| allowed_keys.contains(&c.lock_pub))
+        .map(|(_, _, _, srv, probe)| (srv, probe))
+        .take(3)
+        .collect();
+    Ok(selected)
+}
+
 fn find_reusable_offline_anchor(
     service: &human_money_core::app_service::AppService,
     policy: &SecurityPolicy,
     offenders: &humoco_wot::ServerOffenderList,
     deletable_ms: u64,
-) -> Option<[u8; 32]> {
+) -> Option<([u8; 32], AnchorManifest)> {
     service
         .with_wallet(|w| {
-            let mut best: Option<(u64, [u8; 32])> = None;
+            let mut best: Option<(u64, [u8; 32], AnchorManifest)> = None;
             for (aid_hex, manifest) in &w.profile.l2_anchor_manifests {
                 if manifest.revision != 1
                     || !manifest.authority.guarantor_mig_pubs.is_empty()
@@ -504,12 +707,12 @@ fn find_reusable_offline_anchor(
                 if healthy_trusted >= usize::from(manifest.threshold)
                     && best
                         .as_ref()
-                        .is_none_or(|(ts, _)| manifest.issued_at_ms > *ts)
+                        .is_none_or(|(ts, _, _)| manifest.issued_at_ms > *ts)
                 {
-                    best = Some((manifest.issued_at_ms, aid));
+                    best = Some((manifest.issued_at_ms, aid, manifest.clone()));
                 }
             }
-            best.map(|(_, aid)| aid)
+            best.map(|(_, aid, m)| (aid, m))
         })
         .ok()
         .flatten()
@@ -519,10 +722,11 @@ pub(crate) fn build_lock_protection_overview_from_service(
     service: &mut human_money_core::app_service::AppService,
     policy: &SecurityPolicy,
     lifecycle: &InternalLifecycleState,
+    standard_toml: Option<&str>,
+    validity_duration: Option<&str>,
     password: Option<&str>,
-) -> FrontendLockProtectionOverviewDto {
-    let offenders =
-        crate::l2_lifecycle::load_server_offender_list(service, password).unwrap_or_default();
+) -> Result<FrontendLockProtectionOverviewDto, FrontendError> {
+    let offenders = crate::l2_lifecycle::load_server_offender_list(service, password)?;
     let is_offender_hex = |lock_hex: &str, admin_hex: &str| -> bool {
         let lock_pk = decode_hex_fixed::<32>(lock_hex).ok();
         let admin_pk = decode_hex_fixed::<32>(admin_hex).ok();
@@ -607,7 +811,8 @@ pub(crate) fn build_lock_protection_overview_from_service(
         }
         let error = probe_opt.and_then(|p| p.error.clone()).or_else(|| {
             revoked.then(|| {
-                "Server key or operator key is permanently revoked on ServerOffenderList".to_string()
+                "Server key or operator key is permanently revoked on ServerOffenderList"
+                    .to_string()
             })
         });
         servers.push(FrontendLockServerItemDto {
@@ -653,7 +858,8 @@ pub(crate) fn build_lock_protection_overview_from_service(
         }
         let error = probe.error.clone().or_else(|| {
             revoked.then(|| {
-                "Server key or operator key is permanently revoked on ServerOffenderList".to_string()
+                "Server key or operator key is permanently revoked on ServerOffenderList"
+                    .to_string()
             })
         });
         servers.push(FrontendLockServerItemDto {
@@ -671,9 +877,40 @@ pub(crate) fn build_lock_protection_overview_from_service(
         });
     }
 
-    let now_ms = sync_client::current_unix_timestamp().saturating_mul(1000);
+    let now_secs = sync_client::current_unix_timestamp();
+    let now_ms = now_secs.saturating_mul(1000);
     let has_offline_cached_anchor =
         find_reusable_offline_anchor(service, policy, &offenders, now_ms).is_some();
+    let preview_deletable_ms = estimate_deletable_ms(now_secs, standard_toml, validity_duration);
+    let preview_quarter = required_retention_quarter(preview_deletable_ms).ok();
+    let live_expected = if let Some(req_q) = preview_quarter {
+        select_expected_candidates_from_lifecycle(
+            service, policy, lifecycle, &offenders, &sources, req_q, password,
+        )?
+    } else {
+        Vec::new()
+    };
+    let (expected_lock_pubs, expected_threshold, expected_source) = if !live_expected.is_empty() {
+        let mut pks: Vec<String> = live_expected
+            .iter()
+            .map(|(s, _)| hex::encode(s.lock_pub))
+            .collect();
+        pks.sort();
+        let thr = ((pks.len() / 2) + 1) as u8;
+        (pks, thr, "live".to_string())
+    } else if let Some((_, manifest)) =
+        find_reusable_offline_anchor(service, policy, &offenders, preview_deletable_ms)
+    {
+        let mut pks: Vec<String> = manifest
+            .servers
+            .iter()
+            .map(|s| hex::encode(s.lock_pub))
+            .collect();
+        pks.sort();
+        (pks, manifest.threshold, "cached".to_string())
+    } else {
+        (Vec::new(), 0, "none".to_string())
+    };
     let unresolved_intents_count = service
         .unresolved_l2_send_intents()
         .map(|v| v.len())
@@ -690,17 +927,22 @@ pub(crate) fn build_lock_protection_overview_from_service(
     }
     .to_string();
 
-    FrontendLockProtectionOverviewDto {
+    Ok(FrontendLockProtectionOverviewDto {
         status,
         ready_trusted_count,
         servers,
         has_offline_cached_anchor,
         unresolved_intents_count,
         pending_restore_reconciliation: lifecycle.pending_restore_l2_reconciliation,
-    }
+        expected_lock_pubs,
+        expected_threshold,
+        expected_source,
+    })
 }
 
 pub(crate) fn get_lock_protection_overview_impl(
+    standard_toml: Option<&str>,
+    validity_duration: Option<&str>,
     state: &AppState,
 ) -> Result<FrontendLockProtectionOverviewDto, FrontendError> {
     let mut service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
@@ -710,12 +952,14 @@ pub(crate) fn get_lock_protection_overview_impl(
     let lifecycle = state
         .get_or_load_internal_lifecycle(&mut service, None)
         .map_err(FrontendError::from)?;
-    Ok(build_lock_protection_overview_from_service(
+    build_lock_protection_overview_from_service(
         &mut service,
         &policy,
         &lifecycle,
+        standard_toml,
+        validity_duration,
         None,
-    ))
+    )
 }
 
 pub(crate) fn set_lock_server_trust_impl(
@@ -745,12 +989,14 @@ pub(crate) fn set_lock_server_trust_impl(
     let lifecycle = state
         .get_or_load_internal_lifecycle(&mut service, password.as_deref())
         .map_err(FrontendError::from)?;
-    Ok(build_lock_protection_overview_from_service(
+    build_lock_protection_overview_from_service(
         &mut service,
         &policy,
         &lifecycle,
+        None,
+        None,
         password.as_deref(),
-    ))
+    )
 }
 
 async fn probe_known_sync_sources_into_cache(
@@ -759,18 +1005,16 @@ async fn probe_known_sync_sources_into_cache(
     client: &reqwest::Client,
     sources: &[KnownSyncSource],
     password: Option<&str>,
-) {
+) -> Result<(), FrontendError> {
     if sources.is_empty() {
-        return;
+        return Ok(());
     }
 
-    let offenders = state
-        .with_session(session, |service| {
-            crate::l2_lifecycle::load_server_offender_list(service, password)
-        })
-        .ok()
-        .flatten()
-        .unwrap_or_default();
+    let offenders = state.with_session_required(
+        session,
+        "Wallet session changed before loading offender list for sync probe",
+        |service| crate::l2_lifecycle::load_server_offender_list(service, password),
+    )?;
 
     let src_admin_by_write_norm: HashMap<String, String> = sources
         .iter()
@@ -814,13 +1058,20 @@ async fn probe_known_sync_sources_into_cache(
                     .then(|| probe.admin_pub.trim().to_ascii_lowercase())
                     .or_else(|| src_admin_by_write_norm.get(&norm_w).cloned());
                 if probe.lock_pub.trim().is_empty() {
-                    if let Some(existing) = lc.l2_probe_cache.values().find(|e| {
-                        (!norm_w.is_empty() && normalize_sync_url(&e.write_url) == norm_w)
-                            || hint_admin.as_ref().is_some_and(|a| {
+                    let matched = lc
+                        .l2_probe_cache
+                        .values()
+                        .find(|e| !norm_w.is_empty() && normalize_sync_url(&e.write_url) == norm_w)
+                        .or_else(|| {
+                            let admin_hint = hint_admin.as_ref()?;
+                            let mut admin_matches = lc.l2_probe_cache.values().filter(|e| {
                                 !e.admin_pub.trim().is_empty()
-                                    && e.admin_pub.trim().eq_ignore_ascii_case(a)
-                            })
-                    }) {
+                                    && e.admin_pub.trim().eq_ignore_ascii_case(admin_hint)
+                            });
+                            let first = admin_matches.next()?;
+                            admin_matches.next().is_none().then_some(first)
+                        });
+                    if let Some(existing) = matched {
                         probe.lock_pub = existing.lock_pub.clone();
                         if probe.admin_pub.trim().is_empty() {
                             probe.admin_pub = existing.admin_pub.clone();
@@ -848,6 +1099,7 @@ async fn probe_known_sync_sources_into_cache(
             changed
         });
     }
+    Ok(())
 }
 
 struct AutoCommitteeSpec {
@@ -861,7 +1113,7 @@ async fn mint_and_register_committee(
     session: &crate::session::SessionToken,
     client: &reqwest::Client,
     spec: AutoCommitteeSpec,
-    candidates: Vec<(ServerEntry, LockTicketAuth)>,
+    candidates: Vec<(ServerEntry, LockTicketAuth, bool, u32)>,
     password: Option<&str>,
 ) -> Result<Option<[u8; 32]>, FrontendError> {
     let AutoCommitteeSpec {
@@ -874,10 +1126,10 @@ async fn mint_and_register_committee(
     }
 
     let now_secs = sync_client::current_unix_timestamp();
-    let try_batch = |subset: &[(ServerEntry, LockTicketAuth)]| {
+    let try_batch = |subset: &[(ServerEntry, LockTicketAuth, bool, u32)]| {
         let n = subset.len();
         let threshold = ((n / 2) + 1) as u8;
-        let servers: Vec<ServerEntry> = subset.iter().map(|(s, _)| s.clone()).collect();
+        let servers: Vec<ServerEntry> = subset.iter().map(|(s, _, _, _)| s.clone()).collect();
         let manifest = AnchorManifest {
             revision: 1,
             threshold,
@@ -899,52 +1151,104 @@ async fn mint_and_register_committee(
         return Ok(None);
     };
 
-    let fetch_tickets = |batch_anchor_id: [u8; 32], subset: Vec<(ServerEntry, LockTicketAuth)>| async move {
-        let mut set = tokio::task::JoinSet::new();
-        for (idx, (srv, auth)) in subset.into_iter().enumerate() {
-            let c = client.clone();
-            let wurl = srv.write_url.clone();
-            set.spawn(async move {
-                let res = tokio::time::timeout(
-                    Duration::from_secs(3),
-                    sync_client::request_genesis_ticket(
-                        &c,
-                        &wurl,
-                        &batch_anchor_id,
-                        retain_until_quarter,
-                        auth.clone(),
-                    ),
-                )
-                .await
-                .map_err(|_| "GenesisTicket request timeout".to_string())
-                .and_then(|r| r);
-                (idx, srv, auth, res)
-            });
-        }
-        let mut succeeded = Vec::new();
-        let mut surviving = Vec::new();
-        let mut had_failure = false;
-        while let Some(joined) = set.join_next().await {
-            match joined {
-                Ok((_idx, srv, auth, Ok(ticket))) => {
-                    succeeded.push(ticket);
-                    surviving.push((srv, auth));
-                }
-                Ok((_, _, _, Err(_))) | Err(_) => {
-                    had_failure = true;
+    let fetch_tickets =
+        |batch_anchor_id: [u8; 32], subset: Vec<(ServerEntry, LockTicketAuth, bool, u32)>| async move {
+            let mut set = tokio::task::JoinSet::new();
+            for (idx, (srv, auth, allow_pow, pow_bits)) in subset.into_iter().enumerate() {
+                let c = client.clone();
+                let wurl = srv.write_url.clone();
+                let expected_lp = srv.lock_pub;
+                set.spawn(async move {
+                    let mut active_auth = auth;
+                    let mut res = tokio::time::timeout(
+                        Duration::from_secs(3),
+                        sync_client::request_genesis_ticket(
+                            &c,
+                            &wurl,
+                            expected_lp,
+                            &batch_anchor_id,
+                            retain_until_quarter,
+                            active_auth.clone(),
+                        ),
+                    )
+                    .await
+                    .map_err(|_| "GenesisTicket request timeout".to_string())
+                    .and_then(|r| r);
+
+                    if let Err(ref err_msg) = res {
+                        let is_auth_reject =
+                            err_msg.contains("HTTP 401") || err_msg.contains("HTTP 403");
+                        if is_auth_reject
+                            && allow_pow
+                            && pow_bits <= MAX_AUTO_POW_TICKET_BITS
+                            && !matches!(active_auth, LockTicketAuth::Pow { .. })
+                        {
+                            let fallback_auth = LockTicketAuth::Pow { pow_bits };
+                            let fallback_res = tokio::time::timeout(
+                                Duration::from_secs(4),
+                                sync_client::request_genesis_ticket(
+                                    &c,
+                                    &wurl,
+                                    expected_lp,
+                                    &batch_anchor_id,
+                                    retain_until_quarter,
+                                    fallback_auth.clone(),
+                                ),
+                            )
+                            .await
+                            .map_err(|_| "GenesisTicket PoW fallback timeout".to_string())
+                            .and_then(|r| r);
+                            if fallback_res.is_ok() {
+                                active_auth = fallback_auth;
+                            }
+                            res = fallback_res;
+                        }
+                    }
+                    (idx, srv, active_auth, allow_pow, pow_bits, res)
+                });
+            }
+            let mut succeeded_indexed = Vec::new();
+            let mut surviving_indexed = Vec::new();
+            let mut failed_servers = Vec::new();
+            let mut had_failure = false;
+            while let Some(joined) = set.join_next().await {
+                match joined {
+                    Ok((idx, srv, auth, allow_pow, pow_bits, Ok(ticket))) => {
+                        succeeded_indexed.push((idx, ticket));
+                        surviving_indexed.push((idx, (srv, auth, allow_pow, pow_bits)));
+                    }
+                    Ok((_, srv, _, _, _, Err(err_msg))) => {
+                        had_failure = true;
+                        failed_servers.push((hex::encode(srv.lock_pub), err_msg));
+                    }
+                    Err(_) => {
+                        had_failure = true;
+                    }
                 }
             }
-        }
-        (succeeded, surviving, had_failure)
-    };
+            succeeded_indexed.sort_by_key(|(idx, _)| *idx);
+            surviving_indexed.sort_by_key(|(idx, _)| *idx);
+            let succeeded = succeeded_indexed
+                .into_iter()
+                .map(|(_, t)| t)
+                .collect::<Vec<_>>();
+            let surviving = surviving_indexed
+                .into_iter()
+                .map(|(_, item)| item)
+                .collect::<Vec<_>>();
+            (succeeded, surviving, failed_servers, had_failure)
+        };
 
-    let (tickets1, surviving1, had_failure1) = fetch_tickets(anchor_id, candidates.clone()).await;
+    let (tickets1, surviving1, mut all_failed, had_failure1) =
+        fetch_tickets(anchor_id, candidates.clone()).await;
 
     let final_pair = if !had_failure1 && tickets1.len() == manifest.servers.len() {
         Some((manifest, tickets1))
     } else if !surviving1.is_empty() && surviving1.len() < candidates.len() {
         if let Some((retry_manifest, retry_aid)) = try_batch(&surviving1) {
-            let (tickets2, _surv2, had_failure2) = fetch_tickets(retry_aid, surviving1).await;
+            let (tickets2, _surv2, failed2, had_failure2) =
+                fetch_tickets(retry_aid, surviving1).await;
+            all_failed.extend(failed2);
             if !had_failure2 && tickets2.len() == retry_manifest.servers.len() {
                 Some((retry_manifest, tickets2))
             } else {
@@ -956,6 +1260,21 @@ async fn mint_and_register_committee(
     } else {
         None
     };
+
+    if !all_failed.is_empty() {
+        let _ = state.mutate_internal_lifecycle_for_session(session, password, |lc| {
+            let mut changed = false;
+            for (lock_hex, err_msg) in &all_failed {
+                if let Some(cached) = lc.l2_probe_cache.get_mut(lock_hex) {
+                    cached.passed = false;
+                    cached.probed_at_secs = now_secs;
+                    cached.error = Some(err_msg.clone());
+                    changed = true;
+                }
+            }
+            changed
+        });
+    }
 
     let Some((chosen_manifest, chosen_tickets)) = final_pair else {
         return Ok(None);
@@ -984,8 +1303,16 @@ async fn gather_committee_candidates(
     session: &crate::session::SessionToken,
     client: &reqwest::Client,
     req_quarter: u16,
+    force_reprobe: bool,
     password: Option<&str>,
-) -> Result<(Vec<(ServerEntry, LockTicketAuth)>, [u8; 32], [u8; 32]), FrontendError> {
+) -> Result<
+    (
+        Vec<(ServerEntry, LockTicketAuth, bool, u32)>,
+        [u8; 32],
+        [u8; 32],
+    ),
+    FrontendError,
+> {
     let (sources, policy, lifecycle, offenders) = state.with_session_required(
         session,
         "Wallet session changed before preparing lock committee candidates",
@@ -1008,19 +1335,23 @@ async fn gather_committee_candidates(
         .values()
         .map(|p| (normalize_sync_url(&p.write_url), p))
         .collect();
-    let need_probe: Vec<KnownSyncSource> = sources
-        .iter()
-        .filter(|src| {
-            let norm = normalize_sync_url(&src.write_url);
-            match cached_urls.get(&norm) {
-                None => true,
-                Some(p) => !p.passed && now_secs.saturating_sub(p.probed_at_secs) >= 60,
-            }
-        })
-        .cloned()
-        .collect();
+    let need_probe: Vec<KnownSyncSource> = if force_reprobe {
+        sources.clone()
+    } else {
+        sources
+            .iter()
+            .filter(|src| {
+                let norm = normalize_sync_url(&src.write_url);
+                match cached_urls.get(&norm) {
+                    None => true,
+                    Some(p) => !p.passed && now_secs.saturating_sub(p.probed_at_secs) >= 60,
+                }
+            })
+            .cloned()
+            .collect()
+    };
     if !need_probe.is_empty() {
-        probe_known_sync_sources_into_cache(state, session, client, &need_probe, password).await;
+        probe_known_sync_sources_into_cache(state, session, client, &need_probe, password).await?;
     }
 
     let mut anchor_nonce = [0u8; 32];
@@ -1041,81 +1372,24 @@ async fn gather_committee_candidates(
             let fresh_lc = state
                 .get_or_load_internal_lifecycle(service, password)
                 .map_err(FrontendError::from)?;
-
-            let source_prio_by_url: HashMap<String, u8> = sources
-                .iter()
-                .map(|s| (normalize_sync_url(&s.write_url), s.priority))
-                .collect();
-            let source_prio_by_admin: HashMap<String, u8> = sources
-                .iter()
-                .filter(|s| !s.admin_pub.is_empty())
-                .map(|s| (s.admin_pub.clone(), s.priority))
-                .collect();
-
-            let mut entries: Vec<(u8, u64, SybilServerCandidate, ServerEntry, LockTicketAuth)> =
-                Vec::new();
-            for probe in fresh_lc.l2_probe_cache.values() {
-                if !probe.passed
-                    || !probe.delegation_valid
-                    || probe.max_retention_quarter < req_quarter
-                    || !is_lock_admin_trusted(&policy, &probe.admin_pub)
+            let expected = select_expected_candidates_from_lifecycle(
+                service,
+                &policy,
+                &fresh_lc,
+                &offenders,
+                &sources,
+                req_quarter,
+                password,
+            )?;
+            let mut out = Vec::with_capacity(expected.len());
+            for (srv, probe) in expected {
+                if let Some(auth) =
+                    resolve_ticket_auth_for_server(service, &policy, &probe, password)?
                 {
-                    continue;
+                    out.push((srv, auth, probe.allow_pow_tickets, probe.ticket_pow_bits));
                 }
-                let Ok(lock_pub) = decode_hex_fixed::<32>(&probe.lock_pub) else {
-                    continue;
-                };
-                let Ok(admin_pub) = decode_hex_fixed::<32>(&probe.admin_pub) else {
-                    continue;
-                };
-                if crate::l2_lifecycle::is_server_key_revoked(
-                    &offenders,
-                    &lock_pub,
-                    Some(&admin_pub),
-                ) {
-                    continue;
-                }
-                let Some(auth) = resolve_ticket_auth_for_server(service, &policy, probe, password)?
-                else {
-                    continue;
-                };
-                let prio = source_prio_by_url
-                    .get(&normalize_sync_url(&probe.write_url))
-                    .copied()
-                    .or_else(|| {
-                        source_prio_by_admin
-                            .get(&probe.admin_pub.trim().to_ascii_lowercase())
-                            .copied()
-                    })
-                    .unwrap_or(3);
-                let cand = SybilServerCandidate {
-                    write_url: probe.write_url.clone(),
-                    lock_pub,
-                    admin_pub: Some(admin_pub),
-                    asn: None,
-                };
-                let srv = ServerEntry {
-                    write_url: probe.write_url.clone(),
-                    read_url: probe.read_url.clone(),
-                    admin_pub,
-                    lock_pub,
-                    nominated_by: NominatedBy::Creator,
-                };
-                entries.push((prio, probe.latency_ms, cand, srv, auth));
             }
-
-            entries.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
-            let cands: Vec<SybilServerCandidate> = entries.iter().map(|e| e.2.clone()).collect();
-            let folded = sybil_fold_committee(&cands);
-            let allowed_keys: HashSet<[u8; 32]> = folded.into_iter().map(|c| c.lock_pub).collect();
-            let selected: Vec<(ServerEntry, LockTicketAuth)> = entries
-                .into_iter()
-                .filter(|(_, _, c, _, _)| allowed_keys.contains(&c.lock_pub))
-                .map(|(_, _, _, srv, auth)| (srv, auth))
-                .take(3)
-                .collect();
-
-            Ok((creator_mig_pub, selected))
+            Ok((creator_mig_pub, out))
         },
     )?;
 
@@ -1126,13 +1400,21 @@ pub(crate) async fn assemble_auto_committee_for_voucher(
     state: &AppState,
     session: &crate::session::SessionToken,
     deletable_ms: u64,
+    force_reprobe: bool,
     password: Option<&str>,
-) -> Result<Option<[u8; 32]>, FrontendError> {
+) -> Result<Option<AssembledAutoCommittee>, FrontendError> {
     let req_quarter = required_retention_quarter(deletable_ms)?;
     let client = sync_client::create_sync_probe_client();
 
-    let (candidates, creator_mig_pub, anchor_nonce) =
-        gather_committee_candidates(state, session, &client, req_quarter, password).await?;
+    let (candidates, creator_mig_pub, anchor_nonce) = gather_committee_candidates(
+        state,
+        session,
+        &client,
+        req_quarter,
+        force_reprobe,
+        password,
+    )
+    .await?;
 
     if !candidates.is_empty() {
         if let Some(aid) = mint_and_register_committee(
@@ -1149,7 +1431,31 @@ pub(crate) async fn assemble_auto_committee_for_voucher(
         )
         .await?
         {
-            return Ok(Some(aid));
+            let meta = state.with_session_required(
+                session,
+                "Wallet session changed after registering live L2 committee",
+                |service| {
+                    let aid_hex = hex::encode(aid);
+                    service
+                        .with_wallet(|w| {
+                            w.profile.l2_anchor_manifests.get(&aid_hex).map(|m| {
+                                let mut pks: Vec<String> =
+                                    m.servers.iter().map(|s| hex::encode(s.lock_pub)).collect();
+                                pks.sort();
+                                (pks, m.threshold)
+                            })
+                        })
+                        .map_err(FrontendError::from)
+                },
+            )?;
+            if let Some((lock_pubs, threshold)) = meta {
+                return Ok(Some(AssembledAutoCommittee {
+                    anchor_id: aid,
+                    lock_pubs,
+                    threshold,
+                    source: "live",
+                }));
+            }
         }
     }
 
@@ -1162,12 +1468,21 @@ pub(crate) async fn assemble_auto_committee_for_voucher(
                 .get_or_load_security_policy(service, password)
                 .map_err(FrontendError::from)?;
             let offenders = crate::l2_lifecycle::load_server_offender_list(service, password)?;
-            Ok(find_reusable_offline_anchor(
-                service,
-                &policy,
-                &offenders,
-                deletable_ms,
-            ))
+            Ok(
+                find_reusable_offline_anchor(service, &policy, &offenders, deletable_ms).map(
+                    |(aid, m)| {
+                        let mut pks: Vec<String> =
+                            m.servers.iter().map(|s| hex::encode(s.lock_pub)).collect();
+                        pks.sort();
+                        AssembledAutoCommittee {
+                            anchor_id: aid,
+                            lock_pubs: pks,
+                            threshold: m.threshold,
+                            source: "cached",
+                        }
+                    },
+                ),
+            )
         },
     )?;
     Ok(fallback)
@@ -1202,7 +1517,7 @@ pub(crate) async fn prewarm_offline_anchor_if_missing(
     }
 
     if let Ok((candidates, creator_mig_pub, anchor_nonce)) =
-        gather_committee_candidates(state, session, client, req_quarter, password).await
+        gather_committee_candidates(state, session, client, req_quarter, false, password).await
     {
         if !candidates.is_empty() {
             let _ = mint_and_register_committee(
@@ -1239,7 +1554,7 @@ pub(crate) async fn refresh_lock_servers_with_session(
     )?;
 
     let client = sync_client::create_sync_probe_client();
-    probe_known_sync_sources_into_cache(state, session, &client, &sources, password).await;
+    probe_known_sync_sources_into_cache(state, session, &client, &sources, password).await?;
     prewarm_offline_anchor_if_missing(state, session, &client, password).await;
 
     state.with_session_required(
@@ -1252,9 +1567,9 @@ pub(crate) async fn refresh_lock_servers_with_session(
             let lifecycle = state
                 .get_or_load_internal_lifecycle(service, password)
                 .map_err(FrontendError::from)?;
-            Ok(build_lock_protection_overview_from_service(
-                service, &policy, &lifecycle, password,
-            ))
+            build_lock_protection_overview_from_service(
+                service, &policy, &lifecycle, None, None, password,
+            )
         },
     )
 }
@@ -1271,20 +1586,22 @@ pub(crate) async fn refresh_lock_servers_impl(
     refresh_lock_servers_with_session(state, &session, pw).await
 }
 
-pub(crate) async fn refresh_lock_servers_for_coordinator(state: &AppState) {
+pub(crate) async fn refresh_lock_servers_for_coordinator(state: &AppState) -> bool {
     let session = {
         let Ok(service) = state.service.lock() else {
-            return;
+            return false;
         };
         if !service.is_wallet_unlocked() {
-            return;
+            return false;
         }
         let Ok(s) = state.session_token_for_service(&service) else {
-            return;
+            return false;
         };
         s
     };
-    let _ = refresh_lock_servers_with_session(state, &session, None).await;
+    refresh_lock_servers_with_session(state, &session, None)
+        .await
+        .is_ok()
 }
 
 pub(crate) async fn prewarm_l2_checkout_impl(state: &AppState) -> Result<(), FrontendError> {
@@ -1310,65 +1627,139 @@ pub(crate) async fn prewarm_l2_checkout_impl(state: &AppState) -> Result<(), Fro
     Ok(())
 }
 
+struct ReconcileTargetInfo {
+    local_id: String,
+    anchor_id: [u8; 32],
+    manifest_rev: u64,
+    creator_did: Option<String>,
+    guarantor_dids: Vec<String>,
+    target: VoucherLockReadTarget,
+    pow_bits: u32,
+}
+
+struct MissingManifestInfo {
+    local_id: String,
+    anchor_id: [u8; 32],
+    creator_did: Option<String>,
+    guarantor_dids: Vec<String>,
+}
+
+async fn rebuild_reconcile_read_target(
+    state: &AppState,
+    session: &crate::session::SessionToken,
+    local_id: &str,
+    password: Option<&str>,
+) -> Option<(VoucherLockReadTarget, u32)> {
+    state
+        .with_session(session, |service| {
+            let lc = state
+                .get_or_load_internal_lifecycle(service, password)
+                .map_err(FrontendError::from)?;
+            service
+                .with_wallet_and_identity(|wallet, identity| {
+                    wallet
+                        .build_voucher_read_targets(identity, local_id, None)
+                        .ok()
+                        .map(|t| {
+                            let pow_bits = max_pow_base_bits_for_servers(
+                                &lc,
+                                t.server_paths.iter().map(|(s, _)| s.lock_pub),
+                            );
+                            (t, pow_bits)
+                        })
+                })
+                .map_err(FrontendError::from)
+        })
+        .ok()
+        .flatten()
+        .flatten()
+}
+
 pub(crate) async fn reconcile_vouchers_via_static_locks(
     state: &AppState,
+    session: &crate::session::SessionToken,
     filter_ids: Option<&[String]>,
     password: Option<&str>,
 ) -> Result<StaticReconcileSummary, FrontendError> {
     let filter_set: Option<HashSet<&str>> =
         filter_ids.map(|ids| ids.iter().map(|s| s.as_str()).collect());
 
-    let (session, mut probe_cache, offenders, targets, missing_manifest_ids) = {
-        let mut service = state.lock_service()?;
-        let session = state.session_token_for_service(&service)?;
-        let lifecycle = state
-            .get_or_load_internal_lifecycle(&mut service, password)
-            .map_err(FrontendError::from)?;
-        let offenders =
-            crate::l2_lifecycle::load_server_offender_list(&mut service, password).unwrap_or_default();
-        let (targets, missing_manifest_ids) = service
-            .with_wallet_and_identity(|wallet, identity| {
-                let mut ready = Vec::new();
-                let mut missing = Vec::new();
-                for (id, instance) in &wallet.voucher_store.vouchers {
-                    if instance.status != human_money_core::wallet::instance::VoucherStatus::Active
-                    {
-                        continue;
-                    }
-                    if let Some(ref fset) = filter_set {
-                        if !fset.contains(id.as_str()) {
+    let Some((mut probe_cache, offenders, mut targets, mut missing_infos)) =
+        state.with_session(session, |service| {
+            let lifecycle = state
+                .get_or_load_internal_lifecycle(service, password)
+                .map_err(FrontendError::from)?;
+            let offenders = crate::l2_lifecycle::load_server_offender_list(service, password)?;
+            let (targets, missing_infos) = service
+                .with_wallet_and_identity(|wallet, identity| {
+                    let mut ready = Vec::new();
+                    let mut missing = Vec::new();
+                    for (id, instance) in &wallet.voucher_store.vouchers {
+                        if instance.status
+                            != human_money_core::wallet::instance::VoucherStatus::Active
+                        {
                             continue;
                         }
-                    }
-                    if instance.voucher.layer2_anchor.is_none() {
-                        continue;
-                    }
-                    match wallet.build_voucher_read_targets(identity, id, None) {
-                        Ok(target) => {
-                            let pow_bits = max_pow_base_bits_for_servers(
-                                &lifecycle,
-                                target.server_paths.iter().map(|(srv, _)| srv.lock_pub),
-                            );
-                            ready.push((id.clone(), target, pow_bits));
+                        if let Some(ref fset) = filter_set {
+                            if !fset.contains(id.as_str()) {
+                                continue;
+                            }
                         }
-                        Err(_) => {
-                            missing.push(id.clone());
+                        let Some(anchor_id) = instance.voucher.layer2_anchor else {
+                            continue;
+                        };
+                        let creator_did = instance.voucher.creator_profile.id.clone();
+                        let guarantor_dids: Vec<String> = instance
+                            .voucher
+                            .signatures
+                            .iter()
+                            .filter(|s| s.role.eq_ignore_ascii_case("guarantor"))
+                            .map(|s| s.signer_id.clone())
+                            .collect();
+                        let manifest_rev = wallet
+                            .profile
+                            .l2_anchor_manifests
+                            .get(&hex::encode(anchor_id))
+                            .map(|m| m.revision)
+                            .unwrap_or(0);
+                        match wallet.build_voucher_read_targets(identity, id, None) {
+                            Ok(target) => {
+                                let pow_bits = max_pow_base_bits_for_servers(
+                                    &lifecycle,
+                                    target.server_paths.iter().map(|(srv, _)| srv.lock_pub),
+                                );
+                                ready.push(ReconcileTargetInfo {
+                                    local_id: id.clone(),
+                                    anchor_id,
+                                    manifest_rev,
+                                    creator_did,
+                                    guarantor_dids,
+                                    target,
+                                    pow_bits,
+                                });
+                            }
+                            Err(_) => {
+                                missing.push(MissingManifestInfo {
+                                    local_id: id.clone(),
+                                    anchor_id,
+                                    creator_did,
+                                    guarantor_dids,
+                                });
+                            }
                         }
                     }
-                }
-                (ready, missing)
-            })
-            .map_err(FrontendError::from)?;
-        (
-            session,
-            lifecycle.l2_probe_cache,
-            offenders,
-            targets,
-            missing_manifest_ids,
-        )
+                    (ready, missing)
+                })
+                .map_err(FrontendError::from)?;
+            Ok((lifecycle.l2_probe_cache, offenders, targets, missing_infos))
+        })?
+    else {
+        return Err(FrontendError::from(
+            "Wallet session changed before static L2 reconciliation started".to_string(),
+        ));
     };
 
-    let active_anchored_count = targets.len().saturating_add(missing_manifest_ids.len());
+    let active_anchored_count = targets.len().saturating_add(missing_infos.len());
     if active_anchored_count == 0 {
         return Ok(StaticReconcileSummary {
             active_anchored_count: 0,
@@ -1379,30 +1770,100 @@ pub(crate) async fn reconcile_vouchers_via_static_locks(
     }
 
     let client = sync_client::create_sync_probe_client();
+    let mut unresolved_missing_count = 0usize;
+    for info in missing_infos.drain(..) {
+        let mut rebuilt: Option<ReconcileTargetInfo> = None;
+        if let Ok(Some(discovered)) = crate::l2_lifecycle::discover_anchor_manifest(
+            state,
+            session,
+            &client,
+            &info.anchor_id,
+            info.creator_did.as_deref(),
+            &info.guarantor_dids,
+            password,
+        )
+        .await
+        {
+            if let Some((t, bits)) =
+                rebuild_reconcile_read_target(state, session, &info.local_id, password).await
+            {
+                rebuilt = Some(ReconcileTargetInfo {
+                    local_id: info.local_id.clone(),
+                    anchor_id: info.anchor_id,
+                    manifest_rev: discovered.revision,
+                    creator_did: info.creator_did.clone(),
+                    guarantor_dids: info.guarantor_dids.clone(),
+                    target: t,
+                    pow_bits: bits,
+                });
+            }
+        }
+        if let Some(t) = rebuilt {
+            targets.push(t);
+        } else {
+            unresolved_missing_count += 1;
+        }
+    }
+
     let mut reconciled_spent_count = 0usize;
-    let mut inconclusive_count = missing_manifest_ids.len();
+    let mut inconclusive_count = unresolved_missing_count;
     let mut any_committee_reachable = false;
     let mut learned_probes = Vec::new();
 
-    for (local_id, target, pow_bits) in targets {
-        let probe = probe_voucher_static_lock(
+    for mut info in targets {
+        let mut probe = probe_voucher_static_lock(
             &client,
-            &target,
+            &info.target,
             &mut probe_cache,
             &offenders,
             &mut learned_probes,
         )
         .await;
+        if probe.candidate_entries.is_empty() {
+            if let Ok(Some(discovered)) = crate::l2_lifecycle::discover_anchor_manifest(
+                state,
+                session,
+                &client,
+                &info.anchor_id,
+                info.creator_did.as_deref(),
+                &info.guarantor_dids,
+                password,
+            )
+            .await
+            {
+                if discovered.revision > info.manifest_rev {
+                    if let Some((new_target, new_pow_bits)) =
+                        rebuild_reconcile_read_target(state, session, &info.local_id, password)
+                            .await
+                    {
+                        info.target = new_target;
+                        info.pow_bits = new_pow_bits;
+                        probe = probe_voucher_static_lock(
+                            &client,
+                            &info.target,
+                            &mut probe_cache,
+                            &offenders,
+                            &mut learned_probes,
+                        )
+                        .await;
+                    }
+                }
+            }
+        }
         if probe.any_server_answered {
             any_committee_reachable = true;
         }
 
         let outcome = state.with_session_required(
-            &session,
+            session,
             "Wallet session changed during static L2 reconciliation",
             |service| {
                 reconcile_static_probe_on_service(
-                    service, &local_id, &probe, pow_bits, true, password,
+                    service,
+                    &info.local_id,
+                    &probe,
+                    info.pow_bits,
+                    password,
                 )
             },
         );
@@ -1416,7 +1877,7 @@ pub(crate) async fn reconcile_vouchers_via_static_locks(
                 VoucherReconciliationResult::Inconclusive { reason } => {
                     log::debug!(
                         "Static lock reconciliation inconclusive for {}: {}",
-                        local_id,
+                        info.local_id,
                         reason
                     );
                     inconclusive_count += 1;
@@ -1425,7 +1886,7 @@ pub(crate) async fn reconcile_vouchers_via_static_locks(
             Ok(StaticVoucherReconcileOutcome::Inconclusive { reason, .. }) => {
                 log::debug!(
                     "Static lock probe inconclusive for {}: {}",
-                    local_id,
+                    info.local_id,
                     reason
                 );
                 inconclusive_count += 1;
@@ -1433,7 +1894,7 @@ pub(crate) async fn reconcile_vouchers_via_static_locks(
             Err(err) => {
                 log::warn!(
                     "Failed persisting static lock reconciliation for {}: {}",
-                    local_id,
+                    info.local_id,
                     err.message
                 );
                 inconclusive_count += 1;
@@ -1442,10 +1903,10 @@ pub(crate) async fn reconcile_vouchers_via_static_locks(
     }
 
     if !learned_probes.is_empty() {
-        let _ = state.mutate_internal_lifecycle_for_session(&session, password, |lc| {
+        let _ = state.mutate_internal_lifecycle_for_session(session, password, |lc| {
             let mut changed = false;
             for probe in learned_probes {
-                if upsert_verified_lock_probe(&mut lc.l2_probe_cache, probe) {
+                if upsert_verified_locator_only(&mut lc.l2_probe_cache, probe) {
                     changed = true;
                 }
             }
@@ -1454,7 +1915,7 @@ pub(crate) async fn reconcile_vouchers_via_static_locks(
     }
 
     let all_resolved = inconclusive_count == 0;
-    let status = if !missing_manifest_ids.is_empty() && !any_committee_reachable {
+    let status = if unresolved_missing_count > 0 && !any_committee_reachable {
         "no_servers".to_string()
     } else if all_resolved {
         "reconciled".to_string()
@@ -1486,31 +1947,69 @@ pub(crate) fn clear_fork_lock_for_service(
     }
 }
 
+pub(crate) fn has_fork_or_stale_alert_and_offline_vouchers(
+    service: &human_money_core::app_service::AppService,
+    lifecycle: &InternalLifecycleState,
+    password: Option<&str>,
+) -> (bool, bool) {
+    let fork_or_stale_alert = matches!(
+        service.get_seal_lock_reason(password),
+        Ok(Some(
+            human_money_core::models::seal::SealLockReason::ForkDetected
+        ))
+    ) || lifecycle
+        .wallet_sync_alert
+        .as_ref()
+        .is_some_and(|a| a.kind == "fork_detected" || a.kind == "stale_local_backup");
+    let has_active_offline_vouchers = service
+        .with_wallet(|wallet| {
+            wallet.voucher_store.vouchers.values().any(|inst| {
+                inst.status == human_money_core::wallet::instance::VoucherStatus::Active
+                    && inst.voucher.layer2_anchor.is_none()
+            })
+        })
+        .unwrap_or(true);
+    (fork_or_stale_alert, has_active_offline_vouchers)
+}
+
 pub(crate) async fn reconcile_restored_wallet_if_pending(
     state: &AppState,
+    session: &crate::session::SessionToken,
     password: Option<&str>,
 ) -> Result<bool, FrontendError> {
-    let session = {
-        let mut service = state.lock_service()?;
-        let lifecycle = state
-            .get_or_load_internal_lifecycle(&mut service, password)
-            .map_err(FrontendError::from)?;
-        if !lifecycle.pending_restore_l2_reconciliation {
-            return Ok(false);
-        }
-        state.session_token_for_service(&service)?
+    let Some((is_pending, fork_or_stale_alert, has_active_offline_vouchers)) =
+        state.with_session(session, |service| {
+            let lifecycle = state
+                .get_or_load_internal_lifecycle(service, password)
+                .map_err(FrontendError::from)?;
+            let (fork_or_stale, has_offline) =
+                has_fork_or_stale_alert_and_offline_vouchers(service, &lifecycle, password);
+            Ok((
+                lifecycle.pending_restore_l2_reconciliation,
+                fork_or_stale,
+                has_offline,
+            ))
+        })?
+    else {
+        return Ok(false);
     };
+    if !is_pending {
+        return Ok(false);
+    }
 
-    let summary = reconcile_vouchers_via_static_locks(state, None, password).await?;
-    if summary.all_resolved || summary.active_anchored_count == 0 {
-        let cleared = state.with_session(&session, |service| {
+    let summary = reconcile_vouchers_via_static_locks(state, session, None, password).await?;
+    let can_auto_clear =
+        !fork_or_stale_alert && (summary.all_resolved || summary.active_anchored_count == 0);
+    let _ = has_active_offline_vouchers;
+    if can_auto_clear {
+        let cleared = state.with_session(session, |service| {
             clear_fork_lock_for_service(service, password);
             Ok(())
         })?;
         if cleared.is_none() {
             return Ok(false);
         }
-        let updated = state.mutate_internal_lifecycle_for_session(&session, password, |lc| {
+        let updated = state.mutate_internal_lifecycle_for_session(session, password, |lc| {
             lc.pending_restore_l2_reconciliation = false;
             if lc
                 .wallet_sync_alert
@@ -1531,8 +2030,11 @@ pub(crate) async fn check_voucher_l2_status_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendVoucherL2StatusDto, FrontendError> {
-    let session =
-        state.authorize_and_begin_session(crate::state::RequiredAccess::Unlocked, None)?;
+    let (session, resolved_pw) = state.authorize_and_begin_session_secret(
+        crate::state::RequiredAccess::Unlocked,
+        password.as_deref(),
+    )?;
+    let pw = resolved_pw.as_deref().map(String::as_str);
 
     let (
         target_opt,
@@ -1547,12 +2049,10 @@ pub(crate) async fn check_voucher_l2_status_impl(
         "Wallet session changed before checking voucher L2 status",
         |service| {
             let lifecycle = state
-                .get_or_load_internal_lifecycle(service, password.as_deref())
+                .get_or_load_internal_lifecycle(service, pw)
                 .map_err(FrontendError::from)?;
             let probe_cache = lifecycle.l2_probe_cache.clone();
-            let offenders =
-                crate::l2_lifecycle::load_server_offender_list(service, password.as_deref())
-                    .unwrap_or_default();
+            let offenders = crate::l2_lifecycle::load_server_offender_list(service, pw)?;
             let tup = service
                 .with_wallet_and_identity(|wallet, identity| {
                     let instance = wallet
@@ -1636,10 +2136,10 @@ pub(crate) async fn check_voucher_l2_status_impl(
     )
     .await;
     if !learned_probes.is_empty() {
-        let _ = state.mutate_internal_lifecycle_for_session(&session, password.as_deref(), |lc| {
+        let _ = state.mutate_internal_lifecycle_for_session(&session, pw, |lc| {
             let mut changed = false;
             for p in learned_probes {
-                if upsert_verified_lock_probe(&mut lc.l2_probe_cache, p) {
+                if upsert_verified_locator_only(&mut lc.l2_probe_cache, p) {
                     changed = true;
                 }
             }
@@ -1651,14 +2151,7 @@ pub(crate) async fn check_voucher_l2_status_impl(
         &session,
         "Wallet session changed while verifying voucher L2 status",
         |service| {
-            reconcile_static_probe_on_service(
-                service,
-                &local_instance_id,
-                &probe,
-                pow_bits,
-                false,
-                password.as_deref(),
-            )
+            reconcile_static_probe_on_service(service, &local_instance_id, &probe, pow_bits, pw)
         },
     )?;
 
@@ -1880,7 +2373,6 @@ mod tests {
             &local_id,
             &insufficient_404,
             DEFAULT_LOCK_POW_BASE_BITS,
-            true,
             Some(pw),
         )
         .unwrap();
@@ -1919,7 +2411,6 @@ mod tests {
             &local_id,
             &corrupt_plus_one_404,
             DEFAULT_LOCK_POW_BASE_BITS,
-            true,
             Some(pw),
         )
         .unwrap();
@@ -1944,7 +2435,6 @@ mod tests {
             &local_id,
             &quorum_404,
             DEFAULT_LOCK_POW_BASE_BITS,
-            true,
             Some(pw),
         )
         .unwrap();
@@ -2232,10 +2722,11 @@ mod tests {
         // 1. S1 fails ticket with 500 -> single retry succeeds cleanly with S2 (N = 1)
         let deletable_ms = 1_760_000_000_000u64;
         let aid_retry =
-            assemble_auto_committee_for_voucher(&state, &session, deletable_ms, Some(pw))
+            assemble_auto_committee_for_voucher(&state, &session, deletable_ms, false, Some(pw))
                 .await
                 .unwrap()
-                .expect("retry with surviving server should register N=1 committee");
+                .expect("retry with surviving server should register N=1 committee")
+                .anchor_id;
         let saved_manifest = {
             let s = state.lock_service().unwrap();
             s.with_wallet(|w| {
@@ -2267,16 +2758,17 @@ mod tests {
                 .unwrap();
         }
         let aid_offline_cached =
-            assemble_auto_committee_for_voucher(&state, &session, deletable_ms, Some(pw))
+            assemble_auto_committee_for_voucher(&state, &session, deletable_ms, false, Some(pw))
                 .await
                 .unwrap()
-                .expect("offline fallback must reuse cached rev1 creator anchor");
+                .expect("offline fallback must reuse cached rev1 creator anchor")
+                .anchor_id;
         assert_eq!(aid_offline_cached, aid_retry);
 
         // 3. Offline with no matching cache (future quarter 2045 beyond 2035) -> clean N = 0 (Ok(None))
         let far_future_ms = 2_380_000_000_000u64;
         let aid_none =
-            assemble_auto_committee_for_voucher(&state, &session, far_future_ms, Some(pw))
+            assemble_auto_committee_for_voucher(&state, &session, far_future_ms, false, Some(pw))
                 .await
                 .unwrap();
         assert!(aid_none.is_none());
@@ -2411,8 +2903,14 @@ mod tests {
         };
         assert!(upsert_verified_lock_probe(&mut cache, failed_later));
         let cached = cache.get(&lock_hex).unwrap();
-        assert!(!cached.passed, "H9: newer failed probe must mark passed=false");
-        assert!(cached.delegation_valid, "H9: verified delegation must remain intact");
+        assert!(
+            !cached.passed,
+            "H9: newer failed probe must mark passed=false"
+        );
+        assert!(
+            cached.delegation_valid,
+            "H9: verified delegation must remain intact"
+        );
         assert_eq!(cached.pow_base_bits, 12);
         assert_eq!(cached.error.as_deref(), Some("connection refused"));
 
@@ -2437,9 +2935,19 @@ mod tests {
             let mut s = state.lock_service().unwrap();
             let policy = state.get_or_load_security_policy(&mut s, Some(pw)).unwrap();
             lc.pending_restore_l2_reconciliation = false;
-            let overview =
-                build_lock_protection_overview_from_service(&mut s, &policy, &lc, Some(pw));
-            assert_eq!(overview.ready_trusted_count, 0, "H9: revoked server must not count as ready");
+            let overview = build_lock_protection_overview_from_service(
+                &mut s,
+                &policy,
+                &lc,
+                None,
+                None,
+                Some(pw),
+            )
+            .unwrap();
+            assert_eq!(
+                overview.ready_trusted_count, 0,
+                "H9: revoked server must not count as ready"
+            );
         }
 
         stop.store(true, Ordering::Relaxed);

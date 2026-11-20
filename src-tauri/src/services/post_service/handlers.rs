@@ -19,8 +19,8 @@ use crate::models::{
 };
 use crate::services::common::{are_dids_equal, load_all_standard_tomls};
 use crate::services::recovery_service::{
-    load_guardian_vault_with_cache, load_recovery_owner_state_with_cache,
-    save_guardian_vault_with_cache, save_recovery_owner_state_with_cache,
+    load_guardian_vault, load_recovery_owner_state, save_guardian_vault_with_cache,
+    save_recovery_owner_state_with_cache,
 };
 use crate::state::{AppState, StoredPostState};
 
@@ -101,9 +101,12 @@ pub(crate) async fn dispatch_post_payload(
             handle_voucher_for_signing(ctx, post_state, stats);
             PostDispatchOutcome::Handled
         }
-        PayloadType::DetachedSignature => {
-            as_outcome(handle_detached_signature(ctx, post_state, baseline_post_state, stats))
-        }
+        PayloadType::DetachedSignature => as_outcome(handle_detached_signature(
+            ctx,
+            post_state,
+            baseline_post_state,
+            stats,
+        )),
         PayloadType::TrustAssertion => {
             handle_trust_assertion(ctx, post_state, stats);
             PostDispatchOutcome::Handled
@@ -117,8 +120,7 @@ pub(crate) async fn dispatch_post_payload(
             PostDispatchOutcome::Handled
         }
         PayloadType::Generic(ref s) if s == PAYLOAD_MARKET_INQUIRY_MESSAGE_V1 => {
-            handle_market_inquiry_message(ctx, post_state, stats);
-            PostDispatchOutcome::Handled
+            handle_market_inquiry_message(ctx, post_state, stats)
         }
         PayloadType::Generic(ref s) if s == humoco_market::PAYLOAD_GUARDIAN_ASSIGN_V1 => {
             as_outcome(handle_guardian_assign(ctx, post_state, stats))
@@ -250,11 +252,9 @@ pub(crate) fn commit_post_transaction_bundle(
                         )
                     })?;
             let mut next_post = post_state_cell.borrow_mut().take().ok_or_else(|| {
-                human_money_core::Error::Storage(
-                    human_money_core::StorageError::InvalidFormat(
-                        "Missing post_state companion buffer".to_string(),
-                    ),
-                )
+                human_money_core::Error::Storage(human_money_core::StorageError::InvalidFormat(
+                    "Missing post_state companion buffer".to_string(),
+                ))
             })?;
             if let Some(update_fn) = update_cell.borrow_mut().take() {
                 update_fn(&mut next_post, result);
@@ -263,7 +263,8 @@ pub(crate) fn commit_post_transaction_bundle(
                 human_money_core::Error::Storage(human_money_core::StorageError::InvalidFormat(
                     format!(
                         "Failed to serialize {}: {}",
-                        crate::state::MARKET_POST_STATE_KEY, e
+                        crate::state::MARKET_POST_STATE_KEY,
+                        e
                     ),
                 ))
             })?;
@@ -360,7 +361,10 @@ async fn handle_transaction_bundle(
                 baseline_post_state,
                 post_state,
                 |ps, result| {
-                    ps.processed_msg_ids.insert(ctx.envelope.msg_id.clone());
+                    ps.processed_msg_ids.insert(super::scoped_processed_msg_key(
+                        ctx.sender_did,
+                        &ctx.envelope.msg_id,
+                    ));
                     queue_ack_receipt(ctx, ps, Some(&result.header.bundle_id));
                 },
             )? {
@@ -480,7 +484,10 @@ async fn handle_transaction_bundle(
             let err_lower = e.to_string().to_ascii_lowercase();
             let is_duplicate =
                 err_lower.contains("already processed") || err_lower.contains("duplicate");
-            if is_sibling_subaccount || is_duplicate {
+            if is_duplicate {
+                queue_ack_receipt(ctx, post_state, None);
+                PostDispatchOutcome::Handled
+            } else if is_sibling_subaccount {
                 PostDispatchOutcome::Handled
             } else {
                 stats
@@ -515,6 +522,7 @@ fn handle_voucher_for_signing(
                 .collect(),
             container_bytes: ctx.envelope.container_bytes.clone(),
             anchor_manifest_json: ctx.envelope.anchor_manifest_json.clone(),
+            anchor_delegations_json: ctx.envelope.anchor_delegations_json.clone(),
         });
     stats.new_sign_requests += 1;
     queue_ack_receipt(ctx, post_state, None);
@@ -528,6 +536,10 @@ fn is_retryable_post_attach_error(err: &human_money_core::app_service::AppFacade
             | human_money_core::app_service::AppFacadeError::SessionNotActive(_)
             | human_money_core::app_service::AppFacadeError::Storage(_)
             | human_money_core::app_service::AppFacadeError::Io(_)
+            | human_money_core::app_service::AppFacadeError::VoucherNotFound(_)
+            | human_money_core::app_service::AppFacadeError::Wallet(
+                human_money_core::error::WalletError::StandardNotFound { .. }
+            )
             | human_money_core::app_service::AppFacadeError::App(
                 human_money_core::error::AppError::InsufficientAccessMode { .. }
             )
@@ -542,44 +554,75 @@ fn handle_detached_signature(
 ) -> bool {
     let all_standards = load_all_standard_tomls(ctx.app, ctx.extra_standards);
     let mut attached = false;
+    let mut duplicate_already_attached = false;
     let mut retryable_error: Option<String> = None;
-    let mut committed_post_state: Option<StoredPostState> = None;
+    let baseline_snapshot = baseline_post_state.clone();
+    let working_snapshot = post_state.clone();
+    let committed_post_cell = std::cell::RefCell::new(None::<StoredPostState>);
+
     let lock_res = ctx.state.with_session(ctx.session, |service| {
         if !service.is_wallet_unlocked() {
             return Ok(Some(
                 "Detached signature attachment deferred: wallet session is locked".to_string(),
             ));
         }
-        match service.process_and_attach_signature(
+        let mut candidate_ps = working_snapshot.clone();
+        super::merge_post_state_with_service(
+            service,
+            &baseline_snapshot,
+            &mut candidate_ps,
+            ctx.password,
+        )?;
+        queue_ack_receipt(ctx, &mut candidate_ps, None);
+        candidate_ps
+            .processed_msg_ids
+            .insert(super::scoped_processed_msg_key(
+                ctx.sender_did,
+                &ctx.envelope.msg_id,
+            ));
+
+        let companion_ps = std::cell::RefCell::new(Some(candidate_ps));
+        match service.process_and_attach_signature_with_companions(
             &ctx.envelope.container_bytes,
             &all_standards,
             None,
             ctx.password,
+            |_updated_id, _wallet| {
+                let next_ps = companion_ps.borrow_mut().take().ok_or_else(|| {
+                    human_money_core::Error::Storage(human_money_core::StorageError::InvalidFormat(
+                        "Missing post_state companion buffer".to_string(),
+                    ))
+                })?;
+                let bytes = serde_json::to_vec(&next_ps).map_err(|e| {
+                    human_money_core::Error::Storage(human_money_core::StorageError::InvalidFormat(
+                        format!(
+                            "Failed to serialize {}: {}",
+                            crate::state::MARKET_POST_STATE_KEY,
+                            e
+                        ),
+                    ))
+                })?;
+                *committed_post_cell.borrow_mut() = Some(next_ps);
+                Ok(vec![(
+                    crate::state::MARKET_POST_STATE_KEY.to_string(),
+                    bytes,
+                )])
+            },
         ) {
             Ok(_) => {
                 attached = true;
                 retryable_error = None;
                 let _ = ctx.state.refresh_events_cache(service, ctx.password);
-                let mut next_ps = post_state.clone();
-                queue_ack_receipt(ctx, &mut next_ps, None);
-                next_ps.processed_msg_ids.insert(ctx.envelope.msg_id.clone());
-                super::merge_post_state_with_service(
-                    service,
-                    baseline_post_state,
-                    &mut next_ps,
-                    ctx.password,
-                )?;
-                crate::state::save_encrypted_json(
-                    service,
-                    crate::state::MARKET_POST_STATE_KEY,
-                    &next_ps,
-                    ctx.password,
-                )
-                .map_err(crate::models::FrontendError::from)?;
-                committed_post_state = Some(next_ps);
             }
             Err(e) => {
-                if is_retryable_post_attach_error(&e) {
+                let is_already_attached = matches!(
+                    &e,
+                    human_money_core::app_service::AppFacadeError::MismatchedSignatureData(msg)
+                        if msg.to_ascii_lowercase().contains("already attached")
+                );
+                if is_already_attached {
+                    duplicate_already_attached = true;
+                } else if is_retryable_post_attach_error(&e) {
                     retryable_error = Some(e.to_string());
                 }
             }
@@ -607,11 +650,15 @@ fn handle_detached_signature(
         Ok(Some(None)) => {}
     }
     if attached {
-        if let Some(saved_ps) = committed_post_state {
+        if let Some(saved_ps) = committed_post_cell.into_inner() {
             *post_state = saved_ps;
             *baseline_post_state = post_state.clone();
         }
         stats.imported_signatures += 1;
+        return true;
+    }
+    if duplicate_already_attached {
+        queue_ack_receipt(ctx, post_state, None);
         return true;
     }
     if let Some(err) = retryable_error {
@@ -643,6 +690,13 @@ fn handle_trust_assertion(
             .push(format!("Invalid WoT handshake assertion: {}", e));
         return;
     }
+    if !are_dids_equal(&assertion.sender_did, ctx.sender_did) {
+        stats.errors.push(format!(
+            "Rejected WoT handshake assertion with spoofed sender DID: {} != {}",
+            assertion.sender_did, ctx.sender_did
+        ));
+        return;
+    }
 
     let is_known_trusted_contact = ctx
         .state
@@ -652,8 +706,7 @@ fn handle_trust_assertion(
                 .load_contacts(service, ctx.password)
                 .map(|list| {
                     list.iter().any(|c| {
-                        are_dids_equal(&c.did, &assertion.sender_did)
-                            && c.trust_level.unwrap_or(0) >= 1
+                        are_dids_equal(&c.did, ctx.sender_did) && c.trust_level.unwrap_or(0) >= 1
                     })
                 })
                 .unwrap_or(false))
@@ -669,8 +722,8 @@ fn handle_trust_assertion(
         {
             let _ = ctx.state.with_session(ctx.session, |service| {
                 if let Ok(mut reg) = ctx.state.get_or_load_wot_register(service, ctx.password) {
-                    let can_sender_did = crate::state::canonicalize_did(&assertion.sender_did)
-                        .unwrap_or_else(|_| assertion.sender_did.clone());
+                    let can_sender_did = crate::state::canonicalize_did(ctx.sender_did)
+                        .unwrap_or_else(|_| ctx.sender_did.to_string());
                     let _ = reg.import_sync_package(&pkg, Some(&can_sender_did), ctx.now_secs);
                     let _ = ctx.state.ensure_wot_list_signed(service, &mut reg);
                     let _ = ctx.state.save_wot_register(service, &reg, ctx.password);
@@ -740,7 +793,7 @@ fn handle_trust_assertion(
             .pending_wot_handshakes
             .push(FrontendPendingWotHandshake {
                 msg_id: ctx.envelope.msg_id.clone(),
-                sender_did: assertion.sender_did,
+                sender_did: ctx.sender_did.to_string(),
                 sender_name: assertion.sender_name,
                 proposed_level: assertion.proposed_level,
                 reply_requested: assertion.reply_requested,
@@ -771,14 +824,24 @@ fn handle_post_receipt(
             .push(format!("Invalid delivery receipt: {}", e));
         return;
     }
-    let before_len = post_state.outbox_entries.len();
+    let mut removed = 0usize;
     post_state.outbox_entries.retain(|e| {
         let matches_sender = are_dids_equal(&e.recipient_did, ctx.sender_did);
         let matches_msg = e.msg_id == receipt.acknowledged_msg_id
             || e.tag16_hex == receipt.acknowledged_tag16_hex;
-        !(matches_sender && matches_msg)
+        if matches_sender && matches_msg {
+            removed += 1;
+            if post_state.pruned_outbox_tag16s.len() >= 512 {
+                if let Some(first) = post_state.pruned_outbox_tag16s.iter().next().cloned() {
+                    post_state.pruned_outbox_tag16s.remove(&first);
+                }
+            }
+            post_state.pruned_outbox_tag16s.insert(e.tag16_hex.clone());
+            false
+        } else {
+            true
+        }
     });
-    let removed = before_len - post_state.outbox_entries.len();
     if removed > 0 {
         stats.imported_receipts += removed;
         stats.pruned_boxes += removed;
@@ -804,8 +867,13 @@ fn handle_market_inquiry(
         return;
     }
 
-    let is_target_valid =
-        check_inquiry_target(ctx.state, &inquiry.target, ctx.now_secs, ctx.password);
+    let is_target_valid = check_inquiry_target(
+        ctx.state,
+        ctx.session,
+        &inquiry.target,
+        ctx.now_secs,
+        ctx.password,
+    );
     if !is_target_valid {
         match &inquiry.target {
             InquiryTarget::Ad { ad_id, .. } => {
@@ -907,30 +975,53 @@ fn handle_market_inquiry(
     queue_ack_receipt(ctx, post_state, None);
 }
 
+fn extract_payment_uri_recipient(uri: &str) -> Option<String> {
+    let parsed = reqwest::Url::parse(uri.trim()).ok()?;
+    if !parsed.scheme().eq_ignore_ascii_case("humoco") {
+        return None;
+    }
+    let is_pay = parsed
+        .host_str()
+        .is_some_and(|h| h.eq_ignore_ascii_case("pay"))
+        || parsed.path().trim_matches('/').eq_ignore_ascii_case("pay");
+    if !is_pay {
+        return None;
+    }
+    parsed
+        .query_pairs()
+        .find(|(k, _)| k == "to")
+        .map(|(_, v)| v.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
 fn handle_market_inquiry_message(
     ctx: &PostEnvelopeContext<'_>,
     post_state: &mut StoredPostState,
     stats: &mut PostDispatchStats,
-) {
+) -> PostDispatchOutcome {
     let msg = match serde_json::from_slice::<MarketInquiryMessage>(ctx.decrypted_bytes) {
         Ok(m) => m,
         Err(e) => {
             stats
                 .errors
                 .push(format!("Failed to parse MarketInquiryMessage: {}", e));
-            return;
+            return PostDispatchOutcome::Handled;
         }
     };
     if let Err(e) = validate_market_inquiry_message(&msg) {
         stats
             .errors
             .push(format!("Invalid market inquiry message: {}", e));
-        return;
+        return PostDispatchOutcome::Handled;
     }
     let Some(item) = post_state.inquiries.iter_mut().find(|i| {
         i.inquiry_id == msg.inquiry_id && are_dids_equal(&i.counterparty_did, ctx.sender_did)
     }) else {
-        return;
+        return if ctx.now_secs.saturating_sub(ctx.envelope.created_at) <= 86_400 {
+            PostDispatchOutcome::RetryLater
+        } else {
+            PostDispatchOutcome::Handled
+        };
     };
 
     let mut notice_inquiry_id: Option<String> = None;
@@ -961,8 +1052,17 @@ fn handle_market_inquiry_message(
             } else {
                 "declined".to_string()
             };
-            if msg.payment_uri.is_some() {
-                item.payment_uri = msg.payment_uri.clone();
+            if let Some(ref raw_uri) = msg.payment_uri {
+                if extract_payment_uri_recipient(raw_uri)
+                    .is_some_and(|to_did| are_dids_equal(&to_did, &item.counterparty_did))
+                {
+                    item.payment_uri = Some(raw_uri.clone());
+                } else {
+                    stats.errors.push(format!(
+                        "Dropped mismatched inquiry payment URI for thread {}",
+                        msg.inquiry_id
+                    ));
+                }
             }
             if msg.amount_hint.is_some() {
                 item.amount_hint = msg.amount_hint.clone();
@@ -1008,6 +1108,7 @@ fn handle_market_inquiry_message(
         stats.last_inquiry_notice_target = Some((inq_id, cp_name));
     }
     queue_ack_receipt(ctx, post_state, None);
+    PostDispatchOutcome::Handled
 }
 
 fn handle_guardian_assign(
@@ -1080,26 +1181,24 @@ fn handle_guardian_assign(
 
     let save_res: Result<(), (String, bool)> =
         match ctx.state.with_session(ctx.session, |service| {
-            Ok(
-                match load_guardian_vault_with_cache(ctx.state, service, ctx.password) {
-                    Ok(mut vault) => match vault.upsert_ward(entry.clone()) {
-                        Ok(()) => {
-                            save_guardian_vault_with_cache(ctx.state, service, &vault, ctx.password)
-                                .map_err(|e| {
-                                    (
-                                        format!("Failed to save guardian vault: {}", e.message),
-                                        false,
-                                    )
-                                })
-                        }
-                        Err(e) => Err((format!("Failed to upsert guardian ward: {}", e), true)),
-                    },
-                    Err(e) => Err((
-                        format!("Failed to load guardian vault: {}", e.message),
-                        false,
-                    )),
+            Ok(match load_guardian_vault(service, ctx.password) {
+                Ok(mut vault) => match vault.upsert_ward(entry.clone()) {
+                    Ok(()) => {
+                        save_guardian_vault_with_cache(ctx.state, service, &vault, ctx.password)
+                            .map_err(|e| {
+                                (
+                                    format!("Failed to save guardian vault: {}", e.message),
+                                    false,
+                                )
+                            })
+                    }
+                    Err(e) => Err((format!("Failed to upsert guardian ward: {}", e), true)),
                 },
-            )
+                Err(e) => Err((
+                    format!("Failed to load guardian vault: {}", e.message),
+                    false,
+                )),
+            })
         }) {
             Ok(Some(res)) => res,
             Ok(None) => Err((
@@ -1153,8 +1252,7 @@ fn handle_guardian_ack(
         }
     };
     match ctx.state.with_session(ctx.session, |service| {
-        let owner_opt = match load_recovery_owner_state_with_cache(ctx.state, service, ctx.password)
-        {
+        let owner_opt = match load_recovery_owner_state(service, ctx.password) {
             Ok(opt) => opt,
             Err(e) => {
                 return Ok(Err(format!(
@@ -1238,35 +1336,40 @@ fn handle_guardian_locator(
 
     let update_res: Result<(), (String, bool)> =
         match ctx.state.with_session(ctx.session, |service| {
-            Ok(
-                match load_guardian_vault_with_cache(ctx.state, service, ctx.password) {
-                    Ok(mut vault) => match vault.update_locator(&update) {
-                        Ok(updated) => {
-                            if updated {
-                                save_guardian_vault_with_cache(
-                                    ctx.state,
-                                    service,
-                                    &vault,
-                                    ctx.password,
-                                )
+            Ok(match load_guardian_vault(service, ctx.password) {
+                Ok(mut vault) => match vault.update_locator(&update) {
+                    Ok(updated) => {
+                        if updated {
+                            save_guardian_vault_with_cache(ctx.state, service, &vault, ctx.password)
                                 .map_err(|e| {
                                     (
                                         format!("Failed to save guardian vault: {}", e.message),
                                         false,
                                     )
                                 })
-                            } else {
-                                Ok(())
-                            }
+                        } else {
+                            Ok(())
                         }
-                        Err(e) => Err((format!("Failed to update guardian locator: {}", e), true)),
-                    },
-                    Err(e) => Err((
-                        format!("Failed to load guardian vault: {}", e.message),
-                        false,
-                    )),
+                    }
+                    Err(e) => {
+                        let missing_ward = ctx.now_secs.saturating_sub(ctx.envelope.created_at)
+                            <= 86_400
+                            && matches!(
+                                e,
+                                humoco_market::MarketError::Validation(_)
+                                    | humoco_market::MarketError::Identity(_)
+                            );
+                        Err((
+                            format!("Failed to update guardian locator: {}", e),
+                            !missing_ward,
+                        ))
+                    }
                 },
-            )
+                Err(e) => Err((
+                    format!("Failed to load guardian vault: {}", e.message),
+                    false,
+                )),
+            })
         }) {
             Ok(Some(res)) => res,
             Ok(None) => Err((
@@ -1316,38 +1419,31 @@ fn handle_guardian_revoke(
 
     let revoke_res: Result<(), (String, bool)> =
         match ctx.state.with_session(ctx.session, |service| {
-            Ok(
-                match load_guardian_vault_with_cache(ctx.state, service, ctx.password) {
-                    Ok(mut vault) => match vault.revoke_ward(&revoke) {
-                        Ok(revoked) => {
-                            if revoked {
-                                save_guardian_vault_with_cache(
-                                    ctx.state,
-                                    service,
-                                    &vault,
-                                    ctx.password,
-                                )
+            Ok(match load_guardian_vault(service, ctx.password) {
+                Ok(mut vault) => match vault.revoke_ward(&revoke) {
+                    Ok(revoked) => {
+                        if revoked {
+                            save_guardian_vault_with_cache(ctx.state, service, &vault, ctx.password)
                                 .map_err(|e| {
                                     (
                                         format!("Failed to save guardian vault: {}", e.message),
                                         false,
                                     )
                                 })
-                            } else {
-                                Ok(())
-                            }
+                        } else {
+                            Ok(())
                         }
-                        Err(e) => Err((
-                            format!("Failed to revoke ward from guardian vault: {}", e),
-                            true,
-                        )),
-                    },
+                    }
                     Err(e) => Err((
-                        format!("Failed to load guardian vault: {}", e.message),
-                        false,
+                        format!("Failed to revoke ward from guardian vault: {}", e),
+                        true,
                     )),
                 },
-            )
+                Err(e) => Err((
+                    format!("Failed to load guardian vault: {}", e.message),
+                    false,
+                )),
+            })
         }) {
             Ok(Some(res)) => res,
             Ok(None) => Err((

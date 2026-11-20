@@ -141,16 +141,22 @@ vi.mock('../../../services/backupService', () => ({
 }));
 
 const mockProtectAction = vi.fn((callback: any) => callback('test-password'));
+const mockLockSession = vi.fn().mockResolvedValue(undefined);
+const mockRefreshSessionStatus = vi.fn().mockResolvedValue(undefined);
 
 vi.mock('../../../context/SessionContext', () => ({
   useSession: vi.fn(() => ({
     protectAction: mockProtectAction,
+    lockSession: mockLockSession,
+    refreshSessionStatus: mockRefreshSessionStatus,
     profileName: 'Alice',
     notifyLogout: vi.fn(),
     clearLocks: vi.fn(),
   })),
   useOptionalSession: vi.fn(() => ({
     protectAction: mockProtectAction,
+    lockSession: mockLockSession,
+    refreshSessionStatus: mockRefreshSessionStatus,
     profileName: 'Alice',
     notifyLogout: vi.fn(),
     clearLocks: vi.fn(),

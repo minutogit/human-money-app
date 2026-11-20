@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { open } from '@tauri-apps/plugin-dialog';
 import { SeedPhraseValue } from '../SeedPhraseInput';
@@ -54,10 +54,20 @@ export function useRestoreBackupFlow({
     const [method, setMethod] = useState<TopMethod>(() => {
         if (initialMethod) return initialMethod;
         if (initialBackupPath) return 'file_or_folder';
-        if (initialPayload?.includes('humoco://recovery-reply')) return 'social';
-        if (initialPayload?.includes('humoco://kit')) return 'words_or_sheet';
+        const lower = initialPayload?.toLowerCase() ?? '';
+        if (lower.includes('humoco://recovery-reply')) return 'social';
+        if (lower.includes('humoco://kit')) return 'words_or_sheet';
         return 'choose';
     });
+
+    const mountedRef = useRef(true);
+    const opSeqRef = useRef(0);
+    useEffect(() => {
+        mountedRef.current = true;
+        return () => {
+            mountedRef.current = false;
+        };
+    }, []);
 
     const [activeSocialSession, setActiveSocialSession] =
         useState<ActiveRecoverySessionDto | null>(null);
@@ -116,21 +126,24 @@ export function useRestoreBackupFlow({
     }, [method]);
 
     useEffect(() => {
+        const lower = initialPayload?.toLowerCase() ?? '';
         if (initialMethod) {
             setMethod(initialMethod);
-        } else if (initialPayload?.includes('humoco://recovery-reply')) {
+        } else if (lower.includes('humoco://recovery-reply')) {
             setMethod('social');
-        } else if (initialPayload?.includes('humoco://kit')) {
+        } else if (lower.includes('humoco://kit')) {
             setMethod('words_or_sheet');
         }
     }, [initialMethod, initialPayload]);
 
     const probeAndAdvanceFile = useCallback(
         async (path: string) => {
+            const seq = ++opSeqRef.current;
             setFeedback(null);
             setIsBusy(true);
             try {
                 const probeResult = await backupService.probeBackup(path);
+                if (!mountedRef.current || seq !== opSeqRef.current) return;
                 setSourcePath(path);
                 setProbe(probeResult);
                 setInspection(null);
@@ -139,10 +152,13 @@ export function useRestoreBackupFlow({
                 setCredentialMode(probeResult.supportsPasswordRestore ? 'password' : 'mnemonic');
                 setMethod('file_or_folder');
             } catch (err) {
+                if (!mountedRef.current || seq !== opSeqRef.current) return;
                 logger.error(`Failed to probe backup at ${path}: ${stringifyError(err)}`);
                 setFeedback({ type: 'error', message: translateError(err, t) });
             } finally {
-                setIsBusy(false);
+                if (mountedRef.current && seq === opSeqRef.current) {
+                    setIsBusy(false);
+                }
             }
         },
         [t]
@@ -198,6 +214,7 @@ export function useRestoreBackupFlow({
     };
 
     const runSyncProbe = async (inputsToProbe: string[]) => {
+        const seq = ++opSeqRef.current;
         setIsBusy(true);
         setFeedback(null);
         try {
@@ -208,6 +225,7 @@ export function useRestoreBackupFlow({
                 userPrefix: seedState.userPrefix.trim() || null,
                 language: seedState.language,
             });
+            if (!mountedRef.current || seq !== opSeqRef.current) return;
             setLastSyncInputs(inputsToProbe);
             setSyncProbe(probeRes);
             setResolvedSyncTargets(probeRes.resolvedSyncTargets);
@@ -239,10 +257,13 @@ export function useRestoreBackupFlow({
                 setWordsPhase(probeRes.status === 'not_found' ? 'sync_not_found' : 'sync_unreachable');
             }
         } catch (err) {
+            if (!mountedRef.current || seq !== opSeqRef.current) return;
             logger.error(`Probe sync backup failed: ${stringifyError(err)}`);
             setFeedback({ type: 'error', message: translateError(err, t) });
         } finally {
-            setIsBusy(false);
+            if (mountedRef.current && seq === opSeqRef.current) {
+                setIsBusy(false);
+            }
         }
     };
 
@@ -520,6 +541,7 @@ export function useRestoreBackupFlow({
     };
 
     const handleReconcileL2 = async () => {
+        const seq = ++opSeqRef.current;
         setIsReconcilingL2(true);
         setFeedback(null);
         try {
@@ -530,7 +552,7 @@ export function useRestoreBackupFlow({
                         return await backupService.reconcileRestoredWalletL2(pwd || undefined);
                     })
                   : await backupService.reconcileRestoredWalletL2(undefined);
-            if (!res) return;
+            if (!mountedRef.current || seq !== opSeqRef.current || !res) return;
             if (restoreOutcome) {
                 setRestoreOutcome({
                     ...restoreOutcome,
@@ -544,9 +566,12 @@ export function useRestoreBackupFlow({
                     : { type: 'error', message: t('profile.backupRestoreReconcileOffline') }
             );
         } catch (err) {
+            if (!mountedRef.current || seq !== opSeqRef.current) return;
             setFeedback({ type: 'error', message: translateError(err, t) });
         } finally {
-            setIsReconcilingL2(false);
+            if (mountedRef.current && seq === opSeqRef.current) {
+                setIsReconcilingL2(false);
+            }
         }
     };
 

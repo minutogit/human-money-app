@@ -528,16 +528,20 @@ pub async fn refresh_wot_provider_url_impl(
         }
     }
 
-    let body_bytes = response
-        .bytes()
+    let mut body_bytes = Vec::new();
+    let mut response = response;
+    while let Some(chunk) = response
+        .chunk()
         .await
-        .map_err(|e| FrontendError::from(format!("Failed to read response body: {}", e)))?;
-
-    if body_bytes.len() > humoco_wot::MAX_PROVIDER_FILTER_RAW_LEN {
-        return Err(FrontendError::from(format!(
-            "Provider filter response exceeds {} byte limit",
-            humoco_wot::MAX_PROVIDER_FILTER_RAW_LEN
-        )));
+        .map_err(|e| FrontendError::from(format!("Failed to read response body: {}", e)))?
+    {
+        if body_bytes.len().saturating_add(chunk.len()) > humoco_wot::MAX_PROVIDER_FILTER_RAW_LEN {
+            return Err(FrontendError::from(format!(
+                "Provider filter response exceeds {} byte limit",
+                humoco_wot::MAX_PROVIDER_FILTER_RAW_LEN
+            )));
+        }
+        body_bytes.extend_from_slice(&chunk);
     }
 
     let raw_json = std::str::from_utf8(&body_bytes)

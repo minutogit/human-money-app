@@ -93,7 +93,7 @@ pub async fn create_profile(
         "Attempting to create profile '{}' with language {:?}...",
         profile_name, language
     );
-    let created_folder_name = {
+    let (created_folder_name, session) = {
         let mut service = state.service.lock().unwrap();
         let existing_folders: std::collections::HashSet<String> = service
             .list_profiles()
@@ -117,71 +117,97 @@ pub async fn create_profile(
         ) {
             Ok(()) => {
                 info!("Profile created successfully!");
-                let setup_res = (|| -> Result<String, FrontendError> {
-                    let folder_name = service.list_profiles().ok().and_then(|profiles| {
-                        profiles
-                            .iter()
-                            .find(|p| !existing_folders.contains(&p.folder_name))
-                            .or_else(|| profiles.iter().find(|p| p.profile_name == profile_name))
-                            .map(|p| p.folder_name.clone())
-                    });
-                    let pending_lock = if let Some(ref folder) = folder_name {
-                        state.acquire_profile_lock(folder)?
-                    } else {
-                        PendingProfileLock::None
-                    };
-                    let user_id = service
-                        .with_wallet_and_identity(|_, id| id.user_id.clone())
-                        .ok();
+                let created_folder = service.list_profiles().ok().and_then(|profiles| {
+                    profiles
+                        .iter()
+                        .find(|p| !existing_folders.contains(&p.folder_name))
+                        .or_else(|| profiles.iter().find(|p| p.profile_name == profile_name))
+                        .map(|p| p.folder_name.clone())
+                });
+                let setup_res =
+                    (|| -> Result<(String, crate::session::SessionToken), FrontendError> {
+                        let pending_lock = if let Some(ref folder) = created_folder {
+                            state.acquire_profile_lock(folder)?
+                        } else {
+                            PendingProfileLock::None
+                        };
+                        let user_id = service
+                            .with_wallet_and_identity(|_, id| id.user_id.clone())
+                            .ok();
 
-                    if let Some(ref folder) = folder_name {
-                        if let Err(e) = record_profile_metadata(&app, folder, user_id) {
-                            error!("Failed to update profile metadata: {}", e);
+                        if let Some(ref folder) = created_folder {
+                            if let Err(e) = record_profile_metadata(&app, folder, user_id) {
+                                error!("Failed to update profile metadata: {}", e);
+                            }
                         }
-                    }
 
-                    // 1. Initialize and save split default configuration stores for the new profile
-                    crate::state::save_encrypted_json(
-                        &mut service,
-                        UI_PREFERENCES_KEY,
-                        &UiPreferences::default(),
-                        Some(&password),
-                    )
-                    .map_err(|e| {
-                        FrontendError::from(format!("Failed to save default uiPreferences: {}", e))
-                    })?;
-                    crate::state::save_encrypted_json(
-                        &mut service,
-                        SECURITY_POLICY_KEY,
-                        &SecurityPolicy::default(),
-                        Some(&password),
-                    )
-                    .map_err(|e| {
-                        FrontendError::from(format!("Failed to save default securityPolicy: {}", e))
-                    })?;
-                    crate::state::save_local_sidecar_json(
-                        &mut service,
-                        INTERNAL_LIFECYCLE_STATE_KEY,
-                        &InternalLifecycleState::default(),
-                        Some(&password),
-                    )
-                    .map_err(|e| {
-                        FrontendError::from(format!("Failed to save default lifecycle state: {}", e))
-                    })?;
+                        // 1. Initialize and save split default configuration stores for the new profile
+                        crate::state::save_encrypted_json(
+                            &mut service,
+                            UI_PREFERENCES_KEY,
+                            &UiPreferences::default(),
+                            Some(&password),
+                        )
+                        .map_err(|e| {
+                            FrontendError::from(format!(
+                                "Failed to save default uiPreferences: {}",
+                                e
+                            ))
+                        })?;
+                        crate::state::save_encrypted_json(
+                            &mut service,
+                            SECURITY_POLICY_KEY,
+                            &SecurityPolicy::default(),
+                            Some(&password),
+                        )
+                        .map_err(|e| {
+                            FrontendError::from(format!(
+                                "Failed to save default securityPolicy: {}",
+                                e
+                            ))
+                        })?;
+                        crate::state::save_local_sidecar_json(
+                            &mut service,
+                            INTERNAL_LIFECYCLE_STATE_KEY,
+                            &InternalLifecycleState::default(),
+                            Some(&password),
+                        )
+                        .map_err(|e| {
+                            FrontendError::from(format!(
+                                "Failed to save default lifecycle state: {}",
+                                e
+                            ))
+                        })?;
 
-                    // 2. Initialize session and cache
-                    state
-                        .initialize_profile_session(&mut service, &password)
-                        .map_err(FrontendError::from)?;
-                    state.commit_profile_lock(pending_lock);
-                    Ok(folder_name.unwrap_or_default())
-                })();
+                        // 2. Initialize session and cache
+                        state
+                            .initialize_profile_session(&mut service, &password)
+                            .map_err(FrontendError::from)?;
+                        let session = state.session_token_for_service(&service)?;
+                        state.commit_profile_lock(pending_lock);
+                        Ok((created_folder.clone().unwrap_or_default(), session))
+                    })();
                 match setup_res {
-                    Ok(folder) => folder,
+                    Ok(res) => res,
                     Err(err) => {
-                        service.logout();
-                        state.clear_all_caches();
-                        state.clear_sync_cooldown();
+                        state.rollback_failed_session(&mut service);
+                        if let Some(ref folder) = created_folder {
+                            if !existing_folders.contains(folder)
+                                && !folder.is_empty()
+                                && !folder.contains('/')
+                                && !folder.contains('\\')
+                                && !folder.contains("..")
+                            {
+                                if let Ok(data_dir) = app.path().app_data_dir() {
+                                    let wallet_data_dir = data_dir.join("wallet_data");
+                                    let _ = std::fs::remove_dir_all(wallet_data_dir.join(folder));
+                                    let _ = crate::services::fs_helpers::remove_profile_metadata_entry_in_dir(
+                                        &wallet_data_dir,
+                                        folder,
+                                    );
+                                }
+                            }
+                        }
                         return Err(err);
                     }
                 }
@@ -194,7 +220,9 @@ pub async fn create_profile(
     };
 
     if let Some(preset) = initial_reach_preset {
-        if matches!(preset.as_str(), "near" | "medium" | "far") {
+        if state.is_generation_current(session.generation)
+            && matches!(preset.as_str(), "near" | "medium" | "far")
+        {
             crate::services::settings_service::apply_reach_preset_impl(
                 preset,
                 Some(password.clone()),
@@ -205,6 +233,9 @@ pub async fn create_profile(
 
     if let Some(targets) = initial_sync_targets {
         for target in targets {
+            if !state.is_generation_current(session.generation) {
+                break;
+            }
             let _ = crate::services::sync_engine::save_public_sync_impl(
                 target.write_url,
                 target.read_url,
@@ -247,13 +278,18 @@ pub fn login(
                 error!("Failed to update profile metadata: {}", e);
             }
 
-            state
+            if let Err(err) = state
                 .initialize_profile_session(&mut service, &password)
-                .map_err(FrontendError::from)?;
+                .map_err(FrontendError::from)
+            {
+                state.rollback_failed_session(&mut service);
+                return Err(err);
+            }
+            let session = state.session_token_for_service(&service)?;
             drop(service);
             state.commit_profile_lock(pending_lock);
 
-            crate::services::common::spawn_pending_l2_reconciliation(&app, &password);
+            crate::services::common::spawn_pending_l2_reconciliation(&app, session, &password);
 
             Ok(())
         }
@@ -304,13 +340,18 @@ pub fn recover_wallet_and_set_new_password(
                 error!("Failed to update profile metadata: {}", e);
             }
 
-            state
+            if let Err(err) = state
                 .initialize_profile_session(&mut service, &new_password)
-                .map_err(FrontendError::from)?;
+                .map_err(FrontendError::from)
+            {
+                state.rollback_failed_session(&mut service);
+                return Err(err);
+            }
+            let session = state.session_token_for_service(&service)?;
             drop(service);
             state.commit_profile_lock(pending_lock);
 
-            crate::services::common::spawn_pending_l2_reconciliation(&app, &new_password);
+            crate::services::common::spawn_pending_l2_reconciliation(&app, session, &new_password);
 
             Ok(())
         }
@@ -349,13 +390,18 @@ pub fn handover_to_this_device(
                 error!("Failed to update profile metadata: {}", e);
             }
 
-            state
+            if let Err(err) = state
                 .initialize_profile_session(&mut service, &password)
-                .map_err(FrontendError::from)?;
+                .map_err(FrontendError::from)
+            {
+                state.rollback_failed_session(&mut service);
+                return Err(err);
+            }
+            let session = state.session_token_for_service(&service)?;
             drop(service);
             state.commit_profile_lock(pending_lock);
 
-            crate::services::common::spawn_pending_l2_reconciliation(&app, &password);
+            crate::services::common::spawn_pending_l2_reconciliation(&app, session, &password);
 
             Ok(())
         }
@@ -804,15 +850,22 @@ pub fn enable_profile_pin_impl(
         details: HashMap::new(),
     })?;
 
-    // Verify master password cleanly BEFORE mutating the device keystore
+    // Verify active profile & master password cleanly BEFORE mutating the device keystore
     let mut service = state
         .service
         .lock()
         .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+    if service.is_wallet_unlocked() && !service.is_active_profile(folder_name) {
+        return Err(FrontendError::from(
+            "Target profile does not match currently active session.".to_string(),
+        ));
+    }
     let _ = service
         .export_mnemonic(master_password)
         .map_err(FrontendError::from)?;
 
+    let previous_entry =
+        pin_keystore::get_entry(keystore_dir, folder_name).map_err(FrontendError::from)?;
     let secret = pin_keystore::create_and_store_pepper(
         keystore_dir,
         device_binding_id,
@@ -823,9 +876,10 @@ pub fn enable_profile_pin_impl(
     .map_err(FrontendError::from)?;
 
     if let Err(err) = service.enable_secondary_auth(master_password, &secret, scope) {
-        let _ = pin_keystore::remove_entry(keystore_dir, folder_name);
+        let _ = pin_keystore::restore_entry(keystore_dir, folder_name, previous_entry);
         return Err(FrontendError::from(err));
     }
+    state.clear_one_shot_pin_grant();
 
     Ok(ProfilePinStatusDto {
         enabled: true,
@@ -871,16 +925,22 @@ pub fn disable_profile_pin_impl(
     folder_name: &str,
     keystore_dir: &Path,
     state: &AppState,
-) -> Result<(), FrontendError> {
+) -> Result<SessionStatusDto, FrontendError> {
     let mut service = state
         .service
         .lock()
         .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
+    if service.is_wallet_unlocked() && !service.is_active_profile(folder_name) {
+        return Err(FrontendError::from(
+            "Target profile does not match currently active session.".to_string(),
+        ));
+    }
     service
         .disable_secondary_auth(master_password)
         .map_err(FrontendError::from)?;
     pin_keystore::remove_entry(keystore_dir, folder_name).map_err(FrontendError::from)?;
-    Ok(())
+    state.clear_one_shot_pin_grant();
+    Ok(build_session_status(&service))
 }
 
 #[tauri::command]
@@ -889,7 +949,7 @@ pub fn disable_profile_pin(
     folder_name: Option<String>,
     state: tauri::State<AppState>,
     app: tauri::AppHandle,
-) -> Result<(), FrontendError> {
+) -> Result<SessionStatusDto, FrontendError> {
     let keystore_dir = app
         .path()
         .app_config_dir()
@@ -943,14 +1003,21 @@ pub fn login_with_pin_impl(
                 }
             }
 
-            state
+            if let Err(err) = state
                 .initialize_profile_session_with_secondary(&mut service, &secret)
-                .map_err(FrontendError::from)?;
+                .map_err(FrontendError::from)
+            {
+                state.rollback_failed_session(&mut service);
+                return Err(err);
+            }
+            let session = state.session_token_for_service(&service)?;
             drop(service);
             state.commit_profile_lock(pending_lock);
 
             if let Some(app_handle) = app {
-                crate::services::common::spawn_pending_l2_reconciliation(app_handle, &secret);
+                crate::services::common::spawn_pending_l2_reconciliation(
+                    app_handle, session, &secret,
+                );
             }
 
             Ok(mode.as_str().to_string())
@@ -1030,6 +1097,9 @@ pub fn elevate_session_with_password_impl(
         .elevate_session(master_password, timeout_seconds)
         .map_err(FrontendError::from)?;
     state.clear_one_shot_pin_grant();
+    if timeout_seconds > 0 {
+        state.notify_sync_coordinator();
+    }
     Ok(build_session_status(&service))
 }
 

@@ -72,7 +72,6 @@ vi.mock('../../../services/postService', () => ({
   postService: {
     depositTransferToPost: vi.fn(),
   },
-  POST_INBOX_UPDATED_EVENT: 'humoco://post-inbox-updated',
 }));
 
 describe('TransferSuccessView Component (Dual-Delivery & SST-V4 Retry)', () => {

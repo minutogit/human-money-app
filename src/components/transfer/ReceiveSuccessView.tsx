@@ -1,5 +1,5 @@
 // src/components/ReceiveSuccessView.tsx
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
     ReceiveSuccessPayload,
     PendingReceiveCommit,
@@ -114,6 +114,7 @@ export function ReceiveSuccessView({ payload, pendingCommit, launchItem, onFinis
     const [manualApprovalGranted, setManualApprovalGranted] = useState(
         () => Boolean(activePayload.checkoutVerdict?.isGoodsReleaseAuthorized)
     );
+    const approveInFlightRef = useRef(false);
 
     useEffect(() => {
         setManualApprovalGranted(Boolean(activePayload.checkoutVerdict?.isGoodsReleaseAuthorized));
@@ -128,7 +129,8 @@ export function ReceiveSuccessView({ payload, pendingCommit, launchItem, onFinis
     };
 
     const handleApproveOnTrust = async () => {
-        if (isApprovingOnTrust) return;
+        if (approveInFlightRef.current || isApprovingOnTrust) return;
+        approveInFlightRef.current = true;
         setApprovalError(null);
         setIsApprovingOnTrust(true);
         try {
@@ -175,13 +177,15 @@ export function ReceiveSuccessView({ payload, pendingCommit, launchItem, onFinis
             }
             setApprovalError(translateError(err, t));
         } finally {
+            approveInFlightRef.current = false;
             setIsApprovingOnTrust(false);
         }
     };
 
     const confirmToleranceCommit = async () => {
         const modal = toleranceModal;
-        if (!modal || isApprovingOnTrust) return;
+        if (!modal || approveInFlightRef.current || isApprovingOnTrust) return;
+        approveInFlightRef.current = true;
         setApprovalError(null);
         setIsApprovingOnTrust(true);
         try {
@@ -198,6 +202,7 @@ export function ReceiveSuccessView({ payload, pendingCommit, launchItem, onFinis
         } catch (err) {
             setApprovalError(translateError(err, t));
         } finally {
+            approveInFlightRef.current = false;
             setIsApprovingOnTrust(false);
             setToleranceModal(null);
             setConfirmText('');

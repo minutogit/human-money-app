@@ -176,6 +176,12 @@ function detectDirectRustTier(body: string): CommandAccessTier | null {
             maxTier = mapped;
         }
     }
+    for (const m of body.matchAll(/require_access_mode\s*\(\s*(?:human_money_core::)?AccessMode::(DailyPay|Full)\b/g)) {
+        const mapped: CommandAccessTier = m[1] === "Full" ? "full" : "dailyPay";
+        if (!maxTier || TIER_RANK[mapped] > TIER_RANK[maxTier]) {
+            maxTier = mapped;
+        }
+    }
     return maxTier;
 }
 
@@ -186,20 +192,26 @@ function extractRustCommandTierMap(): Map<string, CommandAccessTier> {
 
     const checkBodyTier = (body: string): CommandAccessTier | null => {
         let best = detectDirectRustTier(body);
-        // Also recognize explicit admin-key helper and Core full delete verification
-        if (/\bload_admin_with_signing_key\s*\(/.test(body) || /service\s*\.\s*delete_profile\s*\(/.test(body)) {
+        // Also recognize explicit admin-key helper and Core Full master-password verification
+        if (
+            /\bload_admin_with_signing_key\s*\(/.test(body) ||
+            /\bservice\s*\.\s*(?:delete_profile|export_mnemonic|disable_secondary_auth)\s*\(/.test(
+                body,
+            )
+        ) {
             if (!best || TIER_RANK.full > TIER_RANK[best]) best = "full";
         }
         return best;
     };
 
     for (const [cmdName, cmdBody] of commands.entries()) {
-        let tier = checkBodyTier(cmdBody);
+        const isBootstrap = /\binitialize_profile_session\s*\(/.test(cmdBody);
+        let tier = isBootstrap ? null : checkBodyTier(cmdBody);
         const visited = new Set<string>();
         const queue: string[] = [];
-        if (!/\binitialize_profile_session\s*\(/.test(cmdBody)) {
+        if (!isBootstrap) {
             queue.push(`${cmdName}_impl`);
-            for (const m of cmdBody.matchAll(/\b([a-z0-9_]+_impl|replace_local_profile_with_restored)\s*\(/g)) {
+            for (const m of cmdBody.matchAll(/\b([a-z0-9_]+_(?:impl|with_options|with_params)|replace_local_profile_with_restored)\s*\(/g)) {
                 queue.push(m[1]);
             }
         }
@@ -209,16 +221,15 @@ function extractRustCommandTierMap(): Map<string, CommandAccessTier> {
             visited.add(target);
             const bodies = allFns.get(target) ?? [];
             for (const b of bodies) {
+                if (/\binitialize_profile_session\s*\(/.test(b)) {
+                    continue;
+                }
                 const subTier = checkBodyTier(b);
                 if (subTier && (!tier || TIER_RANK[subTier] > TIER_RANK[tier])) {
                     tier = subTier;
                 }
-                // Public onboarding/recovery bootstrap functions that establish a new session
-                // call post-onboarding helpers directly with the just-verified credentials.
-                if (!/\binitialize_profile_session\s*\(/.test(b)) {
-                    for (const m2 of b.matchAll(/\b([a-z0-9_]+_impl|load_admin_with_signing_key)\s*\(/g)) {
-                        if (!visited.has(m2[1])) queue.push(m2[1]);
-                    }
+                for (const m2 of b.matchAll(/\b([a-z0-9_]+_(?:impl|with_options|with_params)|load_admin_with_signing_key)\s*\(/g)) {
+                    if (!visited.has(m2[1])) queue.push(m2[1]);
                 }
             }
         }
@@ -344,21 +355,22 @@ function isProtectActionCall(call: ts.CallExpression): {
 function hasExplicitPasswordArgument(call: ts.CallExpression, sf: ts.SourceFile): boolean {
     if (call.arguments.length === 0) return false;
     // Object arg with explicit `password` / `masterPassword` field, OR positional `password`/`masterPassword` identifier
-    const first = call.arguments[0];
-    if (ts.isIdentifier(first) && /password/i.test(first.text)) return true;
-    if (ts.isObjectLiteralExpression(first)) {
-        return first.properties.some((p) => {
-            if (ts.isShorthandPropertyAssignment(p)) {
-                return /password/i.test(p.name.text);
-            }
-            if (ts.isPropertyAssignment(p) && ts.isIdentifier(p.name) && /password/i.test(p.name.text)) {
-                const txt = p.initializer.getText(sf);
-                return txt !== "undefined" && txt !== "null" && !txt.includes("|| undefined");
-            }
-            return false;
-        });
-    }
-    return false;
+    return call.arguments.some((arg) => {
+        if (ts.isIdentifier(arg) && /password/i.test(arg.text)) return true;
+        if (ts.isObjectLiteralExpression(arg)) {
+            return arg.properties.some((p) => {
+                if (ts.isShorthandPropertyAssignment(p)) {
+                    return /password/i.test(p.name.text);
+                }
+                if (ts.isPropertyAssignment(p) && ts.isIdentifier(p.name) && /password/i.test(p.name.text)) {
+                    const txt = p.initializer.getText(sf);
+                    return txt !== "undefined" && txt !== "null" && !txt.includes("|| undefined");
+                }
+                return false;
+            });
+        }
+        return false;
+    });
 }
 
 describe("Tauri command access policy parity (F3)", () => {
@@ -381,6 +393,12 @@ describe("Tauri command access policy parity (F3)", () => {
             const policyTier = COMMAND_ACCESS_POLICY[cmd as keyof typeof COMMAND_ACCESS_POLICY];
             if (policyTier !== rustTier) {
                 mismatches.push(`${cmd}: backend=${rustTier}, commandPolicy=${policyTier}`);
+            }
+        }
+        for (const [cmd, policyTier] of Object.entries(COMMAND_ACCESS_POLICY)) {
+            if (policyTier === "public") continue;
+            if (!rustTiers.has(cmd)) {
+                mismatches.push(`${cmd}: commandPolicy=${policyTier}, backend=<none extracted>`);
             }
         }
         expect(mismatches).toEqual([]);
@@ -416,8 +434,6 @@ describe("Tauri command access policy parity (F3)", () => {
             const rel = path.relative(SRC_ROOT, file);
             const src = fs.readFileSync(file, "utf-8");
             const sf = ts.createSourceFile(file, src, ts.ScriptTarget.Latest, true);
-            const fileHasFullPrecheck =
-                src.includes("ensureFullAccess") || src.includes("requireFullAccess");
 
             // Track local helper functions called inside Full-gated protectAction callbacks vs outside.
             const localFnDefs = new Map<string, ts.Node[]>();
@@ -516,6 +532,9 @@ describe("Tauri command access policy parity (F3)", () => {
                 inProtectAction: boolean,
                 inFullProtectAction: boolean,
             ) => {
+                if (skippedFallbackBranches.has(node)) {
+                    return;
+                }
                 if (fullGatedNodes.has(node)) {
                     ts.forEachChild(node, (child) => inspect(child, true, true));
                     return;
@@ -672,7 +691,6 @@ describe("Tauri command access policy parity (F3)", () => {
                             !EXPLICIT_PASSWORD_REAUTH_COMMANDS.has(
                                 cmd as keyof typeof COMMAND_ACCESS_POLICY,
                             ) &&
-                            !fileHasFullPrecheck &&
                             !hasExplicitPasswordArgument(node, sf) &&
                             !isSilentStartupRepair
                         ) {

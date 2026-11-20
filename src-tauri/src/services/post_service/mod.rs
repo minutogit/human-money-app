@@ -26,16 +26,24 @@ pub use inbox_poller::{
     confirm_pending_post_payment_impl, dismiss_pending_post_item_impl, get_post_inbox_summary_impl,
     mark_inquiry_read_impl, sync_post_channels_impl,
 };
+#[cfg(test)]
+pub use outbox::send_wot_handshake_via_post_impl;
 pub use outbox::{
     accept_wot_handshake_impl, deposit_transfer_to_post_impl,
     reply_detached_signature_via_post_impl, send_market_inquiry_message_via_post_impl,
     send_market_inquiry_via_post_impl, send_signing_request_via_post_impl,
-    send_wot_handshake_via_post_impl,
 };
 pub(crate) use outbox::{
     deposit_transfer_to_post_with_session, flush_post_slots_impl,
     send_wot_handshake_via_post_with_session,
 };
+
+/// Builds the peer-scoped deduplication key `(canonical_peer_did, msg_id)` for processed incoming messages.
+pub(crate) fn scoped_processed_msg_key(peer_did: &str, msg_id: &str) -> String {
+    let can =
+        crate::state::canonicalize_did(peer_did).unwrap_or_else(|_| peer_did.trim().to_string());
+    format!("{}\x00{}", can, msg_id)
+}
 
 /// Extracted identity and reply-sync configuration required to seal and queue Post messages.
 pub(crate) struct PostSigningContext {
@@ -138,6 +146,8 @@ fn merge_inquiries_3way(
                     added_msg = true;
                 }
             }
+            let working_added_msgs =
+                w_item.messages.len() > base_opt.map_or(0, |b| b.messages.len());
             if added_msg {
                 w_item.messages.sort_by_key(|m| m.created_at);
             }
@@ -148,7 +158,22 @@ fn merge_inquiries_3way(
             if w_item.payment_uri.is_none() && latest_item.payment_uri.is_some() {
                 w_item.payment_uri = latest_item.payment_uri.clone();
             }
-            if added_msg && latest_item.unread {
+            if base_opt.is_none_or(|b| b.amount_hint == w_item.amount_hint)
+                && base_opt.is_none_or(|b| b.amount_hint != latest_item.amount_hint)
+            {
+                w_item.amount_hint = latest_item.amount_hint.clone();
+            }
+            if base_opt.is_none_or(|b| b.standard_uuid == w_item.standard_uuid)
+                && base_opt.is_none_or(|b| b.standard_uuid != latest_item.standard_uuid)
+            {
+                w_item.standard_uuid = latest_item.standard_uuid.clone();
+            }
+            if base_opt.is_none_or(|b| b.reply_syncs == w_item.reply_syncs)
+                && base_opt.is_none_or(|b| b.reply_syncs != latest_item.reply_syncs)
+            {
+                w_item.reply_syncs = latest_item.reply_syncs.clone();
+            }
+            if (added_msg && latest_item.unread) || (working_added_msgs && w_item.unread) {
                 w_item.unread = true;
             } else if base_opt.is_some_and(|b| b.unread == w_item.unread) {
                 w_item.unread = latest_item.unread;
@@ -232,6 +257,17 @@ pub(crate) fn merge_post_state_with_service(
                     .entry(target.clone())
                     .or_default()
                     .extend(senders.iter().cloned());
+            }
+        }
+        working.outbox_rotation_tick = working
+            .outbox_rotation_tick
+            .max(latest.outbox_rotation_tick);
+        for id in &latest.replied_sign_request_ids {
+            working.replied_sign_request_ids.insert(id.clone());
+        }
+        for tag in &latest.pruned_outbox_tag16s {
+            if working.pruned_outbox_tag16s.len() < 512 {
+                working.pruned_outbox_tag16s.insert(tag.clone());
             }
         }
     }
@@ -338,7 +374,7 @@ pub(crate) fn load_post_signing_context_for_service(
     let identity = service
         .with_wallet_and_identity(|_w, id| id.clone())
         .map_err(FrontendError::from)?;
-    let sync_ctx = SyncIdentityContext::from_service(service)?;
+    let sync_ctx = SyncIdentityContext::from_service(service, password)?;
     let security_policy = state
         .get_or_load_security_policy(service, password)
         .map_err(FrontendError::from)?;
@@ -496,86 +532,83 @@ pub(crate) fn resolve_counterparty_info_for_session(
         .unwrap_or((None, None, false))
 }
 
-/// Resolves `(display_name, picture_url, is_contact)` for a DID across the
-/// address book and the local marketplace business-card store.
-pub(crate) fn resolve_counterparty_info(
-    state: &AppState,
-    did: &str,
-    password: Option<&str>,
-) -> (Option<String>, Option<String>, bool) {
-    let Ok(mut service) = state.lock_service() else {
-        return (None, None, false);
-    };
-    resolve_counterparty_info_with_service(state, &mut service, did, password)
-}
-
 /// Looks up Sync endpoints for a counterparty across contacts and the local card store.
 pub(crate) fn lookup_counterparty_syncs(
     state: &AppState,
+    session: &SessionToken,
     did: &str,
     password: Option<&str>,
 ) -> Vec<FrontendSyncDescriptor> {
-    let mut result = Vec::new();
-    let mut service = state.service.lock().unwrap();
-    if let Ok(contacts) = state.load_contacts(&mut service, password) {
-        let trimmed = did.trim();
-        if let Some(c) = contacts
-            .iter()
-            .find(|c| c.did.trim() == trimmed)
-            .or_else(|| contacts.iter().find(|c| are_dids_equal(&c.did, trimmed)))
-        {
-            result.extend(c.syncs.iter().cloned());
-        }
-    }
-    if result.is_empty() {
-        match crate::state::load_encrypted_json_opt::<humoco_market::CardStore>(
-            &mut service,
-            MARKET_CARD_STORE_KEY,
-            password,
-        ) {
-            Ok(Some(card_store)) => {
-                if let Some(stored) = find_card_in_store(&card_store, did) {
-                    result.extend(stored.card.payload.drops.iter().cloned().map(Into::into));
+    state
+        .with_session(session, |service| {
+            let mut result = Vec::new();
+            if let Ok(contacts) = state.load_contacts(service, password) {
+                let trimmed = did.trim();
+                if let Some(c) = contacts
+                    .iter()
+                    .find(|c| c.did.trim() == trimmed)
+                    .or_else(|| contacts.iter().find(|c| are_dids_equal(&c.did, trimmed)))
+                {
+                    result.extend(c.syncs.iter().cloned());
                 }
             }
-            Ok(None) => {}
-            Err(e) => {
-                log::warn!(
-                    "Failed to load CardStore in lookup_counterparty_syncs: {}",
-                    e
-                );
+            if result.is_empty() {
+                match crate::state::load_encrypted_json_opt::<humoco_market::CardStore>(
+                    service,
+                    MARKET_CARD_STORE_KEY,
+                    password,
+                ) {
+                    Ok(Some(card_store)) => {
+                        if let Some(stored) = find_card_in_store(&card_store, did) {
+                            result
+                                .extend(stored.card.payload.drops.iter().cloned().map(Into::into));
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        log::warn!(
+                            "Failed to load CardStore in lookup_counterparty_syncs: {}",
+                            e
+                        );
+                    }
+                }
             }
-        }
-    }
-    result
+            Ok(result)
+        })
+        .ok()
+        .flatten()
+        .unwrap_or_default()
 }
 
 /// Checks whether our local marketplace profile/ad currently allows the given inquiry target.
 pub(crate) fn check_inquiry_target(
     state: &AppState,
+    session: &SessionToken,
     target: &humoco_market::InquiryTarget,
     now_secs: u64,
     password: Option<&str>,
 ) -> bool {
-    let mut service = state.service.lock().unwrap();
-    if let Ok(stored) = crate::services::market_service::load_own_market_profile_state(
-        state,
-        &mut service,
-        password,
-    ) {
-        match target {
-            humoco_market::InquiryTarget::Ad { ad_id, .. } => {
-                return stored
-                    .ads
-                    .iter()
-                    .any(|a| &a.id == ad_id && a.expires_at > now_secs && a.allow_inquiries);
+    state
+        .with_session(session, |service| {
+            if let Ok(stored) = crate::services::market_service::load_own_market_profile_state(
+                state, service, password,
+            ) {
+                match target {
+                    humoco_market::InquiryTarget::Ad { ad_id, .. } => {
+                        return Ok(stored.ads.iter().any(|a| {
+                            &a.id == ad_id && a.expires_at > now_secs && a.allow_inquiries
+                        }));
+                    }
+                    humoco_market::InquiryTarget::Person { .. } => {
+                        return Ok(stored.published && stored.allow_inquiries);
+                    }
+                }
             }
-            humoco_market::InquiryTarget::Person { .. } => {
-                return stored.published && stored.allow_inquiries;
-            }
-        }
-    }
-    false
+            Ok(false)
+        })
+        .ok()
+        .flatten()
+        .unwrap_or(false)
 }
 
 /// Serializes `payload`, seals it into a `SecureContainer` targeted at `recipient_did`,
@@ -601,7 +634,7 @@ pub(crate) fn seal_post_container_bytes<T: serde::Serialize>(
 }
 
 /// Wraps `container_bytes` in a `PostEnvelope`, seals a `PostBoxEntry`, and queues it
-/// into `post_state.outbox_entries` (also recording `msg_id` in `processed_msg_ids`).
+/// into `post_state.outbox_entries`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn enqueue_post_envelope(
     post_state: &mut StoredPostState,
@@ -616,6 +649,7 @@ pub(crate) fn enqueue_post_envelope(
     container_bytes: Vec<u8>,
     now_secs: u64,
     anchor_manifest_json: Option<String>,
+    anchor_delegations_json: Option<String>,
 ) -> Result<(), FrontendError> {
     let envelope = PostEnvelope::new(
         msg_id.clone(),
@@ -624,9 +658,9 @@ pub(crate) fn enqueue_post_envelope(
         own_reply_syncs.iter().cloned().map(Into::into).collect(),
         container_bytes,
     )
-    .with_anchor_manifest_json(anchor_manifest_json);
+    .with_anchor_manifest_json(anchor_manifest_json)
+    .with_anchor_delegations_json(anchor_delegations_json);
     let entry = seal_post_box(my_ed_sk, recipient_ed_pk, &envelope).map_err(FrontendError::from)?;
-    post_state.processed_msg_ids.insert(msg_id.clone());
     post_state.outbox_entries.push(PostOutboxEntry {
         msg_id,
         recipient_did: recipient_did.to_string(),
@@ -676,6 +710,7 @@ pub(crate) fn queue_sealed_reply<T: serde::Serialize>(
         container_bytes,
         now_secs,
         None,
+        None,
     );
 }
 
@@ -696,8 +731,7 @@ pub(crate) fn queue_receipt(
     if post_state
         .outbox_entries
         .iter()
-        .any(|e| e.msg_id == receipt_msg_id)
-        || post_state.processed_msg_ids.contains(&receipt_msg_id)
+        .any(|e| e.msg_id == receipt_msg_id && are_dids_equal(&e.recipient_did, sender_did))
     {
         return;
     }
@@ -741,6 +775,7 @@ pub(crate) fn queue_receipt(
         own_reply_syncs,
         container_bytes,
         now_secs,
+        None,
         None,
     ) {
         warn!(

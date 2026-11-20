@@ -142,6 +142,8 @@ pub struct PostEnvelope {
     pub container_bytes: Vec<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub anchor_manifest_json: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor_delegations_json: Option<String>,
 }
 
 impl PostEnvelope {
@@ -159,11 +161,17 @@ impl PostEnvelope {
             reply_drops,
             container_bytes,
             anchor_manifest_json: None,
+            anchor_delegations_json: None,
         }
     }
 
     pub fn with_anchor_manifest_json(mut self, manifest_json: Option<String>) -> Self {
         self.anchor_manifest_json = manifest_json;
+        self
+    }
+
+    pub fn with_anchor_delegations_json(mut self, delegations_json: Option<String>) -> Self {
+        self.anchor_delegations_json = delegations_json;
         self
     }
 }
@@ -397,7 +405,8 @@ pub fn decode_post_slot(slot_bytes: &[u8]) -> Result<Vec<PostBoxEntry>, MarketEr
     }
 
     let count = u16::from_be_bytes([slot_bytes[8], slot_bytes[9]]) as usize;
-    let mut entries = Vec::with_capacity(count);
+    let remaining = slot_bytes.len().saturating_sub(POST_SLOT_HEADER_BYTES);
+    let mut entries = Vec::with_capacity(count.min(remaining / POST_ENTRY_HEADER_BYTES));
     let mut offset = 10;
 
     for i in 0..count {
@@ -459,49 +468,6 @@ pub fn decode_post_slot(slot_bytes: &[u8]) -> Result<Vec<PostBoxEntry>, MarketEr
     }
 
     Ok(entries)
-}
-
-/// Merges a remote slot with local additions while removing acknowledged tags (§6.1).
-///
-/// Strips old dummy boxes and acknowledged entries, merges new entries (deduplicating by `tag16`),
-/// and encodes the combined slot with fresh dummy boxes if needed.
-pub fn merge_post_slot(
-    master_seed: &[u8; 32],
-    remote_slot_bytes: Option<&[u8]>,
-    local_additions: &[PostBoxEntry],
-    remove_tags: &[[u8; 16]],
-    max_bytes: usize,
-) -> Result<Vec<u8>, MarketError> {
-    let mut retained_entries: Vec<PostBoxEntry> = Vec::new();
-
-    if let Some(bytes) = remote_slot_bytes {
-        if !bytes.is_empty() {
-            let remote_entries = decode_post_slot(bytes)?;
-            for entry in remote_entries {
-                if is_own_dummy_post_box(master_seed, &entry) {
-                    continue;
-                }
-                if remove_tags.iter().any(|t| t == &entry.tag16) {
-                    continue;
-                }
-                retained_entries.push(entry);
-            }
-        }
-    }
-
-    for addition in local_additions {
-        if is_own_dummy_post_box(master_seed, addition) {
-            continue;
-        }
-        if remove_tags.iter().any(|t| t == &addition.tag16) {
-            continue;
-        }
-        if !retained_entries.iter().any(|e| e.tag16 == addition.tag16) {
-            retained_entries.push(addition.clone());
-        }
-    }
-
-    encode_post_slot(master_seed, &retained_entries, max_bytes)
 }
 
 /// Work-conserving priority packing of ordered real `PostBoxEntry` items into a size-bounded `post` slot (§6.1).
@@ -802,6 +768,35 @@ pub fn validate_market_inquiry_message(msg: &MarketInquiryMessage) -> Result<(),
                 "message text length {} exceeds MAX_INQUIRY_CHARS ({})",
                 trimmed_chars, MAX_INQUIRY_CHARS
             )));
+        }
+    }
+    if let Some(ref payment_uri) = msg.payment_uri {
+        let trimmed = payment_uri.trim();
+        if !trimmed.to_ascii_lowercase().starts_with("humoco://pay?") {
+            return Err(MarketError::Validation(
+                "payment_uri must start with 'humoco://pay?'".to_string(),
+            ));
+        }
+        if trimmed.len() > 512 {
+            return Err(MarketError::Validation(
+                "payment_uri exceeds maximum length 512".to_string(),
+            ));
+        }
+    }
+    if let Some(ref amount_hint) = msg.amount_hint {
+        let count = amount_hint.trim().chars().count();
+        if count == 0 || count > 64 {
+            return Err(MarketError::Validation(
+                "amount_hint must be 1..=64 characters".to_string(),
+            ));
+        }
+    }
+    if let Some(ref standard_uuid) = msg.standard_uuid {
+        let count = standard_uuid.trim().chars().count();
+        if count == 0 || count > 128 {
+            return Err(MarketError::Validation(
+                "standard_uuid must be 1..=128 characters".to_string(),
+            ));
         }
     }
     Ok(())

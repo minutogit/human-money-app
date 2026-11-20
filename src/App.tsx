@@ -32,8 +32,13 @@ import { isPublicView } from "./types";
 import type { HelpTopicId } from "./help/helpTopics";
 
 function isPreLoginDeepLink(uri: string): boolean {
-    const lower = uri.toLowerCase();
-    return lower.includes('humoco://kit') || lower.includes('humoco://recovery-reply');
+    const lower = uri.trim().toLowerCase();
+    return (
+        lower.startsWith('humoco://kit?') ||
+        lower.startsWith('humoco://recovery-reply?') ||
+        lower === 'humoco://kit' ||
+        lower === 'humoco://recovery-reply'
+    );
 }
 
 type ClassifiedLaunchItem =
@@ -64,7 +69,17 @@ function AppContent() {
     const classifiedLaunchCacheRef = useRef<Map<string, ClassifiedLaunchItem>>(new Map());
     const deferredLaunchItemsRef = useRef<Set<string>>(new Set());
     const reservedLaunchItemRef = useRef<string | null>(null);
+    const hasEnteredReceiveViewRef = useRef(false);
     const skippedLaunchItemsRef = useRef<Set<string>>(new Set());
+    const isMountedRef = useRef(true);
+    const launchQueueRestartNeededRef = useRef(false);
+
+    useEffect(() => {
+        isMountedRef.current = true;
+        return () => {
+            isMountedRef.current = false;
+        };
+    }, []);
 
     const [reservedLaunchItem, setReservedLaunchItem] = useState<string | null>(null);
     const [releaseModalOpen, setReleaseModalOpen] = useState(false);
@@ -114,20 +129,33 @@ function AppContent() {
     useEffect(() => {
         if (!isAuthReady) {
             reservedLaunchItemRef.current = null;
+            hasEnteredReceiveViewRef.current = false;
             setReservedLaunchItem(null);
             skippedLaunchItemsRef.current.clear();
         }
     }, [isAuthReady]);
+
+    useEffect(() => {
+        if (!isAuthReady || !reservedLaunchItemRef.current) return;
+        if (appState.view === 'receive_bundle' || appState.view === 'receive_success') {
+            hasEnteredReceiveViewRef.current = true;
+            return;
+        }
+        if (hasEnteredReceiveViewRef.current) {
+            hasEnteredReceiveViewRef.current = false;
+            void finishLaunchItem(reservedLaunchItemRef.current);
+        }
+    }, [appState.view, isAuthReady, finishLaunchItem]);
 
     type LaunchDispatchOutcome = 'ack' | 'reserved' | 'keep_unacked';
 
     const dispatchDeepLinkUri = useCallback(async (uri: string): Promise<LaunchDispatchOutcome> => {
         if (!uri) return 'ack';
         setDeepLinkFeedback(null);
-        const normalizedUri = extractHumocoDeepLink(uri) || uri;
+        const normalizedUri = (extractHumocoDeepLink(uri) || uri).trim();
         const lowerUri = normalizedUri.toLowerCase();
 
-        if (lowerUri.includes('humoco://card')) {
+        if (lowerUri.startsWith('humoco://card?')) {
             const parsed = parseCardUri(normalizedUri);
             if (parsed) {
                 try {
@@ -143,19 +171,20 @@ function AppContent() {
                         setDeepLinkFeedback(formatCardImportStatusFeedback(res.status, t));
                     }
                 } catch (err) {
-                    if (!isAuthReadyRef.current) {
+                    const msg = err instanceof Error ? err.message : String(err);
+                    if (!isAuthReadyRef.current || msg.includes('User cancelled authentication')) {
                         return 'keep_unacked';
                     }
-                    logger.error("Failed to import card from URI: " + String(err));
+                    logger.error("Failed to import card from URI: " + msg);
                     setDeepLinkFeedback(translateError(err, t));
                 }
             }
             return 'ack';
-        } else if (lowerUri.includes('humoco://pay')) {
+        } else if (lowerUri.startsWith('humoco://pay?')) {
             navigate({ view: 'send_vouchers', initialPaymentUri: normalizedUri });
-        } else if (lowerUri.includes('humoco://contact')) {
+        } else if (lowerUri.startsWith('humoco://contact?')) {
             navigate({ view: 'address_book', initialContactPayload: normalizedUri });
-        } else if (lowerUri.includes('humoco://recovery-reply')) {
+        } else if (lowerUri.startsWith('humoco://recovery-reply?') || lowerUri === 'humoco://recovery-reply') {
             try {
                 const session = await recoveryService.getActiveRecoverySession();
                 if (session?.sessionMode === 'reset_local_password') {
@@ -166,13 +195,13 @@ function AppContent() {
             } catch {
                 navigate({ view: 'restore_backup', initialMethod: 'social', initialPayload: normalizedUri });
             }
-        } else if (lowerUri.includes('humoco://kit')) {
+        } else if (lowerUri.startsWith('humoco://kit?') || lowerUri === 'humoco://kit') {
             if (appStateViewRef.current === 'needs_recovery') {
                 navigate({ view: 'needs_recovery', initialPayload: normalizedUri });
             } else {
                 navigate({ view: 'restore_backup', initialMethod: 'words_or_sheet', initialPayload: normalizedUri });
             }
-        } else if (lowerUri.includes('humoco://recovery-req')) {
+        } else if (lowerUri.startsWith('humoco://recovery-req?')) {
             setReleaseRequestUri(normalizedUri);
             setReleaseModalOpen(true);
         }
@@ -221,12 +250,17 @@ function AppContent() {
         if (classified.kind === 'uri') {
             return await dispatchDeepLinkUri(classified.uri);
         } else if (classified.kind === 'backup') {
-            const stagedPath = await backupService.stageDroppedBackupBytes(classified.bytes);
-            navigate({
-                view: 'restore_backup',
-                initialMethod: 'file_or_folder',
-                initialBackupPath: stagedPath,
-            });
+            try {
+                const stagedPath = await backupService.stageDroppedBackupBytes(classified.bytes);
+                navigate({
+                    view: 'restore_backup',
+                    initialMethod: 'file_or_folder',
+                    initialBackupPath: stagedPath,
+                });
+            } catch (err) {
+                logger.warn("Failed to stage backup launch item: " + (err instanceof Error ? err.message : String(err)));
+                setDeepLinkFeedback(translateError(err, t));
+            }
             return 'ack';
         } else if (classified.kind === 'file') {
             if (classified.classification.kind === 'card') {
@@ -244,13 +278,15 @@ function AppContent() {
                         setDeepLinkFeedback(formatCardImportStatusFeedback(res.status, t));
                     }
                 } catch (err) {
-                    if (!isAuthReadyRef.current) {
+                    const msg = err instanceof Error ? err.message : String(err);
+                    if (!isAuthReadyRef.current || msg.includes('User cancelled authentication')) {
                         return 'keep_unacked';
                     }
                     setDeepLinkFeedback(translateError(err, t));
                 }
                 return 'ack';
             } else {
+                hasEnteredReceiveViewRef.current = false;
                 reservedLaunchItemRef.current = launchItem;
                 setReservedLaunchItem(launchItem);
                 navigate({
@@ -272,7 +308,10 @@ function AppContent() {
             setHasDeferredFile(false);
             return;
         }
-        if (isProcessingLaunchQueueRef.current) return;
+        if (isProcessingLaunchQueueRef.current) {
+            launchQueueRestartNeededRef.current = true;
+            return;
+        }
 
         let cancelled = false;
         let didAdvance = false;
@@ -329,7 +368,9 @@ function AppContent() {
                 }
             } finally {
                 isProcessingLaunchQueueRef.current = false;
-                if (didAdvance && !cancelled) {
+                const shouldRestart = launchQueueRestartNeededRef.current || (didAdvance && !cancelled);
+                launchQueueRestartNeededRef.current = false;
+                if (shouldRestart && isMountedRef.current) {
                     setLaunchQueueKick((k) => k + 1);
                 }
             }

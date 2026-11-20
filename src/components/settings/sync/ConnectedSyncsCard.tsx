@@ -1,5 +1,5 @@
 // src/components/settings/sync/ConnectedSyncsCard.tsx
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import {
@@ -120,8 +120,17 @@ export const ConnectedSyncsCard: React.FC<ConnectedSyncsCardProps> = ({
         }
     };
 
+    const clearDeleteErrorRef = useRef(onClearDeletePublicDropError);
+    clearDeleteErrorRef.current = onClearDeletePublicDropError;
+
+    useEffect(() => {
+        return () => {
+            clearDeleteErrorRef.current?.();
+        };
+    }, []);
+
     const handleConfirmDelete = async () => {
-        if (!pendingPublicDelete) return;
+        if (!pendingPublicDelete || isDeletingPublicDrop) return;
         const ok = await onRemovePublicSync(pendingPublicDelete.writeUrl, deletePublicRemoteData);
         if (ok) setPendingPublicDelete(null);
     };
@@ -405,15 +414,16 @@ export const ConnectedSyncsCard: React.FC<ConnectedSyncsCardProps> = ({
                                 {pendingPublicDelete.writeUrl}
                             </p>
                         )}
-                        <label className="flex items-start gap-2 cursor-pointer text-xs text-theme-primary pt-1">
+                        <label className={`flex items-start gap-2 text-xs text-theme-primary pt-1 ${isDeletingPublicDrop ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'}`}>
                             <input
                                 type="checkbox"
                                 checked={deletePublicRemoteData}
+                                disabled={isDeletingPublicDrop}
                                 onChange={(e) => {
                                     onClearDeletePublicDropError?.();
                                     setDeletePublicRemoteData(e.target.checked);
                                 }}
-                                className="mt-0.5 rounded border-theme-subtle text-theme-primary focus:ring-theme-primary"
+                                className="mt-0.5 rounded border-theme-subtle text-theme-primary focus:ring-theme-primary disabled:opacity-50"
                             />
                             <span>{t('settings.syncPublicDeleteRemoteLabel')}</span>
                         </label>

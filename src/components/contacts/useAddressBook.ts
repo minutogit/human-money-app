@@ -1,5 +1,5 @@
 // src/components/contacts/useAddressBook.ts
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { contactService } from '../../services/contactService';
 import { marketService } from '../../services/marketService';
@@ -10,7 +10,7 @@ import { wotService } from '../../services/wotService';
 import { useOptionalNavigation } from '../../context/NavigationContext';
 import { useSession } from '../../context/SessionContext';
 import { useRateLimitCooldown } from '../../hooks/useRateLimitCooldown';
-import { channelMembersSyncManager } from '../../sync/channelMembersSyncManager';
+import { wakeSyncCoordinator } from '../../sync/syncBridge';
 import {
     Contact,
     FrontendMarketSyncResult,
@@ -116,11 +116,22 @@ export function useAddressBook({
 
     const hasSyncService = (syncOverview?.connectedCount ?? 0) > 0;
 
+    const mountedRef = useRef(true);
+    const loadSeqRef = useRef(0);
+
+    useEffect(() => {
+        mountedRef.current = true;
+        return () => {
+            mountedRef.current = false;
+        };
+    }, []);
+
     const handleNavigateToSyncSettings = useCallback(() => {
         navigation?.navigateToSettingsSection?.('sync');
     }, [navigation]);
 
     const loadContacts = useCallback(async () => {
+        const seq = ++loadSeqRef.current;
         setIsLoading(true);
         try {
             const [contactsResult, summaryResult, providersResult, postInbox, dropStatus, protectionStatus] =
@@ -139,6 +150,7 @@ export function useAddressBook({
                     recoveryService.getRecoveryProtectionStatus().catch(() => null),
                 ]);
 
+            if (!mountedRef.current || seq !== loadSeqRef.current) return;
             setContacts(contactsResult);
             setWotSummary(summaryResult ?? null);
             setProviders(providersResult ?? []);
@@ -161,9 +173,12 @@ export function useAddressBook({
                 }
             }
         } catch (err) {
+            if (!mountedRef.current || seq !== loadSeqRef.current) return;
             logger.error('Failed to load contacts: ' + stringifyError(err));
         } finally {
-            setIsLoading(false);
+            if (mountedRef.current && seq === loadSeqRef.current) {
+                setIsLoading(false);
+            }
         }
     }, []);
 
@@ -222,7 +237,7 @@ export function useAddressBook({
             marketService.probeContactSyncs?.(false)
                 ?.then(() => notifySyncStatusUpdated())
                 ?.catch(() => {});
-            channelMembersSyncManager.trigger({ delayMs: 1500, resetQuota: true });
+            void wakeSyncCoordinator({ syncMembers: true });
             await loadContacts();
             if (wasNew) {
                 const displayName =
@@ -251,7 +266,7 @@ export function useAddressBook({
             await protectAction(async (pwd) => {
                 await contactService.deleteContact(deleteRequest, pwd || undefined);
             });
-            channelMembersSyncManager.trigger({ delayMs: 1500, resetQuota: true });
+            void wakeSyncCoordinator({ syncMembers: true });
             await loadContacts();
             logger.info('Contact deleted');
         } catch (err) {
@@ -354,7 +369,7 @@ export function useAddressBook({
             setPendingWotImportBytes(null);
             setWotContainerPassword('');
             if (result) {
-                channelMembersSyncManager.trigger({ delayMs: 1500, resetQuota: true });
+                void wakeSyncCoordinator({ syncMembers: true });
                 if (result.isProviderFilter) {
                     setFeedbackMsg({
                         type: 'success',
@@ -417,7 +432,7 @@ export function useAddressBook({
             await protectAction(async (pwd) => {
                 await wotService.setProviderTrust(issuerDid, level, pwd || null);
             });
-            channelMembersSyncManager.trigger({ delayMs: 1500, resetQuota: true });
+            void wakeSyncCoordinator({ syncMembers: true });
             await loadContacts();
         } catch (err) {
             logger.error('Failed to set provider trust: ' + stringifyError(err));
@@ -450,7 +465,7 @@ export function useAddressBook({
             await protectAction(async (pwd) => {
                 await wotService.removeProvider(deleteProviderRequest.issuerDid, pwd || null);
             });
-            channelMembersSyncManager.trigger({ delayMs: 1500, resetQuota: true });
+            void wakeSyncCoordinator({ syncMembers: true });
             setFeedbackMsg({ type: 'success', message: t('contacts.providerRemovedSuccess') });
             await loadContacts();
         } catch (err) {

@@ -1,5 +1,5 @@
 // src/components/WalletRecovery.tsx
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import logo from '../../assets/logo.png';
 import { profileService } from '../../services/profileService';
@@ -55,10 +55,19 @@ export function WalletRecovery({
 
     const [method, setMethod] = useState<'choose' | 'social' | 'words'>(() => {
         if (defaultMethod) return defaultMethod;
-        if (initialPayload?.includes('humoco://recovery-reply')) return 'social';
-        if (initialPayload?.includes('humoco://kit')) return 'words';
+        const lower = initialPayload?.toLowerCase() ?? '';
+        if (lower.includes('humoco://recovery-reply')) return 'social';
+        if (lower.includes('humoco://kit')) return 'words';
         return 'choose';
     });
+
+    const mountedRef = useRef(true);
+    useEffect(() => {
+        mountedRef.current = true;
+        return () => {
+            mountedRef.current = false;
+        };
+    }, []);
 
     const [profiles, setProfiles] = useState<ProfileInfo[]>([]);
     const [selectedProfile, setSelectedProfile] = useState<string>('');
@@ -73,9 +82,10 @@ export function WalletRecovery({
     const [isLoading, setIsLoading] = useState(false);
 
     useEffect(() => {
-        if (initialPayload?.includes('humoco://recovery-reply')) {
+        const lower = initialPayload?.toLowerCase() ?? '';
+        if (lower.includes('humoco://recovery-reply')) {
             setMethod('social');
-        } else if (initialPayload?.includes('humoco://kit')) {
+        } else if (lower.includes('humoco://kit')) {
             setMethod('words');
         }
     }, [initialPayload]);
@@ -163,6 +173,7 @@ export function WalletRecovery({
         setFeedbackType('info');
         try {
             const localInstanceId = await authService.getLocalInstanceId();
+            if (!mountedRef.current) return;
             await profileService.recoverWallet({
                 folderName: selectedProfile,
                 mnemonic: seedState.mnemonic,
@@ -171,13 +182,17 @@ export function WalletRecovery({
                 localInstanceId,
                 language: seedState.language,
             });
+            if (!mountedRef.current) return;
             const matchedProfile = profiles.find((p) => p.folderName === selectedProfile);
             onRecoverySuccess(selectedProfile, matchedProfile?.profileName);
         } catch (err) {
+            if (!mountedRef.current) return;
             setFeedbackMsg(`${t('auth.errorRecoveringWallet')}: ${translateError(err, t)}`);
             setFeedbackType('error');
         } finally {
-            setIsLoading(false);
+            if (mountedRef.current) {
+                setIsLoading(false);
+            }
         }
     }
 

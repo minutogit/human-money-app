@@ -8,8 +8,7 @@ use crate::services::post_service::{
     accept_wot_handshake_impl, confirm_pending_post_payment_impl, deposit_transfer_to_post_impl,
     dismiss_pending_post_item_impl, get_post_inbox_summary_impl, mark_inquiry_read_impl,
     reply_detached_signature_via_post_impl, send_market_inquiry_message_via_post_impl,
-    send_market_inquiry_via_post_impl, send_signing_request_via_post_impl,
-    send_wot_handshake_via_post_impl, sync_post_channels_impl,
+    send_market_inquiry_via_post_impl, send_signing_request_via_post_impl, sync_post_channels_impl,
 };
 use crate::state::AppState;
 
@@ -52,24 +51,6 @@ pub async fn reply_detached_signature_via_post(
         request_msg_id,
         recipient_did,
         container_bytes,
-        password,
-        &state,
-    )
-    .await
-}
-
-#[tauri::command]
-pub async fn send_wot_handshake_via_post(
-    recipient_did: String,
-    proposed_level: u8,
-    reply_requested: bool,
-    password: Option<String>,
-    state: State<'_, AppState>,
-) -> Result<FrontendPostDepositResult, FrontendError> {
-    send_wot_handshake_via_post_impl(
-        recipient_did,
-        proposed_level,
-        reply_requested,
         password,
         &state,
     )

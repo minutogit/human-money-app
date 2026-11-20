@@ -281,7 +281,7 @@ export function useProfileCardEditor({
                 return;
             }
             if (s.pricing && s.pricing.trim().length > 40) {
-                setError(t('marketplace.errorPricingTooLong', 'Preisangabe darf maximal 40 Zeichen lang sein'));
+                setError(t('marketplace.errorPricingTooLong', 'Maximal {{max}} Zeichen erlaubt', { max: 40 }));
                 return;
             }
         }

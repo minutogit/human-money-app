@@ -93,6 +93,7 @@ pub(crate) async fn create_new_voucher_impl(
 
         let deletable_ms_opt = if explicit_anchor_bytes.is_none()
             && !v_data.non_redeemable_test_voucher
+            && !data.explicit_offline_only
         {
             let (verified_standard, standard_hash) =
                 human_money_core::models::voucher_standard_definition::VoucherStandardDefinition::from_toml(
@@ -130,20 +131,82 @@ pub(crate) async fn create_new_voucher_impl(
     };
 
     let mut anchor_bytes = explicit_anchor_bytes;
+    let mut assembled_lock_pubs: Vec<String> = Vec::new();
+    let mut assembled_threshold: u8 = 0;
+    let mut assembled_source: &'static str = "none";
+
     if let Some(deletable_ms) = auto_anchor_deletable_ms {
-        let auto_aid = crate::services::l2_anchor_service::assemble_auto_committee_for_voucher(
-            state,
-            &session,
-            deletable_ms,
-            resolved_pw.as_deref().map(String::as_str),
-        )
-        .await?;
-        anchor_bytes = auto_aid;
-        voucher_data.layer2_anchor = auto_aid;
+        if let Some(assembled) =
+            crate::services::l2_anchor_service::assemble_auto_committee_for_voucher(
+                state,
+                &session,
+                deletable_ms,
+                data.force_reprobe,
+                resolved_pw.as_deref().map(String::as_str),
+            )
+            .await?
+        {
+            anchor_bytes = Some(assembled.anchor_id);
+            voucher_data.layer2_anchor = Some(assembled.anchor_id);
+            assembled_lock_pubs = assembled.lock_pubs;
+            assembled_threshold = assembled.threshold;
+            assembled_source = assembled.source;
+        }
+    } else if data.explicit_offline_only {
+        anchor_bytes = None;
+        voucher_data.layer2_anchor = None;
     }
+
+    if let Some(ref exp) = data.expected_committee {
+        if !data.explicit_offline_only && !voucher_data.non_redeemable_test_voucher {
+            let mut exp_pks: Vec<String> = exp
+                .lock_pubs
+                .iter()
+                .map(|s| s.trim().to_ascii_lowercase())
+                .filter(|s| !s.is_empty())
+                .collect();
+            exp_pks.sort();
+            if assembled_lock_pubs != exp_pks
+                || assembled_threshold != exp.threshold
+                || assembled_source != exp.source
+            {
+                let mut err = FrontendError::with_code(
+                    "error.voucher.l2CommitteeChanged",
+                    format!(
+                        "L2 lock committee changed before issuance (expected {} {}/{}, got {} {}/{})",
+                        exp.source,
+                        exp.threshold,
+                        exp_pks.len(),
+                        assembled_source,
+                        assembled_threshold,
+                        assembled_lock_pubs.len()
+                    ),
+                );
+                err.details
+                    .insert("expectedSource".into(), exp.source.clone());
+                err.details
+                    .insert("expectedThreshold".into(), exp.threshold.to_string());
+                err.details
+                    .insert("expectedCount".into(), exp_pks.len().to_string());
+                err.details
+                    .insert("actualSource".into(), assembled_source.to_string());
+                err.details
+                    .insert("actualThreshold".into(), assembled_threshold.to_string());
+                err.details
+                    .insert("actualCount".into(), assembled_lock_pubs.len().to_string());
+                err.details
+                    .insert("expectedLockPubs".into(), exp_pks.join(","));
+                err.details
+                    .insert("actualLockPubs".into(), assembled_lock_pubs.join(","));
+                return Err(err);
+            }
+        }
+    }
+
     if !voucher_data.non_redeemable_test_voucher
         && anchor_bytes.is_none()
         && !data.allow_offline_only
+        && !data.explicit_offline_only
     {
         return Err(FrontendError::with_code(
             "error.voucher.l2AnchorUnavailable",
@@ -156,6 +219,20 @@ pub(crate) async fn create_new_voucher_impl(
         &session,
         "Active wallet session changed before voucher could be created",
         |service| {
+            if anchor_bytes.is_some() && explicit_anchor_bytes != anchor_bytes {
+                let post_preflight = crate::services::preflight::ValueOutflowPreflight {
+                    require_restore_reconciled: true,
+                    check_known_offender_dids: &[],
+                    check_blocking_intent_local_ids: &[],
+                    check_anchor_id_quorum_health: anchor_bytes,
+                };
+                crate::services::preflight::run_value_outflow_preflight(
+                    state,
+                    service,
+                    pw,
+                    &post_preflight,
+                )?;
+            }
             if let Some(anchor_id) = anchor_bytes {
                 let anchor_hex = hex::encode(anchor_id);
                 let (verified_standard, standard_hash) =
@@ -282,13 +359,16 @@ pub async fn create_new_voucher(
 pub(crate) fn create_signing_request_bundle_impl(
     local_instance_id: &str,
     config: ContainerConfig,
+    probe_cache_opt: Option<
+        &std::collections::BTreeMap<String, crate::sync_client::FrontendLockServerProbeResult>,
+    >,
     service: &human_money_core::app_service::AppService,
 ) -> Result<Vec<u8>, FrontendError> {
     let raw = service
         .create_signing_request_bundle(local_instance_id, config)
         .map_err(FrontendError::from)?;
 
-    let embedded_manifest_json = service
+    let embedded_manifest = service
         .with_wallet(|w| {
             w.get_voucher_details(local_instance_id)
                 .ok()
@@ -301,18 +381,29 @@ pub(crate) fn create_signing_request_bundle_impl(
                 })
         })
         .ok()
-        .flatten()
-        .and_then(|m| serde_json::to_string(&m).ok());
+        .flatten();
 
-    if let Some(manifest_json) = embedded_manifest_json {
-        if let Ok(mut container_val) = serde_json::from_slice::<serde_json::Value>(&raw) {
-            if let Some(obj) = container_val.as_object_mut() {
-                obj.insert(
-                    "anchor_manifest_json".to_string(),
-                    serde_json::Value::String(manifest_json),
-                );
-                if let Ok(enriched) = serde_json::to_vec_pretty(&container_val) {
-                    return Ok(enriched);
+    if let Some(ref manifest) = embedded_manifest {
+        if let Ok(manifest_json) = serde_json::to_string(manifest) {
+            if let Ok(mut container_val) = serde_json::from_slice::<serde_json::Value>(&raw) {
+                if let Some(obj) = container_val.as_object_mut() {
+                    obj.insert(
+                        "anchor_manifest_json".to_string(),
+                        serde_json::Value::String(manifest_json),
+                    );
+                    if let Some(delegations_json) = probe_cache_opt.and_then(|cache| {
+                        crate::services::common::collect_verified_delegations_for_manifest(
+                            manifest, cache,
+                        )
+                    }) {
+                        obj.insert(
+                            "anchor_delegations_json".to_string(),
+                            serde_json::Value::String(delegations_json),
+                        );
+                    }
+                    if let Ok(enriched) = serde_json::to_vec_pretty(&container_val) {
+                        return Ok(enriched);
+                    }
                 }
             }
         }
@@ -331,8 +422,12 @@ pub fn create_signing_request_bundle(
         "Creating signing request bundle for voucher {} with config {:?}",
         local_instance_id, config
     );
-    let service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
-    create_signing_request_bundle_impl(&local_instance_id, config, &service)
+    let mut service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
+    let probe_cache = state
+        .get_or_load_internal_lifecycle(&mut service, None)
+        .ok()
+        .map(|lc| lc.l2_probe_cache);
+    create_signing_request_bundle_impl(&local_instance_id, config, probe_cache.as_ref(), &service)
 }
 
 pub(crate) fn open_voucher_signing_request_impl(
@@ -353,9 +448,10 @@ pub(crate) fn open_voucher_signing_request_impl(
             let is_test_voucher = v.non_redeemable_test_voucher;
             let current_amount = v.nominal_value.amount.clone();
 
+            let container_json = serde_json::from_slice::<serde_json::Value>(container_bytes).ok();
             let embedded_manifest = v.layer2_anchor.and_then(|aid| {
-                serde_json::from_slice::<serde_json::Value>(container_bytes)
-                    .ok()
+                container_json
+                    .as_ref()
                     .and_then(|val| {
                         val.get("anchor_manifest_json")
                             .and_then(|m| m.as_str())
@@ -366,11 +462,16 @@ pub(crate) fn open_voucher_signing_request_impl(
                             &raw_m,
                         )
                         .ok()
-                        .filter(|m| {
-                            m.rev1_anchor_id().ok() == Some(aid) && m.verify_anchor_id(&aid).is_ok()
-                        })
+                        .filter(|m| m.verify_anchor_id(&aid).is_ok())
                         .map(|m| (raw_m, m))
                     })
+            });
+            let anchor_delegations_json = v.layer2_anchor.and_then(|_| {
+                container_json.as_ref().and_then(|val| {
+                    val.get("anchor_delegations_json")
+                        .and_then(|d| d.as_str())
+                        .map(str::to_string)
+                })
             });
 
             let resolved_manifest =
@@ -418,6 +519,7 @@ pub(crate) fn open_voucher_signing_request_impl(
                 reduced_guarantor_protection,
                 manifest_revision,
                 anchor_manifest_json,
+                anchor_delegations_json,
             })
         }
         Err(e) => Err(FrontendError::from(e)),
@@ -443,6 +545,7 @@ pub(crate) fn create_detached_signature_response_bundle_impl(
     config: ContainerConfig,
     password: Option<String>,
     anchor_manifest_json: Option<String>,
+    anchor_delegations_json: Option<String>,
     app_opt: Option<&tauri::AppHandle>,
     state: &AppState,
 ) -> Result<Vec<u8>, FrontendError> {
@@ -468,6 +571,7 @@ pub(crate) fn create_detached_signature_response_bundle_impl(
             voucher,
             std_toml.clone(),
             anchor_manifest_json.clone(),
+            anchor_delegations_json,
             password.as_deref(),
             state,
         )?;
@@ -484,32 +588,6 @@ pub(crate) fn create_detached_signature_response_bundle_impl(
 
     let mut service =
         state.authorize_and_lock(crate::state::RequiredAccess::Full, password.as_deref())?;
-
-    if let (Some(aid), Some(raw_manifest)) = (
-        core_voucher_preview.layer2_anchor,
-        anchor_manifest_json.as_deref(),
-    ) {
-        if let Ok(manifest) = serde_json::from_str::<human_money_core::humoco_proto::AnchorManifest>(
-            raw_manifest.trim(),
-        ) {
-            if manifest.rev1_anchor_id().ok() == Some(aid)
-                && manifest.verify_anchor_id(&aid).is_ok()
-            {
-                let anchor_hex = hex::encode(aid);
-                let should_cache = service
-                    .with_wallet(|w| {
-                        w.profile
-                            .l2_anchor_manifests
-                            .get(&anchor_hex)
-                            .is_none_or(|existing| manifest.revision > existing.revision)
-                    })
-                    .unwrap_or(false);
-                if should_cache {
-                    let _ = service.update_l2_anchor_manifest(manifest, password.as_deref());
-                }
-            }
-        }
-    }
 
     let own_did = service
         .with_wallet(|w| w.get_user_id().to_string())
@@ -530,6 +608,30 @@ pub(crate) fn create_detached_signature_response_bundle_impl(
         password.as_deref(),
         &preflight,
     )?;
+
+    if let (Some(aid), Some(raw_manifest)) = (
+        core_voucher_preview.layer2_anchor,
+        anchor_manifest_json.as_deref(),
+    ) {
+        if let Ok(manifest) = serde_json::from_str::<human_money_core::humoco_proto::AnchorManifest>(
+            raw_manifest.trim(),
+        ) {
+            if manifest.verify_anchor_id(&aid).is_ok() {
+                let anchor_hex = hex::encode(aid);
+                let should_cache = service
+                    .with_wallet(|w| {
+                        w.profile
+                            .l2_anchor_manifests
+                            .get(&anchor_hex)
+                            .is_none_or(|existing| manifest.revision > existing.revision)
+                    })
+                    .unwrap_or(false);
+                if should_cache {
+                    let _ = service.update_l2_anchor_manifest(manifest, password.as_deref());
+                }
+            }
+        }
+    }
 
     service
         .create_detached_signature_response_bundle(
@@ -552,6 +654,7 @@ pub fn create_detached_signature_response_bundle(
     config: ContainerConfig,
     password: Option<String>,
     anchor_manifest_json: Option<String>,
+    anchor_delegations_json: Option<String>,
     state: tauri::State<AppState>,
 ) -> Result<Vec<u8>, FrontendError> {
     create_detached_signature_response_bundle_impl(
@@ -561,6 +664,7 @@ pub fn create_detached_signature_response_bundle(
         config,
         password,
         anchor_manifest_json,
+        anchor_delegations_json,
         Some(&app),
         &state,
     )
@@ -630,6 +734,8 @@ pub struct FrontendGuarantorAnchorCheckDto {
     pub threshold: u8,
     pub server_count: usize,
     pub untrusted_servers_count: usize,
+    pub unverified_delegations_count: usize,
+    pub offender_check_unverified: bool,
     pub servers: Vec<FrontendGuarantorServerTrustDto>,
     pub issues: Vec<String>,
 }
@@ -655,6 +761,7 @@ pub(crate) fn evaluate_guarantor_anchor_check_impl(
     voucher: crate::models::FrontendVoucher,
     standard_toml_content: String,
     manifest_json: Option<String>,
+    anchor_delegations_json: Option<String>,
     password: Option<&str>,
     state: &AppState,
 ) -> Result<FrontendGuarantorAnchorCheckDto, FrontendError> {
@@ -691,6 +798,8 @@ pub(crate) fn evaluate_guarantor_anchor_check_impl(
             threshold: 0,
             server_count: 0,
             untrusted_servers_count: 0,
+            unverified_delegations_count: 0,
+            offender_check_unverified: false,
             servers: Vec::new(),
             issues: Vec::new(),
         });
@@ -707,6 +816,8 @@ pub(crate) fn evaluate_guarantor_anchor_check_impl(
             threshold: 0,
             server_count: 0,
             untrusted_servers_count: 0,
+            unverified_delegations_count: 0,
+            offender_check_unverified: false,
             servers: Vec::new(),
             issues,
         });
@@ -741,29 +852,15 @@ pub(crate) fn evaluate_guarantor_anchor_check_impl(
             threshold: 0,
             server_count: 0,
             untrusted_servers_count: 0,
+            unverified_delegations_count: 0,
+            offender_check_unverified: false,
             servers: Vec::new(),
             issues,
         });
     };
 
-    let anchor_valid = manifest.rev1_anchor_id().ok() == Some(anchor_id)
-        && manifest.verify_anchor_id(&anchor_id).is_ok();
-    if !anchor_valid {
+    if manifest.verify_anchor_id(&anchor_id).is_err() {
         issues.push(GUARANTOR_ISSUE_MANIFEST_ANCHOR_MISMATCH.to_string());
-    } else if supplied_manifest_json.is_some() {
-        if let Ok(mut service) = state.service.lock() {
-            let should_cache = service
-                .with_wallet(|w| {
-                    w.profile
-                        .l2_anchor_manifests
-                        .get(&anchor_hex)
-                        .is_none_or(|existing| manifest.revision > existing.revision)
-                })
-                .unwrap_or(false);
-            if should_cache {
-                let _ = service.update_l2_anchor_manifest(manifest.clone(), password);
-            }
-        }
     }
 
     let retention_ok = core_voucher
@@ -784,43 +881,56 @@ pub(crate) fn evaluate_guarantor_anchor_check_impl(
         .get_or_load_internal_lifecycle_locked(password)
         .map(|lc| lc.l2_probe_cache)
         .unwrap_or_default();
+    let embedded_delegations = crate::services::common::parse_and_verify_embedded_delegations(
+        anchor_delegations_json.as_deref(),
+        &manifest,
+    );
 
-    let servers: Vec<FrontendGuarantorServerTrustDto> = manifest
-        .servers
-        .iter()
-        .map(|s| {
-            let admin_pub = hex::encode(s.admin_pub);
-            let lock_pub = hex::encode(s.lock_pub);
-            let (resolved_w, _) = crate::services::common::resolve_server_locator(s, &probe_cache);
-            let trusted = crate::settings::is_lock_admin_trusted(&security_policy, &admin_pub);
-            FrontendGuarantorServerTrustDto {
-                write_url: resolved_w,
-                admin_pub,
-                lock_pub,
-                trusted,
-            }
-        })
-        .collect();
+    let mut unverified_delegations_count = 0usize;
+    let mut servers: Vec<FrontendGuarantorServerTrustDto> =
+        Vec::with_capacity(manifest.servers.len());
+    let mut candidates: Vec<crate::gateway_resolver::SybilServerCandidate> =
+        Vec::with_capacity(manifest.servers.len());
+
+    for s in &manifest.servers {
+        let admin_pub = hex::encode(s.admin_pub);
+        let lock_pub = hex::encode(s.lock_pub);
+        let verified_w = crate::services::common::resolve_locator_with_delegations(
+            s,
+            &probe_cache,
+            &embedded_delegations,
+        )
+        .map(|(w, _)| w);
+        let verified_domain_url = verified_w.unwrap_or_else(|| {
+            unverified_delegations_count += 1;
+            String::new()
+        });
+        let trusted = crate::settings::is_lock_admin_trusted(&security_policy, &admin_pub);
+        servers.push(FrontendGuarantorServerTrustDto {
+            write_url: if verified_domain_url.is_empty() {
+                s.write_url.clone()
+            } else {
+                verified_domain_url.clone()
+            },
+            admin_pub,
+            lock_pub,
+            trusted,
+        });
+        candidates.push(crate::gateway_resolver::SybilServerCandidate {
+            write_url: verified_domain_url,
+            lock_pub: s.lock_pub,
+            admin_pub: Some(s.admin_pub),
+            asn: None,
+        });
+    }
     let untrusted_servers_count = servers.iter().filter(|s| !s.trusted).count();
 
-    let candidates: Vec<crate::gateway_resolver::SybilServerCandidate> = manifest
-        .servers
-        .iter()
-        .map(|s| {
-            let (resolved_w, _) = crate::services::common::resolve_server_locator(s, &probe_cache);
-            crate::gateway_resolver::SybilServerCandidate {
-                write_url: resolved_w,
-                lock_pub: s.lock_pub,
-                admin_pub: Some(s.admin_pub),
-                asn: None,
-            }
-        })
-        .collect();
     let folded = crate::gateway_resolver::sybil_fold_committee(&candidates);
-    if folded.len() < manifest.threshold as usize {
+    if manifest.servers.len() < 2 || folded.len() < manifest.threshold as usize {
         issues.push(GUARANTOR_ISSUE_SYBIL_BELOW_THRESHOLD.to_string());
     }
 
+    let mut offender_check_unverified = false;
     let offenders = {
         let mut service = state.lock_service()?;
         match crate::l2_lifecycle::load_server_offender_list(&mut service, password) {
@@ -830,6 +940,7 @@ pub(crate) fn evaluate_guarantor_anchor_check_impl(
                     && (err.code == "error.auth.sessionNotActive"
                         || err.code == "error.auth.sessionTimeout") =>
             {
+                offender_check_unverified = true;
                 humoco_wot::ServerOffenderList::new()
             }
             Err(err) => return Err(err),
@@ -851,6 +962,8 @@ pub(crate) fn evaluate_guarantor_anchor_check_impl(
         threshold: manifest.threshold,
         server_count: manifest.servers.len(),
         untrusted_servers_count,
+        unverified_delegations_count,
+        offender_check_unverified,
         servers,
         issues,
     })
@@ -864,12 +977,14 @@ pub fn evaluate_guarantor_anchor_check(
     voucher: crate::models::FrontendVoucher,
     standard_toml_content: String,
     manifest_json: Option<String>,
+    anchor_delegations_json: Option<String>,
     state: tauri::State<AppState>,
 ) -> Result<FrontendGuarantorAnchorCheckDto, FrontendError> {
     evaluate_guarantor_anchor_check_impl(
         voucher,
         standard_toml_content,
         manifest_json,
+        anchor_delegations_json,
         None,
         &state,
     )
@@ -963,6 +1078,7 @@ mod tests {
         let ask_bytes = create_signing_request_bundle_impl(
             &local_id,
             ContainerConfig::TargetDid(guar_id, PrivacyMode::TrialDecryption),
+            None,
             &svc_creator,
         )
         .unwrap();
@@ -990,6 +1106,7 @@ mod tests {
             Some(pw.to_string()),
             None,
             None,
+            None,
             &guar_state,
         )
         .unwrap_err();
@@ -999,6 +1116,7 @@ mod tests {
             details.voucher,
             minuto_toml,
             details.anchor_manifest_json,
+            details.anchor_delegations_json,
             None,
             &guar_state,
         )
@@ -1072,6 +1190,9 @@ mod tests {
             },
             layer2_anchor: None,
             allow_offline_only: false,
+            expected_committee: None,
+            force_reprobe: false,
+            explicit_offline_only: false,
         };
         let issue_err = create_new_voucher_impl(
             ft_toml.clone(),
@@ -1151,6 +1272,7 @@ mod tests {
             Some(pw.into()),
             None,
             None,
+            None,
             &signer_state,
         )
         .unwrap_err();
@@ -1183,6 +1305,7 @@ mod tests {
             Some("123456".into()),
             None,
             None,
+            None,
             &signer_state,
         )
         .unwrap_err();
@@ -1195,6 +1318,7 @@ mod tests {
             false,
             ContainerConfig::TargetDid(creator_id, PrivacyMode::TrialDecryption),
             Some(pw.into()),
+            None,
             None,
             None,
             &signer_state,
@@ -1218,12 +1342,11 @@ mod tests {
             crate::test_support::ALICE_PHRASE,
             pw,
         );
-        let profile = svc
-            .with_wallet(|w| w.profile.to_public_profile())
-            .unwrap();
+        let profile = svc.with_wallet(|w| w.profile.to_public_profile()).unwrap();
         let state = crate::test_support::create_test_state(svc);
-        let ft_toml =
-            human_money_core::test_utils::generate_signed_standard_toml("voucher_standards/freetaler_v1/standard.toml");
+        let ft_toml = human_money_core::test_utils::generate_signed_standard_toml(
+            "voucher_standards/freetaler_v1/standard.toml",
+        );
 
         let make_data = |allow_offline_only: bool| FrontendNewVoucherData {
             nominal_value: crate::models::NominalValueData {
@@ -1240,17 +1363,199 @@ mod tests {
             },
             layer2_anchor: None,
             allow_offline_only,
+            expected_committee: None,
+            force_reprobe: false,
+            explicit_offline_only: false,
         };
 
-        let err = create_new_voucher_impl(ft_toml.clone(), make_data(false), Some(pw.into()), &state)
-            .await
-            .unwrap_err();
+        let err =
+            create_new_voucher_impl(ft_toml.clone(), make_data(false), Some(pw.into()), &state)
+                .await
+                .unwrap_err();
         assert_eq!(err.code, "error.voucher.l2AnchorUnavailable");
 
         let created = create_new_voucher_impl(ft_toml, make_data(true), Some(pw.into()), &state)
             .await
             .expect("explicit offline-only confirmation must succeed at N=0");
         assert!(created.voucher.layer2_anchor.is_none());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn k4_evaluate_guarantor_anchor_check_enforces_n2_for_guarantor_and_verifies_rev2() {
+        let dir = crate::test_support::temp_test_dir("vouchers_k4_rev2");
+        let pw = "pw-k4-test";
+        let (mut svc_creator, _) =
+            test_utils::setup_service_with_profile(&dir.join("c"), &ACTORS.alice, "Alice", pw);
+        svc_creator.unlock_session(pw, 600).unwrap();
+        let creator_id = svc_creator
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
+
+        let (mut svc_guar, _) =
+            test_utils::setup_service_with_profile(&dir.join("g"), &ACTORS.bob, "Bob", pw);
+        svc_guar.unlock_session(pw, 600).unwrap();
+        let guar_id = svc_guar
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
+        let guar_state = AppState::new(svc_guar);
+
+        let s1_sk = SigningKey::from_bytes(&[21u8; 32]);
+        let s2_sk = SigningKey::from_bytes(&[22u8; 32]);
+        let creator_mig_sk = SigningKey::from_bytes(&[23u8; 32]);
+        let retain_q = encode_quarter(2035, 4).unwrap();
+
+        let manifest_n1 = AnchorManifest {
+            revision: 1,
+            threshold: 1,
+            servers: vec![ServerEntry {
+                write_url: "https://sync1.example/sync.php".into(),
+                read_url: "https://sync1.example/d".into(),
+                admin_pub: s1_sk.verifying_key().to_bytes(),
+                lock_pub: s1_sk.verifying_key().to_bytes(),
+                nominated_by: NominatedBy::Creator,
+            }],
+            successors: vec![],
+            authority: AnchorAuthority {
+                creator_mig_pub: creator_mig_sk.verifying_key().to_bytes(),
+                guarantor_mig_pubs: vec![],
+            },
+            migration_chain: vec![],
+            issued_at_ms: 1_760_000_000_000,
+            retain_until_quarter: retain_q,
+        };
+        let anchor_id = manifest_n1.rev1_anchor_id().unwrap();
+        svc_creator
+            .update_l2_anchor_manifest(manifest_n1.clone(), Some(pw))
+            .unwrap();
+
+        let minuto_toml = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../voucher_standards/minuto_v1/standard.toml"
+        ))
+        .unwrap();
+        let mut v_data = test_utils::create_minuto_voucher_data(
+            human_money_core::models::profile::PublicProfile {
+                id: Some(creator_id.clone()),
+                ..Default::default()
+            },
+        );
+        v_data.layer2_anchor = Some(anchor_id);
+        let voucher = svc_creator
+            .create_new_voucher(&minuto_toml, v_data, Some(pw))
+            .unwrap();
+        let local_id = Wallet::calculate_local_instance_id(&voucher, &creator_id).unwrap();
+
+        // N=1 manifest on guarantor-required standard MUST fail guarantor anchor check
+        let ask_n1 = create_signing_request_bundle_impl(
+            &local_id,
+            ContainerConfig::TargetDid(guar_id, PrivacyMode::TrialDecryption),
+            None,
+            &svc_creator,
+        )
+        .unwrap();
+        let details_n1 = open_voucher_signing_request_impl(
+            &ask_n1,
+            Some(pw),
+            &guar_state.lock_service().unwrap(),
+        )
+        .unwrap();
+        let res_n1 = evaluate_guarantor_anchor_check_impl(
+            details_n1.voucher.clone(),
+            minuto_toml.clone(),
+            details_n1.anchor_manifest_json,
+            None,
+            Some(pw),
+            &guar_state,
+        )
+        .unwrap();
+        assert!(
+            !res_n1.passed,
+            "N=1 must be rejected for guarantor standards"
+        );
+
+        // Migrated rev=2 N=2 manifest signed with genuine migration chain MUST pass verify_anchor_id check
+        let new_servers = vec![
+            manifest_n1.servers[0].clone(),
+            ServerEntry {
+                write_url: "https://sync2.example/sync.php".into(),
+                read_url: "https://sync2.example/d".into(),
+                admin_pub: s2_sk.verifying_key().to_bytes(),
+                lock_pub: s2_sk.verifying_key().to_bytes(),
+                nominated_by: NominatedBy::Creator,
+            },
+        ];
+        let prop = human_money_core::services::l2_rotation::build_creator_rotation_proposal(
+            anchor_id,
+            &manifest_n1,
+            2,
+            new_servers,
+            Vec::new(),
+            1_760_000_010,
+            &creator_mig_sk,
+        )
+        .unwrap();
+        let imported_state_hash = human_money_core::humoco_proto::compute_import_union_state_hash(
+            &anchor_id,
+            prop.to_rev,
+            &std::collections::BTreeMap::new(),
+        )
+        .unwrap();
+        let prop_hash = prop.core_digest().unwrap();
+        let import_acks: Vec<human_money_core::humoco_proto::ImportAck> = [&s1_sk, &s2_sk]
+            .iter()
+            .map(|sk| {
+                let mut ack = human_money_core::humoco_proto::ImportAck {
+                    anchor_id,
+                    proposal_hash: prop_hash,
+                    to_rev: 2,
+                    imported_state_hash,
+                    retain_until_quarter: retain_q,
+                    lock_pub: sk.verifying_key().to_bytes(),
+                    acked_at: 1_760_000_010,
+                    sig: [0u8; 64],
+                };
+                ack.sig = ed25519_dalek::Signer::sign(*sk, &ack.digest()).to_bytes();
+                ack
+            })
+            .collect();
+        let commit_d = human_money_core::humoco_proto::MigrationCert::commit_digest(
+            &anchor_id,
+            &prop_hash,
+            2,
+            &imported_state_hash,
+        );
+        let commit_sig = human_money_core::humoco_proto::CommitteeSignature {
+            lock_pub: s1_sk.verifying_key().to_bytes(),
+            committed_at: 1_760_000_010,
+            sig: ed25519_dalek::Signer::sign(&s1_sk, &commit_d).to_bytes(),
+        };
+        let (rev2_manifest, _) =
+            human_money_core::services::l2_rotation::assemble_migrated_manifest(
+                &manifest_n1,
+                &anchor_id,
+                prop,
+                imported_state_hash,
+                import_acks,
+                vec![commit_sig],
+            )
+            .unwrap();
+        let rev2_json = serde_json::to_string(&rev2_manifest).unwrap();
+        let res_rev2 = evaluate_guarantor_anchor_check_impl(
+            details_n1.voucher,
+            minuto_toml,
+            Some(rev2_json),
+            None,
+            Some(pw),
+            &guar_state,
+        )
+        .unwrap();
+        assert!(
+            res_rev2.passed,
+            "rev=2 manifest must verify against anchor_id: {:?}",
+            res_rev2.issues
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

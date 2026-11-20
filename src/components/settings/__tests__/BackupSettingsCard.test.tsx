@@ -338,7 +338,7 @@ describe('BackupSettingsCard', () => {
         });
     });
 
-    it('dispatches BACKUP_UPDATED_EVENT when folder backup is synced manually', async () => {
+    it('dispatches APP_EVENTS.BACKUP_UPDATED when folder backup is synced manually', async () => {
         const eventSpy = vi.fn();
         window.addEventListener('humoco:backup-updated', eventSpy);
 

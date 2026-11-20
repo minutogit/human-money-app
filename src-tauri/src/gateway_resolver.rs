@@ -73,6 +73,16 @@ pub fn extract_registrable_domain(raw_url: &str) -> Option<String> {
         ));
     }
     let parts: Vec<&str> = host.split('.').filter(|p| !p.is_empty()).collect();
+    if parts.len() >= 3 {
+        let last_two = format!("{}.{}", parts[parts.len() - 2], parts[parts.len() - 1]);
+        const TWO_LEVEL_CCTLDS: &[&str] = &[
+            "co.uk", "org.uk", "ac.uk", "com.au", "net.au", "co.jp", "ne.jp", "co.nz", "com.br",
+            "co.za", "gv.at", "co.at", "or.at", "com.cn", "co.in", "com.mx",
+        ];
+        if TWO_LEVEL_CCTLDS.contains(&last_two.as_str()) {
+            return Some(format!("{}.{}", parts[parts.len() - 3], last_two));
+        }
+    }
     if parts.len() >= 2 {
         Some(format!(
             "{}.{}",

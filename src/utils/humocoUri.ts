@@ -43,9 +43,9 @@ export interface ParsedPaymentRequest {
   isTest?: boolean;
 }
 
-const CONTACT_URI_REGEX = /humoco:\/\/contact\?([^\s<>"'`„“”‚‘’«»‹›]+)/i;
-const PAY_URI_REGEX = /humoco:\/\/pay\?([^\s<>"'`„“”‚‘’«»‹›]+)/i;
-const CARD_URI_REGEX = /humoco:\/\/card\?([^\s<>"'`„“”‚‘’«»‹›]+)/i;
+const CONTACT_URI_REGEX = /(?<![A-Za-z0-9/._-])humoco:\/\/contact\?([^\s<>"'`„“”‚‘’«»‹›#]+)/i;
+const PAY_URI_REGEX = /(?<![A-Za-z0-9/._-])humoco:\/\/pay\?([^\s<>"'`„“”‚‘’«»‹›#]+)/i;
+const CARD_URI_REGEX = /(?<![A-Za-z0-9/._-])humoco:\/\/card\?([^\s<>"'`„“”‚‘’«»‹›#]+)/i;
 
 const TRAILING_PUNCT_REGEX = /[.,;:!?)\]"'>`„“”‚‘’«»‹›]+$/;
 const CONTINUATION_LINE_REGEX = /^[A-Za-z0-9\-_=+&%.:/@]+$/;
@@ -63,6 +63,12 @@ const GREETING_WORDS = new Set([
   'gruesse',
   'grüße',
 ]);
+
+function normalizeCopiedText(raw: string): string {
+  return raw
+    .replace(/[\u200B-\u200D\uFEFF]/g, '')
+    .replace(/\u00A0/g, ' ');
+}
 
 export function isWrappedUriContinuationLine(line: string, prevLineLength: number): boolean {
   if (!line) return false;
@@ -90,10 +96,13 @@ function stripTrailingPunctuation(query: string): string {
 }
 
 export function unwrapHumocoUriLines(input: string, schemePrefix: string): string {
-  const lower = input.toLowerCase();
-  const idx = lower.indexOf(schemePrefix.toLowerCase());
-  if (idx === -1) return input;
-  const slice = input.slice(idx);
+  const cleaned = normalizeCopiedText(input);
+  const escapedScheme = schemePrefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const startRegex = new RegExp(`(?<![A-Za-z0-9/._-])(${escapedScheme})`, 'i');
+  const startMatch = cleaned.match(startRegex);
+  if (!startMatch || startMatch.index === undefined) return cleaned;
+  const idx = startMatch.index;
+  const slice = cleaned.slice(idx);
   const lines = slice.split(/\r?\n/);
   let joined = (lines[0] || '').trim();
   let prevLineLen = joined.length;
@@ -121,7 +130,7 @@ export type ParsedHumocoInput =
   | { kind: 'did'; did: string };
 
 const DEEPLINK_PATTERN =
-  /humoco:\/\/(recovery-reply|kit|recovery-req|card|pay|contact)[^\s"'`<>„“”‚‘’«»‹›)]+/i;
+  /(?<![A-Za-z0-9/._-])(humoco:\/\/(?:recovery-reply|kit|recovery-req|card|pay|contact)[^\s"'`<>„“”‚‘’«»‹›)#]+)/i;
 
 function compactSyncUrlForUri(raw: string): string {
   const trimmed = raw.trim();
@@ -189,12 +198,12 @@ function canonicalizeUserIdCandidate(value: string): string {
 }
 
 export function isValidUserIdFormat(id: string): boolean {
-  if (/^did:key:z[a-zA-Z0-9]+$/.test(id)) return true;
+  if (/^did:key:z[1-9A-HJ-NP-Za-km-z]{32,64}$/.test(id)) return true;
   const atIdx = id.indexOf('@');
   if (atIdx <= 0) return false;
   const hrp = id.slice(0, atIdx);
   const didPart = id.slice(atIdx + 1);
-  if (!/^did:key:z[a-zA-Z0-9]+$/.test(didPart)) return false;
+  if (!/^did:key:z[1-9A-HJ-NP-Za-km-z]{32,64}$/.test(didPart)) return false;
   return /^[a-z0-9](?:[a-z0-9]|-(?=[a-z0-9])){0,62}:[1-9A-HJ-NP-Za-km-z]{2,8}$/.test(hrp);
 }
 
@@ -237,8 +246,11 @@ export function parseContactCard(input: string): ParsedContactCard | null {
     return null;
   }
 
-  // Normalize line wraps placed directly between '@' and 'did:key:' without ever stripping broken prefixes.
-  const normalizedInput = input.replace(/@[ \t]*\r?\n[ \t]*(?=did:key:)/gi, '@');
+  // Normalize accidental line wraps before/after '@' and mid-DID without ever stripping broken prefixes.
+  const normalizedInput = normalizeCopiedText(input)
+    .replace(/([a-z0-9:-])[ \t]*\r?\n[ \t]*@/gi, '$1@')
+    .replace(/@[ \t]*\r?\n[ \t]*(?=did:key:)/gi, '@')
+    .replace(/(did:key:z[1-9A-HJ-NP-Za-km-z]{6,})\r?\n[ \t]*([1-9A-HJ-NP-Za-km-z]{4,})/gi, '$1$2');
   const standalone = canonicalizeUserIdCandidate(normalizedInput);
   // Check if the trimmed/unwrapped input is a standalone DID or subaccount ID
   if (standalone && !/\s/.test(standalone) && (standalone.startsWith('did:') || standalone.includes('@did:'))) {
@@ -408,18 +420,19 @@ function decodeBase64UrlToUtf8(rawBase64: string): string | undefined {
  */
 export function extractHumocoDeepLink(rawText?: string | null): string | null {
   if (!rawText || typeof rawText !== 'string') return null;
-  const trimmed = rawText.trim();
+  const trimmed = normalizeCopiedText(rawText).trim();
   if (!trimmed) return null;
 
-  const lower = trimmed.toLowerCase();
-  const schemeMatch = lower.match(/humoco:\/\/(recovery-reply|kit|recovery-req|card|pay|contact)\b/);
-  const candidate = schemeMatch
-    ? unwrapHumocoUriLines(trimmed, schemeMatch[0])
+  const schemeMatch = trimmed.match(
+    /(?<![A-Za-z0-9/._-])(humoco:\/\/(?:recovery-reply|kit|recovery-req|card|pay|contact)(?=[?#\s]|$))/i
+  );
+  const candidate = schemeMatch?.[1]
+    ? unwrapHumocoUriLines(trimmed, schemeMatch[1])
     : trimmed;
 
   const match = candidate.match(DEEPLINK_PATTERN);
-  if (match?.[0]) {
-    return stripTrailingPunctuation(match[0]);
+  if (match?.[1]) {
+    return stripTrailingPunctuation(match[1]);
   }
   return null;
 }

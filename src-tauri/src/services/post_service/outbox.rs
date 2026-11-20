@@ -23,7 +23,7 @@ use super::{
     collect_own_reply_syncs, collect_post_upload_targets, enqueue_post_envelope,
     load_post_signing_context_for_service, load_post_signing_context_for_session,
     load_post_state_for_session, lookup_counterparty_syncs, merge_and_save_post_state,
-    resolve_counterparty_info, seal_post_container_bytes,
+    resolve_counterparty_info_for_session, seal_post_container_bytes,
 };
 
 struct FlushContext {
@@ -42,7 +42,6 @@ struct FlushContext {
 pub(crate) struct FlushPostSlotsOutcome {
     pub deposited_to: usize,
     pub recipient_deposited_to: usize,
-    #[cfg_attr(not(test), allow(dead_code))]
     pub uploaded_tags: std::collections::HashSet<[u8; 16]>,
     pub recipient_uploaded_tags: std::collections::HashSet<[u8; 16]>,
     pub deferred_tags: std::collections::HashSet<[u8; 16]>,
@@ -126,7 +125,10 @@ fn refresh_outbox_security_guards_with_service(
         .collect();
     if !value_outflow_blocked && !guarded_recipients.is_empty() {
         let check_res = service.with_wallet(|wallet| {
-            if wallet.assert_not_known_offender(wallet.get_user_id()).is_err() {
+            if wallet
+                .assert_not_known_offender(wallet.get_user_id())
+                .is_err()
+            {
                 value_outflow_blocked = true;
             }
             for rcpt in &guarded_recipients {
@@ -154,10 +156,7 @@ fn refresh_outbox_security_guards(
             "Active wallet session changed before outbox security check",
             |service| {
                 Ok(refresh_outbox_security_guards_with_service(
-                    state,
-                    service,
-                    post_state,
-                    password,
+                    state, service, post_state, password,
                 ))
             },
         )
@@ -171,7 +170,8 @@ pub(crate) fn collect_flush_security_for_test(
     post_state: &StoredPostState,
     password: Option<&str>,
 ) -> (bool, std::collections::HashSet<String>) {
-    refresh_outbox_security_guards(state, session, post_state, password).unwrap_or((true, Default::default()))
+    refresh_outbox_security_guards(state, session, post_state, password)
+        .unwrap_or((true, Default::default()))
 }
 
 fn collect_flush_context(
@@ -187,8 +187,11 @@ fn collect_flush_context(
             session,
             "Active wallet session changed before outbox flush could be prepared",
             |service| {
-                let id_ctx = SyncIdentityContext::from_service(service).map_err(|e| {
-                    FrontendError::from(format!("Failed to access wallet signing key: {}", e.message))
+                let id_ctx = SyncIdentityContext::from_service(service, password).map_err(|e| {
+                    FrontendError::from(format!(
+                        "Failed to access wallet signing key: {}",
+                        e.message
+                    ))
                 })?;
                 let security_policy = state
                     .get_or_load_security_policy(service, password)
@@ -238,7 +241,7 @@ fn collect_flush_context(
                     .filter(|s| !s.is_empty())
                     .collect();
 
-                let contacts = state.load_contacts(service, password).unwrap_or_default();
+                let contacts = state.load_contacts(service, password)?;
                 let card_store = crate::state::load_encrypted_json_opt::<humoco_market::CardStore>(
                     service,
                     crate::state::MARKET_CARD_STORE_KEY,
@@ -386,20 +389,24 @@ fn collect_flush_context(
 
                 let (value_outflow_blocked, blocked_offender_dids) =
                     refresh_outbox_security_guards_with_service(
-                        state,
-                        service,
-                        post_state,
-                        password,
+                        state, service, post_state, password,
                     );
 
-                let mut deduped_targets = Vec::new();
+                let mut recipient_targets = Vec::new();
+                let mut own_targets = Vec::new();
                 let mut seen_urls = std::collections::HashSet::new();
                 for t in targets {
                     let norm = normalize_sync_url(&t.write_url);
-                    if !norm.is_empty() && seen_urls.insert(norm) {
-                        deduped_targets.push(t);
+                    if !norm.is_empty() && seen_urls.insert(norm.clone()) {
+                        if recipient_write_urls.contains(&norm) {
+                            recipient_targets.push(t);
+                        } else {
+                            own_targets.push(t);
+                        }
                     }
                 }
+                recipient_targets.extend(own_targets);
+                let deduped_targets = recipient_targets;
 
                 Ok(FlushContext {
                     id_ctx,
@@ -422,39 +429,78 @@ fn select_prioritized_entries_for_target(
     is_own_target: bool,
     target_recipient_dids: Option<&std::collections::HashSet<String>>,
 ) -> Vec<PostBoxEntry> {
-    let mut selected: Vec<&crate::state::PostOutboxEntry> = post_state
-        .outbox_entries
-        .iter()
-        .filter(|entry| {
-            if entry.message_class.requires_outflow_guard()
-                && (flush_ctx.value_outflow_blocked
-                    || flush_ctx
-                        .blocked_offender_dids
-                        .contains(entry.recipient_did.trim()))
-            {
-                return false;
+    let mut small: Vec<&crate::state::PostOutboxEntry> = Vec::new();
+    let mut large: Vec<&crate::state::PostOutboxEntry> = Vec::new();
+    for entry in &post_state.outbox_entries {
+        if entry.message_class.requires_outflow_guard()
+            && (flush_ctx.value_outflow_blocked
+                || flush_ctx
+                    .blocked_offender_dids
+                    .contains(entry.recipient_did.trim()))
+        {
+            continue;
+        }
+        if !is_own_target {
+            if let Some(recipients) = target_recipient_dids {
+                if !recipients.contains(entry.recipient_did.trim()) {
+                    continue;
+                }
             }
-            if is_own_target {
-                return true;
+        }
+        if entry.entry.ciphertext.len() >= 131_072 {
+            large.push(entry);
+        } else {
+            small.push(entry);
+        }
+    }
+    small.sort_by(|a, b| (a.created_at, a.msg_id.as_str()).cmp(&(b.created_at, b.msg_id.as_str())));
+    large.sort_by(|a, b| (a.created_at, a.msg_id.as_str()).cmp(&(b.created_at, b.msg_id.as_str())));
+    if large.len() > 1 {
+        let shift = (post_state.outbox_rotation_tick as usize) % large.len();
+        large.rotate_left(shift);
+    }
+    let mut ordered = Vec::with_capacity(large.len() + small.len());
+    ordered.extend(large.into_iter().map(|e| e.entry.clone()));
+    ordered.extend(small.into_iter().map(|e| e.entry.clone()));
+    ordered
+}
+
+fn collect_remove_tags_for_flush(
+    post_state: &StoredPostState,
+    flush_ctx: &FlushContext,
+) -> Vec<[u8; 16]> {
+    let mut tags: Vec<[u8; 16]> = Vec::new();
+    let mut seen: std::collections::HashSet<[u8; 16]> = std::collections::HashSet::new();
+    for hex_str in &post_state.pruned_outbox_tag16s {
+        if let Ok(tag) = human_money_core::humoco_proto::decode_hex_fixed::<16>(hex_str) {
+            if seen.insert(tag) {
+                tags.push(tag);
             }
-            let Some(recipients) = target_recipient_dids else {
-                return true;
-            };
-            recipients.contains(entry.recipient_did.trim())
-        })
-        .collect();
-    selected
-        .sort_by(|a, b| (a.created_at, a.msg_id.as_str()).cmp(&(b.created_at, b.msg_id.as_str())));
-    selected.into_iter().map(|e| e.entry.clone()).collect()
+        }
+    }
+    for entry in &post_state.outbox_entries {
+        if entry.message_class.requires_outflow_guard()
+            && (flush_ctx.value_outflow_blocked
+                || flush_ctx
+                    .blocked_offender_dids
+                    .contains(entry.recipient_did.trim()))
+            && seen.insert(entry.entry.tag16)
+        {
+            tags.push(entry.entry.tag16);
+        }
+    }
+    tags
 }
 
 type UploadSlotResult = (Option<String>, Vec<[u8; 16]>, Vec<[u8; 16]>, Vec<[u8; 16]>);
 
+#[allow(clippy::too_many_arguments)]
 async fn upload_single_post_target(
     client: &reqwest::Client,
     id_ctx: &SyncIdentityContext,
     sync_desc: &DropDescriptor,
     local_entries: &[PostBoxEntry],
+    remove_tags: &[[u8; 16]],
     packed: humoco_market::PackedPostSlot,
     if_match: Option<&str>,
     now_secs: u64,
@@ -494,7 +540,7 @@ async fn upload_single_post_target(
         )),
         Ok(PutSlotOutcome::PreconditionFailed { current_etag }) => {
             // Multi-device conflict: fetch remote slot, priority-merge local additions, and retry once.
-            let remote_bytes = match sync_client::get_slot(
+            let (remote_bytes, fetched_etag) = match sync_client::get_slot(
                 client,
                 &sync_desc.read_url,
                 &id,
@@ -504,11 +550,11 @@ async fn upload_single_post_target(
             )
             .await
             {
-                Ok(sync_client::SlotFetchResult::Modified { bytes, .. }) => Some(bytes),
+                Ok(sync_client::SlotFetchResult::Modified { bytes, etag }) => (Some(bytes), etag),
                 Ok(
                     sync_client::SlotFetchResult::NotFound
                     | sync_client::SlotFetchResult::NotModified,
-                ) => None,
+                ) => (None, None),
                 Err(e) => {
                     return Err(format!(
                         "Failed to fetch remote slot for 412 merge from {}: {}",
@@ -521,7 +567,7 @@ async fn upload_single_post_target(
                 &id_ctx.master_seed,
                 remote_bytes.as_deref(),
                 local_entries,
-                &[],
+                remove_tags,
                 DROP_POST_MAX_BYTES,
             )
             .map_err(|e| format!("Failed to merge post slot on 412: {}", e))?;
@@ -535,6 +581,7 @@ async fn upload_single_post_target(
                 &retry_nonce,
                 &merged.blob,
             )?;
+            let retry_if_match = fetched_etag.as_deref().or(current_etag.as_deref());
 
             match sync_client::put_slot(
                 client,
@@ -542,7 +589,7 @@ async fn upload_single_post_target(
                 &retry_signed,
                 "post",
                 &merged.blob,
-                current_etag.as_deref(),
+                retry_if_match,
             )
             .await
             {
@@ -601,6 +648,8 @@ pub(crate) async fn flush_post_slots_impl(
     let client = sync_client::create_sync_http_client();
     let mut deposited_to = 0;
     let mut recipient_deposited_to = 0;
+    let mut own_targets_attempted = 0usize;
+    let mut own_targets_failed = 0usize;
     let mut errors = Vec::new();
     let mut health_updates: Vec<(String, bool)> = Vec::new();
     let mut uploaded_tags = std::collections::HashSet::new();
@@ -675,11 +724,16 @@ pub(crate) async fn flush_post_slots_impl(
             );
         }
 
+        let remove_tags = collect_remove_tags_for_flush(post_state, &flush_ctx);
+        if is_own_target {
+            own_targets_attempted += 1;
+        }
         match upload_single_post_target(
             &client,
             &flush_ctx.id_ctx,
             sync_desc,
             &target_entries,
+            &remove_tags,
             packed,
             if_match.as_deref(),
             flush_ctx.now_secs,
@@ -717,10 +771,17 @@ pub(crate) async fn flush_post_slots_impl(
                 }
             }
             Err(e) => {
+                if is_own_target {
+                    own_targets_failed += 1;
+                }
                 health_updates.push((sync_desc.write_url.clone(), false));
                 errors.push(e);
             }
         }
+    }
+
+    if own_targets_attempted > 0 && own_targets_failed == 0 {
+        post_state.pruned_outbox_tag16s.clear();
     }
 
     if !health_updates.is_empty() {
@@ -740,6 +801,18 @@ pub(crate) async fn flush_post_slots_impl(
         .filter(|t| !uploaded_tags.contains(t))
         .collect();
     let deferred_count = deferred_tags.len();
+    if deferred_count > 0 {
+        post_state.outbox_rotation_tick = post_state.outbox_rotation_tick.wrapping_add(1);
+    }
+    let mut max_retry_after: Option<u64> = None;
+    for err in &errors {
+        if let Some(secs) = sync_client::extract_retry_after_from_error_str(err) {
+            max_retry_after = Some(max_retry_after.map_or(secs, |prev| prev.max(secs)));
+        }
+    }
+    if let Some(secs) = max_retry_after {
+        state.record_sync_cooldown(secs);
+    }
 
     FlushPostSlotsOutcome {
         deposited_to,
@@ -783,15 +856,28 @@ async fn persist_and_flush_post_box(
     }
     merge_and_save_post_state(state, session, &mid_baseline, post_state, password)?;
 
-    let queued_for_next_flush = target_tag16.is_some_and(|t| outcome.deferred_tags.contains(&t));
+    let target_uploaded = target_tag16.is_some_and(|t| outcome.uploaded_tags.contains(&t));
+    let queued_for_next_flush =
+        !target_uploaded && target_tag16.is_some_and(|t| outcome.deferred_tags.contains(&t));
+    let mut errors = outcome.errors;
+    let (deposited_to, recipient_deposited_to) =
+        if outcome.deposited_to > 0 && !target_uploaded && !queued_for_next_flush {
+            errors.push(format!(
+                "Message {} was excluded or omitted during PoST flush and not deposited",
+                msg_id
+            ));
+            (0, 0)
+        } else {
+            (outcome.deposited_to, outcome.recipient_deposited_to)
+        };
 
     Ok(FrontendPostDepositResult {
-        deposited_to: outcome.deposited_to,
-        recipient_deposited_to: outcome.recipient_deposited_to,
+        deposited_to,
+        recipient_deposited_to,
         msg_id,
         deferred_count: outcome.deferred_count,
         queued_for_next_flush,
-        errors: outcome.errors,
+        errors,
     })
 }
 
@@ -819,6 +905,16 @@ pub(crate) async fn deposit_transfer_to_post_with_session(
                         bundle_id
                     ))
                 })?;
+            let recipient_refs = [record.recipient_id.as_str()];
+            let preflight = crate::services::preflight::ValueOutflowPreflight {
+                require_restore_reconciled: true,
+                check_known_offender_dids: &recipient_refs,
+                check_blocking_intent_local_ids: &[],
+                check_anchor_id_quorum_health: None,
+            };
+            crate::services::preflight::run_value_outflow_preflight(
+                state, service, password, &preflight,
+            )?;
             let bundle_bytes =
                 crate::state::get_outgoing_bundle_bytes(service, &record.bundle_id, password)?
                     .filter(|b| !b.is_empty())
@@ -861,6 +957,7 @@ pub(crate) async fn deposit_transfer_to_post_with_session(
             bundle_bytes, // EXACT bytes! Never call create_transfer_bundle!
             now_secs,
             None,
+            None,
         )?;
         fresh_msg_id
     };
@@ -882,40 +979,59 @@ pub async fn deposit_transfer_to_post_impl(
     deposit_transfer_to_post_with_session(&session, bundle_id, pw, state).await
 }
 
-fn resolve_signing_request_anchor_manifest(
+fn resolve_signing_request_anchor_metadata(
     state: &AppState,
+    session: &SessionToken,
     local_instance_id: Option<&str>,
-) -> Option<String> {
-    let service = state.service.lock().ok()?;
-    service
-        .with_wallet(|w| {
-            let aid_hex =
-                if let Some(lid) = local_instance_id.map(str::trim).filter(|s| !s.is_empty()) {
-                    w.get_voucher_instance(lid)
-                        .and_then(|inst| inst.voucher.layer2_anchor)
-                        .map(hex::encode)
-                } else {
-                    let mut candidates = std::collections::BTreeSet::new();
-                    for inst in w.voucher_store.vouchers.values() {
-                        if let Some(aid) = inst.voucher.layer2_anchor {
-                            let hx = hex::encode(aid);
-                            if w.profile.l2_anchor_manifests.contains_key(&hx) {
-                                candidates.insert(hx);
+    password: Option<&str>,
+) -> Result<(Option<String>, Option<String>), FrontendError> {
+    state.with_session_required(
+        session,
+        "Active wallet session changed before loading signing request anchor metadata",
+        |service| {
+            let manifest_opt = service
+                .with_wallet(|w| {
+                    let aid_hex = if let Some(lid) =
+                        local_instance_id.map(str::trim).filter(|s| !s.is_empty())
+                    {
+                        w.get_voucher_instance(lid)
+                            .and_then(|inst| inst.voucher.layer2_anchor)
+                            .map(hex::encode)
+                    } else {
+                        let mut candidates = std::collections::BTreeSet::new();
+                        for inst in w.voucher_store.vouchers.values() {
+                            if let Some(aid) = inst.voucher.layer2_anchor {
+                                let hx = hex::encode(aid);
+                                if w.profile.l2_anchor_manifests.contains_key(&hx) {
+                                    candidates.insert(hx);
+                                }
                             }
                         }
-                    }
-                    if candidates.len() == 1 {
-                        candidates.into_iter().next()
-                    } else {
-                        None
-                    }
-                };
-            aid_hex
-                .and_then(|hx| w.profile.l2_anchor_manifests.get(&hx))
-                .and_then(|m| serde_json::to_string(m).ok())
-        })
-        .ok()
-        .flatten()
+                        if candidates.len() == 1 {
+                            candidates.into_iter().next()
+                        } else {
+                            None
+                        }
+                    };
+                    aid_hex.and_then(|hx| w.profile.l2_anchor_manifests.get(&hx).cloned())
+                })
+                .map_err(FrontendError::from)?;
+            let Some(manifest) = manifest_opt else {
+                return Ok((None, None));
+            };
+            let manifest_json = serde_json::to_string(&manifest).ok();
+            let delegations_json = state
+                .get_or_load_internal_lifecycle(service, password)
+                .ok()
+                .and_then(|lc| {
+                    crate::services::common::collect_verified_delegations_for_manifest(
+                        &manifest,
+                        &lc.l2_probe_cache,
+                    )
+                });
+            Ok((manifest_json, delegations_json))
+        },
+    )
 }
 
 /// Sends a voucher co-signing request container to a guarantor via Post.
@@ -936,8 +1052,8 @@ pub async fn send_signing_request_via_post_impl(
     let recipient_did = validated_recipient.as_str().to_string();
     let recipient_ed_pk = validated_recipient.public_key();
     let signing_ctx = load_post_signing_context_for_session(state, &session, pw)?;
-    let anchor_manifest_json =
-        resolve_signing_request_anchor_manifest(state, local_instance_id.as_deref());
+    let (anchor_manifest_json, anchor_delegations_json) =
+        resolve_signing_request_anchor_metadata(state, &session, local_instance_id.as_deref(), pw)?;
     let now_secs = sync_client::current_unix_timestamp();
 
     let _post_guard = state.post_op_lock.lock().await;
@@ -957,6 +1073,7 @@ pub async fn send_signing_request_via_post_impl(
         container_bytes,
         now_secs,
         anchor_manifest_json,
+        anchor_delegations_json,
     )?;
 
     persist_and_flush_post_box(state, &session, &baseline, &mut post_state, msg_id, pw).await
@@ -990,7 +1107,10 @@ pub async fn reply_detached_signature_via_post_impl(
                 return Err(map_seal_lock_error(reason));
             }
             let signing_ctx = load_post_signing_context_for_service(state, service, pw)?;
-            let offender_dids = [recipient_did.as_str(), signing_ctx.identity.user_id.as_str()];
+            let offender_dids = [
+                recipient_did.as_str(),
+                signing_ctx.identity.user_id.as_str(),
+            ];
             let preflight = crate::services::preflight::ValueOutflowPreflight {
                 require_restore_reconciled: true,
                 check_known_offender_dids: &offender_dids,
@@ -998,10 +1118,7 @@ pub async fn reply_detached_signature_via_post_impl(
                 check_anchor_id_quorum_health: None,
             };
             crate::services::preflight::run_value_outflow_preflight(
-                state,
-                service,
-                pw,
-                &preflight,
+                state, service, pw, &preflight,
             )?;
             Ok(signing_ctx)
         },
@@ -1011,6 +1128,14 @@ pub async fn reply_detached_signature_via_post_impl(
     let _post_guard = state.post_op_lock.lock().await;
     let msg_id = uuid::Uuid::new_v4().to_string();
     let mut post_state = load_post_state_for_session(state, &session, pw)?;
+    if let Some(ref req_id) = request_msg_id {
+        if post_state.replied_sign_request_ids.contains(req_id) {
+            return Err(FrontendError::with_code(
+                "error.post.duplicateReply",
+                "This signature request has already been answered.".to_string(),
+            ));
+        }
+    }
     let baseline = post_state.clone();
     enqueue_post_envelope(
         &mut post_state,
@@ -1025,6 +1150,7 @@ pub async fn reply_detached_signature_via_post_impl(
         container_bytes,
         now_secs,
         None,
+        None,
     )?;
     let target_tag16 = post_state
         .outbox_entries
@@ -1032,29 +1158,20 @@ pub async fn reply_detached_signature_via_post_impl(
         .find(|e| e.msg_id == msg_id)
         .map(|e| e.entry.tag16);
 
-    merge_and_save_post_state(
-        state,
-        &session,
-        &baseline,
-        &mut post_state,
-        pw,
-    )?;
+    merge_and_save_post_state(state, &session, &baseline, &mut post_state, pw)?;
     let mid_baseline = post_state.clone();
 
-    let outcome = flush_post_slots_impl(
-        state,
-        &session,
-        &mut post_state,
-        None,
-        &[],
-        pw,
-    )
-    .await;
-    let delivered_to_recipient =
-        target_tag16.is_some_and(|t| outcome.recipient_uploaded_tags.contains(&t));
+    let outcome = flush_post_slots_impl(state, &session, &mut post_state, None, &[], pw).await;
+    let delivered_any = outcome.deposited_to > 0;
 
-    if delivered_to_recipient {
+    if delivered_any {
         if let Some(ref req_id) = request_msg_id {
+            if post_state.replied_sign_request_ids.len() >= 512 {
+                if let Some(first) = post_state.replied_sign_request_ids.iter().next().cloned() {
+                    post_state.replied_sign_request_ids.remove(&first);
+                }
+            }
+            post_state.replied_sign_request_ids.insert(req_id.clone());
             if let Some(idx) = post_state
                 .pending_sign_requests
                 .iter()
@@ -1086,13 +1203,7 @@ pub async fn reply_detached_signature_via_post_impl(
         }
     }
 
-    merge_and_save_post_state(
-        state,
-        &session,
-        &mid_baseline,
-        &mut post_state,
-        password.as_deref(),
-    )?;
+    merge_and_save_post_state(state, &session, &mid_baseline, &mut post_state, pw)?;
 
     let queued_for_next_flush = target_tag16.is_some_and(|t| outcome.deferred_tags.contains(&t));
 
@@ -1107,6 +1218,7 @@ pub async fn reply_detached_signature_via_post_impl(
 }
 
 /// Sends a WoT trust handshake assertion with an embedded `WotSyncPackage` via Post.
+#[cfg(test)]
 pub async fn send_wot_handshake_via_post_impl(
     recipient_did: String,
     proposed_level: u8,
@@ -1235,6 +1347,7 @@ pub(crate) async fn send_wot_handshake_via_post_with_session(
         &own_reply_syncs,
         container_bytes,
         now_secs,
+        None,
         None,
     )?;
 
@@ -1429,6 +1542,7 @@ pub async fn send_market_inquiry_via_post_impl(
         container_bytes,
         now_secs,
         None,
+        None,
     )?;
     let target_tag16 = post_state
         .outbox_entries
@@ -1446,6 +1560,10 @@ pub async fn send_market_inquiry_via_post_impl(
     )
     .await;
     if !target_tag16.is_some_and(|t| flush_outcome.recipient_uploaded_tags.contains(&t)) {
+        if flush_outcome.deposited_to > 0 {
+            post_state.outbox_entries.retain(|e| e.msg_id != msg_id);
+            let _ = merge_and_save_post_state(state, &session, &baseline, &mut post_state, pw);
+        }
         return Err(FrontendError::with_code(
             "error.post.recipientUnreachable",
             format!(
@@ -1456,7 +1574,7 @@ pub async fn send_market_inquiry_via_post_impl(
     }
 
     let (counterparty_name, counterparty_picture_url, is_contact) =
-        resolve_counterparty_info(state, &recipient_did, pw);
+        resolve_counterparty_info_for_session(state, &session, &recipient_did, pw);
 
     let item = FrontendMarketInquiryItem {
         inquiry_id,
@@ -1567,7 +1685,7 @@ pub async fn send_market_inquiry_message_via_post_impl(
     };
 
     if !has_reply_syncs {
-        let discovered_syncs = lookup_counterparty_syncs(state, &counterparty_did, pw);
+        let discovered_syncs = lookup_counterparty_syncs(state, &session, &counterparty_did, pw);
         if discovered_syncs.is_empty() {
             return Err(FrontendError::from(
                 "Counterparty has no sync service configured for replies".to_string(),
@@ -1624,6 +1742,7 @@ pub async fn send_market_inquiry_message_via_post_impl(
         container_bytes,
         now_secs,
         None,
+        None,
     )?;
     let target_tag16 = post_state
         .outbox_entries
@@ -1634,6 +1753,10 @@ pub async fn send_market_inquiry_message_via_post_impl(
     let flush_outcome =
         flush_post_slots_impl(state, &session, &mut post_state, None, &[], pw).await;
     if !target_tag16.is_some_and(|t| flush_outcome.recipient_uploaded_tags.contains(&t)) {
+        if flush_outcome.deposited_to > 0 {
+            post_state.outbox_entries.retain(|e| e.msg_id != msg_id);
+            let _ = merge_and_save_post_state(state, &session, &baseline, &mut post_state, pw);
+        }
         return Err(FrontendError::with_code(
             "error.post.recipientUnreachable",
             format!(
@@ -1679,7 +1802,7 @@ pub async fn send_market_inquiry_message_via_post_impl(
     merge_and_save_post_state(state, &session, &baseline, &mut post_state, pw)?;
 
     let (name, pic, is_contact) =
-        resolve_counterparty_info(state, &updated_item.counterparty_did, pw);
+        resolve_counterparty_info_for_session(state, &session, &updated_item.counterparty_did, pw);
     updated_item.counterparty_name = name;
     updated_item.counterparty_picture_url = pic;
     updated_item.is_contact = is_contact;

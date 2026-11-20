@@ -78,22 +78,6 @@ export function buildStandardDefinitionsToml(
     return map;
 }
 
-export function isAuthOrDecryptError(err: unknown): boolean {
-    const errMsg = stringifyError(err);
-    const errCode = isBackendError(err) ? err.code : '';
-    return (
-        errCode === 'error.wallet.locked' ||
-        errCode === 'error.auth.sessionTimeout' ||
-        errCode === 'error.auth.passwordRequired' ||
-        errMsg.includes('Password required') ||
-        errMsg.includes('Session timed out') ||
-        errMsg.includes('Wallet is locked') ||
-        errMsg.toLowerCase().includes('decrypt') ||
-        errMsg.includes('SymmetricEncryption') ||
-        errMsg.includes('MacError')
-    );
-}
-
 export type ReceiveImportOutcome =
     | {
           kind: 'success';
@@ -141,8 +125,9 @@ export async function executeReceiveImport({
             emitConflictsUpdatedIfPresent(payload);
         }
 
+        const isQuarantined = Boolean(payload?.checkoutVerdict?.outcome?.startsWith('Quarantined'));
         const pendingCommit: PendingReceiveCommit | undefined =
-            payload && payload.newlyCommitted === false && !payload.isReplay
+            payload && payload.newlyCommitted === false && !payload.isReplay && !isQuarantined
                 ? {
                       bundleData: fileData,
                       standardDefinitionsToml,

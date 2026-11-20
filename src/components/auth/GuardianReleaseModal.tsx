@@ -52,9 +52,15 @@ export const GuardianReleaseModal: React.FC<GuardianReleaseModalProps> = ({
     const [errorMsg, setErrorMsg] = useState<string>('');
     const [copied, setCopied] = useState<boolean>(false);
     const [copiedReplyChat, setCopiedReplyChat] = useState<boolean>(false);
+    const openCycleRef = useRef(0);
+    const inspectSeqRef = useRef(0);
+    const approveSeqRef = useRef(0);
 
     const inspectUri = useCallback(async (uriToInspect: string, promptIfLocked: boolean = false) => {
         if (!uriToInspect.trim()) return;
+        const cycle = openCycleRef.current;
+        const seq = ++inspectSeqRef.current;
+        const isCurrent = () => openCycleRef.current === cycle && inspectSeqRef.current === seq;
         setIsInspecting(true);
         setErrorMsg('');
 
@@ -67,7 +73,7 @@ export const GuardianReleaseModal: React.FC<GuardianReleaseModalProps> = ({
                       );
                   })
                 : await recoveryService.inspectGuardianRecoveryRequest(uriToInspect);
-            if (!dto) return;
+            if (!isCurrent() || !dto) return;
             setInspection(dto);
             const wards = dto.wards || [];
             if (wards.length === 1) {
@@ -91,9 +97,12 @@ export const GuardianReleaseModal: React.FC<GuardianReleaseModalProps> = ({
                 setSelectedOwnerDid('');
             }
         } catch (err) {
+            if (!isCurrent()) return;
             setErrorMsg(translateError(err, t));
         } finally {
-            setIsInspecting(false);
+            if (isCurrent()) {
+                setIsInspecting(false);
+            }
         }
     }, [initialOwnerDid, session, t]);
 
@@ -101,12 +110,18 @@ export const GuardianReleaseModal: React.FC<GuardianReleaseModalProps> = ({
     inspectUriRef.current = inspectUri;
 
     useEffect(() => {
+        openCycleRef.current += 1;
+        inspectSeqRef.current += 1;
+        approveSeqRef.current += 1;
         if (!isOpen) {
             setRequestUri('');
             setPassword('');
             setSelectedOwnerDid('');
             setInspection(null);
             setApprovalResult(null);
+            setIsInspecting(false);
+            setIsSyncingInbox(false);
+            setIsApproving(false);
             setErrorMsg('');
             setCopied(false);
             setCopiedReplyChat(false);
@@ -119,11 +134,14 @@ export const GuardianReleaseModal: React.FC<GuardianReleaseModalProps> = ({
         setSelectedOwnerDid(initialOwnerDid || '');
         setInspection(null);
         setApprovalResult(null);
+        setIsInspecting(false);
+        setIsSyncingInbox(false);
+        setIsApproving(false);
         setErrorMsg('');
         setCopied(false);
         setCopiedReplyChat(false);
 
-        if (uri.includes('recovery-req?')) {
+        if (uri.toLowerCase().includes('humoco://recovery-req?')) {
             inspectUriRef.current(uri, true);
         }
     }, [isOpen, initialRequestUri, initialOwnerDid]);
@@ -131,11 +149,10 @@ export const GuardianReleaseModal: React.FC<GuardianReleaseModalProps> = ({
     const handleApprove = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!requestUri || !selectedOwnerDid || !password || isApproving) return;
-        if (session?.accessMode && session.accessMode !== 'full' && session.requireFullAccess) {
-            const unlocked = await session.requireFullAccess(async () => true);
-            if (!unlocked) return;
-        }
 
+        const cycle = openCycleRef.current;
+        const seq = ++approveSeqRef.current;
+        const isCurrent = () => openCycleRef.current === cycle && approveSeqRef.current === seq;
         setIsApproving(true);
         setErrorMsg('');
 
@@ -145,11 +162,15 @@ export const GuardianReleaseModal: React.FC<GuardianReleaseModalProps> = ({
                 selectedOwnerDid,
                 password
             );
+            if (!isCurrent()) return;
             setApprovalResult(res);
         } catch (err) {
+            if (!isCurrent()) return;
             setErrorMsg(translateError(err, t));
         } finally {
-            setIsApproving(false);
+            if (isCurrent()) {
+                setIsApproving(false);
+            }
         }
     };
 

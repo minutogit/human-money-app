@@ -46,7 +46,7 @@ interface SettingsViewProps {
 
 export function SettingsView({ onBack }: SettingsViewProps) {
     const { t } = useTranslation();
-    const { protectAction, clearLocks } = useSession();
+    const { protectAction, lockSession, refreshSessionStatus } = useSession();
     const nav = useOptionalNavigation();
     const appVersion = nav?.appVersion || '0.3.0';
 
@@ -126,7 +126,10 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                         : cur,
                 );
                 if (updatedPolicy.sessionTimeoutSeconds === 0) {
-                    clearLocks?.();
+                    await lockSession?.();
+                }
+                if ('sessionTimeoutSeconds' in patch) {
+                    await refreshSessionStatus?.();
                 }
                 return true;
             } catch (e) {
@@ -138,7 +141,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                 return false;
             }
         },
-        [clearLocks, protectAction, t, updateConfigState]
+        [lockSession, protectAction, refreshSessionStatus, t, updateConfigState]
     );
 
     // Deep link section mapping

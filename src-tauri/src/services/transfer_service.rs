@@ -41,6 +41,7 @@ pub async fn create_transfer_bundle_impl(
             password.as_deref(),
         )?;
         let pw = resolved_pw.as_deref().map(String::as_str);
+        let _password = pw;
         let session = state.session_token_for_service(&service)?;
         let blocking_ids: Vec<&str> = sources
             .iter()
@@ -61,6 +62,7 @@ pub async fn create_transfer_bundle_impl(
         (session, resolved_pw)
     };
     let pw = resolved_pw.as_deref().map(String::as_str);
+    let _password = pw;
 
     let source_transfers: Vec<SourceTransfer> = sources
         .into_iter()
@@ -164,7 +166,7 @@ pub async fn create_transfer_bundle_impl(
         }
 
         if let Ok(can_recipient) = crate::state::canonicalize_did(&recipient_id) {
-            if let Ok(mut reg) = state.get_or_load_wot_register(service, password.as_deref()) {
+            if let Ok(mut reg) = state.get_or_load_wot_register(service, pw) {
                 if reg
                     .own_contacts
                     .get(&can_recipient)
@@ -172,8 +174,7 @@ pub async fn create_transfer_bundle_impl(
                 {
                     if let Ok(changed) = state.ensure_wot_list_signed(service, &mut reg) {
                         if changed {
-                            let _ =
-                                state.save_wot_register(service, &reg, password.as_deref());
+                            let _ = state.save_wot_register(service, &reg, pw);
                         }
                     }
                     if let Ok((pkg, receipt)) =
@@ -345,14 +346,32 @@ pub async fn create_transfer_bundle_impl(
     })?;
 
     // Service mutex released; L1 + durable L2 intents are committed before network fan-out.
-    let l2_dispatch = crate::services::preflight::dispatch_l2_send_intents(
+    let l2_dispatch = match crate::services::preflight::dispatch_l2_send_intents(
         state,
         &session,
         &intents,
         pow_base_bits,
         pw,
     )
-    .await?;
+    .await
+    {
+        Ok(obs) => obs,
+        Err(err) => {
+            log::warn!(
+                "Transfer L1 committed ({}); L2 intent dispatch deferred/pending: {}",
+                result.bundle_id,
+                err.message
+            );
+            intents
+                .iter()
+                .map(|i| crate::gateway_resolver::IntentDispatchObservation {
+                    local_instance_id: i.local_instance_id.clone(),
+                    status: "pending".to_string(),
+                    http_status: None,
+                })
+                .collect()
+        }
+    };
 
     let (post_deposit, post_deposit_error) = if deposit_to_post.unwrap_or(false) {
         match crate::services::post_service::deposit_transfer_to_post_with_session(
@@ -635,6 +654,7 @@ pub async fn receive_bundle_impl(
         password.as_deref(),
     )?;
     let pw = resolved_pw.as_deref().map(String::as_str);
+    let _password = pw;
 
     let effective_purchase_id = purchase_id
         .as_deref()
@@ -647,12 +667,13 @@ pub async fn receive_bundle_impl(
         });
 
     let mode = commit_mode.unwrap_or_default();
-    if mode == ReceiveCommitMode::OnlineVerify && !force_accept_tolerance_bundle {
+    if mode == ReceiveCommitMode::OnlineVerify {
         let completion = crate::checkout::checkout_bundle(
             state,
             &effective_purchase_id,
             &bundle_data,
             &standard_definitions_toml,
+            force_accept_tolerance_bundle,
             pw,
         )
         .await?;

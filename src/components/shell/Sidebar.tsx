@@ -69,7 +69,7 @@ interface NavGroup {
 
 export const Sidebar: React.FC<SidebarProps> = ({ openClaimsCount }) => {
   const { t } = useTranslation();
-  const { hasCachedSession, isAuthenticated, profileName, displayProfileName, userAvatarUrl, notifyLogout, protectAction, lockSession, accessMode = 'full', requireFullAccess } = useSession();
+  const { hasCachedSession, isAuthenticated, profileName, displayProfileName, userAvatarUrl, notifyLogout, protectAction, lockSession, accessMode = 'full', requireFullAccess, sessionTimeoutSeconds } = useSession();
   const { appState, navigate, appVersion, isSidebarOpen, setSidebarOpen } = useNavigation();
   const { isExpert } = useUiMode();
   const currentView = appState.view;
@@ -228,7 +228,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ openClaimsCount }) => {
                 <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${hasCachedSession ? "bg-theme-success animate-pulse" : "bg-theme-warning"}`}></span>
                 {hasCachedSession ? t('common.activeWallet') : t('auth.sessionLocked')}
               </span>
-              {isAuthenticated && accessMode !== 'full' && (
+              {isAuthenticated && accessMode !== 'full' && sessionTimeoutSeconds !== 0 && (
                 <div className="mt-1 flex items-center gap-1.5 flex-wrap">
                   <span
                     data-testid="sidebar-access-mode-badge"

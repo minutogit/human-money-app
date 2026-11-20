@@ -451,19 +451,16 @@ pub(crate) async fn probe_contact_syncs_with_session(
         session,
         "Wallet session changed before sync probe started",
         |service| {
-            let id_ctx = SyncIdentityContext::from_service(service)?;
+            let id_ctx = SyncIdentityContext::from_service(service, password)?;
             let s = state
                 .get_or_load_security_policy(service, password)
                 .map_err(FrontendError::from)?;
             let own = load_stored_sync_admin_opt(service, password)?.is_some_and(|a| {
                 !a.descriptor.write_url.is_empty() && !a.descriptor.read_url.is_empty()
             });
-            let ab: FrontendAddressBook = crate::state::load_encrypted_json_or_default(
-                service,
-                CONTACTS_DATA_NAME,
-                password,
-            )
-            .map_err(FrontendError::from)?;
+            let ab: FrontendAddressBook =
+                crate::state::load_encrypted_json_or_default(service, CONTACTS_DATA_NAME, password)
+                    .map_err(FrontendError::from)?;
             let targets: Vec<(String, String, FrontendSyncDescriptor)> = ab
                 .contacts
                 .into_iter()
@@ -525,12 +522,9 @@ pub(crate) async fn probe_contact_syncs_with_session(
     }
 
     let final_book_opt = state.with_session(session, |service| {
-        let mut fresh_ab: FrontendAddressBook = crate::state::load_encrypted_json_or_default(
-            service,
-            CONTACTS_DATA_NAME,
-            password,
-        )
-        .map_err(FrontendError::from)?;
+        let mut fresh_ab: FrontendAddressBook =
+            crate::state::load_encrypted_json_or_default(service, CONTACTS_DATA_NAME, password)
+                .map_err(FrontendError::from)?;
         let mut contacts_modified = false;
 
         for (contact_key, orig_norm_write, probed_ep) in &probed_updates {
@@ -553,13 +547,8 @@ pub(crate) async fn probe_contact_syncs_with_session(
         }
 
         if contacts_modified {
-            crate::state::save_encrypted_json(
-                service,
-                CONTACTS_DATA_NAME,
-                &fresh_ab,
-                password,
-            )
-            .map_err(FrontendError::from)?;
+            crate::state::save_encrypted_json(service, CONTACTS_DATA_NAME, &fresh_ab, password)
+                .map_err(FrontendError::from)?;
             state.set_cached_contacts_for_service(service, Some(fresh_ab.clone()));
         }
         Ok(fresh_ab)
@@ -639,12 +628,7 @@ pub(crate) async fn probe_contact_syncs_with_session(
         }
     }
 
-    save_channel_max_bytes_updates(
-        state,
-        session,
-        password,
-        &channel_max_bytes_updates,
-    );
+    save_channel_max_bytes_updates(state, session, password, &channel_max_bytes_updates);
 
     let mut all_syncs = Vec::new();
     for c in final_book.contacts.values() {
@@ -658,7 +642,8 @@ pub async fn set_selected_upload_syncs_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<Vec<FrontendSyncDescriptor>, FrontendError> {
-    state.authorize(crate::state::RequiredAccess::Full, password.as_deref())?;
+    let session = state
+        .authorize_and_begin_session(crate::state::RequiredAccess::Full, password.as_deref())?;
     if syncs.len() > 3 {
         return Err(FrontendError::from(
             "Maximum 3 upload drops allowed".to_string(),
@@ -667,7 +652,7 @@ pub async fn set_selected_upload_syncs_impl(
 
     for d in &syncs {
         sync_client::validate_sync_url(&d.write_url).map_err(FrontendError::from)?;
-        sync_client::validate_sync_url(&d.read_url).map_err(FrontendError::from)?;
+        sync_client::validate_sync_read_url(&d.read_url).map_err(FrontendError::from)?;
         humoco_market::parse_ed25519_pubkey_hex64(&d.drop_pub)
             .map_err(|e| FrontendError::from(format!("Invalid drop_pub: {}", e)))?;
         if let Some(ref sid) = d.slot_id {
@@ -676,21 +661,29 @@ pub async fn set_selected_upload_syncs_impl(
         }
     }
 
-    {
-        let mut service = state.lock_service()?;
-        state
-            .mutate_security_policy(&mut service, password.as_deref(), |policy| {
-                policy.market_selected_syncs = syncs.clone();
-            })
-            .map_err(FrontendError::from)?;
+    state.with_session_required(
+        &session,
+        "Active wallet session changed before upload syncs could be saved",
+        |service| {
+            state
+                .mutate_security_policy(service, password.as_deref(), |policy| {
+                    policy.market_selected_syncs = syncs.clone();
+                })
+                .map_err(FrontendError::from)?;
 
-        sync_own_card_drops_on_settings_change(state, &mut service, &syncs, password.as_deref());
+            sync_own_card_drops_on_settings_change(state, service, &syncs, password.as_deref());
+            Ok(())
+        },
+    )?;
+
+    if state.is_generation_current(session.generation) {
+        let _ = enqueue_guardian_locator_updates_if_configured(state, password.clone()).await;
     }
 
-    let _ = enqueue_guardian_locator_updates_if_configured(state, password.clone()).await;
-
     // Trigger upload to selected drops.
-    let _ = super::sync_market_channels_impl(None, Some(true), password, state).await;
+    if state.is_generation_current(session.generation) {
+        let _ = super::sync_market_channels_impl(None, Some(true), password, state).await;
+    }
 
     Ok(syncs)
 }

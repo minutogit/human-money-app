@@ -98,15 +98,10 @@ pub fn import_voucher_standard(
         })?;
     }
 
-    let service = state.lock_service()?;
-    if service.is_wallet_unlocked() {
-        service
-            .require_access_mode(
-                human_money_core::AccessMode::Full,
-                wallet_password.as_deref(),
-            )
-            .map_err(FrontendError::from)?;
-    }
+    let service = state.authorize_and_lock(
+        crate::state::RequiredAccess::Full,
+        wallet_password.as_deref(),
+    )?;
     service
         .import_voucher_standard(
             &container_bytes,

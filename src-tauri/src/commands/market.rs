@@ -6,11 +6,11 @@ use crate::models::{
     StoredAppNotices,
 };
 use crate::services::market_service::{
-    clear_app_notices_impl, delete_ad_impl, delete_foreign_contact_card_impl,
-    export_forward_card_impl, get_ad_image_impl, get_app_notices_impl, get_market_view_impl,
-    get_my_market_profile_impl, import_contact_card_impl, mark_app_notices_read_impl,
-    renew_ad_impl, resolve_card_recipient_impl, save_my_market_profile_impl,
-    set_card_published_impl, upsert_ad_impl,
+    clear_app_notices_impl, delete_ad_impl, export_forward_card_impl, get_ad_image_impl,
+    get_app_notices_impl, get_market_view_impl, get_my_market_profile_impl,
+    import_contact_card_impl, mark_app_notices_read_impl, renew_ad_impl,
+    resolve_card_recipient_impl, save_my_market_profile_impl, set_card_published_impl,
+    upsert_ad_impl,
 };
 use crate::state::AppState;
 
@@ -110,15 +110,6 @@ pub fn resolve_card_recipient(
     state: State<'_, AppState>,
 ) -> Result<crate::models::FrontendResolvedCardRecipient, FrontendError> {
     resolve_card_recipient_impl(payload, &state)
-}
-
-#[tauri::command]
-pub fn delete_foreign_contact_card(
-    did: String,
-    password: Option<String>,
-    state: State<'_, AppState>,
-) -> Result<(), FrontendError> {
-    delete_foreign_contact_card_impl(did, password, &state)
 }
 
 #[tauri::command]

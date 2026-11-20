@@ -11,11 +11,9 @@ import {
     ReceiveSuccessPayload,
 } from "../types";
 import { afterWalletMutation, triggerAutoBackup } from "../sync/syncBridge";
-import { APP_EVENTS, emitAppEvent, POST_INBOX_UPDATED_EVENT } from "../utils/appEvents";
+import { APP_EVENTS, emitAppEvent } from "../utils/appEvents";
 import { detectIsWifiConnection } from "../utils/networkStatus";
 import { notifyAppNoticesUpdated } from "../utils/syncEvents";
-
-export { POST_INBOX_UPDATED_EVENT };
 
 export function notifyPostInboxUpdated(): void {
     emitAppEvent(APP_EVENTS.POST_INBOX_UPDATED);
@@ -62,22 +60,6 @@ export const postService = {
             requestMsgId: requestMsgId || undefined,
             recipientDid,
             containerBytes: bytes,
-            password: password || undefined,
-        });
-        notifyPostInboxUpdated();
-        return res;
-    },
-
-    sendWotHandshakeViaPost: async (
-        recipientDid: string,
-        proposedLevel: number,
-        replyRequested: boolean = true,
-        password?: string
-    ): Promise<FrontendPostDepositResult> => {
-        const res = await invoke<FrontendPostDepositResult>("send_wot_handshake_via_post", {
-            recipientDid,
-            proposedLevel,
-            replyRequested,
             password: password || undefined,
         });
         notifyPostInboxUpdated();

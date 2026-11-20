@@ -69,8 +69,10 @@ fn format_bff_name(raw_name: &str, is_test: bool) -> String {
 ///   or live `?info` + `verify_lock_delegation`.
 /// - Excludes sync URLs contributed solely by a foreign `voucher.creator_profile.id` so stranger
 ///   merchants do not trust creator-nominated servers via contact cards alone.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn resolve_trusted_lock_keys(
     state: &AppState,
+    session: &crate::session::SessionToken,
     security_policy: &SecurityPolicy,
     lifecycle: &InternalLifecycleState,
     client: &reqwest::Client,
@@ -101,16 +103,13 @@ pub(crate) async fn resolve_trusted_lock_keys(
     let mut trusted_urls: HashSet<String> = HashSet::new();
     let mut trusted_keys: HashSet<LockPubKey> = HashSet::new();
 
-    if let Ok(mut svc_guard) = state.lock_service() {
-        if let Ok(Some(admin)) = crate::services::sync_engine::admin::load_stored_sync_admin_opt(
-            &mut svc_guard,
-            password,
-        ) {
-            if crate::settings::is_lock_admin_trusted(security_policy, &admin.descriptor.drop_pub) {
-                let norm = crate::services::common::normalize_sync_url(&admin.descriptor.write_url);
-                if !norm.is_empty() {
-                    trusted_urls.insert(norm);
-                }
+    if let Ok(Some(Some(admin))) = state.with_session(session, |svc| {
+        crate::services::sync_engine::admin::load_stored_sync_admin_opt(svc, password)
+    }) {
+        if crate::settings::is_lock_admin_trusted(security_policy, &admin.descriptor.drop_pub) {
+            let norm = crate::services::common::normalize_sync_url(&admin.descriptor.write_url);
+            if !norm.is_empty() {
+                trusted_urls.insert(norm);
             }
         }
     }
@@ -135,25 +134,23 @@ pub(crate) async fn resolve_trusted_lock_keys(
     }
 
     let canonical_creator = creator_id.and_then(|c| canonicalize_did(c).ok());
-    let contact_candidates: Vec<String> = {
-        let svc_guard = state.service.lock().ok();
-        let caches_guard = state.profile_caches.lock().ok();
-        let caches_ref = caches_guard.as_ref().and_then(|g| g.as_ref());
-        let book_opt = caches_ref.and_then(|c| c.contacts.as_ref());
-        let wot_ref = caches_ref.and_then(|c| c.wot.as_ref());
+    let contact_candidates: Vec<String> = state.with_session_required(
+        session,
+        "Wallet session changed while resolving contact trust for checkout",
+        |s| {
+            let caches_guard = state.profile_caches.lock().ok();
+            let caches_ref = caches_guard.as_ref().and_then(|g| g.as_ref());
+            let book_opt = caches_ref.and_then(|c| c.contacts.as_ref());
+            let wot_ref = caches_ref.and_then(|c| c.wot.as_ref());
 
-        let self_did = wot_ref.map(|r| r.self_did.clone()).or_else(|| {
-            svc_guard.as_ref().and_then(|s| {
+            let self_did = wot_ref.map(|r| r.self_did.clone()).or_else(|| {
                 s.with_wallet(|w| w.get_user_id().to_string())
                     .ok()
                     .and_then(|d| canonicalize_did(&d).ok())
-            })
-        });
+            });
 
-        let wallet_offenders: HashSet<String> = svc_guard
-            .as_ref()
-            .and_then(|s| {
-                s.with_wallet(|w| {
+            let wallet_offenders: HashSet<String> = s
+                .with_wallet(|w| {
                     book_opt
                         .map(|book| {
                             book.contacts
@@ -166,94 +163,93 @@ pub(crate) async fn resolve_trusted_lock_keys(
                         })
                         .unwrap_or_default()
                 })
-                .ok()
-            })
-            .unwrap_or_default();
+                .unwrap_or_default();
 
-        let mut urls = Vec::new();
-        if let Some(book) = book_opt {
-            for contact in book.contacts.values() {
-                if wallet_offenders.contains(&contact.did) {
-                    continue;
-                }
-                let can_contact = canonicalize_did(&contact.did).ok();
-                // LÜCKE-03: Never accept creator's own card syncs for stranger merchants.
-                if let (Some(can_c), Some(can_cr)) = (&can_contact, &canonical_creator) {
-                    if can_c == can_cr && self_did.as_ref() != Some(can_cr) {
+            let mut urls = Vec::new();
+            if let Some(book) = book_opt {
+                for contact in book.contacts.values() {
+                    if wallet_offenders.contains(&contact.did) {
                         continue;
                     }
-                }
-
-                let mut contact_trusted = contact.trust_level.map(|lvl| lvl >= 1).unwrap_or(false);
-                if !contact_trusted {
-                    if let (Some(reg), Some(can_c)) = (wot_ref, can_contact.as_ref()) {
-                        let hop1_trusted =
-                            reg.own_contacts.get(can_c).is_some_and(|e| e.level >= 1);
-                        let adr08_certified = reg.provider_filters.values().any(|pf| {
-                            pf.local_trust_level >= 1 && pf.certified_level(can_c).is_some()
-                        });
-                        // Hop-2 reachability check via ego graph (depth <= 2 from node 0 with positive weight)
-                        let graph = reg.get_or_build_graph_cache();
-                        let hop2_trusted = graph.did_to_id.get(can_c).is_some_and(|&target_idx| {
-                            if target_idx == 0 {
-                                return true;
-                            }
-                            let mut depth1_nodes = HashSet::new();
-                            if let Some(edges0) = graph.outgoing.first() {
-                                for e in edges0 {
-                                    if e.level >= 1 {
-                                        if e.to == target_idx {
-                                            return true;
-                                        }
-                                        depth1_nodes.insert(e.to);
-                                    }
-                                }
-                            }
-                            depth1_nodes.into_iter().any(|n1| {
-                                graph.outgoing.get(n1 as usize).is_some_and(|edges1| {
-                                    edges1.iter().any(|e| e.to == target_idx && e.level >= 1)
-                                })
-                            })
-                        });
-                        contact_trusted = hop1_trusted || hop2_trusted || adr08_certified;
+                    let can_contact = canonicalize_did(&contact.did).ok();
+                    // LÜCKE-03: Never accept creator's own card syncs for stranger merchants.
+                    if let (Some(can_c), Some(can_cr)) = (&can_contact, &canonical_creator) {
+                        if can_c == can_cr && self_did.as_ref() != Some(can_cr) {
+                            continue;
+                        }
                     }
-                }
 
-                if contact_trusted {
-                    for sync in &contact.syncs {
-                        if sync.status != "revoked" {
-                            let norm = crate::services::common::normalize_sync_url(&sync.write_url);
-                            if !norm.is_empty() {
-                                urls.push(norm);
+                    let mut contact_trusted =
+                        contact.trust_level.map(|lvl| lvl >= 1).unwrap_or(false);
+                    if !contact_trusted {
+                        if let (Some(reg), Some(can_c)) = (wot_ref, can_contact.as_ref()) {
+                            let hop1_trusted =
+                                reg.own_contacts.get(can_c).is_some_and(|e| e.level >= 1);
+                            let adr08_certified = reg.provider_filters.values().any(|pf| {
+                                pf.local_trust_level >= 1 && pf.certified_level(can_c).is_some()
+                            });
+                            // Hop-2 reachability check via ego graph (depth <= 2 from node 0 with positive weight)
+                            let graph = reg.get_or_build_graph_cache();
+                            let hop2_trusted =
+                                graph.did_to_id.get(can_c).is_some_and(|&target_idx| {
+                                    if target_idx == 0 {
+                                        return true;
+                                    }
+                                    let mut depth1_nodes = HashSet::new();
+                                    if let Some(edges0) = graph.outgoing.first() {
+                                        for e in edges0 {
+                                            if e.level >= 1 {
+                                                if e.to == target_idx {
+                                                    return true;
+                                                }
+                                                depth1_nodes.insert(e.to);
+                                            }
+                                        }
+                                    }
+                                    depth1_nodes.into_iter().any(|n1| {
+                                        graph.outgoing.get(n1 as usize).is_some_and(|edges1| {
+                                            edges1
+                                                .iter()
+                                                .any(|e| e.to == target_idx && e.level >= 1)
+                                        })
+                                    })
+                                });
+                            contact_trusted = hop1_trusted || hop2_trusted || adr08_certified;
+                        }
+                    }
+
+                    if contact_trusted {
+                        for sync in &contact.syncs {
+                            if sync.status != "revoked" {
+                                let norm =
+                                    crate::services::common::normalize_sync_url(&sync.write_url);
+                                if !norm.is_empty() {
+                                    urls.push(norm);
+                                }
                             }
                         }
                     }
                 }
             }
-        }
-        urls
-    };
+            Ok(urls)
+        },
+    )?;
 
     for u in contact_candidates {
         trusted_urls.insert(u);
     }
 
-    let offenders = {
-        let mut svc_guard = state.lock_service()?;
-        crate::l2_lifecycle::load_server_offender_list(&mut svc_guard, password)?
-    };
+    let offenders = state.with_session_required(
+        session,
+        "Wallet session changed while loading server offenders for checkout",
+        |svc| crate::l2_lifecycle::load_server_offender_list(svc, password),
+    )?;
 
-    let mut urls_to_live_probe: HashSet<String> = HashSet::new();
-    for url in &trusted_urls {
-        if let Some(pk) = known_url_to_key.get(url) {
-            if !crate::l2_lifecycle::is_server_key_revoked(&offenders, pk, None) {
-                trusted_keys.insert(*pk);
-            }
-        }
-    }
+    let mut urls_to_live_probe: HashMap<String, Option<String>> = HashMap::new();
     if let Some(m) = manifest {
         for s in &m.servers {
-            if !crate::settings::is_lock_admin_trusted(security_policy, &hex::encode(s.admin_pub)) {
+            let expected_admin_hex = hex::encode(s.admin_pub);
+            if !crate::settings::is_lock_admin_trusted(security_policy, &expected_admin_hex) {
                 continue;
             }
             let (resolved_url, _) =
@@ -272,14 +268,15 @@ pub(crate) async fn resolve_trusted_lock_keys(
                     trusted_keys.insert(*pk);
                 }
             } else if !norm_res.is_empty() {
-                urls_to_live_probe.insert(norm_res);
+                urls_to_live_probe.insert(norm_res, Some(expected_admin_hex));
             }
         }
     }
 
     if !urls_to_live_probe.is_empty() {
+        let now_secs = sync_client::current_unix_timestamp();
         let mut join_set = tokio::task::JoinSet::new();
-        for url in urls_to_live_probe {
+        for (url, exp_admin_opt) in urls_to_live_probe {
             let c = client.clone();
             join_set.spawn(async move {
                 let res = tokio::time::timeout(
@@ -287,10 +284,31 @@ pub(crate) async fn resolve_trusted_lock_keys(
                     sync_client::fetch_sync_info(&c, &url),
                 )
                 .await;
+                let norm_target = crate::services::common::normalize_sync_url(&url);
                 res.ok().and_then(|r| r.ok()).and_then(|info| {
                     let lock = info.lock?;
                     let del = lock.delegation.as_ref()?;
-                    if !sync_client::verify_lock_delegation(&lock.lock_pub, del, None) {
+                    if let Some(ref exp_admin) = exp_admin_opt {
+                        if !del.admin_pub.trim().eq_ignore_ascii_case(exp_admin) {
+                            return None;
+                        }
+                    }
+                    if crate::services::common::normalize_sync_url(&del.write_url) != norm_target {
+                        return None;
+                    }
+                    if let Some(ref rev) = info.revocation {
+                        let rev_admin = exp_admin_opt.as_deref().unwrap_or(del.admin_pub.trim());
+                        if sync_client::verify_revocation_notice(rev, rev_admin).is_ok()
+                            && rev.effective_at <= now_secs
+                        {
+                            return None;
+                        }
+                    }
+                    if !sync_client::verify_lock_delegation(
+                        &lock.lock_pub,
+                        del,
+                        exp_admin_opt.as_deref(),
+                    ) {
                         return None;
                     }
                     let lock_pk = decode_hex_fixed::<32>(&lock.lock_pub).ok()?;
@@ -503,6 +521,7 @@ pub(crate) async fn checkout_bundle(
     purchase_id: &str,
     bundle: &[u8],
     standards: &HashMap<String, String>,
+    force_accept_tolerance_bundle: bool,
     password: Option<&str>,
 ) -> Result<PurchaseCompletion, FrontendError> {
     // 1. Idempotent replay check before any network I/O
@@ -587,13 +606,21 @@ pub(crate) async fn checkout_bundle(
         }
     }
 
-    // 2. Decrypt & inspect bundle to check N = 0 offline-only vs anchored vouchers
-    let (opened_bundle, merchant_id, session) = {
+    // 2. Decrypt & inspect bundle to check replay history and N = 0 offline-only vs anchored vouchers
+    let (opened_bundle, merchant_id, session, already_in_history) = {
         let service = state.lock_service()?;
-        let (parsed, mid) = service
+        let (parsed, mid, in_history) = service
             .with_wallet_and_identity(|wallet, identity| {
                 let parsed = bundle_processor::open_and_verify_bundle(identity, bundle)?;
-                Ok::<_, human_money_core::Error>((parsed, wallet.get_user_id().to_string()))
+                let in_history = wallet
+                    .bundle_meta_store
+                    .history
+                    .contains_key(&parsed.bundle_id);
+                Ok::<_, human_money_core::Error>((
+                    parsed,
+                    wallet.get_user_id().to_string(),
+                    in_history,
+                ))
             })
             .map_err(FrontendError::from)?
             .map_err(FrontendError::from)?;
@@ -601,8 +628,43 @@ pub(crate) async fn checkout_bundle(
             generation: state.current_session_generation(),
             owner_did: mid.clone(),
         };
-        (parsed, mid, session)
+        (parsed, mid, session, in_history)
     };
+
+    if already_in_history {
+        let verdict_fe: crate::models::FrontendCheckoutReleaseVerdict =
+            CheckoutReleaseVerdict::new(
+                L2ProcessingOutcome::Confirmed {
+                    quorum_certificates: Vec::new(),
+                },
+                true,
+            )
+            .into();
+        let receive_payload = {
+            let mut service = state.lock_service()?;
+            build_receive_payload_and_record(
+                state,
+                &mut service,
+                purchase_id,
+                bundle,
+                standards,
+                false,
+                true,
+                verdict_fe.clone(),
+                None,
+                password,
+            )
+            .map(|(p, _)| p)
+            .ok()
+        };
+        return Ok(PurchaseCompletion {
+            purchase_id: purchase_id.to_string(),
+            newly_committed: false,
+            is_replay: true,
+            verdict: verdict_fe,
+            receive_payload,
+        });
+    }
 
     if opened_bundle.vouchers.is_empty() {
         return Err(fail("Transaction bundle contains no vouchers"));
@@ -759,6 +821,7 @@ pub(crate) async fn checkout_bundle(
     // 4. Resolve trusted LockPubKeys & fan out committee batches in parallel
     let (mut base_trusted_keys, mut independently_pinned_creator_keys) = resolve_trusted_lock_keys(
         state,
+        &session,
         &security_policy,
         &lifecycle,
         &client,
@@ -777,7 +840,7 @@ pub(crate) async fn checkout_bundle(
     .await;
 
     // 4b. Handle `409 epoch_frozen`, `410 revoked`, or total NXDOMAIN committee failure via Discovery Cascade
-    if let Some((newer_manifest, upgraded_pow_bits)) = resolve_manifest_upgrade_after_dispatch(
+    let upgrade = resolve_manifest_upgrade_after_dispatch(
         state,
         &session,
         &client,
@@ -789,34 +852,40 @@ pub(crate) async fn checkout_bundle(
         &dispatch,
         password,
     )
-    .await?
-    {
-        pow_base_bits = pow_base_bits.max(upgraded_pow_bits);
-        let upgraded_pair =
+    .await?;
+    if upgrade.upgraded_manifest.is_some() || upgrade.relocated {
+        let fresh_lifecycle =
             state.with_session_required(&session, "Wallet changed during checkout", |service| {
-                service
-                    .update_l2_anchor_manifest(newer_manifest, password)
-                    .map_err(FrontendError::from)?;
-                let known_heads = crate::state::load_known_head_receipts_for_anchor(
-                    service, &anchor_id, password,
-                )?;
-                service
-                    .prepare_checkout_requests(
-                        purchase_id,
-                        bundle,
-                        pow_base_bits,
-                        now()?,
-                        &known_heads,
-                        password,
-                    )
+                if let Some((newer_manifest, upgraded_pow_bits)) = upgrade.upgraded_manifest {
+                    pow_base_bits = pow_base_bits.max(upgraded_pow_bits);
+                    service
+                        .update_l2_anchor_manifest(newer_manifest, password)
+                        .map_err(FrontendError::from)?;
+                    let known_heads = crate::state::load_known_head_receipts_for_anchor(
+                        service, &anchor_id, password,
+                    )?;
+                    let pair = service
+                        .prepare_checkout_requests(
+                            purchase_id,
+                            bundle,
+                            pow_base_bits,
+                            now()?,
+                            &known_heads,
+                            password,
+                        )
+                        .map_err(FrontendError::from)?;
+                    context = pair.0;
+                    requests = pair.1;
+                }
+                state
+                    .get_or_load_internal_lifecycle(service, password)
                     .map_err(FrontendError::from)
             })?;
-        context = upgraded_pair.0;
-        requests = upgraded_pair.1;
         let keys = resolve_trusted_lock_keys(
             state,
+            &session,
             &security_policy,
-            &lifecycle,
+            &fresh_lifecycle,
             &client,
             voucher.creator_profile.id.as_deref(),
             Some(&context.manifest),
@@ -829,7 +898,7 @@ pub(crate) async fn checkout_bundle(
             &client,
             &requests,
             CHECKOUT_BATCH_TIMEOUT,
-            &lifecycle.l2_probe_cache,
+            &fresh_lifecycle.l2_probe_cache,
         )
         .await;
     }
@@ -920,6 +989,7 @@ pub(crate) async fn checkout_bundle(
                     &independently_pinned_creator_keys,
                     standards,
                     now()?,
+                    force_accept_tolerance_bundle,
                     password,
                     |res, wallet| {
                         let involved_vouchers_ids: Vec<String> = res
@@ -985,6 +1055,7 @@ pub(crate) async fn checkout_bundle(
             verdict_fe.reduced_guarantor_protection = reduced_guarantor_protection;
             verdict_fe.manifest_revision = manifest_revision;
 
+            let is_replay = !completion.newly_committed;
             let (receive_payload, _) = build_receive_payload_and_record(
                 state,
                 &mut service,
@@ -992,7 +1063,7 @@ pub(crate) async fn checkout_bundle(
                 bundle,
                 standards,
                 completion.newly_committed,
-                false,
+                is_replay,
                 verdict_fe.clone(),
                 l2_quorum,
                 password,
@@ -1019,7 +1090,7 @@ pub(crate) async fn checkout_bundle(
             Ok(PurchaseCompletion {
                 purchase_id: completion.purchase_id,
                 newly_committed: completion.newly_committed,
-                is_replay: false,
+                is_replay,
                 verdict: verdict_fe,
                 receive_payload: Some(receive_payload),
             })
@@ -1083,8 +1154,13 @@ pub(crate) async fn checkout_bundle(
     }
 }
 
+struct DispatchUpgradeResult {
+    upgraded_manifest: Option<(AnchorManifest, u32)>,
+    relocated: bool,
+}
+
 /// Records `410 revoked` notices and resolves any verified newer `AnchorManifest` from
-/// `409 epoch_frozen` responses or manifest discovery (H7 shared path for checkout & PoST).
+/// `409 epoch_frozen` responses or manifest discovery (H7/H10 shared path for checkout & PoST).
 #[allow(clippy::too_many_arguments)]
 async fn resolve_manifest_upgrade_after_dispatch(
     state: &AppState,
@@ -1097,8 +1173,9 @@ async fn resolve_manifest_upgrade_after_dispatch(
     current_manifest: &AnchorManifest,
     dispatch: &crate::gateway_resolver::CommitteeDispatchResult,
     password: Option<&str>,
-) -> Result<Option<(AnchorManifest, u32)>, FrontendError> {
+) -> Result<DispatchUpgradeResult, FrontendError> {
     let now_secs = sync_client::current_unix_timestamp();
+    let mut relocated = false;
     if !dispatch.revoked_notices.is_empty() {
         let mut relocated_lock_pubs: HashSet<LockPubKey> = HashSet::new();
         let mut scratch_cache = lifecycle.l2_probe_cache.clone();
@@ -1125,6 +1202,7 @@ async fn resolve_manifest_upgrade_after_dispatch(
             }
         }
         if !probe_cache_deltas.is_empty() {
+            relocated = true;
             let _ = state.mutate_internal_lifecycle_for_session(session, password, |lc| {
                 let mut changed = false;
                 for probe in probe_cache_deltas {
@@ -1186,13 +1264,16 @@ async fn resolve_manifest_upgrade_after_dispatch(
         }
     }
 
-    Ok(best_upgraded.map(|m| {
-        let pow_bits = crate::services::common::max_pow_base_bits_for_servers(
-            lifecycle,
-            m.servers.iter().map(|s| s.lock_pub),
-        );
-        (m, pow_bits)
-    }))
+    Ok(DispatchUpgradeResult {
+        upgraded_manifest: best_upgraded.map(|m| {
+            let pow_bits = crate::services::common::max_pow_base_bits_for_servers(
+                lifecycle,
+                m.servers.iter().map(|s| s.lock_pub),
+            );
+            (m, pow_bits)
+        }),
+        relocated,
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -1437,32 +1518,37 @@ pub(crate) async fn verify_bundle_l2_precommit(
             )
             .await;
 
-            // H7: Bounded single retry after `409 epoch_frozen` / `410 revoked` / unreachable manifest upgrade
-            if let Some((newer_manifest, upgraded_pow_bits)) =
-                resolve_manifest_upgrade_after_dispatch(
-                    state,
-                    session,
-                    &client,
-                    &anchor_id,
-                    voucher.creator_profile.id.as_deref(),
-                    &guarantor_dids,
-                    &lifecycle,
-                    &manifest,
-                    &dispatch,
-                    password,
-                )
-                .await?
-            {
-                manifest = newer_manifest.clone();
-                pow_base_bits = pow_base_bits.max(upgraded_pow_bits);
-                state.with_session_required(
+            // H7/H10: Bounded single retry after `409 epoch_frozen` / `410 revoked` relocation / unreachable manifest upgrade
+            let upgrade = resolve_manifest_upgrade_after_dispatch(
+                state,
+                session,
+                &client,
+                &anchor_id,
+                voucher.creator_profile.id.as_deref(),
+                &guarantor_dids,
+                &lifecycle,
+                &manifest,
+                &dispatch,
+                password,
+            )
+            .await?;
+            if upgrade.upgraded_manifest.is_some() || upgrade.relocated {
+                let fresh_probe_cache = state.with_session_required(
                     session,
                     "Wallet session changed during pre-commit manifest upgrade",
                     |service| {
-                        service
-                            .update_l2_anchor_manifest(newer_manifest, password)
-                            .map_err(FrontendError::from)?;
-                        Ok(())
+                        if let Some((newer_manifest, upgraded_pow_bits)) = upgrade.upgraded_manifest
+                        {
+                            manifest = newer_manifest.clone();
+                            pow_base_bits = pow_base_bits.max(upgraded_pow_bits);
+                            service
+                                .update_l2_anchor_manifest(newer_manifest, password)
+                                .map_err(FrontendError::from)?;
+                        }
+                        state
+                            .get_or_load_internal_lifecycle(service, password)
+                            .map(|lc| lc.l2_probe_cache)
+                            .map_err(FrontendError::from)
                     },
                 )?;
                 let rebuilt = collect_prefix_qcs_and_build_precommit_batch(
@@ -1483,7 +1569,7 @@ pub(crate) async fn verify_bundle_l2_precommit(
                         &client,
                         &requests,
                         CHECKOUT_BATCH_TIMEOUT,
-                        &lifecycle.l2_probe_cache,
+                        &fresh_probe_cache,
                     )
                     .await;
                 }
@@ -1770,6 +1856,7 @@ mod tests {
             "pos-offline-1",
             &transfer.bundle_bytes,
             &standards,
+            false,
             Some(pw),
         )
         .await
@@ -2002,6 +2089,7 @@ mod tests {
             "pos-yellow",
             &transfer.bundle_bytes,
             &standards,
+            false,
             Some(pw),
         )
         .await
@@ -2065,6 +2153,7 @@ mod tests {
             "pos-green",
             &transfer.bundle_bytes,
             &standards,
+            false,
             Some(pw),
         )
         .await
@@ -2080,6 +2169,7 @@ mod tests {
             "pos-green",
             &transfer.bundle_bytes,
             &standards,
+            false,
             Some(pw),
         )
         .await
@@ -2153,6 +2243,7 @@ mod tests {
             "pos-multi",
             &multi_transfer.bundle_bytes,
             &standards,
+            false,
             Some(pw),
         )
         .await
