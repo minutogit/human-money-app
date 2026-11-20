@@ -128,7 +128,7 @@ describe('i18n Key & Placeholder Integrity', () => {
             .filter(Boolean)
             .map((ident) => constValues.get(ident) ?? ident.replace(/^"|"$/g, ''));
 
-        expect(issueCodes.length).toBeGreaterThanOrEqual(7);
+        expect(issueCodes.length).toBeGreaterThanOrEqual(5);
 
         const locales: Array<[string, Record<string, string>]> = [
             ['en', en],

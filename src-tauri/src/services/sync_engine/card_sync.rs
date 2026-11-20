@@ -414,10 +414,7 @@ async fn probe_single_contact_endpoint(
     }
 }
 
-fn apply_probe_result_fields(
-    target: &mut FrontendSyncDescriptor,
-    probed: &FrontendSyncDescriptor,
-) {
+fn apply_probe_result_fields(target: &mut FrontendSyncDescriptor, probed: &FrontendSyncDescriptor) {
     target.write_url = probed.write_url.clone();
     target.read_url = probed.read_url.clone();
     if probed.slot_id.is_some() {
@@ -529,9 +526,11 @@ pub async fn probe_contact_syncs_impl(
 
         for (contact_key, orig_norm_write, probed_ep) in &probed_updates {
             if let Some(contact) = fresh_ab.contacts.get_mut(contact_key) {
-                if let Some(ep) = contact.syncs.iter_mut().find(|existing| {
-                    normalize_sync_url(&existing.write_url) == *orig_norm_write
-                }) {
+                if let Some(ep) = contact
+                    .syncs
+                    .iter_mut()
+                    .find(|existing| normalize_sync_url(&existing.write_url) == *orig_norm_write)
+                {
                     apply_probe_result_fields(ep, probed_ep);
                     contacts_modified = true;
                 }
@@ -631,7 +630,12 @@ pub async fn probe_contact_syncs_impl(
         }
     }
 
-    save_channel_max_bytes_updates(state, &session, password.as_deref(), &channel_max_bytes_updates);
+    save_channel_max_bytes_updates(
+        state,
+        &session,
+        password.as_deref(),
+        &channel_max_bytes_updates,
+    );
 
     let mut all_syncs = Vec::new();
     for c in final_book.contacts.values() {
@@ -774,21 +778,16 @@ fn load_card_upload_context(
             let my_can_did = canonicalize_did(&id_ctx.my_did).ok();
             let own_profile_opt: Option<StoredOwnMarketProfile> = Some(
                 crate::services::market_service::load_own_market_profile_state(
-                    state,
-                    service,
-                    password,
+                    state, service, password,
                 )?,
             );
             // Include unexpired <jws>~ tombstone cards even when `published == false`.
             let own_card_opt = own_profile_opt.as_ref().and_then(|p| p.last_card.clone());
 
             let reg = state.get_or_load_wot_register(service, password).ok();
-            let address_book: FrontendAddressBook = crate::state::load_encrypted_json_or_default(
-                service,
-                CONTACTS_DATA_NAME,
-                password,
-            )
-            .map_err(FrontendError::from)?;
+            let address_book: FrontendAddressBook =
+                crate::state::load_encrypted_json_or_default(service, CONTACTS_DATA_NAME, password)
+                    .map_err(FrontendError::from)?;
 
             let mut readers = Vec::new();
             let mut evicted_reader_keys = Vec::new();

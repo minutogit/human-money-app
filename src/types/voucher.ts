@@ -39,6 +39,7 @@ export interface VoucherSummary {
     displayCurrency: string;
     displayStandardName: string;
     allowPartialTransfers: boolean;
+    hasLayer2Anchor?: boolean;
     trust?: VoucherTrustDto;
 }
 

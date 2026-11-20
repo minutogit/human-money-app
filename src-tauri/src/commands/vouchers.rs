@@ -6,20 +6,14 @@ use crate::{
 use human_money_core::{models::secure_container::ContainerConfig, NewVoucherData};
 use log::{error, info};
 
-pub(crate) fn create_new_voucher_impl(
+pub(crate) async fn create_new_voucher_impl(
     standard_toml_content: String,
     data: FrontendNewVoucherData,
     password: Option<String>,
     state: &AppState,
 ) -> Result<crate::models::FrontendVoucherDetails, FrontendError> {
     info!("Attempting to create a new voucher...");
-    let mut service =
-        state.authorize_and_lock(crate::state::RequiredAccess::Full, password.as_deref())?;
-    let user_id = service
-        .with_wallet(|w| w.get_user_id().to_string())
-        .map_err(FrontendError::from)?;
-
-    let anchor_bytes = match data
+    let explicit_anchor_bytes = match data
         .layer2_anchor
         .as_deref()
         .map(str::trim)
@@ -32,179 +26,248 @@ pub(crate) fn create_new_voucher_impl(
         None => None,
     };
 
-    let preflight = crate::services::preflight::ValueOutflowPreflight {
-        require_restore_reconciled: true,
-        check_known_offender_dids: &[],
-        check_blocking_intent_local_ids: &[],
-        check_anchor_id_quorum_health: anchor_bytes,
-    };
-    crate::services::preflight::run_value_outflow_preflight(
-        state,
-        &mut service,
-        password.as_deref(),
-        &preflight,
-    )?;
+    let (mut voucher_data, session, resolved_pw, auto_anchor_deletable_ms) = {
+        let (mut service, resolved_pw) = state
+            .authorize_and_lock_secret(crate::state::RequiredAccess::Full, password.as_deref())?;
+        let pw = resolved_pw.as_deref().map(String::as_str);
+        let session = state.session_token_for_service(&service)?;
+        let user_id = service
+            .with_wallet(|w| w.get_user_id().to_string())
+            .map_err(FrontendError::from)?;
 
-    let voucher_data = NewVoucherData {
-        nominal_value: human_money_core::models::voucher::ValueDefinition {
-            amount: data.nominal_value.amount.trim().replace(',', "."),
-            unit: data.nominal_value.unit,
-            ..Default::default()
-        },
-        collateral: Some(human_money_core::models::voucher::Collateral {
-            value: human_money_core::models::voucher::ValueDefinition {
-                amount: data.collateral.amount.trim().replace(',', "."),
-                unit: data.collateral.unit,
+        let preflight = crate::services::preflight::ValueOutflowPreflight {
+            require_restore_reconciled: true,
+            check_known_offender_dids: &[],
+            check_blocking_intent_local_ids: &[],
+            check_anchor_id_quorum_health: explicit_anchor_bytes,
+        };
+        crate::services::preflight::run_value_outflow_preflight(
+            state,
+            &mut service,
+            pw,
+            &preflight,
+        )?;
+
+        let v_data = NewVoucherData {
+            nominal_value: human_money_core::models::voucher::ValueDefinition {
+                amount: data.nominal_value.amount.trim().replace(',', "."),
+                unit: data.nominal_value.unit,
                 ..Default::default()
             },
-            ..Default::default()
-        }),
-        creator_profile: human_money_core::models::profile::PublicProfile {
-            protocol_version: data.creator.protocol_version,
-            id: Some(user_id),
-            first_name: Some(data.creator.first_name),
-            last_name: Some(data.creator.last_name),
-            address: Some(human_money_core::models::voucher::Address {
-                street: data.creator.address.street,
-                house_number: data.creator.address.house_number,
-                zip_code: data.creator.address.zip_code,
-                city: data.creator.address.city,
-                country: data.creator.address.country,
-                full_address: data.creator.address.full_address,
+            collateral: Some(human_money_core::models::voucher::Collateral {
+                value: human_money_core::models::voucher::ValueDefinition {
+                    amount: data.collateral.amount.trim().replace(',', "."),
+                    unit: data.collateral.unit,
+                    ..Default::default()
+                },
+                ..Default::default()
             }),
-            organization: data.creator.organization,
-            community: data.creator.community,
-            phone: data.creator.phone,
-            email: data.creator.email,
-            url: data.creator.url,
-            gender: Some(data.creator.gender),
-            coordinates: Some(data.creator.coordinates),
-            service_offer: data.creator.service_offer,
-            needs: data.creator.needs,
-            ..Default::default()
-        },
-        validity_duration: data.validity_duration,
-        non_redeemable_test_voucher: data.non_redeemable_test_voucher,
-        layer2_anchor: anchor_bytes,
-    };
+            creator_profile: human_money_core::models::profile::PublicProfile {
+                protocol_version: data.creator.protocol_version,
+                id: Some(user_id),
+                first_name: Some(data.creator.first_name),
+                last_name: Some(data.creator.last_name),
+                address: Some(human_money_core::models::voucher::Address {
+                    street: data.creator.address.street,
+                    house_number: data.creator.address.house_number,
+                    zip_code: data.creator.address.zip_code,
+                    city: data.creator.address.city,
+                    country: data.creator.address.country,
+                    full_address: data.creator.address.full_address,
+                }),
+                organization: data.creator.organization,
+                community: data.creator.community,
+                phone: data.creator.phone,
+                email: data.creator.email,
+                url: data.creator.url,
+                gender: Some(data.creator.gender),
+                coordinates: Some(data.creator.coordinates),
+                service_offer: data.creator.service_offer,
+                needs: data.creator.needs,
+                ..Default::default()
+            },
+            validity_duration: data.validity_duration,
+            non_redeemable_test_voucher: data.non_redeemable_test_voucher,
+            layer2_anchor: explicit_anchor_bytes,
+        };
 
-    if let Some(anchor_id) = anchor_bytes {
-        let anchor_hex = hex::encode(anchor_id);
-        let (verified_standard, standard_hash) =
-            human_money_core::models::voucher_standard_definition::VoucherStandardDefinition::from_toml(
-                &standard_toml_content,
-            )
-            .map_err(FrontendError::from)?;
-        let voucher_data_preview = voucher_data.clone();
-        service
-            .with_wallet_and_identity(|wallet, identity| {
-                let manifest = wallet
-                    .profile
-                    .l2_anchor_manifests
-                    .get(&anchor_hex)
-                    .ok_or_else(|| FrontendError::from("anchor_template_not_found".to_string()))?;
-                if !wallet.profile.l2_anchor_nonces.contains_key(&anchor_hex) {
-                    return Err(FrontendError::from(
-                        "anchor_template_missing_creator_nonce".to_string(),
-                    ));
-                }
-                let dry_run = human_money_core::models::voucher::Voucher::create(
-                    identity,
-                    &verified_standard,
-                    &standard_hash,
-                    voucher_data_preview,
+        let deletable_ms_opt = if explicit_anchor_bytes.is_none()
+            && !v_data.non_redeemable_test_voucher
+        {
+            let (verified_standard, standard_hash) =
+                human_money_core::models::voucher_standard_definition::VoucherStandardDefinition::from_toml(
+                    &standard_toml_content,
                 )
                 .map_err(FrontendError::from)?;
-                let deletable_str = dry_run
-                    .transactions
-                    .first()
-                    .and_then(|t| t.deletable_at.as_deref())
-                    .ok_or_else(|| {
-                        FrontendError::from("Init transaction missing deletable_at".to_string())
-                    })?;
-                let deletable_ms =
+            let preview_data = v_data.clone();
+            let deletable_ms = service
+                .with_wallet_and_identity(|_, identity| {
+                    let dry_run = human_money_core::models::voucher::Voucher::create(
+                        identity,
+                        &verified_standard,
+                        &standard_hash,
+                        preview_data,
+                    )?;
+                    let deletable_str = dry_run
+                        .transactions
+                        .first()
+                        .and_then(|t| t.deletable_at.as_deref())
+                        .ok_or_else(|| {
+                            human_money_core::Error::Generic(
+                                "Init transaction missing deletable_at".to_string(),
+                            )
+                        })?;
                     human_money_core::services::utils::parse_timestamp_ms(deletable_str)
-                        .map_err(FrontendError::from)?;
-                if !human_money_core::humoco_proto::retention_covers(
-                    deletable_ms,
-                    manifest.retain_until_quarter,
-                ) {
-                    return Err(FrontendError::from(
-                        "anchor_template_retention_too_short".to_string(),
-                    ));
-                }
-                Ok(())
-            })
-            .map_err(FrontendError::from)??;
-    }
+                })
+                .map_err(FrontendError::from)?
+                .map_err(FrontendError::from)?;
+            Some(deletable_ms)
+        } else {
+            None
+        };
 
-    let voucher = service
-        .create_new_voucher(&standard_toml_content, voucher_data, password.as_deref())
-        .map_err(FrontendError::from)?;
+        (v_data, session, resolved_pw, deletable_ms_opt)
+    };
 
-    if let Err(e) = state.refresh_events_cache(&mut service, password.as_deref()) {
-        error!(
-            "Failed to refresh events cache after create_new_voucher: {}",
-            e
-        );
-    }
-
-    let created_voucher_id = voucher.voucher_id.clone();
-    let details_res = service
-        .with_wallet_and_identity(
-            |w, id| -> Result<crate::models::FrontendVoucherDetails, human_money_core::Error> {
-                let local_id = w
-                    .voucher_store
-                    .vouchers
-                    .iter()
-                    .find(|(_, inst)| inst.voucher.voucher_id == created_voucher_id)
-                    .map(|(lid, _)| lid.clone())
-                    .ok_or_else(|| {
-                        human_money_core::Error::VoucherNotFound(created_voucher_id.clone())
-                    })?;
-                let raw_details = w.get_voucher_details(&local_id)?;
-                let mut frontend_details: crate::models::FrontendVoucherDetails =
-                    raw_details.clone().into();
-                if let Some(summary) = w
-                    .list_vouchers(Some(id), None, None, None)
-                    .into_iter()
-                    .find(|s| s.local_instance_id == local_id)
-                {
-                    frontend_details.current_amount = summary.current_amount;
-                }
-                let creator_id = raw_details
-                    .voucher
-                    .creator_profile
-                    .id
-                    .as_deref()
-                    .unwrap_or("");
-                frontend_details.trust =
-                    state.evaluate_voucher_trust(w, creator_id, &raw_details.voucher.signatures);
-                if let Some(anchor_id) = raw_details.voucher.layer2_anchor {
-                    let anchor_hex = hex::encode(anchor_id);
-                    if let Some(manifest) = w.profile.l2_anchor_manifests.get(&anchor_hex) {
-                        frontend_details.reduced_guarantor_protection =
-                            manifest.has_reduced_guarantor_protection().unwrap_or(false);
-                        frontend_details.manifest_revision = Some(manifest.revision);
-                    }
-                }
-                Ok(frontend_details)
-            },
+    let mut anchor_bytes = explicit_anchor_bytes;
+    if let Some(deletable_ms) = auto_anchor_deletable_ms {
+        let auto_aid = crate::services::l2_anchor_service::assemble_auto_committee_for_voucher(
+            state,
+            &session,
+            deletable_ms,
+            resolved_pw.as_deref().map(String::as_str),
         )
-        .map_err(FrontendError::from)?
-        .map_err(FrontendError::from)?;
+        .await?;
+        anchor_bytes = auto_aid;
+        voucher_data.layer2_anchor = auto_aid;
+    }
+
+    let pw = resolved_pw.as_deref().map(String::as_str);
+    let details_res = state.with_session_required(
+        &session,
+        "Active wallet session changed before voucher could be created",
+        |service| {
+            if let Some(anchor_id) = anchor_bytes {
+                let anchor_hex = hex::encode(anchor_id);
+                let (verified_standard, standard_hash) =
+                    human_money_core::models::voucher_standard_definition::VoucherStandardDefinition::from_toml(
+                        &standard_toml_content,
+                    )
+                    .map_err(FrontendError::from)?;
+                let voucher_data_preview = voucher_data.clone();
+                service
+                    .with_wallet_and_identity(|wallet, identity| {
+                        let manifest = wallet
+                            .profile
+                            .l2_anchor_manifests
+                            .get(&anchor_hex)
+                            .ok_or_else(|| {
+                                FrontendError::from("anchor_template_not_found".to_string())
+                            })?;
+                        if !wallet.profile.l2_anchor_nonces.contains_key(&anchor_hex) {
+                            return Err(FrontendError::from(
+                                "anchor_template_missing_creator_nonce".to_string(),
+                            ));
+                        }
+                        let dry_run = human_money_core::models::voucher::Voucher::create(
+                            identity,
+                            &verified_standard,
+                            &standard_hash,
+                            voucher_data_preview,
+                        )
+                        .map_err(FrontendError::from)?;
+                        let deletable_str = dry_run
+                            .transactions
+                            .first()
+                            .and_then(|t| t.deletable_at.as_deref())
+                            .ok_or_else(|| {
+                                FrontendError::from("Init transaction missing deletable_at".to_string())
+                            })?;
+                        let deletable_ms =
+                            human_money_core::services::utils::parse_timestamp_ms(deletable_str)
+                                .map_err(FrontendError::from)?;
+                        if !human_money_core::humoco_proto::retention_covers(
+                            deletable_ms,
+                            manifest.retain_until_quarter,
+                        ) {
+                            return Err(FrontendError::from(
+                                "anchor_template_retention_too_short".to_string(),
+                            ));
+                        }
+                        Ok(())
+                    })
+                    .map_err(FrontendError::from)??;
+            }
+
+            let voucher = service
+                .create_new_voucher(&standard_toml_content, voucher_data, pw)
+                .map_err(FrontendError::from)?;
+
+            if let Err(e) = state.refresh_events_cache(service, pw) {
+                error!(
+                    "Failed to refresh events cache after create_new_voucher: {}",
+                    e
+                );
+            }
+
+            let created_voucher_id = voucher.voucher_id.clone();
+            service
+                .with_wallet_and_identity(
+                    |w, id| -> Result<crate::models::FrontendVoucherDetails, human_money_core::Error> {
+                        let local_id = w
+                            .voucher_store
+                            .vouchers
+                            .iter()
+                            .find(|(_, inst)| inst.voucher.voucher_id == created_voucher_id)
+                            .map(|(lid, _)| lid.clone())
+                            .ok_or_else(|| {
+                                human_money_core::Error::VoucherNotFound(created_voucher_id.clone())
+                            })?;
+                        let raw_details = w.get_voucher_details(&local_id)?;
+                        let mut frontend_details: crate::models::FrontendVoucherDetails =
+                            raw_details.clone().into();
+                        if let Some(summary) = w
+                            .list_vouchers(Some(id), None, None, None)
+                            .into_iter()
+                            .find(|s| s.local_instance_id == local_id)
+                        {
+                            frontend_details.current_amount = summary.current_amount;
+                        }
+                        let creator_id = raw_details
+                            .voucher
+                            .creator_profile
+                            .id
+                            .as_deref()
+                            .unwrap_or("");
+                        frontend_details.trust =
+                            state.evaluate_voucher_trust(w, creator_id, &raw_details.voucher.signatures);
+                        if let Some(anchor_id) = raw_details.voucher.layer2_anchor {
+                            let anchor_hex = hex::encode(anchor_id);
+                            if let Some(manifest) = w.profile.l2_anchor_manifests.get(&anchor_hex) {
+                                frontend_details.reduced_guarantor_protection =
+                                    manifest.has_reduced_guarantor_protection().unwrap_or(false);
+                                frontend_details.manifest_revision = Some(manifest.revision);
+                            }
+                        }
+                        Ok(frontend_details)
+                    },
+                )
+                .map_err(FrontendError::from)?
+                .map_err(FrontendError::from)
+        },
+    )?;
 
     Ok(details_res)
 }
 
 #[tauri::command]
-pub fn create_new_voucher(
+pub async fn create_new_voucher(
     standard_toml_content: String,
     data: FrontendNewVoucherData,
     password: Option<String>,
-    state: tauri::State<AppState>,
+    state: tauri::State<'_, AppState>,
 ) -> Result<crate::models::FrontendVoucherDetails, FrontendError> {
-    create_new_voucher_impl(standard_toml_content, data, password, &state)
+    create_new_voucher_impl(standard_toml_content, data, password, &state).await
 }
 
 pub(crate) fn create_signing_request_bundle_impl(
@@ -529,12 +592,21 @@ pub fn remove_voucher_signature(
         "Removing signature {} from voucher {}...",
         signature_id, local_instance_id
     );
-    let (mut service, resolved_pw) =
-        state.authorize_and_lock_secret(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
+    let (mut service, resolved_pw) = state
+        .authorize_and_lock_secret(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
     let pw = resolved_pw.as_deref().map(String::as_str);
     service
         .remove_voucher_signature(&local_instance_id, &signature_id, pw)
         .map_err(FrontendError::from)
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct FrontendGuarantorServerTrustDto {
+    pub write_url: String,
+    pub admin_pub: String,
+    pub lock_pub: String,
+    pub trusted: bool,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
@@ -544,18 +616,17 @@ pub struct FrontendGuarantorAnchorCheckDto {
     pub passed: bool,
     pub has_layer2_anchor: bool,
     pub retention_ok: Option<bool>,
-    pub own_server_present: Option<bool>,
     pub sybil_independent_count: usize,
     pub threshold: u8,
     pub server_count: usize,
+    pub untrusted_servers_count: usize,
+    pub servers: Vec<FrontendGuarantorServerTrustDto>,
     pub issues: Vec<String>,
 }
 
 pub const GUARANTOR_ISSUE_MISSING_ANCHOR_MANIFEST: &str = "missing_anchor_manifest";
 pub const GUARANTOR_ISSUE_MANIFEST_ANCHOR_MISMATCH: &str = "manifest_anchor_mismatch";
 pub const GUARANTOR_ISSUE_RETENTION_MISMATCH: &str = "retention_does_not_cover_deletable_at";
-pub const GUARANTOR_ISSUE_OWN_SERVER_MISSING: &str = "own_nominated_server_missing";
-pub const GUARANTOR_ISSUE_NO_OWN_SERVER: &str = "no_own_nominated_server_configured";
 pub const GUARANTOR_ISSUE_SYBIL_BELOW_THRESHOLD: &str = "sybil_independent_servers_below_threshold";
 pub const GUARANTOR_ISSUE_BANNED_SERVER: &str = "banned_lock_server_in_manifest";
 
@@ -563,8 +634,6 @@ pub const GUARANTOR_ANCHOR_ISSUE_CODES: &[&str] = &[
     GUARANTOR_ISSUE_BANNED_SERVER,
     GUARANTOR_ISSUE_MANIFEST_ANCHOR_MISMATCH,
     GUARANTOR_ISSUE_MISSING_ANCHOR_MANIFEST,
-    GUARANTOR_ISSUE_NO_OWN_SERVER,
-    GUARANTOR_ISSUE_OWN_SERVER_MISSING,
     GUARANTOR_ISSUE_RETENTION_MISMATCH,
     GUARANTOR_ISSUE_SYBIL_BELOW_THRESHOLD,
 ];
@@ -608,10 +677,11 @@ pub(crate) fn evaluate_guarantor_anchor_check_impl(
             passed: true,
             has_layer2_anchor: core_voucher.layer2_anchor.is_some(),
             retention_ok: None,
-            own_server_present: None,
             sybil_independent_count: 0,
             threshold: 0,
             server_count: 0,
+            untrusted_servers_count: 0,
+            servers: Vec::new(),
             issues: Vec::new(),
         });
     }
@@ -623,10 +693,11 @@ pub(crate) fn evaluate_guarantor_anchor_check_impl(
             passed: true,
             has_layer2_anchor: false,
             retention_ok: None,
-            own_server_present: None,
             sybil_independent_count: 0,
             threshold: 0,
             server_count: 0,
+            untrusted_servers_count: 0,
+            servers: Vec::new(),
             issues,
         });
     };
@@ -656,10 +727,11 @@ pub(crate) fn evaluate_guarantor_anchor_check_impl(
             passed: false,
             has_layer2_anchor: true,
             retention_ok: None,
-            own_server_present: None,
             sybil_independent_count: 0,
             threshold: 0,
             server_count: 0,
+            untrusted_servers_count: 0,
+            servers: Vec::new(),
             issues,
         });
     };
@@ -698,44 +770,39 @@ pub(crate) fn evaluate_guarantor_anchor_check_impl(
     }
 
     let security_policy = state.get_or_load_security_policy_locked(password)?;
-    let own_server_present = if let Some(ref own) = security_policy.own_nominated_lock_server {
-        let own_norm = crate::services::common::normalize_sync_url(&own.write_url);
-        let present = manifest.servers.iter().any(|s| {
-            crate::services::common::normalize_sync_url(&s.write_url) == own_norm
-                && hex::encode(s.lock_pub) == own.lock_pub.to_ascii_lowercase()
-                && matches!(
-                    s.nominated_by,
-                    human_money_core::humoco_proto::NominatedBy::Guarantor(_)
-                )
-        });
-        if !present {
-            issues.push(GUARANTOR_ISSUE_OWN_SERVER_MISSING.to_string());
-        }
-        Some(present)
-    } else {
-        issues.push(GUARANTOR_ISSUE_NO_OWN_SERVER.to_string());
-        Some(false)
-    };
+    let probe_cache = state
+        .get_or_load_internal_lifecycle_locked(password)
+        .map(|lc| lc.l2_probe_cache)
+        .unwrap_or_default();
+
+    let servers: Vec<FrontendGuarantorServerTrustDto> = manifest
+        .servers
+        .iter()
+        .map(|s| {
+            let admin_pub = hex::encode(s.admin_pub);
+            let lock_pub = hex::encode(s.lock_pub);
+            let (resolved_w, _) = crate::services::common::resolve_server_locator(s, &probe_cache);
+            let trusted = crate::settings::is_lock_admin_trusted(&security_policy, &admin_pub);
+            FrontendGuarantorServerTrustDto {
+                write_url: resolved_w,
+                admin_pub,
+                lock_pub,
+                trusted,
+            }
+        })
+        .collect();
+    let untrusted_servers_count = servers.iter().filter(|s| !s.trusted).count();
 
     let candidates: Vec<crate::gateway_resolver::SybilServerCandidate> = manifest
         .servers
         .iter()
         .map(|s| {
-            let norm = crate::services::common::normalize_sync_url(&s.write_url);
-            let asn = security_policy
-                .own_nominated_lock_server
-                .as_ref()
-                .filter(|o| crate::services::common::normalize_sync_url(&o.write_url) == norm)
-                .and_then(|o| {
-                    o.asn
-                        .as_deref()
-                        .and_then(|s| s.trim().trim_start_matches("AS").parse::<u32>().ok())
-                });
+            let (resolved_w, _) = crate::services::common::resolve_server_locator(s, &probe_cache);
             crate::gateway_resolver::SybilServerCandidate {
-                write_url: s.write_url.clone(),
+                write_url: resolved_w,
                 lock_pub: s.lock_pub,
                 admin_pub: Some(s.admin_pub),
-                asn,
+                asn: None,
             }
         })
         .collect();
@@ -770,10 +837,11 @@ pub(crate) fn evaluate_guarantor_anchor_check_impl(
         passed,
         has_layer2_anchor: true,
         retention_ok: Some(retention_ok),
-        own_server_present,
         sybil_independent_count: folded.len(),
         threshold: manifest.threshold,
         server_count: manifest.servers.len(),
+        untrusted_servers_count,
+        servers,
         issues,
     })
 }
@@ -800,9 +868,7 @@ pub fn evaluate_guarantor_anchor_check(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::settings::{
-        InternalLifecycleState, NominatedLockServerMeta, SecurityPolicy,
-    };
+    use crate::settings::{InternalLifecycleState, SecurityPolicy};
     use ed25519_dalek::SigningKey;
     use human_money_core::{
         humoco_proto::{encode_quarter, AnchorAuthority, AnchorManifest, NominatedBy, ServerEntry},
@@ -899,18 +965,7 @@ mod tests {
         );
         assert_eq!(details.manifest_revision, Some(1));
 
-        let guar_policy = SecurityPolicy {
-            own_nominated_lock_server: Some(NominatedLockServerMeta {
-                write_url: "https://sync2.example/sync.php".into(),
-                read_url: "https://sync2.example/d".into(),
-                drop_pub: "drop_pub_2".into(),
-                admin_pub: hex::encode(s2_sk.verifying_key().to_bytes()),
-                lock_pub: hex::encode(s2_sk.verifying_key().to_bytes()),
-                asn: Some("AS64512".into()),
-                probed_at_secs: 1_760_000_000,
-            }),
-            ..Default::default()
-        };
+        let guar_policy = SecurityPolicy::default();
         let guar_state = AppState::new(svc_guarantor);
         guar_state.set_cached_security_policy(Some(guar_policy));
         guar_state.set_cached_internal_lifecycle(Some(InternalLifecycleState::default()));
@@ -943,21 +998,30 @@ mod tests {
             "guarantor anchor check should pass from embedded .ask manifest, got {:?}",
             check.issues
         );
-        assert_eq!(check.own_server_present, Some(true));
+        assert_eq!(check.untrusted_servers_count, 0);
+        assert_eq!(check.servers.len(), 2);
         assert_eq!(check.sybil_independent_count, 2);
 
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    #[test]
-    fn test_restore_reconcile_and_daily_pay_access_gates_for_issuance_and_detached_signing() {
+    #[tokio::test]
+    async fn test_restore_reconcile_and_daily_pay_access_gates_for_issuance_and_detached_signing() {
         let dir = crate::test_support::temp_test_dir("vouchers_phase2_gates");
         let pw = "TestPassword123!";
-        let svc_creator =
-            crate::test_support::setup_test_app(&dir.join("creator"), "Alice", crate::test_support::ALICE_PHRASE, pw);
+        let svc_creator = crate::test_support::setup_test_app(
+            &dir.join("creator"),
+            "Alice",
+            crate::test_support::ALICE_PHRASE,
+            pw,
+        );
         let creator_state = AppState::new(svc_creator);
-        let svc_signer =
-            crate::test_support::setup_test_app(&dir.join("signer"), "Bob", crate::test_support::BOB_PHRASE, pw);
+        let svc_signer = crate::test_support::setup_test_app(
+            &dir.join("signer"),
+            "Bob",
+            crate::test_support::BOB_PHRASE,
+            pw,
+        );
         let signer_state = AppState::new(svc_signer);
 
         let (creator_id, creator_profile) = {
@@ -977,8 +1041,9 @@ mod tests {
             (id, p)
         };
 
-        let ft_toml =
-            test_utils::generate_signed_standard_toml("voucher_standards/freetaler_v1/standard.toml");
+        let ft_toml = test_utils::generate_signed_standard_toml(
+            "voucher_standards/freetaler_v1/standard.toml",
+        );
         let minuto_toml =
             test_utils::generate_signed_standard_toml("voucher_standards/minuto_v1/standard.toml");
 
@@ -1003,6 +1068,7 @@ mod tests {
             Some(pw.into()),
             &creator_state,
         )
+        .await
         .unwrap_err();
         assert!(
             issue_err.message.contains("Sicherheitsabgleich"),
@@ -1122,7 +1188,11 @@ mod tests {
             None,
             &signer_state,
         );
-        assert!(ok_sig.is_ok(), "Full access detached sign should succeed: {:?}", ok_sig.err());
+        assert!(
+            ok_sig.is_ok(),
+            "Full access detached sign should succeed: {:?}",
+            ok_sig.err()
+        );
 
         let _ = std::fs::remove_dir_all(dir);
     }

@@ -67,12 +67,9 @@ fn load_wot_upload_context(
                     .get_or_load_wot_register(service, password)
                     .map_err(FrontendError::from)?,
             );
-            let address_book: FrontendAddressBook = crate::state::load_encrypted_json_or_default(
-                service,
-                CONTACTS_DATA_NAME,
-                password,
-            )
-            .map_err(FrontendError::from)?;
+            let address_book: FrontendAddressBook =
+                crate::state::load_encrypted_json_or_default(service, CONTACTS_DATA_NAME, password)
+                    .map_err(FrontendError::from)?;
 
             let zero_book_dids: Vec<String> = address_book
                 .contacts
@@ -96,10 +93,7 @@ fn load_wot_upload_context(
                         .filter(|did| {
                             service
                                 .with_wallet(|w| {
-                                    matches!(
-                                        w.check_reputation(did),
-                                        TrustStatus::KnownOffender(_)
-                                    )
+                                    matches!(w.check_reputation(did), TrustStatus::KnownOffender(_))
                                 })
                                 .unwrap_or(false)
                         })

@@ -1921,9 +1921,10 @@ pub(crate) async fn sync_backup_with_standards_impl(
                     .get_or_load_internal_lifecycle(service, password.as_deref())
                     .map_err(FrontendError::from)?;
                 let mut lock_pubs = std::collections::HashMap::new();
-                for (url_key, probe) in &lc.l2_probe_cache {
-                    if !probe.lock_pub.is_empty() {
-                        lock_pubs.insert(url_key.clone(), probe.lock_pub.clone());
+                for probe in lc.l2_probe_cache.values() {
+                    let norm_write = crate::services::common::normalize_sync_url(&probe.write_url);
+                    if !norm_write.is_empty() && !probe.lock_pub.is_empty() {
+                        lock_pubs.insert(norm_write, probe.lock_pub.clone());
                     }
                 }
                 Ok((
@@ -1996,7 +1997,9 @@ pub(crate) async fn sync_backup_with_standards_impl(
             let inspect_res = state.with_session_required(
                 &session,
                 "Active wallet session changed during backup inspection",
-                |service| Ok(service.inspect_mnemonic_backup_with_unlocked_identity(&manifest_bytes)),
+                |service| {
+                    Ok(service.inspect_mnemonic_backup_with_unlocked_identity(&manifest_bytes))
+                },
             )?;
             let report = match inspect_res {
                 Ok(r) => r,
@@ -2142,95 +2145,98 @@ pub(crate) async fn sync_backup_with_standards_impl(
         &session,
         "Active wallet session changed before creating backup payload",
         |service| {
+            let pending_seal_hash = service
+                .get_current_seal()
+                .ok()
+                .flatten()
+                .and_then(|seal| seal.compute_hash().ok());
 
-        let pending_seal_hash = service
-            .get_current_seal()
-            .ok()
-            .flatten()
-            .and_then(|seal| seal.compute_hash().ok());
-
-        // Try building a delta against the stored Base manifest (if one exists)
-        let delta_attempt = if let (Some(prev_manifest), Some(prev_sha256)) = (
-            backup_sync_state.base_manifest_bytes.as_deref(),
-            backup_sync_state.base_manifest_sha256.as_deref(),
-        ) {
-            match service.create_differential_backup(
-                Some(prev_manifest),
-                BackupProtection::MnemonicOnly,
-                password.as_deref(),
+            // Try building a delta against the stored Base manifest (if one exists)
+            let delta_attempt = if let (Some(prev_manifest), Some(prev_sha256)) = (
+                backup_sync_state.base_manifest_bytes.as_deref(),
+                backup_sync_state.base_manifest_sha256.as_deref(),
             ) {
-                Ok(diff) => {
-                    let put_blobs_hex = encode_blobs_hex(diff.put_blobs);
-                    let delta_container = BackupDeltaContainer {
-                        container_format: "humoco-app-backup-delta-v1".to_string(),
-                        created_at: Utc::now().to_rfc3339(),
-                        base_manifest_sha256: prev_sha256.to_string(),
-                        manifest_hex: human_money_core::hex::encode(&diff.encrypted_manifest_bytes),
-                        put_blobs_hex,
-                        delete_blobs: diff.delete_blobs,
-                        custom_standards: custom_standards.clone(),
-                    };
-                    serde_json::to_vec(&delta_container).ok().and_then(|bytes| {
-                        humoco_market::pad_backup_slot_bytes(&bytes, max_target_bytes).ok()
-                    })
-                }
-                Err(_) => None,
-            }
-        } else {
-            None
-        };
-
-        // Determine if any mirror needs a fresh Base (or if Delta grew too large)
-        let any_mirror_needs_base = authorized_targets
-            .iter()
-            .filter(|t| !skip_urls.contains(&t.desc.write_url))
-            .any(|target| {
-                !delta_attempt.as_ref().is_some_and(|d| {
-                    target_can_use_delta(
-                        target,
-                        &backup_sync_state,
-                        d.len(),
-                        now_secs,
-                        &force_base_urls,
-                    )
-                })
-            });
-
-        let (base_m_bytes, base_m_sha, base_padded) = if any_mirror_needs_base {
-            let diff = service
-                .create_differential_backup(
-                    None,
+                match service.create_differential_backup(
+                    Some(prev_manifest),
                     BackupProtection::MnemonicOnly,
                     password.as_deref(),
-                )
-                .map_err(FrontendError::from)?;
-            let blobs_hex = encode_blobs_hex(diff.put_blobs);
-            let container = PortableBackupContainer {
-                container_format: "humoco-app-backup-v1".to_string(),
-                created_at: Utc::now().to_rfc3339(),
-                manifest_hex: human_money_core::hex::encode(&diff.encrypted_manifest_bytes),
-                blobs_hex,
-                custom_standards,
+                ) {
+                    Ok(diff) => {
+                        let put_blobs_hex = encode_blobs_hex(diff.put_blobs);
+                        let delta_container = BackupDeltaContainer {
+                            container_format: "humoco-app-backup-delta-v1".to_string(),
+                            created_at: Utc::now().to_rfc3339(),
+                            base_manifest_sha256: prev_sha256.to_string(),
+                            manifest_hex: human_money_core::hex::encode(
+                                &diff.encrypted_manifest_bytes,
+                            ),
+                            put_blobs_hex,
+                            delete_blobs: diff.delete_blobs,
+                            custom_standards: custom_standards.clone(),
+                        };
+                        serde_json::to_vec(&delta_container).ok().and_then(|bytes| {
+                            humoco_market::pad_backup_slot_bytes(&bytes, max_target_bytes).ok()
+                        })
+                    }
+                    Err(_) => None,
+                }
+            } else {
+                None
             };
-            let container_bytes = serde_json::to_vec(&container).map_err(|e| {
-                FrontendError::from(format!("Failed to serialize backup container: {}", e))
-            })?;
-            let padded = humoco_market::pad_backup_slot_bytes(&container_bytes, max_target_bytes)
-                .map_err(|e| FrontendError::from(e.to_string()))?;
-            let sha = sha256_hex(&diff.encrypted_manifest_bytes);
-            (Some(diff.encrypted_manifest_bytes), Some(sha), Some(padded))
-        } else {
-            (None, None, None)
-        };
 
-        Ok((
-            base_m_bytes,
-            base_m_sha,
-            base_padded,
-            delta_attempt,
-            pending_seal_hash,
-        ))
-    })?;
+            // Determine if any mirror needs a fresh Base (or if Delta grew too large)
+            let any_mirror_needs_base = authorized_targets
+                .iter()
+                .filter(|t| !skip_urls.contains(&t.desc.write_url))
+                .any(|target| {
+                    !delta_attempt.as_ref().is_some_and(|d| {
+                        target_can_use_delta(
+                            target,
+                            &backup_sync_state,
+                            d.len(),
+                            now_secs,
+                            &force_base_urls,
+                        )
+                    })
+                });
+
+            let (base_m_bytes, base_m_sha, base_padded) = if any_mirror_needs_base {
+                let diff = service
+                    .create_differential_backup(
+                        None,
+                        BackupProtection::MnemonicOnly,
+                        password.as_deref(),
+                    )
+                    .map_err(FrontendError::from)?;
+                let blobs_hex = encode_blobs_hex(diff.put_blobs);
+                let container = PortableBackupContainer {
+                    container_format: "humoco-app-backup-v1".to_string(),
+                    created_at: Utc::now().to_rfc3339(),
+                    manifest_hex: human_money_core::hex::encode(&diff.encrypted_manifest_bytes),
+                    blobs_hex,
+                    custom_standards,
+                };
+                let container_bytes = serde_json::to_vec(&container).map_err(|e| {
+                    FrontendError::from(format!("Failed to serialize backup container: {}", e))
+                })?;
+                let padded =
+                    humoco_market::pad_backup_slot_bytes(&container_bytes, max_target_bytes)
+                        .map_err(|e| FrontendError::from(e.to_string()))?;
+                let sha = sha256_hex(&diff.encrypted_manifest_bytes);
+                (Some(diff.encrypted_manifest_bytes), Some(sha), Some(padded))
+            } else {
+                (None, None, None)
+            };
+
+            Ok((
+                base_m_bytes,
+                base_m_sha,
+                base_padded,
+                delta_attempt,
+                pending_seal_hash,
+            ))
+        },
+    )?;
 
     let client = crate::sync_client::create_sync_http_client();
     let mut uploaded_to = 0;
@@ -2484,7 +2490,8 @@ pub(crate) async fn sync_backup_with_standards_impl(
         if mutated {
             if let Some(ref seal_hash) = pending_seal_hash {
                 let _ = state.with_session(&session, |service| {
-                    if let Err(err) = service.acknowledge_seal_sync(seal_hash, password.as_deref()) {
+                    if let Err(err) = service.acknowledge_seal_sync(seal_hash, password.as_deref())
+                    {
                         log::warn!("Post-sync seal acknowledgement deferred: {}", err);
                     }
                     Ok(())
@@ -3099,11 +3106,9 @@ pub(crate) async fn reconcile_restored_wallet_l2_impl(
                 password.as_deref(),
                 |lc| {
                     lc.pending_restore_l2_reconciliation = false;
-                    if lc
-                        .wallet_sync_alert
-                        .as_ref()
-                        .is_some_and(|a| a.kind == "stale_local_backup" || a.kind == "fork_detected")
-                    {
+                    if lc.wallet_sync_alert.as_ref().is_some_and(|a| {
+                        a.kind == "stale_local_backup" || a.kind == "fork_detected"
+                    }) {
                         lc.wallet_sync_alert = None;
                     }
                     true

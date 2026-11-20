@@ -1,15 +1,14 @@
 // src/components/voucher/VoucherBasicsForm.tsx
 
 import { useTranslation } from "react-i18next";
-import { Coins, AlertCircle, FlaskConical, FileSignature, Clock, ShieldAlert, WifiOff } from "lucide-react";
+import { Coins, AlertCircle, FlaskConical, FileSignature, Clock, ShieldCheck, WifiOff } from "lucide-react";
 import { Card } from "../ui/Card";
 import { Input } from "../ui/Input";
 import { HelpIcon } from "../ui/HelpIcon";
 import { Advanced } from "../ui/Advanced";
 import { Disclosure } from "../ui/Disclosure";
-import { VoucherStandardInfo, VoucherStandardDefinition, StoredAnchorTemplateMeta } from "../../types";
+import { VoucherStandardInfo, VoucherStandardDefinition, LockProtectionOverviewDto } from "../../types";
 import { getStandardShortSummary } from "../../hooks/useVoucherCreation";
-import { formatQuarter } from "../../utils/retentionQuarter";
 
 interface VoucherBasicsFormProps {
     standards: VoucherStandardInfo[];
@@ -29,10 +28,7 @@ interface VoucherBasicsFormProps {
     amountRef: React.RefObject<HTMLInputElement | null>;
     parsedStandard?: VoucherStandardDefinition | null;
     onManageStandards?: () => void;
-    anchorTemplates?: StoredAnchorTemplateMeta[];
-    selectedAnchorId?: string | null;
-    onSelectedAnchorChange?: (id: string | null) => void;
-    retentionInsufficient?: boolean;
+    lockOverview?: LockProtectionOverviewDto | null;
 }
 
 export function VoucherBasicsForm({
@@ -53,10 +49,7 @@ export function VoucherBasicsForm({
     amountRef,
     parsedStandard,
     onManageStandards,
-    anchorTemplates = [],
-    selectedAnchorId = null,
-    onSelectedAnchorChange,
-    retentionInsufficient = false,
+    lockOverview = null,
 }: VoucherBasicsFormProps) {
     const { t, i18n } = useTranslation();
 
@@ -113,43 +106,45 @@ export function VoucherBasicsForm({
         </Disclosure>
     );
 
-    const anchorSelectorSection = onSelectedAnchorChange ? (
+    const hasLiveOnline = (lockOverview?.readyTrustedCount ?? 0) > 0;
+    const hasOfflineCached = Boolean(lockOverview?.hasOfflineCachedAnchor);
+    const anchorSelectorSection = !nonRedeemable ? (
         <div className="space-y-2 p-4 rounded-3xl border border-theme-subtle bg-white/70">
             <div className="flex items-center justify-between gap-2">
-                <label
-                    htmlFor="voucher-l2-anchor"
-                    className="text-[10px] font-black text-theme-light uppercase tracking-widest"
-                >
+                <span className="text-[10px] font-black text-theme-light uppercase tracking-widest">
                     {t('voucher.basics.l2AnchorLabel', 'Online Lock Protection')}
-                </label>
+                </span>
                 <HelpIcon topic="l2Protection" size={14} />
             </div>
-            <select
-                id="voucher-l2-anchor"
-                value={selectedAnchorId || ''}
-                onChange={(e) => onSelectedAnchorChange(e.target.value || null)}
-                className="w-full bg-white border border-theme-subtle rounded-xl px-3 py-2 text-xs font-bold text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none"
-            >
-                <option value="">
-                    {t('voucher.basics.l2AnchorOfflineOnly', 'Offline-only (N = 0, trust-based)')}
-                </option>
-                {anchorTemplates.map((tpl) => (
-                    <option key={tpl.anchorId} value={tpl.anchorId}>
-                        {tpl.label} ({tpl.threshold}/{tpl.servers.length} · ≥ {formatQuarter(tpl.retainUntilQuarter)})
-                    </option>
-                ))}
-            </select>
-
-            {!selectedAnchorId && (
+            {hasLiveOnline || hasOfflineCached ? (
+                <p
+                    data-testid="voucher-auto-lock-notice"
+                    className="text-[11px] text-emerald-900 bg-emerald-50 border border-emerald-200 rounded-xl p-2.5 flex items-start gap-2 font-medium"
+                >
+                    <ShieldCheck size={14} className="shrink-0 mt-0.5 text-emerald-600" />
+                    <span>
+                        {hasLiveOnline
+                            ? t(
+                                  'voucher.basics.l2AutoProtectedLive',
+                                  'Automatic online double-spend protection is active ({{count}} trusted services).',
+                                  { count: lockOverview?.readyTrustedCount ?? 0 }
+                              )
+                            : t(
+                                  'voucher.basics.l2AutoProtectedCached',
+                                  'Automatic online double-spend protection will use your pre-warmed protection set.'
+                              )}
+                    </span>
+                </p>
+            ) : (
                 <p
                     data-testid="voucher-offline-only-notice"
-                    className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-xl p-2 flex items-start gap-2"
+                    className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-xl p-2.5 flex items-start gap-2 font-medium"
                 >
                     <WifiOff size={14} className="shrink-0 mt-0.5 text-amber-600" />
                     <span>
                         {t(
                             'voucher.basics.l2AnchorOfflineOnlyWarning',
-                            'No lock servers selected (N = 0). Protected offline via SST V4 signatures, without live double-spend locks.'
+                            'Currently offline-only (N = 0). Protected offline via SST V4 signatures, without live double-spend locks.'
                         )}
                     </span>
                 </p>
@@ -237,7 +232,7 @@ export function VoucherBasicsForm({
                                 className={`font-bold text-sm ${errors.amount ? 'border-rose-500' : ''}`}
                             />
                         </div>
-                        {retentionInsufficient ? validitySection : <Advanced>{validitySection}</Advanced>}
+                        <Advanced>{validitySection}</Advanced>
                     </div>
                 </div>
                 
@@ -305,30 +300,7 @@ export function VoucherBasicsForm({
                         )}
                     </div>
 
-                    {onSelectedAnchorChange && (
-                        <>
-                            {retentionInsufficient ? (
-                                anchorSelectorSection
-                            ) : (
-                                <Advanced>{anchorSelectorSection}</Advanced>
-                            )}
-
-                            {selectedAnchorId && retentionInsufficient && (
-                                <p
-                                    data-testid="voucher-retention-error"
-                                    className="text-[11px] text-rose-800 bg-rose-50 border border-rose-200 rounded-xl p-2 flex items-start gap-2 font-semibold"
-                                >
-                                    <ShieldAlert size={14} className="shrink-0 mt-0.5 text-rose-600" />
-                                    <span>
-                                        {t(
-                                            'voucher.basics.l2AnchorRetentionTooShort',
-                                            'Selected anchor set retention is shorter than the voucher validity and retention window. Choose a longer template or shorten validity.'
-                                        )}
-                                    </span>
-                                </p>
-                            )}
-                        </>
-                    )}
+                    <Advanced>{anchorSelectorSection}</Advanced>
                 </div>
             </div>
         </Card>

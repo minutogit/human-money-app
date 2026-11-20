@@ -192,7 +192,7 @@ pub async fn create_transfer_bundle_impl(
 
         let pow_bits = service
             .with_wallet(|wallet| {
-                let mut write_urls: Vec<&str> = Vec::new();
+                let mut lock_pubs: Vec<[u8; 32]> = Vec::new();
                 for src in &source_transfers {
                     if let Some(anchor_id) = wallet
                         .get_voucher_instance(&src.local_instance_id)
@@ -201,14 +201,13 @@ pub async fn create_transfer_bundle_impl(
                         let anchor_hex = hex::encode(anchor_id);
                         if let Some(manifest) = wallet.profile.l2_anchor_manifests.get(&anchor_hex)
                         {
-                            write_urls
-                                .extend(manifest.servers.iter().map(|s| s.write_url.as_str()));
+                            lock_pubs.extend(manifest.servers.iter().map(|s| s.lock_pub));
                         }
                     }
                 }
                 crate::services::common::max_pow_base_bits_for_servers(
                     &loaded_lifecycle,
-                    write_urls,
+                    lock_pubs,
                 )
             })
             .unwrap_or(DEFAULT_LOCK_POW_BASE_BITS);
@@ -425,7 +424,13 @@ fn collect_received_voucher_markers(
 pub(crate) fn filter_conflicts_for_received_vouchers(
     service: &human_money_core::app_service::AppService,
     received_vouchers: &[human_money_core::Voucher],
-) -> Result<(Vec<crate::models::FrontendProofOfDoubleSpendSummary>, Option<usize>), FrontendError> {
+) -> Result<
+    (
+        Vec<crate::models::FrontendProofOfDoubleSpendSummary>,
+        Option<usize>,
+    ),
+    FrontendError,
+> {
     let all_conflicts = service.list_conflicts().map_err(FrontendError::from)?;
     if all_conflicts.is_empty() {
         return Ok((Vec::new(), None));
@@ -474,12 +479,7 @@ pub(crate) fn apply_receive_companion_side_effects(
     }
 
     let wot_imported_lists = if let Some(ref wot_json) = result.wot_sync_json {
-        state.try_import_piggybacked_wot(
-            service,
-            wot_json,
-            &result.header.sender_id,
-            password,
-        )
+        state.try_import_piggybacked_wot(service, wot_json, &result.header.sender_id, password)
     } else {
         None
     };
@@ -518,7 +518,8 @@ pub(crate) fn build_receive_success_payload_from_result(
     let notes = result.header.notes.clone();
     let sender_profile_name = result.header.sender_profile_name.clone();
 
-    let wot_imported_lists = apply_receive_companion_side_effects(service, state, &result, password);
+    let wot_imported_lists =
+        apply_receive_companion_side_effects(service, state, &result, password);
 
     let receive_kind = service
         .with_wallet(|w| {
@@ -999,7 +1000,9 @@ mod offline_and_degraded_transfer_tests {
         s.with_wallet_and_identity(|w, id| w.list_vouchers(Some(id), None, None, None))
             .unwrap()
             .into_iter()
-            .find(|v| v.status == VoucherStatus::Active && !before_ids.contains(&v.local_instance_id))
+            .find(|v| {
+                v.status == VoucherStatus::Active && !before_ids.contains(&v.local_instance_id)
+            })
             .unwrap()
             .local_instance_id
     }
@@ -1372,10 +1375,16 @@ mod offline_and_degraded_transfer_tests {
             }
         }
         copy_dir(&carol_dir, &carol_clone_dir);
-        let mut clone_svc = human_money_core::app_service::AppService::new(&carol_clone_dir).unwrap();
+        let mut clone_svc =
+            human_money_core::app_service::AppService::new(&carol_clone_dir).unwrap();
         let clone_folder = clone_svc.list_profiles().unwrap()[0].folder_name.clone();
         clone_svc
-            .login(&clone_folder, password, false, "device-drops-test".to_string())
+            .login(
+                &clone_folder,
+                password,
+                false,
+                "device-drops-test".to_string(),
+            )
             .unwrap();
         clone_svc.unlock_session(password, 300).unwrap();
         let carol_clone_state = create_test_state(clone_svc);
@@ -1582,7 +1591,11 @@ mod offline_and_degraded_transfer_tests {
             &alice_state,
         )
         .await;
-        assert!(ok_res.is_ok(), "Transfer should proceed: {:?}", ok_res.err());
+        assert!(
+            ok_res.is_ok(),
+            "Transfer should proceed: {:?}",
+            ok_res.err()
+        );
 
         let raw_card_store = {
             let mut s = alice_state.service.lock().unwrap();
@@ -1644,13 +1657,9 @@ mod offline_and_degraded_transfer_tests {
 
         let raw_settings = {
             let mut s = alice_state.service.lock().unwrap();
-            crate::state::load_encrypted_bytes_opt(
-                &mut s,
-                UI_PREFERENCES_KEY,
-                Some(password),
-            )
-            .unwrap()
-            .unwrap()
+            crate::state::load_encrypted_bytes_opt(&mut s, UI_PREFERENCES_KEY, Some(password))
+                .unwrap()
+                .unwrap()
         };
         assert_eq!(raw_settings, b"{corrupt-settings");
 
@@ -1658,8 +1667,8 @@ mod offline_and_degraded_transfer_tests {
     }
 
     #[tokio::test]
-    async fn k3_transfer_persists_outgoing_bundles_atomically_with_stripped_disk_history_and_hydrates()
-    {
+    async fn k3_transfer_persists_outgoing_bundles_atomically_with_stripped_disk_history_and_hydrates(
+    ) {
         let base_dir = temp_test_dir("k3_outgoing_bundles_atomic");
         let password = "TestPassword123!";
         let alice_state = create_test_state(setup_test_app(
@@ -1717,13 +1726,10 @@ mod offline_and_degraded_transfer_tests {
                 rec.bundle_data.is_empty(),
                 "On-disk tx_history must not store duplicate bundle_data"
             );
-            let stored_bytes = crate::state::get_outgoing_bundle_bytes(
-                &mut s,
-                &res.bundle_id,
-                Some(password),
-            )
-            .unwrap()
-            .expect("Canonical bytes must exist in outgoing_bundles");
+            let stored_bytes =
+                crate::state::get_outgoing_bundle_bytes(&mut s, &res.bundle_id, Some(password))
+                    .unwrap()
+                    .expect("Canonical bytes must exist in outgoing_bundles");
             assert_eq!(stored_bytes, res.bundle_data);
         }
 
@@ -1932,14 +1938,15 @@ mod offline_and_degraded_transfer_tests {
                 .save_security_policy(&mut s, sec, Some(password))
                 .unwrap();
             let mut lc = InternalLifecycleState::default();
+            let sk1_hex = hex::encode(sk1.verifying_key().as_bytes());
             lc.l2_probe_cache.insert(
-                write_url.clone(),
+                sk1_hex.clone(),
                 crate::sync_client::FrontendLockServerProbeResult {
                     write_url: write_url.clone(),
                     read_url: format!("http://127.0.0.1:{}/d", p1),
-                    drop_pub: hex::encode(sk1.verifying_key().as_bytes()),
-                    admin_pub: hex::encode(sk1.verifying_key().as_bytes()),
-                    lock_pub: hex::encode(sk1.verifying_key().as_bytes()),
+                    drop_pub: sk1_hex.clone(),
+                    admin_pub: sk1_hex.clone(),
+                    lock_pub: sk1_hex,
                     delegation_valid: true,
                     waf_probe_passed: true,
                     selftest_passed: true,
@@ -1953,6 +1960,7 @@ mod offline_and_degraded_transfer_tests {
                     used_inodes: 0,
                     max_inodes: 50_000,
                     probed_at_secs: 1,
+                    delegation: None,
                     error: None,
                 },
             );
@@ -2000,11 +2008,13 @@ mod offline_and_degraded_transfer_tests {
             green.checkout_verdict.as_ref().unwrap().outcome,
             "Confirmed"
         );
-        assert!(green
-            .checkout_verdict
-            .as_ref()
-            .unwrap()
-            .is_goods_release_authorized);
+        assert!(
+            green
+                .checkout_verdict
+                .as_ref()
+                .unwrap()
+                .is_goods_release_authorized
+        );
         assert_eq!(green.l2_quorum.as_ref().unwrap().status, "final");
 
         let replay = receive_bundle_impl(
@@ -2075,11 +2085,13 @@ mod offline_and_degraded_transfer_tests {
             pending.checkout_verdict.as_ref().unwrap().outcome,
             "OfflineOnly"
         );
-        assert!(!pending
-            .checkout_verdict
-            .as_ref()
-            .unwrap()
-            .is_goods_release_authorized);
+        assert!(
+            !pending
+                .checkout_verdict
+                .as_ref()
+                .unwrap()
+                .is_goods_release_authorized
+        );
 
         let committed = receive_bundle_impl(
             None,
@@ -2095,11 +2107,13 @@ mod offline_and_degraded_transfer_tests {
         .unwrap();
         assert_eq!(committed.newly_committed, Some(true));
         assert_eq!(committed.is_replay, Some(false));
-        assert!(committed
-            .checkout_verdict
-            .as_ref()
-            .unwrap()
-            .is_goods_release_authorized);
+        assert!(
+            committed
+                .checkout_verdict
+                .as_ref()
+                .unwrap()
+                .is_goods_release_authorized
+        );
 
         srv.abort();
         let _ = std::fs::remove_dir_all(base_dir);
@@ -2130,12 +2144,7 @@ mod offline_and_degraded_transfer_tests {
             .unwrap()
             .with_wallet(|w| w.get_user_id().to_string())
             .unwrap();
-        let folder = alice_state
-            .service
-            .lock()
-            .unwrap()
-            .list_profiles()
-            .unwrap()[0]
+        let folder = alice_state.service.lock().unwrap().list_profiles().unwrap()[0]
             .folder_name
             .clone();
 
@@ -2195,7 +2204,9 @@ mod offline_and_degraded_transfer_tests {
             &alice_state,
         )
         .await
-        .expect("H1: Single-call transfer + PoST outbox deposit must succeed with one-shot PIN grant");
+        .expect(
+            "H1: Single-call transfer + PoST outbox deposit must succeed with one-shot PIN grant",
+        );
 
         assert!(
             res.post_deposit.is_some(),

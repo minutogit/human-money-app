@@ -112,7 +112,6 @@ describe('SyncServiceSettingsCard Component', () => {
             syncBackupEnabled: true,
             backupSyncFolder: null,
             backupProtectionMode: null,
-            ownNominatedLockServer: null,
             marketSelectedSyncs: [],
             publicSyncs: [],
         },
@@ -122,7 +121,6 @@ describe('SyncServiceSettingsCard Component', () => {
             lastBackupAt: null,
             lastSyncBackupAt: null,
             l2ProbeCache: {},
-            l2AnchorTemplatesMeta: [],
         },
     });
 

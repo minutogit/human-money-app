@@ -153,15 +153,87 @@ pub(crate) fn normalize_sync_url(raw: &str) -> String {
     }
 }
 
-/// Computes the maximum `pow_base_bits` across probed lock servers for a committee.
-pub(crate) fn max_pow_base_bits_for_servers<'a>(
+/// Upserts a lock server probe keyed by lowercase 64-hex `lock_pub`, never rolling back a
+/// verified delegation to a stale `issued_at` or an unverified failure result.
+pub(crate) fn upsert_verified_lock_probe(
+    cache: &mut std::collections::BTreeMap<
+        String,
+        crate::sync_client::FrontendLockServerProbeResult,
+    >,
+    mut probe: crate::sync_client::FrontendLockServerProbeResult,
+) -> bool {
+    let lock_key = probe.lock_pub.trim().to_ascii_lowercase();
+    if human_money_core::humoco_proto::decode_hex_fixed::<32>(&lock_key).is_err() {
+        return false;
+    }
+    probe.lock_pub = lock_key.clone();
+    probe.admin_pub = probe.admin_pub.trim().to_ascii_lowercase();
+    probe.drop_pub = probe.drop_pub.trim().to_ascii_lowercase();
+
+    let incoming_issued_at = probe.delegation.as_ref().map(|d| d.issued_at).unwrap_or(0);
+    if let Some(existing) = cache.get(&lock_key) {
+        if existing.delegation_valid {
+            if !probe.delegation_valid {
+                return false;
+            }
+            let existing_issued_at = existing
+                .delegation
+                .as_ref()
+                .map(|d| d.issued_at)
+                .unwrap_or(0);
+            if incoming_issued_at < existing_issued_at {
+                return false;
+            }
+            if incoming_issued_at == existing_issued_at && existing.passed && !probe.passed {
+                return false;
+            }
+        }
+    }
+    cache.insert(lock_key, probe);
+    true
+}
+
+/// Resolves the live locator `(write_url, read_url)` for a manifest `ServerEntry`, preferring
+/// any newer verified delegation/probe entry matching `(lock_pub, admin_pub)` in `probe_cache`.
+pub(crate) fn resolve_server_locator(
+    entry: &human_money_core::humoco_proto::manifest::ServerEntry,
+    probe_cache: &std::collections::BTreeMap<
+        String,
+        crate::sync_client::FrontendLockServerProbeResult,
+    >,
+) -> (String, String) {
+    let lock_hex = hex::encode(entry.lock_pub);
+    let admin_hex = hex::encode(entry.admin_pub);
+    if let Some(probe) = probe_cache.get(&lock_hex) {
+        let admin_matches = probe.admin_pub.trim().eq_ignore_ascii_case(&admin_hex);
+        let lock_matches = probe.lock_pub.trim().eq_ignore_ascii_case(&lock_hex);
+        let del_valid = probe.delegation_valid
+            && probe.delegation.as_ref().is_some_and(|d| {
+                crate::sync_client::verify_lock_delegation(&lock_hex, d, Some(&admin_hex))
+                    && normalize_sync_url(&d.write_url) == normalize_sync_url(&probe.write_url)
+                    && normalize_sync_url(&d.read_url) == normalize_sync_url(&probe.read_url)
+                    && crate::sync_client::validate_sync_url(d.write_url.trim()).is_ok()
+                    && crate::sync_client::validate_sync_url(d.read_url.trim()).is_ok()
+            });
+        if admin_matches && lock_matches && del_valid {
+            return (
+                probe.write_url.trim().to_string(),
+                probe.read_url.trim().to_string(),
+            );
+        }
+    }
+    (entry.write_url.clone(), entry.read_url.clone())
+}
+
+/// Computes the maximum `pow_base_bits` across probed lock servers identified by `lock_pub`.
+pub(crate) fn max_pow_base_bits_for_servers(
     lifecycle: &InternalLifecycleState,
-    write_urls: impl IntoIterator<Item = &'a str>,
+    lock_pubs: impl IntoIterator<Item = [u8; 32]>,
 ) -> u32 {
     let mut bits = DEFAULT_LOCK_POW_BASE_BITS;
-    for url in write_urls {
-        let norm = normalize_sync_url(url);
-        if let Some(probe) = lifecycle.l2_probe_cache.get(&norm) {
+    for lp in lock_pubs {
+        let key = hex::encode(lp);
+        if let Some(probe) = lifecycle.l2_probe_cache.get(&key) {
             bits = bits.max(probe.pow_base_bits);
         }
     }

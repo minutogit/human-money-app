@@ -122,7 +122,7 @@ pub async fn dispatch_l2_send_intents(
     let mut l2_dispatch = Vec::with_capacity(intents.len());
 
     for intent in intents {
-        let (known_heads, nonce, reqs_res) = state.with_session_required(
+        let (known_heads, nonce, reqs_res, probe_cache) = state.with_session_required(
             session,
             "Wallet session changed during L2 dispatch",
             |service| {
@@ -132,6 +132,10 @@ pub async fn dispatch_l2_send_intents(
                     &intent.anchor_id,
                     password,
                 )?;
+                let probe_cache = state
+                    .get_or_load_internal_lifecycle(service, password)
+                    .map(|lc| lc.l2_probe_cache)
+                    .unwrap_or_default();
                 let reqs_res = service
                     .build_intent_committee_requests(
                         &intent.local_instance_id,
@@ -140,7 +144,7 @@ pub async fn dispatch_l2_send_intents(
                         true,
                     )
                     .map_err(FrontendError::from);
-                Ok((known_heads, nonce, reqs_res))
+                Ok((known_heads, nonce, reqs_res, probe_cache))
             },
         )?;
         let _ = known_heads;
@@ -154,8 +158,13 @@ pub async fn dispatch_l2_send_intents(
             continue;
         };
 
-        let dispatch =
-            dispatch_lock_committee_batches(&client, &requests, Duration::from_secs(4)).await;
+        let dispatch = dispatch_lock_committee_batches(
+            &client,
+            &requests,
+            Duration::from_secs(4),
+            &probe_cache,
+        )
+        .await;
 
         let valid_slots: HashSet<[u8; 32]> = intent.entries.iter().map(|e| e.slot).collect();
         let matching_receipts: Vec<_> = dispatch
@@ -308,7 +317,9 @@ mod tests {
             )
             .unwrap();
 
-        let user_id = service.with_wallet(|w| w.get_user_id().to_string()).unwrap();
+        let user_id = service
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
         let std_toml = test_utils::generate_signed_standard_toml(
             "voucher_standards/freetaler_v1/standard.toml",
         );

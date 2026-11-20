@@ -24,48 +24,6 @@ where
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct StoredAnchorServerMeta {
-    pub write_url: String,
-    pub read_url: String,
-    pub drop_pub: String,
-    pub admin_pub: String,
-    pub lock_pub: String,
-    pub nominated_by: String,
-    #[serde(default)]
-    pub operator_domain: Option<String>,
-    #[serde(default)]
-    pub asn: Option<String>,
-    pub info_fetched_at_secs: u64,
-    pub max_retention_quarter: u16,
-    pub pow_base_bits: u32,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct StoredAnchorTemplateMeta {
-    pub anchor_id: String,
-    pub label: String,
-    pub threshold: u8,
-    pub retain_until_quarter: u16,
-    pub created_at_secs: u64,
-    pub servers: Vec<StoredAnchorServerMeta>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct NominatedLockServerMeta {
-    pub write_url: String,
-    pub read_url: String,
-    pub drop_pub: String,
-    pub admin_pub: String,
-    pub lock_pub: String,
-    #[serde(default)]
-    pub asn: Option<String>,
-    pub probed_at_secs: u64,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
 pub struct StoredPublicSync {
     pub write_url: String,
     pub read_url: String,
@@ -191,7 +149,7 @@ pub struct SecurityPolicy {
     #[serde(default)]
     pub backup_protection_mode: Option<String>,
     #[serde(default)]
-    pub own_nominated_lock_server: Option<NominatedLockServerMeta>,
+    pub lock_trust_by_admin_pub: BTreeMap<String, bool>,
     #[serde(default)]
     pub market_selected_syncs: Vec<crate::models::FrontendSyncDescriptor>,
     #[serde(default)]
@@ -208,11 +166,25 @@ impl Default for SecurityPolicy {
             sync_backup_enabled: true,
             backup_sync_folder: None,
             backup_protection_mode: None,
-            own_nominated_lock_server: None,
+            lock_trust_by_admin_pub: BTreeMap::new(),
             market_selected_syncs: Vec::new(),
             public_syncs: Vec::new(),
         }
     }
+}
+
+/// Returns whether a sync server identified by `admin_pub_hex` is trusted for Sync-Locks
+/// (trusted by default unless explicitly opted out via `false`).
+pub fn is_lock_admin_trusted(policy: &SecurityPolicy, admin_pub_hex: &str) -> bool {
+    let key = admin_pub_hex.trim().to_ascii_lowercase();
+    if key.is_empty() {
+        return false;
+    }
+    policy
+        .lock_trust_by_admin_pub
+        .get(&key)
+        .copied()
+        .unwrap_or(true)
 }
 
 /// Warning surfaced in the UI when backup sync detects a stale local copy, fork,
@@ -247,8 +219,6 @@ pub struct InternalLifecycleState {
     pub last_sync_backup_at: Option<String>,
     #[serde(default)]
     pub l2_probe_cache: BTreeMap<String, crate::sync_client::FrontendLockServerProbeResult>,
-    #[serde(default)]
-    pub l2_anchor_templates_meta: Vec<StoredAnchorTemplateMeta>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wallet_sync_alert: Option<WalletSyncAlert>,
 }

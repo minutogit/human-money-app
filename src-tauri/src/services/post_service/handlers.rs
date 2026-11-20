@@ -93,9 +93,7 @@ pub(crate) async fn dispatch_post_payload(
         }
     };
     match payload_type {
-        PayloadType::TransactionBundle => {
-            handle_transaction_bundle(ctx, post_state, stats).await
-        }
+        PayloadType::TransactionBundle => handle_transaction_bundle(ctx, post_state, stats).await,
         PayloadType::VoucherForSigning => {
             handle_voucher_for_signing(ctx, post_state, stats);
             PostDispatchOutcome::Handled
@@ -297,37 +295,37 @@ async fn handle_transaction_bundle(
         CoreError(human_money_core::Error),
     }
 
-    let commit_res = ctx.state.with_session(ctx.session, |service| {
-        match commit_post_transaction_bundle(
-            service,
-            ctx.state,
-            ctx.app,
-            &ctx.envelope.container_bytes,
-            &all_standards,
-            l2_evidence_owned.as_ref(),
-            false,
-            ctx.password,
-        )? {
-            PostBundleCommitResult::Committed(result) => {
-                let bundle_id = result.header.bundle_id.clone();
-                crate::services::transfer_service::apply_receive_companion_side_effects(
-                    service,
-                    ctx.state,
-                    &result,
-                    ctx.password,
-                );
-                Ok(HandleCommitOutcome::Committed(bundle_id))
-            }
-            PostBundleCommitResult::CoreError(e) => Ok(HandleCommitOutcome::CoreError(e)),
-        }
-    });
+    let commit_res =
+        ctx.state
+            .with_session(ctx.session, |service| match commit_post_transaction_bundle(
+                service,
+                ctx.state,
+                ctx.app,
+                &ctx.envelope.container_bytes,
+                &all_standards,
+                l2_evidence_owned.as_ref(),
+                false,
+                ctx.password,
+            )? {
+                PostBundleCommitResult::Committed(result) => {
+                    let bundle_id = result.header.bundle_id.clone();
+                    crate::services::transfer_service::apply_receive_companion_side_effects(
+                        service,
+                        ctx.state,
+                        &result,
+                        ctx.password,
+                    );
+                    Ok(HandleCommitOutcome::Committed(bundle_id))
+                }
+                PostBundleCommitResult::CoreError(e) => Ok(HandleCommitOutcome::CoreError(e)),
+            });
 
     let outcome = match commit_res {
         Ok(Some(res)) => res,
         Ok(None) => {
-            stats.errors.push(
-                "Receive payment bundle deferred: active wallet session changed".to_string(),
-            );
+            stats
+                .errors
+                .push("Receive payment bundle deferred: active wallet session changed".to_string());
             return PostDispatchOutcome::RetryLater;
         }
         Err(err) => {
@@ -519,9 +517,9 @@ fn handle_detached_signature(
             return false;
         }
         Ok(None) => {
-            stats.errors.push(
-                "Detached signature attachment deferred: wallet session changed".to_string(),
-            );
+            stats
+                .errors
+                .push("Detached signature attachment deferred: wallet session changed".to_string());
             return false;
         }
         Err(e) => {
@@ -922,8 +920,13 @@ fn handle_market_inquiry_message(
     }
 
     if let Some(inq_id) = notice_inquiry_id {
-        let cp_name =
-            resolve_counterparty_info_for_session(ctx.state, ctx.session, ctx.sender_did, ctx.password).0;
+        let cp_name = resolve_counterparty_info_for_session(
+            ctx.state,
+            ctx.session,
+            ctx.sender_did,
+            ctx.password,
+        )
+        .0;
         stats.last_inquiry_notice_target = Some((inq_id, cp_name));
     }
     queue_ack_receipt(ctx, post_state, None);
@@ -971,7 +974,8 @@ fn handle_guardian_assign(
                     .load_contacts(service, ctx.password)
                     .map(|list| {
                         list.iter().any(|c| {
-                            are_dids_equal(&c.did, ctx.sender_did) && c.trust_level.unwrap_or(0) >= 1
+                            are_dids_equal(&c.did, ctx.sender_did)
+                                && c.trust_level.unwrap_or(0) >= 1
                         })
                     })
                     .unwrap_or(false))
@@ -996,35 +1000,36 @@ fn handle_guardian_assign(
         return true;
     }
 
-    let save_res: Result<(), (String, bool)> = match ctx.state.with_session(ctx.session, |service| {
-        Ok(
-            match load_guardian_vault_with_cache(ctx.state, service, ctx.password) {
-                Ok(mut vault) => match vault.upsert_ward(entry.clone()) {
-                    Ok(()) => {
-                        save_guardian_vault_with_cache(ctx.state, service, &vault, ctx.password)
-                            .map_err(|e| {
-                                (
-                                    format!("Failed to save guardian vault: {}", e.message),
-                                    false,
-                                )
-                            })
-                    }
-                    Err(e) => Err((format!("Failed to upsert guardian ward: {}", e), true)),
+    let save_res: Result<(), (String, bool)> =
+        match ctx.state.with_session(ctx.session, |service| {
+            Ok(
+                match load_guardian_vault_with_cache(ctx.state, service, ctx.password) {
+                    Ok(mut vault) => match vault.upsert_ward(entry.clone()) {
+                        Ok(()) => {
+                            save_guardian_vault_with_cache(ctx.state, service, &vault, ctx.password)
+                                .map_err(|e| {
+                                    (
+                                        format!("Failed to save guardian vault: {}", e.message),
+                                        false,
+                                    )
+                                })
+                        }
+                        Err(e) => Err((format!("Failed to upsert guardian ward: {}", e), true)),
+                    },
+                    Err(e) => Err((
+                        format!("Failed to load guardian vault: {}", e.message),
+                        false,
+                    )),
                 },
-                Err(e) => Err((
-                    format!("Failed to load guardian vault: {}", e.message),
-                    false,
-                )),
-            },
-        )
-    }) {
-        Ok(Some(res)) => res,
-        Ok(None) => Err((
-            "Guardian assign deferred: active wallet session changed".to_string(),
-            false,
-        )),
-        Err(e) => Err((format!("Guardian assign failed: {}", e.message), false)),
-    };
+            )
+        }) {
+            Ok(Some(res)) => res,
+            Ok(None) => Err((
+                "Guardian assign deferred: active wallet session changed".to_string(),
+                false,
+            )),
+            Err(e) => Err((format!("Guardian assign failed: {}", e.message), false)),
+        };
 
     match save_res {
         Ok(()) => {
@@ -1070,16 +1075,16 @@ fn handle_guardian_ack(
         }
     };
     match ctx.state.with_session(ctx.session, |service| {
-        let owner_opt =
-            match load_recovery_owner_state_with_cache(ctx.state, service, ctx.password) {
-                Ok(opt) => opt,
-                Err(e) => {
-                    return Ok(Err(format!(
-                        "Failed to load recovery owner state: {}",
-                        e.message
-                    )));
-                }
-            };
+        let owner_opt = match load_recovery_owner_state_with_cache(ctx.state, service, ctx.password)
+        {
+            Ok(opt) => opt,
+            Err(e) => {
+                return Ok(Err(format!(
+                    "Failed to load recovery owner state: {}",
+                    e.message
+                )));
+            }
+        };
         if let Some(mut owner_state) = owner_opt {
             let same_account = matches!(
                 (
@@ -1153,39 +1158,48 @@ fn handle_guardian_locator(
         return true;
     }
 
-    let update_res: Result<(), (String, bool)> = match ctx.state.with_session(ctx.session, |service| {
-        Ok(
-            match load_guardian_vault_with_cache(ctx.state, service, ctx.password) {
-                Ok(mut vault) => match vault.update_locator(&update) {
-                    Ok(updated) => {
-                        if updated {
-                            save_guardian_vault_with_cache(ctx.state, service, &vault, ctx.password)
+    let update_res: Result<(), (String, bool)> =
+        match ctx.state.with_session(ctx.session, |service| {
+            Ok(
+                match load_guardian_vault_with_cache(ctx.state, service, ctx.password) {
+                    Ok(mut vault) => match vault.update_locator(&update) {
+                        Ok(updated) => {
+                            if updated {
+                                save_guardian_vault_with_cache(
+                                    ctx.state,
+                                    service,
+                                    &vault,
+                                    ctx.password,
+                                )
                                 .map_err(|e| {
                                     (
                                         format!("Failed to save guardian vault: {}", e.message),
                                         false,
                                     )
                                 })
-                        } else {
-                            Ok(())
+                            } else {
+                                Ok(())
+                            }
                         }
-                    }
-                    Err(e) => Err((format!("Failed to update guardian locator: {}", e), true)),
+                        Err(e) => Err((format!("Failed to update guardian locator: {}", e), true)),
+                    },
+                    Err(e) => Err((
+                        format!("Failed to load guardian vault: {}", e.message),
+                        false,
+                    )),
                 },
-                Err(e) => Err((
-                    format!("Failed to load guardian vault: {}", e.message),
-                    false,
-                )),
-            },
-        )
-    }) {
-        Ok(Some(res)) => res,
-        Ok(None) => Err((
-            "Guardian locator update deferred: wallet session changed".to_string(),
-            false,
-        )),
-        Err(e) => Err((format!("Guardian locator update failed: {}", e.message), false)),
-    };
+            )
+        }) {
+            Ok(Some(res)) => res,
+            Ok(None) => Err((
+                "Guardian locator update deferred: wallet session changed".to_string(),
+                false,
+            )),
+            Err(e) => Err((
+                format!("Guardian locator update failed: {}", e.message),
+                false,
+            )),
+        };
 
     match update_res {
         Ok(()) => {
@@ -1222,42 +1236,48 @@ fn handle_guardian_revoke(
         return true;
     }
 
-    let revoke_res: Result<(), (String, bool)> = match ctx.state.with_session(ctx.session, |service| {
-        Ok(
-            match load_guardian_vault_with_cache(ctx.state, service, ctx.password) {
-                Ok(mut vault) => match vault.revoke_ward(&revoke) {
-                    Ok(revoked) => {
-                        if revoked {
-                            save_guardian_vault_with_cache(ctx.state, service, &vault, ctx.password)
+    let revoke_res: Result<(), (String, bool)> =
+        match ctx.state.with_session(ctx.session, |service| {
+            Ok(
+                match load_guardian_vault_with_cache(ctx.state, service, ctx.password) {
+                    Ok(mut vault) => match vault.revoke_ward(&revoke) {
+                        Ok(revoked) => {
+                            if revoked {
+                                save_guardian_vault_with_cache(
+                                    ctx.state,
+                                    service,
+                                    &vault,
+                                    ctx.password,
+                                )
                                 .map_err(|e| {
                                     (
                                         format!("Failed to save guardian vault: {}", e.message),
                                         false,
                                     )
                                 })
-                        } else {
-                            Ok(())
+                            } else {
+                                Ok(())
+                            }
                         }
-                    }
+                        Err(e) => Err((
+                            format!("Failed to revoke ward from guardian vault: {}", e),
+                            true,
+                        )),
+                    },
                     Err(e) => Err((
-                        format!("Failed to revoke ward from guardian vault: {}", e),
-                        true,
+                        format!("Failed to load guardian vault: {}", e.message),
+                        false,
                     )),
                 },
-                Err(e) => Err((
-                    format!("Failed to load guardian vault: {}", e.message),
-                    false,
-                )),
-            },
-        )
-    }) {
-        Ok(Some(res)) => res,
-        Ok(None) => Err((
-            "Guardian revoke deferred: wallet session changed".to_string(),
-            false,
-        )),
-        Err(e) => Err((format!("Guardian revoke failed: {}", e.message), false)),
-    };
+            )
+        }) {
+            Ok(Some(res)) => res,
+            Ok(None) => Err((
+                "Guardian revoke deferred: wallet session changed".to_string(),
+                false,
+            )),
+            Err(e) => Err((format!("Guardian revoke failed: {}", e.message), false)),
+        };
 
     match revoke_res {
         Ok(()) => {

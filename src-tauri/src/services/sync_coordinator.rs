@@ -11,9 +11,7 @@ use std::time::{Duration, Instant};
 use tauri::{Emitter, Manager};
 
 use crate::models::MarketSyncStatus;
-use crate::services::{
-    backup_service, l2_anchor_service, post_service, sync_engine,
-};
+use crate::services::{backup_service, l2_anchor_service, post_service, sync_engine};
 use crate::state::{AppState, SyncWakeRequest};
 
 pub const SEAL_CHECK_INTERVAL: Duration = Duration::from_secs(30);
@@ -49,6 +47,7 @@ pub(crate) struct CoordinatorSchedule {
     pub next_market_at: Option<Instant>,
     pub next_market_force_upload: bool,
     pub market_deferred_for_wifi: bool,
+    pub lock_refresh_done: bool,
 }
 
 impl CoordinatorSchedule {
@@ -65,6 +64,7 @@ impl CoordinatorSchedule {
         self.next_market_at = Some(now + MARKET_INITIAL_DELAY);
         self.next_market_force_upload = false;
         self.market_deferred_for_wifi = false;
+        self.lock_refresh_done = false;
     }
 
     pub fn clear(&mut self) {
@@ -80,6 +80,7 @@ impl CoordinatorSchedule {
         self.next_market_at = None;
         self.next_market_force_upload = false;
         self.market_deferred_for_wifi = false;
+        self.lock_refresh_done = false;
     }
 
     pub fn promote_wifi_deferred(&mut self, is_online: bool, is_wifi: bool, now: Instant) {
@@ -253,7 +254,8 @@ async fn run_coordinator_loop(app: tauri::AppHandle) {
         }
 
         // 2. Local folder Auto-Backup (runs offline as well, executes sync I/O on blocking pool)
-        if schedule.next_local_backup_at.is_some_and(|t| now >= t) && state.is_generation_current(generation)
+        if schedule.next_local_backup_at.is_some_and(|t| now >= t)
+            && state.is_generation_current(generation)
         {
             schedule.next_local_backup_at = Some(now + LOCAL_BACKUP_PERIODIC_INTERVAL);
             let app_clone = app.clone();
@@ -276,16 +278,18 @@ async fn run_coordinator_loop(app: tauri::AppHandle) {
         // 3. Off-site Sync Backup (requires online + not cooling down)
         if ctrl.is_online
             && !net_cooldown
-            && schedule.next_sync_backup_at.is_some_and(|t| Instant::now() >= t)
+            && schedule
+                .next_sync_backup_at
+                .is_some_and(|t| Instant::now() >= t)
             && state.is_generation_current(generation)
         {
             let forced = std::mem::take(&mut schedule.next_sync_backup_forced);
             let now_run = Instant::now();
             schedule.next_sync_backup_at = Some(now_run + SYNC_BACKUP_DAILY_INTERVAL);
             let throttled = !forced
-                && schedule
-                    .last_sync_backup_success_at
-                    .is_some_and(|last| now_run.saturating_duration_since(last) < SYNC_BACKUP_DAILY_INTERVAL);
+                && schedule.last_sync_backup_success_at.is_some_and(|last| {
+                    now_run.saturating_duration_since(last) < SYNC_BACKUP_DAILY_INTERVAL
+                });
             if !throttled {
                 match backup_service::sync_backup_impl(None, Some(ctrl.is_wifi), &state, &app).await
                 {
@@ -422,7 +426,17 @@ async fn run_coordinator_loop(app: tauri::AppHandle) {
             }
         }
 
-        let next_due = schedule.earliest_due(ctrl.is_online, state.sync_control.lock().unwrap().cooldown_until);
+        // 6. One-shot per-session Sync-Lock probe refresh & silent offline anchor pre-warm
+        if ctrl.is_online && !schedule.lock_refresh_done && state.is_generation_current(generation)
+        {
+            schedule.lock_refresh_done = true;
+            l2_anchor_service::refresh_lock_servers_for_coordinator(&state).await;
+        }
+
+        let next_due = schedule.earliest_due(
+            ctrl.is_online,
+            state.sync_control.lock().unwrap().cooldown_until,
+        );
         wait_for_next_event(next_due, &mut gen_rx, &wake).await;
     }
 }
@@ -510,10 +524,7 @@ mod tests {
         assert!(sched.sync_backup_deferred_for_wifi);
         assert!(sched.post_deferred_for_wifi);
         assert!(sched.market_deferred_for_wifi);
-        assert_eq!(
-            sched.next_market_at,
-            Some(t0 + MARKET_PERIODIC_INTERVAL)
-        );
+        assert_eq!(sched.next_market_at, Some(t0 + MARKET_PERIODIC_INTERVAL));
 
         // Switching to Wi-Fi while online promotes all deferred jobs to run immediately.
         let t2 = t0 + Duration::from_secs(15);

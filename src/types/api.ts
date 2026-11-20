@@ -41,54 +41,34 @@ export interface LockServerProbeResult {
     error?: string | null;
 }
 
-export interface StoredAnchorServerMeta {
+export interface LockServerItemDto {
     writeUrl: string;
     readUrl: string;
-    dropPub: string;
     adminPub: string;
     lockPub: string;
-    nominatedBy: string;
-    operatorDomain?: string | null;
-    asn?: string | null;
-    infoFetchedAtSecs: number;
+    source: 'own' | 'circle' | 'public' | 'cache' | string;
+    status: 'ok' | 'unreachable' | 'no_lock' | 'unverified' | string;
+    trusted: boolean;
+    allowPowTickets: boolean;
     maxRetentionQuarter: number;
-    powBaseBits: number;
-}
-
-export interface StoredAnchorTemplateMeta {
-    anchorId: string;
-    label: string;
-    threshold: number;
-    retainUntilQuarter: number;
-    createdAtSecs: number;
-    servers: StoredAnchorServerMeta[];
-}
-
-export interface NominatedLockServerMeta {
-    writeUrl: string;
-    readUrl: string;
-    dropPub: string;
-    adminPub: string;
-    lockPub: string;
-    asn?: string | null;
     probedAtSecs: number;
+    error?: string | null;
 }
 
-export interface AnchorServerInputDto {
-    writeUrl: string;
-    nominatedBy: 'creator' | 'guarantor';
-    guarantorIndex?: number | null;
-    asn?: string | null;
-}
-
-export interface L2LockStatusDto {
-    status: 'Ok' | 'Syncing' | 'NoServers' | 'Degraded';
+export interface LockProtectionOverviewDto {
+    status: 'ready' | 'degraded' | 'none' | 'syncing' | string;
+    readyTrustedCount: number;
+    servers: LockServerItemDto[];
+    hasOfflineCachedAnchor: boolean;
     unresolvedIntentsCount: number;
     pendingRestoreReconciliation: boolean;
-    templatesCount: number;
-    hasOwnNominatedServer: boolean;
-    staleServersCount: number;
-    maxProbeAgeSecs?: number | null;
+}
+
+export interface GuarantorServerTrustDto {
+    writeUrl: string;
+    adminPub: string;
+    lockPub: string;
+    trusted: boolean;
 }
 
 export interface GuarantorAnchorCheckDto {
@@ -96,10 +76,11 @@ export interface GuarantorAnchorCheckDto {
     passed: boolean;
     hasLayer2Anchor: boolean;
     retentionOk?: boolean | null;
-    ownServerPresent?: boolean | null;
     sybilIndependentCount: number;
     threshold: number;
     serverCount: number;
+    untrustedServersCount: number;
+    servers: GuarantorServerTrustDto[];
     issues: string[];
 }
 
@@ -143,39 +124,6 @@ export interface ClaimBundleDto {
     postDepositError?: string | null;
 }
 
-export type DeadQuorumSwapStatus =
-    | 'awaiting_guarantor_signatures'
-    | 'pending_l2_lock'
-    | 'completed';
-
-export interface ApprovedSwapClaimDto {
-    claimantDid: string;
-    voucherId: string;
-    tipTId: string;
-    approvedAmount: string;
-    replacementVoucherId?: string | null;
-    replacementLocalInstanceId?: string | null;
-    replacementBundleId?: string | null;
-    replacementBundleBytes?: number[] | null;
-    replacementIntentLocalId?: string | null;
-    status: DeadQuorumSwapStatus;
-    postDeposit?: FrontendPostDepositResult | null;
-    postDepositError?: string | null;
-}
-
-export interface RejectedSwapClaimDto {
-    claimantDid: string;
-    voucherId: string;
-    tipTId: string;
-    reason: string;
-}
-
-export interface DeadQuorumAdjudicationDto {
-    approved: ApprovedSwapClaimDto[];
-    rejected: RejectedSwapClaimDto[];
-    doubleSpendProofsCount: number;
-}
-
 export interface UiPreferences {
     uiMode: UiMode;
     lastUsedDirectory?: string | null;
@@ -199,7 +147,7 @@ export interface SecurityPolicy {
     syncBackupEnabled: boolean;
     backupSyncFolder?: string | null;
     backupProtectionMode?: string | null;
-    ownNominatedLockServer?: NominatedLockServerMeta | null;
+    lockTrustByAdminPub?: Record<string, boolean>;
     marketSelectedSyncs: FrontendSyncDescriptor[];
     publicSyncs: StoredPublicSync[];
 }
@@ -227,7 +175,6 @@ export interface InternalLifecycleState {
     lastBackupAt?: string | null;
     lastSyncBackupAt?: string | null;
     l2ProbeCache: Record<string, LockServerProbeResult>;
-    l2AnchorTemplatesMeta: StoredAnchorTemplateMeta[];
     walletSyncAlert?: WalletSyncAlert | null;
 }
 

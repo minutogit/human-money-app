@@ -31,8 +31,9 @@ pub(crate) fn seal_active_ad_media_blobs(
             continue;
         };
         let storage_key = own_media_storage_key(token);
-        if let Some(webp_bytes) = crate::state::load_encrypted_bytes_opt(service, &storage_key, password)
-            .map_err(crate::models::FrontendError::from)?
+        if let Some(webp_bytes) =
+            crate::state::load_encrypted_bytes_opt(service, &storage_key, password)
+                .map_err(crate::models::FrontendError::from)?
         {
             if let Ok((_tok, blob_id, ciphertext)) =
                 humoco_market::seal_media_blob(&own_card.payload.did, &webp_bytes)

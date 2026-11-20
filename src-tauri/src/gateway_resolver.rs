@@ -168,16 +168,19 @@ pub async fn dispatch_lock_committee_batches(
     client: &reqwest::Client,
     requests: &[(ServerEntry, SyncLockBatchRequest)],
     per_server_timeout: Duration,
+    probe_cache: &std::collections::BTreeMap<String, sync_client::FrontendLockServerProbeResult>,
 ) -> CommitteeDispatchResult {
     let mut join_set = tokio::task::JoinSet::new();
     for (server, req) in requests {
         let c = client.clone();
         let srv = server.clone();
+        let (target_write_url, _) =
+            crate::services::common::resolve_server_locator(&srv, probe_cache);
         let payload = req.clone();
         join_set.spawn(async move {
             let outcome = tokio::time::timeout(
                 per_server_timeout,
-                sync_client::post_lock_batch(&c, &srv.write_url, &payload),
+                sync_client::post_lock_batch(&c, &target_write_url, &payload),
             )
             .await;
             (srv, payload, outcome)
@@ -441,10 +444,12 @@ mod tests {
         let req2 = req1.clone();
 
         let client = sync_client::create_sync_http_client();
+        let empty_cache = std::collections::BTreeMap::new();
         let res = dispatch_lock_committee_batches(
             &client,
             &[(srv1, req1), (srv2, req2)],
             Duration::from_secs(2),
+            &empty_cache,
         )
         .await;
 
@@ -554,9 +559,14 @@ mod tests {
             };
 
             let client = sync_client::create_sync_http_client();
-            let res =
-                dispatch_lock_committee_batches(&client, &[(srv, req)], Duration::from_secs(2))
-                    .await;
+            let empty_cache = std::collections::BTreeMap::new();
+            let res = dispatch_lock_committee_batches(
+                &client,
+                &[(srv, req)],
+                Duration::from_secs(2),
+                &empty_cache,
+            )
+            .await;
             assert!(
                 res.competing_entries.is_empty(),
                 "Forged/mismatched ConflictSeen receipt must NOT yield competing_entry"

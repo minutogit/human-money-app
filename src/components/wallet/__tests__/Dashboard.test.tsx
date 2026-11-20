@@ -118,7 +118,6 @@ const mockConfig: AppConfigDto = {
         syncBackupEnabled: true,
         backupSyncFolder: null,
         backupProtectionMode: null,
-        ownNominatedLockServer: null,
         marketSelectedSyncs: [],
         publicSyncs: [],
     },
@@ -128,7 +127,6 @@ const mockConfig: AppConfigDto = {
         lastBackupAt: null,
         lastSyncBackupAt: null,
         l2ProbeCache: {},
-        l2AnchorTemplatesMeta: [],
     },
 };
 

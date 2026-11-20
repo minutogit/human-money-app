@@ -2758,7 +2758,9 @@ async fn test_h5_outbox_holds_back_value_transfers_under_fork_lock_and_known_off
     assert!(!outcome1.uploaded_tags.contains(&value_tag));
 
     // Remove flushed Control entry, clear restore lock, then mark Bob as KnownOffender.
-    post_state.outbox_entries.retain(|e| e.msg_id != "msg-ctrl-1");
+    post_state
+        .outbox_entries
+        .retain(|e| e.msg_id != "msg-ctrl-1");
     save_post_state(&alice_state, &post_state, Some(password)).unwrap();
     {
         let mut s = alice_state.service.lock().unwrap();
@@ -2874,12 +2876,7 @@ async fn h8_post_tolerance_zone_parks_confirms_and_dismisses() {
 
     // Put Bob into recovery epoch 1 started 30 minutes IN THE FUTURE relative to bundle timestamp
     // so Alice's transfer hits soft tolerance zone (15m..24h).
-    let bob_folder = bob_state
-        .service
-        .lock()
-        .unwrap()
-        .list_profiles()
-        .unwrap()[0]
+    let bob_folder = bob_state.service.lock().unwrap().list_profiles().unwrap()[0]
         .folder_name
         .clone();
     {
@@ -2899,18 +2896,19 @@ async fn h8_post_tolerance_zone_parks_confirms_and_dismisses() {
     let (server_b_url, bob_drop) =
         setup_test_sync(&server_b, DROP_PUB_B, password, &bob_state).await;
 
-    let make_desc = |url: &str, srv: &MockSyncServer, pub_hex: &str, access_pk: &str| FrontendSyncDescriptor {
-        write_url: url.to_string(),
-        read_url: format!("{}/{}", srv.base_url, srv.data_dir),
-        slot_id: Some(humoco_market::format_slot_id(access_pk, Some("pc")).unwrap()),
-        drop_pub: pub_hex.to_string(),
-        last_seen_at: None,
-        last_error_at: None,
-        fail_count: 0,
-        status: "active".to_string(),
-        last_probed_at: None,
-        ..Default::default()
-    };
+    let make_desc =
+        |url: &str, srv: &MockSyncServer, pub_hex: &str, access_pk: &str| FrontendSyncDescriptor {
+            write_url: url.to_string(),
+            read_url: format!("{}/{}", srv.base_url, srv.data_dir),
+            slot_id: Some(humoco_market::format_slot_id(access_pk, Some("pc")).unwrap()),
+            drop_pub: pub_hex.to_string(),
+            last_seen_at: None,
+            last_error_at: None,
+            fail_count: 0,
+            status: "active".to_string(),
+            last_probed_at: None,
+            ..Default::default()
+        };
 
     {
         let mut s = alice_state.service.lock().unwrap();
@@ -3003,7 +3001,10 @@ async fn h8_post_tolerance_zone_parks_confirms_and_dismisses() {
         let vs = s
             .with_wallet_and_identity(|w, id| w.list_vouchers(Some(id), None, None, None))
             .unwrap();
-        (vs[0].local_instance_id.clone(), vs[1].local_instance_id.clone())
+        (
+            vs[0].local_instance_id.clone(),
+            vs[1].local_instance_id.clone(),
+        )
     };
 
     // Send 2 unanchored bundles -> both deposit over PoST and hit Bob's soft tolerance zone

@@ -71,6 +71,7 @@ export function SignRequestView({ voucherData, requestMsgId, senderDid, anchorMa
     const [guarantorCheck, setGuarantorCheck] = useState<GuarantorAnchorCheckDto | null>(null);
     const [isGuarantorCheckLoading, setIsGuarantorCheckLoading] = useState(false);
     const [guarantorCheckError, setGuarantorCheckError] = useState<string | null>(null);
+    const [isTrustingServers, setIsTrustingServers] = useState(false);
     const [discoveredManifestJson, setDiscoveredManifestJson] = useState<string | null>(null);
 
     const effectiveManifestJson =
@@ -682,10 +683,80 @@ export function SignRequestView({ voucherData, requestMsgId, senderDid, anchorMa
                                         {guarantorCheck.retentionOk !== null && guarantorCheck.retentionOk !== undefined && (
                                             <span>Retention: {guarantorCheck.retentionOk ? '✓' : '✕'}</span>
                                         )}
-                                        {guarantorCheck.ownServerPresent !== null && guarantorCheck.ownServerPresent !== undefined && (
-                                            <span>Own Server: {guarantorCheck.ownServerPresent ? '✓' : '✕'}</span>
-                                        )}
+                                        <span>
+                                            {t('voucher.signRequest.serversCount', '{{count}} Services', {
+                                                count: guarantorCheck.serverCount,
+                                            })}
+                                        </span>
                                     </div>
+                                    {guarantorCheck.passed && guarantorCheck.untrustedServersCount > 0 && (
+                                        <div className="mt-2 p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 space-y-2">
+                                            <p className="text-[11px] font-semibold">
+                                                {t(
+                                                    'voucher.signRequest.untrustedServersHint',
+                                                    '{{count}} protection services in this voucher are not yet marked as trusted for Sync-Locks.',
+                                                    { count: guarantorCheck.untrustedServersCount }
+                                                )}
+                                            </p>
+                                            <ul className="text-[10px] font-mono space-y-0.5 text-amber-800">
+                                                {guarantorCheck.servers
+                                                    .filter((s) => !s.trusted)
+                                                    .map((s) => (
+                                                        <li key={s.lockPub} className="truncate">
+                                                            • {s.writeUrl}
+                                                        </li>
+                                                    ))}
+                                            </ul>
+                                            <Button
+                                                type="button"
+                                                size="xs"
+                                                variant="primary"
+                                                disabled={isTrustingServers || isSigning}
+                                                onClick={async () => {
+                                                    const untrusted = guarantorCheck.servers.filter((s) => !s.trusted);
+                                                    if (untrusted.length === 0) return;
+                                                    setIsTrustingServers(true);
+                                                    try {
+                                                        await protectAction(
+                                                            async (password) => {
+                                                                for (const s of untrusted) {
+                                                                    await settingsService.setLockServerTrust(
+                                                                        s.adminPub,
+                                                                        true,
+                                                                        password ?? null
+                                                                    );
+                                                                }
+                                                            },
+                                                            { requireFullAccess: true }
+                                                        );
+                                                        setGuarantorCheck((prev) =>
+                                                            prev
+                                                                ? {
+                                                                      ...prev,
+                                                                      untrustedServersCount: 0,
+                                                                      servers: prev.servers.map((s) => ({
+                                                                          ...s,
+                                                                          trusted: true,
+                                                                      })),
+                                                                  }
+                                                                : prev
+                                                        );
+                                                        await handleSign();
+                                                    } catch (e) {
+                                                        setFeedbackMsg(stringifyError(e));
+                                                        setFeedbackType('error');
+                                                    } finally {
+                                                        setIsTrustingServers(false);
+                                                    }
+                                                }}
+                                            >
+                                                {t(
+                                                    'voucher.signRequest.trustAndSignBtn',
+                                                    'Trust these services & sign'
+                                                )}
+                                            </Button>
+                                        </div>
+                                    )}
                                     {guarantorCheck.issues.length > 0 && (
                                         <ul className="list-disc list-inside text-[11px] font-semibold space-y-0.5">
                                             {guarantorCheck.issues.map((issue) => (

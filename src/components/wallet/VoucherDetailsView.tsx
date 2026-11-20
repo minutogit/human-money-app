@@ -28,7 +28,6 @@ import { CreatorSection } from '../voucher/CreatorSection';
 import { PolicySection } from '../voucher/PolicySection';
 import { TimelineSection } from '../voucher/TimelineSection';
 import { GuarantorClaimPanel } from './GuarantorClaimPanel';
-import { DeadQuorumSwapPanel } from './DeadQuorumSwapPanel';
 import {
     VoucherActionsPanel,
     VoucherHeaderActions,
@@ -343,13 +342,24 @@ export function VoucherDetailsView() {
                             </div>
                         </Card>
 
-                        <DeadQuorumSwapPanel
-                            localInstanceId={details.localInstanceId}
-                            isActiveVoucher={statusInfo.id === 'active'}
-                            protectAction={state.protectAction}
-                            findMatchingStandardToml={state.findMatchingStandardToml}
-                            onRefreshDetails={state.refreshDetails}
-                        />
+                        {Boolean(voucher.layer2Anchor) &&
+                            (state.l2Status?.status === 'offline' || state.l2Status?.status === 'no_servers') && (
+                                <AlertBanner
+                                    variant="info"
+                                    icon={<AlertCircle size={18} className="text-sky-600" />}
+                                    title={t(
+                                        'voucher.l2UnreachableTitle',
+                                        'Protection committee currently unreachable'
+                                    )}
+                                >
+                                    <p className="text-xs leading-relaxed">
+                                        {t(
+                                            'voucher.l2UnreachableDesc',
+                                            'The security services for this voucher cannot currently be reached. Transfers still work offline using cryptographic signature traps, though instant online double-spend prevention is paused until connectivity returns.'
+                                        )}
+                                    </p>
+                                </AlertBanner>
+                            )}
                     </div>
                 </div>
             </div>

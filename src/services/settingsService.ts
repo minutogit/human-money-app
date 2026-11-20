@@ -1,33 +1,20 @@
 import { invoke } from "@tauri-apps/api/core";
 import {
     AnchorDiscoveryDto,
-    AnchorServerInputDto,
     AppConfigDto,
     L2LifecycleStatusDto,
-    L2LockStatusDto,
-    LockServerProbeResult,
+    LockProtectionOverviewDto,
     MnemonicLanguage,
-    NominatedLockServerMeta,
     ReachPresetDto,
     ReachPresetId,
     SecurityPolicy,
     SecurityPolicyPatch,
-    StoredAnchorTemplateMeta,
     UiPreferences,
     UiPreferencesPatch,
     VoucherL2StatusDto,
 } from "../types";
 
-export type { VoucherL2StatusDto, L2LockStatusDto };
-
-export interface AssembleAnchorTemplateArgs {
-    label: string;
-    retainUntilQuarterStr: string;
-    servers: AnchorServerInputDto[];
-    guarantorMigPubsHex?: string[];
-    threshold?: number | null;
-    password?: string | null;
-}
+export type { VoucherL2StatusDto, LockProtectionOverviewDto };
 
 export const settingsService = {
     getConfig: async (): Promise<AppConfigDto> => {
@@ -64,30 +51,25 @@ export const settingsService = {
         return await invoke<string>("get_latest_logs");
     },
 
-    probeLockServer: async (writeUrl: string, expectedAdminPub?: string | null, password?: string | null) => {
-        return await invoke<LockServerProbeResult>("probe_lock_server_cmd", {
-            writeUrl,
-            expectedAdminPub: expectedAdminPub ?? null,
+    getLockProtectionOverview: async (): Promise<LockProtectionOverviewDto> => {
+        return await invoke<LockProtectionOverviewDto>("get_lock_protection_overview");
+    },
+
+    refreshLockServers: async (password?: string | null): Promise<LockProtectionOverviewDto> => {
+        return await invoke<LockProtectionOverviewDto>("refresh_lock_servers", {
             password: password ?? null,
         });
     },
 
-    setOwnNominatedLockServer: async (writeUrl: string | null, asn?: string | null, password?: string | null) => {
-        return await invoke<NominatedLockServerMeta | null>("set_own_nominated_lock_server", {
-            writeUrl,
-            asn: asn ?? null,
+    setLockServerTrust: async (
+        adminPub: string,
+        trusted: boolean,
+        password?: string | null,
+    ): Promise<LockProtectionOverviewDto> => {
+        return await invoke<LockProtectionOverviewDto>("set_lock_server_trust", {
+            adminPub,
+            trusted,
             password: password ?? null,
-        });
-    },
-
-    assembleAnchorTemplate: async (args: AssembleAnchorTemplateArgs) => {
-        return await invoke<StoredAnchorTemplateMeta>("assemble_anchor_template", {
-            label: args.label,
-            retainUntilQuarterStr: args.retainUntilQuarterStr,
-            servers: args.servers,
-            guarantorMigPubsHex: args.guarantorMigPubsHex ?? [],
-            threshold: args.threshold ?? null,
-            password: args.password ?? null,
         });
     },
 
@@ -95,19 +77,9 @@ export const settingsService = {
         return await invoke<void>("prewarm_l2_checkout");
     },
 
-    checkL2LockStatus: async () => {
-        return await invoke<L2LockStatusDto>("check_l2_lock_status");
-    },
-
     checkVoucherL2Status: async (localInstanceId: string, password?: string | null) => {
         return await invoke<VoucherL2StatusDto>("check_voucher_l2_status", {
             localInstanceId,
-            password: password ?? null,
-        });
-    },
-
-    getL2LifecycleStatus: async (password?: string | null) => {
-        return await invoke<L2LifecycleStatusDto>("get_l2_lifecycle_status", {
             password: password ?? null,
         });
     },
@@ -129,20 +101,6 @@ export const settingsService = {
             anchorIdHex: args.anchorIdHex,
             creatorDid: args.creatorDid ?? null,
             guarantorDids: args.guarantorDids ?? [],
-            password: args.password ?? null,
-        });
-    },
-
-    registerGuarantorAnchorRole: async (args: {
-        anchorIdHex: string;
-        guarantorIndex: number;
-        contextNonceHex?: string | null;
-        password?: string | null;
-    }) => {
-        return await invoke<string>("register_guarantor_anchor_role", {
-            anchorIdHex: args.anchorIdHex,
-            guarantorIndex: args.guarantorIndex,
-            contextNonceHex: args.contextNonceHex ?? null,
             password: args.password ?? null,
         });
     },

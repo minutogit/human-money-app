@@ -10,25 +10,29 @@ pub struct ReachPresetDto {
     pub media_auto_load_max_hops: u8,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct AnchorServerInputDto {
+pub struct FrontendLockServerItemDto {
     pub write_url: String,
-    pub nominated_by: String, // "creator" | "guarantor"
-    #[serde(default)]
-    pub guarantor_index: Option<u8>,
-    #[serde(default)]
-    pub asn: Option<String>,
+    pub read_url: String,
+    pub admin_pub: String,
+    pub lock_pub: String,
+    pub source: String, // "own" | "circle" | "public" | "cache"
+    pub status: String, // "ok" | "unreachable" | "no_lock" | "unverified"
+    pub trusted: bool,
+    pub allow_pow_tickets: bool,
+    pub max_retention_quarter: u16,
+    pub probed_at_secs: u64,
+    pub error: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct FrontendL2LockStatusDto {
-    pub status: String, // "Ok" | "Syncing" | "NoServers" | "Degraded"
+pub struct FrontendLockProtectionOverviewDto {
+    pub status: String, // "ready" | "degraded" | "none" | "syncing"
+    pub ready_trusted_count: usize,
+    pub servers: Vec<FrontendLockServerItemDto>,
+    pub has_offline_cached_anchor: bool,
     pub unresolved_intents_count: usize,
     pub pending_restore_reconciliation: bool,
-    pub templates_count: usize,
-    pub has_own_nominated_server: bool,
-    pub stale_servers_count: usize,
-    pub max_probe_age_secs: Option<u64>,
 }

@@ -298,6 +298,7 @@ pub fn get_voucher_summaries_impl(
                     summary.status = "archived".to_string();
                 }
                 if let Some(instance) = w.voucher_store.vouchers.get(&summary.local_instance_id) {
+                    summary.has_layer2_anchor = instance.voucher.layer2_anchor.is_some();
                     summary.description = instance
                         .voucher
                         .nominal_value

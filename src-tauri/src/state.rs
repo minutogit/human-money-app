@@ -210,13 +210,21 @@ pub(crate) fn merge_sync_state_3way(
     if working.last_readers_hash == baseline.last_readers_hash {
         working.last_readers_hash = latest.last_readers_hash.clone();
     }
-    merge_btree_map_3way(&baseline.etags_by_read_url, &mut working.etags_by_read_url, &latest.etags_by_read_url);
+    merge_btree_map_3way(
+        &baseline.etags_by_read_url,
+        &mut working.etags_by_read_url,
+        &latest.etags_by_read_url,
+    );
     merge_btree_map_3way(
         &baseline.last_modified_by_read_url,
         &mut working.last_modified_by_read_url,
         &latest.last_modified_by_read_url,
     );
-    merge_btree_map_3way(&baseline.slot_etags, &mut working.slot_etags, &latest.slot_etags);
+    merge_btree_map_3way(
+        &baseline.slot_etags,
+        &mut working.slot_etags,
+        &latest.slot_etags,
+    );
     merge_btree_map_3way(
         &baseline.channel_max_bytes_by_write_url,
         &mut working.channel_max_bytes_by_write_url,
@@ -843,13 +851,13 @@ fn endpoints_overlap(a_read: &str, a_write: &str, b_read: &str, b_write: &str) -
 
 impl AppState {
     pub fn new(service: AppService) -> Self {
-        let (initial_gen, initial_caches) = match service.with_wallet(|w| w.get_user_id().to_string())
-        {
-            Ok(owner_did) if service.is_wallet_unlocked() => {
-                (1u64, Some(ActiveProfileCaches::new(1, owner_did)))
-            }
-            _ => (0u64, None),
-        };
+        let (initial_gen, initial_caches) =
+            match service.with_wallet(|w| w.get_user_id().to_string()) {
+                Ok(owner_did) if service.is_wallet_unlocked() => {
+                    (1u64, Some(ActiveProfileCaches::new(1, owner_did)))
+                }
+                _ => (0u64, None),
+            };
         let (session_gen_tx, _) = tokio::sync::watch::channel(initial_gen);
         Self {
             service: Mutex::new(service),
@@ -1051,9 +1059,9 @@ impl AppState {
         }
         let key = (blob_id, read_url.trim_end_matches('/').to_string());
         let mut guard = self.profile_caches.lock().unwrap();
-        let needs_init = guard.as_ref().is_none_or(|c| {
-            c.generation != session.generation || c.owner_did != session.owner_did
-        });
+        let needs_init = guard
+            .as_ref()
+            .is_none_or(|c| c.generation != session.generation || c.owner_did != session.owner_did);
         if needs_init {
             *guard = Some(ActiveProfileCaches::new(
                 session.generation,
@@ -1299,16 +1307,14 @@ impl AppState {
                         },
                     ),
                 )),
-                RequiredAccess::DailyPay | RequiredAccess::Unlocked => {
-                    Err(crate::models::FrontendError::from(
-                        human_money_core::Error::App(
-                            human_money_core::error::AppError::SessionExpired {
-                                reason: "One-shot PIN grant must be consumed via secret guard."
-                                    .to_string(),
-                            },
-                        ),
-                    ))
-                }
+                RequiredAccess::DailyPay | RequiredAccess::Unlocked => Err(
+                    crate::models::FrontendError::from(human_money_core::Error::App(
+                        human_money_core::error::AppError::SessionExpired {
+                            reason: "One-shot PIN grant must be consumed via secret guard."
+                                .to_string(),
+                        },
+                    )),
+                ),
             };
         }
         match required {
@@ -5930,17 +5936,16 @@ mod tests {
                 .save_contact_with_options(&mut s, reset, Some(pw), true)
                 .unwrap();
 
-            let store: CardStore = super::load_encrypted_json_opt(
-                &mut s,
-                super::MARKET_CARD_STORE_KEY,
-                Some(pw),
-            )
-            .unwrap()
-            .unwrap();
+            let store: CardStore =
+                super::load_encrypted_json_opt(&mut s, super::MARKET_CARD_STORE_KEY, Some(pw))
+                    .unwrap()
+                    .unwrap();
             let can_alice = super::canonicalize_did(&alice_did).unwrap();
             assert!(
                 store.cards.values().any(|sc| {
-                    super::canonicalize_did(&sc.card.payload.did).ok().as_deref()
+                    super::canonicalize_did(&sc.card.payload.did)
+                        .ok()
+                        .as_deref()
                         == Some(can_alice.as_str())
                 }),
                 "H1: preserve_manual_card=true must keep manually imported card in CardStore"

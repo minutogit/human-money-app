@@ -588,12 +588,14 @@ fn test_channelless_admin_actions_omit_channel_line() {
     let del_msg = humoco_market::format_lock_delegate_signature_message(
         &"aa".repeat(32),
         &"bb".repeat(32),
+        "https://sync.example/write",
+        "https://sync.example/read",
         1700000000,
     );
     assert_eq!(
         del_msg,
         format!(
-            "HUMOCO-LOCK-DELEGATE-V1\n{}\n{}\n1700000000",
+            "HUMOCO-LOCK-DELEGATE-V1\n{}\n{}\nhttps://sync.example/write\nhttps://sync.example/read\n1700000000",
             "aa".repeat(32),
             "bb".repeat(32)
         )

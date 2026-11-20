@@ -868,10 +868,15 @@ pub fn save_my_market_profile_impl(
     service
         .update_public_profile_with_companions(
             core_profile,
-            vec![(crate::state::MARKET_OWN_PROFILE_KEY.to_string(), stored_bytes)],
+            vec![(
+                crate::state::MARKET_OWN_PROFILE_KEY.to_string(),
+                stored_bytes,
+            )],
             password.as_deref(),
         )
-        .map_err(|e| FrontendError::from(format!("Failed to update Core & market profile: {}", e)))?;
+        .map_err(|e| {
+            FrontendError::from(format!("Failed to update Core & market profile: {}", e))
+        })?;
     state.set_cached_own_market_profile_for_service(&service, Some(stored));
 
     drop(service);
@@ -1006,10 +1011,7 @@ pub fn upsert_ad_impl(
         }
         None => {
             if let Some(idx) = existing_idx {
-                stored.ads[idx]
-                    .image_token
-                    .clone()
-                    .map(|t| (t, Vec::new()))
+                stored.ads[idx].image_token.clone().map(|t| (t, Vec::new()))
             } else {
                 None
             }
@@ -1067,13 +1069,17 @@ pub fn upsert_ad_impl(
         rebuild_and_sign_own_card(&mut service, &mut stored, now)?;
     }
 
-    let stored_bytes = serde_json::to_vec(&stored)
-        .map_err(|e| FrontendError::from(format!("Failed to serialize own market profile: {}", e)))?;
+    let stored_bytes = serde_json::to_vec(&stored).map_err(|e| {
+        FrontendError::from(format!("Failed to serialize own market profile: {}", e))
+    })?;
     let mut batch: Vec<(&str, &[u8])> = Vec::with_capacity(2);
     if let Some((ref media_key, ref media_bytes)) = pending_media_blob {
         batch.push((media_key.as_str(), media_bytes.as_slice()));
     }
-    batch.push((crate::state::MARKET_OWN_PROFILE_KEY, stored_bytes.as_slice()));
+    batch.push((
+        crate::state::MARKET_OWN_PROFILE_KEY,
+        stored_bytes.as_slice(),
+    ));
     service
         .save_encrypted_batch(&batch, pw)
         .map_err(FrontendError::from)?;
@@ -1662,12 +1668,9 @@ pub fn import_contact_card_impl(
     let max_stored_cards = ui_prefs.max_stored_cards.clamp(100, 10_000);
     let now = chrono::Utc::now().timestamp().max(0) as u64;
 
-    let mut store: humoco_market::CardStore = crate::state::load_encrypted_json_or_default(
-        &mut service,
-        MARKET_CARD_STORE_KEY,
-        pw,
-    )
-    .map_err(FrontendError::from)?;
+    let mut store: humoco_market::CardStore =
+        crate::state::load_encrypted_json_or_default(&mut service, MARKET_CARD_STORE_KEY, pw)
+            .map_err(FrontendError::from)?;
 
     let outcome = service
         .with_wallet(|wallet| {
@@ -1798,19 +1801,19 @@ pub fn delete_foreign_contact_card_impl(
         .authorize_and_lock_secret(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
     let pw = resolved_pw.as_deref().map(String::as_str);
 
-    let mut store: humoco_market::CardStore = crate::state::load_encrypted_json_or_default(
-        &mut service,
-        MARKET_CARD_STORE_KEY,
-        pw,
-    )
-    .map_err(FrontendError::from)?;
+    let mut store: humoco_market::CardStore =
+        crate::state::load_encrypted_json_or_default(&mut service, MARKET_CARD_STORE_KEY, pw)
+            .map_err(FrontendError::from)?;
 
     let validated_did = human_money_core::ValidatedUserId::parse(&did)
         .map_err(|e| FrontendError::from(format!("Invalid DID: {}", e)))?;
 
     let mut removed_tombstones: Vec<(String, u64)> = Vec::new();
     if let Some(sc) = store.cards.remove(validated_did.as_str()) {
-        removed_tombstones.push((sc.card.payload.recipient_id().to_string(), sc.card.payload.v));
+        removed_tombstones.push((
+            sc.card.payload.recipient_id().to_string(),
+            sc.card.payload.v,
+        ));
     }
     if removed_tombstones.is_empty() && validated_did.as_str() == validated_did.canonical_did() {
         let target_pk = validated_did.public_key_bytes();
@@ -1821,8 +1824,10 @@ pub fn delete_foreign_contact_card_impl(
                     .map(|k| k.to_bytes())
                     == Some(target_pk);
             if matches_pk {
-                removed_tombstones
-                    .push((sc.card.payload.recipient_id().to_string(), sc.card.payload.v));
+                removed_tombstones.push((
+                    sc.card.payload.recipient_id().to_string(),
+                    sc.card.payload.v,
+                ));
             }
             !matches_pk
         });
@@ -1832,13 +1837,8 @@ pub fn delete_foreign_contact_card_impl(
         for (card_key, version) in removed_tombstones {
             humoco_market::mark_card_deleted(&mut store, &card_key, version);
         }
-        crate::state::save_encrypted_json(
-            &mut service,
-            MARKET_CARD_STORE_KEY,
-            &store,
-            pw,
-        )
-        .map_err(FrontendError::from)?;
+        crate::state::save_encrypted_json(&mut service, MARKET_CARD_STORE_KEY, &store, pw)
+            .map_err(FrontendError::from)?;
     }
 
     Ok(())
@@ -2990,7 +2990,10 @@ mod tests {
         )
         .expect("Initial valid profile save should succeed");
         assert_eq!(initial_ok.profile.first_name.as_deref(), Some("Alice"));
-        assert_eq!(initial_ok.profile.organization.as_deref(), Some("Clean Org"));
+        assert_eq!(
+            initial_ok.profile.organization.as_deref(),
+            Some("Clean Org")
+        );
 
         // Attempt an update whose first_name exceeds sd_card's 80-char limit while published = true.
         // Validation/signing MUST fail BEFORE mutating Core's UserProfile on disk or in RAM.
@@ -3090,7 +3093,9 @@ mod tests {
                 true,
             )
             .unwrap();
-        let expected_uid = service.with_wallet(|w| w.get_user_id().to_string()).unwrap();
+        let expected_uid = service
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
         assert!(expected_uid.starts_with("shop:"));
 
         let state = crate::test_support::create_test_state(service);
@@ -3112,7 +3117,9 @@ mod tests {
             &state,
         )
         .unwrap();
-        let share_uri = profile.share_uri.expect("published card must have share_uri");
+        let share_uri = profile
+            .share_uri
+            .expect("published card must have share_uri");
 
         let resolved = resolve_card_recipient_impl(share_uri.clone(), &state).unwrap();
         assert_eq!(resolved.recipient_id, expected_uid);
@@ -3126,7 +3133,8 @@ mod tests {
         let payload_bytes = human_money_core::crypto::decode_base64(&parts[1]).unwrap();
         let mut payload_val: serde_json::Value = serde_json::from_slice(&payload_bytes).unwrap();
         payload_val["did"] = serde_json::json!(format!("evil:999@{}", resolved.did));
-        parts[1] = human_money_core::crypto::encode_base64(&serde_json::to_vec(&payload_val).unwrap());
+        parts[1] =
+            human_money_core::crypto::encode_base64(&serde_json::to_vec(&payload_val).unwrap());
         env.card_wire = parts.join(".");
         let tampered_json = serde_json::to_string(&env).unwrap();
         assert!(resolve_card_recipient_impl(tampered_json, &state).is_err());
@@ -3176,12 +3184,13 @@ mod tests {
         let share_uri = alice_prof.share_uri.unwrap();
 
         let bob_svc = AppService::new(&dir_bob).unwrap();
-        let bob_state = crate::test_support::create_test_state(crate::test_support::setup_test_app(
-            &dir_bob.join("w"),
-            "Bob",
-            crate::test_support::BOB_PHRASE,
-            pw,
-        ));
+        let bob_state =
+            crate::test_support::create_test_state(crate::test_support::setup_test_app(
+                &dir_bob.join("w"),
+                "Bob",
+                crate::test_support::BOB_PHRASE,
+                pw,
+            ));
         drop(bob_svc);
         {
             let mut s = bob_state.service.lock().unwrap();
@@ -3214,7 +3223,9 @@ mod tests {
 
         // Inject write fault on batch save -> card + contact update must abort together AND cache stay untouched!
         human_money_core::storage::file_storage::inject_write_fault_once("seal.enc");
-        assert!(import_contact_card_impl(share_uri.clone(), Some(pw.to_string()), &bob_state).is_err());
+        assert!(
+            import_contact_card_impl(share_uri.clone(), Some(pw.to_string()), &bob_state).is_err()
+        );
         {
             let mut s = bob_state.service.lock().unwrap();
             assert_eq!(
@@ -3259,7 +3270,10 @@ mod tests {
             );
         }
 
-        let _ = (MnemonicLanguage::English, std::fs::remove_dir_all(&dir_alice));
+        let _ = (
+            MnemonicLanguage::English,
+            std::fs::remove_dir_all(&dir_alice),
+        );
         let _ = std::fs::remove_dir_all(&dir_bob);
     }
 }

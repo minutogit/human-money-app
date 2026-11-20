@@ -38,7 +38,6 @@ function makeAppConfig(
       syncBackupEnabled: true,
       backupSyncFolder: null,
       backupProtectionMode: null,
-      ownNominatedLockServer: null,
       marketSelectedSyncs: [],
       publicSyncs: [],
     },
@@ -48,7 +47,6 @@ function makeAppConfig(
       lastBackupAt: null,
       lastSyncBackupAt: null,
       l2ProbeCache: {},
-      l2AnchorTemplatesMeta: [],
     },
   };
 }

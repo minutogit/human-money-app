@@ -38,18 +38,21 @@ pub(crate) fn save_channel_max_bytes_updates(
         return;
     }
     let _ = state.with_session(session, |service| {
-        let mut sync_state: StoredSyncState =
-            match crate::state::load_encrypted_json_or_default(service, MARKET_SYNC_KEY, password) {
-                Ok(s) => s,
-                Err(e) => {
-                    log::warn!(
-                        "Failed to load {} before updating channel max bytes: {}",
-                        MARKET_SYNC_KEY,
-                        e
-                    );
-                    return Ok(());
-                }
-            };
+        let mut sync_state: StoredSyncState = match crate::state::load_encrypted_json_or_default(
+            service,
+            MARKET_SYNC_KEY,
+            password,
+        ) {
+            Ok(s) => s,
+            Err(e) => {
+                log::warn!(
+                    "Failed to load {} before updating channel max bytes: {}",
+                    MARKET_SYNC_KEY,
+                    e
+                );
+                return Ok(());
+            }
+        };
         let mut changed = false;
         for (write_url, channel, mb) in updates {
             if *mb > 0 {
@@ -431,17 +434,14 @@ fn collect_poll_targets(
     }
 
     let reg = state.get_or_load_wot_register(service, password).ok();
-    let card_store: Option<humoco_market::CardStore> = match crate::state::load_encrypted_json_opt(
-        service,
-        MARKET_CARD_STORE_KEY,
-        password,
-    ) {
-        Ok(c) => c,
-        Err(e) => {
-            log::warn!("Failed to load CardStore in collect_poll_targets: {}", e);
-            None
-        }
-    };
+    let card_store: Option<humoco_market::CardStore> =
+        match crate::state::load_encrypted_json_opt(service, MARKET_CARD_STORE_KEY, password) {
+            Ok(c) => c,
+            Err(e) => {
+                log::warn!("Failed to load CardStore in collect_poll_targets: {}", e);
+                None
+            }
+        };
 
     if let Ok(contacts) = state.load_contacts(service, password) {
         for c in contacts {
@@ -559,7 +559,11 @@ pub(crate) fn direct_card_delta_etag_key(
 }
 
 pub(crate) fn direct_wot_etag_key(read_url: &str, base_slot_pk: &str) -> String {
-    format!("direct_wot:{}:{}", normalize_sync_url(read_url), base_slot_pk)
+    format!(
+        "direct_wot:{}:{}",
+        normalize_sync_url(read_url),
+        base_slot_pk
+    )
 }
 
 pub(crate) fn index_card_etag_key(read_url: &str, entry_id: &str, pfx: &str) -> String {
@@ -694,16 +698,18 @@ pub(crate) async fn poll_sync_channels(
         sync_health_updates: Vec::new(),
     };
 
-    let Ok(Some((direct_slot_fetches, candidate_read_urls))) = state.with_session(session, |service| {
-        Ok(collect_poll_targets(
-            state,
-            service,
-            ui_prefs,
-            security_policy,
-            id_ctx.my_prefix.as_deref(),
-            password,
-        ))
-    }) else {
+    let Ok(Some((direct_slot_fetches, candidate_read_urls))) =
+        state.with_session(session, |service| {
+            Ok(collect_poll_targets(
+                state,
+                service,
+                ui_prefs,
+                security_policy,
+                id_ctx.my_prefix.as_deref(),
+                password,
+            ))
+        })
+    else {
         return outcome;
     };
 
@@ -1174,8 +1180,12 @@ async fn probe_public_sync_capabilities(
 ) -> Vec<String> {
     let mut authorized_channels = Vec::new();
     let mut channel_max_bytes_updates = Vec::new();
-    for ch in ["card", "wot", "backup", "post"] {
-        let ch_prefix = if ch == "wot" { None } else { my_prefix };
+    for ch in ["card", "wot", "backup", "post", "lock"] {
+        let ch_prefix = if ch == "wot" || ch == "lock" {
+            None
+        } else {
+            my_prefix
+        };
         if let Ok(cap) = sync_client::head_slot_capability(
             probe_client,
             canonical_url,
@@ -1261,8 +1271,8 @@ pub async fn save_public_sync_impl(
     humoco_market::parse_ed25519_pubkey_hex64(&drop_pub)
         .map_err(|e| FrontendError::from(e.to_string()))?;
 
-    let session =
-        state.authorize_and_begin_session(crate::state::RequiredAccess::Full, password.as_deref())?;
+    let session = state
+        .authorize_and_begin_session(crate::state::RequiredAccess::Full, password.as_deref())?;
     let id_ctx = state.with_session_required(
         &session,
         "Active wallet changed before public sync could be prepared",
@@ -1349,6 +1359,20 @@ pub async fn save_public_sync_impl(
         },
     )?;
 
+    if enabled && info_opt.as_ref().is_some_and(|i| i.lock.is_some()) {
+        let lock_probe =
+            sync_client::probe_lock_server(&probe_client, &canonical_url, Some(&drop_pub)).await;
+        if !lock_probe.lock_pub.trim().is_empty() {
+            let _ =
+                state.mutate_internal_lifecycle_for_session(&session, password.as_deref(), |lc| {
+                    crate::services::common::upsert_verified_lock_probe(
+                        &mut lc.l2_probe_cache,
+                        lock_probe.clone(),
+                    )
+                });
+        }
+    }
+
     let _ = enqueue_guardian_locator_updates_if_configured(state, password.clone()).await;
 
     Ok(FrontendPublicSyncInfo {
@@ -1367,8 +1391,8 @@ pub async fn remove_public_sync_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<(), FrontendError> {
-    let session =
-        state.authorize_and_begin_session(crate::state::RequiredAccess::Full, password.as_deref())?;
+    let session = state
+        .authorize_and_begin_session(crate::state::RequiredAccess::Full, password.as_deref())?;
     let canonical_url = humoco_market::canonicalize_write_url(&write_url)
         .map_err(|e| FrontendError::from(e.to_string()))?;
 

@@ -111,7 +111,6 @@ function createBeginnerConfig(backupSyncFolder: string | null = '/fake/backup/pa
             syncBackupEnabled: true,
             backupSyncFolder,
             backupProtectionMode: null,
-            ownNominatedLockServer: null,
             marketSelectedSyncs: [],
             publicSyncs: [],
         },
@@ -121,7 +120,6 @@ function createBeginnerConfig(backupSyncFolder: string | null = '/fake/backup/pa
             lastBackupAt: null,
             lastSyncBackupAt: null,
             l2ProbeCache: {},
-            l2AnchorTemplatesMeta: [],
         },
     };
 }

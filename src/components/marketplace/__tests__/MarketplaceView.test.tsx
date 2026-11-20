@@ -252,7 +252,6 @@ describe('MarketplaceView Component', () => {
               syncBackupEnabled: true,
               backupSyncFolder: null,
               backupProtectionMode: null,
-              ownNominatedLockServer: null,
               marketSelectedSyncs: [{ id: 'sync-1' } as any],
               publicSyncs: [],
             },
@@ -262,7 +261,6 @@ describe('MarketplaceView Component', () => {
               lastBackupAt: null,
               lastSyncBackupAt: null,
               l2ProbeCache: {},
-              l2AnchorTemplatesMeta: [],
             },
           } satisfies AppConfigDto);
         case 'set_card_published':
@@ -539,7 +537,6 @@ describe('MarketplaceView Component', () => {
             syncBackupEnabled: true,
             backupSyncFolder: null,
             backupProtectionMode: null,
-            ownNominatedLockServer: null,
             marketSelectedSyncs: [],
             publicSyncs: [],
           },
@@ -549,7 +546,6 @@ describe('MarketplaceView Component', () => {
             lastBackupAt: null,
             lastSyncBackupAt: null,
             l2ProbeCache: {},
-            l2AnchorTemplatesMeta: [],
           },
         });
       }
@@ -616,7 +612,6 @@ describe('MarketplaceView Component', () => {
             syncBackupEnabled: true,
             backupSyncFolder: null,
             backupProtectionMode: null,
-            ownNominatedLockServer: null,
             marketSelectedSyncs: [],
             publicSyncs: [],
           },
@@ -626,7 +621,6 @@ describe('MarketplaceView Component', () => {
             lastBackupAt: null,
             lastSyncBackupAt: null,
             l2ProbeCache: {},
-            l2AnchorTemplatesMeta: [],
           },
         });
       }

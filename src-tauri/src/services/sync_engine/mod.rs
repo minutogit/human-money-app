@@ -245,8 +245,7 @@ pub async fn sync_market_channels_with_options(
         let mut next_wot_reg: Option<humoco_wot::TrustRegister> = None;
         let mut next_notices_store: Option<crate::models::StoredAppNotices> = None;
 
-        let need_address_book =
-            !decoded_card_bundles.is_empty() || !sync_health_updates.is_empty();
+        let need_address_book = !decoded_card_bundles.is_empty() || !sync_health_updates.is_empty();
         if need_address_book {
             let ab: crate::models::FrontendAddressBook =
                 crate::state::load_encrypted_json_or_default(
@@ -377,7 +376,10 @@ pub async fn sync_market_channels_with_options(
             owned_blobs.push(serialize(MARKET_CARD_STORE_KEY, serde_json::to_vec(store))?);
         }
         if let Some(ref reg) = next_wot_reg {
-            owned_blobs.push(serialize(crate::state::WOT_DATA_NAME, serde_json::to_vec(reg))?);
+            owned_blobs.push(serialize(
+                crate::state::WOT_DATA_NAME,
+                serde_json::to_vec(reg),
+            )?);
         }
         if address_book_changed {
             if let Some(ref ab) = next_address_book {
@@ -1947,11 +1949,11 @@ pub(crate) mod tests {
 
         assert_eq!(finalize_status.data_dir, draft.data_dir);
 
-        // Finalize pushes the 4 channels
+        // Finalize pushes the 5 channels (card, wot, post, backup, lock)
         let initial_puts = *server.put_members_count.lock().unwrap();
         assert_eq!(
-            initial_puts, 4,
-            "Initial finalize should push all 4 channels"
+            initial_puts, 5,
+            "Initial finalize should push all 5 channels"
         );
 
         // 2. Call sync_channel_members_impl immediately without any changes
@@ -3384,7 +3386,9 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn test_k1_sync_aborts_on_logout_and_profile_switch_without_overwriting_profile_b() {
-        use crate::test_support::{temp_test_dir, ALICE_PHRASE, BOB_PHRASE, CHARLIE_PHRASE, READER1_PHRASE};
+        use crate::test_support::{
+            temp_test_dir, ALICE_PHRASE, BOB_PHRASE, CHARLIE_PHRASE, READER1_PHRASE,
+        };
         use human_money_core::app_service::AppService;
         use std::sync::Arc;
 
@@ -3437,12 +3441,15 @@ pub(crate) mod tests {
         let state = Arc::new(AppState::new(shared_svc));
 
         // External publisher Carol + baseline Reader1 card belonging solely to Bob
-        let carol_service = setup_test_app(&base_dir.join("carol"), "Carol", CHARLIE_PHRASE, password);
+        let carol_service =
+            setup_test_app(&base_dir.join("carol"), "Carol", CHARLIE_PHRASE, password);
         let carol_state = create_test_state(carol_service);
         let (carol_did, carol_sk, carol_vk) = {
             let s = carol_state.service.lock().unwrap();
-            s.with_wallet_and_identity(|_, id| (id.user_id.clone(), id.signing_key.clone(), id.public_key))
-                .unwrap()
+            s.with_wallet_and_identity(|_, id| {
+                (id.user_id.clone(), id.signing_key.clone(), id.public_key)
+            })
+            .unwrap()
         };
 
         let r1_service = setup_test_app(&base_dir.join("r1"), "Reader1", READER1_PHRASE, password);
@@ -3466,7 +3473,8 @@ pub(crate) mod tests {
             &carol_state,
         )
         .unwrap();
-        let server = MockSyncServer::start(draft.data_dir.clone(), draft.admin_pubkey.clone()).await;
+        let server =
+            MockSyncServer::start(draft.data_dir.clone(), draft.admin_pubkey.clone()).await;
         let fin = finalize_sync_setup_impl(
             server.base_url.clone(),
             Some(password.to_string()),
@@ -3481,7 +3489,9 @@ pub(crate) mod tests {
             s.login(&alice_folder, password, false, "device-k1-test".into())
                 .unwrap();
             state.initialize_profile_session(&mut s, password).unwrap();
-            let (did, vk) = s.with_wallet_and_identity(|_, id| (id.user_id.clone(), id.public_key)).unwrap();
+            let (did, vk) = s
+                .with_wallet_and_identity(|_, id| (id.user_id.clone(), id.public_key))
+                .unwrap();
             state
                 .mutate_security_policy(&mut s, Some(password), |p| {
                     p.market_selected_syncs = vec![fin.descriptor.clone()];
@@ -3523,8 +3533,13 @@ pub(crate) mod tests {
                 &|_| false,
             );
             assert!(matches!(out, humoco_market::AcceptOutcome::Accepted { .. }));
-            crate::state::save_encrypted_json(&mut s, MARKET_CARD_STORE_KEY, &bob_store, Some(password))
-                .unwrap();
+            crate::state::save_encrypted_json(
+                &mut s,
+                MARKET_CARD_STORE_KEY,
+                &bob_store,
+                Some(password),
+            )
+            .unwrap();
             let bob_contact = FrontendContact {
                 did: r1_did.clone(),
                 profile: FrontendUserProfile {
@@ -3540,7 +3555,9 @@ pub(crate) mod tests {
                 peer_list_updated_at: None,
                 syncs: vec![],
             };
-            state.save_contact(&mut s, bob_contact, Some(password)).unwrap();
+            state
+                .save_contact(&mut s, bob_contact, Some(password))
+                .unwrap();
         }
         crate::commands::auth::logout_impl(&state);
 
@@ -3568,16 +3585,25 @@ pub(crate) mod tests {
                 peer_list_updated_at: None,
                 syncs: vec![],
             };
-            carol_state.save_contact(&mut cs, c_contact, Some(password)).unwrap();
+            carol_state
+                .save_contact(&mut cs, c_contact, Some(password))
+                .unwrap();
         }
         let carol_env = make_signed_card(&carol_did, &carol_sk, 2, 1);
         let bundle = humoco_market::CardBundle {
             envelopes: vec![carol_env],
         };
-        let sealed = humoco_market::seal_slot_blob(&bundle, &[alice_vk, carol_vk], 512 * 1024).unwrap();
-        let stealth_carol = humoco_market::derive_member_stealth_pubkey(&carol_sk, &fin.descriptor.drop_pub).unwrap();
+        let sealed =
+            humoco_market::seal_slot_blob(&bundle, &[alice_vk, carol_vk], 512 * 1024).unwrap();
+        let stealth_carol =
+            humoco_market::derive_member_stealth_pubkey(&carol_sk, &fin.descriptor.drop_pub)
+                .unwrap();
         server.members.lock().unwrap().push(stealth_carol.clone());
-        server.slots.lock().unwrap().insert(format!("{}.card", stealth_carol), sealed);
+        server
+            .slots
+            .lock()
+            .unwrap()
+            .insert(format!("{}.card", stealth_carol), sealed);
 
         // Pause Alice's poll at index.json -> switch to Bob mid-flight -> release!
         let (hit_rx, release_tx) = server.arm_pause_gate("index.json");
@@ -3653,13 +3679,30 @@ pub(crate) mod tests {
         let carol_state = create_test_state(carol_svc);
         let (carol_did, carol_sk, carol_vk) = {
             let s = carol_state.service.lock().unwrap();
-            s.with_wallet_and_identity(|_, id| (id.user_id.clone(), id.signing_key.clone(), id.public_key))
-                .unwrap()
+            s.with_wallet_and_identity(|_, id| {
+                (id.user_id.clone(), id.signing_key.clone(), id.public_key)
+            })
+            .unwrap()
         };
 
-        let draft = prepare_sync_setup_impl(None, Some(300), None, None, Some(password.to_string()), &carol_state).unwrap();
-        let server = MockSyncServer::start(draft.data_dir.clone(), draft.admin_pubkey.clone()).await;
-        let fin = finalize_sync_setup_impl(server.base_url.clone(), Some(password.to_string()), &carol_state).await.unwrap();
+        let draft = prepare_sync_setup_impl(
+            None,
+            Some(300),
+            None,
+            None,
+            Some(password.to_string()),
+            &carol_state,
+        )
+        .unwrap();
+        let server =
+            MockSyncServer::start(draft.data_dir.clone(), draft.admin_pubkey.clone()).await;
+        let fin = finalize_sync_setup_impl(
+            server.base_url.clone(),
+            Some(password.to_string()),
+            &carol_state,
+        )
+        .await
+        .unwrap();
 
         let alice_vk = {
             let mut s = state.service.lock().unwrap();
@@ -3694,14 +3737,22 @@ pub(crate) mod tests {
 
         let carol_env = make_signed_card(&carol_did, &carol_sk, 2, 1);
         let sealed = humoco_market::seal_slot_blob(
-            &humoco_market::CardBundle { envelopes: vec![carol_env] },
+            &humoco_market::CardBundle {
+                envelopes: vec![carol_env],
+            },
             &[alice_vk, carol_vk],
             512 * 1024,
         )
         .unwrap();
-        let stealth_carol = humoco_market::derive_member_stealth_pubkey(&carol_sk, &fin.descriptor.drop_pub).unwrap();
+        let stealth_carol =
+            humoco_market::derive_member_stealth_pubkey(&carol_sk, &fin.descriptor.drop_pub)
+                .unwrap();
         server.members.lock().unwrap().push(stealth_carol.clone());
-        server.slots.lock().unwrap().insert(format!("{}.card", stealth_carol), sealed);
+        server
+            .slots
+            .lock()
+            .unwrap()
+            .insert(format!("{}.card", stealth_carol), sealed);
 
         let (hit_rx, release_tx) = server.arm_pause_gate("index.json");
         let state_bg = Arc::clone(&state);
@@ -3753,8 +3804,12 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn test_h1_market_poll_preserves_concurrent_qr_import_and_deletion_tombstone() {
-        use crate::services::market_service::{delete_foreign_contact_card_impl, import_contact_card_impl};
-        use crate::test_support::{temp_test_dir, ALICE_PHRASE, BOB_PHRASE, CHARLIE_PHRASE, READER1_PHRASE};
+        use crate::services::market_service::{
+            delete_foreign_contact_card_impl, import_contact_card_impl,
+        };
+        use crate::test_support::{
+            temp_test_dir, ALICE_PHRASE, BOB_PHRASE, CHARLIE_PHRASE, READER1_PHRASE,
+        };
         use std::sync::Arc;
 
         let base_dir = temp_test_dir("h1_market_poll_concurrency");
@@ -3776,16 +3831,33 @@ pub(crate) mod tests {
 
         let (carol_did, carol_sk, carol_vk) = {
             let s = carol_state.service.lock().unwrap();
-            s.with_wallet_and_identity(|_, id| (id.user_id.clone(), id.signing_key.clone(), id.public_key))
-                .unwrap()
+            s.with_wallet_and_identity(|_, id| {
+                (id.user_id.clone(), id.signing_key.clone(), id.public_key)
+            })
+            .unwrap()
         };
         let (dave_did, dave_sk) = dave_svc
             .with_wallet_and_identity(|_, id| (id.user_id.clone(), id.signing_key.clone()))
             .unwrap();
 
-        let draft = prepare_sync_setup_impl(None, Some(300), None, None, Some(password.to_string()), &carol_state).unwrap();
-        let server = MockSyncServer::start(draft.data_dir.clone(), draft.admin_pubkey.clone()).await;
-        let fin = finalize_sync_setup_impl(server.base_url.clone(), Some(password.to_string()), &carol_state).await.unwrap();
+        let draft = prepare_sync_setup_impl(
+            None,
+            Some(300),
+            None,
+            None,
+            Some(password.to_string()),
+            &carol_state,
+        )
+        .unwrap();
+        let server =
+            MockSyncServer::start(draft.data_dir.clone(), draft.admin_pubkey.clone()).await;
+        let fin = finalize_sync_setup_impl(
+            server.base_url.clone(),
+            Some(password.to_string()),
+            &carol_state,
+        )
+        .await
+        .unwrap();
 
         let bob_vk = {
             let mut s = bob_state.service.lock().unwrap();
@@ -3827,33 +3899,41 @@ pub(crate) mod tests {
                 &|_| false,
             );
             assert!(matches!(out, humoco_market::AcceptOutcome::Accepted { .. }));
-            crate::state::save_encrypted_json(&mut s, MARKET_CARD_STORE_KEY, &initial_store, Some(password))
-                .unwrap();
+            crate::state::save_encrypted_json(
+                &mut s,
+                MARKET_CARD_STORE_KEY,
+                &initial_store,
+                Some(password),
+            )
+            .unwrap();
             s.with_wallet_and_identity(|_, id| id.public_key).unwrap()
         };
 
         // Put Carol's v=1 card onto the server so the poll downloads it
         let carol_env_srv = make_signed_card(&carol_did, &carol_sk, 1, 1);
         let sealed = humoco_market::seal_slot_blob(
-            &humoco_market::CardBundle { envelopes: vec![carol_env_srv] },
+            &humoco_market::CardBundle {
+                envelopes: vec![carol_env_srv],
+            },
             &[bob_vk, carol_vk],
             512 * 1024,
         )
         .unwrap();
-        let stealth_carol = humoco_market::derive_member_stealth_pubkey(&carol_sk, &fin.descriptor.drop_pub).unwrap();
+        let stealth_carol =
+            humoco_market::derive_member_stealth_pubkey(&carol_sk, &fin.descriptor.drop_pub)
+                .unwrap();
         server.members.lock().unwrap().push(stealth_carol.clone());
-        server.slots.lock().unwrap().insert(format!("{}.card", stealth_carol), sealed);
+        server
+            .slots
+            .lock()
+            .unwrap()
+            .insert(format!("{}.card", stealth_carol), sealed);
 
         let (hit_rx, release_tx) = server.arm_pause_gate("index.json");
         let bob_bg = Arc::clone(&bob_state);
         let poll_handle = tokio::spawn(async move {
-            sync_market_channels_impl(
-                Some(true),
-                Some(false),
-                Some(password.to_string()),
-                &bob_bg,
-            )
-            .await
+            sync_market_channels_impl(Some(true), Some(false), Some(password.to_string()), &bob_bg)
+                .await
         });
 
         hit_rx.await.unwrap();
@@ -3908,14 +3988,10 @@ pub(crate) mod tests {
                 .save_ui_preferences(&mut s, prefs, Some(password))
                 .unwrap();
         }
-        let res = sync_market_channels_impl(
-            Some(false),
-            Some(false),
-            Some(password.to_string()),
-            &state,
-        )
-        .await
-        .unwrap();
+        let res =
+            sync_market_channels_impl(Some(false), Some(false), Some(password.to_string()), &state)
+                .await
+                .unwrap();
         assert_eq!(res.status, MarketSyncStatus::SkippedWifiOnly);
 
         let _ = std::fs::remove_dir_all(&dir);

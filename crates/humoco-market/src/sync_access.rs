@@ -557,12 +557,16 @@ pub fn format_admin_request_message(
 pub fn format_lock_delegate_signature_message(
     admin_pub: &str,
     lock_pub: &str,
+    write_url: &str,
+    read_url: &str,
     issued_at: u64,
 ) -> String {
     format!(
-        "HUMOCO-LOCK-DELEGATE-V1\n{}\n{}\n{}",
+        "HUMOCO-LOCK-DELEGATE-V1\n{}\n{}\n{}\n{}\n{}",
         admin_pub.trim().to_ascii_lowercase(),
         lock_pub.trim().to_ascii_lowercase(),
+        write_url.trim(),
+        read_url.trim(),
         issued_at
     )
 }

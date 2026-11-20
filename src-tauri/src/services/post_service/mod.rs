@@ -26,13 +26,13 @@ pub use inbox_poller::{
     confirm_pending_post_payment_impl, dismiss_pending_post_item_impl, get_post_inbox_summary_impl,
     mark_inquiry_read_impl, sync_post_channels_impl,
 };
-pub(crate) use outbox::{deposit_transfer_to_post_with_session, flush_post_slots_impl};
 pub use outbox::{
     accept_wot_handshake_impl, deposit_transfer_to_post_impl,
     reply_detached_signature_via_post_impl, send_market_inquiry_message_via_post_impl,
     send_market_inquiry_via_post_impl, send_signing_request_via_post_impl,
     send_wot_handshake_via_post_impl,
 };
+pub(crate) use outbox::{deposit_transfer_to_post_with_session, flush_post_slots_impl};
 
 /// Extracted identity and reply-sync configuration required to seal and queue Post messages.
 pub(crate) struct PostSigningContext {
@@ -150,12 +150,9 @@ pub(crate) fn merge_post_state_with_service(
     working: &mut StoredPostState,
     password: Option<&str>,
 ) -> Result<(), FrontendError> {
-    let latest: StoredPostState = crate::state::load_encrypted_json_or_default(
-        service,
-        MARKET_POST_STATE_KEY,
-        password,
-    )
-    .map_err(FrontendError::from)?;
+    let latest: StoredPostState =
+        crate::state::load_encrypted_json_or_default(service, MARKET_POST_STATE_KEY, password)
+            .map_err(FrontendError::from)?;
 
     if &latest != baseline {
         merge_vec_by_id(

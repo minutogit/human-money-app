@@ -109,7 +109,6 @@ describe('BackupSettingsCard', () => {
             syncBackupEnabled: true,
             backupSyncFolder: null,
             backupProtectionMode: 'mnemonic_only',
-            ownNominatedLockServer: null,
             marketSelectedSyncs: [],
             publicSyncs: [],
         },
@@ -119,7 +118,6 @@ describe('BackupSettingsCard', () => {
             lastBackupAt: null,
             lastSyncBackupAt: null,
             l2ProbeCache: {},
-            l2AnchorTemplatesMeta: [],
         },
     });
 

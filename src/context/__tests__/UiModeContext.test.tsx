@@ -44,7 +44,6 @@ function makeConfig(uiMode: 'simple' | 'expert'): AppConfigDto {
             syncBackupEnabled: true,
             backupSyncFolder: null,
             backupProtectionMode: null,
-            ownNominatedLockServer: null,
             marketSelectedSyncs: [],
             publicSyncs: [],
         },
@@ -54,7 +53,6 @@ function makeConfig(uiMode: 'simple' | 'expert'): AppConfigDto {
             lastBackupAt: null,
             lastSyncBackupAt: null,
             l2ProbeCache: {},
-            l2AnchorTemplatesMeta: [],
         },
     };
 }

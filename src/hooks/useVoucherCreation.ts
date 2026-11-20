@@ -13,10 +13,9 @@ import {
     CollateralData, 
     NewVoucherData,
     PublicProfile,
-    StoredAnchorTemplateMeta
+    LockProtectionOverviewDto
 } from "../types";
 import { normalizeCoordinates } from "../utils/geoUtils";
-import { estimateIsoDurationMs, quarterEndUtcMs, formatQuarter } from "../utils/retentionQuarter";
 import { APP_EVENTS, useAppEvent } from "../utils/appEvents";
 
 /**
@@ -119,16 +118,9 @@ export function useVoucherCreation() {
     const [isLoading, setIsLoading] = useState(true);
     const [coordWarning, setCoordWarning] = useState("");
     const [errors, setErrors] = useState<Record<string, boolean>>({});
-    const [anchorTemplates, setAnchorTemplates] = useState<StoredAnchorTemplateMeta[]>([]);
-    const [selectedAnchorId, setSelectedAnchorId] = useState<string | null>(null);
-    const hasUserSelectedAnchorRef = useRef(false);
+    const [lockOverview, setLockOverview] = useState<LockProtectionOverviewDto | null>(null);
     const isMountedRef = useRef(true);
     const standardParseSeqRef = useRef(0);
-
-    const handleSelectAnchor = useCallback((anchorId: string | null) => {
-        hasUserSelectedAnchorRef.current = true;
-        setSelectedAnchorId(anchorId);
-    }, []);
 
     useEffect(() => {
         isMountedRef.current = true;
@@ -139,15 +131,17 @@ export function useVoucherCreation() {
 
     useEffect(() => {
         let active = true;
-        settingsService
-            .getConfig()
-            .then((cfg) => {
-                if (!active || !cfg?.lifecycle?.l2AnchorTemplatesMeta) return;
-                setAnchorTemplates(cfg.lifecycle.l2AnchorTemplatesMeta);
-            })
-            .catch(() => {
-                // Keep offline-only default if config is unavailable in isolated tests
-            });
+        if (typeof settingsService?.getLockProtectionOverview === 'function') {
+            settingsService
+                .getLockProtectionOverview()
+                .then((res) => {
+                    if (!active || !res) return;
+                    setLockOverview(res);
+                })
+                .catch(() => {
+                    // Keep offline-only default if unavailable
+                });
+        }
         return () => { active = false; };
     }, []);
 
@@ -291,35 +285,6 @@ export function useVoucherCreation() {
         return newErrors;
     }, [selectedStandardId, amount, identity, parsedStandard]);
 
-    const validityDurationStr = validityValue > 0 ? `P${validityValue}${validityUnit}` : parsedStandard?.mutable?.appConfig?.defaultValidityDuration;
-    const historyRetentionIso = parsedStandard?.mutable?.appConfig?.serverHistoryRetention || "P1Y";
-    const estimatedDeletableAtMs =
-        Date.now() +
-        estimateIsoDurationMs(validityDurationStr) +
-        estimateIsoDurationMs(historyRetentionIso);
-
-    useEffect(() => {
-        if (hasUserSelectedAnchorRef.current) return;
-        if (anchorTemplates.length === 0) {
-            setSelectedAnchorId(null);
-            return;
-        }
-        const compatible = anchorTemplates.find(
-            (tpl) => (quarterEndUtcMs(tpl.retainUntilQuarter) ?? 0) >= estimatedDeletableAtMs
-        );
-        setSelectedAnchorId(compatible ? compatible.anchorId : null);
-    }, [anchorTemplates, estimatedDeletableAtMs]);
-
-    const selectedAnchorTemplate =
-        anchorTemplates.find((tpl) => tpl.anchorId === selectedAnchorId) || null;
-    const retentionInsufficient = Boolean(
-        selectedAnchorTemplate &&
-            (quarterEndUtcMs(selectedAnchorTemplate.retainUntilQuarter) ?? 0) < estimatedDeletableAtMs
-    );
-    const selectedAnchorQuarterLabel = selectedAnchorTemplate
-        ? formatQuarter(selectedAnchorTemplate.retainUntilQuarter)
-        : null;
-
     const prepareVoucherData = useCallback((): NewVoucherData => {
         const validityDuration = validityValue > 0 ? `P${validityValue}${validityUnit}` : null;
         const { street, houseNumber, zipCode, city, country } = identity.address;
@@ -338,9 +303,9 @@ export function useVoucherCreation() {
                 gender: creatorGender,
                 address: { ...identity.address, fullAddress }
             },
-            layer2Anchor: selectedAnchorId || null,
+            layer2Anchor: null,
         };
-    }, [identity, collateral, amount, nonRedeemable, parsedStandard, validityValue, validityUnit, selectedAnchorId]);
+    }, [identity, collateral, amount, nonRedeemable, parsedStandard, validityValue, validityUnit]);
 
     return {
         standards,
@@ -355,11 +320,7 @@ export function useVoucherCreation() {
         isLoading,
         coordWarning,
         errors,
-        anchorTemplates,
-        selectedAnchorId,
-        selectedAnchorTemplate,
-        selectedAnchorQuarterLabel,
-        retentionInsufficient,
+        lockOverview,
         setAmount,
         setValidityValue,
         setValidityUnit,
@@ -367,7 +328,6 @@ export function useVoucherCreation() {
         setIdentity,
         setCollateral,
         setErrors,
-        setSelectedAnchorId: handleSelectAnchor,
         handleStandardChange,
         handleLoadProfile,
         handleCoordBlur,

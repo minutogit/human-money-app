@@ -18,8 +18,8 @@ pub async fn save_contact(
     state: tauri::State<'_, AppState>,
 ) -> Result<(), FrontendError> {
     let mut contact = contact;
-    let validated_did = human_money_core::ValidatedUserId::parse(&contact.did)
-        .map_err(FrontendError::from)?;
+    let validated_did =
+        human_money_core::ValidatedUserId::parse(&contact.did).map_err(FrontendError::from)?;
     contact.did = validated_did.into_string();
     let contact_did = contact.did.clone();
     let trust_level = contact.trust_level;
@@ -90,7 +90,12 @@ pub fn delete_contact(
         state.authorize_and_lock_secret(RequiredAccess::DailyPay, password.as_deref())?;
     let pw = resolved_pw.as_deref().map(String::as_str);
     state
-        .delete_contact_with_options(&mut service, &did, pw, preserve_manual_card.unwrap_or(false))
+        .delete_contact_with_options(
+            &mut service,
+            &did,
+            pw,
+            preserve_manual_card.unwrap_or(false),
+        )
         .map_err(FrontendError::from)
 }
 

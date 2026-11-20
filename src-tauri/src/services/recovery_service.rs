@@ -1128,9 +1128,7 @@ pub async fn setup_social_recovery_guardians_with_params(
                 .export_mnemonic(&password)
                 .map_err(FrontendError::from)?;
             let (phrase, lang, has_bip39_passphrase) = exp.ok_or_else(|| {
-                FrontendError::from(
-                    "Mnemonic phrase required to setup social recovery".to_string(),
-                )
+                FrontendError::from("Mnemonic phrase required to setup social recovery".to_string())
             })?;
             let contacts = state.load_contacts(&mut service, Some(&password))?;
 
@@ -1457,7 +1455,11 @@ pub async fn revoke_social_recovery_impl(
         let security_policy = state.with_session_required(
             &session,
             "Active wallet session changed before recovery revocation could load policy",
-            |service| state.get_or_load_security_policy(service, password.as_deref()).map_err(FrontendError::from),
+            |service| {
+                state
+                    .get_or_load_security_policy(service, password.as_deref())
+                    .map_err(FrontendError::from)
+            },
         )?;
         let reply_drops: Vec<DropDescriptor> = collect_own_reply_syncs(
             &security_policy,
@@ -2021,7 +2023,9 @@ pub async fn complete_social_recovery_impl(
 
                 let expected_owner_id = derived_identity.user_id.clone();
                 state.with_session_required(
-                    &state.lock_service().and_then(|s| state.session_token_for_service(&s))?,
+                    &state
+                        .lock_service()
+                        .and_then(|s| state.session_token_for_service(&s))?,
                     "Restored wallet session changed before updating recovery rotation epoch",
                     |service| {
                         let current_owner_id = service

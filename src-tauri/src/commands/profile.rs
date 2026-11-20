@@ -174,25 +174,25 @@ mod tests {
 
         // Add both a selected friend/own sync and a public sync with distinct read_url vs write_url
         state.set_cached_security_policy(Some(crate::settings::SecurityPolicy {
-                market_selected_syncs: vec![crate::models::FrontendSyncDescriptor {
-                    write_url: "https://own.example.com/sync.php".to_string(),
-                    read_url: "https://own.example.com/d-own12345".to_string(),
-                    drop_pub: "11".repeat(32),
-                    status: "active".to_string(),
-                    ..Default::default()
-                }],
-                public_syncs: vec![crate::settings::StoredPublicSync {
-                    write_url: "https://sync.example.com/sync.php".to_string(),
-                    read_url: "https://sync.example.com/d-pub67890".to_string(),
-                    access_pubkey: "abc".to_string(),
-                    drop_pub: "def".to_string(),
-                    enabled: true,
-                    authorized_channels: vec!["card".to_string()],
-                    register_url: None,
-                    ..Default::default()
-                }],
+            market_selected_syncs: vec![crate::models::FrontendSyncDescriptor {
+                write_url: "https://own.example.com/sync.php".to_string(),
+                read_url: "https://own.example.com/d-own12345".to_string(),
+                drop_pub: "11".repeat(32),
+                status: "active".to_string(),
                 ..Default::default()
-            }));
+            }],
+            public_syncs: vec![crate::settings::StoredPublicSync {
+                write_url: "https://sync.example.com/sync.php".to_string(),
+                read_url: "https://sync.example.com/d-pub67890".to_string(),
+                access_pubkey: "abc".to_string(),
+                drop_pub: "def".to_string(),
+                enabled: true,
+                authorized_channels: vec!["card".to_string()],
+                register_url: None,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }));
 
         let quick = get_my_quick_contact_impl(&state).expect("get_my_quick_contact should succeed");
 

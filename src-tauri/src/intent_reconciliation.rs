@@ -47,7 +47,8 @@ async fn reconcile_due_intent(
         service
             .build_intent_committee_requests(local_id, &nonce, &known_heads, true)
             .map_err(FrontendError::from)
-    })? else {
+    })?
+    else {
         return Ok(());
     };
 
@@ -60,6 +61,7 @@ async fn reconcile_due_intent(
         &client,
         &requests,
         INTENT_DISPATCH_TIMEOUT,
+        &lifecycle.l2_probe_cache,
     )
     .await;
 
@@ -78,7 +80,10 @@ async fn reconcile_due_intent(
     }
     if let Some(newer_manifest) = best_upgraded {
         let upgraded_reqs = state.with_session(session, |service| {
-            if service.update_l2_anchor_manifest(newer_manifest, None).is_ok() {
+            if service
+                .update_l2_anchor_manifest(newer_manifest, None)
+                .is_ok()
+            {
                 let known_heads = crate::state::load_known_head_receipts_for_anchor(
                     service,
                     &intent.anchor_id,
@@ -97,6 +102,7 @@ async fn reconcile_due_intent(
                     &client,
                     &next_reqs,
                     INTENT_DISPATCH_TIMEOUT,
+                    &lifecycle.l2_probe_cache,
                 )
                 .await;
                 dispatch.receipts.extend(extra.receipts);
@@ -119,9 +125,13 @@ async fn reconcile_due_intent(
 
     let pow_base_bits = crate::services::common::max_pow_base_bits_for_servers(
         lifecycle,
-        intent.manifest.servers.iter().map(|s| s.write_url.as_str()),
+        intent.manifest.servers.iter().map(|s| s.lock_pub),
     );
-    let Some(mut service) = state.lock_service().ok().filter(|s| state.is_session_current(session, s)) else {
+    let Some(mut service) = state
+        .lock_service()
+        .ok()
+        .filter(|s| state.is_session_current(session, s))
+    else {
         return Ok(());
     };
     crate::state::record_known_head_receipts(
@@ -211,7 +221,8 @@ pub async fn reconcile_due_intents(
                 if let Err(error) = service.expire_intent_if_overdue(&local_id, now, None) {
                     log::debug!("Failed to expire L2 send intent {}: {}", local_id, error);
                 }
-                if let Err(error) = service.cleanup_terminal_intents(TERMINAL_RETENTION_MS, now, None)
+                if let Err(error) =
+                    service.cleanup_terminal_intents(TERMINAL_RETENTION_MS, now, None)
                 {
                     log::debug!("Failed to clean up terminal L2 send intents: {}", error);
                 }

@@ -28,7 +28,7 @@ vi.mock('../../services/marketService', () => ({
 
 vi.mock('../../services/settingsService', () => ({
     settingsService: {
-        getConfig: vi.fn(),
+        getLockProtectionOverview: vi.fn(),
     },
 }));
 
@@ -70,7 +70,14 @@ describe('useVoucherCreation', () => {
         vi.mocked(standardsService.getStandards).mockResolvedValue([stdA, stdB]);
         vi.mocked(profileService.getProfile).mockResolvedValue({ id: 'did:key:zOwn' });
         vi.mocked(marketService.getMyMarketProfile).mockResolvedValue({ skills: [] } as never);
-        vi.mocked(settingsService.getConfig).mockResolvedValue({ lifecycle: { l2AnchorTemplatesMeta: [] } } as never);
+        vi.mocked(settingsService.getLockProtectionOverview).mockResolvedValue({
+            status: 'none',
+            readyTrustedCount: 0,
+            servers: [],
+            hasOfflineCachedAnchor: false,
+            unresolvedIntentsCount: 0,
+            pendingRestoreReconciliation: false,
+        });
     });
 
     it('discards stale async parseStandard responses when switching standards rapidly', async () => {

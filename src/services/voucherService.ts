@@ -9,7 +9,6 @@ import {
     AggregatedBalance,
     GuarantorAnchorCheckDto,
     ClaimBundleDto,
-    DeadQuorumAdjudicationDto,
 } from "../types";
 
 export type SigningRequestConfig = 
@@ -123,50 +122,4 @@ export const voucherService = {
         afterWalletMutation(args.password);
         return result;
     },
-
-    createDeadQuorumSwapOffer: async (args: {
-        deadAnchorIdHex: string;
-        replacementAnchorIdHex: string;
-        claimWindowSecs?: number | null;
-        powBits?: number | null;
-        password?: string | null;
-    }) => {
-        return await invoke<string>("create_dead_quorum_swap_offer_cmd", {
-            deadAnchorIdHex: args.deadAnchorIdHex,
-            replacementAnchorIdHex: args.replacementAnchorIdHex,
-            claimWindowSecs: args.claimWindowSecs ?? null,
-            powBits: args.powBits ?? null,
-            password: args.password ?? null,
-        });
-    },
-
-    createDeadQuorumSwapClaim: async (args: {
-        offerJson: string;
-        localInstanceId: string;
-        password?: string | null;
-    }) => {
-        return await invoke<string>("create_dead_quorum_swap_claim_cmd", {
-            offerJson: args.offerJson,
-            localInstanceId: args.localInstanceId,
-            password: args.password ?? null,
-        });
-    },
-
-    adjudicateDeadQuorumSwap: async (args: {
-        offerJson: string;
-        submissionsJson: string[];
-        standardToml: string;
-        depositToPost?: boolean;
-        password?: string | null;
-    }) => {
-        const result = await invoke<DeadQuorumAdjudicationDto>("adjudicate_dead_quorum_swap_cmd", {
-            offerJson: args.offerJson,
-            submissionsJson: args.submissionsJson,
-            standardToml: args.standardToml,
-            depositToPost: args.depositToPost ?? false,
-            password: args.password ?? null,
-        });
-        afterWalletMutation(args.password);
-        return result;
-    }
 };

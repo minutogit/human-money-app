@@ -535,10 +535,9 @@ pub(crate) fn delete_profile_impl(
 
     // 2. Remove metadata entry & device-local PIN keystore entry while still holding `_delete_lock`
     if let Some(dir) = metadata_wallet_dir {
-        if let Err(e) = crate::services::fs_helpers::remove_profile_metadata_entry_in_dir(
-            dir,
-            folder_name,
-        ) {
+        if let Err(e) =
+            crate::services::fs_helpers::remove_profile_metadata_entry_in_dir(dir, folder_name)
+        {
             log::warn!("Failed to remove deleted profile metadata entry: {}", e);
         }
     }
@@ -776,13 +775,7 @@ pub fn unlock_session_with_pin(
             resolve_active_profile_folder(&service, folder_name.as_deref(), &wallet_data_dir)
         })?
     };
-    unlock_session_with_pin_impl(
-        &resolved_folder,
-        &pin,
-        &keystore_dir,
-        &device_id,
-        &state,
-    )
+    unlock_session_with_pin_impl(&resolved_folder, &pin, &keystore_dir, &device_id, &state)
 }
 
 pub fn enable_profile_pin_impl(
@@ -1202,14 +1195,9 @@ mod tests {
         assert_eq!(status.remaining_attempts, 5);
 
         // Full-baseline session rejects PIN session unlock without touching failed_attempts
-        let full_pin_err = unlock_session_with_pin_impl(
-            &folder,
-            "000000",
-            &keystore_dir,
-            "dev-pin-1",
-            &app_state,
-        )
-        .unwrap_err();
+        let full_pin_err =
+            unlock_session_with_pin_impl(&folder, "000000", &keystore_dir, "dev-pin-1", &app_state)
+                .unwrap_err();
         assert_eq!(full_pin_err.code, "error.auth.insufficientAccessMode");
         let after_full_pin_err =
             get_profile_pin_status_impl(&folder, &keystore_dir, &app_state).unwrap();
@@ -1279,14 +1267,9 @@ mod tests {
             session_timeout_seconds: 0,
             ..Default::default()
         }));
-        let ephemeral = unlock_session_with_pin_impl(
-            &folder,
-            "246810",
-            &keystore_dir,
-            "dev-pin-1",
-            &app_state,
-        )
-        .unwrap();
+        let ephemeral =
+            unlock_session_with_pin_impl(&folder, "246810", &keystore_dir, "dev-pin-1", &app_state)
+                .unwrap();
         assert!(!ephemeral.has_cached_session);
         assert_eq!(ephemeral.access_mode, "dailyPay");
         assert!(ephemeral
@@ -1299,28 +1282,18 @@ mod tests {
             session_timeout_seconds: 300,
             ..Default::default()
         }));
-        let wrong_once = unlock_session_with_pin_impl(
-            &folder,
-            "000000",
-            &keystore_dir,
-            "dev-pin-1",
-            &app_state,
-        )
-        .unwrap_err();
+        let wrong_once =
+            unlock_session_with_pin_impl(&folder, "000000", &keystore_dir, "dev-pin-1", &app_state)
+                .unwrap_err();
         assert_eq!(wrong_once.code, "error.auth.invalidPin");
         assert_eq!(
             wrong_once.details.get("remaining").map(String::as_str),
             Some("4")
         );
 
-        let cached_pin = unlock_session_with_pin_impl(
-            &folder,
-            "246810",
-            &keystore_dir,
-            "dev-pin-1",
-            &app_state,
-        )
-        .unwrap();
+        let cached_pin =
+            unlock_session_with_pin_impl(&folder, "246810", &keystore_dir, "dev-pin-1", &app_state)
+                .unwrap();
         assert!(cached_pin.has_cached_session);
         assert!(cached_pin.one_shot_grant.is_none());
         assert_eq!(cached_pin.access_mode, "dailyPay");
@@ -1351,15 +1324,18 @@ mod tests {
 
         // Boundary enforcement across l2, sync, and standards modules:
         // DailyPay fails with insufficientAccessMode; master password override succeeds.
-        let l2_err = crate::services::l2_anchor_service::set_own_nominated_lock_server_impl(
-            None, None, None, &app_state,
+        let l2_err = crate::services::l2_anchor_service::set_lock_server_trust_impl(
+            "11".repeat(32),
+            true,
+            None,
+            &app_state,
         )
         .unwrap_err();
         assert_eq!(l2_err.code, "error.auth.insufficientAccessMode");
         assert!(
-            crate::services::l2_anchor_service::set_own_nominated_lock_server_impl(
-                None,
-                None,
+            crate::services::l2_anchor_service::set_lock_server_trust_impl(
+                "11".repeat(32),
+                true,
                 Some(master_pw.to_string()),
                 &app_state,
             )
@@ -1415,14 +1391,9 @@ mod tests {
                 Some(expected_rem.to_string().as_str())
             );
         }
-        let wipe_reauth_err = unlock_session_with_pin_impl(
-            &folder,
-            "000000",
-            &keystore_dir,
-            "dev-pin-1",
-            &app_state,
-        )
-        .unwrap_err();
+        let wipe_reauth_err =
+            unlock_session_with_pin_impl(&folder, "000000", &keystore_dir, "dev-pin-1", &app_state)
+                .unwrap_err();
         assert_eq!(wipe_reauth_err.code, "error.auth.pinWipedMaxAttempts");
         let after_reauth_wipe = get_session_status_impl(&app_state).unwrap();
         assert!(!after_reauth_wipe.has_cached_session);
@@ -1550,7 +1521,9 @@ mod tests {
         }));
 
         // Locked DailyPay session denies Full and DailyPay calls without grant
-        let denied_daily = app_state.authorize(RequiredAccess::DailyPay, None).unwrap_err();
+        let denied_daily = app_state
+            .authorize(RequiredAccess::DailyPay, None)
+            .unwrap_err();
         assert!(
             denied_daily.code == "error.auth.passwordRequired"
                 || denied_daily.code == "error.auth.sessionNotActive",
@@ -1558,14 +1531,9 @@ mod tests {
             denied_daily.code
         );
 
-        let unlocked = unlock_session_with_pin_impl(
-            &folder,
-            "246810",
-            &keystore_dir,
-            "dev-h1",
-            &app_state,
-        )
-        .unwrap();
+        let unlocked =
+            unlock_session_with_pin_impl(&folder, "246810", &keystore_dir, "dev-h1", &app_state)
+                .unwrap();
         let grant = unlocked
             .one_shot_grant
             .expect("timeout=0 PIN unlock must issue a single-use grant");
@@ -1593,16 +1561,11 @@ mod tests {
         );
 
         // 3. Issuing a new grant and logging out / clearing caches invalidates it
-        let grant2 = unlock_session_with_pin_impl(
-            &folder,
-            "246810",
-            &keystore_dir,
-            "dev-h1",
-            &app_state,
-        )
-        .unwrap()
-        .one_shot_grant
-        .unwrap();
+        let grant2 =
+            unlock_session_with_pin_impl(&folder, "246810", &keystore_dir, "dev-h1", &app_state)
+                .unwrap()
+                .one_shot_grant
+                .unwrap();
         app_state.clear_all_caches();
         assert!(app_state
             .authorize_and_lock_secret(RequiredAccess::DailyPay, Some(&grant2))
@@ -1667,14 +1630,9 @@ mod tests {
         // B holds the profile lock -> A's delete_profile MUST fail closed before touching files!
         let lock_b = state_b.acquire_profile_lock(&folder).unwrap();
         state_b.commit_profile_lock(lock_b);
-        let contention_err = delete_profile_impl(
-            &folder,
-            pw,
-            &state_a,
-            Some(&wallet_dir),
-            Some(&config_dir),
-        )
-        .unwrap_err();
+        let contention_err =
+            delete_profile_impl(&folder, pw, &state_a, Some(&wallet_dir), Some(&config_dir))
+                .unwrap_err();
         assert_eq!(contention_err.code, "error.auth.profileAlreadyOpen");
         assert!(wallet_dir.join(&folder).exists());
 
@@ -1684,14 +1642,8 @@ mod tests {
         state_a.commit_profile_lock(lock_a);
         let gen_before = state_a.current_session_generation();
 
-        delete_profile_impl(
-            &folder,
-            pw,
-            &state_a,
-            Some(&wallet_dir),
-            Some(&config_dir),
-        )
-        .expect("Active profile delete after lock release must succeed");
+        delete_profile_impl(&folder, pw, &state_a, Some(&wallet_dir), Some(&config_dir))
+            .expect("Active profile delete after lock release must succeed");
 
         assert!(!wallet_dir.join(&folder).exists());
         assert!(

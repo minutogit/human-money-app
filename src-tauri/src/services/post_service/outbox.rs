@@ -843,15 +843,7 @@ pub async fn send_signing_request_via_post_impl(
         anchor_manifest_json,
     )?;
 
-    persist_and_flush_post_box(
-        state,
-        &session,
-        &baseline,
-        &mut post_state,
-        msg_id,
-        pw,
-    )
-    .await
+    persist_and_flush_post_box(state, &session, &baseline, &mut post_state, msg_id, pw).await
 }
 
 /// Replies with a detached voucher signature container via Post and clears any matching request.
@@ -862,8 +854,8 @@ pub async fn reply_detached_signature_via_post_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendPostDepositResult, FrontendError> {
-    let session =
-        state.authorize_and_begin_session(crate::state::RequiredAccess::Full, password.as_deref())?;
+    let session = state
+        .authorize_and_begin_session(crate::state::RequiredAccess::Full, password.as_deref())?;
     let validated_recipient =
         ValidatedUserId::parse(&recipient_did).map_err(FrontendError::from)?;
     let recipient_did = validated_recipient.as_str().to_string();
@@ -895,7 +887,13 @@ pub async fn reply_detached_signature_via_post_impl(
         .find(|e| e.msg_id == msg_id)
         .map(|e| e.entry.tag16);
 
-    merge_and_save_post_state(state, &session, &baseline, &mut post_state, password.as_deref())?;
+    merge_and_save_post_state(
+        state,
+        &session,
+        &baseline,
+        &mut post_state,
+        password.as_deref(),
+    )?;
     let mid_baseline = post_state.clone();
 
     let outcome = flush_post_slots_impl(
@@ -988,64 +986,66 @@ pub async fn send_wot_handshake_via_post_impl(
     let recipient_did = validated_recipient.as_str().to_string();
     let recipient_ed_pk = validated_recipient.public_key();
 
-    let (my_identity, my_ed_sk, own_reply_syncs, assertion, now_secs) = state.with_session_required(
-        &session,
-        "Wallet session changed before preparing WoT handshake",
-        |service| {
-            let my_identity = service
-                .with_wallet_and_identity(|_w, id| id.clone())
-                .map_err(FrontendError::from)?;
-            let my_ed_sk = my_identity.signing_key.clone();
-            let my_did = my_identity.user_id.clone();
-            let my_name = service
-                .with_wallet(|w| w.profile.first_name.clone())
-                .ok()
-                .flatten();
-
-            let mut reg = state
-                .get_or_load_wot_register(service, pw)
-                .map_err(FrontendError::from)?;
-
-            if reg.own_list_dirty {
-                state
-                    .ensure_wot_list_signed(service, &mut reg)
+    let (my_identity, my_ed_sk, own_reply_syncs, assertion, now_secs) = state
+        .with_session_required(
+            &session,
+            "Wallet session changed before preparing WoT handshake",
+            |service| {
+                let my_identity = service
+                    .with_wallet_and_identity(|_w, id| id.clone())
                     .map_err(FrontendError::from)?;
-                state
-                    .save_wot_register(service, &reg, pw)
+                let my_ed_sk = my_identity.signing_key.clone();
+                let my_did = my_identity.user_id.clone();
+                let my_name = service
+                    .with_wallet(|w| w.profile.first_name.clone())
+                    .ok()
+                    .flatten();
+
+                let mut reg = state
+                    .get_or_load_wot_register(service, pw)
                     .map_err(FrontendError::from)?;
-            }
 
-            let can_recipient = crate::state::canonicalize_did(&recipient_did)
-                .unwrap_or_else(|_| recipient_did.clone());
+                if reg.own_list_dirty {
+                    state
+                        .ensure_wot_list_signed(service, &mut reg)
+                        .map_err(FrontendError::from)?;
+                    state
+                        .save_wot_register(service, &reg, pw)
+                        .map_err(FrontendError::from)?;
+                }
 
-            let (pkg, _receipt) = reg
-                .prepare_sync_package(Some(&can_recipient), None, true)
-                .map_err(FrontendError::from)?;
-            let wot_sync_json = serde_json::to_string(&pkg)
-                .map_err(|e| FrontendError::from(format!("Failed to serialize sync package: {}", e)))?;
+                let can_recipient = crate::state::canonicalize_did(&recipient_did)
+                    .unwrap_or_else(|_| recipient_did.clone());
 
-            let security_policy = state
-                .get_or_load_security_policy(service, pw)
-                .map_err(FrontendError::from)?;
-            let reply_syncs = collect_own_reply_syncs(
-                &security_policy,
-                human_money_core::crypto::get_prefix_from_user_id(&my_did),
-            );
-            let now_secs = sync_client::current_unix_timestamp();
+                let (pkg, _receipt) = reg
+                    .prepare_sync_package(Some(&can_recipient), None, true)
+                    .map_err(FrontendError::from)?;
+                let wot_sync_json = serde_json::to_string(&pkg).map_err(|e| {
+                    FrontendError::from(format!("Failed to serialize sync package: {}", e))
+                })?;
 
-            let assertion = WotHandshakeAssertion {
-                sender_did: my_did,
-                sender_name: my_name,
-                proposed_level,
-                wot_sync_json,
-                reply_requested,
-                created_at: now_secs,
-            };
-            validate_wot_handshake_assertion(&assertion).map_err(FrontendError::from)?;
+                let security_policy = state
+                    .get_or_load_security_policy(service, pw)
+                    .map_err(FrontendError::from)?;
+                let reply_syncs = collect_own_reply_syncs(
+                    &security_policy,
+                    human_money_core::crypto::get_prefix_from_user_id(&my_did),
+                );
+                let now_secs = sync_client::current_unix_timestamp();
 
-            Ok((my_identity, my_ed_sk, reply_syncs, assertion, now_secs))
-        },
-    )?;
+                let assertion = WotHandshakeAssertion {
+                    sender_did: my_did,
+                    sender_name: my_name,
+                    proposed_level,
+                    wot_sync_json,
+                    reply_requested,
+                    created_at: now_secs,
+                };
+                validate_wot_handshake_assertion(&assertion).map_err(FrontendError::from)?;
+
+                Ok((my_identity, my_ed_sk, reply_syncs, assertion, now_secs))
+            },
+        )?;
 
     let container_bytes = seal_post_container_bytes(
         &my_identity,
@@ -1074,15 +1074,7 @@ pub async fn send_wot_handshake_via_post_impl(
         None,
     )?;
 
-    persist_and_flush_post_box(
-        state,
-        &session,
-        &baseline,
-        &mut post_state,
-        msg_id,
-        pw,
-    )
-    .await
+    persist_and_flush_post_box(state, &session, &baseline, &mut post_state, msg_id, pw).await
 }
 
 /// Accepts a pending incoming WoT handshake, updates contact trust, imports the peer's
@@ -1124,7 +1116,9 @@ pub async fn accept_wot_handshake_impl(
         let pkg_opt = post_state
             .pending_wot_packages_by_msg_id
             .remove(&msg_id)
-            .and_then(|json_str| serde_json::from_str::<humoco_wot::WotSyncPackage>(&json_str).ok());
+            .and_then(|json_str| {
+                serde_json::from_str::<humoco_wot::WotSyncPackage>(&json_str).ok()
+            });
 
         state.with_session_required(
             &session,
@@ -1167,13 +1161,7 @@ pub async fn accept_wot_handshake_impl(
             },
         )?;
 
-        merge_and_save_post_state(
-            state,
-            &session,
-            &baseline,
-            &mut post_state,
-            pw,
-        )?;
+        merge_and_save_post_state(state, &session, &baseline, &mut post_state, pw)?;
         sender_did
     };
 
@@ -1414,8 +1402,7 @@ pub async fn send_market_inquiry_message_via_post_impl(
     };
 
     if !has_reply_syncs {
-        let discovered_syncs =
-            lookup_counterparty_syncs(state, &counterparty_did, pw);
+        let discovered_syncs = lookup_counterparty_syncs(state, &counterparty_did, pw);
         if discovered_syncs.is_empty() {
             return Err(FrontendError::from(
                 "Counterparty has no sync service configured for replies".to_string(),
@@ -1479,15 +1466,8 @@ pub async fn send_market_inquiry_message_via_post_impl(
         .find(|e| e.msg_id == msg_id)
         .map(|e| e.entry.tag16);
 
-    let flush_outcome = flush_post_slots_impl(
-        state,
-        &session,
-        &mut post_state,
-        None,
-        &[],
-        pw,
-    )
-    .await;
+    let flush_outcome =
+        flush_post_slots_impl(state, &session, &mut post_state, None, &[], pw).await;
     if !target_tag16.is_some_and(|t| flush_outcome.recipient_uploaded_tags.contains(&t)) {
         return Err(FrontendError::with_code(
             "error.post.recipientUnreachable",

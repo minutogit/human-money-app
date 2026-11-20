@@ -4,6 +4,8 @@ import {
     CheckCircle2, 
     Clock, 
     ShieldAlert, 
+    ShieldCheck,
+    WifiOff,
     History,
     ArrowUpRight,
 } from "lucide-react";
@@ -133,6 +135,28 @@ export const VoucherCard = React.memo(({
                                 )}
                             </div>
                             <div className="flex flex-wrap items-center gap-2">
+                                {!voucher.isTestVoucher && voucher.hasLayer2Anchor !== undefined && (
+                                    <span
+                                        data-testid="voucher-card-l2-badge"
+                                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                            voucher.hasLayer2Anchor
+                                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                                : 'bg-slate-100 text-slate-600 border border-slate-200'
+                                        }`}
+                                    >
+                                        {voucher.hasLayer2Anchor ? (
+                                            <>
+                                                <ShieldCheck size={11} />
+                                                {t('voucher.card.onlineProtected', 'Online protection')}
+                                            </>
+                                        ) : (
+                                            <>
+                                                <WifiOff size={11} />
+                                                {t('voucher.card.offlineOnly', 'Offline only')}
+                                            </>
+                                        )}
+                                    </span>
+                                )}
                                 <TrustBadge trust={voucher.trust} size="sm" />
                                 {showStatus && (
                                     <div className={`flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-black uppercase ${bgColor} ${color}`}>

@@ -112,6 +112,8 @@ pub struct FrontendVoucherSummary {
     pub display_standard_name: String,
     pub allow_partial_transfers: bool,
     #[serde(default)]
+    pub has_layer2_anchor: bool,
+    #[serde(default)]
     pub trust: super::wot::FrontendVoucherTrustDto,
 }
 
@@ -148,6 +150,7 @@ impl From<human_money_core::wallet::types::VoucherSummary> for FrontendVoucherSu
             // L1 Core VoucherSummary does not carry standard definition features.
             // Full divisibility is resolved from parsed standards in the frontend.
             allow_partial_transfers: true,
+            has_layer2_anchor: false,
             trust: super::wot::FrontendVoucherTrustDto::default(),
         }
     }

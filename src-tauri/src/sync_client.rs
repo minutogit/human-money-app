@@ -65,6 +65,8 @@ pub struct SyncRevocationNotice {
 pub struct SyncLockDelegationDto {
     pub admin_pub: String,
     pub lock_pub: String,
+    pub write_url: String,
+    pub read_url: String,
     pub issued_at: u64,
     pub sig: String,
 }
@@ -147,6 +149,8 @@ pub struct FrontendLockServerProbeResult {
     pub used_inodes: u64,
     pub max_inodes: u64,
     pub probed_at_secs: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegation: Option<SyncLockDelegationDto>,
     pub error: Option<String>,
 }
 
@@ -419,19 +423,32 @@ pub async fn push_revocation_notice(
 pub async fn push_lock_delegation(
     client: &reqwest::Client,
     write_url: &str,
+    read_url: &str,
     admin_sk: &SigningKey,
     lock_pub_hex: &str,
     issued_at: u64,
 ) -> Result<SyncLockDelegationDto, String> {
     let url = append_sync_query(write_url, "lock_delegate")?;
+    let clean_write = write_url.trim().to_string();
+    let clean_read = read_url.trim().to_string();
+    if !is_valid_delegation_url(&clean_write) || !is_valid_delegation_url(&clean_read) {
+        return Err("Invalid write_url or read_url for lock delegation".to_string());
+    }
     let admin_pub = hex::encode(admin_sk.verifying_key().as_bytes());
     let lock_pub = lock_pub_hex.trim().to_ascii_lowercase();
-    let msg =
-        humoco_market::format_lock_delegate_signature_message(&admin_pub, &lock_pub, issued_at);
+    let msg = humoco_market::format_lock_delegate_signature_message(
+        &admin_pub,
+        &lock_pub,
+        &clean_write,
+        &clean_read,
+        issued_at,
+    );
     let sig = hex::encode(admin_sk.sign(msg.as_bytes()).to_bytes());
     let payload = SyncLockDelegationDto {
         admin_pub,
         lock_pub,
+        write_url: clean_write,
+        read_url: clean_read,
         issued_at,
         sig,
     };
@@ -1192,12 +1209,25 @@ fn verify_ed25519_hex_strict(pubkey_hex: &str, sig_hex: &str, msg: &[u8]) -> boo
     vk.verify_strict(msg, &sig).is_ok()
 }
 
+pub fn is_valid_delegation_url(url: &str) -> bool {
+    let trimmed = url.trim();
+    !trimmed.is_empty()
+        && trimmed.len() <= 2048
+        && (trimmed.starts_with("http://") || trimmed.starts_with("https://"))
+        && !trimmed.chars().any(|c| c.is_control() || c.is_whitespace())
+}
+
 pub fn verify_lock_delegation(
     info_lock_pub: &str,
     delegation: &SyncLockDelegationDto,
     expected_admin_pub: Option<&str>,
 ) -> bool {
     if delegation.issued_at == 0 {
+        return false;
+    }
+    let write_url = delegation.write_url.trim();
+    let read_url = delegation.read_url.trim();
+    if !is_valid_delegation_url(write_url) || !is_valid_delegation_url(read_url) {
         return false;
     }
     let lock_lower = delegation.lock_pub.trim().to_ascii_lowercase();
@@ -1210,9 +1240,12 @@ pub fn verify_lock_delegation(
             return false;
         }
     }
-    let msg = format!(
-        "HUMOCO-LOCK-DELEGATE-V1\n{}\n{}\n{}",
-        admin_lower, lock_lower, delegation.issued_at
+    let msg = humoco_market::format_lock_delegate_signature_message(
+        &admin_lower,
+        &lock_lower,
+        write_url,
+        read_url,
+        delegation.issued_at,
     );
     verify_ed25519_hex_strict(&admin_lower, &delegation.sig, msg.as_bytes())
 }
@@ -1300,6 +1333,7 @@ pub async fn probe_lock_server(
         used_inodes: 0,
         max_inodes: 0,
         probed_at_secs: now_secs,
+        delegation: None,
         error: None,
     };
 
@@ -1350,13 +1384,22 @@ pub async fn probe_lock_server(
     failed.used_inodes = lock_info.used_inodes;
     failed.max_inodes = lock_info.max_inodes;
 
+    let norm_probe_write = crate::services::common::normalize_sync_url(&clean_write_url);
+    let norm_probe_read = crate::services::common::normalize_sync_url(&failed.read_url);
     failed.delegation_valid = lock_info
         .delegation
         .as_ref()
         .map(|d| {
-            let valid = verify_lock_delegation(&lock_pub, d, expected_admin_pub);
+            let d_write = d.write_url.trim();
+            let d_read = d.read_url.trim();
+            let valid = verify_lock_delegation(&lock_pub, d, expected_admin_pub)
+                && validate_sync_url(d_write).is_ok()
+                && validate_sync_url(d_read).is_ok()
+                && crate::services::common::normalize_sync_url(d_write) == norm_probe_write
+                && crate::services::common::normalize_sync_url(d_read) == norm_probe_read;
             if valid {
                 failed.admin_pub = d.admin_pub.trim().to_ascii_lowercase();
+                failed.delegation = Some(d.clone());
             }
             valid
         })
@@ -1417,31 +1460,42 @@ pub async fn probe_lock_server(
     failed
 }
 
+#[derive(Clone, Debug)]
+pub enum LockTicketAuth {
+    Direct(SigningKey),
+    Stealth {
+        wallet_ed_sk: SigningKey,
+        drop_pub_hex: String,
+    },
+    Pow {
+        pow_bits: u32,
+    },
+}
+
 pub async fn request_genesis_ticket(
     client: &reqwest::Client,
     write_url: &str,
     anchor_id: &[u8; 32],
     retain_until_quarter: u16,
-    pow_bits: Option<u32>,
-    caller_signing_key: Option<&SigningKey>,
+    auth: LockTicketAuth,
 ) -> Result<GenesisTicket, String> {
     let url = append_sync_query(write_url, "lock_ticket")?;
     let now_secs = current_unix_timestamp();
 
-    let (pow_ts, pow_nonce) = if caller_signing_key.is_none() || pow_bits.is_some() {
-        let bits = pow_bits.unwrap_or(16);
-        let found = solve_ticket_pow(
-            anchor_id,
-            retain_until_quarter,
-            now_secs,
-            bits,
-            0,
-            2_000_000,
-        )
-        .ok_or_else(|| format!("Failed to solve GenesisTicket PoW ({} bits)", bits))?;
-        (Some(now_secs), Some(found))
-    } else {
-        (None, None)
+    let (pow_ts, pow_nonce) = match &auth {
+        LockTicketAuth::Pow { pow_bits } => {
+            let found = solve_ticket_pow(
+                anchor_id,
+                retain_until_quarter,
+                now_secs,
+                *pow_bits,
+                0,
+                2_000_000,
+            )
+            .ok_or_else(|| format!("Failed to solve GenesisTicket PoW ({} bits)", pow_bits))?;
+            (Some(now_secs), Some(found))
+        }
+        LockTicketAuth::Direct(_) | LockTicketAuth::Stealth { .. } => (None, None),
     };
 
     let req_body = serde_json::json!({
@@ -1457,18 +1511,39 @@ pub async fn request_genesis_ticket(
         .post(&url)
         .header(reqwest::header::CONTENT_TYPE, "application/json");
 
-    if let Some(sk) = caller_signing_key {
-        let nonce = generate_sync_nonce();
-        let signed = humoco_market::sign_member_request_direct(
-            sk,
-            "POST",
-            "lock_ticket",
-            None,
-            now_secs,
-            &nonce,
-            &raw_bytes,
-        );
-        req = apply_signed_headers(req, &signed, false);
+    match &auth {
+        LockTicketAuth::Direct(sk) => {
+            let nonce = generate_sync_nonce();
+            let signed = humoco_market::sign_member_request_direct(
+                sk,
+                "POST",
+                "lock_ticket",
+                None,
+                now_secs,
+                &nonce,
+                &raw_bytes,
+            );
+            req = apply_signed_headers(req, &signed, false);
+        }
+        LockTicketAuth::Stealth {
+            wallet_ed_sk,
+            drop_pub_hex,
+        } => {
+            let nonce = generate_sync_nonce();
+            let signed = humoco_market::sign_member_request_stealth(
+                wallet_ed_sk,
+                drop_pub_hex,
+                "POST",
+                "lock_ticket",
+                None,
+                now_secs,
+                &nonce,
+                &raw_bytes,
+            )
+            .map_err(|e| format!("Failed stealth lock_ticket signing: {}", e))?;
+            req = apply_signed_headers(req, &signed, false);
+        }
+        LockTicketAuth::Pow { .. } => {}
     }
 
     let resp = send_sync_request(
@@ -2072,13 +2147,16 @@ mod tests {
         let lock_sk = SigningKey::from_bytes(&[22u8; 32]);
         let lock_hex = hex::encode(lock_sk.verifying_key().as_bytes());
 
-        let del_msg = format!(
-            "HUMOCO-LOCK-DELEGATE-V1\n{}\n{}\n{}",
-            admin_hex, lock_hex, 1700000000u64
+        let write_u = "https://sync.example/sync.php";
+        let read_u = "https://sync.example/d";
+        let del_msg = humoco_market::format_lock_delegate_signature_message(
+            &admin_hex, &lock_hex, write_u, read_u, 1700000000,
         );
         let del = SyncLockDelegationDto {
             admin_pub: admin_hex.clone(),
             lock_pub: lock_hex.clone(),
+            write_url: write_u.to_string(),
+            read_url: read_u.to_string(),
             issued_at: 1700000000,
             sig: hex::encode(admin_sk.sign(del_msg.as_bytes()).to_bytes()),
         };
@@ -2087,6 +2165,13 @@ mod tests {
             &lock_hex,
             &del,
             Some(&hex::encode([99u8; 32]))
+        ));
+        let mut bad_url_del = del.clone();
+        bad_url_del.write_url = "ftp://invalid.example/sync".to_string();
+        assert!(!verify_lock_delegation(
+            &lock_hex,
+            &bad_url_del,
+            Some(&admin_hex)
         ));
 
         let checks = SyncLockSelftestChecksDto {
@@ -2440,17 +2525,162 @@ mod tests {
 
         let client = create_sync_http_client();
         let write_url = format!("http://127.0.0.1:{}/sync.php", addr.port());
-        let returned = push_lock_delegation(&client, &write_url, &admin_sk, &lock_pub, issued_at)
-            .await
-            .unwrap();
+        let read_url = format!("http://127.0.0.1:{}/d", addr.port());
+        let returned = push_lock_delegation(
+            &client, &write_url, &read_url, &admin_sk, &lock_pub, issued_at,
+        )
+        .await
+        .unwrap();
         assert_eq!(returned.admin_pub, admin_pub);
         assert_eq!(returned.lock_pub, lock_pub);
+        assert_eq!(returned.write_url, write_url);
+        assert_eq!(returned.read_url, read_url);
         assert_eq!(returned.issued_at, issued_at);
         assert!(verify_lock_delegation(
             &lock_pub,
             &returned,
             Some(&admin_pub)
         ));
+
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_request_genesis_ticket_direct_and_stealth_vs_pow_rejected() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let admin_sk = SigningKey::from_bytes(&[61u8; 32]);
+        let admin_pub_hex = hex::encode(admin_sk.verifying_key().as_bytes());
+        let wallet_ed_sk = SigningKey::from_bytes(&[62u8; 32]);
+        let stealth_p_hex =
+            humoco_market::derive_member_stealth_pubkey(&wallet_ed_sk, &admin_pub_hex).unwrap();
+        let lock_sk = SigningKey::from_bytes(&[63u8; 32]);
+        let lock_pub = lock_sk.verifying_key().to_bytes();
+        let anchor_id = [0x42u8; 32];
+        let retain_q = human_money_core::humoco_proto::encode_quarter(2035, 4).unwrap();
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let exp_admin = admin_pub_hex.clone();
+        let exp_stealth = stealth_p_hex.clone();
+
+        let server = tokio::spawn(async move {
+            for _ in 0..3 {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut buf = [0u8; 8192];
+                let n = stream.read(&mut buf).await.unwrap();
+                let raw = String::from_utf8_lossy(&buf[..n]);
+                let (head, body) = raw.split_once("\r\n\r\n").unwrap();
+                let mut lines = head.lines();
+                let req_line = lines.next().unwrap();
+                assert!(req_line.starts_with("POST /sync.php?lock_ticket"));
+
+                let mut hdr_pub = String::new();
+                let mut hdr_sig = String::new();
+                let mut hdr_ts: Option<u64> = None;
+                let mut hdr_nonce = String::new();
+                for line in lines {
+                    if let Some((k, v)) = line.split_once(':') {
+                        match k.trim().to_ascii_lowercase().as_str() {
+                            "x-drop-pubkey" => hdr_pub = v.trim().to_ascii_lowercase(),
+                            "x-drop-signature" => hdr_sig = v.trim().to_string(),
+                            "x-drop-timestamp" => hdr_ts = v.trim().parse().ok(),
+                            "x-drop-nonce" => hdr_nonce = v.trim().to_string(),
+                            _ => {}
+                        }
+                    }
+                }
+
+                let authorized_key = hdr_pub == exp_admin || hdr_pub == exp_stealth;
+                let valid_sig = hdr_ts.is_some_and(|ts| {
+                    let msg = humoco_market::format_member_request_message(
+                        "POST",
+                        "lock_ticket",
+                        None,
+                        ts,
+                        &hdr_nonce,
+                        body.as_bytes(),
+                    );
+                    verify_ed25519_hex_strict(&hdr_pub, &hdr_sig, msg.as_bytes())
+                });
+
+                let (status_line, resp_body) = if authorized_key && valid_sig {
+                    let req_json: serde_json::Value = serde_json::from_str(body).unwrap();
+                    let req_aid =
+                        decode_hex_fixed::<32>(req_json["anchor_id"].as_str().unwrap()).unwrap();
+                    let req_q = req_json["retain_until_quarter"].as_u64().unwrap() as u16;
+                    let mut ticket = GenesisTicket {
+                        anchor_id: req_aid,
+                        retain_until_quarter: req_q,
+                        issued_at: 1_760_000_000,
+                        lock_pub,
+                        sig: [0u8; 64],
+                    };
+                    ticket.sig = lock_sk.sign(&ticket.digest()).to_bytes();
+                    (
+                        "200 OK",
+                        serde_json::json!({ "ticket": ticket }).to_string(),
+                    )
+                } else {
+                    ("403 Forbidden", r#"{"error":"pow_disabled"}"#.to_string())
+                };
+                let resp = format!(
+                    "HTTP/1.1 {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                    status_line,
+                    resp_body.len(),
+                    resp_body
+                );
+                stream.write_all(resp.as_bytes()).await.unwrap();
+            }
+        });
+
+        let client = create_sync_http_client();
+        let write_url = format!("http://127.0.0.1:{}/sync.php", addr.port());
+
+        // 1. Direct admin auth succeeds without PoW
+        let t_direct = request_genesis_ticket(
+            &client,
+            &write_url,
+            &anchor_id,
+            retain_q,
+            LockTicketAuth::Direct(admin_sk),
+        )
+        .await
+        .unwrap();
+        assert!(t_direct.verify());
+        assert_eq!(t_direct.lock_pub, lock_pub);
+
+        // 2. Stealth member auth succeeds without PoW
+        let t_stealth = request_genesis_ticket(
+            &client,
+            &write_url,
+            &anchor_id,
+            retain_q,
+            LockTicketAuth::Stealth {
+                wallet_ed_sk,
+                drop_pub_hex: admin_pub_hex,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(t_stealth.verify());
+        assert_eq!(t_stealth.lock_pub, lock_pub);
+
+        // 3. PoW request is rejected with 403 when allow_pow_tickets = false
+        let err_pow = request_genesis_ticket(
+            &client,
+            &write_url,
+            &anchor_id,
+            retain_q,
+            LockTicketAuth::Pow { pow_bits: 1 },
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            err_pow.contains("403"),
+            "expected HTTP 403, got: {}",
+            err_pow
+        );
 
         server.await.unwrap();
     }

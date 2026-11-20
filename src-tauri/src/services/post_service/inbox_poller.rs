@@ -22,8 +22,8 @@ use super::handlers::{
     dispatch_post_payload, PostDispatchOutcome, PostDispatchStats, PostEnvelopeContext,
 };
 use super::{
-    load_post_state, merge_and_save_post_state,
-    resolve_counterparty_info, resolve_counterparty_info_for_session,
+    load_post_state, merge_and_save_post_state, resolve_counterparty_info,
+    resolve_counterparty_info_for_session,
 };
 use crate::services::post_service::outbox::flush_post_slots_impl;
 
@@ -507,9 +507,7 @@ fn collect_authorized_post_senders(
 
             let has_inquiry_listing =
                 crate::services::market_service::load_own_market_profile_state(
-                    state,
-                    service,
-                    password,
+                    state, service, password,
                 )
                 .ok()
                 .map(|stored| {
@@ -1069,8 +1067,7 @@ pub async fn sync_post_channels_impl(
                 decrypted_bytes: &decrypted_bytes,
                 now_secs,
             };
-            match dispatch_post_payload(&env_ctx, &container.c, &mut post_state, &mut stats).await
-            {
+            match dispatch_post_payload(&env_ctx, &container.c, &mut post_state, &mut stats).await {
                 PostDispatchOutcome::Handled => {
                     post_state.processed_msg_ids.insert(envelope.msg_id.clone());
                 }
@@ -1089,15 +1086,15 @@ pub async fn sync_post_channels_impl(
                         if post_state.unsupported_messages.len() >= 50 {
                             post_state.unsupported_messages.remove(0);
                         }
-                        post_state
-                            .unsupported_messages
-                            .push(crate::models::FrontendUnsupportedPostItem {
+                        post_state.unsupported_messages.push(
+                            crate::models::FrontendUnsupportedPostItem {
                                 msg_id: envelope.msg_id.clone(),
                                 sender_did: sender_did.clone(),
                                 sender_name,
                                 payload_type,
                                 created_at: envelope.created_at,
-                            });
+                            },
+                        );
                     }
                     post_state.processed_msg_ids.insert(envelope.msg_id.clone());
                 }
@@ -1119,9 +1116,15 @@ pub async fn sync_post_channels_impl(
     )?;
     baseline_post_state = post_state.clone();
 
-    let flush_outcome =
-        flush_post_slots_impl(state, &session, &mut post_state, None, &[], password.as_deref())
-            .await;
+    let flush_outcome = flush_post_slots_impl(
+        state,
+        &session,
+        &mut post_state,
+        None,
+        &[],
+        password.as_deref(),
+    )
+    .await;
     let uploaded_to = flush_outcome.deposited_to;
     stats.errors.extend(flush_outcome.errors);
 

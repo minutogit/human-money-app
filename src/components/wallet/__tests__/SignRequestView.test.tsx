@@ -113,7 +113,6 @@ uuid = "minuto-uuid-123"`,
       syncBackupEnabled: true,
       backupSyncFolder: null,
       backupProtectionMode: null,
-      ownNominatedLockServer: null,
       marketSelectedSyncs: [],
       publicSyncs: [],
     },
@@ -123,7 +122,6 @@ uuid = "minuto-uuid-123"`,
       lastBackupAt: null,
       lastSyncBackupAt: null,
       l2ProbeCache: {},
-      l2AnchorTemplatesMeta: [],
     },
   };
 
@@ -175,6 +173,8 @@ uuid = "minuto-uuid-123"`,
           sybilIndependentCount: 0,
           threshold: 0,
           serverCount: 0,
+          untrustedServersCount: 0,
+          servers: [],
           issues: [],
         });
       }
@@ -366,11 +366,12 @@ uuid = "minuto-uuid-123"`,
           passed: false,
           hasLayer2Anchor: true,
           retentionOk: false,
-          ownServerPresent: false,
           sybilIndependentCount: 1,
           threshold: 2,
           serverCount: 3,
-          issues: ['own_nominated_server_missing', 'sybil_independent_servers_below_threshold'],
+          untrustedServersCount: 0,
+          servers: [],
+          issues: ['sybil_independent_servers_below_threshold'],
         });
       }
       return baseImpl ? baseImpl(cmd, args) : Promise.resolve(undefined);
@@ -381,6 +382,65 @@ uuid = "minuto-uuid-123"`,
     const anchorCard = await screen.findByTestId('guarantor-anchor-check');
     expect(anchorCard).toHaveTextContent(/Sybil: 1\/2/);
     expect(screen.getByRole('button', { name: /Sign Now/i })).toBeDisabled();
+  });
+
+  it('offers 1-click trust-and-sign when anchor has untrusted protection services', async () => {
+    const baseImpl = (invoke as Mock).getMockImplementation();
+    (invoke as Mock).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === 'evaluate_guarantor_anchor_check') {
+        return Promise.resolve({
+          required: true,
+          passed: true,
+          hasLayer2Anchor: true,
+          retentionOk: true,
+          sybilIndependentCount: 2,
+          threshold: 2,
+          serverCount: 2,
+          untrustedServersCount: 1,
+          servers: [
+            {
+              lockPub: '11'.repeat(32),
+              adminPub: 'aa'.repeat(32),
+              writeUrl: 'https://s1.example/sync.php',
+              trusted: true,
+            },
+            {
+              lockPub: '22'.repeat(32),
+              adminPub: 'bb'.repeat(32),
+              writeUrl: 'https://s2.example/sync.php',
+              trusted: false,
+            },
+          ],
+          issues: [],
+        });
+      }
+      if (cmd === 'set_lock_server_trust') {
+        return Promise.resolve({
+          status: 'ready',
+          readyTrustedCount: 2,
+          servers: [],
+          hasOfflineCachedAnchor: false,
+          unresolvedIntentsCount: 0,
+          pendingRestoreReconciliation: false,
+        });
+      }
+      return baseImpl ? baseImpl(cmd, args) : Promise.resolve(undefined);
+    });
+
+    (save as Mock).mockResolvedValue('/tmp/signature-trusted.sig');
+    render(<SignRequestView voucherData={mockVoucherDetails} onBack={mockOnBack} />);
+
+    const trustBtn = await screen.findByRole('button', { name: /Trust these services & sign/i });
+    fireEvent.click(trustBtn);
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('set_lock_server_trust', {
+        adminPub: 'bb'.repeat(32),
+        trusted: true,
+        password: 'test-password',
+      });
+      expect(invoke).toHaveBeenCalledWith('create_detached_signature_response_bundle', expect.anything());
+    });
   });
 
   it('blocks guarantor signing while anchor check is pending or when anchor check rejects', async () => {

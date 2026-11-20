@@ -25,10 +25,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::gateway_resolver::{sybil_fold_committee, SybilServerCandidate};
 use crate::models::{FrontendAddressBook, FrontendError};
-use crate::services::common::max_pow_base_bits_for_servers;
-use crate::settings::{InternalLifecycleState, SecurityPolicy};
+use crate::services::common::{
+    max_pow_base_bits_for_servers, normalize_sync_url, resolve_server_locator,
+    upsert_verified_lock_probe,
+};
+use crate::settings::{is_lock_admin_trusted, InternalLifecycleState, SecurityPolicy};
 use crate::state::{AppState, CONTACTS_DATA_NAME, MARKET_CARD_STORE_KEY};
-use crate::sync_client::{self, SyncRevocationNotice};
+use crate::sync_client::{self, FrontendLockServerProbeResult, SyncRevocationNotice};
 
 pub const SERVER_OFFENDER_LIST_KEY: &str = "l2_server_offenders";
 pub const KEY_SUCCESSOR_STORE_KEY: &str = "wot_key_successors";
@@ -143,47 +146,6 @@ pub struct FrontendClaimBundleDto {
     pub post_deposit: Option<crate::models::FrontendPostDepositResult>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub post_deposit_error: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FrontendApprovedSwapClaimDto {
-    pub claimant_did: String,
-    pub voucher_id: String,
-    pub tip_t_id: String,
-    pub approved_amount: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub replacement_voucher_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub replacement_local_instance_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub replacement_bundle_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub replacement_bundle_bytes: Option<Vec<u8>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub replacement_intent_local_id: Option<String>,
-    pub status: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub post_deposit: Option<crate::models::FrontendPostDepositResult>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub post_deposit_error: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FrontendRejectedSwapClaimDto {
-    pub claimant_did: String,
-    pub voucher_id: String,
-    pub tip_t_id: String,
-    pub reason: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FrontendDeadQuorumAdjudicationDto {
-    pub approved: Vec<FrontendApprovedSwapClaimDto>,
-    pub rejected: Vec<FrontendRejectedSwapClaimDto>,
-    pub double_spend_proofs_count: usize,
 }
 
 pub fn load_server_offender_list(
@@ -338,14 +300,92 @@ pub(crate) fn classify_server_probe_info(
     }
 }
 
-/// Pure decision helper applying verified effective `SyncRevocationNotice` entries to anchor health.
+/// Validates a signed same-`lock_pub` relocation notice and replacement probe, updating `probe_cache`
+/// without revoking `expected_srv.lock_pub`.
+pub(crate) fn try_apply_relocation_from_notice(
+    probe_cache: &mut BTreeMap<String, FrontendLockServerProbeResult>,
+    expected_srv: &ServerEntry,
+    notice: &SyncRevocationNotice,
+    replacement_probe: FrontendLockServerProbeResult,
+) -> bool {
+    let admin_hex = hex::encode(expected_srv.admin_pub);
+    let lock_hex = hex::encode(expected_srv.lock_pub);
+    if sync_client::verify_revocation_notice(notice, &admin_hex).is_err() {
+        return false;
+    }
+    let Some(ref rep) = notice.replacement else {
+        return false;
+    };
+    if !replacement_probe.delegation_valid || !replacement_probe.passed {
+        return false;
+    }
+    if !replacement_probe
+        .lock_pub
+        .trim()
+        .eq_ignore_ascii_case(&lock_hex)
+        || !replacement_probe
+            .admin_pub
+            .trim()
+            .eq_ignore_ascii_case(&admin_hex)
+    {
+        return false;
+    }
+    let rep_w = normalize_sync_url(&rep.write_url);
+    let rep_r = normalize_sync_url(&rep.read_url);
+    if rep_w.is_empty()
+        || rep_r.is_empty()
+        || normalize_sync_url(&replacement_probe.write_url) != rep_w
+        || normalize_sync_url(&replacement_probe.read_url) != rep_r
+    {
+        return false;
+    }
+    if !replacement_probe.delegation.as_ref().is_none_or(|d| {
+        normalize_sync_url(&d.write_url) == rep_w && normalize_sync_url(&d.read_url) == rep_r
+    }) {
+        return false;
+    }
+    upsert_verified_lock_probe(probe_cache, replacement_probe)
+}
+
+pub(crate) async fn try_follow_relocation_notice(
+    client: &reqwest::Client,
+    probe_cache: &mut BTreeMap<String, FrontendLockServerProbeResult>,
+    expected_srv: &ServerEntry,
+    notice: &SyncRevocationNotice,
+) -> bool {
+    let admin_hex = hex::encode(expected_srv.admin_pub);
+    if sync_client::verify_revocation_notice(notice, &admin_hex).is_err() {
+        return false;
+    }
+    let Some(ref rep) = notice.replacement else {
+        return false;
+    };
+    let Ok(rep_probe) = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        sync_client::probe_lock_server(client, &rep.write_url, Some(&admin_hex)),
+    )
+    .await
+    else {
+        return false;
+    };
+    try_apply_relocation_from_notice(probe_cache, expected_srv, notice, rep_probe)
+}
+
+/// Pure decision helper applying verified effective `SyncRevocationNotice` entries to anchor health,
+/// skipping servers whose `lock_pub` relocated cleanly via a verified replacement probe.
 pub(crate) fn apply_revocation_notices_to_health(
     health: &mut StoredAnchorHealth,
     notices: &[(LockPubKey, SyncRevocationNotice)],
     expected_servers: &[ServerEntry],
+    relocated_lock_pubs: &HashSet<LockPubKey>,
     now_secs: u64,
 ) {
     for (lock_pub, notice) in notices {
+        let lock_hex = hex::encode(lock_pub);
+        if relocated_lock_pubs.contains(lock_pub) {
+            health.unhealthy_since_by_lock_pub.remove(&lock_hex);
+            continue;
+        }
         let Some(srv) = expected_servers.iter().find(|s| s.lock_pub == *lock_pub) else {
             continue;
         };
@@ -353,7 +393,7 @@ pub(crate) fn apply_revocation_notices_to_health(
         if sync_client::verify_revocation_notice(notice, &expected_admin).is_ok()
             && notice.effective_at <= now_secs
         {
-            health.revoked_lock_pubs.insert(hex::encode(lock_pub));
+            health.revoked_lock_pubs.insert(lock_hex);
         }
     }
 }
@@ -406,6 +446,7 @@ pub fn record_revoked_servers(
     anchor_id: &[u8; 32],
     notices: &[(LockPubKey, SyncRevocationNotice)],
     expected_servers: &[ServerEntry],
+    relocated_lock_pubs: &HashSet<LockPubKey>,
     now_secs: u64,
     password: Option<&str>,
 ) -> Result<(), FrontendError> {
@@ -418,7 +459,13 @@ pub fn record_revoked_servers(
         .anchors
         .entry(anchor_hex.clone())
         .or_insert_with(|| StoredAnchorHealth::new(anchor_hex));
-    apply_revocation_notices_to_health(health, notices, expected_servers, now_secs);
+    apply_revocation_notices_to_health(
+        health,
+        notices,
+        expected_servers,
+        relocated_lock_pubs,
+        now_secs,
+    );
     save_lifecycle_state(service, &lc, password)
 }
 
@@ -516,8 +563,7 @@ pub async fn discover_anchor_manifest(
             let local_manifest = service
                 .with_wallet(|w| w.profile.l2_anchor_manifests.get(&anchor_hex).cloned())
                 .map_err(FrontendError::from)?;
-            let local_manifest =
-                local_manifest.filter(|m| m.verify_anchor_id(anchor_id).is_ok());
+            let local_manifest = local_manifest.filter(|m| m.verify_anchor_id(anchor_id).is_ok());
             let local_rev = local_manifest.as_ref().map(|m| m.revision).unwrap_or(0);
 
             let card_store: CardStore = crate::state::load_encrypted_json_or_default(
@@ -610,18 +656,21 @@ pub async fn discover_anchor_manifest(
             push_unique_url(&mut stage_urls, &mut seen, &s.write_url);
         }
     }
-    for (url, probe) in &lifecycle.l2_probe_cache {
+    for d in &security_policy.market_selected_syncs {
+        push_unique_url(&mut stage_urls, &mut seen, &d.read_url);
+        push_unique_url(&mut stage_urls, &mut seen, &d.write_url);
+    }
+    for probe in lifecycle.l2_probe_cache.values() {
         if probe.passed {
             push_unique_url(&mut stage_urls, &mut seen, &probe.read_url);
-            push_unique_url(&mut stage_urls, &mut seen, url);
+            push_unique_url(&mut stage_urls, &mut seen, &probe.write_url);
         }
-    }
-    if let Some(ref own) = security_policy.own_nominated_lock_server {
-        push_unique_url(&mut stage_urls, &mut seen, &own.read_url);
-        push_unique_url(&mut stage_urls, &mut seen, &own.write_url);
     }
     if let Some(ref m) = best_manifest {
         for srv in &m.servers {
+            let (resolved_w, resolved_r) = resolve_server_locator(srv, &lifecycle.l2_probe_cache);
+            push_unique_url(&mut stage_urls, &mut seen, &resolved_r);
+            push_unique_url(&mut stage_urls, &mut seen, &resolved_w);
             push_unique_url(&mut stage_urls, &mut seen, &srv.read_url);
             push_unique_url(&mut stage_urls, &mut seen, &srv.write_url);
         }
@@ -666,12 +715,15 @@ pub async fn mirror_manifest_to_own_syncs(
     }
     let mut urls = HashSet::new();
     for s in &security_policy.public_syncs {
-        if s.enabled && s.status != "revoked" {
+        if s.enabled && s.status != "revoked" && is_lock_admin_trusted(security_policy, &s.drop_pub)
+        {
             urls.insert(s.write_url.clone());
         }
     }
-    if let Some(ref own) = security_policy.own_nominated_lock_server {
-        urls.insert(own.write_url.clone());
+    for d in &security_policy.market_selected_syncs {
+        if is_lock_admin_trusted(security_policy, &d.drop_pub) {
+            urls.insert(d.write_url.clone());
+        }
     }
     for write_url in urls {
         let _ =
@@ -686,6 +738,7 @@ pub(crate) fn select_rotation_proposal(
     failed_lock_pubs: &HashSet<LockPubKey>,
     creator_mig_sk: Option<&SigningKey>,
     guarantor_auth: Option<(u8, &SigningKey, u64)>,
+    security_policy: &SecurityPolicy,
     lifecycle: &InternalLifecycleState,
     offenders: &ServerOffenderList,
     now_secs: u64,
@@ -746,8 +799,11 @@ pub(crate) fn select_rotation_proposal(
         };
         if can_pick_probe {
             let mut picked: Option<ServerEntry> = None;
-            for (url, probe) in &lifecycle.l2_probe_cache {
-                if !probe.passed || probe.max_retention_quarter < manifest.retain_until_quarter {
+            for probe in lifecycle.l2_probe_cache.values() {
+                if !probe.passed
+                    || probe.max_retention_quarter < manifest.retain_until_quarter
+                    || !is_lock_admin_trusted(security_policy, &probe.admin_pub)
+                {
                     continue;
                 }
                 let Ok(lock_pub) = decode_hex_fixed::<32>(&probe.lock_pub) else {
@@ -762,7 +818,7 @@ pub(crate) fn select_rotation_proposal(
                     continue;
                 }
                 let cand = SybilServerCandidate {
-                    write_url: url.clone(),
+                    write_url: probe.write_url.clone(),
                     lock_pub,
                     admin_pub: Some(admin_pub),
                     asn: None,
@@ -790,7 +846,12 @@ pub(crate) fn select_rotation_proposal(
         // Otherwise shrink dead slot cleanly (Concept §5.4: never fill a guarantor seat with creator server).
     }
 
-    if new_servers.is_empty() || new_servers == manifest.servers {
+    let same_committee = new_servers.len() == manifest.servers.len()
+        && new_servers
+            .iter()
+            .zip(&manifest.servers)
+            .all(|(a, b)| a.same_identity(b));
+    if new_servers.is_empty() || same_committee {
         return None;
     }
 
@@ -830,6 +891,111 @@ pub(crate) fn select_rotation_proposal(
     }
 
     None
+}
+
+/// Phase 5 Safe Auto-Growth: safely expands healthy `creator`-only committees with empty
+/// `guarantor_mig_pubs` (`N < 3`) up to `N = 3` (`threshold = 2`), or `1 -> 2` (`threshold = 2`)
+/// when a trusted friend/circle server (`market_selected_syncs`) is added as the 2nd server.
+pub(crate) fn select_auto_growth_proposal(
+    anchor_id: [u8; 32],
+    manifest: &AnchorManifest,
+    creator_mig_sk: &SigningKey,
+    security_policy: &SecurityPolicy,
+    lifecycle: &InternalLifecycleState,
+    offenders: &ServerOffenderList,
+    now_secs: u64,
+) -> Option<MigrationProposal> {
+    if !manifest.authority.guarantor_mig_pubs.is_empty()
+        || manifest.servers.is_empty()
+        || manifest.servers.len() >= 3
+    {
+        return None;
+    }
+
+    let circle_urls: HashSet<String> = security_policy
+        .market_selected_syncs
+        .iter()
+        .map(|d| normalize_sync_url(&d.write_url))
+        .filter(|u| !u.is_empty())
+        .collect();
+
+    let mut used_lock_pubs: HashSet<LockPubKey> =
+        manifest.servers.iter().map(|s| s.lock_pub).collect();
+    let mut sybil_existing: Vec<SybilServerCandidate> = manifest
+        .servers
+        .iter()
+        .map(|s| {
+            let (resolved_w, _) = resolve_server_locator(s, &lifecycle.l2_probe_cache);
+            SybilServerCandidate {
+                write_url: resolved_w,
+                lock_pub: s.lock_pub,
+                admin_pub: Some(s.admin_pub),
+                asn: None,
+            }
+        })
+        .collect();
+
+    let mut available_extra: Vec<ServerEntry> = Vec::new();
+    for probe in lifecycle.l2_probe_cache.values() {
+        if !probe.passed
+            || !probe.delegation_valid
+            || probe.max_retention_quarter < manifest.retain_until_quarter
+            || !is_lock_admin_trusted(security_policy, &probe.admin_pub)
+        {
+            continue;
+        }
+        let Ok(lock_pub) = decode_hex_fixed::<32>(&probe.lock_pub) else {
+            continue;
+        };
+        let Ok(admin_pub) = decode_hex_fixed::<32>(&probe.admin_pub) else {
+            continue;
+        };
+        if used_lock_pubs.contains(&lock_pub)
+            || is_server_key_revoked(offenders, &lock_pub, Some(&admin_pub))
+        {
+            continue;
+        }
+        let cand = SybilServerCandidate {
+            write_url: probe.write_url.clone(),
+            lock_pub,
+            admin_pub: Some(admin_pub),
+            asn: None,
+        };
+        let mut trial = sybil_existing.clone();
+        trial.push(cand.clone());
+        if sybil_fold_committee(&trial).len() == trial.len() {
+            used_lock_pubs.insert(lock_pub);
+            sybil_existing.push(cand);
+            available_extra.push(ServerEntry {
+                write_url: probe.write_url.clone(),
+                read_url: probe.read_url.clone(),
+                admin_pub,
+                lock_pub,
+                nominated_by: NominatedBy::Creator,
+            });
+        }
+    }
+
+    let add_count = match (manifest.servers.len(), available_extra.len()) {
+        (1, n) if n >= 2 => 2,
+        (1, 1) if circle_urls.contains(&normalize_sync_url(&available_extra[0].write_url)) => 1,
+        (2, n) if n >= 1 => 1,
+        _ => return None,
+    };
+
+    let mut new_servers = manifest.servers.clone();
+    new_servers.extend(available_extra.into_iter().take(add_count));
+
+    l2_rotation::build_creator_rotation_proposal(
+        anchor_id,
+        manifest,
+        2,
+        new_servers,
+        manifest.successors.clone(),
+        now_secs,
+        creator_mig_sk,
+    )
+    .ok()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -872,6 +1038,12 @@ pub(crate) fn record_guarantor_veto_sent(lc: &mut StoredL2LifecycleState, reason
     lc.last_veto_reason = Some(reason.to_string());
 }
 
+type GuarantorRoleEntry = (String, AnchorManifest, u8, Vec<u8>);
+type GuarantorVetoScanData = (
+    Vec<GuarantorRoleEntry>,
+    BTreeMap<String, FrontendLockServerProbeResult>,
+);
+
 async fn check_guarantor_vetoes(
     state: &AppState,
     session: &crate::session::SessionToken,
@@ -879,26 +1051,30 @@ async fn check_guarantor_vetoes(
     now_secs: u64,
     password: Option<&str>,
 ) -> Result<(), FrontendError> {
-    let roles_and_manifests: Vec<(String, AnchorManifest, u8, Vec<u8>)> = state
-        .with_session_required(
-            session,
-            "Wallet session changed during guarantor veto scan",
-            |service| {
-                let lc = load_lifecycle_state(service, password)?;
-                service
-                    .with_wallet(|w| {
-                        lc.guarantor_roles
-                            .values()
-                            .filter_map(|r| {
-                                let m = w.profile.l2_anchor_manifests.get(&r.anchor_id)?.clone();
-                                let nonce = hex::decode(&r.context_nonce_hex).ok()?;
-                                Some((r.anchor_id.clone(), m, r.guarantor_index, nonce))
-                            })
-                            .collect::<Vec<_>>()
-                    })
-                    .map_err(FrontendError::from)
-            },
-        )?;
+    let (roles_and_manifests, probe_cache): GuarantorVetoScanData = state.with_session_required(
+        session,
+        "Wallet session changed during guarantor veto scan",
+        |service| {
+            let lc = load_lifecycle_state(service, password)?;
+            let probe_cache = state
+                .get_or_load_internal_lifecycle(service, password)
+                .map(|ilc| ilc.l2_probe_cache)
+                .unwrap_or_default();
+            let roles = service
+                .with_wallet(|w| {
+                    lc.guarantor_roles
+                        .values()
+                        .filter_map(|r| {
+                            let m = w.profile.l2_anchor_manifests.get(&r.anchor_id)?.clone();
+                            let nonce = hex::decode(&r.context_nonce_hex).ok()?;
+                            Some((r.anchor_id.clone(), m, r.guarantor_index, nonce))
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .map_err(FrontendError::from)?;
+            Ok((roles, probe_cache))
+        },
+    )?;
 
     for (anchor_hex, manifest, g_idx, ctx_nonce) in roles_and_manifests {
         let Ok(anchor_id) = decode_hex_fixed::<32>(&anchor_hex) else {
@@ -907,8 +1083,9 @@ async fn check_guarantor_vetoes(
 
         let mut polled_proposals: Vec<MigrationProposal> = Vec::new();
         for srv in &manifest.servers {
+            let (write_url, _) = resolve_server_locator(srv, &probe_cache);
             if let Ok(Some(status)) =
-                sync_client::get_lock_freeze_status(client, &srv.write_url, &anchor_hex).await
+                sync_client::get_lock_freeze_status(client, &write_url, &anchor_hex).await
             {
                 if let Some(prop) = status.voted_proposal {
                     polled_proposals.push(prop);
@@ -950,7 +1127,8 @@ async fn check_guarantor_vetoes(
             });
             let mut sent_any = false;
             for srv in &manifest.servers {
-                if sync_client::post_lock_freeze_action(client, &srv.write_url, &body)
+                let (write_url, _) = resolve_server_locator(srv, &probe_cache);
+                if sync_client::post_lock_freeze_action(client, &write_url, &body)
                     .await
                     .is_ok()
                 {
@@ -1004,11 +1182,19 @@ pub(crate) fn compute_proposal_phase(
     accepted_effective_ats: &[Option<u64>],
     threshold: u8,
     now_secs: u64,
+    has_guarantors: bool,
 ) -> Option<StoredRotationPhase> {
     if accepted_effective_ats.len() < usize::from(threshold) {
         return None;
     }
-    let mut effective_at_secs = now_secs.saturating_add(humoco_proto::PROPOSAL_TIMELOCK_SECS);
+    let default_timelock = if matches!(proposal.initiator, humoco_proto::ProposalInitiator::Creator)
+        && !has_guarantors
+    {
+        0
+    } else {
+        humoco_proto::PROPOSAL_TIMELOCK_SECS
+    };
+    let mut effective_at_secs = now_secs.saturating_add(default_timelock);
     for eff in accepted_effective_ats.iter().flatten() {
         effective_at_secs = effective_at_secs.min(*eff);
     }
@@ -1194,20 +1380,23 @@ async fn drive_active_rotation(
             // Ensure permanent freeze & collect >= Q_old FreezeSnapshots
             let mut candidate_exports: Vec<SnapshotExport> = Vec::new();
             for srv in &manifest.servers {
+                let (write_url, _) = resolve_server_locator(srv, &lifecycle.l2_probe_cache);
+                let mut got_export = false;
                 if let Ok(Some(st)) =
-                    sync_client::get_lock_freeze_status(client, &srv.write_url, &anchor_hex).await
+                    sync_client::get_lock_freeze_status(client, &write_url, &anchor_hex).await
                 {
                     if let Some(exp) = st.snapshot_export {
                         candidate_exports.push(exp);
+                        got_export = true;
                     }
-                } else {
+                }
+                if !got_export {
                     let fetch_body = serde_json::json!({
                         "action": "fetch_snapshot",
                         "anchor_id": anchor_hex,
                     });
                     if let Ok(val) =
-                        sync_client::post_lock_freeze_action(client, &srv.write_url, &fetch_body)
-                            .await
+                        sync_client::post_lock_freeze_action(client, &write_url, &fetch_body).await
                     {
                         if let Some(exp_val) = val.get("snapshot_export").cloned() {
                             if let Ok(exp) = serde_json::from_value::<SnapshotExport>(exp_val) {
@@ -1236,7 +1425,7 @@ async fn drive_active_rotation(
             )?;
             let pow_bits = max_pow_base_bits_for_servers(
                 lifecycle,
-                manifest.servers.iter().map(|srv| srv.write_url.as_str()),
+                manifest.servers.iter().map(|srv| srv.lock_pub),
             );
 
             let (proposal, exports, expected_state_hash) = match evaluate_proposed_phase_transition(
@@ -1260,14 +1449,9 @@ async fn drive_active_rotation(
 
             let mut import_acks: Vec<ImportAck> = Vec::with_capacity(proposal.new_servers.len());
             for new_srv in &proposal.new_servers {
+                let (write_url, _) = resolve_server_locator(new_srv, &lifecycle.l2_probe_cache);
                 let ack = sync_client::post_lock_import(
-                    client,
-                    &new_srv.write_url,
-                    &anchor_id,
-                    &manifest,
-                    &proposal,
-                    &exports,
-                    &qcs,
+                    client, &write_url, &anchor_id, &manifest, &proposal, &exports, &qcs,
                 )
                 .await
                 .map_err(lifecycle_err)?;
@@ -1295,9 +1479,10 @@ async fn drive_active_rotation(
     // Phase 3: Collect >= Q_old commit signatures
     let mut commit_sigs: Vec<CommitteeSignature> = Vec::new();
     for old_srv in &manifest.servers {
+        let (write_url, _) = resolve_server_locator(old_srv, &lifecycle.l2_probe_cache);
         if let Ok(cs) = sync_client::post_lock_commit_sign(
             client,
-            &old_srv.write_url,
+            &write_url,
             &anchor_id,
             &proposal,
             &imported_state_hash,
@@ -1331,7 +1516,8 @@ async fn drive_active_rotation(
 
     let mut final_urls = HashSet::new();
     for srv in manifest.servers.iter().chain(next_manifest.servers.iter()) {
-        final_urls.insert(srv.write_url.clone());
+        let (write_url, _) = resolve_server_locator(srv, &lifecycle.l2_probe_cache);
+        final_urls.insert(write_url);
     }
     for url in final_urls {
         let _ =
@@ -1352,6 +1538,94 @@ async fn drive_active_rotation(
     Ok(None)
 }
 
+async fn initiate_rotation_proposal(
+    env: RotationEnv<'_>,
+    anchor_id: [u8; 32],
+    anchor_hex: &str,
+    manifest: &AnchorManifest,
+    proposal: MigrationProposal,
+) -> Result<(), FrontendError> {
+    let RotationEnv {
+        state,
+        session,
+        lifecycle,
+        client,
+        now_secs,
+        password,
+        ..
+    } = env;
+
+    let prop_body = serde_json::json!({
+        "action": "propose",
+        "proposal": proposal,
+        "current_manifest": manifest,
+    });
+    let mut accepted_effective_ats: Vec<Option<u64>> = Vec::new();
+    for srv in &manifest.servers {
+        let (write_url, _) = resolve_server_locator(srv, &lifecycle.l2_probe_cache);
+        if let Ok(resp) = sync_client::post_lock_freeze_action(client, &write_url, &prop_body).await
+        {
+            accepted_effective_ats.push(resp.get("effective_at").and_then(|v| v.as_u64()));
+        }
+    }
+
+    if let Some(phase) = compute_proposal_phase(
+        proposal,
+        &accepted_effective_ats,
+        manifest.threshold,
+        now_secs,
+        !manifest.authority.guarantor_mig_pubs.is_empty(),
+    ) {
+        let phase_effective_at = match &phase {
+            StoredRotationPhase::Proposed {
+                effective_at_secs, ..
+            } => *effective_at_secs,
+            StoredRotationPhase::Imported { .. } => now_secs,
+        };
+        state.with_session_required(
+            session,
+            "Wallet session changed after proposing L2 rotation",
+            |service| {
+                let mut lc = load_lifecycle_state(service, password)?;
+                let health = lc
+                    .anchors
+                    .entry(anchor_hex.to_string())
+                    .or_insert_with(|| StoredAnchorHealth::new(anchor_hex.to_string()));
+                health.active_rotation = Some(phase.clone());
+                health.last_error = None;
+                save_lifecycle_state(service, &lc, password)
+            },
+        )?;
+
+        if is_proposal_timelock_elapsed(phase_effective_at, now_secs) {
+            if let Ok(next_phase) =
+                drive_active_rotation(env, anchor_id, manifest.clone(), phase).await
+            {
+                state.with_session_required(
+                    session,
+                    "Wallet session changed after driving L2 rotation step",
+                    |service| {
+                        let mut lc = load_lifecycle_state(service, password)?;
+                        let health = lc
+                            .anchors
+                            .entry(anchor_hex.to_string())
+                            .or_insert_with(|| StoredAnchorHealth::new(anchor_hex.to_string()));
+                        apply_rotation_step_outcome(
+                            health,
+                            Ok(&next_phase),
+                            manifest.revision,
+                            now_secs,
+                        );
+                        save_lifecycle_state(service, &lc, password)
+                    },
+                )?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Executes one health check, guarantor-veto scan, and crash-resumable rotation step using `now_secs`.
 pub(crate) async fn run_lifecycle_tick_with_now(
     state: &AppState,
@@ -1361,7 +1635,7 @@ pub(crate) async fn run_lifecycle_tick_with_now(
     force: bool,
     password: Option<&str>,
 ) -> Result<FrontendL2LifecycleStatusDto, FrontendError> {
-    let (security_policy, internal_lc) = state.with_session_required(
+    let (security_policy, mut internal_lc) = state.with_session_required(
         session,
         "Wallet session changed before starting L2 lifecycle tick",
         |service| {
@@ -1391,8 +1665,7 @@ pub(crate) async fn run_lifecycle_tick_with_now(
         "Wallet session changed during L2 lifecycle tick",
         |service| {
             let mut lc = load_lifecycle_state(service, password)?;
-            if !force && now_secs.saturating_sub(lc.last_tick_secs) < HEALTH_CHECK_INTERVAL_SECS
-            {
+            if !force && now_secs.saturating_sub(lc.last_tick_secs) < HEALTH_CHECK_INTERVAL_SECS {
                 return build_status_dto(service, &lc, password).map(CollectOutcome::Early);
             }
             lc.last_tick_secs = now_secs;
@@ -1485,9 +1758,10 @@ pub(crate) async fn run_lifecycle_tick_with_now(
             continue;
         }
 
-        // Probe health of every server in manifest.servers
+        // Probe health of every server in manifest.servers (relocation-aware)
         let mut unhealthy_now: HashSet<String> = HashSet::new();
         let mut revoked_now: HashSet<String> = HashSet::new();
+        let mut probe_cache_dirty = false;
         let mut last_creator_activity_secs = manifest.issued_at_ms / 1_000;
 
         for srv in &manifest.servers {
@@ -1496,16 +1770,80 @@ pub(crate) async fn run_lifecycle_tick_with_now(
                 revoked_now.insert(lock_hex);
                 continue;
             }
-            match sync_client::fetch_sync_info(client, &srv.write_url).await {
-                Ok(info) => match classify_server_probe_info(&info, &lock_hex, now_secs) {
-                    ServerProbeOutcome::Healthy => {}
-                    ServerProbeOutcome::Unhealthy => {
-                        unhealthy_now.insert(lock_hex);
+            let (mut active_write_url, _) =
+                resolve_server_locator(srv, &internal_lc.l2_probe_cache);
+            let admin_hex = hex::encode(srv.admin_pub);
+            match sync_client::fetch_sync_info(client, &active_write_url).await {
+                Ok(info) => {
+                    if let Some(ref rev) = info.revocation {
+                        if try_follow_relocation_notice(
+                            client,
+                            &mut internal_lc.l2_probe_cache,
+                            srv,
+                            rev,
+                        )
+                        .await
+                        {
+                            probe_cache_dirty = true;
+                            active_write_url =
+                                resolve_server_locator(srv, &internal_lc.l2_probe_cache).0;
+                        } else {
+                            match classify_server_probe_info(&info, &lock_hex, now_secs) {
+                                ServerProbeOutcome::Healthy => {}
+                                ServerProbeOutcome::Unhealthy => {
+                                    unhealthy_now.insert(lock_hex.clone());
+                                }
+                                ServerProbeOutcome::Revoked => {
+                                    revoked_now.insert(lock_hex.clone());
+                                }
+                            }
+                        }
+                    } else {
+                        match classify_server_probe_info(&info, &lock_hex, now_secs) {
+                            ServerProbeOutcome::Healthy => {
+                                if let Some(ref lock_info) = info.lock {
+                                    if let Some(ref del) = lock_info.delegation {
+                                        if sync_client::verify_lock_delegation(
+                                            &lock_hex,
+                                            del,
+                                            Some(&admin_hex),
+                                        ) {
+                                            let target_url = del.write_url.trim();
+                                            let cur_cached = internal_lc
+                                                .l2_probe_cache
+                                                .get(&lock_hex)
+                                                .and_then(|p| p.delegation.as_ref())
+                                                .map(|d| d.issued_at)
+                                                .unwrap_or(0);
+                                            if del.issued_at > cur_cached
+                                                && sync_client::is_valid_delegation_url(target_url)
+                                            {
+                                                let updated_probe = sync_client::probe_lock_server(
+                                                    client,
+                                                    target_url,
+                                                    Some(&admin_hex),
+                                                )
+                                                .await;
+                                                if upsert_verified_lock_probe(
+                                                    &mut internal_lc.l2_probe_cache,
+                                                    updated_probe,
+                                                ) {
+                                                    probe_cache_dirty = true;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            ServerProbeOutcome::Unhealthy => {
+                                unhealthy_now.insert(lock_hex.clone());
+                            }
+                            ServerProbeOutcome::Revoked => {
+                                revoked_now.insert(lock_hex.clone());
+                            }
+                        }
                     }
-                    ServerProbeOutcome::Revoked => {
-                        revoked_now.insert(lock_hex);
-                    }
-                },
+                }
                 Err(_) => {
                     unhealthy_now.insert(lock_hex);
                 }
@@ -1513,13 +1851,22 @@ pub(crate) async fn run_lifecycle_tick_with_now(
 
             if g_role_opt.is_some() {
                 if let Ok(Some(st)) =
-                    sync_client::get_lock_freeze_status(client, &srv.write_url, &anchor_hex).await
+                    sync_client::get_lock_freeze_status(client, &active_write_url, &anchor_hex)
+                        .await
                 {
                     if let Some(act) = st.last_creator_activity_secs {
                         last_creator_activity_secs = last_creator_activity_secs.max(act);
                     }
                 }
             }
+        }
+
+        if probe_cache_dirty {
+            let updated_cache = internal_lc.l2_probe_cache.clone();
+            let _ = state.mutate_internal_lifecycle_for_session(session, password, |lc| {
+                lc.l2_probe_cache = updated_cache;
+                true
+            });
         }
 
         // Update hysteresis state and collect servers triggering rotation
@@ -1542,10 +1889,6 @@ pub(crate) async fn run_lifecycle_tick_with_now(
                 Ok(failed)
             },
         )?;
-
-        if failed_lock_pubs.is_empty() {
-            continue;
-        }
 
         // Derive signing authority keys if present in wallet
         let (creator_sk_opt, guarantor_sk_opt): (Option<SigningKey>, Option<(u8, SigningKey)>) =
@@ -1578,6 +1921,40 @@ pub(crate) async fn run_lifecycle_tick_with_now(
                 },
             )?;
 
+        if failed_lock_pubs.is_empty() {
+            if manifest.authority.guarantor_mig_pubs.is_empty() && manifest.servers.len() < 3 {
+                if let Some(ref c_sk) = creator_sk_opt {
+                    if let Some(growth_prop) = select_auto_growth_proposal(
+                        anchor_id,
+                        &manifest,
+                        c_sk,
+                        &security_policy,
+                        &internal_lc,
+                        &offenders,
+                        now_secs,
+                    ) {
+                        initiate_rotation_proposal(
+                            RotationEnv {
+                                state,
+                                session,
+                                security_policy: &security_policy,
+                                lifecycle: &internal_lc,
+                                client,
+                                now_secs,
+                                password,
+                            },
+                            anchor_id,
+                            &anchor_hex,
+                            &manifest,
+                            growth_prop,
+                        )
+                        .await?;
+                    }
+                }
+            }
+            continue;
+        }
+
         let guarantor_tuple = guarantor_sk_opt
             .as_ref()
             .map(|(idx, sk)| (*idx, sk, last_creator_activity_secs));
@@ -1588,6 +1965,7 @@ pub(crate) async fn run_lifecycle_tick_with_now(
             &failed_lock_pubs,
             creator_sk_opt.as_ref(),
             guarantor_tuple,
+            &security_policy,
             &internal_lc,
             &offenders,
             now_secs,
@@ -1595,87 +1973,22 @@ pub(crate) async fn run_lifecycle_tick_with_now(
             continue;
         };
 
-        // Phase 1: Propose on reachable old committee servers
-        let prop_body = serde_json::json!({
-            "action": "propose",
-            "proposal": proposal,
-            "current_manifest": manifest,
-        });
-        let mut accepted_effective_ats: Vec<Option<u64>> = Vec::new();
-        for srv in &manifest.servers {
-            if let Ok(resp) =
-                sync_client::post_lock_freeze_action(client, &srv.write_url, &prop_body).await
-            {
-                accepted_effective_ats.push(resp.get("effective_at").and_then(|v| v.as_u64()));
-            }
-        }
-
-        if let Some(phase) = compute_proposal_phase(
-            proposal,
-            &accepted_effective_ats,
-            manifest.threshold,
-            now_secs,
-        ) {
-            let phase_effective_at = match &phase {
-                StoredRotationPhase::Proposed {
-                    effective_at_secs, ..
-                } => *effective_at_secs,
-                StoredRotationPhase::Imported { .. } => now_secs,
-            };
-            state.with_session_required(
+        initiate_rotation_proposal(
+            RotationEnv {
+                state,
                 session,
-                "Wallet session changed after proposing L2 rotation",
-                |service| {
-                    let mut lc = load_lifecycle_state(service, password)?;
-                    let health = lc
-                        .anchors
-                        .entry(anchor_hex.clone())
-                        .or_insert_with(|| StoredAnchorHealth::new(anchor_hex.clone()));
-                    health.active_rotation = Some(phase.clone());
-                    health.last_error = None;
-                    save_lifecycle_state(service, &lc, password)
-                },
-            )?;
-
-            // If timelock is already elapsed (e.g., short dev/test timelock = 0), advance immediately
-            if is_proposal_timelock_elapsed(phase_effective_at, now_secs) {
-                if let Ok(next_phase) = drive_active_rotation(
-                    RotationEnv {
-                        state,
-                        session,
-                        security_policy: &security_policy,
-                        lifecycle: &internal_lc,
-                        client,
-                        now_secs,
-                        password,
-                    },
-                    anchor_id,
-                    manifest.clone(),
-                    phase,
-                )
-                .await
-                {
-                    state.with_session_required(
-                        session,
-                        "Wallet session changed after driving L2 rotation step",
-                        |service| {
-                            let mut lc = load_lifecycle_state(service, password)?;
-                            let health = lc
-                                .anchors
-                                .entry(anchor_hex.clone())
-                                .or_insert_with(|| StoredAnchorHealth::new(anchor_hex.clone()));
-                            apply_rotation_step_outcome(
-                                health,
-                                Ok(&next_phase),
-                                manifest.revision,
-                                now_secs,
-                            );
-                            save_lifecycle_state(service, &lc, password)
-                        },
-                    )?;
-                }
-            }
-        }
+                security_policy: &security_policy,
+                lifecycle: &internal_lc,
+                client,
+                now_secs,
+                password,
+            },
+            anchor_id,
+            &anchor_hex,
+            &manifest,
+            proposal,
+        )
+        .await?;
     }
 
     state.with_session_required(
@@ -2502,8 +2815,8 @@ mod tests {
             true,
             Some(pw),
         )
-                .await
-                .unwrap();
+        .await
+        .unwrap();
         assert_eq!(status2.anchors[0].revision, 2);
         assert!(status2.anchors[0].active_rotation_phase.is_none());
 
@@ -2695,8 +3008,8 @@ mod tests {
 
         let dto =
             run_lifecycle_tick_with_now(&state, &session, &client, 1_760_000_050, true, Some(pw))
-            .await
-            .unwrap();
+                .await
+                .unwrap();
         assert!(veto_received.load(Ordering::Relaxed));
         assert!(dto.auto_vetoes_sent >= 1);
         assert!(dto.last_veto_reason.is_some());
@@ -2878,16 +3191,10 @@ mod tests {
         assert!(d4.anchors[0].active_rotation_phase.is_none());
 
         // Day 5: >= 5 days elapsed -> proposes Phase 1 rotation!
-        let d5 = run_lifecycle_tick_with_now(
-            &state,
-            &session,
-            &client,
-            t0 + 5 * 86_400,
-            true,
-            Some(pw),
-        )
-            .await
-            .unwrap();
+        let d5 =
+            run_lifecycle_tick_with_now(&state, &session, &client, t0 + 5 * 86_400, true, Some(pw))
+                .await
+                .unwrap();
         assert_eq!(
             d5.anchors[0].active_rotation_phase.as_deref(),
             Some("proposed")
@@ -3294,6 +3601,7 @@ mod tests {
                 (s1_sk.verifying_key().to_bytes(), active_rev),
             ],
             &expected_servers,
+            &HashSet::new(),
             now0,
         );
         assert!(rev_health.revoked_lock_pubs.contains(&s1_hex));
@@ -3338,12 +3646,14 @@ mod tests {
         // 1. select_rotation_proposal: empty failed set returns None
         let lifecycle = InternalLifecycleState::default();
         let offenders = ServerOffenderList::new();
+        let empty_policy = SecurityPolicy::default();
         assert!(select_rotation_proposal(
             anchor_id,
             &manifest,
             &HashSet::new(),
             Some(&creator_mig_sk),
             None,
+            &empty_policy,
             &lifecycle,
             &offenders,
             now0,
@@ -3358,6 +3668,7 @@ mod tests {
             &failed,
             Some(&creator_mig_sk),
             None,
+            &empty_policy,
             &lifecycle,
             &offenders,
             now0,
@@ -3370,14 +3681,15 @@ mod tests {
         let mut manifest_no_standby = manifest.clone();
         manifest_no_standby.successors.clear();
         let mut lifecycle_with_probe = InternalLifecycleState::default();
+        let s4_hex = hex::encode(s4_sk.verifying_key().as_bytes());
         lifecycle_with_probe.l2_probe_cache.insert(
-            "https://srv4.delta.example/sync.php".into(),
+            s4_hex.clone(),
             sync_client::FrontendLockServerProbeResult {
                 write_url: "https://srv4.delta.example/sync.php".into(),
                 read_url: "https://srv4.delta.example/d".into(),
-                drop_pub: hex::encode(s4_sk.verifying_key().as_bytes()),
-                admin_pub: hex::encode(s4_sk.verifying_key().as_bytes()),
-                lock_pub: hex::encode(s4_sk.verifying_key().as_bytes()),
+                drop_pub: s4_hex.clone(),
+                admin_pub: s4_hex.clone(),
+                lock_pub: s4_hex,
                 delegation_valid: true,
                 waf_probe_passed: true,
                 selftest_passed: true,
@@ -3391,6 +3703,7 @@ mod tests {
                 used_inodes: 0,
                 max_inodes: 1000,
                 probed_at_secs: now0,
+                delegation: None,
                 error: None,
             },
         );
@@ -3400,6 +3713,7 @@ mod tests {
             &failed,
             Some(&creator_mig_sk),
             None,
+            &empty_policy,
             &lifecycle_with_probe,
             &offenders,
             now0,
@@ -3416,7 +3730,8 @@ mod tests {
             standby_prop.clone(),
             &[Some(now0 + 100)],
             manifest.threshold,
-            now0
+            now0,
+            true,
         )
         .is_none());
         let proposed_phase = compute_proposal_phase(
@@ -3424,6 +3739,7 @@ mod tests {
             &[None, Some(now0 + 500)],
             manifest.threshold,
             now0,
+            true,
         )
         .expect("threshold acks must enter Proposed phase");
         let StoredRotationPhase::Proposed {
@@ -3690,5 +4006,479 @@ mod tests {
         record_guarantor_veto_sent(&mut lc, decisions[0].reason);
         assert_eq!(lc.auto_vetoes_sent, 1);
         assert_eq!(lc.last_veto_reason.as_deref(), Some(decisions[0].reason));
+    }
+
+    fn make_signed_probe_result(
+        admin_sk: &SigningKey,
+        lock_sk: &SigningKey,
+        write_url: &str,
+        read_url: &str,
+        issued_at: u64,
+        max_retention_quarter: u16,
+    ) -> FrontendLockServerProbeResult {
+        let admin_hex = hex::encode(admin_sk.verifying_key().as_bytes());
+        let lock_hex = hex::encode(lock_sk.verifying_key().as_bytes());
+        let del_msg = humoco_market::format_lock_delegate_signature_message(
+            &admin_hex, &lock_hex, write_url, read_url, issued_at,
+        );
+        let del = sync_client::SyncLockDelegationDto {
+            admin_pub: admin_hex.clone(),
+            lock_pub: lock_hex.clone(),
+            write_url: write_url.to_string(),
+            read_url: read_url.to_string(),
+            issued_at,
+            sig: hex::encode(admin_sk.sign(del_msg.as_bytes()).to_bytes()),
+        };
+        FrontendLockServerProbeResult {
+            write_url: write_url.to_string(),
+            read_url: read_url.to_string(),
+            drop_pub: admin_hex.clone(),
+            admin_pub: admin_hex,
+            lock_pub: lock_hex,
+            delegation_valid: true,
+            waf_probe_passed: true,
+            selftest_passed: true,
+            key_leak_safe: true,
+            passed: true,
+            latency_ms: 5,
+            max_retention_quarter,
+            pow_base_bits: 16,
+            allow_pow_tickets: false,
+            inode_warning: false,
+            used_inodes: 0,
+            max_inodes: 50_000,
+            probed_at_secs: issued_at,
+            delegation: Some(del),
+            error: None,
+        }
+    }
+
+    #[test]
+    fn test_relocation_by_delegation_and_revocation_notice() {
+        let admin_sk = SigningKey::from_bytes(&[71u8; 32]);
+        let lock_sk = SigningKey::from_bytes(&[72u8; 32]);
+        let retain_q = encode_quarter(2035, 4).unwrap();
+        let entry = ServerEntry {
+            write_url: "https://old.host.example/sync.php".into(),
+            read_url: "https://old.host.example/d".into(),
+            admin_pub: admin_sk.verifying_key().to_bytes(),
+            lock_pub: lock_sk.verifying_key().to_bytes(),
+            nominated_by: NominatedBy::Creator,
+        };
+        let lock_hex = hex::encode(entry.lock_pub);
+        let mut cache = BTreeMap::new();
+
+        // 1. Initial probe at old URL, then relocate via newer signed 5-field delegation
+        let p_old = make_signed_probe_result(
+            &admin_sk,
+            &lock_sk,
+            "https://old.host.example/sync.php",
+            "https://old.host.example/d",
+            100,
+            retain_q,
+        );
+        assert!(upsert_verified_lock_probe(&mut cache, p_old));
+
+        let p_moved1 = make_signed_probe_result(
+            &admin_sk,
+            &lock_sk,
+            "https://moved1.host.example/sync.php",
+            "https://moved1.host.example/d",
+            200,
+            retain_q,
+        );
+        assert!(upsert_verified_lock_probe(&mut cache, p_moved1));
+        assert_eq!(
+            resolve_server_locator(&entry, &cache),
+            (
+                "https://moved1.host.example/sync.php".to_string(),
+                "https://moved1.host.example/d".to_string()
+            )
+        );
+
+        // Stale issued_at cannot overwrite newer delegation
+        let p_stale = make_signed_probe_result(
+            &admin_sk,
+            &lock_sk,
+            "https://stale.host.example/sync.php",
+            "https://stale.host.example/d",
+            150,
+            retain_q,
+        );
+        assert!(!upsert_verified_lock_probe(&mut cache, p_stale));
+
+        // 2. Relocate via signed SyncRevocationNotice pointing to same lock_pub at new URL
+        let notice = sync_client::sign_revocation_notice(
+            &admin_sk,
+            250,
+            300,
+            Some("relocated".into()),
+            Some(sync_client::SyncReplacementTarget {
+                write_url: "https://moved2.host.example/sync.php".into(),
+                read_url: "https://moved2.host.example/d".into(),
+                drop_pub: hex::encode(admin_sk.verifying_key().as_bytes()),
+            }),
+        )
+        .unwrap();
+        let p_moved2 = make_signed_probe_result(
+            &admin_sk,
+            &lock_sk,
+            "https://moved2.host.example/sync.php",
+            "https://moved2.host.example/d",
+            300,
+            retain_q,
+        );
+        assert!(try_apply_relocation_from_notice(
+            &mut cache, &entry, &notice, p_moved2
+        ));
+        assert_eq!(
+            resolve_server_locator(&entry, &cache),
+            (
+                "https://moved2.host.example/sync.php".to_string(),
+                "https://moved2.host.example/d".to_string()
+            )
+        );
+
+        let mut health = StoredAnchorHealth::new("aa".repeat(32));
+        let demotions = apply_health_observations_and_collect_demotions(
+            &mut health,
+            &HashSet::new(),
+            &HashSet::new(),
+            350,
+        );
+        assert!(demotions.is_empty());
+        assert!(!health.revoked_lock_pubs.contains(&lock_hex));
+    }
+
+    #[tokio::test]
+    async fn test_auto_growth_n1_to_n3_and_stops_at_n3() {
+        let dir = temp_dir("auto_growth_n1_n3");
+        let pw = "pw";
+        let (mut svc, _) = test_utils::setup_service_with_profile(&dir, &ACTORS.alice, "Alice", pw);
+        svc.unlock_session(pw, 600).unwrap();
+
+        let s1_sk = SigningKey::from_bytes(&[101u8; 32]);
+        let s2_sk = SigningKey::from_bytes(&[102u8; 32]);
+        let s3_sk = SigningKey::from_bytes(&[103u8; 32]);
+        let s4_sk = SigningKey::from_bytes(&[104u8; 32]);
+        let anchor_nonce = [105u8; 32];
+        let creator_mig_pub = svc
+            .with_wallet_and_identity(|_, id| {
+                l2_gateway::derive_anchor_mig_signing_key(id, &anchor_nonce)
+                    .map(|k| k.verifying_key().to_bytes())
+            })
+            .unwrap()
+            .unwrap();
+
+        let l1 = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let p1 = l1.local_addr().unwrap().port();
+        let l2 = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let p2 = l2.local_addr().unwrap().port();
+        let l3 = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let p3 = l3.local_addr().unwrap().port();
+        let l4 = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let p4 = l4.local_addr().unwrap().port();
+
+        let retain_q = encode_quarter(2035, 4).unwrap();
+        let now0 = 1_760_000_100u64;
+        let w1 = format!("http://127.0.0.1:{}/sync.php", p1);
+        let r1 = format!("http://127.0.0.1:{}/d", p1);
+        let w2 = format!("http://127.0.0.1:{}/sync.php", p2);
+        let r2 = format!("http://127.0.0.1:{}/d", p2);
+        let w3 = format!("http://127.0.0.1:{}/sync.php", p3);
+        let r3 = format!("http://127.0.0.1:{}/d", p3);
+        let w4 = format!("http://127.0.0.1:{}/sync.php", p4);
+        let r4 = format!("http://127.0.0.1:{}/d", p4);
+
+        // Create initial N=1 healthy creator-only anchor with empty guarantor_mig_pubs
+        let manifest = AnchorManifest {
+            revision: 1,
+            threshold: 1,
+            servers: vec![ServerEntry {
+                write_url: w1.clone(),
+                read_url: r1.clone(),
+                admin_pub: s1_sk.verifying_key().to_bytes(),
+                lock_pub: s1_sk.verifying_key().to_bytes(),
+                nominated_by: NominatedBy::Creator,
+            }],
+            successors: vec![],
+            authority: AnchorAuthority {
+                creator_mig_pub,
+                guarantor_mig_pubs: vec![],
+            },
+            migration_chain: vec![],
+            issued_at_ms: now0 * 1000,
+            retain_until_quarter: retain_q,
+        };
+        let anchor_id = manifest.rev1_anchor_id().unwrap();
+        let mut t1 = GenesisTicket {
+            anchor_id,
+            retain_until_quarter: retain_q,
+            issued_at: now0,
+            lock_pub: s1_sk.verifying_key().to_bytes(),
+            sig: [0u8; 64],
+        };
+        t1.sig = s1_sk.sign(&t1.digest()).to_bytes();
+        svc.register_l2_anchor_template_with_nonce(
+            manifest.clone(),
+            vec![t1],
+            Some(&anchor_nonce),
+            Some(pw),
+        )
+        .unwrap();
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let spawn_growth_mock = |listener: tokio::net::TcpListener,
+                                 sk: SigningKey,
+                                 stop_flag: Arc<AtomicBool>| {
+            let lock_pub = sk.verifying_key().to_bytes();
+            let lock_hex = hex::encode(lock_pub);
+            let bucket = humoco_proto::derive_bucket(&anchor_id, &lock_pub);
+            let vp: Arc<Mutex<Option<MigrationProposal>>> = Arc::new(Mutex::new(None));
+            tokio::spawn(async move {
+                loop {
+                    let accept = tokio::time::timeout(
+                        std::time::Duration::from_millis(40),
+                        listener.accept(),
+                    )
+                    .await;
+                    let Ok(Ok((mut stream, _))) = accept else {
+                        if stop_flag.load(Ordering::Relaxed) {
+                            break;
+                        }
+                        continue;
+                    };
+                    let mut buf = [0u8; 32_768];
+                    let n = stream.read(&mut buf).await.unwrap_or(0);
+                    let raw = String::from_utf8_lossy(&buf[..n]);
+                    let (head, body) = raw.split_once("\r\n\r\n").unwrap_or((&raw, ""));
+                    let path = head
+                        .lines()
+                        .next()
+                        .unwrap_or("")
+                        .split_whitespace()
+                        .nth(1)
+                        .unwrap_or("");
+
+                    let make_export = |prop_hash_opt: Option<[u8; 32]>| {
+                        let mut s = humoco_proto::FreezeSnapshot {
+                            anchor_id,
+                            bucket,
+                            from_rev: 1,
+                            retain_until_quarter: retain_q,
+                            write_seq: 0,
+                            bucket_head: humoco_proto::crypto::compute_bucket_init_head(
+                                &bucket, retain_q,
+                            ),
+                            state_hash: humoco_proto::compute_freeze_state_hash(
+                                &anchor_id,
+                                1,
+                                &[],
+                                &[],
+                            )
+                            .unwrap(),
+                            permanent: true,
+                            proposal_hash: prop_hash_opt,
+                            frozen_at: now0,
+                            expires_at: None,
+                            lock_pub,
+                            sig: [0u8; 64],
+                        };
+                        s.sig = sk.sign(&s.digest()).to_bytes();
+                        SnapshotExport {
+                            snapshot: s,
+                            entries: vec![],
+                            conflicts: vec![],
+                        }
+                    };
+
+                    let resp_json: serde_json::Value = if path.contains("info") {
+                        serde_json::json!({
+                            "drop_pub": lock_hex,
+                            "read_url": "http://127.0.0.1:9/d",
+                            "lock": {
+                                "lock_pub": lock_hex,
+                                "max_retention_quarter": retain_q,
+                                "pow_base_bits": 0,
+                                "allow_pow_tickets": true
+                            }
+                        })
+                    } else if path.contains("lock_freeze") {
+                        if head.starts_with("GET ") {
+                            let p = vp.lock().unwrap().clone();
+                            serde_json::json!({
+                                "anchor_id": hex::encode(anchor_id),
+                                "bucket": hex::encode(bucket),
+                                "active_manifest": serde_json::Value::Null,
+                                "last_creator_activity_secs": now0,
+                                "bucket_freeze_state": {},
+                                "voted_proposal": p,
+                                "snapshot_export": serde_json::Value::Null
+                            })
+                        } else {
+                            let val: serde_json::Value = serde_json::from_str(body).unwrap();
+                            match val.get("action").and_then(|v| v.as_str()) {
+                                Some("propose") => {
+                                    let prop: MigrationProposal =
+                                        serde_json::from_value(val["proposal"].clone()).unwrap();
+                                    *vp.lock().unwrap() = Some(prop);
+                                    // 0s timelock for Creator + empty guarantors
+                                    serde_json::json!({
+                                        "status": "proposed",
+                                        "effective_at": now0
+                                    })
+                                }
+                                Some("fetch_snapshot") => {
+                                    let ph = vp
+                                        .lock()
+                                        .unwrap()
+                                        .as_ref()
+                                        .and_then(|p| p.core_digest().ok());
+                                    let exp = make_export(ph);
+                                    serde_json::json!({ "snapshot_export": exp })
+                                }
+                                _ => serde_json::json!({ "status": "ok" }),
+                            }
+                        }
+                    } else if path.contains("lock_import") {
+                        let req: serde_json::Value = serde_json::from_str(body).unwrap();
+                        let prop: MigrationProposal =
+                            serde_json::from_value(req["proposal"].clone()).unwrap();
+                        let mut ack = ImportAck {
+                            anchor_id,
+                            proposal_hash: prop.core_digest().unwrap(),
+                            to_rev: prop.to_rev,
+                            imported_state_hash: humoco_proto::compute_import_union_state_hash(
+                                &anchor_id,
+                                prop.to_rev,
+                                &BTreeMap::new(),
+                            )
+                            .unwrap(),
+                            retain_until_quarter: retain_q,
+                            lock_pub,
+                            acked_at: now0,
+                            sig: [0u8; 64],
+                        };
+                        ack.sig = sk.sign(&ack.digest()).to_bytes();
+                        serde_json::json!({ "import_ack": ack })
+                    } else if path.contains("lock_commit") {
+                        let req: serde_json::Value = serde_json::from_str(body).unwrap();
+                        if req.get("action").and_then(|v| v.as_str()) == Some("sign_commit") {
+                            let prop: MigrationProposal =
+                                serde_json::from_value(req["proposal"].clone()).unwrap();
+                            let ish = decode_hex_fixed::<32>(
+                                req["imported_state_hash"].as_str().unwrap(),
+                            )
+                            .unwrap();
+                            let d = MigrationCert::commit_digest(
+                                &anchor_id,
+                                &prop.core_digest().unwrap(),
+                                prop.to_rev,
+                                &ish,
+                            );
+                            let cs = CommitteeSignature {
+                                lock_pub,
+                                committed_at: now0,
+                                sig: sk.sign(&d).to_bytes(),
+                            };
+                            serde_json::json!({ "committee_signature": cs })
+                        } else {
+                            serde_json::json!({ "status": "finalized", "revision": 2 })
+                        }
+                    } else {
+                        serde_json::json!({})
+                    };
+
+                    let json_str = resp_json.to_string();
+                    let http = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                            json_str.len(),
+                            json_str
+                        );
+                    let _ = stream.write_all(http.as_bytes()).await;
+                }
+            })
+        };
+
+        let h1 = spawn_growth_mock(l1, s1_sk.clone(), Arc::clone(&stop));
+        let h2 = spawn_growth_mock(l2, s2_sk.clone(), Arc::clone(&stop));
+        let h3 = spawn_growth_mock(l3, s3_sk.clone(), Arc::clone(&stop));
+        let h4 = spawn_growth_mock(l4, s4_sk.clone(), Arc::clone(&stop));
+
+        let state = AppState::new(svc);
+        {
+            let mut s = state.lock_service().unwrap();
+            let p1_res = make_signed_probe_result(&s1_sk, &s1_sk, &w1, &r1, now0, retain_q);
+            let p2_res = make_signed_probe_result(&s2_sk, &s2_sk, &w2, &r2, now0, retain_q);
+            let p3_res = make_signed_probe_result(&s3_sk, &s3_sk, &w3, &r3, now0, retain_q);
+            state
+                .mutate_internal_lifecycle(&mut s, Some(pw), |lc| {
+                    upsert_verified_lock_probe(&mut lc.l2_probe_cache, p1_res);
+                    upsert_verified_lock_probe(&mut lc.l2_probe_cache, p2_res);
+                    upsert_verified_lock_probe(&mut lc.l2_probe_cache, p3_res);
+                })
+                .unwrap();
+        }
+        let session = {
+            let s = state.lock_service().unwrap();
+            state.session_token_for_service(&s).unwrap()
+        };
+        let client = sync_client::create_sync_probe_client();
+
+        // Single tick rotates healthy N=1 creator-only anchor directly to N=3 (threshold=2, rev=2)
+        let status1 = run_lifecycle_tick_with_now(&state, &session, &client, now0, true, Some(pw))
+            .await
+            .unwrap();
+        assert_eq!(status1.anchors[0].revision, 2);
+        assert!(status1.anchors[0].active_rotation_phase.is_none());
+        let rev2_manifest = {
+            let s = state.lock_service().unwrap();
+            s.with_wallet(|w| {
+                w.profile
+                    .l2_anchor_manifests
+                    .get(&hex::encode(anchor_id))
+                    .cloned()
+            })
+            .unwrap()
+            .unwrap()
+        };
+        assert_eq!(rev2_manifest.servers.len(), 3);
+        assert_eq!(rev2_manifest.threshold, 2);
+
+        // Add S4 and run another tick -> stops at N >= 3 without further rotation
+        {
+            let mut s = state.lock_service().unwrap();
+            let p4_res = make_signed_probe_result(&s4_sk, &s4_sk, &w4, &r4, now0 + 10, retain_q);
+            state
+                .mutate_internal_lifecycle(&mut s, Some(pw), |lc| {
+                    upsert_verified_lock_probe(&mut lc.l2_probe_cache, p4_res);
+                })
+                .unwrap();
+        }
+        let status2 =
+            run_lifecycle_tick_with_now(&state, &session, &client, now0 + 100, true, Some(pw))
+                .await
+                .unwrap();
+        assert_eq!(status2.anchors[0].revision, 2);
+        assert!(status2.anchors[0].active_rotation_phase.is_none());
+        let after_manifest = {
+            let s = state.lock_service().unwrap();
+            s.with_wallet(|w| {
+                w.profile
+                    .l2_anchor_manifests
+                    .get(&hex::encode(anchor_id))
+                    .cloned()
+            })
+            .unwrap()
+            .unwrap()
+        };
+        assert_eq!(after_manifest.servers.len(), 3);
+
+        stop.store(true, Ordering::Relaxed);
+        let _ = h1.await;
+        let _ = h2.await;
+        let _ = h3.await;
+        let _ = h4.await;
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

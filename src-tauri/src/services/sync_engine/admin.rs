@@ -294,7 +294,7 @@ pub(crate) async fn push_all_channel_members(
         "Active wallet session changed before channel members could be computed",
         |service| {
             let mut list = Vec::new();
-            for ch in ["card", "wot", "backup", "post"] {
+            for ch in ["card", "wot", "backup", "post", "lock"] {
                 let (_stats, pks) =
                     compute_admin_sync_members_with_stats(state, service, admin, ch, password)?;
                 list.push((ch, pks));
@@ -341,8 +341,8 @@ pub(crate) async fn push_all_channel_members(
             session,
             "Active wallet session changed before channel member hashes could be saved",
             |service| {
-                let mut target_admin = load_stored_sync_admin_opt(service, password)?
-                    .unwrap_or_else(|| admin.clone());
+                let mut target_admin =
+                    load_stored_sync_admin_opt(service, password)?.unwrap_or_else(|| admin.clone());
                 for (key, hash) in &pushed_hashes {
                     target_admin
                         .last_members_hash
@@ -366,33 +366,35 @@ pub(crate) async fn refresh_own_admin_members(
     session: &SessionToken,
     password: Option<&str>,
 ) {
-    let Ok(Some(admin_opt)) = state.with_session(session, |service| {
-        match load_stored_sync_admin_opt(service, password) {
-            Ok(Some(admin)) => {
-                if let Ok(seed) = get_wallet_master_seed(service) {
-                    let (admin_sk, _, _) =
-                        humoco_market::derive_drop_admin_keypair(&seed, admin.sync_index);
-                    Ok(Some((admin, admin_sk)))
-                } else {
+    let Ok(Some(admin_opt)) =
+        state.with_session(session, |service| {
+            match load_stored_sync_admin_opt(service, password) {
+                Ok(Some(admin)) => {
+                    if let Ok(seed) = get_wallet_master_seed(service) {
+                        let (admin_sk, _, _) =
+                            humoco_market::derive_drop_admin_keypair(&seed, admin.sync_index);
+                        Ok(Some((admin, admin_sk)))
+                    } else {
+                        Ok(None)
+                    }
+                }
+                Ok(None) => Ok(None),
+                Err(e) => {
+                    log::warn!(
+                        "Failed to load StoredSyncAdmin in refresh_own_admin_members: {}",
+                        e.message
+                    );
                     Ok(None)
                 }
             }
-            Ok(None) => Ok(None),
-            Err(e) => {
-                log::warn!(
-                    "Failed to load StoredSyncAdmin in refresh_own_admin_members: {}",
-                    e.message
-                );
-                Ok(None)
-            }
-        }
-    }) else {
+        })
+    else {
         return;
     };
 
     if let Some((mut admin, admin_sk)) = admin_opt {
-        let _ = push_all_channel_members(client, state, session, &mut admin, &admin_sk, password)
-            .await;
+        let _ =
+            push_all_channel_members(client, state, session, &mut admin, &admin_sk, password).await;
     }
 }
 
@@ -400,11 +402,10 @@ pub async fn sync_channel_members_impl(
     password: Option<&str>,
     state: &AppState,
 ) -> Result<usize, FrontendError> {
-    let session = state.authorize_and_begin_session(crate::state::RequiredAccess::Unlocked, None)?;
-    let Some((mut admin, admin_sk)) = state.with_session_required(
-        &session,
-        "Active wallet session changed",
-        |service| {
+    let session =
+        state.authorize_and_begin_session(crate::state::RequiredAccess::Unlocked, None)?;
+    let Some((mut admin, admin_sk)) =
+        state.with_session_required(&session, "Active wallet session changed", |service| {
             let Some(admin) = load_stored_sync_admin_opt(service, password)? else {
                 return Ok(None);
             };
@@ -412,8 +413,8 @@ pub async fn sync_channel_members_impl(
             let (admin_sk, _, _) =
                 humoco_market::derive_drop_admin_keypair(&master_seed, admin.sync_index);
             Ok(Some((admin, admin_sk)))
-        },
-    )? else {
+        })?
+    else {
         return Ok(0);
     };
 
@@ -450,7 +451,7 @@ pub fn prepare_sync_setup_impl(
 
     let mut policies = BTreeMap::new();
     policies.insert("card".to_string(), card_policy.clone().into());
-    for ch in ["wot", "backup", "post"] {
+    for ch in ["wot", "backup", "post", "lock"] {
         policies.insert(ch.to_string(), default_policy_for_channel(ch));
     }
 
@@ -627,6 +628,8 @@ pub async fn finalize_sync_setup_impl(
         })?;
 
     let mut lock_probe_result = None;
+    let norm_write_url = normalize_sync_url(&write_url);
+    let norm_read_url = normalize_sync_url(&server_read_url);
     if let Some(ref lock_info) = info.lock {
         let lock_pub_hex = lock_info.lock_pub.trim().to_ascii_lowercase();
         if humoco_market::parse_ed25519_pubkey_hex64(&lock_pub_hex).is_ok() {
@@ -635,13 +638,15 @@ pub async fn finalize_sync_setup_impl(
                     &lock_pub_hex,
                     d,
                     Some(&admin.descriptor.drop_pub),
-                )
+                ) && normalize_sync_url(&d.write_url) == norm_write_url
+                    && normalize_sync_url(&d.read_url) == norm_read_url
             });
             let mut ready = delegation_valid;
             if !delegation_valid {
                 match sync_client::push_lock_delegation(
                     &client,
                     &write_url,
+                    &server_read_url,
                     &admin_sk,
                     &lock_pub_hex,
                     sync_client::current_unix_timestamp().max(1),
@@ -729,14 +734,15 @@ pub async fn finalize_sync_setup_impl(
             }
         })?;
         if let Some(probe) = lock_probe_result {
-            let norm_write = normalize_sync_url(&probe.write_url);
-            if !norm_write.is_empty() {
+            if !probe.lock_pub.trim().is_empty() {
                 state.mutate_internal_lifecycle_for_session(
                     &session,
                     password.as_deref(),
                     |lc| {
-                        lc.l2_probe_cache.insert(norm_write, probe);
-                        true
+                        crate::services::common::upsert_verified_lock_probe(
+                            &mut lc.l2_probe_cache,
+                            probe.clone(),
+                        )
                     },
                 )?;
             }
@@ -749,10 +755,8 @@ pub async fn finalize_sync_setup_impl(
         )?;
     }
 
-    let (stats, active_slot_ids) = state.with_session_required(
-        &session,
-        "Active wallet session changed",
-        |service| {
+    let (stats, active_slot_ids) =
+        state.with_session_required(&session, "Active wallet session changed", |service| {
             compute_admin_sync_members_with_stats(
                 state,
                 service,
@@ -760,8 +764,7 @@ pub async fn finalize_sync_setup_impl(
                 "card",
                 password.as_deref(),
             )
-        },
-    )?;
+        })?;
 
     Ok(build_admin_status_dto(
         admin,

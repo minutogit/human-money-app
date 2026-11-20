@@ -1,12 +1,18 @@
 ---
 project: human-money-app
-version: "0.5.10"
+version: "0.5.14"
 phase: "beta"
 health: "green"
-last_updated: "2026-11-19"
+last_updated: "2026-11-20"
 blocks: []
 blocked_by: []
 priority_tasks:
+  - id: "APP-072"
+    title: "Zero-Config & Relocation-Safe Sync-Locks UX, Automatic Committee Assembly, N=1->2/3 Auto-Growth & Soft Guarantor Trust Flow"
+    status: "completed"
+    priority: "high"
+    depends_on: ["PROTO-005", "CORE-022", "SYNC-010", "WOT-014"]
+    description: "Replaced manual Sync-Lock probe/template/lifecycle/dead-quorum panels (`LockServerProbeSection`, `AnchorTemplateBuilder`, `L2LifecycleSection`, `DeadQuorumSwapPanel`) with automatic Sync-Lock protection across `humoco-market`, `src-tauri`, `src/`, and all 5 locales: 1) Aligned 5-field `HUMOCO-LOCK-DELEGATE-V1` and `"lock"` channel authorization/probing in `admin.rs`/`channel_reader.rs`; 2) Added `LockTicketAuth` (`Direct`/`Stealth`/`Pow` gated by `allow_pow_tickets`), `SecurityPolicy.lock_trust_by_admin_pub` (`get_lock_protection_overview`, `set_lock_server_trust`, `refresh_lock_servers`), and live endpoint resolution (`resolve_server_locator`, `upsert_verified_lock_probe`, and relocation notice following without key revocation); 3) Implemented automatic lock committee creation on voucher issuance with single-subset retry, offline cache reuse, `N=0` fallback, and safe creator-only auto-growth `N=1 -> 2/3` (`l2_lifecycle.rs` + `0s` timelock when `guarantor_mig_pubs` is empty); 4) Replaced blocking guarantor own-server errors with `untrustedServersCount` and 1-click trust-and-sign, plus calm offline/unreachable voucher status notices (`VoucherCard`, `VoucherDetailsView`, `VoucherBasicsForm`, `NetworkProtectionCard`). Verified with `humoco-market` (`112/112` tests, Clippy 0 warnings), `src-tauri` (`199/199` tests incl. 4 new regression tests, Clippy 0 warnings, `rustfmt --edition 2021 --check` on modified files), `npm run check-versions` (`2.11 / 0.5.14`), `npm run i18n:check` (`3042` keys across 5 locales), `eslint` (0 errors on modified TS files), `npm run build` (`tsc && vite build`), and Vitest (`94/94` files, `708/708` tests)."
   - id: "APP-UX-11"
     title: "Systematic End-to-End UX, Workflow & Wiring Audit & Re-Audit Fixes (Simple/Expert/Cashier Parity, .ask Offline L2 Anchors, PoS & Recovery Hardening)"
     status: "completed"

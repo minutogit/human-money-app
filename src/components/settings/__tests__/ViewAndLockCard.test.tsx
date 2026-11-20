@@ -28,7 +28,6 @@ function makeConfig(sessionTimeoutSeconds: number): AppConfigDto {
             syncBackupEnabled: true,
             backupSyncFolder: null,
             backupProtectionMode: null,
-            ownNominatedLockServer: null,
             marketSelectedSyncs: [],
             publicSyncs: [],
         },
@@ -38,7 +37,6 @@ function makeConfig(sessionTimeoutSeconds: number): AppConfigDto {
             lastBackupAt: null,
             lastSyncBackupAt: null,
             l2ProbeCache: {},
-            l2AnchorTemplatesMeta: [],
         },
     };
 }

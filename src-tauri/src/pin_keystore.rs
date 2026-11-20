@@ -85,9 +85,7 @@ fn load_keystore_file(keystore_dir: &Path) -> Result<PinKeystoreFile, String> {
     let path = keystore_path(keystore_dir);
     let bytes = match fs::read(&path) {
         Ok(b) => b,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(PinKeystoreFile::default())
-        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(PinKeystoreFile::default()),
         Err(e) => return Err(format!("Failed to read PIN keystore: {}", e)),
     };
     serde_json::from_slice(&bytes).map_err(|e| format!("Invalid PIN keystore JSON: {}", e))
@@ -287,8 +285,14 @@ mod tests {
         let corrupt = b"{not-valid-json";
         fs::write(&path, corrupt).unwrap();
 
-        let err = create_and_store_pepper(&dir, "dev-1", "profile_b", "246810", SecondaryScope::DailyPay)
-            .unwrap_err();
+        let err = create_and_store_pepper(
+            &dir,
+            "dev-1",
+            "profile_b",
+            "246810",
+            SecondaryScope::DailyPay,
+        )
+        .unwrap_err();
         assert!(err.contains("Invalid PIN keystore JSON"));
         assert_eq!(fs::read(&path).unwrap(), corrupt);
 
