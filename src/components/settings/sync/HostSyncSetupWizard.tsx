@@ -7,7 +7,7 @@ import { marketService } from '../../../services/marketService';
 import { protectCommandOptions } from '../../../services/commandPolicy';
 import { useSession } from '../../../context/SessionContext';
 import { normalizeSyncUrlInput } from '../../../utils/humocoUri';
-import { pickSaveFilePath } from '../../../utils/fileIo';
+import { saveBytesToFile } from '../../../utils/fileIo';
 import { runSyncBackupPass } from '../../../sync/syncBridge';
 import { notifySyncStatusUpdated } from '../../../utils/syncEvents';
 import { translateError } from '../../../utils/errorHelper';
@@ -60,19 +60,26 @@ export const HostSyncSetupWizard: React.FC<HostSyncSetupWizardProps> = ({
         setIsDownloadingZip(true);
         onFeedback(null);
         try {
-            const filePath = await pickSaveFilePath({
-                defaultFilename: 'humoco-sync-setup.zip',
-                filters: [{ name: 'ZIP Archive', extensions: ['zip'] }],
-            });
-            if (filePath) {
-                await protectAction(async (pwd) => {
-                    await marketService.prepareSyncSetup(
-                        { policy: hostPolicy, ...normalizeHostQuotas(hostQuotas) },
-                        pwd || undefined
-                    );
-                    await marketService.saveSyncSetupZip(filePath, pwd || undefined);
-                }, protectCommandOptions('prepare_sync_setup'));
-                onFeedback({ type: 'success', message: t('settings.syncZipSaved') });
+            const draft = await protectAction(async (pwd) => {
+                return await marketService.prepareSyncSetup(
+                    { policy: hostPolicy, ...normalizeHostQuotas(hostQuotas) },
+                    pwd || undefined
+                );
+            }, protectCommandOptions('prepare_sync_setup'));
+            if (draft) {
+                if (!draft.zipBase64) {
+                    throw new Error('Failed to generate setup ZIP archive.');
+                }
+                const binary = globalThis.atob(draft.zipBase64);
+                const zipBytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
+                const saved = await saveBytesToFile(zipBytes, {
+                    defaultFilename: 'humoco-sync-setup.zip',
+                    filters: [{ name: 'ZIP Archive', extensions: ['zip'] }],
+                    mimeType: 'application/zip',
+                });
+                if (saved) {
+                    onFeedback({ type: 'success', message: t('settings.syncZipSaved') });
+                }
             }
         } catch (err) {
             onFeedback({ type: 'error', message: translateError(err, t) });

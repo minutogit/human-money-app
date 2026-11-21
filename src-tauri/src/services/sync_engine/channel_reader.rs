@@ -735,6 +735,13 @@ pub(crate) async fn poll_sync_channels(
         if !state.is_generation_current(session.generation) {
             break;
         }
+        if state.is_origin_cooling_down(&read_url, std::time::Instant::now()) {
+            decode_ctx.errors.push(format!(
+                "Poll of {} deferred: server origin cooling down after HTTP 429",
+                read_url
+            ));
+            continue;
+        }
         decode_ctx.outcome.polled_syncs += 1;
         let (base_slot_pk, slot_prefix) =
             humoco_market::parse_slot_id(&slot_id).unwrap_or_else(|_| (slot_id.clone(), None));
@@ -782,6 +789,7 @@ pub(crate) async fn poll_sync_channels(
                     decode_ctx.sync_state.slot_etags.remove(&base_etag_key);
                 }
                 Err(e) => {
+                    state.record_origin_cooldown_if_429(&read_url, &e);
                     decode_ctx
                         .outcome
                         .sync_health_updates
@@ -821,6 +829,7 @@ pub(crate) async fn poll_sync_channels(
                     decode_ctx.sync_state.slot_etags.remove(&delta_etag_key);
                 }
                 Err(e) => {
+                    state.record_origin_cooldown_if_429(&read_url, &e);
                     decode_ctx.errors.push(format!(
                         "Failed to get direct delta card slot {} from {}: {}",
                         slot_id, read_url, e
@@ -870,6 +879,7 @@ pub(crate) async fn poll_sync_channels(
                 decode_ctx.sync_state.slot_etags.remove(&wot_etag_key);
             }
             Err(e) => {
+                state.record_origin_cooldown_if_429(&read_url, &e);
                 decode_ctx
                     .outcome
                     .sync_health_updates
@@ -886,6 +896,13 @@ pub(crate) async fn poll_sync_channels(
     for read_url in candidate_read_urls {
         if !state.is_generation_current(session.generation) {
             break;
+        }
+        if state.is_origin_cooling_down(&read_url, std::time::Instant::now()) {
+            decode_ctx.errors.push(format!(
+                "Poll of {} deferred: server origin cooling down after HTTP 429",
+                read_url
+            ));
+            continue;
         }
         decode_ctx.outcome.polled_syncs += 1;
         let idx_key = index_etag_key(&read_url);
@@ -1033,6 +1050,7 @@ pub(crate) async fn poll_sync_channels(
                             decode_ctx.sync_state.slot_etags.remove(&etag_key);
                         }
                         Err(e) => {
+                            state.record_origin_cooldown_if_429(&read_url, &e);
                             decode_ctx.errors.push(format!(
                                 "Failed to get {} slot {}: {}",
                                 entry.channel, entry.id, e
@@ -1042,6 +1060,7 @@ pub(crate) async fn poll_sync_channels(
                 }
             }
             Err(e) => {
+                state.record_origin_cooldown_if_429(&read_url, &e);
                 decode_ctx
                     .outcome
                     .sync_health_updates

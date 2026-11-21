@@ -703,7 +703,6 @@ pub fn run() {
             // Sync Services
             prepare_sync_setup,
             get_rust_sync_config,
-            save_sync_setup_zip,
             finalize_sync_setup,
             test_sync_connection,
             get_sync_admin_status,

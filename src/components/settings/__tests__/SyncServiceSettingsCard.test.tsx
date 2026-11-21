@@ -5,6 +5,7 @@ import { SyncServiceSettingsCard, normalizeSyncUrlInput } from '../SyncServiceSe
 import { marketService } from '../../../services/marketService';
 import { settingsService } from '../../../services/settingsService';
 import { save } from '@tauri-apps/plugin-dialog';
+import { writeFile } from '@tauri-apps/plugin-fs';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { copyToClipboard } from '../../../utils/clipboard';
 import { AppConfigDto, FrontendSyncAdminStatus } from '../../../types';
@@ -63,7 +64,6 @@ vi.mock('../../../services/marketService', () => ({
         removePublicSync: vi.fn(),
         prepareSyncSetup: vi.fn(),
         getRustSyncConfig: vi.fn(),
-        saveSyncSetupZip: vi.fn(),
         testSyncConnection: vi.fn(),
         finalizeSyncSetup: vi.fn(),
         updateSyncAdminConfig: vi.fn(),
@@ -214,8 +214,27 @@ describe('SyncServiceSettingsCard Component', () => {
 
     it('switches to host tab and triggers setup ZIP generation', async () => {
         vi.mocked(save).mockResolvedValue('/tmp/humoco-sync-setup.zip');
-        vi.mocked(marketService.prepareSyncSetup).mockResolvedValue(undefined as any);
-        vi.mocked(marketService.saveSyncSetupZip).mockResolvedValue(undefined as any);
+        vi.mocked(writeFile).mockResolvedValue(undefined);
+        vi.mocked(marketService.prepareSyncSetup).mockResolvedValue({
+            descriptor: {
+                writeUrl: '',
+                readUrl: '',
+                dropPub: 'abcd',
+            },
+            dataDir: 'd-1234',
+            adminPubkey: 'abcd',
+            maxMembers: 300,
+            maxTotalStorageMb: 2048,
+            maxUserStorageMb: 25,
+            policy: {
+                directMin: 2,
+                hop2Enabled: true,
+                bridgeMin: 2,
+                hop2Min: 2,
+            },
+            zipBase64: globalThis.btoa('PK\x03\x04test'),
+            rustConfigToml: '',
+        });
 
         render(
             <SyncServiceSettingsCard
@@ -239,7 +258,6 @@ describe('SyncServiceSettingsCard Component', () => {
         fireEvent.click(downloadBtn);
 
         await waitFor(() => {
-            expect(save).toHaveBeenCalled();
             expect(marketService.prepareSyncSetup).toHaveBeenCalledWith(
                 expect.objectContaining({
                     maxMembers: 300,
@@ -248,7 +266,11 @@ describe('SyncServiceSettingsCard Component', () => {
                 }),
                 'mock-wallet-pw'
             );
-            expect(marketService.saveSyncSetupZip).toHaveBeenCalledWith('/tmp/humoco-sync-setup.zip', 'mock-wallet-pw');
+            expect(save).toHaveBeenCalled();
+            expect(writeFile).toHaveBeenCalledWith(
+                '/tmp/humoco-sync-setup.zip',
+                Uint8Array.from('PK\x03\x04test', (c) => c.charCodeAt(0))
+            );
         });
     });
 

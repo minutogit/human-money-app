@@ -728,6 +728,16 @@ pub(crate) async fn flush_post_slots_impl(
         if is_own_target {
             own_targets_attempted += 1;
         }
+        if state.is_origin_cooling_down(&sync_desc.write_url, std::time::Instant::now()) {
+            if is_own_target {
+                own_targets_failed += 1;
+            }
+            errors.push(format!(
+                "Upload to {} deferred: server origin cooling down after HTTP 429",
+                sync_desc.write_url
+            ));
+            continue;
+        }
         match upload_single_post_target(
             &client,
             &flush_ctx.id_ctx,
@@ -774,6 +784,7 @@ pub(crate) async fn flush_post_slots_impl(
                 if is_own_target {
                     own_targets_failed += 1;
                 }
+                state.record_origin_cooldown_if_429(&sync_desc.write_url, &e);
                 health_updates.push((sync_desc.write_url.clone(), false));
                 errors.push(e);
             }
@@ -803,15 +814,6 @@ pub(crate) async fn flush_post_slots_impl(
     let deferred_count = deferred_tags.len();
     if deferred_count > 0 {
         post_state.outbox_rotation_tick = post_state.outbox_rotation_tick.wrapping_add(1);
-    }
-    let mut max_retry_after: Option<u64> = None;
-    for err in &errors {
-        if let Some(secs) = sync_client::extract_retry_after_from_error_str(err) {
-            max_retry_after = Some(max_retry_after.map_or(secs, |prev| prev.max(secs)));
-        }
-    }
-    if let Some(secs) = max_retry_after {
-        state.record_sync_cooldown(secs);
     }
 
     FlushPostSlotsOutcome {

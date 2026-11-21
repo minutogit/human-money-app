@@ -1154,7 +1154,6 @@ export function getTauriMockInitScript(initialScenario = 'normal') {
             totalMemberCount: 3
         }),
         "prepare_sync_setup": () => ({ token: "setup_token_demo" }),
-        "save_sync_setup_zip": () => null,
         "finalize_sync_setup": () => handlers["get_sync_admin_status"](),
         "test_sync_connection": () => ({ success: true, latencyMs: 18, message: "Sync Relay OK" }),
         "update_sync_admin_config": () => handlers["get_sync_admin_status"](),

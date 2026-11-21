@@ -38,15 +38,6 @@ pub fn get_rust_sync_config(
 }
 
 #[tauri::command]
-pub fn save_sync_setup_zip(
-    file_path: String,
-    password: Option<String>,
-    state: State<'_, AppState>,
-) -> Result<(), FrontendError> {
-    sync_engine::save_sync_setup_zip_impl(file_path, password, &state)
-}
-
-#[tauri::command]
 pub async fn finalize_sync_setup(
     base_url: String,
     password: Option<String>,

@@ -70,7 +70,6 @@ pub(crate) struct MockSyncServer {
     pub slots: Arc<Mutex<HashMap<String, Vec<u8>>>>,
     pub etags: Arc<Mutex<HashMap<String, String>>>,
     pub ttl_days: Arc<Mutex<u32>>,
-    pub rotation_cert: Arc<Mutex<Option<String>>>,
     pub put_members_count: Arc<Mutex<usize>>,
     pub admin_config: Arc<Mutex<(u64, usize, u64)>>,
     pub pause_gate: Arc<Mutex<Option<Arc<HttpPauseGate>>>>,
@@ -112,7 +111,6 @@ impl MockSyncServer {
         let slots = Arc::new(Mutex::new(HashMap::<String, Vec<u8>>::new()));
         let etags = Arc::new(Mutex::new(HashMap::<String, String>::new()));
         let ttl_days = Arc::new(Mutex::new(30u32));
-        let rotation_cert = Arc::new(Mutex::new(None));
         let put_members_count = Arc::new(Mutex::new(0));
         let admin_config = Arc::new(Mutex::new((2048u64, 300usize, 25u64)));
         let pause_gate: Arc<Mutex<Option<Arc<HttpPauseGate>>>> = Arc::new(Mutex::new(None));
@@ -128,7 +126,6 @@ impl MockSyncServer {
         let s_slots = Arc::clone(&slots);
         let s_etags = Arc::clone(&etags);
         let s_ttl_days = Arc::clone(&ttl_days);
-        let s_rotation = Arc::clone(&rotation_cert);
         let s_put_members = Arc::clone(&put_members_count);
         let s_admin_config = Arc::clone(&admin_config);
         let s_pause_gate = Arc::clone(&pause_gate);
@@ -150,7 +147,6 @@ impl MockSyncServer {
                         let slots = Arc::clone(&s_slots);
                         let etags = Arc::clone(&s_etags);
                         let ttl_days_arc = Arc::clone(&s_ttl_days);
-                        let rotation = Arc::clone(&s_rotation);
                         let put_members = Arc::clone(&s_put_members);
                         let admin_config = Arc::clone(&s_admin_config);
                         let pause_gate = Arc::clone(&s_pause_gate);
@@ -235,13 +231,6 @@ impl MockSyncServer {
                                 }
                             }
 
-                            let rot_header_opt = rotation.lock().unwrap().clone();
-                            let rot_hdr_line = if let Some(ref r) = rot_header_opt {
-                                format!("X-Humoco-Sync-Rotation: {}\r\n", r)
-                            } else {
-                                String::new()
-                            };
-
                             let response: Vec<u8> = if method == "GET" && path.contains("info") {
                                 let cur_admin = admin_pub.lock().unwrap().clone();
                                 let info_json = serde_json::json!({
@@ -257,13 +246,14 @@ impl MockSyncServer {
                                         "used_inodes": 0,
                                         "inode_warning": false,
                                         "pow_base_bits": 8,
-                                        "allow_pow_tickets": false
+                                        "allow_pow_tickets": false,
+                                        "ticket_pow_bits": 16
                                     }
                                 });
                                 let body_str = serde_json::to_string(&info_json).unwrap();
                                 format!(
-                                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n{}Content-Length: {}\r\n\r\n{}",
-                                    rot_hdr_line, body_str.len(), body_str
+                                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                                    body_str.len(), body_str
                                 ).into_bytes()
                             } else if method == "HEAD" && path.starts_with("/sync.php") {
                                 let req_pub = headers.get("x-drop-pubkey").cloned().unwrap_or_default();
@@ -292,12 +282,11 @@ impl MockSyncServer {
                                     String::new()
                                 };
                                 format!(
-                                    "HTTP/1.1 200 OK\r\nCache-Control: no-store\r\nX-Drop-Authorized: {}\r\nX-Drop-Channels: card,wot,backup,post\r\nX-Channel-Max-Bytes: 524288\r\n{}X-Slot-Occupied: {}\r\n{}{}Content-Length: 0\r\n\r\n",
+                                    "HTTP/1.1 200 OK\r\nCache-Control: no-store\r\nX-Drop-Authorized: {}\r\nX-Drop-Channels: card,wot,backup,post\r\nX-Channel-Max-Bytes: 524288\r\n{}X-Slot-Occupied: {}\r\n{}Content-Length: 0\r\n\r\n",
                                     if is_auth { "true" } else { "false" },
                                     ttl_hdr,
                                     if occupied { "true" } else { "false" },
-                                    etag_hdr,
-                                    rot_hdr_line
+                                    etag_hdr
                                 ).into_bytes()
                             } else if method == "PUT" && path.starts_with("/sync.php") && path.contains("members") {
                                 *put_members.lock().unwrap() += 1;
@@ -329,7 +318,7 @@ impl MockSyncServer {
                                             false
                                         }
                                     });
-                                    format!("HTTP/1.1 204 No Content\r\n{}Content-Length: 0\r\n\r\n", rot_hdr_line).into_bytes()
+                                    b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n".to_vec()
                                 } else {
                                     b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n".to_vec()
                                 }
@@ -347,13 +336,12 @@ impl MockSyncServer {
                                     "max_user_bytes": max_user_mb * 1024 * 1024,
                                     "slot_count": s_map.len(),
                                     "channel_counts": {"card": s_map.len()},
-                                    "admin_pubkey": cur_admin,
-                                    "rotation": null
+                                    "admin_pubkey": cur_admin
                                 });
                                 let body_str = serde_json::to_string(&status_json).unwrap();
                                 format!(
-                                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n{}Content-Length: {}\r\n\r\n{}",
-                                    rot_hdr_line, body_str.len(), body_str
+                                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                                    body_str.len(), body_str
                                 ).into_bytes()
                             } else if method == "PUT" && path.starts_with("/sync.php") && path.contains("admin_config") {
                                 #[derive(serde::Deserialize)]
@@ -385,13 +373,12 @@ impl MockSyncServer {
                                             "max_user_bytes": cfg_in.max_user_storage_mb * 1024 * 1024,
                                             "slot_count": s_map.len(),
                                             "channel_counts": {"card": s_map.len()},
-                                            "admin_pubkey": cur_admin,
-                                            "rotation": null
+                                            "admin_pubkey": cur_admin
                                         });
                                         let body_str = serde_json::to_string(&status_json).unwrap();
                                         format!(
-                                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n{}Content-Length: {}\r\n\r\n{}",
-                                            rot_hdr_line, body_str.len(), body_str
+                                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                                            body_str.len(), body_str
                                         ).into_bytes()
                                     }
                                     _ => b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n".to_vec(),
@@ -444,8 +431,8 @@ impl MockSyncServer {
                                         etags.lock().unwrap().insert(key, new_etag.clone());
                                         if channel == "media" {
                                             format!(
-                                                "HTTP/1.1 200 OK\r\n{}ETag: {}\r\nContent-Length: 0\r\n\r\n",
-                                                rot_hdr_line, new_etag
+                                                "HTTP/1.1 200 OK\r\nETag: {}\r\nContent-Length: 0\r\n\r\n",
+                                                new_etag
                                             ).into_bytes()
                                         } else {
                                             let ts_now = crate::sync_client::current_unix_timestamp();
@@ -472,13 +459,13 @@ impl MockSyncServer {
                                             })
                                             .to_string();
                                             format!(
-                                                "HTTP/1.1 200 OK\r\n{}Content-Type: application/json\r\nETag: {}\r\nContent-Length: {}\r\n\r\n{}",
-                                                rot_hdr_line, new_etag, resp_json.len(), resp_json
+                                                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nETag: {}\r\nContent-Length: {}\r\n\r\n{}",
+                                                new_etag, resp_json.len(), resp_json
                                             ).into_bytes()
                                         }
                                     }
                                 } else {
-                                    format!("HTTP/1.1 403 Forbidden\r\n{}Content-Length: 0\r\n\r\n", rot_hdr_line).into_bytes()
+                                    b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n".to_vec()
                                 }
                             } else if method == "DELETE" && path.starts_with("/sync.php") {
                                 let pubkey = headers.get("x-drop-pubkey").cloned().unwrap_or_default();
@@ -509,7 +496,7 @@ impl MockSyncServer {
                                         etags.lock().unwrap().remove(&key);
                                     }
                                 }
-                                format!("HTTP/1.1 204 No Content\r\n{}Content-Length: 0\r\n\r\n", rot_hdr_line).into_bytes()
+                                b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n".to_vec()
                             } else if method == "GET" && path.contains("index.json") {
                                 let s_map = slots.lock().unwrap();
                                 let e_map = etags.lock().unwrap();
@@ -614,7 +601,6 @@ impl MockSyncServer {
             slots,
             etags,
             ttl_days,
-            rotation_cert,
             put_members_count,
             admin_config,
             pause_gate,

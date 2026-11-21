@@ -231,6 +231,16 @@ async fn upload_wot_subpackages_to_target(
     tomb_overhead: usize,
     active_classes: usize,
 ) -> bool {
+    if ctx
+        .state
+        .is_origin_cooling_down(&drop_desc.write_url, std::time::Instant::now())
+    {
+        ctx.errors.push(format!(
+            "WoT upload to {} deferred: server origin cooling down after HTTP 429",
+            drop_desc.write_url
+        ));
+        return false;
+    }
     let effective_wot_max_bytes = ensure_cached_channel_max_bytes(
         ctx.client,
         ctx.sync_state,
@@ -367,6 +377,10 @@ async fn upload_wot_subpackages_to_target(
                                         ));
                                     }
                                     Err(e) => {
+                                        ctx.state.record_origin_cooldown_if_429(
+                                            &drop_desc.write_url,
+                                            &e,
+                                        );
                                         ctx.errors.push(format!(
                                             "Upload wot to {}: {}",
                                             drop_desc.write_url, e
@@ -424,6 +438,16 @@ async fn upload_wot_tombstones_only(
             break;
         }
         if drop_desc.write_url.is_empty() {
+            continue;
+        }
+        if ctx
+            .state
+            .is_origin_cooling_down(&drop_desc.write_url, std::time::Instant::now())
+        {
+            ctx.errors.push(format!(
+                "WoT tombstone upload to {} deferred: server origin cooling down after HTTP 429",
+                drop_desc.write_url
+            ));
             continue;
         }
         let tomb_changed = ctx
@@ -512,6 +536,16 @@ async fn delete_unshared_wot_slots(
             break;
         }
         if drop_desc.write_url.is_empty() {
+            continue;
+        }
+        if ctx
+            .state
+            .is_origin_cooling_down(&drop_desc.write_url, std::time::Instant::now())
+        {
+            ctx.errors.push(format!(
+                "WoT slot deletion on {} deferred: server origin cooling down after HTTP 429",
+                drop_desc.write_url
+            ));
             continue;
         }
         if !ctx.force_upload

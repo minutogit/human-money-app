@@ -3458,7 +3458,8 @@ mod tests {
                                 "lock_pub": lock_hex,
                                 "max_retention_quarter": 8159,
                                 "pow_base_bits": 0,
-                                "allow_pow_tickets": true
+                                "allow_pow_tickets": true,
+                                "ticket_pow_bits": 16
                             }
                         })
                     } else if path.contains("lock_freeze") {
@@ -3764,7 +3765,8 @@ mod tests {
                             "lock": {
                                 "lock_pub": lock_hex,
                                 "max_retention_quarter": 8159,
-                                "pow_base_bits": 0
+                                "pow_base_bits": 0,
+                                "ticket_pow_bits": 16
                             }
                         })
                     } else if path.contains("lock_freeze") && head.starts_with("GET ") {
@@ -3961,6 +3963,7 @@ mod tests {
                                 "lock_pub": lock_hex,
                                 "max_retention_quarter": 8159,
                                 "pow_base_bits": 0,
+                                "ticket_pow_bits": 16,
                                 "delegation": {
                                     "admin_pub": lock_hex,
                                     "lock_pub": lock_hex,
@@ -5148,7 +5151,8 @@ mod tests {
                                 "lock_pub": lock_hex,
                                 "max_retention_quarter": retain_q,
                                 "pow_base_bits": 0,
-                                "allow_pow_tickets": true
+                                "allow_pow_tickets": true,
+                                "ticket_pow_bits": 16
                             }
                         })
                     } else if path.contains("lock_freeze") {

@@ -610,6 +610,7 @@ fn collect_authorized_post_senders(
 }
 
 async fn download_post_slots(
+    state: &AppState,
     client: &reqwest::Client,
     direct_slot_fetches: Vec<(String, String, Option<String>)>,
     candidate_read_urls: Vec<String>,
@@ -620,6 +621,13 @@ async fn download_post_slots(
     let mut errors = Vec::new();
 
     for (read_url, slot_id, prefix_opt) in direct_slot_fetches {
+        if state.is_origin_cooling_down(&read_url, std::time::Instant::now()) {
+            errors.push(format!(
+                "Poll of {} deferred: server origin cooling down after HTTP 429",
+                read_url
+            ));
+            continue;
+        }
         polled_syncs += 1;
         let (base_slot_pk, slot_prefix) =
             humoco_market::parse_slot_id(&slot_id).unwrap_or_else(|_| (slot_id.clone(), None));
@@ -637,6 +645,7 @@ async fn download_post_slots(
                 health_updates.push((read_url.clone(), true));
             }
             Err(e) => {
+                state.record_origin_cooldown_if_429(&read_url, &e);
                 health_updates.push((read_url.clone(), false));
                 errors.push(format!(
                     "Failed to fetch direct post slot from {}: {}",
@@ -647,6 +656,13 @@ async fn download_post_slots(
     }
 
     for read_url in candidate_read_urls {
+        if state.is_origin_cooling_down(&read_url, std::time::Instant::now()) {
+            errors.push(format!(
+                "Poll of {} deferred: server origin cooling down after HTTP 429",
+                read_url
+            ));
+            continue;
+        }
         polled_syncs += 1;
         match sync_client::list_index(client, &read_url, None, None).await {
             Ok(sync_client::IndexFetchResult::Modified { entries, .. }) => {
@@ -672,10 +688,13 @@ async fn download_post_slots(
                             sync_client::SlotFetchResult::NotFound
                             | sync_client::SlotFetchResult::NotModified,
                         ) => {}
-                        Err(e) => errors.push(format!(
-                            "Failed to fetch post slot {} from {}: {}",
-                            entry.id, read_url, e
-                        )),
+                        Err(e) => {
+                            state.record_origin_cooldown_if_429(&read_url, &e);
+                            errors.push(format!(
+                                "Failed to fetch post slot {} from {}: {}",
+                                entry.id, read_url, e
+                            ));
+                        }
                     }
                 }
             }
@@ -683,6 +702,7 @@ async fn download_post_slots(
                 health_updates.push((read_url.clone(), true));
             }
             Err(e) => {
+                state.record_origin_cooldown_if_429(&read_url, &e);
                 health_updates.push((read_url.clone(), false));
                 errors.push(format!(
                     "Failed to fetch post slot index from {}: {}",
@@ -909,7 +929,7 @@ pub async fn sync_post_channels_impl(
 
     // 4. Download slots (no mutex held across `.await`)
     let (fetched_slots, post_sync_health_updates, polled_syncs, download_errors) =
-        download_post_slots(&client, direct_slot_fetches, candidate_read_urls).await;
+        download_post_slots(state, &client, direct_slot_fetches, candidate_read_urls).await;
     if !state.is_generation_current(session.generation) {
         return Ok(FrontendPostSyncResult::default());
     }
@@ -1225,9 +1245,6 @@ pub async fn sync_post_channels_impl(
         if let Some(secs) = sync_client::extract_retry_after_from_error_str(e) {
             retry_after_secs = Some(retry_after_secs.map_or(secs, |prev| prev.max(secs)));
         }
-    }
-    if let Some(secs) = retry_after_secs {
-        state.record_sync_cooldown(secs);
     }
 
     if !stats.errors.is_empty() {

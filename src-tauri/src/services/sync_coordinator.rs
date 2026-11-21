@@ -152,37 +152,25 @@ impl CoordinatorSchedule {
         }
     }
 
-    /// Computes the earliest wakeup `Instant` across due tasks while gating network passes on
-    /// connectivity and active 429 cooldown windows.
-    pub fn earliest_due(
-        &self,
-        is_online: bool,
-        cooldown_until: Option<Instant>,
-    ) -> Option<Instant> {
+    /// Computes the earliest wakeup `Instant` across due local/network tasks.
+    pub fn earliest_due(&self, is_online: bool) -> Option<Instant> {
         let mut earliest = self.next_local_backup_at;
         if let Some(seal_at) = self.next_seal_at {
             earliest = Some(earliest.map_or(seal_at, |e| e.min(seal_at)));
         }
 
         if is_online {
-            let net_floor = |at: Instant| cooldown_until.map_or(at, |cd| at.max(cd));
-            if let Some(at) = self.next_post_at.map(net_floor) {
+            if let Some(at) = self.next_post_at {
                 earliest = Some(earliest.map_or(at, |e| e.min(at)));
             }
-            if let Some(at) = self.next_sync_backup_at.map(net_floor) {
+            if let Some(at) = self.next_sync_backup_at {
                 earliest = Some(earliest.map_or(at, |e| e.min(at)));
             }
-            if let Some(at) = self.next_sync_members_at.map(net_floor) {
+            if let Some(at) = self.next_sync_members_at {
                 earliest = Some(earliest.map_or(at, |e| e.min(at)));
             }
             if let Some(at) = self.next_market_at {
-                // Forced market uploads bypass periodic cooldown gating, matching legacy UX expectation
-                let effective = if self.next_market_force_upload {
-                    at
-                } else {
-                    net_floor(at)
-                };
-                earliest = Some(earliest.map_or(effective, |e| e.min(effective)));
+                earliest = Some(earliest.map_or(at, |e| e.min(at)));
             }
         }
 
@@ -209,10 +197,6 @@ fn active_session_generation(state: &AppState) -> Option<u64> {
 
 fn is_session_active_for_generation(state: &AppState, generation: u64) -> bool {
     active_session_generation(state) == Some(generation)
-}
-
-fn is_cooling_down(cooldown_until: Option<Instant>, now: Instant) -> bool {
-    cooldown_until.is_some_and(|until| now < until)
 }
 
 async fn wait_for_next_event(
@@ -299,11 +283,9 @@ async fn run_coordinator_loop(app: tauri::AppHandle) {
             }
         }
 
-        // 3. Off-site Sync Backup (requires online + not cooling down)
+        // 3. Off-site Sync Backup (requires online; per-origin 429 cooldowns are enforced per mirror)
         let ctrl = state.sync_control_snapshot();
-        let net_cooldown = is_cooling_down(ctrl.cooldown_until, Instant::now());
         if ctrl.is_online
-            && !net_cooldown
             && schedule
                 .next_sync_backup_at
                 .is_some_and(|t| Instant::now() >= t)
@@ -330,9 +312,6 @@ async fn run_coordinator_loop(app: tauri::AppHandle) {
                             schedule.next_sync_backup_at = None;
                             schedule.sync_backup_consecutive_failures = 0;
                         } else {
-                            if let Some(secs) = res.retry_after_secs {
-                                state.record_sync_cooldown(secs);
-                            }
                             if res.uploaded_to > 0 || res.errors.is_empty() {
                                 schedule.last_sync_backup_success_at = Some(Instant::now());
                                 schedule.sync_backup_consecutive_failures = 0;
@@ -351,12 +330,7 @@ async fn run_coordinator_loop(app: tauri::AppHandle) {
                             let _ = app.emit("humoco://sync-status-updated", &res);
                         }
                     }
-                    Err(e) if is_session_active_for_generation(&state, generation) => {
-                        if let Some(secs) =
-                            crate::sync_client::extract_retry_after_from_error_str(&e.message)
-                        {
-                            state.record_sync_cooldown(secs);
-                        }
+                    Err(_e) if is_session_active_for_generation(&state, generation) => {
                         schedule.sync_backup_consecutive_failures =
                             schedule.sync_backup_consecutive_failures.saturating_add(1);
                         let exp = schedule
@@ -376,15 +350,12 @@ async fn run_coordinator_loop(app: tauri::AppHandle) {
             continue;
         }
 
-        // 4. PoST Channel Sync
+        // 4. PoST Channel Sync (per-origin 429 cooldowns are enforced per endpoint inside PoST)
         let ctrl = state.sync_control_snapshot();
         let now_post = Instant::now();
-        if ctrl.is_online
-            && !is_cooling_down(ctrl.cooldown_until, now_post)
-            && schedule.next_post_at.is_some_and(|t| now_post >= t)
-        {
+        if ctrl.is_online && schedule.next_post_at.is_some_and(|t| now_post >= t) {
             schedule.next_post_at = Some(now_post + POST_PERIODIC_INTERVAL);
-            match post_service::sync_post_channels_impl(
+            if let Ok(res) = post_service::sync_post_channels_impl(
                 Some(&app),
                 Some(ctrl.is_wifi),
                 None,
@@ -393,12 +364,9 @@ async fn run_coordinator_loop(app: tauri::AppHandle) {
             )
             .await
             {
-                Ok(res) if is_session_active_for_generation(&state, generation) => {
+                if is_session_active_for_generation(&state, generation) {
                     if res.skipped_wifi_only {
                         schedule.post_deferred_for_wifi = true;
-                    }
-                    if let Some(secs) = res.retry_after_secs {
-                        state.record_sync_cooldown(secs);
                     }
                     let has_backup_changes = res.uploaded_to > 0
                         || res.imported_payments > 0
@@ -422,14 +390,6 @@ async fn run_coordinator_loop(app: tauri::AppHandle) {
                     }
                     let _ = app.emit("humoco://post-synced", &res);
                 }
-                Err(e) if is_session_active_for_generation(&state, generation) => {
-                    if let Some(secs) =
-                        crate::sync_client::extract_retry_after_from_error_str(&e.message)
-                    {
-                        state.record_sync_cooldown(secs);
-                    }
-                }
-                _ => {}
             }
         }
 
@@ -441,7 +401,6 @@ async fn run_coordinator_loop(app: tauri::AppHandle) {
         let ctrl = state.sync_control_snapshot();
         let now_members = Instant::now();
         if ctrl.is_online
-            && !is_cooling_down(ctrl.cooldown_until, now_members)
             && schedule
                 .next_sync_members_at
                 .is_some_and(|t| now_members >= t)
@@ -466,38 +425,25 @@ async fn run_coordinator_loop(app: tauri::AppHandle) {
         let now_market = Instant::now();
         if ctrl.is_online && schedule.next_market_at.is_some_and(|t| now_market >= t) {
             let force_upload = schedule.next_market_force_upload;
-            if force_upload || !is_cooling_down(ctrl.cooldown_until, now_market) {
-                schedule.next_market_force_upload = false;
-                schedule.next_market_at = Some(now_market + MARKET_PERIODIC_INTERVAL);
-                match sync_engine::sync_market_channels_with_options(
-                    Some(ctrl.is_wifi),
-                    Some(force_upload),
-                    Some(!force_upload),
-                    None,
-                    &state,
-                )
-                .await
-                {
-                    Ok(res) if is_session_active_for_generation(&state, generation) => {
-                        if res.status == MarketSyncStatus::SkippedWifiOnly {
-                            if force_upload {
-                                schedule.next_market_force_upload = true;
-                            }
-                            schedule.market_deferred_for_wifi = true;
+            schedule.next_market_force_upload = false;
+            schedule.next_market_at = Some(now_market + MARKET_PERIODIC_INTERVAL);
+            if let Ok(res) = sync_engine::sync_market_channels_with_options(
+                Some(ctrl.is_wifi),
+                Some(force_upload),
+                Some(!force_upload),
+                None,
+                &state,
+            )
+            .await
+            {
+                if is_session_active_for_generation(&state, generation) {
+                    if res.status == MarketSyncStatus::SkippedWifiOnly {
+                        if force_upload {
+                            schedule.next_market_force_upload = true;
                         }
-                        if let Some(secs) = res.retry_after_secs {
-                            state.record_sync_cooldown(secs);
-                        }
-                        let _ = app.emit("humoco://market-synced", &res);
+                        schedule.market_deferred_for_wifi = true;
                     }
-                    Err(e) if is_session_active_for_generation(&state, generation) => {
-                        if let Some(secs) =
-                            crate::sync_client::extract_retry_after_from_error_str(&e.message)
-                        {
-                            state.record_sync_cooldown(secs);
-                        }
-                    }
-                    _ => {}
+                    let _ = app.emit("humoco://market-synced", &res);
                 }
             }
         }
@@ -505,7 +451,6 @@ async fn run_coordinator_loop(app: tauri::AppHandle) {
         // 6. One-shot per-session Sync-Lock probe refresh & silent offline anchor pre-warm
         let ctrl = state.sync_control_snapshot();
         if ctrl.is_online
-            && !is_cooling_down(ctrl.cooldown_until, Instant::now())
             && !schedule.lock_refresh_done
             && is_session_active_for_generation(&state, generation)
             && l2_anchor_service::refresh_lock_servers_for_coordinator(&state).await
@@ -514,7 +459,7 @@ async fn run_coordinator_loop(app: tauri::AppHandle) {
         }
 
         let ctrl = state.sync_control_snapshot();
-        let next_due = schedule.earliest_due(ctrl.is_online, ctrl.cooldown_until);
+        let next_due = schedule.earliest_due(ctrl.is_online);
         wait_for_next_event(next_due, &mut gen_rx, &wake).await;
     }
 }
@@ -539,19 +484,19 @@ mod tests {
         assert_eq!(sched.next_market_at, Some(t0 + MARKET_INITIAL_DELAY));
 
         // Offline gating keeps local backup + seal due, skipping remote jobs until back online
-        let due_offline = sched.earliest_due(false, None).unwrap();
+        let due_offline = sched.earliest_due(false).unwrap();
         assert_eq!(due_offline, t0 + SEAL_INITIAL_DELAY);
 
-        // Cooldown pushes non-forced remote jobs out while allowing local backup earlier
-        let cooldown = t0 + Duration::from_secs(120);
+        // Online includes both remote and local jobs, picking whichever is earliest
         sched.next_seal_at = Some(t0 + Duration::from_secs(120));
         sched.next_local_backup_at = Some(t0 + Duration::from_secs(5));
-        assert_eq!(
-            sched.earliest_due(true, Some(cooldown)),
-            Some(t0 + Duration::from_secs(5))
-        );
+        assert_eq!(sched.earliest_due(true), Some(t0 + POST_INITIAL_DELAY));
+        sched.next_post_at = Some(t0 + Duration::from_secs(120));
+        sched.next_market_at = Some(t0 + Duration::from_secs(120));
+        sched.next_sync_backup_at = Some(t0 + Duration::from_secs(120));
+        assert_eq!(sched.earliest_due(true), Some(t0 + Duration::from_secs(5)));
 
-        // Forced market upload wake uses MARKET_UPLOAD_DEBOUNCE and bypasses cooldown floor
+        // Forced market upload wake uses MARKET_UPLOAD_DEBOUNCE
         let t1 = t0 + Duration::from_secs(10);
         sched.next_local_backup_at = Some(t1 + LOCAL_BACKUP_PERIODIC_INTERVAL);
         sched.next_market_at = Some(t1 + MARKET_PERIODIC_INTERVAL);
@@ -579,7 +524,7 @@ mod tests {
         assert!(!sched.sync_backup_deferred_for_wifi);
         assert!(!sched.post_deferred_for_wifi);
         assert!(!sched.market_deferred_for_wifi);
-        assert_eq!(sched.earliest_due(true, None), None);
+        assert_eq!(sched.earliest_due(true), None);
     }
 
     #[test]
@@ -638,12 +583,9 @@ mod tests {
             sched.next_sync_members_at,
             Some(t0 + Duration::from_secs(1))
         );
+        assert_eq!(sched.earliest_due(true), Some(t0 + Duration::from_secs(1)));
         assert_eq!(
-            sched.earliest_due(true, None),
-            Some(t0 + Duration::from_secs(1))
-        );
-        assert_eq!(
-            sched.earliest_due(false, None),
+            sched.earliest_due(false),
             Some(t0 + SEAL_INITIAL_DELAY.min(LOCAL_BACKUP_INITIAL_DELAY))
         );
 
@@ -705,5 +647,37 @@ mod tests {
             !l2_anchor_service::refresh_lock_servers_for_coordinator(&state).await,
             "locked session must not initiate L2 coordinator probes"
         );
+    }
+
+    #[test]
+    fn s08_q3_per_origin_cooldown_isolates_throttled_origin_from_honest_origins() {
+        let dir = crate::test_support::temp_test_dir("coord_origin_cd");
+        let pw = "TestPass123!";
+        let svc = crate::test_support::setup_test_app(
+            &dir,
+            "Alice",
+            crate::test_support::ALICE_PHRASE,
+            pw,
+        );
+        let state = crate::test_support::create_test_state(svc);
+
+        let now = Instant::now();
+        let recorded = state.record_origin_cooldown_if_429(
+            "https://evil-peer.example.org/data/alice.bin",
+            "Failed with HTTP 429 Too Many Requests; Retry-After: 3600",
+        );
+        assert_eq!(recorded, Some(3600));
+        assert!(state.is_origin_cooling_down("https://evil-peer.example.org/sync.php", now));
+        assert!(
+            !state.is_origin_cooling_down("https://own-backup.example.org/sync.php", now),
+            "429 from one origin must NOT throttle unrelated honest origins"
+        );
+        assert!(
+            !state.is_origin_cooling_down("https://evil-peer.example.org:8443/sync.php", now),
+            "different port is a distinct origin"
+        );
+
+        state.clear_sync_cooldown();
+        assert!(!state.is_origin_cooling_down("https://evil-peer.example.org/sync.php", now));
     }
 }

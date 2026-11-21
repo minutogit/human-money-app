@@ -9,8 +9,8 @@ pub(crate) use admin::{block_sync_slot_impl, sync_channel_members_impl};
 pub use admin::{
     compute_admin_sync_members_with_stats, compute_channel_members_hash, delete_sync_admin_impl,
     finalize_sync_setup_impl, get_rust_sync_config_impl, get_sync_admin_status_impl,
-    prepare_sync_setup_impl, revoke_own_sync_server_impl, save_sync_setup_zip_impl,
-    test_sync_connection_impl, update_sync_admin_config_impl,
+    prepare_sync_setup_impl, revoke_own_sync_server_impl, test_sync_connection_impl,
+    update_sync_admin_config_impl,
 };
 pub(crate) use card_sync::probe_contact_syncs_with_session;
 pub use card_sync::{
@@ -454,9 +454,6 @@ pub async fn sync_market_channels_with_options(
         if let Some(secs) = sync_client::extract_retry_after_from_error_str(e) {
             retry_after_secs = Some(retry_after_secs.map_or(secs, |prev| prev.max(secs)));
         }
-    }
-    if let Some(secs) = retry_after_secs {
-        state.record_sync_cooldown(secs);
     }
 
     let status = if skip_poll && uploaded_to == 0 {
@@ -2578,18 +2575,20 @@ pub(crate) mod tests {
                 .is_none()
         );
 
-        // Preparing setup (copying config.toml / saving ZIP) must NOT mark service as active
+        // Preparing setup (copying config.toml / generating ZIP) must NOT mark service as active
         let draft =
             prepare_sync_setup_impl(None, None, None, None, Some(password.to_string()), &state)
                 .unwrap();
         let _toml = get_rust_sync_config_impl(Some(password.to_string()), &state).unwrap();
-        let zip_path = base_dir.join("humoco-sync-setup.zip");
-        save_sync_setup_zip_impl(
-            zip_path.to_string_lossy().to_string(),
-            Some(password.to_string()),
-            &state,
+        let zip_bytes = base64::Engine::decode(
+            &base64::engine::general_purpose::STANDARD,
+            &draft.zip_base64,
         )
-        .unwrap();
+        .expect("prepare_sync_setup_impl must produce valid base64 ZIP bytes");
+        assert!(
+            zip_bytes.starts_with(b"PK\x03\x04"),
+            "decoded setup artifact must be a PKZIP archive"
+        );
         assert!(
             get_sync_admin_status_impl(Some(password.to_string()), &state)
                 .await

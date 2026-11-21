@@ -2423,6 +2423,13 @@ pub(crate) async fn sync_backup_with_standards_impl(
         if skip_urls.contains(&target.norm_write_url) {
             continue;
         }
+        if state.is_origin_cooling_down(&target.desc.write_url, std::time::Instant::now()) {
+            errors.push(format!(
+                "Upload to {} deferred: server origin cooling down after HTTP 429",
+                target.desc.write_url
+            ));
+            continue;
+        }
         let upload_now_secs = crate::sync_client::current_unix_timestamp();
         let target_delta_prefix = humoco_market::derive_delta_prefix(target.base_prefix.as_deref());
         let can_use_delta = delta_padded_opt.as_ref().is_some_and(|d| {
@@ -2591,6 +2598,7 @@ pub(crate) async fn sync_backup_with_standards_impl(
                         ));
                     }
                     Err(e) => {
+                        state.record_origin_cooldown_if_429(&target.desc.write_url, &e);
                         errors.push(format!("Upload to {} failed: {}", target.desc.write_url, e));
                     }
                 }
@@ -2691,9 +2699,6 @@ pub(crate) async fn sync_backup_with_standards_impl(
         if let Some(secs) = crate::sync_client::extract_retry_after_from_error_str(e) {
             retry_after_secs = Some(retry_after_secs.map_or(secs, |prev| prev.max(secs)));
         }
-    }
-    if let Some(secs) = retry_after_secs {
-        state.record_sync_cooldown(secs);
     }
 
     Ok(FrontendBackupSyncResult {
@@ -5296,7 +5301,6 @@ mod tests {
                 max_members: 50,
                 max_total_storage_mb: 100,
                 max_user_storage_mb: 10,
-                register_url: None,
                 policies: Default::default(),
                 allow: vec![],
                 deny: vec![],

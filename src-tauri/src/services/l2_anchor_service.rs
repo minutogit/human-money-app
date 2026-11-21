@@ -2669,6 +2669,7 @@ mod tests {
                                     "max_retention_quarter": retain_q,
                                     "pow_base_bits": 16,
                                     "allow_pow_tickets": false,
+                                    "ticket_pow_bits": 16,
                                     "used_inodes": 10,
                                     "max_inodes": 50_000,
                                     "inode_warning": false,

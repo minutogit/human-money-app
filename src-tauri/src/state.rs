@@ -134,8 +134,6 @@ pub struct StoredSyncAdmin {
     pub max_members: usize,
     pub max_total_storage_mb: usize,
     pub max_user_storage_mb: usize,
-    #[serde(default)]
-    pub register_url: Option<String>,
     pub policies: std::collections::BTreeMap<String, humoco_market::MemberPolicy>,
     pub allow: Vec<String>,
     pub deny: Vec<String>,
@@ -466,7 +464,7 @@ pub struct SyncCoordinatorControl {
     pub is_wifi: bool,
     pub is_visible: bool,
     pub pending_wake: SyncWakeRequest,
-    pub cooldown_until: Option<std::time::Instant>,
+    pub origin_cooldowns: std::collections::HashMap<String, std::time::Instant>,
 }
 
 impl Default for SyncCoordinatorControl {
@@ -476,7 +474,7 @@ impl Default for SyncCoordinatorControl {
             is_wifi: true,
             is_visible: true,
             pending_wake: SyncWakeRequest::default(),
-            cooldown_until: None,
+            origin_cooldowns: std::collections::HashMap::new(),
         }
     }
 }
@@ -939,16 +937,54 @@ impl AppState {
         (guard.clone(), wake)
     }
 
-    pub fn record_sync_cooldown(&self, retry_after_secs: u64) {
+    pub fn record_origin_cooldown(&self, url: &str, retry_after_secs: u64) {
+        let Some(origin) = crate::sync_client::sync_origin_key(url) else {
+            return;
+        };
         let clamped = retry_after_secs.clamp(5, 3600);
-        let target = std::time::Instant::now() + std::time::Duration::from_secs(clamped);
+        let now = std::time::Instant::now();
+        let target = now + std::time::Duration::from_secs(clamped);
         let mut guard = self.sync_control.lock().unwrap_or_else(|e| e.into_inner());
-        guard.cooldown_until = Some(guard.cooldown_until.map_or(target, |prev| prev.max(target)));
+        guard.origin_cooldowns.retain(|_, until| *until > now);
+        const MAX_ORIGIN_COOLDOWNS: usize = 256;
+        if !guard.origin_cooldowns.contains_key(&origin)
+            && guard.origin_cooldowns.len() >= MAX_ORIGIN_COOLDOWNS
+        {
+            if let Some(oldest_key) = guard
+                .origin_cooldowns
+                .iter()
+                .min_by_key(|(_, until)| **until)
+                .map(|(k, _)| k.clone())
+            {
+                guard.origin_cooldowns.remove(&oldest_key);
+            }
+        }
+        let entry = guard.origin_cooldowns.entry(origin).or_insert(target);
+        if target > *entry {
+            *entry = target;
+        }
+    }
+
+    pub fn record_origin_cooldown_if_429(&self, url: &str, err_msg: &str) -> Option<u64> {
+        let secs = crate::sync_client::extract_retry_after_from_error_str(err_msg)?;
+        self.record_origin_cooldown(url, secs);
+        Some(secs)
+    }
+
+    pub fn is_origin_cooling_down(&self, url: &str, now: std::time::Instant) -> bool {
+        let Some(origin) = crate::sync_client::sync_origin_key(url) else {
+            return false;
+        };
+        let guard = self.sync_control.lock().unwrap_or_else(|e| e.into_inner());
+        guard
+            .origin_cooldowns
+            .get(&origin)
+            .is_some_and(|until| now < *until)
     }
 
     pub fn clear_sync_cooldown(&self) {
         let mut guard = self.sync_control.lock().unwrap_or_else(|e| e.into_inner());
-        guard.cooldown_until = None;
+        guard.origin_cooldowns.clear();
         guard.pending_wake = SyncWakeRequest::default();
     }
 

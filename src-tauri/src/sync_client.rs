@@ -106,17 +106,6 @@ pub struct SyncLockSelftestReportDto {
     pub sig: String,
 }
 
-fn deserialize_u32_null_default<'de, D>(deserializer: D) -> Result<u32, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    Ok(Option::<u32>::deserialize(deserializer)?.unwrap_or_else(default_ticket_pow_bits))
-}
-
-fn default_ticket_pow_bits() -> u32 {
-    16
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct SyncLockInfoDto {
     pub lock_pub: String,
@@ -132,10 +121,6 @@ pub struct SyncLockInfoDto {
     pub pow_base_bits: u32,
     #[serde(default)]
     pub allow_pow_tickets: bool,
-    #[serde(
-        default = "default_ticket_pow_bits",
-        deserialize_with = "deserialize_u32_null_default"
-    )]
     pub ticket_pow_bits: u32,
     #[serde(default)]
     pub selftest: Option<SyncLockSelftestReportDto>,
@@ -172,7 +157,6 @@ pub struct FrontendLockServerProbeResult {
     pub max_retention_quarter: u16,
     pub pow_base_bits: u32,
     pub allow_pow_tickets: bool,
-    #[serde(default = "default_ticket_pow_bits")]
     pub ticket_pow_bits: u32,
     pub inode_warning: bool,
     pub used_inodes: u64,
@@ -533,8 +517,12 @@ pub async fn push_lock_delegation(
     .await
 }
 
+/// Loopback/localhost sync servers are allowed in unit tests and explicit debug builds only;
+/// release builds never honor `HUMOCO_ALLOW_LOOPBACK_SYNC` to avoid env-var SSRF/HTTP downgrades.
 fn loopback_sync_allowed() -> bool {
-    cfg!(test) || std::env::var("HUMOCO_ALLOW_LOOPBACK_SYNC").ok().as_deref() == Some("1")
+    cfg!(test)
+        || (cfg!(debug_assertions)
+            && std::env::var("HUMOCO_ALLOW_LOOPBACK_SYNC").ok().as_deref() == Some("1"))
 }
 
 fn is_blocked_v4(v4: std::net::Ipv4Addr, allow_loopback: bool) -> bool {
@@ -744,6 +732,18 @@ pub fn create_sync_probe_client() -> reqwest::Client {
         .timeout(std::time::Duration::from_secs(6))
         .build()
         .expect("failed to build SSRF-safe sync probe HTTP client")
+}
+
+/// Canonical `(scheme, lowercase host, effective port)` key for per-origin rate-limit cooldowns.
+pub fn sync_origin_key(url: &str) -> Option<String> {
+    let parsed = reqwest::Url::parse(url.trim()).ok()?;
+    let scheme = parsed.scheme().to_ascii_lowercase();
+    if scheme != "http" && scheme != "https" {
+        return None;
+    }
+    let host = parsed.host_str()?.to_ascii_lowercase();
+    let port = parsed.port_or_known_default()?;
+    Some(format!("{}://{}:{}", scheme, host, port))
 }
 
 pub fn generate_sync_nonce() -> String {
@@ -4032,5 +4032,51 @@ mod tests {
         .unwrap();
         assert!(pow_ticket.verify());
         pow_server.await.unwrap();
+    }
+
+    #[test]
+    fn s08_followups_ticket_pow_bits_required_and_origin_key_canonical() {
+        // S08-R1: SyncLockInfoDto rejects missing or null ticket_pow_bits (no pre-SYNC-011 default).
+        let missing = serde_json::json!({
+            "lock_pub": "aa".repeat(32),
+            "max_retention_quarter": 8159,
+            "pow_base_bits": 8,
+            "allow_pow_tickets": true
+        });
+        assert!(serde_json::from_value::<SyncLockInfoDto>(missing).is_err());
+
+        let null_val = serde_json::json!({
+            "lock_pub": "aa".repeat(32),
+            "max_retention_quarter": 8159,
+            "pow_base_bits": 8,
+            "allow_pow_tickets": true,
+            "ticket_pow_bits": null
+        });
+        assert!(serde_json::from_value::<SyncLockInfoDto>(null_val).is_err());
+
+        let valid = serde_json::json!({
+            "lock_pub": "aa".repeat(32),
+            "max_retention_quarter": 8159,
+            "pow_base_bits": 8,
+            "allow_pow_tickets": true,
+            "ticket_pow_bits": 16
+        });
+        let dto = serde_json::from_value::<SyncLockInfoDto>(valid).unwrap();
+        assert_eq!(dto.ticket_pow_bits, 16);
+
+        // S08-Q3: canonical origin extraction groups paths/ports accurately and ignores invalid URLs.
+        assert_eq!(
+            sync_origin_key("HTTPS://Sync.Example.ORG:443/a/sync.php"),
+            Some("https://sync.example.org:443".to_string())
+        );
+        assert_eq!(
+            sync_origin_key("https://sync.example.org/b/sync.php"),
+            Some("https://sync.example.org:443".to_string())
+        );
+        assert_eq!(
+            sync_origin_key("http://127.0.0.1:8080/sync.php"),
+            Some("http://127.0.0.1:8080".to_string())
+        );
+        assert_eq!(sync_origin_key("ftp://sync.example.org/sync.php"), None);
     }
 }

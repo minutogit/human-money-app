@@ -1087,6 +1087,14 @@ pub(crate) async fn sync_card_upload_channel(
                 if target_key.is_empty() {
                     continue;
                 }
+                if state.is_origin_cooling_down(&drop_desc.write_url, std::time::Instant::now()) {
+                    any_card_failed = true;
+                    errors.push(format!(
+                        "Card upload to {} deferred: server origin cooling down after HTTP 429",
+                        drop_desc.write_url
+                    ));
+                    continue;
+                }
 
                 let effective_card_max_bytes = ensure_cached_channel_max_bytes(
                     client,
@@ -1268,6 +1276,10 @@ pub(crate) async fn sync_card_upload_channel(
                                             ));
                                         }
                                         Err(e) => {
+                                            state.record_origin_cooldown_if_429(
+                                                &drop_desc.write_url,
+                                                &e,
+                                            );
                                             any_card_failed = true;
                                             errors.push(format!(
                                                 "Upload delta to {}: {}",
@@ -1361,6 +1373,10 @@ pub(crate) async fn sync_card_upload_channel(
                                                     ));
                                                 }
                                                 Err(e) => {
+                                                    state.record_origin_cooldown_if_429(
+                                                        &drop_desc.write_url,
+                                                        &e,
+                                                    );
                                                     any_card_failed = true;
                                                     errors.push(format!(
                                                         "Upload to {}: {}",

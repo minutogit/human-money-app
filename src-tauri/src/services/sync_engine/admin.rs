@@ -327,6 +327,7 @@ pub(crate) async fn push_all_channel_members(
                 pushed_hashes.push((key, hash));
             }
             Err(e) => {
+                state.record_origin_cooldown_if_429(&admin.descriptor.write_url, &e);
                 log::warn!("Failed to push members for channel {}: {}", ch, e);
                 if first_error.is_none() {
                     first_error = Some(FrontendError::from(e));
@@ -476,7 +477,6 @@ pub fn prepare_sync_setup_impl(
         max_members: max_mem,
         max_total_storage_mb: max_storage_mb,
         max_user_storage_mb: max_user_mb,
-        register_url: None,
         policies,
         allow: Vec::new(),
         deny: Vec::new(),
@@ -525,13 +525,15 @@ pub fn get_rust_sync_config_impl(
     let mut service =
         state.authorize_and_lock(crate::state::RequiredAccess::Full, password.as_deref())?;
     if let Some(admin) = load_stored_sync_admin_opt(&mut service, password.as_deref())? {
+        let write_url_trimmed = admin.descriptor.write_url.trim();
+        let public_url_hint = (!write_url_trimmed.is_empty()).then_some(write_url_trimmed);
         return Ok(crate::sync_zip::generate_rust_sync_config_toml(
             &admin.descriptor.drop_pub,
             &admin.data_dir,
             admin.max_members,
             admin.max_total_storage_mb,
             admin.max_user_storage_mb,
-            admin.register_url.as_deref(),
+            public_url_hint,
         ));
     }
 
@@ -548,31 +550,6 @@ pub fn get_rust_sync_config_impl(
         25,
         None,
     ))
-}
-
-pub fn save_sync_setup_zip_impl(
-    file_path: String,
-    password: Option<String>,
-    state: &AppState,
-) -> Result<(), FrontendError> {
-    let mut service =
-        state.authorize_and_lock(crate::state::RequiredAccess::Full, password.as_deref())?;
-    let admin = load_stored_sync_admin_opt(&mut service, password.as_deref())?
-        .ok_or_else(|| FrontendError::from("Sync admin not configured".to_string()))?;
-
-    let zip_bytes = crate::sync_zip::build_sync_zip_bytes(
-        &admin.descriptor.drop_pub,
-        &admin.data_dir,
-        admin.max_members,
-        admin.max_total_storage_mb,
-        admin.max_user_storage_mb,
-        admin.register_url.as_deref(),
-    );
-
-    std::fs::write(&file_path, zip_bytes)
-        .map_err(|e| FrontendError::from(format!("Failed to write ZIP file: {}", e)))?;
-
-    Ok(())
 }
 
 pub async fn finalize_sync_setup_impl(

@@ -161,7 +161,6 @@ export const COMMAND_ACCESS_POLICY = {
     save_my_market_profile: "full",
     prepare_sync_setup: "full",
     get_rust_sync_config: "full",
-    save_sync_setup_zip: "full",
     finalize_sync_setup: "full",
     test_sync_connection: "full",
     update_sync_admin_config: "full",

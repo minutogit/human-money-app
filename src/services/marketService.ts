@@ -136,13 +136,6 @@ export const marketService = {
         });
     },
 
-    saveSyncSetupZip: async (filePath: string, password?: string): Promise<void> => {
-        return await invoke<void>("save_sync_setup_zip", {
-            filePath,
-            password: password || undefined,
-        });
-    },
-
     finalizeSyncSetup: async (baseUrl: string, password?: string): Promise<FrontendSyncAdminStatus> => {
         return await invoke<FrontendSyncAdminStatus>("finalize_sync_setup", {
             baseUrl,
