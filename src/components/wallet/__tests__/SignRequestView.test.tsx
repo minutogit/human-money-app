@@ -481,4 +481,64 @@ uuid = "minuto-uuid-123"`,
     await screen.findByTestId('guarantor-anchor-check-error');
     expect(screen.getByRole('button', { name: /Sign Now/i })).toBeDisabled();
   });
+
+  it('forwards anchorDelegationsJson to evaluate_guarantor_anchor_check and create_detached_signature_response_bundle (S06-F7)', async () => {
+    const delegationsJson = JSON.stringify([{ lockPub: '11'.repeat(32), sig: 'aa'.repeat(64) }]);
+    const manifestJson = JSON.stringify({ revision: 1, threshold: 2, servers: [] });
+    const baseImpl = (invoke as Mock).getMockImplementation();
+    (invoke as Mock).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === 'evaluate_guarantor_anchor_check') {
+        return Promise.resolve({
+          required: true,
+          passed: true,
+          hasLayer2Anchor: true,
+          retentionOk: true,
+          sybilIndependentCount: 2,
+          threshold: 2,
+          serverCount: 2,
+          untrustedServersCount: 0,
+          unverifiedDelegationsCount: 0,
+          offenderCheckUnverified: false,
+          servers: [],
+          issues: [],
+        });
+      }
+      return baseImpl ? baseImpl(cmd, args) : Promise.resolve(undefined);
+    });
+    (save as Mock).mockResolvedValue('/tmp/sig-delegations.sig');
+
+    render(
+      <SignRequestView
+        voucherData={{
+          ...mockVoucherDetails,
+          anchorManifestJson: manifestJson,
+          anchorDelegationsJson: delegationsJson,
+        }}
+        onBack={mockOnBack}
+      />
+    );
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith(
+        'evaluate_guarantor_anchor_check',
+        expect.objectContaining({
+          manifestJson,
+          anchorDelegationsJson: delegationsJson,
+        })
+      );
+    });
+
+    const signBtn = await screen.findByRole('button', { name: /Sign Now/i });
+    fireEvent.click(signBtn);
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith(
+        'create_detached_signature_response_bundle',
+        expect.objectContaining({
+          anchorManifestJson: manifestJson,
+          anchorDelegationsJson: delegationsJson,
+        })
+      );
+    });
+  });
 });

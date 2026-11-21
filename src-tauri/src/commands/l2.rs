@@ -148,6 +148,7 @@ pub(crate) async fn create_guarantor_claim_bundle_impl(
             check_known_offender_dids: &[guarantor_id.as_str()],
             check_blocking_intent_local_ids: &[local_instance_id.as_str()],
             check_anchor_id_quorum_health: None,
+            preverified_anchor_manifest: None,
         };
         crate::services::preflight::run_value_outflow_preflight(
             state,

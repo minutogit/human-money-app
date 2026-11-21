@@ -31,20 +31,6 @@ impl From<ScoreBreakdown> for FrontendScoreBreakdown {
     }
 }
 
-impl From<FrontendScoreBreakdown> for ScoreBreakdown {
-    fn from(b: FrontendScoreBreakdown) -> Self {
-        Self {
-            s_boomerang: b.s_boomerang,
-            s_eigen: b.s_eigen,
-            s_corridor: b.s_corridor,
-            s_age: b.s_age,
-            s_chain: b.s_chain,
-            s_fit: b.s_fit,
-            s_wot: b.s_wot,
-        }
-    }
-}
-
 fn reason_to_string(r: &SelectionReason) -> String {
     match r {
         SelectionReason::ExactMatch => "exactMatch".to_string(),

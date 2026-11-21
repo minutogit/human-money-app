@@ -43,10 +43,11 @@ interface SignRequestViewProps {
     requestMsgId?: string;
     senderDid?: string;
     anchorManifestJson?: string;
+    anchorDelegationsJson?: string;
     onBack: () => void;
 }
 
-export function SignRequestView({ voucherData, requestMsgId, senderDid, anchorManifestJson, onBack }: SignRequestViewProps) {
+export function SignRequestView({ voucherData, requestMsgId, senderDid, anchorManifestJson, anchorDelegationsJson, onBack }: SignRequestViewProps) {
     const { t } = useTranslation();
     const { protectAction } = useSession();
     const [allowedRoles, setAllowedRoles] = useState<string[]>([]);
@@ -76,6 +77,8 @@ export function SignRequestView({ voucherData, requestMsgId, senderDid, anchorMa
 
     const effectiveManifestJson =
         anchorManifestJson ?? voucherData.anchorManifestJson ?? discoveredManifestJson;
+    const effectiveDelegationsJson =
+        anchorDelegationsJson ?? voucherData.anchorDelegationsJson ?? null;
 
 
 
@@ -240,6 +243,7 @@ export function SignRequestView({ voucherData, requestMsgId, senderDid, anchorMa
                     voucher: voucherData.voucher,
                     standardTomlContent: standardContent!,
                     manifestJson: manifestToUse,
+                    anchorDelegationsJson: effectiveDelegationsJson,
                 });
                 if (!active) return;
                 if (res && typeof res.required === 'boolean') {
@@ -269,7 +273,7 @@ export function SignRequestView({ voucherData, requestMsgId, senderDid, anchorMa
         }
 
         return () => { active = false; };
-    }, [selectedRole, standardContent, voucherData, effectiveManifestJson, t]);
+    }, [selectedRole, standardContent, voucherData, effectiveManifestJson, effectiveDelegationsJson, t]);
 
     const isGuarantorAnchorBlocked =
         selectedRole.toLowerCase() === 'guarantor' &&
@@ -311,6 +315,7 @@ export function SignRequestView({ voucherData, requestMsgId, senderDid, anchorMa
                             config: { type: "TargetDid", value: [targetCreatorDid!, "TrialDecryption"] },
                             password: password || undefined,
                             anchorManifestJson: effectiveManifestJson ?? null,
+                            anchorDelegationsJson: effectiveDelegationsJson,
                         });
                         if (Array.isArray(generatedBytes)) {
                             signedBytes = generatedBytes;

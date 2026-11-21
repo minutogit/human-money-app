@@ -4307,6 +4307,7 @@ mod tests {
                     check_known_offender_dids: &[],
                     check_blocking_intent_local_ids: &[],
                     check_anchor_id_quorum_health: None,
+                    preverified_anchor_manifest: None,
                 },
             )
         };

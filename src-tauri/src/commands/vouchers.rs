@@ -40,6 +40,7 @@ pub(crate) async fn create_new_voucher_impl(
             check_known_offender_dids: &[],
             check_blocking_intent_local_ids: &[],
             check_anchor_id_quorum_health: explicit_anchor_bytes,
+            preverified_anchor_manifest: None,
         };
         crate::services::preflight::run_value_outflow_preflight(
             state,
@@ -58,33 +59,17 @@ pub(crate) async fn create_new_voucher_impl(
                 value: human_money_core::models::voucher::ValueDefinition {
                     amount: data.collateral.amount.trim().replace(',', "."),
                     unit: data.collateral.unit,
+                    abbreviation: {
+                        let abbr = data.collateral.abbreviation.trim();
+                        (!abbr.is_empty()).then(|| abbr.to_string())
+                    },
                     ..Default::default()
                 },
                 ..Default::default()
             }),
             creator_profile: human_money_core::models::profile::PublicProfile {
-                protocol_version: data.creator.protocol_version,
                 id: Some(user_id),
-                first_name: Some(data.creator.first_name),
-                last_name: Some(data.creator.last_name),
-                address: Some(human_money_core::models::voucher::Address {
-                    street: data.creator.address.street,
-                    house_number: data.creator.address.house_number,
-                    zip_code: data.creator.address.zip_code,
-                    city: data.creator.address.city,
-                    country: data.creator.address.country,
-                    full_address: data.creator.address.full_address,
-                }),
-                organization: data.creator.organization,
-                community: data.creator.community,
-                phone: data.creator.phone,
-                email: data.creator.email,
-                url: data.creator.url,
-                gender: Some(data.creator.gender),
-                coordinates: Some(data.creator.coordinates),
-                service_offer: data.creator.service_offer,
-                needs: data.creator.needs,
-                ..Default::default()
+                ..data.creator.into()
             },
             validity_duration: data.validity_duration,
             non_redeemable_test_voucher: data.non_redeemable_test_voucher,
@@ -158,7 +143,10 @@ pub(crate) async fn create_new_voucher_impl(
     }
 
     if let Some(ref exp) = data.expected_committee {
-        if !data.explicit_offline_only && !voucher_data.non_redeemable_test_voucher {
+        if explicit_anchor_bytes.is_none()
+            && !data.explicit_offline_only
+            && !voucher_data.non_redeemable_test_voucher
+        {
             let mut exp_pks: Vec<String> = exp
                 .lock_pubs
                 .iter()
@@ -225,6 +213,7 @@ pub(crate) async fn create_new_voucher_impl(
                     check_known_offender_dids: &[],
                     check_blocking_intent_local_ids: &[],
                     check_anchor_id_quorum_health: anchor_bytes,
+                    preverified_anchor_manifest: None,
                 };
                 crate::services::preflight::run_value_outflow_preflight(
                     state,
@@ -309,33 +298,9 @@ pub(crate) async fn create_new_voucher_impl(
                             .ok_or_else(|| {
                                 human_money_core::Error::VoucherNotFound(created_voucher_id.clone())
                             })?;
-                        let raw_details = w.get_voucher_details(&local_id)?;
-                        let mut frontend_details: crate::models::FrontendVoucherDetails =
-                            raw_details.clone().into();
-                        if let Some(summary) = w
-                            .list_vouchers(Some(id), None, None, None)
-                            .into_iter()
-                            .find(|s| s.local_instance_id == local_id)
-                        {
-                            frontend_details.current_amount = summary.current_amount;
-                        }
-                        let creator_id = raw_details
-                            .voucher
-                            .creator_profile
-                            .id
-                            .as_deref()
-                            .unwrap_or("");
-                        frontend_details.trust =
-                            state.evaluate_voucher_trust(w, creator_id, &raw_details.voucher.signatures);
-                        if let Some(anchor_id) = raw_details.voucher.layer2_anchor {
-                            let anchor_hex = hex::encode(anchor_id);
-                            if let Some(manifest) = w.profile.l2_anchor_manifests.get(&anchor_hex) {
-                                frontend_details.reduced_guarantor_protection =
-                                    manifest.has_reduced_guarantor_protection().unwrap_or(false);
-                                frontend_details.manifest_revision = Some(manifest.revision);
-                            }
-                        }
-                        Ok(frontend_details)
+                        crate::services::balance_service::build_enriched_voucher_details(
+                            state, w, id, &local_id,
+                        )
                     },
                 )
                 .map_err(FrontendError::from)?
@@ -453,9 +418,24 @@ pub(crate) fn open_voucher_signing_request_impl(
                 v.creator_profile.id.as_deref().unwrap_or("N/A")
             );
 
-            let display_currency = v.nominal_value.unit.clone();
-            let display_standard_name = v.voucher_standard.name.clone();
             let is_test_voucher = v.non_redeemable_test_voucher;
+            let raw_currency = v
+                .nominal_value
+                .abbreviation
+                .clone()
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| v.nominal_value.unit.clone());
+            let display_currency = if is_test_voucher && !raw_currency.starts_with("TEST-") {
+                format!("TEST-{}", raw_currency)
+            } else {
+                raw_currency
+            };
+            let display_standard_name =
+                if is_test_voucher && !v.voucher_standard.name.starts_with("TEST-") {
+                    format!("TEST-{}", v.voucher_standard.name)
+                } else {
+                    v.voucher_standard.name.clone()
+                };
             let current_amount = v.nominal_value.amount.clone();
 
             let container_json = serde_json::from_slice::<serde_json::Value>(container_bytes).ok();
@@ -484,29 +464,36 @@ pub(crate) fn open_voucher_signing_request_impl(
                 })
             });
 
-            let resolved_manifest =
-                embedded_manifest
-                    .as_ref()
-                    .map(|(_, m)| m.clone())
-                    .or_else(|| {
-                        v.layer2_anchor.and_then(|aid| {
-                            service
-                                .with_wallet(|w| {
-                                    w.profile
-                                        .l2_anchor_manifests
-                                        .get(&hex::encode(aid))
-                                        .cloned()
-                                })
-                                .ok()
-                                .flatten()
-                        })
-                    });
-
-            let anchor_manifest_json = embedded_manifest.map(|(raw_m, _)| raw_m).or_else(|| {
-                resolved_manifest
-                    .as_ref()
-                    .and_then(|m| serde_json::to_string(m).ok())
+            let local_manifest = v.layer2_anchor.and_then(|aid| {
+                service
+                    .with_wallet(|w| {
+                        w.profile
+                            .l2_anchor_manifests
+                            .get(&hex::encode(aid))
+                            .cloned()
+                    })
+                    .ok()
+                    .flatten()
+                    .filter(|m| m.verify_anchor_id(&aid).is_ok())
             });
+
+            let (resolved_manifest, anchor_manifest_json) =
+                match (embedded_manifest, local_manifest) {
+                    (Some((raw_m, emb)), Some(local)) => {
+                        if local.revision >= emb.revision {
+                            let json = serde_json::to_string(&local).ok();
+                            (Some(local), json)
+                        } else {
+                            (Some(emb), Some(raw_m))
+                        }
+                    }
+                    (Some((raw_m, emb)), None) => (Some(emb), Some(raw_m)),
+                    (None, Some(local)) => {
+                        let json = serde_json::to_string(&local).ok();
+                        (Some(local), json)
+                    }
+                    (None, None) => (None, None),
+                };
 
             let reduced_guarantor_protection = resolved_manifest
                 .as_ref()
@@ -547,6 +534,45 @@ pub fn open_voucher_signing_request(
     open_voucher_signing_request_impl(&container_bytes, password.as_deref(), &service)
 }
 
+/// Resolves the highest verified `AnchorManifest` for `anchor_id` between an optional
+/// caller-supplied JSON string and the local wallet cache. Invalid JSON fails explicitly,
+/// mismatched supplied manifests are surfaced without masking, and older supplied revisions
+/// never downgrade a higher verified local revision.
+fn resolve_manifest_candidate(
+    wallet: &human_money_core::wallet::Wallet,
+    anchor_id: &[u8; 32],
+    supplied_manifest_json: Option<&str>,
+) -> Result<Option<human_money_core::humoco_proto::AnchorManifest>, FrontendError> {
+    let anchor_hex = hex::encode(anchor_id);
+    let supplied_opt = match supplied_manifest_json
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        Some(raw) => Some(
+            serde_json::from_str::<human_money_core::humoco_proto::AnchorManifest>(raw)
+                .map_err(|e| FrontendError::from(format!("Invalid manifest JSON: {}", e)))?,
+        ),
+        None => None,
+    };
+    let local_opt = wallet.profile.l2_anchor_manifests.get(&anchor_hex).cloned();
+    match (supplied_opt, local_opt) {
+        (Some(supplied), Some(local)) => {
+            if supplied.verify_anchor_id(anchor_id).is_err() {
+                Ok(Some(supplied))
+            } else if local.verify_anchor_id(anchor_id).is_ok()
+                && local.revision >= supplied.revision
+            {
+                Ok(Some(local))
+            } else {
+                Ok(Some(supplied))
+            }
+        }
+        (Some(supplied), None) => Ok(Some(supplied)),
+        (None, Some(local)) => Ok(Some(local)),
+        (None, None) => Ok(None),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn create_detached_signature_response_bundle_impl(
     voucher: crate::models::FrontendVoucher,
@@ -563,27 +589,37 @@ pub(crate) fn create_detached_signature_response_bundle_impl(
         "Creating detached signature response for role {} with config {:?}",
         role, config
     );
-    state.authorize(crate::state::RequiredAccess::Full, password.as_deref())?;
+    let (mut service, resolved_pw) =
+        state.authorize_and_lock_secret(crate::state::RequiredAccess::Full, password.as_deref())?;
+    let pw = resolved_pw.as_deref().map(String::as_str);
 
-    let core_voucher_preview = human_money_core::models::voucher::Voucher::from(voucher.clone());
-    if role.trim().eq_ignore_ascii_case("guarantor") && core_voucher_preview.layer2_anchor.is_some()
-    {
+    let core_voucher = human_money_core::models::voucher::Voucher::try_from(voucher)?;
+    let resolved_manifest = if let Some(aid) = core_voucher.layer2_anchor {
+        service
+            .with_wallet(|w| resolve_manifest_candidate(w, &aid, anchor_manifest_json.as_deref()))
+            .map_err(FrontendError::from)??
+    } else {
+        None
+    };
+
+    if role.trim().eq_ignore_ascii_case("guarantor") && core_voucher.layer2_anchor.is_some() {
         let all_standards = crate::services::common::load_all_standard_tomls(app_opt, None);
         let std_toml = all_standards
-            .get(&core_voucher_preview.voucher_standard.uuid)
+            .get(&core_voucher.voucher_standard.uuid)
             .ok_or_else(|| {
                 FrontendError::with_code(
                     "error.voucher.guarantorAnchorCheckFailed",
                     "Guarantor anchor verification failed (missing standard definition for anchored voucher)",
                 )
             })?;
-        let check = evaluate_guarantor_anchor_check_impl(
-            voucher,
-            std_toml.clone(),
-            anchor_manifest_json.clone(),
-            anchor_delegations_json,
-            password.as_deref(),
+        let check = evaluate_guarantor_anchor_check_with_service(
             state,
+            &mut service,
+            &core_voucher,
+            std_toml,
+            anchor_manifest_json.as_deref(),
+            anchor_delegations_json.as_deref(),
+            pw,
         )?;
         if check.required && !check.passed {
             return Err(FrontendError::with_code(
@@ -596,60 +632,46 @@ pub(crate) fn create_detached_signature_response_bundle_impl(
         }
     }
 
-    let mut service =
-        state.authorize_and_lock(crate::state::RequiredAccess::Full, password.as_deref())?;
-
     let own_did = service
         .with_wallet(|w| w.get_user_id().to_string())
         .map_err(FrontendError::from)?;
     let mut offender_dids = vec![own_did.as_str()];
-    if let Some(creator_id) = core_voucher_preview.creator_profile.id.as_deref() {
+    if let Some(creator_id) = core_voucher.creator_profile.id.as_deref() {
         offender_dids.push(creator_id);
     }
     let preflight = crate::services::preflight::ValueOutflowPreflight {
         require_restore_reconciled: true,
         check_known_offender_dids: &offender_dids,
         check_blocking_intent_local_ids: &[],
-        check_anchor_id_quorum_health: core_voucher_preview.layer2_anchor,
+        check_anchor_id_quorum_health: core_voucher.layer2_anchor,
+        preverified_anchor_manifest: resolved_manifest.as_ref(),
     };
-    crate::services::preflight::run_value_outflow_preflight(
-        state,
-        &mut service,
-        password.as_deref(),
-        &preflight,
-    )?;
+    crate::services::preflight::run_value_outflow_preflight(state, &mut service, pw, &preflight)?;
 
-    if let (Some(aid), Some(raw_manifest)) = (
-        core_voucher_preview.layer2_anchor,
-        anchor_manifest_json.as_deref(),
-    ) {
-        if let Ok(manifest) = serde_json::from_str::<human_money_core::humoco_proto::AnchorManifest>(
-            raw_manifest.trim(),
-        ) {
-            if manifest.verify_anchor_id(&aid).is_ok() {
-                let anchor_hex = hex::encode(aid);
-                let should_cache = service
-                    .with_wallet(|w| {
-                        w.profile
-                            .l2_anchor_manifests
-                            .get(&anchor_hex)
-                            .is_none_or(|existing| manifest.revision > existing.revision)
-                    })
-                    .unwrap_or(false);
-                if should_cache {
-                    let _ = service.update_l2_anchor_manifest(manifest, password.as_deref());
-                }
-            }
+    if let (Some(aid), Some(manifest)) = (core_voucher.layer2_anchor, resolved_manifest) {
+        let anchor_hex = hex::encode(aid);
+        let should_cache = service
+            .with_wallet(|w| {
+                w.profile
+                    .l2_anchor_manifests
+                    .get(&anchor_hex)
+                    .is_none_or(|existing| manifest.revision > existing.revision)
+            })
+            .map_err(FrontendError::from)?;
+        if should_cache {
+            service
+                .update_l2_anchor_manifest(manifest, pw)
+                .map_err(FrontendError::from)?;
         }
     }
 
     service
         .create_detached_signature_response_bundle(
-            &core_voucher_preview,
+            &core_voucher,
             &role,
             include_details,
             config,
-            password.as_deref(),
+            pw,
         )
         .map_err(FrontendError::from)
 }
@@ -695,14 +717,21 @@ pub fn process_and_attach_signature(
         wallet_password.as_deref(),
     )?;
     let pw = resolved_pw.as_deref().map(String::as_str);
-    service
+    let voucher_id = service
         .process_and_attach_signature(
             &container_bytes,
             &all_standards,
             container_password.as_deref(),
             pw,
         )
-        .map_err(FrontendError::from)
+        .map_err(FrontendError::from)?;
+    if let Err(e) = state.refresh_events_cache(&mut service, pw) {
+        log::warn!(
+            "Failed to refresh events cache after process_and_attach_signature: {}",
+            e
+        );
+    }
+    Ok(voucher_id)
 }
 
 #[tauri::command]
@@ -721,7 +750,14 @@ pub fn remove_voucher_signature(
     let pw = resolved_pw.as_deref().map(String::as_str);
     service
         .remove_voucher_signature(&local_instance_id, &signature_id, pw)
-        .map_err(FrontendError::from)
+        .map_err(FrontendError::from)?;
+    if let Err(e) = state.refresh_events_cache(&mut service, pw) {
+        log::warn!(
+            "Failed to refresh events cache after remove_voucher_signature: {}",
+            e
+        );
+    }
+    Ok(())
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
@@ -764,21 +800,20 @@ pub const GUARANTOR_ANCHOR_ISSUE_CODES: &[&str] = &[
     GUARANTOR_ISSUE_SYBIL_BELOW_THRESHOLD,
 ];
 
-/// Evaluates guarantor pre-signing L2 security requirements (Concept §5.3).
-/// Active **only** for vouched voucher standards (`additional_signatures_range[0] > 0`
-/// and `"guarantor"` allowed). Non-guarantor / `N=0` voucher flows stay unaffected.
-pub(crate) fn evaluate_guarantor_anchor_check_impl(
-    voucher: crate::models::FrontendVoucher,
-    standard_toml_content: String,
-    manifest_json: Option<String>,
-    anchor_delegations_json: Option<String>,
-    password: Option<&str>,
+/// Evaluates guarantor pre-signing L2 security requirements (Concept §5.3) under an
+/// already-locked `AppService` to prevent redundant lock cycles and TOCTOU gaps.
+pub(crate) fn evaluate_guarantor_anchor_check_with_service(
     state: &AppState,
+    service: &mut human_money_core::app_service::AppService,
+    core_voucher: &human_money_core::models::voucher::Voucher,
+    standard_toml_content: &str,
+    manifest_json: Option<&str>,
+    anchor_delegations_json: Option<&str>,
+    password: Option<&str>,
 ) -> Result<FrontendGuarantorAnchorCheckDto, FrontendError> {
-    state.authorize(crate::state::RequiredAccess::Unlocked, None)?;
     let (std_def, _) =
         human_money_core::models::voucher_standard_definition::VoucherStandardDefinition::from_toml(
-            &standard_toml_content,
+            standard_toml_content,
         )
         .map_err(FrontendError::from)?;
 
@@ -797,7 +832,6 @@ pub(crate) fn evaluate_guarantor_anchor_check_impl(
         .any(|r| r.eq_ignore_ascii_case("guarantor"));
     let requires_check = min_sigs > 0 && allows_guarantor;
 
-    let core_voucher = human_money_core::models::voucher::Voucher::from(voucher);
     if !requires_check {
         return Ok(FrontendGuarantorAnchorCheckDto {
             required: false,
@@ -833,23 +867,9 @@ pub(crate) fn evaluate_guarantor_anchor_check_impl(
         });
     };
 
-    let anchor_hex = hex::encode(anchor_id);
-    let supplied_manifest_json = manifest_json
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
-    let manifest_opt: Option<human_money_core::humoco_proto::AnchorManifest> =
-        if let Some(raw) = supplied_manifest_json {
-            Some(
-                serde_json::from_str(raw)
-                    .map_err(|e| FrontendError::from(format!("Invalid manifest JSON: {}", e)))?,
-            )
-        } else {
-            let service = state.service.lock().unwrap();
-            service
-                .with_wallet(|w| w.profile.l2_anchor_manifests.get(&anchor_hex).cloned())
-                .map_err(FrontendError::from)?
-        };
+    let manifest_opt = service
+        .with_wallet(|w| resolve_manifest_candidate(w, &anchor_id, manifest_json))
+        .map_err(FrontendError::from)??;
 
     let Some(manifest) = manifest_opt else {
         issues.push(GUARANTOR_ISSUE_MISSING_ANCHOR_MANIFEST.to_string());
@@ -886,13 +906,15 @@ pub(crate) fn evaluate_guarantor_anchor_check_impl(
         issues.push(GUARANTOR_ISSUE_RETENTION_MISMATCH.to_string());
     }
 
-    let security_policy = state.get_or_load_security_policy_locked(password)?;
+    let security_policy = state
+        .get_or_load_security_policy(service, password)
+        .map_err(FrontendError::from)?;
     let probe_cache = state
-        .get_or_load_internal_lifecycle_locked(password)
-        .map(|lc| lc.l2_probe_cache)
-        .unwrap_or_default();
+        .get_or_load_internal_lifecycle(service, password)
+        .map_err(FrontendError::from)?
+        .l2_probe_cache;
     let embedded_delegations = crate::services::common::parse_and_verify_embedded_delegations(
-        anchor_delegations_json.as_deref(),
+        anchor_delegations_json,
         &manifest,
     );
 
@@ -941,20 +963,17 @@ pub(crate) fn evaluate_guarantor_anchor_check_impl(
     }
 
     let mut offender_check_unverified = false;
-    let offenders = {
-        let mut service = state.lock_service()?;
-        match state.get_or_load_server_offender_list(&mut service, password) {
-            Ok(list) => list,
-            Err(err)
-                if password.is_none()
-                    && (err.code == "error.auth.sessionNotActive"
-                        || err.code == "error.auth.sessionTimeout") =>
-            {
-                offender_check_unverified = true;
-                humoco_wot::ServerOffenderList::new()
-            }
-            Err(err) => return Err(err),
+    let offenders = match state.get_or_load_server_offender_list(service, password) {
+        Ok(list) => list,
+        Err(err)
+            if password.is_none()
+                && (err.code == "error.auth.sessionNotActive"
+                    || err.code == "error.auth.sessionTimeout") =>
+        {
+            offender_check_unverified = true;
+            humoco_wot::ServerOffenderList::new()
         }
+        Err(err) => return Err(err),
     };
     if manifest.servers.iter().any(|s| {
         crate::l2_lifecycle::is_server_key_revoked(&offenders, &s.lock_pub, Some(&s.admin_pub))
@@ -977,6 +996,30 @@ pub(crate) fn evaluate_guarantor_anchor_check_impl(
         servers,
         issues,
     })
+}
+
+/// Evaluates guarantor pre-signing L2 security requirements (Concept §5.3).
+/// Active **only** for vouched voucher standards (`additional_signatures_range[0] > 0`
+/// and `"guarantor"` allowed). Non-guarantor / `N=0` voucher flows stay unaffected.
+pub(crate) fn evaluate_guarantor_anchor_check_impl(
+    voucher: crate::models::FrontendVoucher,
+    standard_toml_content: String,
+    manifest_json: Option<String>,
+    anchor_delegations_json: Option<String>,
+    password: Option<&str>,
+    state: &AppState,
+) -> Result<FrontendGuarantorAnchorCheckDto, FrontendError> {
+    let mut service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
+    let core_voucher = human_money_core::models::voucher::Voucher::try_from(voucher)?;
+    evaluate_guarantor_anchor_check_with_service(
+        state,
+        &mut service,
+        &core_voucher,
+        &standard_toml_content,
+        manifest_json.as_deref(),
+        anchor_delegations_json.as_deref(),
+        password,
+    )
 }
 
 /// Evaluates guarantor pre-signing L2 security requirements (Concept §5.3).
@@ -1660,6 +1703,318 @@ mod tests {
                     .contains(&GUARANTOR_ISSUE_SYBIL_BELOW_THRESHOLD.to_string()),
             "S04-F4: stripping anchor_delegations_json must fail Sybil check, got: {:?}",
             res_no_del.issues
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn s06_f1_f8_first_contact_guarantor_signing_and_no_manifest_downgrade() {
+        let dir = crate::test_support::temp_test_dir("s06_f1_f8_guarantor");
+        let pw = "pw-s06-f1";
+        let (mut svc_creator, _) =
+            test_utils::setup_service_with_profile(&dir.join("c"), &ACTORS.alice, "Alice", pw);
+        svc_creator.unlock_session(pw, 600).unwrap();
+        let creator_id = svc_creator
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
+
+        let (mut svc_guar, _) =
+            test_utils::setup_service_with_profile(&dir.join("g"), &ACTORS.bob, "Bob", pw);
+        svc_guar.unlock_session(pw, 600).unwrap();
+        let guar_id = svc_guar
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
+        let guar_state = AppState::new(svc_guar);
+
+        let s1_sk = SigningKey::from_bytes(&[41u8; 32]);
+        let s2_sk = SigningKey::from_bytes(&[42u8; 32]);
+        let s3_sk = SigningKey::from_bytes(&[43u8; 32]);
+        let creator_mig_sk = SigningKey::from_bytes(&[44u8; 32]);
+        let retain_q = encode_quarter(2035, 4).unwrap();
+
+        let manifest_rev1 = AnchorManifest {
+            revision: 1,
+            threshold: 2,
+            servers: vec![
+                ServerEntry {
+                    write_url: "https://sync1.example/sync.php".into(),
+                    read_url: "https://sync1.example/d".into(),
+                    admin_pub: s1_sk.verifying_key().to_bytes(),
+                    lock_pub: s1_sk.verifying_key().to_bytes(),
+                    nominated_by: NominatedBy::Creator,
+                },
+                ServerEntry {
+                    write_url: "https://sync2.example/sync.php".into(),
+                    read_url: "https://sync2.example/d".into(),
+                    admin_pub: s2_sk.verifying_key().to_bytes(),
+                    lock_pub: s2_sk.verifying_key().to_bytes(),
+                    nominated_by: NominatedBy::Creator,
+                },
+            ],
+            successors: vec![],
+            authority: AnchorAuthority {
+                creator_mig_pub: creator_mig_sk.verifying_key().to_bytes(),
+                guarantor_mig_pubs: vec![],
+            },
+            migration_chain: vec![],
+            issued_at_ms: 1_760_000_000_000,
+            retain_until_quarter: retain_q,
+        };
+        let anchor_id = manifest_rev1.rev1_anchor_id().unwrap();
+        let anchor_hex = hex::encode(anchor_id);
+        svc_creator
+            .update_l2_anchor_manifest(manifest_rev1.clone(), Some(pw))
+            .unwrap();
+
+        let minuto_toml = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../voucher_standards/minuto_v1/standard.toml"
+        ))
+        .unwrap();
+        let mut v_data = test_utils::create_minuto_voucher_data(
+            human_money_core::models::profile::PublicProfile {
+                id: Some(creator_id.clone()),
+                ..Default::default()
+            },
+        );
+        v_data.layer2_anchor = Some(anchor_id);
+        let voucher = svc_creator
+            .create_new_voucher(&minuto_toml, v_data, Some(pw))
+            .unwrap();
+        let local_id = Wallet::calculate_local_instance_id(&voucher, &creator_id).unwrap();
+
+        let sign_dels = |manifest: &AnchorManifest, keys: &[&SigningKey]| -> String {
+            let list: Vec<crate::sync_client::SyncLockDelegationDto> = manifest
+                .servers
+                .iter()
+                .zip(keys.iter())
+                .map(|(srv, sk)| {
+                    let admin_hex = hex::encode(srv.admin_pub);
+                    let lock_hex = hex::encode(srv.lock_pub);
+                    let msg = humoco_market::format_lock_delegate_signature_message(
+                        &admin_hex,
+                        &lock_hex,
+                        &srv.write_url,
+                        &srv.read_url,
+                        1_760_000_010,
+                    );
+                    let sig =
+                        hex::encode(ed25519_dalek::Signer::sign(*sk, msg.as_bytes()).to_bytes());
+                    crate::sync_client::SyncLockDelegationDto {
+                        admin_pub: admin_hex,
+                        lock_pub: lock_hex,
+                        write_url: srv.write_url.clone(),
+                        read_url: srv.read_url.clone(),
+                        issued_at: 1_760_000_010,
+                        sig,
+                    }
+                })
+                .collect();
+            serde_json::to_string(&list).unwrap()
+        };
+
+        let rev1_json = serde_json::to_string(&manifest_rev1).unwrap();
+        let rev1_del_json = sign_dels(&manifest_rev1, &[&s1_sk, &s2_sk]);
+        let fe_voucher = crate::models::FrontendVoucher::from(voucher.clone());
+
+        // 1. Failed preflight (pending restore) MUST NOT persist supplied manifest!
+        {
+            let mut s = guar_state.service.lock().unwrap();
+            guar_state
+                .save_internal_lifecycle(
+                    &mut s,
+                    InternalLifecycleState {
+                        pending_restore_l2_reconciliation: true,
+                        ..Default::default()
+                    },
+                    Some(pw),
+                )
+                .unwrap();
+        }
+        let blocked = create_detached_signature_response_bundle_impl(
+            fe_voucher.clone(),
+            "guarantor".into(),
+            false,
+            ContainerConfig::TargetDid(creator_id.clone(), PrivacyMode::TrialDecryption),
+            Some(pw.into()),
+            Some(rev1_json.clone()),
+            Some(rev1_del_json.clone()),
+            None,
+            &guar_state,
+        );
+        assert!(blocked.is_err(), "Pending restore must block signing");
+        {
+            let s = guar_state.service.lock().unwrap();
+            let stored = s
+                .with_wallet(|w| w.profile.l2_anchor_manifests.get(&anchor_hex).cloned())
+                .unwrap();
+            assert!(
+                stored.is_none(),
+                "Failed preflight must NOT persist supplied manifest"
+            );
+        }
+
+        // Clear restore flag; invalid supplied manifest JSON MUST return Err
+        {
+            let mut s = guar_state.service.lock().unwrap();
+            guar_state
+                .save_internal_lifecycle(&mut s, InternalLifecycleState::default(), Some(pw))
+                .unwrap();
+        }
+        let invalid_json_err = create_detached_signature_response_bundle_impl(
+            fe_voucher.clone(),
+            "guarantor".into(),
+            false,
+            ContainerConfig::TargetDid(creator_id.clone(), PrivacyMode::TrialDecryption),
+            Some(pw.into()),
+            Some("{not-valid-manifest-json".into()),
+            Some(rev1_del_json.clone()),
+            None,
+            &guar_state,
+        );
+        assert!(
+            invalid_json_err.is_err(),
+            "Invalid supplied manifest JSON must fail explicitly"
+        );
+
+        // 2. First-contact guarantor signing with valid supplied manifest + delegations MUST SUCCEED
+        // without prior local manifest, and persist rev=1 afterwards!
+        let first_contact_ok = create_detached_signature_response_bundle_impl(
+            fe_voucher.clone(),
+            "guarantor".into(),
+            false,
+            ContainerConfig::TargetDid(creator_id.clone(), PrivacyMode::TrialDecryption),
+            Some(pw.into()),
+            Some(rev1_json.clone()),
+            Some(rev1_del_json.clone()),
+            None,
+            &guar_state,
+        );
+        assert!(
+            first_contact_ok.is_ok(),
+            "S06-F1: First-contact guarantor signing must succeed with supplied manifest: {:?}",
+            first_contact_ok.err()
+        );
+        {
+            let s = guar_state.service.lock().unwrap();
+            let stored = s
+                .with_wallet(|w| w.profile.l2_anchor_manifests.get(&anchor_hex).cloned())
+                .unwrap();
+            assert_eq!(stored.map(|m| m.revision), Some(1));
+        }
+
+        // 3. Upgrade local guarantor wallet to verified rev=2 (3 servers), then supply older rev=1:
+        // neither open_voucher_signing_request nor evaluate_guarantor_anchor_check may downgrade rev=2 -> rev=1!
+        let new_servers = vec![
+            manifest_rev1.servers[0].clone(),
+            manifest_rev1.servers[1].clone(),
+            ServerEntry {
+                write_url: "https://sync3.example/sync.php".into(),
+                read_url: "https://sync3.example/d".into(),
+                admin_pub: s3_sk.verifying_key().to_bytes(),
+                lock_pub: s3_sk.verifying_key().to_bytes(),
+                nominated_by: NominatedBy::Creator,
+            },
+        ];
+        let prop = human_money_core::services::l2_rotation::build_creator_rotation_proposal(
+            anchor_id,
+            &manifest_rev1,
+            2,
+            new_servers,
+            Vec::new(),
+            1_760_000_020,
+            &creator_mig_sk,
+        )
+        .unwrap();
+        let imported_state_hash = human_money_core::humoco_proto::compute_import_union_state_hash(
+            &anchor_id,
+            prop.to_rev,
+            &std::collections::BTreeMap::new(),
+        )
+        .unwrap();
+        let prop_hash = prop.core_digest().unwrap();
+        let import_acks: Vec<_> = [&s1_sk, &s2_sk, &s3_sk]
+            .iter()
+            .map(|sk| {
+                let mut ack = human_money_core::humoco_proto::ImportAck {
+                    anchor_id,
+                    proposal_hash: prop_hash,
+                    to_rev: 2,
+                    imported_state_hash,
+                    retain_until_quarter: retain_q,
+                    lock_pub: sk.verifying_key().to_bytes(),
+                    acked_at: 1_760_000_020,
+                    sig: [0u8; 64],
+                };
+                ack.sig = ed25519_dalek::Signer::sign(*sk, &ack.digest()).to_bytes();
+                ack
+            })
+            .collect();
+        let commit_d = human_money_core::humoco_proto::MigrationCert::commit_digest(
+            &anchor_id,
+            &prop_hash,
+            2,
+            &imported_state_hash,
+        );
+        let commit_sigs: Vec<_> = [&s1_sk, &s2_sk]
+            .iter()
+            .map(|sk| human_money_core::humoco_proto::CommitteeSignature {
+                lock_pub: sk.verifying_key().to_bytes(),
+                committed_at: 1_760_000_020,
+                sig: ed25519_dalek::Signer::sign(*sk, &commit_d).to_bytes(),
+            })
+            .collect();
+        let (rev2_manifest, _) =
+            human_money_core::services::l2_rotation::assemble_migrated_manifest(
+                &manifest_rev1,
+                &anchor_id,
+                prop,
+                imported_state_hash,
+                import_acks,
+                commit_sigs,
+            )
+            .unwrap();
+        {
+            let mut s = guar_state.service.lock().unwrap();
+            s.update_l2_anchor_manifest(rev2_manifest.clone(), Some(pw))
+                .unwrap();
+        }
+
+        // Open signing request carrying older rev=1 embedded manifest
+        let ask_rev1 = create_signing_request_bundle_impl(
+            &local_id,
+            ContainerConfig::TargetDid(guar_id, PrivacyMode::TrialDecryption),
+            None,
+            Some(pw),
+            &svc_creator,
+        )
+        .unwrap();
+        let opened = open_voucher_signing_request_impl(
+            &ask_rev1,
+            Some(pw),
+            &guar_state.lock_service().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            opened.manifest_revision,
+            Some(2),
+            "S06-F8: open_voucher_signing_request must prefer higher verified local rev=2 over embedded rev=1"
+        );
+
+        let rev2_del_json = sign_dels(&rev2_manifest, &[&s1_sk, &s2_sk, &s3_sk]);
+        let check_no_downgrade = evaluate_guarantor_anchor_check_impl(
+            fe_voucher,
+            minuto_toml,
+            Some(rev1_json),
+            Some(rev2_del_json),
+            Some(pw),
+            &guar_state,
+        )
+        .unwrap();
+        assert_eq!(
+            check_no_downgrade.server_count, 3,
+            "S06-F8: supplying older rev=1 must NOT downgrade local verified rev=2 (3 servers)"
         );
 
         let _ = std::fs::remove_dir_all(&dir);

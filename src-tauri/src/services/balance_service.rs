@@ -42,10 +42,22 @@ pub fn parse_fixed_point(amount_str: &str) -> Option<i128> {
     } else {
         (false, s.as_str())
     };
+    if num_str.is_empty() {
+        return None;
+    }
 
     let mut parts = num_str.splitn(2, '.');
     let int_part_str = parts.next()?;
     let frac_part_str = parts.next().unwrap_or("");
+
+    if int_part_str.is_empty() && frac_part_str.is_empty() {
+        return None;
+    }
+    if !int_part_str.bytes().all(|b| b.is_ascii_digit())
+        || !frac_part_str.bytes().all(|b| b.is_ascii_digit())
+    {
+        return None;
+    }
 
     let int_part = if int_part_str.is_empty() {
         0i128
@@ -55,19 +67,19 @@ pub fn parse_fixed_point(amount_str: &str) -> Option<i128> {
 
     let mut frac_val = 0i128;
     if !frac_part_str.is_empty() {
-        let mut padded = frac_part_str.to_string();
-        if padded.len() > 8 {
-            padded.truncate(8);
-        } else {
-            while padded.len() < 8 {
-                padded.push('0');
-            }
+        let mut padded = frac_part_str[..frac_part_str.len().min(8)].to_string();
+        while padded.len() < 8 {
+            padded.push('0');
         }
         frac_val = padded.parse::<i128>().ok()?;
     }
 
     let total = int_part.checked_mul(FIXED_SCALE)?.checked_add(frac_val)?;
-    Some(if is_negative { -total } else { total })
+    if is_negative {
+        total.checked_neg()
+    } else {
+        Some(total)
+    }
 }
 
 pub fn format_fixed_point(val: i128) -> String {
@@ -75,9 +87,10 @@ pub fn format_fixed_point(val: i128) -> String {
         return "0".to_string();
     }
     let is_negative = val < 0;
-    let abs_val = val.unsigned_abs() as i128;
-    let int_part = abs_val / FIXED_SCALE;
-    let frac_part = abs_val % FIXED_SCALE;
+    let scale = FIXED_SCALE as u128;
+    let abs_val = val.unsigned_abs();
+    let int_part = abs_val / scale;
+    let frac_part = abs_val % scale;
 
     let sign = if is_negative { "-" } else { "" };
     if frac_part == 0 {
@@ -86,6 +99,15 @@ pub fn format_fixed_point(val: i128) -> String {
         let frac_str = format!("{:08}", frac_part);
         let trimmed_frac = frac_str.trim_end_matches('0');
         format!("{}{}.{}", sign, int_part, trimmed_frac)
+    }
+}
+
+fn canonical_asset_unit(nv: &human_money_core::models::voucher::ValueDefinition) -> String {
+    let trimmed_unit = nv.unit.trim();
+    if !trimmed_unit.is_empty() {
+        trimmed_unit.to_string()
+    } else {
+        nv.abbreviation.as_deref().unwrap_or("").trim().to_string()
     }
 }
 
@@ -123,9 +145,16 @@ pub fn calculate_aggregated_balances(
             continue;
         }
 
+        let unit = w
+            .voucher_store
+            .vouchers
+            .get(&s.local_instance_id)
+            .map(|inst| canonical_asset_unit(&inst.voucher.nominal_value))
+            .unwrap_or_else(|| s.unit.clone());
+
         let key = (
             s.voucher_standard_uuid.clone(),
-            s.unit.clone(),
+            unit.clone(),
             s.is_test_voucher,
         );
         meta_map
@@ -133,7 +162,7 @@ pub fn calculate_aggregated_balances(
             .or_insert_with(|| AssetClassMeta {
                 standard_name: s.raw_standard_name.clone(),
                 standard_uuid: s.voucher_standard_uuid.clone(),
-                unit: s.unit.clone(),
+                unit: unit.clone(),
                 is_test_voucher: s.is_test_voucher,
                 display_currency: s.display_currency.clone(),
                 display_standard_name: s.display_standard_name.clone(),
@@ -142,9 +171,9 @@ pub fn calculate_aggregated_balances(
         let amount = parse_fixed_point(&s.current_amount).unwrap_or(0);
         let entry = amounts_map.entry(key).or_default();
         if s.creator_id == id.user_id {
-            entry.own_available_amount += amount;
+            entry.own_available_amount = entry.own_available_amount.saturating_add(amount);
         } else {
-            entry.received_amount += amount;
+            entry.received_amount = entry.received_amount.saturating_add(amount);
         }
     }
 
@@ -163,22 +192,18 @@ pub fn calculate_aggregated_balances(
         if matches!(
             instance.status,
             human_money_core::wallet::instance::VoucherStatus::Incomplete { .. }
+                | human_money_core::wallet::instance::VoucherStatus::Expired
         ) {
             continue;
         }
         let not_expired = chrono::DateTime::parse_from_rfc3339(&instance.voucher.valid_until)
             .map(|dt| dt > chrono::Utc::now())
-            .unwrap_or(true);
+            .unwrap_or(false);
         if !not_expired {
             continue;
         }
 
-        let unit = instance
-            .voucher
-            .nominal_value
-            .abbreviation
-            .clone()
-            .unwrap_or_else(|| instance.voucher.nominal_value.unit.clone());
+        let unit = canonical_asset_unit(&instance.voucher.nominal_value);
         let is_test = instance.voucher.non_redeemable_test_voucher;
         let key = (
             instance.voucher.voucher_standard.uuid.clone(),
@@ -188,13 +213,20 @@ pub fn calculate_aggregated_balances(
 
         meta_map.entry(key.clone()).or_insert_with(|| {
             let std_name = instance.voucher.voucher_standard.name.clone();
-            let display_currency = if is_test {
-                format!("TEST {}", unit)
+            let raw_display_currency = instance
+                .voucher
+                .nominal_value
+                .abbreviation
+                .clone()
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| unit.clone());
+            let display_currency = if is_test && !raw_display_currency.starts_with("TEST-") {
+                format!("TEST-{}", raw_display_currency)
             } else {
-                unit.clone()
+                raw_display_currency
             };
-            let display_standard_name = if is_test {
-                format!("TEST {}", std_name)
+            let display_standard_name = if is_test && !std_name.starts_with("TEST-") {
+                format!("TEST-{}", std_name)
             } else {
                 std_name.clone()
             };
@@ -225,8 +257,8 @@ pub fn calculate_aggregated_balances(
                     .or_default()
                     .insert(tx_key)
                 {
-                    *redeemed_by_asset.entry(key.clone()).or_default() +=
-                        parse_fixed_point(&tx.amount).unwrap_or(0);
+                    let redeemed = redeemed_by_asset.entry(key.clone()).or_default();
+                    *redeemed = redeemed.saturating_add(parse_fixed_point(&tx.amount).unwrap_or(0));
                 }
             }
         }
@@ -241,14 +273,16 @@ pub fn calculate_aggregated_balances(
 
         let nominal_total: i128 = root_nominal_by_asset
             .get(&key)
-            .map(|m| m.values().sum())
+            .map(|m| m.values().copied().fold(0i128, i128::saturating_add))
             .unwrap_or(0);
         let redeemed_amount = redeemed_by_asset.get(&key).copied().unwrap_or(0);
 
-        let own_circulating_amount =
-            (nominal_total - redeemed_amount - own_available_amount).max(0);
-        let total_amount = received_amount + own_available_amount;
-        let net_balance = received_amount - own_circulating_amount;
+        let own_circulating_amount = nominal_total
+            .saturating_sub(redeemed_amount)
+            .saturating_sub(own_available_amount)
+            .max(0);
+        let total_amount = received_amount.saturating_add(own_available_amount);
+        let net_balance = received_amount.saturating_sub(own_circulating_amount);
 
         if total_amount > 0 || own_circulating_amount > 0 {
             result.push(crate::models::FrontendAggregatedBalance {
@@ -320,48 +354,52 @@ pub fn get_voucher_summaries_impl(
     Ok(summaries)
 }
 
+pub(crate) fn build_enriched_voucher_details(
+    state: &AppState,
+    w: &human_money_core::wallet::Wallet,
+    id: &human_money_core::models::profile::UserIdentity,
+    local_id: &str,
+) -> Result<crate::models::FrontendVoucherDetails, human_money_core::Error> {
+    let raw_details = w.get_voucher_details(local_id)?;
+    let mut frontend_details: crate::models::FrontendVoucherDetails = raw_details.clone().into();
+    if let Some(summary) = w
+        .list_vouchers(Some(id), None, None, None)
+        .into_iter()
+        .find(|s| s.local_instance_id == local_id)
+    {
+        frontend_details.current_amount = summary.current_amount;
+    }
+    if frontend_details.status == "active"
+        && parse_fixed_point(&frontend_details.current_amount) == Some(0)
+    {
+        frontend_details.status = "archived".to_string();
+    }
+    let creator_id = raw_details
+        .voucher
+        .creator_profile
+        .id
+        .as_deref()
+        .unwrap_or("");
+    frontend_details.trust =
+        state.evaluate_voucher_trust(w, creator_id, &raw_details.voucher.signatures);
+    if let Some(anchor_id) = raw_details.voucher.layer2_anchor {
+        let anchor_hex = hex::encode(anchor_id);
+        if let Some(manifest) = w.profile.l2_anchor_manifests.get(&anchor_hex) {
+            frontend_details.reduced_guarantor_protection =
+                manifest.has_reduced_guarantor_protection().unwrap_or(false);
+            frontend_details.manifest_revision = Some(manifest.revision);
+        }
+    }
+    Ok(frontend_details)
+}
+
 pub fn get_voucher_details_impl(
     local_id: String,
     state: &AppState,
 ) -> Result<crate::models::FrontendVoucherDetails, FrontendError> {
     let service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
     let details = service
-        .with_wallet_and_identity(
-            |w, id| -> Result<crate::models::FrontendVoucherDetails, human_money_core::Error> {
-                let raw_details = w.get_voucher_details(&local_id)?;
-                let mut frontend_details: crate::models::FrontendVoucherDetails =
-                    raw_details.clone().into();
-                if let Some(summary) = w
-                    .list_vouchers(Some(id), None, None, None)
-                    .into_iter()
-                    .find(|s| s.local_instance_id == local_id)
-                {
-                    frontend_details.current_amount = summary.current_amount;
-                }
-                if frontend_details.status == "active"
-                    && parse_fixed_point(&frontend_details.current_amount) == Some(0)
-                {
-                    frontend_details.status = "archived".to_string();
-                }
-                let creator_id = raw_details
-                    .voucher
-                    .creator_profile
-                    .id
-                    .as_deref()
-                    .unwrap_or("");
-                frontend_details.trust =
-                    state.evaluate_voucher_trust(w, creator_id, &raw_details.voucher.signatures);
-                if let Some(anchor_id) = raw_details.voucher.layer2_anchor {
-                    let anchor_hex = hex::encode(anchor_id);
-                    if let Some(manifest) = w.profile.l2_anchor_manifests.get(&anchor_hex) {
-                        frontend_details.reduced_guarantor_protection =
-                            manifest.has_reduced_guarantor_protection().unwrap_or(false);
-                        frontend_details.manifest_revision = Some(manifest.revision);
-                    }
-                }
-                Ok(frontend_details)
-            },
-        )
+        .with_wallet_and_identity(|w, id| build_enriched_voucher_details(state, w, id, &local_id))
         .map_err(FrontendError::from)?
         .map_err(FrontendError::from)?;
     Ok(details)
@@ -495,25 +533,36 @@ pub fn check_reputation_impl(
     Ok(status.into())
 }
 
+const EVENTS_CACHE_PAGE_SIZE: usize = 50;
+
 pub fn get_event_history_impl(
     offset: usize,
     limit: usize,
     state: &AppState,
 ) -> Result<Vec<crate::models::FrontendWalletEvent>, FrontendError> {
     state.authorize(crate::state::RequiredAccess::Unlocked, None)?;
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+    let requested_end = offset.saturating_add(limit);
     let events_cache = state.cache_events();
     if let Some(events) = events_cache.as_ref() {
-        let start = offset.min(events.len());
-        let end = offset.saturating_add(limit).min(events.len());
-        Ok(events[start..end]
-            .iter()
-            .map(|e| e.clone().into())
-            .collect())
-    } else {
-        Err(FrontendError::from(
-            "Events cache not initialized".to_string(),
-        ))
+        let cache_covers_page =
+            requested_end <= events.len() || events.len() < EVENTS_CACHE_PAGE_SIZE;
+        if cache_covers_page {
+            let start = offset.min(events.len());
+            let end = requested_end.min(events.len());
+            return Ok(events[start..end]
+                .iter()
+                .map(|e| e.clone().into())
+                .collect());
+        }
     }
+    let mut service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
+    let events = service
+        .get_event_history(offset, limit, None)
+        .map_err(FrontendError::from)?;
+    Ok(events.into_iter().map(Into::into).collect())
 }
 
 #[cfg(test)]
@@ -604,5 +653,159 @@ mod tests {
         use human_money_core::models::conflict::ConflictRole;
         assert_eq!(conflict_role_str(ConflictRole::Victim), "victim");
         assert_eq!(conflict_role_str(ConflictRole::Witness), "witness");
+    }
+
+    #[test]
+    fn s06_f5_fixed_point_rejects_malformed_utf8_and_formats_i128_min() {
+        assert_eq!(parse_fixed_point(""), None);
+        assert_eq!(parse_fixed_point("."), None);
+        assert_eq!(parse_fixed_point("-."), None);
+        assert_eq!(parse_fixed_point("+."), None);
+        assert_eq!(parse_fixed_point("1.2.3"), None);
+        // Must NOT panic on multi-byte UTF-8 boundary slicing
+        assert_eq!(parse_fixed_point("1.éééééééé"), None);
+        assert_eq!(parse_fixed_point("1.23é456789"), None);
+        // Must NOT overflow on i128::MIN
+        let formatted_min = format_fixed_point(i128::MIN);
+        assert!(
+            formatted_min.starts_with("-1701411834604692317316873037158."),
+            "unexpected i128::MIN formatting: {}",
+            formatted_min
+        );
+    }
+
+    #[test]
+    fn s06_f6_calculate_aggregated_balances_unit_key_test_prefix_and_expired_handling() {
+        use human_money_core::test_utils::{self, ACTORS};
+        use human_money_core::wallet::instance::VoucherStatus;
+        use human_money_core::NewVoucherData;
+
+        let dir = crate::test_support::temp_test_dir("s06_f6_balances");
+        let pw = "pw-s06-f6";
+        let (mut svc, _) = test_utils::setup_service_with_profile(&dir, &ACTORS.alice, "Alice", pw);
+        svc.unlock_session(pw, 600).unwrap();
+
+        let minuto_toml =
+            test_utils::generate_signed_standard_toml("voucher_standards/minuto_v1/standard.toml");
+        let ft_toml = test_utils::generate_signed_standard_toml(
+            "voucher_standards/freetaler_v1/standard.toml",
+        );
+        let user_id = svc.with_wallet(|w| w.get_user_id().to_string()).unwrap();
+
+        // Mint an own voucher with unit != abbreviation ("Minuto" vs "m") and activate it directly.
+        let mut v_data = test_utils::create_minuto_voucher_data(
+            human_money_core::models::profile::PublicProfile {
+                id: Some(user_id.clone()),
+                ..Default::default()
+            },
+        );
+        v_data.nominal_value.amount = "60".into();
+        let voucher = svc
+            .create_new_voucher(&minuto_toml, v_data, Some(pw))
+            .unwrap();
+        let local_id =
+            human_money_core::wallet::Wallet::calculate_local_instance_id(&voucher, &user_id)
+                .unwrap();
+
+        // Also mint an own test voucher to check TEST- prefix and an expired/corrupt-date voucher
+        let test_v = svc
+            .create_new_voucher(
+                &ft_toml,
+                NewVoucherData {
+                    creator_profile: human_money_core::models::profile::PublicProfile {
+                        id: Some(user_id.clone()),
+                        ..Default::default()
+                    },
+                    nominal_value: human_money_core::models::voucher::ValueDefinition {
+                        amount: "50".into(),
+                        ..Default::default()
+                    },
+                    non_redeemable_test_voucher: true,
+                    ..Default::default()
+                },
+                Some(pw),
+            )
+            .unwrap();
+        let test_local_id =
+            human_money_core::wallet::Wallet::calculate_local_instance_id(&test_v, &user_id)
+                .unwrap();
+
+        let balances = svc
+            .with_wallet_and_identity(|w, id| {
+                let mut w = w.clone();
+                // Make the minuto voucher Active and give it distinct unit vs abbreviation
+                if let Some(inst) = w.voucher_store.vouchers.get_mut(&local_id) {
+                    inst.status = VoucherStatus::Active;
+                    inst.voucher.nominal_value.unit = "Minutos".into();
+                    inst.voucher.nominal_value.abbreviation = Some("MIN".into());
+                }
+                // Make an expired clone of the own test voucher + corrupt-date clone (both Archived)
+                // plus archive the original test voucher so Loop 2 creates the meta entry.
+                let mut archived_test = w
+                    .voucher_store
+                    .vouchers
+                    .get(&test_local_id)
+                    .unwrap()
+                    .clone();
+                archived_test.status = VoucherStatus::Archived;
+                w.voucher_store
+                    .vouchers
+                    .insert(test_local_id.clone(), archived_test.clone());
+
+                let mut expired_v = archived_test.clone();
+                expired_v.status = VoucherStatus::Expired;
+                expired_v.voucher.voucher_id = "expired-vid".into();
+                w.voucher_store
+                    .vouchers
+                    .insert("expired-local".into(), expired_v);
+
+                let mut corrupt_date_v = archived_test;
+                corrupt_date_v.status = VoucherStatus::Archived;
+                corrupt_date_v.voucher.voucher_id = "corrupt-date-vid".into();
+                corrupt_date_v.voucher.valid_until = "not-an-rfc3339-date".into();
+                w.voucher_store
+                    .vouchers
+                    .insert("corrupt-date-local".into(), corrupt_date_v);
+
+                calculate_aggregated_balances(&w, id)
+            })
+            .unwrap();
+
+        // Minuto must have a SINGLE entry (keyed by unit "Minutos", NOT duplicated under "MIN")
+        let minuto_entries: Vec<_> = balances
+            .iter()
+            .filter(|b| b.standard_uuid == voucher.voucher_standard.uuid)
+            .collect();
+        assert_eq!(
+            minuto_entries.len(),
+            1,
+            "Loop 1 and Loop 2 must share the exact same unit key; got: {:?}",
+            minuto_entries
+        );
+        assert_eq!(minuto_entries[0].own_available_amount, "60");
+        assert_eq!(minuto_entries[0].own_circulating_amount, "0");
+
+        // Test voucher: must use "TEST-" hyphen prefix, and exclude Expired + unparseable valid_until
+        let test_entries: Vec<_> = balances
+            .iter()
+            .filter(|b| b.standard_uuid == test_v.voucher_standard.uuid && b.is_test_voucher)
+            .collect();
+        assert_eq!(test_entries.len(), 1);
+        assert!(
+            test_entries[0].display_currency.starts_with("TEST-"),
+            "Expected TEST- hyphen prefix, got: {}",
+            test_entries[0].display_currency
+        );
+        assert!(
+            test_entries[0].display_standard_name.starts_with("TEST-"),
+            "Expected TEST- hyphen prefix, got: {}",
+            test_entries[0].display_standard_name
+        );
+        assert_eq!(
+            test_entries[0].own_circulating_amount, "50",
+            "Expired and corrupt-date vouchers must NOT inflate own_circulating_amount"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

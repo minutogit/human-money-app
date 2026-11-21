@@ -35,35 +35,6 @@ pub async fn create_transfer_bundle_impl(
     let recipient_id = validated_recipient.into_string();
     log::debug!("Creating transfer bundle (sources={})", sources.len());
 
-    let (session, resolved_pw) = {
-        let (mut service, resolved_pw) = state.authorize_and_lock_secret(
-            crate::state::RequiredAccess::DailyPay,
-            password.as_deref(),
-        )?;
-        let pw = resolved_pw.as_deref().map(String::as_str);
-        let _password = pw;
-        let session = state.session_token_for_service(&service)?;
-        let blocking_ids: Vec<&str> = sources
-            .iter()
-            .map(|s| s.local_instance_id.as_str())
-            .collect();
-        let preflight = crate::services::preflight::ValueOutflowPreflight {
-            require_restore_reconciled: true,
-            check_known_offender_dids: &[recipient_id.as_str()],
-            check_blocking_intent_local_ids: &blocking_ids,
-            check_anchor_id_quorum_health: None,
-        };
-        crate::services::preflight::run_value_outflow_preflight(
-            state,
-            &mut service,
-            pw,
-            &preflight,
-        )?;
-        (session, resolved_pw)
-    };
-    let pw = resolved_pw.as_deref().map(String::as_str);
-    let _password = pw;
-
     let source_transfers: Vec<SourceTransfer> = sources
         .into_iter()
         .map(|s| SourceTransfer {
@@ -71,11 +42,27 @@ pub async fn create_transfer_bundle_impl(
             amount_to_send: s.amount_to_send.trim().replace(',', "."),
         })
         .collect();
+    let blocking_ids: Vec<&str> = source_transfers
+        .iter()
+        .map(|s| s.local_instance_id.as_str())
+        .collect();
 
-    let (result, intents, pow_base_bits) = state.with_session_required(
-        &session,
-        "Wallet session changed before creating transfer bundle",
-        |service| {
+    let (session, resolved_pw, result, intents, pow_base_bits) = {
+        let (mut service_guard, resolved_pw) = state.authorize_and_lock_secret(
+            crate::state::RequiredAccess::DailyPay,
+            password.as_deref(),
+        )?;
+        let service = &mut *service_guard;
+        let pw = resolved_pw.as_deref().map(String::as_str);
+        let session = state.session_token_for_service(service)?;
+        let preflight = crate::services::preflight::ValueOutflowPreflight {
+            require_restore_reconciled: true,
+            check_known_offender_dids: &[recipient_id.as_str()],
+            check_blocking_intent_local_ids: &blocking_ids,
+            check_anchor_id_quorum_health: None,
+            preverified_anchor_manifest: None,
+        };
+        crate::services::preflight::run_value_outflow_preflight(state, service, pw, &preflight)?;
 
         let mut wot_sync_json: Option<String> = None;
         let mut pending_receipt: Option<humoco_wot::SyncReceipt> = None;
@@ -95,12 +82,8 @@ pub async fn create_transfer_bundle_impl(
         if should_send_card {
             let now_secs = chrono::Utc::now().timestamp().max(0) as u64;
             let own_profile_opt: Option<crate::models::StoredOwnMarketProfile> =
-                crate::services::market_service::load_own_market_profile_state(
-                    state,
-                    service,
-                    pw,
-                )
-                .ok();
+                crate::services::market_service::load_own_market_profile_state(state, service, pw)
+                    .ok();
 
             if let Some(own_profile) = own_profile_opt {
                 if own_profile.published {
@@ -111,9 +94,7 @@ pub async fn create_transfer_bundle_impl(
                                 let store_res = crate::state::load_encrypted_json_or_default::<
                                     humoco_market::CardStore,
                                 >(
-                                    service,
-                                    crate::state::MARKET_CARD_STORE_KEY,
-                                    pw,
+                                    service, crate::state::MARKET_CARD_STORE_KEY, pw
                                 );
                                 match store_res {
                                     Ok(store) => {
@@ -206,28 +187,28 @@ pub async fn create_transfer_bundle_impl(
                         }
                     }
                 }
-                crate::services::common::max_pow_base_bits_for_servers(
-                    &loaded_lifecycle,
-                    lock_pubs,
-                )
+                crate::services::common::max_pow_base_bits_for_servers(&loaded_lifecycle, lock_pubs)
             })
             .unwrap_or(DEFAULT_LOCK_POW_BASE_BITS);
         let source_count = source_transfers.len();
         let record_recipient_id = recipient_id.clone();
         let record_notes = notes.clone();
         let record_sender_profile_name = sender_profile_name.clone();
-        let summable_by_name: HashMap<String, bool> = standard_definitions_toml
-            .values()
-            .filter_map(|toml| {
-                human_money_core::models::voucher_standard_definition::VoucherStandardDefinition::from_toml(toml).ok()
-            })
-            .map(|(def, _)| (def.immutable.identity.name, def.immutable.features.balances_are_summable))
-            .collect();
+        let mut summable_by_uuid: HashMap<String, bool> = HashMap::new();
+        let mut summable_by_name: HashMap<String, bool> = HashMap::new();
+        for toml in standard_definitions_toml.values() {
+            if let Ok((def, _)) =
+                human_money_core::models::voucher_standard_definition::VoucherStandardDefinition::from_toml(toml)
+            {
+                let summable = def.immutable.features.balances_are_summable;
+                summable_by_uuid.insert(def.immutable.identity.uuid, summable);
+                summable_by_name.insert(def.immutable.identity.name, summable);
+            }
+        }
         let baseline_history = state
             .load_history_from_disk(service, pw)
             .map_err(FrontendError::from)?;
-        let baseline_outgoing =
-            crate::state::load_outgoing_bundles(service, pw)?;
+        let baseline_outgoing = crate::state::load_outgoing_bundles(service, pw)?;
         let next_history_cell = std::cell::RefCell::new(None::<Vec<TransactionRecord>>);
         let next_outgoing_cell =
             std::cell::RefCell::new(None::<crate::models::StoredOutgoingBundles>);
@@ -251,9 +232,11 @@ pub async fn create_transfer_bundle_impl(
                 pow_bits,
                 |res, wallet| {
                     let record = build_sent_transaction_record(
+                        wallet,
                         wallet.get_user_id().to_string(),
                         record_recipient_id.clone(),
                         res,
+                        &summable_by_uuid,
                         &summable_by_name,
                         record_notes.clone(),
                         record_sender_profile_name.clone(),
@@ -327,7 +310,7 @@ pub async fn create_transfer_bundle_impl(
 
         if let Some(receipt) = pending_receipt {
             if let Ok(mut reg) = state.get_or_load_wot_register(service, pw) {
-                let now_secs = chrono::Utc::now().timestamp() as u64;
+                let now_secs = crate::sync_client::current_unix_timestamp();
                 reg.commit_sync_receipt(receipt, now_secs);
                 if let Err(e) = state.save_wot_register(service, &reg, pw) {
                     log::warn!(
@@ -342,8 +325,9 @@ pub async fn create_transfer_bundle_impl(
             error!("Failed to refresh events after transfer commit: {}", error);
         }
 
-        Ok((result, intents, pow_bits))
-    })?;
+        (session, resolved_pw, result, intents, pow_bits)
+    };
+    let pw = resolved_pw.as_deref().map(String::as_str);
 
     // Service mutex released; L1 + durable L2 intents are committed before network fan-out.
     let l2_dispatch = match crate::services::preflight::dispatch_l2_send_intents(
@@ -566,13 +550,69 @@ pub(crate) fn build_receive_success_payload_from_result(
         .ok()
         .flatten();
 
-    let opened_vouchers: Vec<human_money_core::Voucher> = service
-        .with_wallet_and_identity(|_, id| {
-            human_money_core::services::bundle_processor::open_and_verify_bundle(id, bundle_data)
-                .map(|b| b.vouchers)
-                .unwrap_or_default()
-        })
-        .unwrap_or_default();
+    let (opened_vouchers, reduced_guarantor_protection, manifest_revision) =
+        if !involved_vouchers_ids.is_empty() {
+            service
+                .with_wallet(|w| -> Result<_, FrontendError> {
+                    let mut vouchers = Vec::with_capacity(involved_vouchers_ids.len());
+                    let mut reduced = false;
+                    let mut rev: Option<u64> = None;
+                    for id in &involved_vouchers_ids {
+                        let inst = w.get_voucher_instance(id).ok_or_else(|| {
+                            FrontendError::from(format!(
+                                "Committed voucher '{}' missing from wallet after receive",
+                                id
+                            ))
+                        })?;
+                        if let Some(anchor_id) = inst.voucher.layer2_anchor {
+                            let anchor_hex = hex::encode(anchor_id);
+                            if let Some(manifest) = w.profile.l2_anchor_manifests.get(&anchor_hex) {
+                                reduced |=
+                                    manifest.has_reduced_guarantor_protection().unwrap_or(false);
+                                rev =
+                                    Some(rev.map_or(manifest.revision, |prev| {
+                                        prev.max(manifest.revision)
+                                    }));
+                            }
+                        }
+                        vouchers.push(inst.voucher.clone());
+                    }
+                    Ok((vouchers, reduced, rev))
+                })
+                .map_err(FrontendError::from)??
+        } else {
+            let vouchers = service
+                .with_wallet_and_identity(|_, id| {
+                    human_money_core::services::bundle_processor::open_and_verify_bundle(
+                        id,
+                        bundle_data,
+                    )
+                    .map(|b| b.vouchers)
+                })
+                .map_err(FrontendError::from)?
+                .map_err(FrontendError::from)?;
+            let (reduced, rev) = service
+                .with_wallet(|w| {
+                    let mut reduced = false;
+                    let mut rev: Option<u64> = None;
+                    for v in &vouchers {
+                        if let Some(anchor_id) = v.layer2_anchor {
+                            let anchor_hex = hex::encode(anchor_id);
+                            if let Some(manifest) = w.profile.l2_anchor_manifests.get(&anchor_hex) {
+                                reduced |=
+                                    manifest.has_reduced_guarantor_protection().unwrap_or(false);
+                                rev =
+                                    Some(rev.map_or(manifest.revision, |prev| {
+                                        prev.max(manifest.revision)
+                                    }));
+                            }
+                        }
+                    }
+                    (reduced, rev)
+                })
+                .map_err(FrontendError::from)?;
+            (vouchers, reduced, rev)
+        };
     let all_unanchored =
         !opened_vouchers.is_empty() && opened_vouchers.iter().all(|v| v.layer2_anchor.is_none());
     let (conflict_summaries, unrelated_open_conflicts_count) =
@@ -615,8 +655,8 @@ pub(crate) fn build_receive_success_payload_from_result(
         requires_merchant_approval: false,
         is_goods_release_authorized: !has_victim_conflict,
         merchant_warning: None,
-        reduced_guarantor_protection: false,
-        manifest_revision: None,
+        reduced_guarantor_protection,
+        manifest_revision,
     });
 
     Ok(ReceiveSuccessPayload {
@@ -659,7 +699,6 @@ pub async fn receive_bundle_impl(
         password.as_deref(),
     )?;
     let pw = resolved_pw.as_deref().map(String::as_str);
-    let _password = pw;
 
     let effective_purchase_id = purchase_id
         .as_deref()
@@ -772,10 +811,13 @@ pub async fn receive_bundle_impl(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_sent_transaction_record(
+    wallet: &human_money_core::wallet::Wallet,
     sender_id: String,
     recipient_id: String,
     result: &human_money_core::wallet::CreateBundleResult,
+    summable_by_uuid: &HashMap<String, bool>,
     summable_by_name: &HashMap<String, bool>,
     notes: Option<String>,
     sender_profile_name: Option<String>,
@@ -789,20 +831,24 @@ fn build_sent_transaction_record(
         .map(|d| d.local_instance_id.clone())
         .collect();
     for detail in &result.involved_sources_details {
-        let summable = summable_by_name
-            .get(&detail.standard_name)
+        let summable = wallet
+            .get_voucher_instance(&detail.local_instance_id)
+            .and_then(|inst| summable_by_uuid.get(&inst.voucher.voucher_standard.uuid))
+            .or_else(|| summable_by_name.get(&detail.standard_name))
             .copied()
             .unwrap_or(true);
         if summable {
             if let Some(amt) = parse_fixed_point(&detail.amount) {
-                *summable_sums
+                let sum = summable_sums
                     .entry(detail.display_currency.clone())
-                    .or_default() += amt;
+                    .or_default();
+                *sum = sum.saturating_add(amt);
             }
         } else {
-            *countable_items
+            let count = countable_items
                 .entry(detail.display_currency.clone())
-                .or_default() += 1;
+                .or_default();
+            *count = count.saturating_add(1);
         }
     }
     let summable_amounts = summable_sums
@@ -876,7 +922,7 @@ fn compute_wot_bonuses(
 
     let recipient_list_known =
         reg.raw_list_store.contains_key(&can_recipient) || can_recipient == reg.self_did;
-    let now_secs = chrono::Utc::now().timestamp() as u64;
+    let now_secs = crate::sync_client::current_unix_timestamp();
 
     for (local_id, instance) in &wallet.voucher_store.vouchers {
         if instance.status != human_money_core::wallet::instance::VoucherStatus::Active {
@@ -887,7 +933,9 @@ fn compute_wot_bonuses(
         }
 
         let creator_id = instance.voucher.creator_profile.id.as_deref().unwrap_or("");
-        let guarantor_refs: Vec<&str> = instance
+        let creator_canonical =
+            crate::state::canonicalize_did(creator_id).unwrap_or_else(|_| creator_id.to_string());
+        let guarantor_canonicals: Vec<String> = instance
             .voucher
             .signatures
             .iter()
@@ -898,12 +946,15 @@ fn compute_wot_bonuses(
                         TrustStatus::KnownOffender(_)
                     )
             })
-            .map(|s| s.signer_id.as_str())
+            .map(|s| {
+                crate::state::canonicalize_did(&s.signer_id).unwrap_or_else(|_| s.signer_id.clone())
+            })
             .collect();
+        let guarantor_refs: Vec<&str> = guarantor_canonicals.iter().map(String::as_str).collect();
 
         if let Ok(eval) = reg.evaluate_voucher_for_observer(
-            recipient_id,
-            creator_id,
+            &can_recipient,
+            &creator_canonical,
             &guarantor_refs,
             false,
             Some(now_secs),
@@ -946,7 +997,12 @@ pub fn prepare_transfer_plan_impl(
     let min_recipient_trust_percent = if recipient_list_known && !plan.selected.is_empty() {
         plan.selected
             .iter()
-            .filter_map(|rv| trust_percents.get(&rv.local_instance_id).copied())
+            .map(|rv| {
+                trust_percents
+                    .get(&rv.local_instance_id)
+                    .copied()
+                    .unwrap_or(0)
+            })
             .min()
     } else {
         None
@@ -2262,5 +2318,202 @@ mod offline_and_degraded_transfer_tests {
             .is_err());
 
         let _ = std::fs::remove_dir_all(base_dir);
+    }
+
+    #[test]
+    fn s06_f13_receive_payload_fails_closed_on_missing_voucher_and_sets_manifest_meta() {
+        let dir = temp_test_dir("s06_f13_receive_payload");
+        let pw = "pw-s06-f13";
+        let (mut svc, _) =
+            test_utils::setup_service_with_profile(&dir, &test_utils::ACTORS.alice, "Alice", pw);
+        svc.unlock_session(pw, 600).unwrap();
+        let state = create_test_state(svc);
+
+        // Case 1: Missing committed voucher + corrupt bundle bytes MUST fail closed (not return
+        // Ok with empty opened_vouchers hiding conflicts!).
+        let fake_result = human_money_core::wallet::types::ProcessBundleResult {
+            involved_vouchers_details: vec![human_money_core::wallet::types::InvolvedVoucherInfo {
+                local_instance_id: "missing-local-id".into(),
+                voucher_id: "vid-missing".into(),
+                standard_name: "FreeTaler".into(),
+                unit: "FT".into(),
+                amount: "10".into(),
+                allow_partial_transfers: true,
+                is_test_voucher: false,
+                display_currency: "FT".into(),
+                display_standard_name: "FreeTaler".into(),
+                counterparty_id: None,
+                counterparty_name: None,
+            }],
+            ..Default::default()
+        };
+        let mut service = state.lock_service().unwrap();
+        let err = build_receive_success_payload_from_result(
+            &mut service,
+            &state,
+            b"{not-a-valid-bundle",
+            fake_result,
+            "p-1".into(),
+            Some(pw),
+        );
+        assert!(
+            err.is_err(),
+            "S06-F13: unreadable/missing committed vouchers must fail closed instead of masking conflicts"
+        );
+
+        // Case 2: Valid anchored voucher in wallet MUST populate reduced_guarantor_protection & manifest_revision!
+        let sk1 = SigningKey::from_bytes(&[81u8; 32]);
+        let sk2 = SigningKey::from_bytes(&[82u8; 32]);
+        let mig_sk = SigningKey::from_bytes(&[83u8; 32]);
+        let retain_q = encode_quarter(2035, 4).unwrap();
+        let manifest_rev1 = AnchorManifest {
+            revision: 1,
+            threshold: 1,
+            servers: vec![ServerEntry {
+                write_url: "https://s1.example/sync.php".into(),
+                read_url: "https://s1.example/d".into(),
+                admin_pub: sk1.verifying_key().to_bytes(),
+                lock_pub: sk1.verifying_key().to_bytes(),
+                nominated_by: NominatedBy::Creator,
+            }],
+            successors: vec![],
+            authority: AnchorAuthority {
+                creator_mig_pub: mig_sk.verifying_key().to_bytes(),
+                guarantor_mig_pubs: vec![],
+            },
+            migration_chain: vec![],
+            issued_at_ms: 1_760_000_000_000,
+            retain_until_quarter: retain_q,
+        };
+        let anchor_id = manifest_rev1.rev1_anchor_id().unwrap();
+        // Migrate to rev=2 with 2 servers so revision == 2 is observable.
+        let new_servers = vec![
+            manifest_rev1.servers[0].clone(),
+            ServerEntry {
+                write_url: "https://s2.example/sync.php".into(),
+                read_url: "https://s2.example/d".into(),
+                admin_pub: sk2.verifying_key().to_bytes(),
+                lock_pub: sk2.verifying_key().to_bytes(),
+                nominated_by: NominatedBy::Creator,
+            },
+        ];
+        let prop = human_money_core::services::l2_rotation::build_creator_rotation_proposal(
+            anchor_id,
+            &manifest_rev1,
+            2,
+            new_servers,
+            Vec::new(),
+            1_760_000_020,
+            &mig_sk,
+        )
+        .unwrap();
+        let state_hash = human_money_core::humoco_proto::compute_import_union_state_hash(
+            &anchor_id,
+            2,
+            &std::collections::BTreeMap::new(),
+        )
+        .unwrap();
+        let prop_hash = prop.core_digest().unwrap();
+        let acks: Vec<_> = [&sk1, &sk2]
+            .iter()
+            .map(|sk| {
+                let mut ack = human_money_core::humoco_proto::ImportAck {
+                    anchor_id,
+                    proposal_hash: prop_hash,
+                    to_rev: 2,
+                    imported_state_hash: state_hash,
+                    retain_until_quarter: retain_q,
+                    lock_pub: sk.verifying_key().to_bytes(),
+                    acked_at: 1_760_000_020,
+                    sig: [0u8; 64],
+                };
+                ack.sig = sk.sign(&ack.digest()).to_bytes();
+                ack
+            })
+            .collect();
+        let commit_d = human_money_core::humoco_proto::MigrationCert::commit_digest(
+            &anchor_id,
+            &prop_hash,
+            2,
+            &state_hash,
+        );
+        let commit_sig = human_money_core::humoco_proto::CommitteeSignature {
+            lock_pub: sk1.verifying_key().to_bytes(),
+            committed_at: 1_760_000_020,
+            sig: sk1.sign(&commit_d).to_bytes(),
+        };
+        let (rev2_manifest, _) =
+            human_money_core::services::l2_rotation::assemble_migrated_manifest(
+                &manifest_rev1,
+                &anchor_id,
+                prop,
+                state_hash,
+                acks,
+                vec![commit_sig],
+            )
+            .unwrap();
+        service
+            .update_l2_anchor_manifest(rev2_manifest, Some(pw))
+            .unwrap();
+
+        let user_id = service
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
+        let (_, ft_toml) = std_map();
+        let voucher = service
+            .create_new_voucher(
+                &ft_toml,
+                NewVoucherData {
+                    creator_profile: PublicProfile {
+                        id: Some(user_id.clone()),
+                        ..Default::default()
+                    },
+                    nominal_value: ValueDefinition {
+                        amount: "20".into(),
+                        ..Default::default()
+                    },
+                    layer2_anchor: Some(anchor_id),
+                    ..Default::default()
+                },
+                Some(pw),
+            )
+            .unwrap();
+        let local_id =
+            human_money_core::wallet::Wallet::calculate_local_instance_id(&voucher, &user_id)
+                .unwrap();
+
+        let real_result = human_money_core::wallet::types::ProcessBundleResult {
+            involved_vouchers_details: vec![human_money_core::wallet::types::InvolvedVoucherInfo {
+                local_instance_id: local_id,
+                voucher_id: voucher.voucher_id,
+                standard_name: "FreeTaler".into(),
+                unit: "FT".into(),
+                amount: "20".into(),
+                allow_partial_transfers: true,
+                is_test_voucher: false,
+                display_currency: "FT".into(),
+                display_standard_name: "FreeTaler".into(),
+                counterparty_id: None,
+                counterparty_name: None,
+            }],
+            ..Default::default()
+        };
+        let payload = build_receive_success_payload_from_result(
+            &mut service,
+            &state,
+            b"unused-when-committed-in-wallet",
+            real_result,
+            "p-2".into(),
+            Some(pw),
+        )
+        .unwrap();
+        let verdict = payload.checkout_verdict.expect("verdict must be present");
+        assert_eq!(
+            verdict.manifest_revision,
+            Some(2),
+            "S06-F13: manifest_revision must be populated from wallet l2_anchor_manifests"
+        );
+        drop(service);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -150,24 +150,6 @@ impl From<human_money_core::wallet::types::InvolvedVoucherInfo> for FrontendInvo
     }
 }
 
-impl From<FrontendInvolvedVoucherInfo> for human_money_core::wallet::types::InvolvedVoucherInfo {
-    fn from(i: FrontendInvolvedVoucherInfo) -> Self {
-        Self {
-            local_instance_id: i.local_instance_id,
-            voucher_id: i.voucher_id,
-            standard_name: i.standard_name,
-            unit: i.unit,
-            amount: i.amount,
-            allow_partial_transfers: i.allow_partial_transfers,
-            is_test_voucher: i.is_test_voucher,
-            display_currency: i.display_currency,
-            display_standard_name: i.display_standard_name,
-            counterparty_id: i.counterparty_id,
-            counterparty_name: i.counterparty_name,
-        }
-    }
-}
-
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(tag = "type", content = "items", rename_all = "camelCase")]
 pub enum IntegrityReport {

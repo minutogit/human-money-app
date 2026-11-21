@@ -58,6 +58,8 @@ export interface GuarantorAnchorCheckDto {
     threshold: number;
     serverCount: number;
     untrustedServersCount: number;
+    unverifiedDelegationsCount?: number;
+    offenderCheckUnverified?: boolean;
     servers: GuarantorServerTrustDto[];
     issues: string[];
 }
@@ -252,7 +254,7 @@ export type AppState =
     | { view: "transfer_success"; bundleData: number[]; recipientId: string; summary: string; l2Dispatch?: IntentDispatchObservation[]; bundleId?: string; depositedTo?: number; recipientDepositedTo?: number; depositError?: string }
     | { view: "receive_success"; payload: ReceiveSuccessPayload; pendingCommit?: PendingReceiveCommit; launchItem?: string }
     | { view: "address_book"; initialSearchQuery?: string; initialOpenAddModal?: boolean; initialContactPayload?: string; previousView?: AppState }
-    | { view: "sign_request"; voucherData: VoucherDetails; requestMsgId?: string; senderDid?: string; anchorManifestJson?: string }
+    | { view: "sign_request"; voucherData: VoucherDetails; requestMsgId?: string; senderDid?: string; anchorManifestJson?: string; anchorDelegationsJson?: string }
     | { view: "conflict_details"; proofId: string; previousView?: AppState }
     | { view: "conflict_list" }
     | { view: "wallet"; initialStatusFilter?: string; initialStandardFilter?: string; initialFilter?: 'all' | 'received' | 'own' | 'expiringSoon' }

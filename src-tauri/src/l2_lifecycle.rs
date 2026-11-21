@@ -2441,6 +2441,7 @@ pub(crate) async fn run_lifecycle_tick_core(
                 check_known_offender_dids: &[],
                 check_blocking_intent_local_ids: &[],
                 check_anchor_id_quorum_health: None,
+                preverified_anchor_manifest: None,
             };
             let outflow_allowed = crate::services::preflight::run_value_outflow_preflight(
                 state, service, password, &preflight,

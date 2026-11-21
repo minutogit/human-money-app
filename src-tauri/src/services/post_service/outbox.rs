@@ -911,6 +911,7 @@ pub(crate) async fn deposit_transfer_to_post_with_session(
                 check_known_offender_dids: &recipient_refs,
                 check_blocking_intent_local_ids: &[],
                 check_anchor_id_quorum_health: None,
+                preverified_anchor_manifest: None,
             };
             crate::services::preflight::run_value_outflow_preflight(
                 state, service, password, &preflight,
@@ -1116,6 +1117,7 @@ pub async fn reply_detached_signature_via_post_impl(
                 check_known_offender_dids: &offender_dids,
                 check_blocking_intent_local_ids: &[],
                 check_anchor_id_quorum_health: None,
+                preverified_anchor_manifest: None,
             };
             crate::services::preflight::run_value_outflow_preflight(
                 state, service, pw, &preflight,

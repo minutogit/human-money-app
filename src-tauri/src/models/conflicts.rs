@@ -32,7 +32,10 @@ impl From<human_money_core::wallet::types::ProofOfDoubleSpendSummary>
 
         Self {
             proof_id: s.proof_id,
-            is_cryptographically_attributed: s.offender_id.contains("did:key:"),
+            is_cryptographically_attributed: human_money_core::ValidatedUserId::parse(
+                &s.offender_id,
+            )
+            .is_ok(),
             offender_id: s.offender_id,
             fork_point_prev_hash: s.fork_point_prev_hash,
             report_timestamp: s.report_timestamp,
@@ -87,7 +90,8 @@ impl From<human_money_core::models::conflict::ProofOfDoubleSpend> for FrontendPr
             }
         });
 
-        let is_cryptographically_attributed = p.offender_id.contains("did:key:");
+        let is_cryptographically_attributed =
+            human_money_core::ValidatedUserId::parse(&p.offender_id).is_ok();
         let has_victim_witness = !p.victim_witnesses.is_empty();
         let victim_witness_count = p.victim_witnesses.len();
         let suspected_identity = p.suspected_identity.clone();
@@ -186,4 +190,55 @@ pub struct FrontendProofImportResult {
     pub proof_id: String,
     pub already_known: bool,
     pub added_endorsements: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn s06_f15_conflict_attribution_requires_valid_user_id() {
+        let spoofed_summary = human_money_core::wallet::types::ProofOfDoubleSpendSummary {
+            proof_id: "p1".into(),
+            offender_id: "not-a-did:key:fake".into(),
+            fork_point_prev_hash: "h".into(),
+            report_timestamp: "2026-01-01T00:00:00Z".into(),
+            local_override: false,
+            endorsement_count: 0,
+            local_note: None,
+            conflict_role: ConflictRole::Victim,
+            affected_voucher_name: None,
+            display_affected_voucher_name: None,
+            voucher_standard_uuid: None,
+            is_test_voucher: false,
+        };
+        let fe_summary = FrontendProofOfDoubleSpendSummary::from(spoofed_summary);
+        assert!(
+            !fe_summary.is_cryptographically_attributed,
+            "Spoofed offender_id containing substring 'did:key:' must NOT be marked attributed"
+        );
+
+        let spoofed_proof = human_money_core::models::conflict::ProofOfDoubleSpend {
+            proof_id: "p1".into(),
+            offender_id: "evil:did:key:notvalid".into(),
+            fork_point_prev_hash: "h".into(),
+            conflicting_transactions: vec![],
+            deletable_at: "2030-01-01T00:00:00Z".into(),
+            reporter_id: "r".into(),
+            report_timestamp: "2026-01-01T00:00:00Z".into(),
+            reporter_signature: "sig".into(),
+            resolutions: None,
+            fingerprints: vec![],
+            victim_witnesses: vec![],
+            suspected_identity: None,
+            affected_voucher_name: None,
+            voucher_standard_uuid: None,
+            non_redeemable_test_voucher: false,
+        };
+        let fe_proof = FrontendProofOfDoubleSpend::from(spoofed_proof);
+        assert!(
+            !fe_proof.is_cryptographically_attributed,
+            "ProofOfDoubleSpend with spoofed offender_id must NOT be marked attributed"
+        );
+    }
 }

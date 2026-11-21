@@ -23,6 +23,7 @@ export interface DetachedSignatureResponseArgs {
     config: SigningRequestConfig;
     password?: string | null;
     anchorManifestJson?: string | null;
+    anchorDelegationsJson?: string | null;
 }
 
 export const voucherService = {
@@ -49,11 +50,13 @@ export const voucherService = {
         voucher: Voucher;
         standardTomlContent: string;
         manifestJson?: string | null;
+        anchorDelegationsJson?: string | null;
     }) => {
         return await invoke<GuarantorAnchorCheckDto>("evaluate_guarantor_anchor_check", {
             voucher: args.voucher,
             standardTomlContent: args.standardTomlContent,
             manifestJson: args.manifestJson ?? null,
+            anchorDelegationsJson: args.anchorDelegationsJson ?? null,
         });
     },
 
@@ -77,6 +80,7 @@ export const voucherService = {
             config: args.config,
             password: args.password,
             anchorManifestJson: args.anchorManifestJson ?? null,
+            anchorDelegationsJson: args.anchorDelegationsJson ?? null,
         });
     },
 

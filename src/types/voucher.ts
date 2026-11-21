@@ -153,7 +153,8 @@ export interface CollateralData {
     unit: string;
     amount: string;
     abbreviation?: string;
-    type?: string;
+    description?: string;
+    collateralType?: string;
     redeemCondition?: string;
 }
 
@@ -200,7 +201,7 @@ export interface TransactionHistoryEntry {
     tId: string;
     tType: string;
     tTime: string;
-    senderId: string;
+    senderId?: string | null;
     recipientId: string;
     amount: string;
 }
@@ -232,6 +233,7 @@ export interface VoucherDetails {
     reducedGuarantorProtection?: boolean;
     manifestRevision?: number | null;
     anchorManifestJson?: string;
+    anchorDelegationsJson?: string;
 }
 
 export interface SignatureImpact {

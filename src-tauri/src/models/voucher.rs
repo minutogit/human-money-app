@@ -14,27 +14,43 @@ pub struct NominalValueData {
 pub struct FrontendCollateralData {
     pub amount: String,
     pub unit: String,
+    #[serde(default)]
     pub abbreviation: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct FrontendCreatorData {
+    #[serde(default)]
     pub protocol_version: Option<String>,
     #[serde(default)]
     pub id: Option<String>,
-    pub first_name: String,
-    pub last_name: String,
-    pub address: FrontendAddressData,
+    #[serde(default)]
+    pub first_name: Option<String>,
+    #[serde(default)]
+    pub last_name: Option<String>,
+    #[serde(default)]
+    pub address: Option<FrontendAddressData>,
+    #[serde(default)]
     pub organization: Option<String>,
+    #[serde(default)]
     pub community: Option<String>,
+    #[serde(default)]
     pub phone: Option<String>,
+    #[serde(default)]
     pub email: Option<String>,
+    #[serde(default)]
     pub url: Option<String>,
-    pub gender: String,
+    #[serde(default)]
+    pub gender: Option<String>,
+    #[serde(default)]
     pub service_offer: Option<String>,
+    #[serde(default)]
     pub needs: Option<String>,
-    pub coordinates: String,
+    #[serde(default)]
+    pub coordinates: Option<String>,
+    #[serde(default)]
+    pub picture_url: Option<String>,
 }
 
 impl From<human_money_core::models::profile::PublicProfile> for FrontendCreatorData {
@@ -42,18 +58,19 @@ impl From<human_money_core::models::profile::PublicProfile> for FrontendCreatorD
         Self {
             protocol_version: p.protocol_version,
             id: p.id,
-            first_name: p.first_name.unwrap_or_default(),
-            last_name: p.last_name.unwrap_or_default(),
-            address: p.address.map(|a| a.into()).unwrap_or_default(),
+            first_name: p.first_name,
+            last_name: p.last_name,
+            address: p.address.map(|a| a.into()),
             organization: p.organization,
             community: p.community,
             phone: p.phone,
             email: p.email,
             url: p.url,
-            gender: p.gender.unwrap_or_default(),
+            gender: p.gender,
             service_offer: p.service_offer,
             needs: p.needs,
-            coordinates: p.coordinates.unwrap_or_default(),
+            coordinates: p.coordinates,
+            picture_url: p.picture_url,
         }
     }
 }
@@ -478,19 +495,19 @@ impl From<FrontendCreatorData> for human_money_core::models::profile::PublicProf
         Self {
             protocol_version: c.protocol_version,
             id: c.id,
-            first_name: Some(c.first_name),
-            last_name: Some(c.last_name),
-            address: Some(c.address.into()),
+            first_name: c.first_name,
+            last_name: c.last_name,
+            address: c.address.map(|a| a.into()),
             organization: c.organization,
             community: c.community,
             phone: c.phone,
             email: c.email,
             url: c.url,
-            gender: Some(c.gender),
-            coordinates: Some(c.coordinates),
+            gender: c.gender,
+            coordinates: c.coordinates,
             service_offer: c.service_offer,
             needs: c.needs,
-            ..Default::default()
+            picture_url: c.picture_url,
         }
     }
 }
@@ -542,9 +559,24 @@ impl From<FrontendVoucherSignature> for human_money_core::models::voucher::Vouch
     }
 }
 
-impl From<FrontendVoucher> for human_money_core::models::voucher::Voucher {
-    fn from(v: FrontendVoucher) -> Self {
-        Self {
+impl TryFrom<FrontendVoucher> for human_money_core::models::voucher::Voucher {
+    type Error = super::FrontendError;
+
+    fn try_from(v: FrontendVoucher) -> Result<Self, Self::Error> {
+        let layer2_anchor = match v
+            .layer2_anchor
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            Some(h) => Some(
+                human_money_core::humoco_proto::decode_hex_fixed::<32>(h).map_err(|e| {
+                    super::FrontendError::from(format!("Invalid layer2_anchor hex: {}", e))
+                })?,
+            ),
+            None => None,
+        };
+        Ok(Self {
             voucher_standard: v.voucher_standard.into(),
             voucher_id: v.voucher_id,
             voucher_nonce: v.voucher_nonce,
@@ -556,9 +588,70 @@ impl From<FrontendVoucher> for human_money_core::models::voucher::Voucher {
             creator_profile: v.creator.into(),
             transactions: v.transactions.into_iter().map(|t| t.into()).collect(),
             signatures: v.signatures.into_iter().map(|s| s.into()).collect(),
-            layer2_anchor: v.layer2_anchor.as_deref().and_then(|h| {
-                human_money_core::humoco_proto::decode_hex_fixed::<32>(h.trim()).ok()
-            }),
-        }
+            layer2_anchor,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn s06_f3_voucher_try_from_rejects_malformed_anchor_and_preserves_creator_fields() {
+        let orig_profile = human_money_core::models::profile::PublicProfile {
+            id: Some("0:al@did:key:z6Mkexample".into()),
+            first_name: Some("Alice".into()),
+            last_name: None,
+            address: None,
+            gender: None,
+            coordinates: None,
+            picture_url: Some("https://example.org/avatar.png".into()),
+            ..Default::default()
+        };
+        let fe_creator = FrontendCreatorData::from(orig_profile.clone());
+        let roundtripped = human_money_core::models::profile::PublicProfile::from(fe_creator);
+        assert_eq!(roundtripped.address, None);
+        assert_eq!(roundtripped.gender, None);
+        assert_eq!(roundtripped.coordinates, None);
+        assert_eq!(roundtripped.last_name, None);
+        assert_eq!(
+            roundtripped.picture_url.as_deref(),
+            Some("https://example.org/avatar.png")
+        );
+
+        let bad_voucher = FrontendVoucher {
+            voucher_standard: FrontendVoucherStandard {
+                name: "Test".into(),
+                uuid: "uuid".into(),
+                standard_definition_hash: "hash".into(),
+            },
+            voucher_id: "vid".into(),
+            voucher_nonce: "nonce".into(),
+            creation_date: "2026-01-01T00:00:00Z".into(),
+            valid_until: "2027-01-01T00:00:00Z".into(),
+            non_redeemable_test_voucher: false,
+            nominal_value: FrontendValueDefinition {
+                unit: "FT".into(),
+                amount: "10".into(),
+                abbreviation: None,
+                description: None,
+            },
+            collateral: None,
+            creator: FrontendCreatorData::from(orig_profile),
+            layer2_anchor: Some("not-valid-hex".into()),
+            transactions: vec![],
+            signatures: vec![],
+        };
+        let err = human_money_core::models::voucher::Voucher::try_from(bad_voucher.clone());
+        assert!(
+            err.is_err(),
+            "S06-F3: malformed non-empty layer2_anchor must fail TryFrom instead of becoming None"
+        );
+
+        let mut empty_anchor = bad_voucher;
+        empty_anchor.layer2_anchor = Some("   ".into());
+        let ok = human_money_core::models::voucher::Voucher::try_from(empty_anchor).unwrap();
+        assert_eq!(ok.layer2_anchor, None);
     }
 }

@@ -352,6 +352,7 @@ export interface FrontendPendingSignRequest {
     replySyncs: FrontendSyncDescriptor[];
     containerBytes: number[];
     anchorManifestJson?: string | null;
+    anchorDelegationsJson?: string | null;
 }
 
 export interface FrontendPendingWotHandshake {

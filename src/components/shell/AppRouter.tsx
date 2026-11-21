@@ -158,6 +158,7 @@ export const AppRouter: React.FC<AppRouterProps> = ({ onFinishLaunchItem }) => {
                             view: "sign_request",
                             voucherData: details,
                             anchorManifestJson: details.anchorManifestJson,
+                            anchorDelegationsJson: details.anchorDelegationsJson,
                         });
                     } else if (payload.isSignatureAttached && payload.voucherId) {
                         if (droppedLaunchItem) {
@@ -203,6 +204,7 @@ export const AppRouter: React.FC<AppRouterProps> = ({ onFinishLaunchItem }) => {
                 requestMsgId={appState.requestMsgId}
                 senderDid={appState.senderDid}
                 anchorManifestJson={appState.anchorManifestJson}
+                anchorDelegationsJson={appState.anchorDelegationsJson}
                 onBack={goBack}
             />;
         case "conflict_details":
