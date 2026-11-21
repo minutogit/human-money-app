@@ -2499,13 +2499,13 @@ pub(crate) async fn sync_backup_with_standards_impl(
                             .map(|e| e.trim().trim_matches('"').to_string())
                             .filter(|s| !s.is_empty());
                         let verified_ack = slot_ack.filter(|ack| {
-                            let etag_ok = normalized_etag.as_deref().is_some_and(|e| {
-                                ack.verify(&target.cap_pubkey, upload_prefix, "backup", e)
-                            });
-                            let probe_ok = probe_lock_pubs.get(&target.norm_write_url).is_some_and(
-                                |expected_lp| ack.lock_pub.trim().eq_ignore_ascii_case(expected_lp),
-                            );
-                            etag_ok && probe_ok
+                            let (Some(expected_lp), Some(e)) = (
+                                probe_lock_pubs.get(&target.norm_write_url),
+                                normalized_etag.as_deref(),
+                            ) else {
+                                return false;
+                            };
+                            ack.verify(expected_lp, &target.cap_pubkey, upload_prefix, "backup", e)
                         });
                         let anomaly = mirror_anomalies.get(&target.norm_write_url).cloned();
                         if is_delta_upload {

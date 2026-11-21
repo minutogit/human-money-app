@@ -416,7 +416,7 @@ impl ProfileSessionLock {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SyncWakeRequest {
     #[serde(default)]
     pub seal: bool,
@@ -900,7 +900,7 @@ impl AppState {
 
     pub fn update_network_status(&self, is_online: bool, is_wifi: bool, is_visible: bool) {
         let should_notify = {
-            let mut guard = self.sync_control.lock().unwrap();
+            let mut guard = self.sync_control.lock().unwrap_or_else(|e| e.into_inner());
             let became_online = !guard.is_online && is_online;
             let became_wifi = !guard.is_wifi && is_wifi;
             let became_visible = !guard.is_visible && is_visible;
@@ -916,7 +916,7 @@ impl AppState {
 
     pub fn wake_sync_coordinator(&self, req: SyncWakeRequest) {
         {
-            let mut guard = self.sync_control.lock().unwrap();
+            let mut guard = self.sync_control.lock().unwrap_or_else(|e| e.into_inner());
             guard.pending_wake.merge(req);
         }
         self.sync_coordinator_wake.notify_one();
@@ -926,8 +926,15 @@ impl AppState {
         self.sync_coordinator_wake.notify_one();
     }
 
+    pub fn sync_control_snapshot(&self) -> SyncCoordinatorControl {
+        self.sync_control
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
     pub fn take_sync_coordinator_snapshot(&self) -> (SyncCoordinatorControl, SyncWakeRequest) {
-        let mut guard = self.sync_control.lock().unwrap();
+        let mut guard = self.sync_control.lock().unwrap_or_else(|e| e.into_inner());
         let wake = std::mem::take(&mut guard.pending_wake);
         (guard.clone(), wake)
     }
@@ -935,12 +942,12 @@ impl AppState {
     pub fn record_sync_cooldown(&self, retry_after_secs: u64) {
         let clamped = retry_after_secs.clamp(5, 3600);
         let target = std::time::Instant::now() + std::time::Duration::from_secs(clamped);
-        let mut guard = self.sync_control.lock().unwrap();
+        let mut guard = self.sync_control.lock().unwrap_or_else(|e| e.into_inner());
         guard.cooldown_until = Some(guard.cooldown_until.map_or(target, |prev| prev.max(target)));
     }
 
     pub fn clear_sync_cooldown(&self) {
-        let mut guard = self.sync_control.lock().unwrap();
+        let mut guard = self.sync_control.lock().unwrap_or_else(|e| e.into_inner());
         guard.cooldown_until = None;
         guard.pending_wake = SyncWakeRequest::default();
     }

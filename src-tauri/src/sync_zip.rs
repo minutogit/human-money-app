@@ -9,6 +9,21 @@ const ROBOTS_TXT: &[u8] = include_bytes!("../../../humoco-sync/php/robots.txt");
 const INDEX_HTML: &[u8] = include_bytes!("../../../humoco-sync/php/index.html");
 const README_MD: &[u8] = include_bytes!("../../../humoco-sync/php/README.md");
 
+fn escape_php_single_quoted(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    for ch in raw.chars() {
+        if ch.is_control() {
+            continue;
+        }
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '\'' => out.push_str("\\'"),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 pub fn generate_sync_config_php(
     admin_pubkey: &str,
     data_dir: &str,
@@ -17,8 +32,10 @@ pub fn generate_sync_config_php(
     max_user_storage_mb: usize,
     register_url: Option<&str>,
 ) -> String {
-    let register_url_val = match register_url {
-        Some(url) => format!("'{}'", url.replace('\'', "\\'")),
+    let esc_admin = escape_php_single_quoted(admin_pubkey);
+    let esc_dir = escape_php_single_quoted(data_dir);
+    let register_url_val = match register_url.map(str::trim).filter(|u| !u.is_empty()) {
+        Some(url) => format!("'{}'", escape_php_single_quoted(url)),
         None => "null".to_string(),
     };
     let max_media_user_bytes: u64 =
@@ -74,8 +91,8 @@ return [
     ],
 ];
 "#,
-        admin_pubkey,
-        data_dir,
+        esc_admin,
+        esc_dir,
         register_url_val,
         max_members,
         max_total_storage_mb,
@@ -90,9 +107,12 @@ fn escape_toml_basic_string(raw: &str) -> String {
         match ch {
             '\\' => out.push_str("\\\\"),
             '"' => out.push_str("\\\""),
+            '\u{0008}' => out.push_str("\\b"),
+            '\u{000C}' => out.push_str("\\f"),
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
+            c if c.is_control() => out.push_str(&format!("\\u{:04X}", c as u32)),
             c => out.push(c),
         }
     }
@@ -109,21 +129,25 @@ pub fn generate_rust_sync_config_toml(
 ) -> String {
     let esc_admin = escape_toml_basic_string(admin_pubkey);
     let esc_dir = escape_toml_basic_string(data_dir);
-    let max_free_pool_mb = (max_total_storage_mb / 4).max(1);
+    let max_free_pool_mb = (max_total_storage_mb / 4).max(1).min(max_total_storage_mb);
     let max_user_bytes: u64 = (max_user_storage_mb as u64).saturating_mul(1024 * 1024);
     let max_friends_media_user_bytes: u64 = 6_291_456u64.min(max_user_bytes);
     let public_base_url = register_url
         .and_then(|u| {
             let trimmed = u.trim();
-            if trimmed.is_empty() {
-                None
-            } else if let Some(idx) = trimmed.find("://") {
-                let after = &trimmed[idx + 3..];
-                let host = after.split('/').next().unwrap_or(after);
-                Some(format!("{}://{}", &trimmed[..idx], host))
-            } else {
-                None
+            if trimmed.is_empty() || trimmed.chars().any(|c| c.is_control() || c.is_whitespace()) {
+                return None;
             }
+            let parsed = url::Url::parse(trimmed).ok()?;
+            if !matches!(parsed.scheme(), "http" | "https")
+                || !parsed.username().is_empty()
+                || parsed.password().is_some()
+            {
+                return None;
+            }
+            let host = parsed.host_str()?;
+            let port_part = parsed.port().map(|p| format!(":{}", p)).unwrap_or_default();
+            Some(format!("{}://{}{}", parsed.scheme(), host, port_part))
         })
         .unwrap_or_else(|| "https://sync.example.org".to_string());
     let esc_base_url = escape_toml_basic_string(&public_base_url);
@@ -372,7 +396,7 @@ fn build_pkzip_archive(entries: &[ZipEntry]) -> Vec<u8> {
         zip_bytes.extend_from_slice(&[0x00, 0x08]); // Flags: UTF-8 (bit 11)
         zip_bytes.extend_from_slice(&[0x00, 0x00]); // Method: STORE (0)
         zip_bytes.extend_from_slice(&[0x00, 0x00]); // Time
-        zip_bytes.extend_from_slice(&[0x00, 0x00]); // Date
+        zip_bytes.extend_from_slice(&[0x21, 0x00]); // Date: 1980-01-01
         zip_bytes.extend_from_slice(&crc.to_le_bytes()); // CRC-32
         zip_bytes.extend_from_slice(&size.to_le_bytes()); // Compressed size
         zip_bytes.extend_from_slice(&size.to_le_bytes()); // Uncompressed size
@@ -383,12 +407,12 @@ fn build_pkzip_archive(entries: &[ZipEntry]) -> Vec<u8> {
 
         // Central directory entry: 46 bytes + name_len
         central_dir.extend_from_slice(&[0x50, 0x4b, 0x01, 0x02]); // Signature
-        central_dir.extend_from_slice(&[0x3f, 0x00]); // Version made by: Unix (0x3f)
+        central_dir.extend_from_slice(&[0x14, 0x03]); // Version made by: ZIP 2.0 (0x14), Unix (0x03)
         central_dir.extend_from_slice(&[0x14, 0x00]); // Version needed: 2.0
         central_dir.extend_from_slice(&[0x00, 0x08]); // Flags: UTF-8
         central_dir.extend_from_slice(&[0x00, 0x00]); // Method: STORE
         central_dir.extend_from_slice(&[0x00, 0x00]); // Time
-        central_dir.extend_from_slice(&[0x00, 0x00]); // Date
+        central_dir.extend_from_slice(&[0x21, 0x00]); // Date: 1980-01-01
         central_dir.extend_from_slice(&crc.to_le_bytes()); // CRC-32
         central_dir.extend_from_slice(&size.to_le_bytes()); // Compressed size
         central_dir.extend_from_slice(&size.to_le_bytes()); // Uncompressed size
@@ -528,6 +552,172 @@ mod tests {
         assert!(cfg_str.contains("'media'"));
         assert!(cfg_str.contains("'lock'"));
         assert!(cfg_str.contains("'max_retention_quarter'"));
+
+        // Verify Central Directory entries & EOCD structure
+        let cd_start = offset;
+        let mut cd_offset = cd_start;
+        let mut cd_count = 0usize;
+        while cd_offset + 46 <= zip_bytes.len()
+            && zip_bytes[cd_offset..cd_offset + 4] == [0x50, 0x4b, 0x01, 0x02]
+        {
+            assert_eq!(
+                &zip_bytes[cd_offset + 4..cd_offset + 6],
+                &[0x14, 0x03],
+                "CD version made by must be ZIP 2.0 / Unix (0x14, 0x03)"
+            );
+            assert_eq!(
+                &zip_bytes[cd_offset + 14..cd_offset + 16],
+                &[0x21, 0x00],
+                "CD DOS date must be 1980-01-01 (0x21, 0x00)"
+            );
+            assert_eq!(
+                &zip_bytes[cd_offset + 38..cd_offset + 42],
+                &[0x00, 0x00, 0xa4, 0x81],
+                "CD external attributes must encode 0o100644"
+            );
+            let cd_crc = u32::from_le_bytes(
+                zip_bytes[cd_offset + 16..cd_offset + 20]
+                    .try_into()
+                    .unwrap(),
+            );
+            let cd_csize = u32::from_le_bytes(
+                zip_bytes[cd_offset + 20..cd_offset + 24]
+                    .try_into()
+                    .unwrap(),
+            );
+            let cd_usize = u32::from_le_bytes(
+                zip_bytes[cd_offset + 24..cd_offset + 28]
+                    .try_into()
+                    .unwrap(),
+            );
+            let cd_name_len = u16::from_le_bytes(
+                zip_bytes[cd_offset + 28..cd_offset + 30]
+                    .try_into()
+                    .unwrap(),
+            ) as usize;
+            let cd_extra_len = u16::from_le_bytes(
+                zip_bytes[cd_offset + 30..cd_offset + 32]
+                    .try_into()
+                    .unwrap(),
+            ) as usize;
+            let cd_comment_len = u16::from_le_bytes(
+                zip_bytes[cd_offset + 32..cd_offset + 34]
+                    .try_into()
+                    .unwrap(),
+            ) as usize;
+            let local_off = u32::from_le_bytes(
+                zip_bytes[cd_offset + 42..cd_offset + 46]
+                    .try_into()
+                    .unwrap(),
+            ) as usize;
+            let name =
+                std::str::from_utf8(&zip_bytes[cd_offset + 46..cd_offset + 46 + cd_name_len])
+                    .unwrap();
+            let file_data = extracted_files
+                .get(name)
+                .expect("CD name must match local entry");
+            assert_eq!(cd_csize, file_data.len() as u32);
+            assert_eq!(cd_usize, file_data.len() as u32);
+            let mut hasher = Hasher::new();
+            hasher.update(file_data);
+            assert_eq!(cd_crc, hasher.finalize());
+            assert_eq!(
+                &zip_bytes[local_off..local_off + 4],
+                &[0x50, 0x4b, 0x03, 0x04]
+            );
+
+            cd_offset += 46 + cd_name_len + cd_extra_len + cd_comment_len;
+            cd_count += 1;
+        }
+        assert_eq!(cd_count, 8);
+        assert_eq!(cd_offset + 22, zip_bytes.len());
+        assert_eq!(
+            &zip_bytes[cd_offset..cd_offset + 4],
+            &[0x50, 0x4b, 0x05, 0x06]
+        );
+        assert_eq!(
+            u16::from_le_bytes(zip_bytes[cd_offset + 8..cd_offset + 10].try_into().unwrap()),
+            8
+        );
+        assert_eq!(
+            u16::from_le_bytes(
+                zip_bytes[cd_offset + 10..cd_offset + 12]
+                    .try_into()
+                    .unwrap()
+            ),
+            8
+        );
+        assert_eq!(
+            u32::from_le_bytes(
+                zip_bytes[cd_offset + 12..cd_offset + 16]
+                    .try_into()
+                    .unwrap()
+            ) as usize,
+            cd_offset - cd_start
+        );
+        assert_eq!(
+            u32::from_le_bytes(
+                zip_bytes[cd_offset + 16..cd_offset + 20]
+                    .try_into()
+                    .unwrap()
+            ) as usize,
+            cd_start
+        );
+    }
+
+    #[test]
+    fn test_s08_f8_php_toml_escaping_and_origin_validation() {
+        // 1. PHP escaping: \' and trailing \ and control chars and blank register_url
+        let php_cfg = generate_sync_config_php(
+            "aa\n';phpinfo();//",
+            "d-1\r\\'",
+            50,
+            100,
+            10,
+            Some("https://evil.example/\\'<?php system('id'); ?>\\"),
+        );
+        assert!(!php_cfg.contains("aa\n"));
+        assert!(php_cfg.contains("'admin_pubkey'         => 'aa\\';phpinfo();//'"));
+        assert!(php_cfg.contains("'data_dir'             => 'd-1\\\\\\''"));
+        assert!(php_cfg.contains(
+            "'register_url'         => 'https://evil.example/\\\\\\'<?php system(\\'id\\'); ?>\\\\'"
+        ));
+
+        let php_blank = generate_sync_config_php("aa", "d-1", 50, 100, 10, Some("   "));
+        assert!(php_blank.contains("'register_url'         => null"));
+
+        // 2. TOML control-char escaping + URL origin extraction + max_free_pool_mb clamp
+        let toml_ctrl = generate_rust_sync_config_toml(
+            "ab\x00\x07\x08\x0c\x1b\x7fcd",
+            "d-\x1b[31m",
+            10,
+            0,
+            10,
+            Some("https://sync.example.org:8443/register?ref=1#frag"),
+        );
+        assert!(
+            !toml_ctrl
+                .chars()
+                .any(|c| c.is_control() && c != '\n' && c != '\r' && c != '\t'),
+            "TOML output must not contain unescaped control chars"
+        );
+        assert!(toml_ctrl.contains(r#"admin_pubkey = "ab\u0000\u0007\b\f\u001B\u007Fcd""#));
+        assert!(toml_ctrl.contains(r#"data_dir = "d-\u001B[31m""#));
+        assert!(toml_ctrl.contains(r#"public_base_url = "https://sync.example.org:8443""#));
+        assert!(toml_ctrl.contains("max_total_storage_mb = 0"));
+        assert!(toml_ctrl.contains("max_free_pool_mb = 0"));
+
+        for bad_reg in [
+            "javascript://foo/bar",
+            "https://user:pass@sync.example.org/reg",
+        ] {
+            let toml_bad = generate_rust_sync_config_toml("aa", "d-1", 10, 100, 10, Some(bad_reg));
+            assert!(
+                toml_bad.contains(r#"public_base_url = "https://sync.example.org""#),
+                "expected fallback base url for '{}'",
+                bad_reg
+            );
+        }
     }
 
     #[test]

@@ -1629,7 +1629,7 @@ pub(crate) async fn refresh_lock_servers_for_coordinator(state: &AppState) -> bo
         let Ok(service) = state.service.lock() else {
             return false;
         };
-        if !service.is_wallet_unlocked() {
+        if !service.is_wallet_unlocked() || !service.is_session_active() {
             return false;
         }
         let Ok(s) = state.session_token_for_service(&service) else {

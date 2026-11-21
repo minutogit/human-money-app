@@ -767,7 +767,9 @@ mod tests {
     fn s07_f6_probe_cache_clamps_pow_verifies_delegation_and_prevents_downgrade() {
         let admin_sk = SigningKey::from_bytes(&[0x33u8; 32]);
         let admin_hex = hex::encode(admin_sk.verifying_key().as_bytes());
-        let lock_bytes = [0x44u8; 32];
+        let lock_bytes = SigningKey::from_bytes(&[0x44u8; 32])
+            .verifying_key()
+            .to_bytes();
         let lock_hex = hex::encode(lock_bytes);
         let write_url = "https://sync.example.org/sync.php";
         let read_url = "https://sync.example.org/data";

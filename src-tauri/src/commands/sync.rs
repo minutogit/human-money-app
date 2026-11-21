@@ -52,7 +52,12 @@ pub async fn finalize_sync_setup(
     password: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<FrontendSyncAdminStatus, FrontendError> {
-    sync_engine::finalize_sync_setup_impl(base_url, password, &state).await
+    let status = sync_engine::finalize_sync_setup_impl(base_url, password, &state).await?;
+    state.wake_sync_coordinator(crate::state::SyncWakeRequest {
+        sync_backup: true,
+        ..Default::default()
+    });
+    Ok(status)
 }
 
 #[tauri::command]
@@ -131,7 +136,14 @@ pub async fn set_selected_upload_syncs(
     password: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<Vec<FrontendSyncDescriptor>, FrontendError> {
-    sync_engine::set_selected_upload_syncs_impl(syncs, password, &state).await
+    let saved = sync_engine::set_selected_upload_syncs_impl(syncs, password, &state).await?;
+    if !saved.is_empty() {
+        state.wake_sync_coordinator(crate::state::SyncWakeRequest {
+            sync_backup: true,
+            ..Default::default()
+        });
+    }
+    Ok(saved)
 }
 
 #[tauri::command]
@@ -181,7 +193,7 @@ pub async fn save_public_sync(
     password: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<FrontendPublicSyncInfo, FrontendError> {
-    sync_engine::save_public_sync_impl(
+    let info = sync_engine::save_public_sync_impl(
         write_url,
         read_url,
         drop_pub,
@@ -190,7 +202,14 @@ pub async fn save_public_sync(
         password,
         &state,
     )
-    .await
+    .await?;
+    if enabled {
+        state.wake_sync_coordinator(crate::state::SyncWakeRequest {
+            sync_backup: true,
+            ..Default::default()
+        });
+    }
+    Ok(info)
 }
 
 #[tauri::command]

@@ -1,4 +1,4 @@
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use human_money_core::humoco_proto::{
     causal::{LockEntry, LOCK_ENTRY_WIRE_LEN},
     crypto::{solve_ticket_pow, verify_ed25519_strict},
@@ -9,6 +9,17 @@ use human_money_core::models::layer2_api::{SyncLockBatchRequest, SyncLockBatchRe
 use humoco_market::SignedDropHeaders;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+
+const MAX_ERROR_BODY_BYTES: usize = 4 * 1024;
+const MAX_ERROR_DETAIL_CHARS: usize = 256;
+const MAX_JSON_META_BODY_BYTES: usize = 256 * 1024;
+const MAX_LOCK_BATCH_BODY_BYTES: usize = 2 * 1024 * 1024;
+const MAX_INDEX_JSON_BODY_BYTES: usize = 4 * 1024 * 1024;
+const MAX_FREEZE_JSON_BODY_BYTES: usize = 8 * 1024 * 1024;
+const MAX_SLOT_BLOB_BODY_BYTES: usize = 32 * 1024 * 1024;
+const MIN_RETRY_AFTER_SECS: u64 = 1;
+const MAX_RETRY_AFTER_SECS: u64 = 3600;
+const POW_START_NONCE_MASK: u64 = (1u64 << 52) - 1;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct SyncIndexEntry {
@@ -199,18 +210,28 @@ pub struct SlotAckReceipt {
 impl SlotAckReceipt {
     pub fn verify(
         &self,
+        expected_lock_pub: &str,
         expected_pubkey: &str,
         expected_prefix: Option<&str>,
         expected_channel: &str,
         expected_etag: &str,
     ) -> bool {
+        if self.timestamp == 0 || has_outer_ws_or_control(&self.lock_pub) {
+            return false;
+        }
         let norm_expected_pfx = expected_prefix.filter(|s| !s.is_empty());
         let norm_self_pfx = self.prefix.as_deref().filter(|s| !s.is_empty());
-        let clean_etag = expected_etag.trim().trim_matches('"');
-        if self.pubkey != expected_pubkey
+        let Some(clean_expected_etag) = normalize_etag_token(expected_etag) else {
+            return false;
+        };
+        let Some(clean_self_etag) = normalize_etag_token(&self.etag) else {
+            return false;
+        };
+        if !self.lock_pub.eq_ignore_ascii_case(expected_lock_pub.trim())
+            || self.pubkey != expected_pubkey
             || norm_self_pfx != norm_expected_pfx
             || self.channel != expected_channel
-            || self.etag.trim().trim_matches('"') != clean_etag
+            || clean_self_etag != clean_expected_etag
         {
             return false;
         }
@@ -285,6 +306,19 @@ pub fn canonical_revocation_message(
     )
 }
 
+fn has_outer_ws_or_control(s: &str) -> bool {
+    s.trim() != s || s.chars().any(|c| c.is_control())
+}
+
+fn parse_ed25519_pubkey_strict(hex_str: &str) -> Result<VerifyingKey, String> {
+    if has_outer_ws_or_control(hex_str) {
+        return Err("Public key hex contains outer whitespace or control characters".to_string());
+    }
+    let pk_bytes = decode_hex_fixed::<32>(hex_str)
+        .map_err(|_| "Invalid Ed25519 public key hex".to_string())?;
+    VerifyingKey::from_bytes(&pk_bytes).map_err(|_| "Invalid Ed25519 public key".to_string())
+}
+
 pub fn sign_revocation_notice(
     admin_sk: &SigningKey,
     issued_at: u64,
@@ -292,18 +326,18 @@ pub fn sign_revocation_notice(
     reason: Option<String>,
     replacement: Option<SyncReplacementTarget>,
 ) -> Result<SyncRevocationNotice, String> {
+    if issued_at == 0 || effective_at == 0 {
+        return Err("Revocation notice requires non-zero issued_at and effective_at".to_string());
+    }
     if let Some(ref r_txt) = reason {
-        if r_txt.len() > 200 || r_txt.contains('\n') || r_txt.contains('\r') || r_txt.contains('\0')
-        {
+        if r_txt.len() > 200 || r_txt.chars().any(|c| c.is_control()) {
             return Err("Invalid revocation reason (max 200 chars, single-line)".to_string());
         }
     }
     if let Some(ref rep) = replacement {
         validate_sync_url(&rep.write_url)?;
-        validate_sync_url(&rep.read_url)?;
-        if rep.drop_pub.len() != 64 || !rep.drop_pub.chars().all(|c| c.is_ascii_hexdigit()) {
-            return Err("Invalid replacement drop_pub".to_string());
-        }
+        validate_sync_read_url(&rep.read_url)?;
+        parse_ed25519_pubkey_strict(rep.drop_pub.trim())?;
     }
     let drop_pub = hex::encode(admin_sk.verifying_key().as_bytes());
     let clean_reason = reason
@@ -336,39 +370,40 @@ pub fn verify_revocation_notice(
     notice: &SyncRevocationNotice,
     expected_drop_pub: &str,
 ) -> Result<(), String> {
-    let expected = expected_drop_pub.trim().to_lowercase();
-    if expected.len() != 64 || !expected.chars().all(|c| c.is_ascii_hexdigit()) {
-        return Err("Missing or invalid expected drop_pub".to_string());
+    if has_outer_ws_or_control(&notice.drop_pub) || has_outer_ws_or_control(&notice.signature) {
+        return Err("Revocation notice contains invalid whitespace or control chars".to_string());
     }
-    if notice.drop_pub.trim().to_lowercase() != expected {
+    let expected = expected_drop_pub.trim().to_ascii_lowercase();
+    let vk = parse_ed25519_pubkey_strict(&expected)
+        .map_err(|_| "Missing or invalid expected drop_pub".to_string())?;
+    if notice.drop_pub.to_ascii_lowercase() != expected {
         return Err("Revocation notice drop_pub mismatch".to_string());
     }
     if notice.issued_at == 0 || notice.effective_at == 0 {
         return Err("Revocation notice missing timestamps".to_string());
     }
     if let Some(ref r_txt) = notice.reason {
-        if r_txt.len() > 200 || r_txt.contains('\n') || r_txt.contains('\r') || r_txt.contains('\0')
-        {
+        if r_txt.len() > 200 || r_txt.chars().any(|c| c.is_control()) {
             return Err("Revocation notice contains invalid reason".to_string());
         }
     }
     if let Some(ref rep) = notice.replacement {
-        validate_sync_url(&rep.write_url)?;
-        validate_sync_url(&rep.read_url)?;
-        if rep.drop_pub.len() != 64 || !rep.drop_pub.chars().all(|c| c.is_ascii_hexdigit()) {
-            return Err("Revocation notice contains invalid replacement drop_pub".to_string());
+        if has_outer_ws_or_control(&rep.write_url)
+            || has_outer_ws_or_control(&rep.read_url)
+            || has_outer_ws_or_control(&rep.drop_pub)
+        {
+            return Err(
+                "Revocation notice replacement contains invalid whitespace or control chars"
+                    .to_string(),
+            );
         }
+        validate_sync_url(&rep.write_url)?;
+        validate_sync_read_url(&rep.read_url)?;
+        parse_ed25519_pubkey_strict(&rep.drop_pub)
+            .map_err(|_| "Revocation notice contains invalid replacement drop_pub".to_string())?;
     }
-    let pk_bytes: [u8; 32] = hex::decode(&expected)
-        .map_err(|_| "Invalid drop_pub hex".to_string())?
-        .try_into()
-        .map_err(|_| "Invalid drop_pub length".to_string())?;
-    let vk =
-        VerifyingKey::from_bytes(&pk_bytes).map_err(|_| "Invalid Ed25519 drop_pub".to_string())?;
-    let sig_bytes: [u8; 64] = hex::decode(notice.signature.trim())
-        .map_err(|_| "Invalid signature hex".to_string())?
-        .try_into()
-        .map_err(|_| "Invalid signature length".to_string())?;
+    let sig_bytes = decode_hex_fixed::<64>(&notice.signature)
+        .map_err(|_| "Invalid revocation notice signature hex".to_string())?;
     let sig = Signature::from_bytes(&sig_bytes);
 
     let canonical = canonical_revocation_message(
@@ -378,7 +413,7 @@ pub fn verify_revocation_notice(
         notice.replacement.as_ref(),
         notice.reason.as_deref(),
     );
-    vk.verify(canonical.as_bytes(), &sig)
+    vk.verify_strict(canonical.as_bytes(), &sig)
         .map_err(|_| "Invalid revocation notice Ed25519 signature".to_string())
 }
 
@@ -398,10 +433,13 @@ pub async fn fetch_revocation_notice(
         return Ok(None);
     }
     let resp = map_unexpected_status(resp, "fetching revocation.json").await?;
-    let notice: SyncRevocationNotice = resp
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse revocation.json: {}", e))?;
+    let notice: SyncRevocationNotice = read_response_json_bounded(
+        resp,
+        MAX_JSON_META_BODY_BYTES,
+        "fetching revocation.json",
+        "Failed to parse revocation.json",
+    )
+    .await?;
     verify_revocation_notice(&notice, expected_drop_pub)?;
     Ok(Some(notice))
 }
@@ -452,8 +490,10 @@ pub async fn push_lock_delegation(
     if validate_sync_url(&clean_write).is_err() || validate_sync_read_url(&clean_read).is_err() {
         return Err("Invalid write_url or read_url for lock delegation".to_string());
     }
-    let admin_pub = hex::encode(admin_sk.verifying_key().as_bytes());
     let lock_pub = lock_pub_hex.trim().to_ascii_lowercase();
+    parse_ed25519_pubkey_strict(&lock_pub)
+        .map_err(|_| "Invalid Ed25519 lock_pub for lock delegation".to_string())?;
+    let admin_pub = hex::encode(admin_sk.verifying_key().as_bytes());
     let msg = humoco_market::format_lock_delegate_signature_message(
         &admin_pub,
         &lock_pub,
@@ -484,9 +524,13 @@ pub async fn push_lock_delegation(
     .body(body_json);
 
     let resp = send_sync_request(req, "pushing lock delegation").await?;
-    resp.json()
-        .await
-        .map_err(|e| format!("Failed to parse lock delegation response JSON: {}", e))
+    read_response_json_bounded(
+        resp,
+        MAX_JSON_META_BODY_BYTES,
+        "pushing lock delegation",
+        "Failed to parse lock delegation response JSON",
+    )
+    .await
 }
 
 fn loopback_sync_allowed() -> bool {
@@ -507,6 +551,7 @@ fn is_blocked_v4(v4: std::net::Ipv4Addr, allow_loopback: bool) -> bool {
         || (o[0] == 100 && (o[1] & 0b1100_0000) == 64)
         || (o[0] == 192 && o[1] == 0 && o[2] == 0)
         || (o[0] == 192 && o[1] == 0 && o[2] == 2)
+        || (o[0] == 192 && o[1] == 88 && o[2] == 99)
         || (o[0] == 198 && (o[1] & 0b1111_1110) == 18)
         || (o[0] == 198 && o[1] == 51 && o[2] == 100)
         || (o[0] == 203 && o[1] == 0 && o[2] == 113)
@@ -538,19 +583,16 @@ pub(crate) fn is_blocked_ip(ip: std::net::IpAddr, allow_loopback: bool) -> bool 
             if v6.is_loopback() {
                 !allow_loopback
             } else {
-                v6.is_unspecified()
-                    || v6.is_multicast()
-                    || (seg[0] == 0x0064 && seg[1] == 0xff9b && seg[2] == 0x0001) // NAT64 local-use 64:ff9b:1::/48
-                    || (seg[0] & 0xfe00) == 0xfc00
-                    || (seg[0] & 0xffc0) == 0xfe80
-                    || (seg[0] & 0xffc0) == 0xfec0 // Site-local
-                    || seg[0] == 0x2002 // 6to4
-                    || (seg[0] == 0x2001 && seg[1] == 0x0000) // Teredo
-                    || (seg[0] == 0x0100 && seg[1..4] == [0, 0, 0]) // Discard-Only 100::/64
-                    || (seg[0] == 0x2001 && seg[1] == 0x0002 && seg[2] == 0) // Benchmarking
-                    || (seg[0] == 0x2001 && ((seg[1] & 0xfff0) == 0x0010 || (seg[1] & 0xfff0) == 0x0020)) // ORCHID
-                    || (seg[0] == 0x2001 && seg[1] == 0x0db8)
-                    || (seg[0] == 0x3fff && seg[1] < 0x1000) // Documentation 3fff::/20
+                let is_global_unicast = (seg[0] & 0xe000) == 0x2000;
+                if !is_global_unicast {
+                    return true;
+                }
+                // Block non-global / special-purpose sub-ranges inside 2000::/3:
+                // 2001::/23 (Teredo, IETF protocol assignments, Benchmarking, ORCHID),
+                // 2001:db8::/32 (Documentation), 2002::/16 (6to4), 3fff::/20 (Documentation)
+                (seg[0] == 0x2001 && ((seg[1] & 0xfe00) == 0x0000 || seg[1] == 0x0db8))
+                    || seg[0] == 0x2002
+                    || (seg[0] == 0x3fff && seg[1] < 0x1000)
             }
         }
     }
@@ -686,6 +728,7 @@ pub fn create_sync_http_client() -> reqwest::Client {
         .dns_resolver(std::sync::Arc::new(SsrfSafeDnsResolver::new(
             loopback_sync_allowed(),
         )))
+        .connect_timeout(std::time::Duration::from_secs(5))
         .timeout(std::time::Duration::from_secs(15))
         .build()
         .expect("failed to build SSRF-safe sync HTTP client")
@@ -697,6 +740,7 @@ pub fn create_sync_probe_client() -> reqwest::Client {
         .dns_resolver(std::sync::Arc::new(SsrfSafeDnsResolver::new(
             loopback_sync_allowed(),
         )))
+        .connect_timeout(std::time::Duration::from_secs(4))
         .timeout(std::time::Duration::from_secs(6))
         .build()
         .expect("failed to build SSRF-safe sync probe HTTP client")
@@ -715,19 +759,32 @@ pub fn current_unix_timestamp() -> u64 {
         .as_secs()
 }
 
+fn normalize_etag_token(raw: &str) -> Option<String> {
+    let s = raw.trim();
+    let s = s
+        .strip_prefix("W/")
+        .or_else(|| s.strip_prefix("w/"))
+        .unwrap_or(s)
+        .trim();
+    let s = s.trim_matches('"').trim();
+    if s.is_empty() || s.chars().any(|c| c.is_control() || c == '"') {
+        return None;
+    }
+    Some(s.to_string())
+}
+
 pub fn extract_etag(headers: &reqwest::header::HeaderMap) -> Option<String> {
     headers
         .get(reqwest::header::ETAG)
         .and_then(|v| v.to_str().ok())
-        .map(|s| s.trim().trim_matches('"').to_string())
-        .filter(|s| !s.is_empty())
+        .and_then(normalize_etag_token)
 }
 
 pub fn parse_retry_after(headers: &reqwest::header::HeaderMap) -> u64 {
     if let Some(val) = headers.get(reqwest::header::RETRY_AFTER) {
         if let Ok(s) = val.to_str() {
             if let Ok(secs) = s.trim().parse::<u64>() {
-                return secs;
+                return secs.clamp(MIN_RETRY_AFTER_SECS, MAX_RETRY_AFTER_SECS);
             }
         }
     }
@@ -735,18 +792,26 @@ pub fn parse_retry_after(headers: &reqwest::header::HeaderMap) -> u64 {
 }
 
 pub fn extract_retry_after_from_error_str(err: &str) -> Option<u64> {
-    if let Some(pos) = err.find("Retry-After:") {
-        let after = &err[pos + "Retry-After:".len()..];
+    if err.starts_with("Server returned HTTP ") && !err.starts_with("Server returned HTTP 429") {
+        return None;
+    }
+    if err.starts_with("Lock server ")
+        && err.contains(" returned HTTP ")
+        && !err.contains(" returned HTTP 429")
+    {
+        return None;
+    }
+    let http429_pos = err.find("HTTP 429")?;
+    let tail = &err[http429_pos..];
+    if let Some(pos) = tail.find("Retry-After:") {
+        let after = &tail[pos + "Retry-After:".len()..];
         let trimmed = after.trim_start();
         let num_str: String = trimmed.chars().take_while(|c| c.is_ascii_digit()).collect();
         if let Ok(secs) = num_str.parse::<u64>() {
-            return Some(secs);
+            return Some(secs.clamp(MIN_RETRY_AFTER_SECS, MAX_RETRY_AFTER_SECS));
         }
     }
-    if err.contains("429") {
-        return Some(60);
-    }
-    None
+    Some(60)
 }
 
 /// Validates `url` against SSRF rules and returns the trimmed slice.
@@ -762,9 +827,48 @@ fn append_sync_query(base_url: &str, query: &str) -> Result<String, String> {
     Ok(format!("{}{}{}", clean, sep, query))
 }
 
-/// Validates `base_url` against SSRF rules and appends a relative path segment.
+fn is_lower_hex_exact(s: &str, len: usize) -> bool {
+    s.len() == len && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+fn is_valid_sync_channel(channel: &str) -> bool {
+    !channel.is_empty()
+        && channel.len() <= 32
+        && channel
+            .bytes()
+            .all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'_'))
+}
+
+fn validate_static_lock_rel_path(rel_path: &str) -> Result<String, String> {
+    let clean_rel = rel_path.trim().trim_start_matches('/');
+    let clean_rel = clean_rel.strip_prefix("locks/").unwrap_or(clean_rel);
+    if clean_rel.is_empty()
+        || clean_rel.len() > 256
+        || !clean_rel.ends_with(".lock")
+        || clean_rel
+            .chars()
+            .any(|c| c.is_control() || c.is_whitespace() || matches!(c, '?' | '#' | '\\' | '%'))
+    {
+        return Err(format!("Invalid static lock path '{}'", rel_path));
+    }
+    for seg in clean_rel.split('/') {
+        if seg.is_empty()
+            || seg == "."
+            || seg == ".."
+            || !seg
+                .bytes()
+                .all(|b| matches!(b, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'.' | b'_' | b'-'))
+        {
+            return Err(format!("Invalid static lock path '{}'", rel_path));
+        }
+    }
+    Ok(clean_rel.to_string())
+}
+
+/// Validates `base_url` as a read URL (no query string) and appends a relative path segment.
 fn append_sync_path(base_url: &str, path: &str) -> Result<String, String> {
-    let clean = validated_sync_url(base_url)?.trim_end_matches('/');
+    validate_sync_read_url(base_url)?;
+    let clean = base_url.trim().trim_end_matches('/');
     let rel = path.trim_start_matches('/');
     Ok(format!("{}/{}", clean, rel))
 }
@@ -816,6 +920,84 @@ fn parse_header<T: std::str::FromStr>(
         .and_then(|s| s.trim().parse::<T>().ok())
 }
 
+/// Reads an HTTP response body up to `max_bytes`, failing closed on oversized `Content-Length`
+/// or streaming chunks exceeding the cap.
+async fn read_response_bytes_bounded(
+    mut resp: reqwest::Response,
+    max_bytes: usize,
+    op: &str,
+) -> Result<Vec<u8>, String> {
+    if let Some(len) = resp.content_length() {
+        if len > max_bytes as u64 {
+            return Err(format!(
+                "Response body {} exceeds maximum allowed size ({} bytes)",
+                op, max_bytes
+            ));
+        }
+    }
+    let initial_cap = resp
+        .content_length()
+        .map(|l| (l as usize).min(max_bytes).min(64 * 1024))
+        .unwrap_or(0);
+    let mut buf = Vec::with_capacity(initial_cap);
+    while let Some(chunk) = resp
+        .chunk()
+        .await
+        .map_err(|e| format!("Failed reading response {}: {}", op, e))?
+    {
+        if buf.len().saturating_add(chunk.len()) > max_bytes {
+            return Err(format!(
+                "Response body {} exceeds maximum allowed size ({} bytes)",
+                op, max_bytes
+            ));
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    Ok(buf)
+}
+
+/// Streams a bounded HTTP response body up to `max_bytes` and parses it as JSON.
+async fn read_response_json_bounded<T: serde::de::DeserializeOwned>(
+    resp: reqwest::Response,
+    max_bytes: usize,
+    op: &str,
+    parse_ctx: &str,
+) -> Result<T, String> {
+    let bytes = read_response_bytes_bounded(resp, max_bytes, op).await?;
+    serde_json::from_slice(&bytes).map_err(|e| format!("{}: {}", parse_ctx, e))
+}
+
+/// Sanitizes an untrusted error snippet by stripping control chars, collapsing whitespace, and
+/// bounding length to `MAX_ERROR_DETAIL_CHARS`.
+fn sanitize_error_snippet(bytes: &[u8]) -> String {
+    let raw = String::from_utf8_lossy(bytes);
+    let cleaned: String = raw
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    let collapsed = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
+    collapsed.chars().take(MAX_ERROR_DETAIL_CHARS).collect()
+}
+
+/// Reads at most `max_bytes` from an error HTTP response and sanitizes the snippet for logs/UI.
+async fn read_error_snippet_bounded(mut resp: reqwest::Response, max_bytes: usize) -> String {
+    let mut buf = Vec::new();
+    while buf.len() < max_bytes {
+        match resp.chunk().await {
+            Ok(Some(chunk)) => {
+                let remaining = max_bytes - buf.len();
+                let take = chunk.len().min(remaining);
+                buf.extend_from_slice(&chunk[..take]);
+                if chunk.len() > remaining {
+                    break;
+                }
+            }
+            Ok(None) | Err(_) => break,
+        }
+    }
+    sanitize_error_snippet(&buf)
+}
+
 /// Formats an HTTP 429 rate-limit error string including the `Retry-After` duration.
 fn rate_limit_error(op: &str, headers: &reqwest::header::HeaderMap) -> String {
     let secs = parse_retry_after(headers);
@@ -828,8 +1010,7 @@ async fn error_from_response(resp: reqwest::Response, op: &str) -> String {
     if status.as_u16() == 429 {
         return rate_limit_error(op, resp.headers());
     }
-    let text = resp.text().await.unwrap_or_default();
-    let detail = text.trim();
+    let detail = read_error_snippet_bounded(resp, MAX_ERROR_BODY_BYTES).await;
     if detail.is_empty() {
         format!("Server returned HTTP {} {}", status, op)
     } else {
@@ -881,13 +1062,14 @@ async fn handle_put_slot_response(
     match resp.status().as_u16() {
         200 | 201 | 204 => {
             let header_etag = extract_etag(resp.headers());
-            let body_bytes = resp.bytes().await.unwrap_or_default();
+            let body_bytes = read_response_bytes_bounded(resp, MAX_JSON_META_BODY_BYTES, op)
+                .await
+                .unwrap_or_default();
             let parsed_json = serde_json::from_slice::<serde_json::Value>(&body_bytes).ok();
             let body_etag = parsed_json
                 .as_ref()
                 .and_then(|v| v.get("etag").and_then(|e| e.as_str()))
-                .map(|s| s.trim().trim_matches('"').to_string())
-                .filter(|s| !s.is_empty());
+                .and_then(normalize_etag_token);
             let slot_ack = parsed_json
                 .as_ref()
                 .and_then(|v| v.get("slot_ack"))
@@ -932,10 +1114,13 @@ pub async fn fetch_sync_info(
     )
     .await?;
 
-    let mut info: SyncServerInfo = resp
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse sync info JSON: {}", e))?;
+    let mut info: SyncServerInfo = read_response_json_bounded(
+        resp,
+        MAX_JSON_META_BODY_BYTES,
+        "fetching sync info",
+        "Failed to parse sync info JSON",
+    )
+    .await?;
 
     info.register_url = info
         .register_url
@@ -954,13 +1139,18 @@ pub async fn head_slot_capability(
     channel: &str,
 ) -> Result<SyncCapabilityResult, String> {
     let clean_url = validated_sync_url(write_url)?;
+    if !is_valid_sync_channel(channel) {
+        return Err(format!("Invalid sync channel '{}'", channel));
+    }
+    let clean_prefix = humoco_market::validate_sync_prefix(prefix)
+        .map_err(|e| format!("Invalid slot prefix: {}", e))?;
 
     let mut req = client
         .head(clean_url)
         .header("X-Drop-Pubkey", pubkey_hex64)
         .header("X-Channel", channel);
 
-    if let Some(p) = prefix.filter(|s| !s.is_empty()) {
+    if let Some(p) = clean_prefix.as_deref() {
         req = req.header("X-Drop-Prefix", p);
     }
 
@@ -1008,6 +1198,9 @@ pub async fn put_slot(
     if_match: Option<&str>,
 ) -> Result<PutSlotOutcome, String> {
     let clean_url = validated_sync_url(write_url)?;
+    if !is_valid_sync_channel(channel) {
+        return Err(format!("Invalid sync channel '{}'", channel));
+    }
     let mut req = apply_signed_headers(client.put(clean_url), signed_headers, true)
         .header("X-Channel", channel)
         .header("Content-Type", "application/octet-stream");
@@ -1016,7 +1209,9 @@ pub async fn put_slot(
         if im == "none" {
             req = req.header("If-Match", "none");
         } else {
-            req = req.header("If-Match", format!("\"{}\"", im.trim_matches('"')));
+            let clean =
+                normalize_etag_token(im).ok_or_else(|| "Invalid If-Match ETag".to_string())?;
+            req = req.header("If-Match", format!("\"{}\"", clean));
         }
     }
 
@@ -1036,6 +1231,9 @@ pub async fn delete_slot(
     channel: &str,
 ) -> Result<(), String> {
     let clean_url = validated_sync_url(write_url)?;
+    if !is_valid_sync_channel(channel) {
+        return Err(format!("Invalid sync channel '{}'", channel));
+    }
     let req = apply_signed_headers(client.delete(clean_url), signed_headers, true)
         .header("X-Channel", channel);
     send_delete_request(req, "deleting slot").await
@@ -1059,6 +1257,12 @@ pub async fn put_media_blob(
     blob_bytes: &[u8],
 ) -> Result<PutSlotOutcome, String> {
     let clean_url = validated_sync_url(write_url)?;
+    if !is_lower_hex_exact(blob_id, 64) {
+        return Err(format!(
+            "Invalid blob_id '{}': expected 64 lowercase hex chars",
+            blob_id
+        ));
+    }
     let resp = apply_signed_headers(client.put(clean_url), signed_headers, false)
         .header("X-Channel", "media")
         .header("X-Media-Id", blob_id)
@@ -1078,6 +1282,14 @@ pub async fn delete_media_blob(
     blob_id: Option<&str>,
 ) -> Result<(), String> {
     let clean_url = validated_sync_url(write_url)?;
+    if let Some(id) = blob_id {
+        if !is_lower_hex_exact(id, 64) {
+            return Err(format!(
+                "Invalid blob_id '{}': expected 64 lowercase hex chars",
+                id
+            ));
+        }
+    }
     let mut req = apply_signed_headers(client.delete(clean_url), signed_headers, false)
         .header("X-Channel", "media");
     if let Some(id) = blob_id {
@@ -1093,6 +1305,9 @@ pub async fn push_members(
     channel: &str,
     pubkeys: &[String],
 ) -> Result<(), String> {
+    if !is_valid_sync_channel(channel) {
+        return Err(format!("Invalid sync channel '{}'", channel));
+    }
     let url = append_sync_query(write_url, &format!("members&channel={}", channel))?;
     let body_json = serde_json::to_string(&serde_json::json!({ "pubkeys": pubkeys }))
         .map_err(|e| format!("Failed to serialize members payload: {}", e))?;
@@ -1119,9 +1334,13 @@ pub async fn fetch_admin_status(
     let url = append_sync_query(write_url, "status")?;
     let req = apply_admin_headers(client.get(&url), admin_sk, "STATUS", "", b"");
     let resp = send_sync_request(req, "fetching admin status").await?;
-    resp.json()
-        .await
-        .map_err(|e| format!("Failed to parse admin status JSON: {}", e))
+    read_response_json_bounded(
+        resp,
+        MAX_JSON_META_BODY_BYTES,
+        "fetching admin status",
+        "Failed to parse admin status JSON",
+    )
+    .await
 }
 
 pub async fn put_admin_config(
@@ -1151,9 +1370,13 @@ pub async fn put_admin_config(
     .body(body_json);
 
     let resp = send_sync_request(req, "pushing admin_config").await?;
-    resp.json()
-        .await
-        .map_err(|e| format!("Failed to parse admin_config response JSON: {}", e))
+    read_response_json_bounded(
+        resp,
+        MAX_JSON_META_BODY_BYTES,
+        "pushing admin_config",
+        "Failed to parse admin_config response JSON",
+    )
+    .await
 }
 
 pub async fn list_index(
@@ -1164,10 +1387,13 @@ pub async fn list_index(
 ) -> Result<IndexFetchResult, String> {
     let url = append_sync_path(read_url, "index.json")?;
     let mut req = client.get(&url);
-    if let Some(etag) = cached_etag {
-        req = req.header("If-None-Match", etag);
+    if let Some(etag) = cached_etag.and_then(normalize_etag_token) {
+        req = req.header("If-None-Match", format!("\"{}\"", etag));
     }
-    if let Some(lm) = cached_last_modified {
+    if let Some(lm) = cached_last_modified
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && !s.chars().any(|c| c.is_control()))
+    {
         req = req.header("If-Modified-Since", lm);
     }
 
@@ -1196,10 +1422,13 @@ pub async fn list_index(
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string());
 
-    let entries: Vec<SyncIndexEntry> = resp
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse index.json: {}", e))?;
+    let entries: Vec<SyncIndexEntry> = read_response_json_bounded(
+        resp,
+        MAX_INDEX_JSON_BODY_BYTES,
+        "fetching index",
+        "Failed to parse index.json",
+    )
+    .await?;
 
     Ok(IndexFetchResult::Modified {
         entries,
@@ -1216,17 +1445,25 @@ pub async fn get_slot(
     channel: &str,
     cached_etag: Option<&str>,
 ) -> Result<SlotFetchResult, String> {
-    let slot_key = match prefix.filter(|s| !s.is_empty()) {
+    if !is_lower_hex_exact(id, 64) {
+        return Err(format!(
+            "Invalid slot id '{}': expected 64 lowercase hex chars",
+            id
+        ));
+    }
+    let clean_prefix = humoco_market::validate_sync_prefix(prefix)
+        .map_err(|e| format!("Invalid slot prefix: {}", e))?;
+    if !is_valid_sync_channel(channel) {
+        return Err(format!("Invalid sync channel '{}'", channel));
+    }
+    let slot_key = match clean_prefix.as_deref() {
         Some(p) => format!("{}_{}", id, p),
         None => id.to_string(),
     };
     let url = append_sync_path(read_url, &format!("{}.{}.bin", slot_key, channel))?;
 
     let mut req = client.get(&url);
-    if let Some(etag) = cached_etag
-        .map(|s| s.trim().trim_matches('"'))
-        .filter(|s| !s.is_empty())
-    {
+    if let Some(etag) = cached_etag.and_then(normalize_etag_token) {
         req = req.header("If-None-Match", format!("\"{}\"", etag));
     }
 
@@ -1243,15 +1480,11 @@ pub async fn get_slot(
 
     let resp = map_unexpected_status(resp, &format!("fetching slot {}", id)).await?;
     let etag = extract_etag(resp.headers());
-    let bytes = resp
-        .bytes()
+    let bytes = read_response_bytes_bounded(resp, MAX_SLOT_BLOB_BODY_BYTES, "reading slot bytes")
         .await
         .map_err(|e| format!("Failed to read slot bytes: {}", e))?;
 
-    Ok(SlotFetchResult::Modified {
-        bytes: bytes.to_vec(),
-        etag,
-    })
+    Ok(SlotFetchResult::Modified { bytes, etag })
 }
 
 pub async fn get_media_blob(
@@ -1351,16 +1584,23 @@ pub fn verify_lock_delegation(
     delegation: &SyncLockDelegationDto,
     expected_admin_pub: Option<&str>,
 ) -> bool {
-    if delegation.issued_at == 0 {
+    if delegation.issued_at == 0
+        || has_outer_ws_or_control(&delegation.write_url)
+        || has_outer_ws_or_control(&delegation.read_url)
+        || has_outer_ws_or_control(&delegation.lock_pub)
+        || has_outer_ws_or_control(&delegation.admin_pub)
+        || has_outer_ws_or_control(&delegation.sig)
+    {
         return false;
     }
-    let write_url = delegation.write_url.trim();
-    let read_url = delegation.read_url.trim();
-    if validate_sync_url(write_url).is_err() || validate_sync_url(read_url).is_err() {
+    if validate_sync_url(&delegation.write_url).is_err()
+        || validate_sync_read_url(&delegation.read_url).is_err()
+        || parse_ed25519_pubkey_strict(&delegation.lock_pub).is_err()
+    {
         return false;
     }
-    let lock_lower = delegation.lock_pub.trim().to_ascii_lowercase();
-    let admin_lower = delegation.admin_pub.trim().to_ascii_lowercase();
+    let lock_lower = delegation.lock_pub.to_ascii_lowercase();
+    let admin_lower = delegation.admin_pub.to_ascii_lowercase();
     if lock_lower != info_lock_pub.trim().to_ascii_lowercase() {
         return false;
     }
@@ -1372,8 +1612,8 @@ pub fn verify_lock_delegation(
     let msg = humoco_market::format_lock_delegate_signature_message(
         &admin_lower,
         &lock_lower,
-        write_url,
-        read_url,
+        &delegation.write_url,
+        &delegation.read_url,
         delegation.issued_at,
     );
     verify_ed25519_hex_strict(&admin_lower, &delegation.sig, msg.as_bytes())
@@ -1532,7 +1772,9 @@ pub async fn probe_lock_server(
     let lock_pub = lock_info.lock_pub.trim().to_ascii_lowercase();
     failed.lock_pub = lock_pub.clone();
     failed.max_retention_quarter = lock_info.max_retention_quarter;
-    failed.pow_base_bits = lock_info.pow_base_bits;
+    failed.pow_base_bits = lock_info
+        .pow_base_bits
+        .min(human_money_core::humoco_proto::crypto::MAX_LOCK_POW_BITS);
     failed.allow_pow_tickets = lock_info.allow_pow_tickets;
     failed.ticket_pow_bits = lock_info
         .ticket_pow_bits
@@ -1570,7 +1812,14 @@ pub async fn probe_lock_server(
         });
         if let Ok(resp) = client.post(&lock_url).json(&probe_body).send().await {
             if resp.status().is_success() {
-                if let Ok(parsed) = resp.json::<SyncLockProbeResponseDto>().await {
+                if let Ok(parsed) = read_response_json_bounded::<SyncLockProbeResponseDto>(
+                    resp,
+                    MAX_JSON_META_BODY_BYTES,
+                    "probing lock server",
+                    "Failed to parse lock probe response",
+                )
+                .await
+                {
                     failed.waf_probe_passed =
                         verify_lock_probe_response(&lock_pub, &client_nonce, &parsed);
                 }
@@ -1581,7 +1830,14 @@ pub async fn probe_lock_server(
     if let Ok(selftest_url) = append_sync_query(&clean_write_url, "lock_selftest") {
         if let Ok(resp) = client.get(&selftest_url).send().await {
             if resp.status().is_success() {
-                if let Ok(report) = resp.json::<SyncLockSelftestReportDto>().await {
+                if let Ok(report) = read_response_json_bounded::<SyncLockSelftestReportDto>(
+                    resp,
+                    MAX_JSON_META_BODY_BYTES,
+                    "fetching lock selftest",
+                    "Failed to parse lock selftest report",
+                )
+                .await
+                {
                     failed.selftest_passed = verify_lock_selftest(&lock_pub, &report);
                 }
             }
@@ -1638,6 +1894,13 @@ impl Drop for CancelFlagDropGuard {
     }
 }
 
+fn next_pow_start_nonce() -> u64 {
+    let mut start_bytes = [0u8; 8];
+    rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut start_bytes);
+    // Keep start_nonce + max_total well below i64::MAX so PHP json_decode parses pow_nonce as int.
+    u64::from_le_bytes(start_bytes) & POW_START_NONCE_MASK
+}
+
 pub async fn request_genesis_ticket(
     client: &reqwest::Client,
     write_url: &str,
@@ -1658,9 +1921,7 @@ pub async fn request_genesis_ticket(
             let aid = *anchor_id;
             let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
             let _cancel_guard = CancelFlagDropGuard(cancel.clone());
-            let mut start_bytes = [0u8; 8];
-            rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut start_bytes);
-            let start_nonce = u64::from_le_bytes(start_bytes);
+            let start_nonce = next_pow_start_nonce();
             let max_total = if bits <= 18 {
                 2_000_000u64
             } else {
@@ -1751,10 +2012,13 @@ pub async fn request_genesis_ticket(
     )
     .await?;
 
-    let parsed: GenesisTicketResponse = resp
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse GenesisTicket JSON: {}", e))?;
+    let parsed: GenesisTicketResponse = read_response_json_bounded(
+        resp,
+        MAX_JSON_META_BODY_BYTES,
+        "parsing GenesisTicket",
+        "Failed to parse GenesisTicket JSON",
+    )
+    .await?;
     if !parsed.ticket.verify()
         || parsed.ticket.lock_pub != expected_lock_pub
         || parsed.ticket.anchor_id != *anchor_id
@@ -1789,15 +2053,14 @@ pub async fn post_lock_batch(
         ));
     }
 
-    let text = resp.text().await.map_err(|e| {
-        format!(
-            "Failed reading lock batch response from {}: {}",
-            write_url, e
-        )
-    })?;
-
     if status_code == 410 {
-        let notice = serde_json::from_str::<serde_json::Value>(&text)
+        let bytes = read_response_bytes_bounded(
+            resp,
+            MAX_LOCK_BATCH_BODY_BYTES,
+            &format!("reading lock batch response from {}", write_url),
+        )
+        .await?;
+        let notice = serde_json::from_slice::<serde_json::Value>(&bytes)
             .ok()
             .and_then(|v| v.get("revocation").cloned())
             .and_then(|rv| serde_json::from_value::<SyncRevocationNotice>(rv).ok());
@@ -1808,7 +2071,13 @@ pub async fn post_lock_batch(
     }
 
     if status_code == 200 || status_code == 201 || status_code == 409 {
-        let val: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
+        let bytes = read_response_bytes_bounded(
+            resp,
+            MAX_LOCK_BATCH_BODY_BYTES,
+            &format!("reading lock batch response from {}", write_url),
+        )
+        .await?;
+        let val: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| {
             format!(
                 "Invalid JSON in lock batch response (HTTP {}): {}",
                 status_code, e
@@ -1825,8 +2094,8 @@ pub async fn post_lock_batch(
         let err_msg = val
             .get("error")
             .and_then(|v| v.as_str())
-            .unwrap_or(text.trim())
-            .to_string();
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| sanitize_error_snippet(&bytes));
         if status_code == 409 && err_msg == "epoch_frozen" {
             let latest_manifest = val
                 .get("latest_manifest")
@@ -1844,11 +2113,10 @@ pub async fn post_lock_batch(
         });
     }
 
+    let detail = read_error_snippet_bounded(resp, MAX_ERROR_BODY_BYTES).await;
     Err(format!(
         "Lock server {} returned HTTP {}: {}",
-        write_url,
-        status_code,
-        text.trim()
+        write_url, status_code, detail
     ))
 }
 
@@ -1857,9 +2125,19 @@ pub async fn get_lock_freeze_status(
     write_url: &str,
     anchor_id_hex: &str,
 ) -> Result<Option<LockFreezeStatusDto>, String> {
+    let trimmed_anchor = anchor_id_hex.trim();
+    if trimmed_anchor != anchor_id_hex
+        || trimmed_anchor
+            .chars()
+            .any(|c| c.is_control() || c.is_whitespace())
+    {
+        return Err("Invalid anchor_id hex".to_string());
+    }
+    let aid = decode_hex_fixed::<32>(trimmed_anchor)
+        .map_err(|e| format!("Invalid anchor_id hex: {}", e))?;
     let url = append_sync_query(
         write_url,
-        &format!("lock_freeze&anchor_id={}", anchor_id_hex.trim()),
+        &format!("lock_freeze&anchor_id={}", hex::encode(aid)),
     )?;
     let resp = client.get(&url).send().await.map_err(|e| {
         format!(
@@ -1872,10 +2150,13 @@ pub async fn get_lock_freeze_status(
     }
     let resp =
         map_unexpected_status(resp, &format!("querying ?lock_freeze on {}", write_url)).await?;
-    let parsed: LockFreezeStatusDto = resp
-        .json()
-        .await
-        .map_err(|e| format!("Invalid ?lock_freeze status JSON: {}", e))?;
+    let parsed: LockFreezeStatusDto = read_response_json_bounded(
+        resp,
+        MAX_FREEZE_JSON_BODY_BYTES,
+        "querying ?lock_freeze",
+        "Invalid ?lock_freeze status JSON",
+    )
+    .await?;
     Ok(Some(parsed))
 }
 
@@ -1892,9 +2173,13 @@ pub async fn post_lock_freeze_action(
         &format!("posting ?lock_freeze to {}", write_url),
     )
     .await?;
-    resp.json()
-        .await
-        .map_err(|e| format!("Invalid POST ?lock_freeze response JSON: {}", e))
+    read_response_json_bounded(
+        resp,
+        MAX_FREEZE_JSON_BODY_BYTES,
+        "posting ?lock_freeze",
+        "Invalid POST ?lock_freeze response JSON",
+    )
+    .await
 }
 
 #[derive(Deserialize)]
@@ -1926,10 +2211,13 @@ pub async fn post_lock_import(
         &format!("posting ?lock_import to {}", write_url),
     )
     .await?;
-    let parsed: LockImportResponseDto = resp
-        .json()
-        .await
-        .map_err(|e| format!("Invalid ?lock_import response JSON: {}", e))?;
+    let parsed: LockImportResponseDto = read_response_json_bounded(
+        resp,
+        MAX_JSON_META_BODY_BYTES,
+        "posting ?lock_import",
+        "Invalid ?lock_import response JSON",
+    )
+    .await?;
     if parsed.import_ack.anchor_id != *anchor_id || !parsed.import_ack.verify() {
         return Err("Returned ImportAck failed signature or anchor_id verification".to_string());
     }
@@ -1964,10 +2252,13 @@ pub async fn post_lock_commit_sign(
         &format!("posting ?lock_commit sign_commit to {}", write_url),
     )
     .await?;
-    let parsed: LockCommitSignResponseDto = resp
-        .json()
-        .await
-        .map_err(|e| format!("Invalid ?lock_commit response JSON: {}", e))?;
+    let parsed: LockCommitSignResponseDto = read_response_json_bounded(
+        resp,
+        MAX_JSON_META_BODY_BYTES,
+        "posting ?lock_commit",
+        "Invalid ?lock_commit response JSON",
+    )
+    .await?;
     let prop_hash = proposal.core_digest()?;
     let digest =
         MigrationCert::commit_digest(anchor_id, &prop_hash, proposal.to_rev, imported_state_hash);
@@ -2007,29 +2298,44 @@ pub fn anchor_manifest_candidate_urls(
     base_url: &str,
     anchor_hex: &str,
 ) -> Result<Vec<String>, String> {
+    if !is_lower_hex_exact(anchor_hex, 64) {
+        return Err(format!(
+            "Invalid anchor_hex '{}': expected 64 lowercase hex chars",
+            anchor_hex
+        ));
+    }
     let trimmed = validated_sync_url(base_url)?.trim_end_matches('/');
+    let parsed = reqwest::Url::parse(trimmed)
+        .map_err(|e| format!("Invalid Sync URL '{}': {}", base_url, e))?;
+    let Some(host) = parsed.host_str() else {
+        return Err(format!("Sync URL missing host: '{}'", base_url));
+    };
+    let port_part = parsed.port().map(|p| format!(":{}", p)).unwrap_or_default();
+    let origin = format!("{}://{}{}", parsed.scheme(), host, port_part);
+    let path_trimmed = parsed.path().trim_end_matches('/');
     let mut urls = Vec::new();
-    if trimmed.ends_with("/sync.php") || trimmed.ends_with("/sync") {
-        let root = trimmed
+    if path_trimmed.ends_with("/sync.php") || path_trimmed.ends_with("/sync") {
+        let parent = path_trimmed
             .rsplit_once('/')
             .map(|(prefix, _)| prefix)
-            .unwrap_or(trimmed);
-        urls.push(format!("{}/anchors/{}.bin", root, anchor_hex));
+            .unwrap_or("");
+        urls.push(format!("{}{}/anchors/{}.bin", origin, parent, anchor_hex));
     } else {
-        let read_base = normalize_lock_read_base(trimmed);
-        urls.push(format!("{}/anchors/{}.bin", read_base, anchor_hex));
-        if let Ok(parsed) = reqwest::Url::parse(&read_base) {
-            if let Some(host) = parsed.host_str() {
-                let port_part = parsed.port().map(|p| format!(":{}", p)).unwrap_or_default();
-                urls.push(format!(
-                    "{}://{}{}/anchors/{}.bin",
-                    parsed.scheme(),
-                    host,
-                    port_part,
-                    anchor_hex
-                ));
-            }
+        if parsed.query().is_some() {
+            return Err(format!(
+                "Sync read URL must not contain a query string: '{}'",
+                base_url
+            ));
         }
+        let read_path = path_trimmed
+            .strip_suffix("/locks")
+            .unwrap_or(path_trimmed)
+            .trim_end_matches('/');
+        urls.push(format!(
+            "{}{}/anchors/{}.bin",
+            origin, read_path, anchor_hex
+        ));
+        urls.push(format!("{}/anchors/{}.bin", origin, anchor_hex));
     }
     urls.dedup();
     Ok(urls)
@@ -2056,7 +2362,13 @@ pub async fn fetch_anchor_manifest_bin(
         if !resp.status().is_success() {
             continue;
         }
-        let Ok(bytes) = resp.bytes().await else {
+        let Ok(bytes) = read_response_bytes_bounded(
+            resp,
+            MAX_LOCK_BATCH_BODY_BYTES,
+            "fetching anchor manifest",
+        )
+        .await
+        else {
             continue;
         };
         let Ok(manifest) = serde_json::from_slice::<AnchorManifest>(&bytes) else {
@@ -2074,13 +2386,9 @@ pub async fn fetch_static_lock_entry(
     read_url: &str,
     rel_path: &str,
 ) -> Result<Option<LockEntry>, String> {
-    let clean_read_url = validated_sync_url(read_url)?;
-    let base = normalize_lock_read_base(clean_read_url);
-    let clean_rel = rel_path.trim().trim_start_matches('/');
-    let clean_rel = clean_rel.strip_prefix("locks/").unwrap_or(clean_rel);
-    if clean_rel.is_empty() || clean_rel.contains("..") {
-        return Err(format!("Invalid static lock path '{}'", rel_path));
-    }
+    validate_sync_read_url(read_url)?;
+    let base = normalize_lock_read_base(read_url);
+    let clean_rel = validate_static_lock_rel_path(rel_path)?;
     let url = format!("{}/locks/{}", base, clean_rel);
 
     let resp = client
@@ -2094,10 +2402,8 @@ pub async fn fetch_static_lock_entry(
     }
     let resp = map_unexpected_status(resp, &format!("fetching static lock '{}'", url)).await?;
 
-    let bytes = resp
-        .bytes()
-        .await
-        .map_err(|e| format!("Failed reading static lock bytes: {}", e))?;
+    let bytes =
+        read_response_bytes_bounded(resp, LOCK_ENTRY_WIRE_LEN, "reading static lock bytes").await?;
     if bytes.len() != LOCK_ENTRY_WIRE_LEN {
         return Err(format!(
             "Invalid static lock entry size {} bytes (expected {} bytes)",
@@ -2201,10 +2507,15 @@ mod tests {
     fn test_sign_and_verify_revocation_notice() {
         let sk = SigningKey::from_bytes(&[42u8; 32]);
         let drop_pub = hex::encode(sk.verifying_key().as_bytes());
+        let rep_drop_pub = hex::encode(
+            SigningKey::from_bytes(&[7u8; 32])
+                .verifying_key()
+                .as_bytes(),
+        );
         let rep = SyncReplacementTarget {
             write_url: "https://new.example.org/sync.php".to_string(),
             read_url: "https://new.example.org/d-1234567890abcdef".to_string(),
-            drop_pub: hex::encode([7u8; 32]),
+            drop_pub: rep_drop_pub.clone(),
         };
         let notice = sign_revocation_notice(
             &sk,
@@ -2231,7 +2542,7 @@ mod tests {
         let bad_rep = SyncReplacementTarget {
             write_url: "http://insecure.example.org/sync.php".to_string(),
             read_url: "https://new.example.org/d-1234".to_string(),
-            drop_pub: hex::encode([7u8; 32]),
+            drop_pub: rep_drop_pub,
         };
         assert!(sign_revocation_notice(&sk, 100, 200, None, Some(bad_rep)).is_err());
 
@@ -2254,6 +2565,10 @@ mod tests {
         let seen_if_none_match = Arc::new(AtomicUsize::new(0));
         let seen_clone = Arc::clone(&seen_if_none_match);
 
+        let alice_id = "aa".repeat(32);
+        let missing_id = "bb".repeat(32);
+        let missing_suffix = format!("{}.card.bin", missing_id);
+
         let server = tokio::spawn(async move {
             for _ in 0..3 {
                 let (mut stream, _) = listener.accept().await.unwrap();
@@ -2269,7 +2584,7 @@ mod tests {
                     .find(|(k, _)| k.eq_ignore_ascii_case("if-none-match"))
                     .map(|(_, v)| v.trim().to_string());
 
-                let resp: Vec<u8> = if path.ends_with("missing.card.bin") {
+                let resp: Vec<u8> = if path.ends_with(&missing_suffix) {
                     b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n".to_vec()
                 } else if inm.as_deref() == Some("\"slot-v1\"") {
                     seen_inner.fetch_add(1, Ordering::SeqCst);
@@ -2293,7 +2608,7 @@ mod tests {
         let read_url = format!("http://127.0.0.1:{}/d-test", addr.port());
 
         // 1. Cold fetch without cached ETag -> 200 Modified with ETag
-        let first = get_slot(&client, &read_url, "alice", None, "card", None)
+        let first = get_slot(&client, &read_url, &alice_id, None, "card", None)
             .await
             .unwrap();
         assert_eq!(
@@ -2305,14 +2620,14 @@ mod tests {
         );
 
         // 2. Conditional fetch with cached ETag -> 304 NotModified
-        let second = get_slot(&client, &read_url, "alice", None, "card", Some("slot-v1"))
+        let second = get_slot(&client, &read_url, &alice_id, None, "card", Some("slot-v1"))
             .await
             .unwrap();
         assert_eq!(second, SlotFetchResult::NotModified);
         assert_eq!(seen_if_none_match.load(Ordering::SeqCst), 1);
 
         // 3. Missing slot -> NotFound
-        let third = get_slot(&client, &read_url, "missing", None, "card", None)
+        let third = get_slot(&client, &read_url, &missing_id, None, "card", None)
             .await
             .unwrap();
         assert_eq!(third, SlotFetchResult::NotFound);
@@ -2969,5 +3284,753 @@ mod tests {
 
         let clean = filter_resolved_addrs(vec![public_v4], "dual.example.org", false).unwrap();
         assert_eq!(clean, vec![public_v4]);
+    }
+
+    #[test]
+    fn test_s08_f3_retry_after_clamping_and_strict_429_extraction() {
+        let mut hdrs = reqwest::header::HeaderMap::new();
+        hdrs.insert(reqwest::header::RETRY_AFTER, "0".parse().unwrap());
+        assert_eq!(parse_retry_after(&hdrs), 1);
+
+        hdrs.insert(reqwest::header::RETRY_AFTER, "999999999".parse().unwrap());
+        assert_eq!(parse_retry_after(&headers_with("999999999")), 3600);
+        assert_eq!(parse_retry_after(&hdrs), 3600);
+
+        // HTTP 500 embedding attacker-controlled Retry-After / HTTP 429 text must NOT trigger cooldown
+        assert_eq!(
+            extract_retry_after_from_error_str(
+                "Server returned HTTP 500 fetching index: Retry-After: 9999 HTTP 429"
+            ),
+            None
+        );
+        assert_eq!(
+            extract_retry_after_from_error_str(
+                "Lock server https://evil.example/sync.php returned HTTP 500: HTTP 429 Retry-After: 900"
+            ),
+            None
+        );
+
+        // Network errors containing "429" in hex slot ID or port must NOT trigger false-positive cooldown
+        let hex_with_429 = format!("{}429{}", "ab".repeat(15), "cd".repeat(16));
+        assert_eq!(
+            extract_retry_after_from_error_str(&format!(
+                "Network error fetching slot {} at https://sync.example.org:4290/d",
+                hex_with_429
+            )),
+            None
+        );
+
+        // Legitimate 429 strings remain parsed and clamped to 1..=3600
+        assert_eq!(
+            extract_retry_after_from_error_str(
+                "Rate limited fetching index (HTTP 429). Retry-After: 999999999s"
+            ),
+            Some(3600)
+        );
+        assert_eq!(
+            extract_retry_after_from_error_str(
+                "Rate limited fetching index (HTTP 429). Retry-After: 0s"
+            ),
+            Some(1)
+        );
+        assert_eq!(
+            extract_retry_after_from_error_str("Server returned HTTP 429 Too Many Requests"),
+            Some(60)
+        );
+    }
+
+    fn headers_with(val: &str) -> reqwest::header::HeaderMap {
+        let mut h = reqwest::header::HeaderMap::new();
+        h.insert(reqwest::header::RETRY_AFTER, val.parse().unwrap());
+        h
+    }
+
+    #[tokio::test]
+    async fn test_s08_f1_bounded_http_body_and_sanitized_error_body() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let server = tokio::spawn(async move {
+            // 1. Static lock with Content-Length: 606 (> 605)
+            {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut buf = [0u8; 2048];
+                let _ = stream.read(&mut buf).await;
+                let resp = "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: 606\r\n\r\n";
+                let _ = stream.write_all(resp.as_bytes()).await;
+            }
+            // 2. Static lock with chunked streaming > 605 bytes (no Content-Length)
+            {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut buf = [0u8; 2048];
+                let _ = stream.read(&mut buf).await;
+                let _ = stream
+                    .write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n")
+                    .await;
+                let chunk = vec![b'A'; 700];
+                let chunk_hdr = format!("{:x}\r\n", chunk.len());
+                let _ = stream.write_all(chunk_hdr.as_bytes()).await;
+                let _ = stream.write_all(&chunk).await;
+                let _ = stream.write_all(b"\r\n0\r\n\r\n").await;
+            }
+            // 3. fetch_sync_info with Content-Length > 256 KiB
+            {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut buf = [0u8; 2048];
+                let _ = stream.read(&mut buf).await;
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+                    300 * 1024
+                );
+                let _ = stream.write_all(resp.as_bytes()).await;
+            }
+            // 4. Error 500 with > 4 KiB body and control characters / newlines
+            {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut buf = [0u8; 2048];
+                let _ = stream.read(&mut buf).await;
+                let malicious_body = format!("bad\r\n\t\x1b[31merror {}", "X".repeat(8192));
+                let resp = format!(
+                    "HTTP/1.1 500 Internal Server Error\r\nContent-Length: {}\r\n\r\n{}",
+                    malicious_body.len(),
+                    malicious_body
+                );
+                let _ = stream.write_all(resp.as_bytes()).await;
+            }
+        });
+
+        let client = create_sync_http_client();
+        let read_url = format!("http://127.0.0.1:{}/d-test", addr.port());
+        let write_url = format!("http://127.0.0.1:{}/sync.php", addr.port());
+
+        // 1. Content-Length 606 rejected upfront
+        let err1 = fetch_static_lock_entry(&client, &read_url, "2027-Q4/aa/oversized.lock")
+            .await
+            .unwrap_err();
+        assert!(
+            err1.contains("exceeds maximum allowed size"),
+            "unexpected error for Content-Length 606: {}",
+            err1
+        );
+
+        // 2. Chunked stream > 605 rejected
+        let err2 = fetch_static_lock_entry(&client, &read_url, "2027-Q4/aa/chunked.lock")
+            .await
+            .unwrap_err();
+        assert!(
+            err2.contains("exceeds maximum allowed size"),
+            "unexpected error for chunked > 605: {}",
+            err2
+        );
+
+        // 3. fetch_sync_info > 256 KiB rejected
+        let err3 = fetch_sync_info(&client, &write_url).await.unwrap_err();
+        assert!(
+            err3.contains("exceeds maximum allowed size"),
+            "unexpected error for oversized ?info: {}",
+            err3
+        );
+
+        // 4. Error body truncated and sanitized of control chars
+        let err4 = fetch_sync_info(&client, &write_url).await.unwrap_err();
+        assert!(err4.contains("HTTP 500"), "unexpected error: {}", err4);
+        assert!(
+            !err4.chars().any(|c| c.is_control()),
+            "error leaked control chars: {:?}",
+            err4
+        );
+        assert!(
+            err4.len() <= 400,
+            "error body was not truncated (len={}): {}",
+            err4.len(),
+            err4
+        );
+
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_s08_f2_path_traversal_query_and_read_url_guards() {
+        let client = create_sync_http_client();
+        let valid_id = "aa".repeat(32);
+        let read_url = "https://sync.example.org/d-test";
+        let write_url = "https://sync.example.org/sync.php";
+        let admin_sk = SigningKey::from_bytes(&[77u8; 32]);
+        let signed = SignedDropHeaders {
+            pubkey_hex: valid_id.clone(),
+            prefix: None,
+            timestamp: 1_700_000_000,
+            nonce_hex: "bb".repeat(16),
+            signature_hex: "cc".repeat(64),
+        };
+
+        fn assert_validation_err<T: std::fmt::Debug>(res: Result<T, String>, ctx: &str) {
+            let err = res.expect_err(ctx);
+            assert!(
+                !err.starts_with("Network error"),
+                "{}: expected input validation error, got network error '{}'",
+                ctx,
+                err
+            );
+        }
+
+        // get_slot rejects path traversal, invalid id, invalid prefix, invalid channel, and query in read_url
+        assert_validation_err(
+            get_slot(&client, read_url, "../../etc?x=#", None, "card", None).await,
+            "get_slot traversal id",
+        );
+        assert_validation_err(
+            get_slot(&client, read_url, &valid_id, Some("../foo"), "card", None).await,
+            "get_slot invalid prefix",
+        );
+        assert_validation_err(
+            get_slot(&client, read_url, &valid_id, None, "card?x=1", None).await,
+            "get_slot invalid channel",
+        );
+        assert_validation_err(
+            get_slot(
+                &client,
+                "https://sync.example.org/d-test?q=1",
+                &valid_id,
+                None,
+                "card",
+                None,
+            )
+            .await,
+            "get_slot read_url query",
+        );
+
+        // append_sync_path rejects query string in read_url
+        assert!(append_sync_path("https://sync.example.org/d-test?q=1", "index.json").is_err());
+
+        // fetch_static_lock_entry rejects query in read_url and traversal / encoded / query paths
+        assert_validation_err(
+            fetch_static_lock_entry(
+                &client,
+                "https://sync.example.org/d-test?q=1",
+                "2027-Q4/aa/present.lock",
+            )
+            .await,
+            "fetch_static_lock_entry read_url query",
+        );
+        for bad_rel in [
+            "2027-Q4/%2e%2e/present.lock",
+            "2027-Q4\\aa\\present.lock",
+            "2027-Q4/aa/present.lock?x=1",
+            "2027-Q4/aa/present.lock#frag",
+            "2027-Q4/../present.lock",
+            "2027-Q4/aa/present.txt",
+        ] {
+            assert_validation_err(
+                fetch_static_lock_entry(&client, read_url, bad_rel).await,
+                bad_rel,
+            );
+        }
+
+        // get_lock_freeze_status rejects non-64-hex anchor_id
+        assert_validation_err(
+            get_lock_freeze_status(&client, write_url, "abc&x=1").await,
+            "get_lock_freeze_status anchor_id",
+        );
+
+        // push_members rejects invalid channel query injection
+        assert_validation_err(
+            push_members(&client, write_url, &admin_sk, "card&evil=1", &[]).await,
+            "push_members channel",
+        );
+
+        // put_media_blob and delete_media_blob validate 64 lowercase hex blob_id
+        assert_validation_err(
+            put_media_blob(&client, write_url, &signed, "BAD_ID\r\n", b"x").await,
+            "put_media_blob blob_id",
+        );
+        assert_validation_err(
+            delete_media_blob(&client, write_url, &signed, Some("not-hex")).await,
+            "delete_media_blob blob_id",
+        );
+
+        // anchor_manifest_candidate_urls strips query strings on write URLs and rejects invalid anchor hex
+        let cands = anchor_manifest_candidate_urls(
+            "https://sync.example.org/sub/sync.php?drop=1",
+            &valid_id,
+        )
+        .unwrap();
+        assert_eq!(
+            cands,
+            vec![format!(
+                "https://sync.example.org/sub/anchors/{}.bin",
+                valid_id
+            )]
+        );
+        assert!(anchor_manifest_candidate_urls(write_url, "not-64-hex").is_err());
+    }
+
+    #[tokio::test]
+    async fn test_s08_f4_f5_crypto_canonicalization_and_etag_quoting() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        // 1. Weak ETag normalization
+        let mut weak_hdrs = reqwest::header::HeaderMap::new();
+        weak_hdrs.insert(reqwest::header::ETAG, "W/\"abc123\"".parse().unwrap());
+        assert_eq!(extract_etag(&weak_hdrs), Some("abc123".to_string()));
+        weak_hdrs.insert(reqwest::header::ETAG, "w/\"xyz789\"".parse().unwrap());
+        assert_eq!(extract_etag(&weak_hdrs), Some("xyz789".to_string()));
+
+        // 2. list_index sends quoted If-None-Match and handles 304 / 404 / 429
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            for idx in 0..3 {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut buf = [0u8; 4096];
+                let n = stream.read(&mut buf).await.unwrap();
+                let req = String::from_utf8_lossy(&buf[..n]);
+                let inm = req
+                    .lines()
+                    .filter_map(|l| l.split_once(':'))
+                    .find(|(k, _)| k.eq_ignore_ascii_case("if-none-match"))
+                    .map(|(_, v)| v.trim().to_string());
+                let resp = match idx {
+                    0 => {
+                        assert_eq!(inm.as_deref(), Some("\"etag-v1\""));
+                        "HTTP/1.1 304 Not Modified\r\nContent-Length: 0\r\n\r\n"
+                    }
+                    1 => "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n",
+                    _ => "HTTP/1.1 429 Too Many Requests\r\nRetry-After: 12\r\nContent-Length: 0\r\n\r\n",
+                };
+                stream.write_all(resp.as_bytes()).await.unwrap();
+            }
+        });
+
+        let client = create_sync_http_client();
+        let read_url = format!("http://127.0.0.1:{}/d-test", addr.port());
+        let r304 = list_index(&client, &read_url, Some("etag-v1"), None)
+            .await
+            .unwrap();
+        assert_eq!(r304, IndexFetchResult::NotModified);
+        let r404 = list_index(&client, &read_url, None, None).await.unwrap();
+        assert_eq!(
+            r404,
+            IndexFetchResult::Modified {
+                entries: Vec::new(),
+                etag: None,
+                last_modified: None
+            }
+        );
+        let r429 = list_index(&client, &read_url, None, None)
+            .await
+            .unwrap_err();
+        assert_eq!(extract_retry_after_from_error_str(&r429), Some(12));
+        server.await.unwrap();
+
+        // 3. SlotAckReceipt rejects timestamp == 0, wrong expected_lock_pub, tampered etag, and accepts valid
+        let lock_sk = SigningKey::from_bytes(&[15u8; 32]);
+        let lock_pub = hex::encode(lock_sk.verifying_key().as_bytes());
+        let other_lock_pub = hex::encode(
+            SigningKey::from_bytes(&[19u8; 32])
+                .verifying_key()
+                .as_bytes(),
+        );
+        let slot_pk = "aa".repeat(32);
+        let zero_ts_msg = format!(
+            "HUMOCO-SLOT-ACK-V1\n{}\n{}\n\nbackup\netag1\n0",
+            lock_pub, slot_pk
+        );
+        let zero_ts_ack = SlotAckReceipt {
+            lock_pub: lock_pub.clone(),
+            pubkey: slot_pk.clone(),
+            prefix: None,
+            channel: "backup".to_string(),
+            etag: "etag1".to_string(),
+            timestamp: 0,
+            sig: hex::encode(lock_sk.sign(zero_ts_msg.as_bytes()).to_bytes()),
+        };
+        assert!(!zero_ts_ack.verify(&lock_pub, &slot_pk, None, "backup", "etag1"));
+
+        let valid_ack_msg = format!(
+            "HUMOCO-SLOT-ACK-V1\n{}\n{}\n\nbackup\netag1\n1700000000",
+            lock_pub, slot_pk
+        );
+        let valid_ack = SlotAckReceipt {
+            lock_pub: lock_pub.clone(),
+            pubkey: slot_pk.clone(),
+            prefix: None,
+            channel: "backup".to_string(),
+            etag: "etag1".to_string(),
+            timestamp: 1_700_000_000,
+            sig: hex::encode(lock_sk.sign(valid_ack_msg.as_bytes()).to_bytes()),
+        };
+        assert!(valid_ack.verify(&lock_pub, &slot_pk, None, "backup", "etag1"));
+        assert!(!valid_ack.verify(&other_lock_pub, &slot_pk, None, "backup", "etag1"));
+        assert!(!valid_ack.verify(&lock_pub, &slot_pk, None, "backup", "etag2"));
+
+        // 4. sign_revocation_notice & verify_revocation_notice strict checks
+        let admin_sk = SigningKey::from_bytes(&[16u8; 32]);
+        let admin_pub = hex::encode(admin_sk.verifying_key().as_bytes());
+        let rep_sk = SigningKey::from_bytes(&[17u8; 32]);
+        let rep_pub = hex::encode(rep_sk.verifying_key().as_bytes());
+
+        assert!(sign_revocation_notice(&admin_sk, 100, 0, None, None).is_err());
+        assert!(sign_revocation_notice(&admin_sk, 0, 100, None, None).is_err());
+        assert!(
+            sign_revocation_notice(&admin_sk, 100, 200, Some("bad\tctrl".to_string()), None)
+                .is_err()
+        );
+        assert!(sign_revocation_notice(
+            &admin_sk,
+            100,
+            200,
+            None,
+            Some(SyncReplacementTarget {
+                write_url: "https://new.example.org/sync.php".to_string(),
+                read_url: "https://new.example.org/d?q=1".to_string(),
+                drop_pub: rep_pub.clone(),
+            })
+        )
+        .is_err());
+
+        // Non-curve replacement drop_pub rejected
+        let non_curve_byte = (1u8..=255)
+            .find(|&b| VerifyingKey::from_bytes(&[b; 32]).is_err())
+            .unwrap();
+        let non_curve_hex = hex::encode([non_curve_byte; 32]);
+        assert!(sign_revocation_notice(
+            &admin_sk,
+            100,
+            200,
+            None,
+            Some(SyncReplacementTarget {
+                write_url: "https://new.example.org/sync.php".to_string(),
+                read_url: "https://new.example.org/d".to_string(),
+                drop_pub: non_curve_hex.clone(),
+            })
+        )
+        .is_err());
+
+        // Newline-padded replacement write_url must be rejected on verify_revocation_notice
+        let padded_rep = SyncReplacementTarget {
+            write_url: "https://new.example.org/sync.php\n".to_string(),
+            read_url: "https://new.example.org/d".to_string(),
+            drop_pub: rep_pub.clone(),
+        };
+        let padded_msg =
+            canonical_revocation_message(&admin_pub, 100, 200, Some(&padded_rep), None);
+        let padded_notice = SyncRevocationNotice {
+            drop_pub: admin_pub.clone(),
+            issued_at: 100,
+            effective_at: 200,
+            reason: None,
+            replacement: Some(padded_rep),
+            signature: hex::encode(admin_sk.sign(padded_msg.as_bytes()).to_bytes()),
+        };
+        assert!(verify_revocation_notice(&padded_notice, &admin_pub).is_err());
+
+        // 5. verify_lock_delegation & push_lock_delegation strict checks
+        let query_read_msg = humoco_market::format_lock_delegate_signature_message(
+            &admin_pub,
+            &lock_pub,
+            "https://sync.example.org/sync.php",
+            "https://sync.example.org/d?q=1",
+            100,
+        );
+        let query_del = SyncLockDelegationDto {
+            admin_pub: admin_pub.clone(),
+            lock_pub: lock_pub.clone(),
+            write_url: "https://sync.example.org/sync.php".to_string(),
+            read_url: "https://sync.example.org/d?q=1".to_string(),
+            issued_at: 100,
+            sig: hex::encode(admin_sk.sign(query_read_msg.as_bytes()).to_bytes()),
+        };
+        assert!(!verify_lock_delegation(
+            &lock_pub,
+            &query_del,
+            Some(&admin_pub)
+        ));
+
+        let ws_msg = humoco_market::format_lock_delegate_signature_message(
+            &admin_pub,
+            &lock_pub,
+            " https://sync.example.org/sync.php",
+            "https://sync.example.org/d",
+            100,
+        );
+        let ws_del = SyncLockDelegationDto {
+            admin_pub: admin_pub.clone(),
+            lock_pub: lock_pub.clone(),
+            write_url: " https://sync.example.org/sync.php".to_string(),
+            read_url: "https://sync.example.org/d".to_string(),
+            issued_at: 100,
+            sig: hex::encode(admin_sk.sign(ws_msg.as_bytes()).to_bytes()),
+        };
+        assert!(!verify_lock_delegation(
+            &lock_pub,
+            &ws_del,
+            Some(&admin_pub)
+        ));
+
+        let bad_lock_msg = humoco_market::format_lock_delegate_signature_message(
+            &admin_pub,
+            &non_curve_hex,
+            "https://sync.example.org/sync.php",
+            "https://sync.example.org/d",
+            100,
+        );
+        let bad_lock_del = SyncLockDelegationDto {
+            admin_pub: admin_pub.clone(),
+            lock_pub: non_curve_hex.clone(),
+            write_url: "https://sync.example.org/sync.php".to_string(),
+            read_url: "https://sync.example.org/d".to_string(),
+            issued_at: 100,
+            sig: hex::encode(admin_sk.sign(bad_lock_msg.as_bytes()).to_bytes()),
+        };
+        assert!(!verify_lock_delegation(
+            &non_curve_hex,
+            &bad_lock_del,
+            Some(&admin_pub)
+        ));
+
+        let push_err = push_lock_delegation(
+            &client,
+            "https://sync.example.org/sync.php",
+            "https://sync.example.org/d",
+            &admin_sk,
+            &non_curve_hex,
+            100,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            !push_err.starts_with("Network error"),
+            "expected key validation error, got '{}'",
+            push_err
+        );
+    }
+
+    #[tokio::test]
+    async fn test_s08_f6_f7_f10_pow_nonce_ipv6_allowlist_and_endpoint_paths() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        // 1. IPv6 Global Unicast allowlist & IPv4 192.88.99.0/24
+        for ip_str in [
+            "5f00::1",
+            "2001:1::1",
+            "2001:3::1",
+            "fe00::1",
+            "4000::1",
+            "8000::1",
+            "192.88.99.1",
+        ] {
+            let ip: std::net::IpAddr = ip_str.parse().unwrap();
+            assert!(
+                is_blocked_ip(ip, false),
+                "expected {} to be blocked",
+                ip_str
+            );
+        }
+        for ip_str in ["2606:4700:4700::1111", "2a01:4f8::1"] {
+            let ip: std::net::IpAddr = ip_str.parse().unwrap();
+            assert!(
+                !is_blocked_ip(ip, false),
+                "expected {} to be allowed",
+                ip_str
+            );
+        }
+
+        // 2. post_lock_batch (200 / 409 epoch_frozen / 410 revocation / 429 / 500),
+        //    fetch_revocation_notice (404 / valid 200 / forged 200),
+        //    delete_account (204 / 404 / 500)
+        let admin_sk = SigningKey::from_bytes(&[81u8; 32]);
+        let admin_pub = hex::encode(admin_sk.verifying_key().as_bytes());
+        let valid_rev = sign_revocation_notice(
+            &admin_sk,
+            1_700_000_000,
+            1_700_000_100,
+            Some("eol".to_string()),
+            None,
+        )
+        .unwrap();
+        let mut forged_rev = valid_rev.clone();
+        forged_rev.signature = "00".repeat(64);
+
+        let batch_200_json = serde_json::to_string(&SyncLockBatchResponse {
+            status: "ok".to_string(),
+            bucket: [0x11u8; 32],
+            retain_until_quarter: 8000,
+            receipts: Vec::new(),
+            conflict: None,
+        })
+        .unwrap();
+        let batch_409_json = r#"{"error":"epoch_frozen"}"#.to_string();
+        let batch_410_json = serde_json::json!({ "revocation": valid_rev }).to_string();
+        let valid_rev_json = serde_json::to_string(&valid_rev).unwrap();
+        let forged_rev_json = serde_json::to_string(&forged_rev).unwrap();
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let responses = [
+                (200, "", batch_200_json),
+                (409, "", batch_409_json),
+                (410, "", batch_410_json),
+                (429, "Retry-After: 23\r\n", String::new()),
+                (500, "", "lock db error".to_string()),
+                (404, "", String::new()),
+                (200, "", valid_rev_json),
+                (200, "", forged_rev_json),
+                (204, "", String::new()),
+                (404, "", String::new()),
+                (500, "", "delete failed".to_string()),
+            ];
+            for (code, extra_hdrs, body) in responses {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut buf = [0u8; 8192];
+                let _ = stream.read(&mut buf).await;
+                let resp = format!(
+                    "HTTP/1.1 {} Test\r\nContent-Type: application/json\r\n{}Content-Length: {}\r\n\r\n{}",
+                    code,
+                    extra_hdrs,
+                    body.len(),
+                    body
+                );
+                let _ = stream.write_all(resp.as_bytes()).await;
+            }
+        });
+
+        let client = create_sync_http_client();
+        let write_url = format!("http://127.0.0.1:{}/sync.php", addr.port());
+        let read_url = format!("http://127.0.0.1:{}/d-test", addr.port());
+        let batch_req = SyncLockBatchRequest {
+            anchor_id: [0x22u8; 32],
+            bucket: [0x11u8; 32],
+            recipient_nonce: [0x33u8; 32],
+            entries: vec!["00".repeat(605)],
+            manifest: None,
+            genesis_ticket: None,
+            known_head_receipt: None,
+        };
+
+        assert!(matches!(
+            post_lock_batch(&client, &write_url, &batch_req)
+                .await
+                .unwrap(),
+            SyncLockBatchOutcome::Response {
+                status_code: 200,
+                ..
+            }
+        ));
+        assert!(matches!(
+            post_lock_batch(&client, &write_url, &batch_req)
+                .await
+                .unwrap(),
+            SyncLockBatchOutcome::EpochFrozen {
+                status_code: 409,
+                ..
+            }
+        ));
+        assert!(matches!(
+            post_lock_batch(&client, &write_url, &batch_req)
+                .await
+                .unwrap(),
+            SyncLockBatchOutcome::Revoked {
+                status_code: 410,
+                notice: Some(_)
+            }
+        ));
+        let err_429 = post_lock_batch(&client, &write_url, &batch_req)
+            .await
+            .unwrap_err();
+        assert_eq!(extract_retry_after_from_error_str(&err_429), Some(23));
+        let err_500 = post_lock_batch(&client, &write_url, &batch_req)
+            .await
+            .unwrap_err();
+        assert!(err_500.contains("HTTP 500"));
+
+        assert!(fetch_revocation_notice(&client, &read_url, &admin_pub)
+            .await
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            fetch_revocation_notice(&client, &read_url, &admin_pub)
+                .await
+                .unwrap()
+                .unwrap()
+                .drop_pub,
+            admin_pub
+        );
+        assert!(fetch_revocation_notice(&client, &read_url, &admin_pub)
+            .await
+            .is_err());
+
+        let signed = SignedDropHeaders {
+            pubkey_hex: admin_pub.clone(),
+            prefix: None,
+            timestamp: 1_700_000_000,
+            nonce_hex: "aa".repeat(16),
+            signature_hex: "bb".repeat(64),
+        };
+        delete_account(&client, &write_url, &signed).await.unwrap();
+        delete_account(&client, &write_url, &signed).await.unwrap();
+        assert!(delete_account(&client, &write_url, &signed)
+            .await
+            .unwrap_err()
+            .contains("HTTP 500"));
+
+        server.await.unwrap();
+
+        // 3. PoW start nonce & solved pow_nonce stay safely within signed i64::MAX for PHP json_decode
+        for _ in 0..64 {
+            assert!(next_pow_start_nonce() <= POW_START_NONCE_MASK);
+        }
+
+        let pow_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let pow_addr = pow_listener.local_addr().unwrap();
+        let lock_sk = SigningKey::from_bytes(&[82u8; 32]);
+        let lock_pub = lock_sk.verifying_key().to_bytes();
+        let anchor_id = [0x44u8; 32];
+        let retain_q = human_money_core::humoco_proto::encode_quarter(2035, 4).unwrap();
+        let pow_server = tokio::spawn(async move {
+            let (mut stream, _) = pow_listener.accept().await.unwrap();
+            let mut buf = [0u8; 8192];
+            let n = stream.read(&mut buf).await.unwrap();
+            let raw = String::from_utf8_lossy(&buf[..n]);
+            let (_, body) = raw.split_once("\r\n\r\n").unwrap();
+            let req_json: serde_json::Value = serde_json::from_str(body).unwrap();
+            let pn = req_json["pow_nonce"].as_u64().unwrap();
+            assert!(
+                pn <= i64::MAX as u64,
+                "pow_nonce {} must fit signed i64::MAX for PHP json_decode",
+                pn
+            );
+            let mut ticket = GenesisTicket {
+                anchor_id,
+                retain_until_quarter: retain_q,
+                issued_at: 1_760_000_000,
+                lock_pub,
+                sig: [0u8; 64],
+            };
+            ticket.sig = lock_sk.sign(&ticket.digest()).to_bytes();
+            let resp_body = serde_json::json!({ "ticket": ticket }).to_string();
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                resp_body.len(),
+                resp_body
+            );
+            stream.write_all(resp.as_bytes()).await.unwrap();
+        });
+        let pow_write_url = format!("http://127.0.0.1:{}/sync.php", pow_addr.port());
+        let pow_ticket = request_genesis_ticket(
+            &client,
+            &pow_write_url,
+            lock_pub,
+            &anchor_id,
+            retain_q,
+            LockTicketAuth::Pow { pow_bits: 1 },
+        )
+        .await
+        .unwrap();
+        assert!(pow_ticket.verify());
+        pow_server.await.unwrap();
     }
 }

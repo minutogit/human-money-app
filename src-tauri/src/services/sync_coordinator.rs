@@ -207,6 +207,10 @@ fn active_session_generation(state: &AppState) -> Option<u64> {
     }
 }
 
+fn is_session_active_for_generation(state: &AppState, generation: u64) -> bool {
+    active_session_generation(state) == Some(generation)
+}
+
 fn is_cooling_down(cooldown_until: Option<Instant>, now: Instant) -> bool {
     cooldown_until.is_some_and(|until| now < until)
 }
@@ -277,7 +281,7 @@ async fn run_coordinator_loop(app: tauri::AppHandle) {
 
         // 2. Local folder Auto-Backup (runs offline as well, executes sync I/O on blocking pool)
         if schedule.next_local_backup_at.is_some_and(|t| now >= t)
-            && state.is_generation_current(generation)
+            && is_session_active_for_generation(&state, generation)
         {
             schedule.next_local_backup_at = Some(now + LOCAL_BACKUP_PERIODIC_INTERVAL);
             let app_clone = app.clone();
@@ -286,7 +290,7 @@ async fn run_coordinator_loop(app: tauri::AppHandle) {
                 backup_service::run_auto_backup_sync_impl(&s, &app_clone)
             })
             .await;
-            if state.is_generation_current(generation) {
+            if is_session_active_for_generation(&state, generation) {
                 if let Ok(Ok(dto)) = res {
                     let _ = app.emit("humoco://backup-updated", &dto);
                 }
@@ -295,15 +299,15 @@ async fn run_coordinator_loop(app: tauri::AppHandle) {
             }
         }
 
-        let net_cooldown = is_cooling_down(ctrl.cooldown_until, Instant::now());
-
         // 3. Off-site Sync Backup (requires online + not cooling down)
+        let ctrl = state.sync_control_snapshot();
+        let net_cooldown = is_cooling_down(ctrl.cooldown_until, Instant::now());
         if ctrl.is_online
             && !net_cooldown
             && schedule
                 .next_sync_backup_at
                 .is_some_and(|t| Instant::now() >= t)
-            && state.is_generation_current(generation)
+            && is_session_active_for_generation(&state, generation)
         {
             let forced = std::mem::take(&mut schedule.next_sync_backup_forced);
             let now_run = Instant::now();
@@ -315,7 +319,7 @@ async fn run_coordinator_loop(app: tauri::AppHandle) {
             if !throttled {
                 match backup_service::sync_backup_impl(None, Some(ctrl.is_wifi), &state, &app).await
                 {
-                    Ok(res) if state.is_generation_current(generation) => {
+                    Ok(res) if is_session_active_for_generation(&state, generation) => {
                         if res.skipped_wifi_only {
                             if forced {
                                 schedule.next_sync_backup_forced = true;
@@ -329,10 +333,10 @@ async fn run_coordinator_loop(app: tauri::AppHandle) {
                             if let Some(secs) = res.retry_after_secs {
                                 state.record_sync_cooldown(secs);
                             }
-                            if res.uploaded_to > 0 {
+                            if res.uploaded_to > 0 || res.errors.is_empty() {
                                 schedule.last_sync_backup_success_at = Some(Instant::now());
                                 schedule.sync_backup_consecutive_failures = 0;
-                            } else if !res.errors.is_empty() {
+                            } else {
                                 schedule.sync_backup_consecutive_failures =
                                     schedule.sync_backup_consecutive_failures.saturating_add(1);
                                 let exp = schedule
@@ -347,7 +351,7 @@ async fn run_coordinator_loop(app: tauri::AppHandle) {
                             let _ = app.emit("humoco://sync-status-updated", &res);
                         }
                     }
-                    Err(e) if state.is_generation_current(generation) => {
+                    Err(e) if is_session_active_for_generation(&state, generation) => {
                         if let Some(secs) =
                             crate::sync_client::extract_retry_after_from_error_str(&e.message)
                         {
@@ -368,15 +372,15 @@ async fn run_coordinator_loop(app: tauri::AppHandle) {
             }
         }
 
-        if !state.is_generation_current(generation) {
+        if !is_session_active_for_generation(&state, generation) {
             continue;
         }
 
         // 4. PoST Channel Sync
+        let ctrl = state.sync_control_snapshot();
         let now_post = Instant::now();
-        let cooldown_post = state.sync_control.lock().unwrap().cooldown_until;
         if ctrl.is_online
-            && !is_cooling_down(cooldown_post, now_post)
+            && !is_cooling_down(ctrl.cooldown_until, now_post)
             && schedule.next_post_at.is_some_and(|t| now_post >= t)
         {
             schedule.next_post_at = Some(now_post + POST_PERIODIC_INTERVAL);
@@ -389,7 +393,7 @@ async fn run_coordinator_loop(app: tauri::AppHandle) {
             )
             .await
             {
-                Ok(res) if state.is_generation_current(generation) => {
+                Ok(res) if is_session_active_for_generation(&state, generation) => {
                     if res.skipped_wifi_only {
                         schedule.post_deferred_for_wifi = true;
                     }
@@ -418,7 +422,7 @@ async fn run_coordinator_loop(app: tauri::AppHandle) {
                     }
                     let _ = app.emit("humoco://post-synced", &res);
                 }
-                Err(e) if state.is_generation_current(generation) => {
+                Err(e) if is_session_active_for_generation(&state, generation) => {
                     if let Some(secs) =
                         crate::sync_client::extract_retry_after_from_error_str(&e.message)
                     {
@@ -429,19 +433,19 @@ async fn run_coordinator_loop(app: tauri::AppHandle) {
             }
         }
 
-        if !state.is_generation_current(generation) {
+        if !is_session_active_for_generation(&state, generation) {
             continue;
         }
 
         // 4b. Background channel members push (serialized before Market sync)
+        let ctrl = state.sync_control_snapshot();
         let now_members = Instant::now();
-        let cooldown_members = state.sync_control.lock().unwrap().cooldown_until;
         if ctrl.is_online
-            && !is_cooling_down(cooldown_members, now_members)
+            && !is_cooling_down(ctrl.cooldown_until, now_members)
             && schedule
                 .next_sync_members_at
                 .is_some_and(|t| now_members >= t)
-            && state.is_generation_current(generation)
+            && is_session_active_for_generation(&state, generation)
         {
             schedule.next_sync_members_at = None;
             if let Ok(session) =
@@ -453,16 +457,16 @@ async fn run_coordinator_loop(app: tauri::AppHandle) {
             }
         }
 
-        if !state.is_generation_current(generation) {
+        if !is_session_active_for_generation(&state, generation) {
             continue;
         }
 
         // 5. Market (`card` + `wot`) Channel Sync
+        let ctrl = state.sync_control_snapshot();
         let now_market = Instant::now();
-        let cooldown_now = state.sync_control.lock().unwrap().cooldown_until;
         if ctrl.is_online && schedule.next_market_at.is_some_and(|t| now_market >= t) {
             let force_upload = schedule.next_market_force_upload;
-            if force_upload || !is_cooling_down(cooldown_now, now_market) {
+            if force_upload || !is_cooling_down(ctrl.cooldown_until, now_market) {
                 schedule.next_market_force_upload = false;
                 schedule.next_market_at = Some(now_market + MARKET_PERIODIC_INTERVAL);
                 match sync_engine::sync_market_channels_with_options(
@@ -474,7 +478,7 @@ async fn run_coordinator_loop(app: tauri::AppHandle) {
                 )
                 .await
                 {
-                    Ok(res) if state.is_generation_current(generation) => {
+                    Ok(res) if is_session_active_for_generation(&state, generation) => {
                         if res.status == MarketSyncStatus::SkippedWifiOnly {
                             if force_upload {
                                 schedule.next_market_force_upload = true;
@@ -486,7 +490,7 @@ async fn run_coordinator_loop(app: tauri::AppHandle) {
                         }
                         let _ = app.emit("humoco://market-synced", &res);
                     }
-                    Err(e) if state.is_generation_current(generation) => {
+                    Err(e) if is_session_active_for_generation(&state, generation) => {
                         if let Some(secs) =
                             crate::sync_client::extract_retry_after_from_error_str(&e.message)
                         {
@@ -499,20 +503,18 @@ async fn run_coordinator_loop(app: tauri::AppHandle) {
         }
 
         // 6. One-shot per-session Sync-Lock probe refresh & silent offline anchor pre-warm
-        let cooldown_l2 = state.sync_control.lock().unwrap().cooldown_until;
+        let ctrl = state.sync_control_snapshot();
         if ctrl.is_online
-            && !is_cooling_down(cooldown_l2, Instant::now())
+            && !is_cooling_down(ctrl.cooldown_until, Instant::now())
             && !schedule.lock_refresh_done
-            && state.is_generation_current(generation)
+            && is_session_active_for_generation(&state, generation)
             && l2_anchor_service::refresh_lock_servers_for_coordinator(&state).await
         {
             schedule.lock_refresh_done = true;
         }
 
-        let next_due = schedule.earliest_due(
-            ctrl.is_online,
-            state.sync_control.lock().unwrap().cooldown_until,
-        );
+        let ctrl = state.sync_control_snapshot();
+        let next_due = schedule.earliest_due(ctrl.is_online, ctrl.cooldown_until);
         wait_for_next_event(next_due, &mut gen_rx, &wake).await;
     }
 }
@@ -657,5 +659,51 @@ mod tests {
         assert!(!sched.sync_backup_no_targets);
         assert_eq!(sched.sync_backup_consecutive_failures, 0);
         assert_eq!(sched.next_sync_backup_at, Some(t2));
+    }
+
+    #[tokio::test]
+    async fn s08_f9_wake_request_strict_and_locked_session_stops_l2_probe() {
+        // 1. SyncWakeRequest rejects unknown JSON fields
+        assert!(serde_json::from_str::<SyncWakeRequest>(r#"{"post":true,"unknown":1}"#).is_err());
+
+        // 2. Locking session immediately blocks refresh_lock_servers_for_coordinator even with cached policy
+        let dir = crate::test_support::temp_test_dir("coord_lock");
+        let pw = "TestPass123!";
+        let mut svc = crate::test_support::setup_test_app(
+            &dir,
+            "Alice",
+            crate::test_support::ALICE_PHRASE,
+            pw,
+        );
+        svc.unlock_session(pw, 600).unwrap();
+        let state = crate::test_support::create_test_state(svc);
+        // Warm caches in active session
+        let _ = state.get_or_load_security_policy_locked(Some(pw)).unwrap();
+        let _ = state
+            .get_or_load_internal_lifecycle_locked(Some(pw))
+            .unwrap();
+        let gen_id = state.current_session_generation();
+        assert!(is_session_active_for_generation(&state, gen_id));
+
+        // Live network updates reflect in sync_control_snapshot & survive mutex poison
+        state.update_network_status(true, false, true);
+        let snap1 = state.sync_control_snapshot();
+        assert!(snap1.is_online && !snap1.is_wifi);
+
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = state.sync_control.lock().unwrap();
+            panic!("simulate mutex poison");
+        }));
+        state.update_network_status(false, false, true);
+        let snap2 = state.sync_control_snapshot();
+        assert!(!snap2.is_online);
+
+        // Lock session without bumping session_generation
+        state.service.lock().unwrap().lock_session();
+        assert!(!is_session_active_for_generation(&state, gen_id));
+        assert!(
+            !l2_anchor_service::refresh_lock_servers_for_coordinator(&state).await,
+            "locked session must not initiate L2 coordinator probes"
+        );
     }
 }
