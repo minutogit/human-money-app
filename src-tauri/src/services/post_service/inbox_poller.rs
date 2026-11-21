@@ -713,7 +713,7 @@ fn open_verified_container(
         }
     }
 
-    match container.open(my_identity, None) {
+    match container.open(Some(my_identity), None) {
         Ok(b) => Some(b),
         Err(e) => {
             let allow_canonical_fallback = my_identity.user_id.contains('@')
@@ -725,7 +725,7 @@ fn open_verified_container(
                     .and_then(|can| {
                         let mut alt = my_identity.clone();
                         alt.user_id = can;
-                        container.open(&alt, None).ok()
+                        container.open(Some(&alt), None).ok()
                     })
             } else {
                 None
