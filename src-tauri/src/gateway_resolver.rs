@@ -10,6 +10,7 @@ use human_money_core::humoco_proto::{
     causal::LockEntry,
     manifest::{AnchorManifest, ServerEntry},
     types::{LockPubKey, LockReceipt, LockReceiptKind},
+    EquivocationProof,
 };
 use human_money_core::models::layer2_api::SyncLockBatchRequest;
 use serde::Serialize;
@@ -35,7 +36,9 @@ pub struct CommitteeDispatchResult {
     pub transport_errors: Vec<(LockPubKey, String)>,
     pub pending_retries: Vec<(ServerEntry, SyncLockBatchRequest)>,
     pub epoch_frozen_manifests: Vec<AnchorManifest>,
+    pub had_epoch_frozen: bool,
     pub revoked_notices: Vec<(LockPubKey, sync_client::SyncRevocationNotice)>,
+    pub equivocation_proofs: Vec<EquivocationProof>,
 }
 
 /// Candidate lock server metadata considered for Sybil folding (`assemble_anchor_template` & Bürgen-Check).
@@ -112,11 +115,11 @@ pub fn sybil_fold_committee(candidates: &[SybilServerCandidate]) -> Vec<SybilSer
                 continue;
             }
         }
-        let domain_key = extract_registrable_domain(&cand.write_url);
-        if let Some(ref dom) = domain_key {
-            if seen_domains.contains(dom) {
-                continue;
-            }
+        let Some(domain_key) = extract_registrable_domain(&cand.write_url) else {
+            continue;
+        };
+        if seen_domains.contains(&domain_key) {
+            continue;
         }
         if let Some(asn) = cand.asn {
             if seen_asns.contains(&asn) {
@@ -128,9 +131,7 @@ pub fn sybil_fold_committee(candidates: &[SybilServerCandidate]) -> Vec<SybilSer
         if let Some(admin) = cand.admin_pub {
             seen_admin_pubs.insert(admin);
         }
-        if let Some(dom) = domain_key {
-            seen_domains.insert(dom);
-        }
+        seen_domains.insert(domain_key);
         if let Some(asn) = cand.asn {
             seen_asns.insert(asn);
         }
@@ -209,18 +210,70 @@ pub async fn dispatch_lock_committee_batches(
         match wrapped {
             Ok(Ok(SyncLockBatchOutcome::Response { status_code, body })) => {
                 out.http_statuses.push((server.lock_pub, Some(status_code)));
-                let mut had_server_receipt = false;
-                for receipt in body.receipts {
-                    if receipt.verify_signature() && receipt.lock_pub == server.lock_pub {
-                        if matches!(receipt.kind, LockReceiptKind::FirstWrite) {
-                            had_server_receipt = true;
+                let mut expected_entries: Vec<([u8; 32], [u8; 32], [u8; 32])> =
+                    Vec::with_capacity(req.entries.len());
+                let mut requested_slots: HashSet<[u8; 32]> =
+                    HashSet::with_capacity(req.entries.len());
+                for hex_str in &req.entries {
+                    if let Ok(wire) = human_money_core::humoco_proto::decode_hex_fixed::<
+                        { human_money_core::humoco_proto::causal::LOCK_ENTRY_WIRE_LEN },
+                    >(hex_str)
+                    {
+                        if let Ok(entry) = LockEntry::from_wire_bytes(&wire) {
+                            if let Ok(eh) = entry.entry_hash() {
+                                requested_slots.insert(entry.slot);
+                                expected_entries.push((entry.slot, entry.child_lock, eh));
+                            }
                         }
+                    }
+                }
+
+                let max_receipts = req.entries.len().saturating_mul(2).clamp(2, 64);
+                let mut seen_server_receipts: HashSet<([u8; 32], [u8; 32], [u8; 32])> =
+                    HashSet::new();
+                let mut covered_requested_slots: HashSet<[u8; 32]> = HashSet::new();
+                let mut valid_first_writes_for_equiv: Vec<LockReceipt> = Vec::new();
+                for receipt in body.receipts.into_iter().take(max_receipts) {
+                    // ConflictSeen is accepted EXCLUSIVELY via the verified `body.conflict` branch.
+                    if !matches!(receipt.kind, LockReceiptKind::FirstWrite) {
+                        continue;
+                    }
+                    if receipt.lock_pub != server.lock_pub
+                        || receipt.bucket != req.bucket
+                        || !requested_slots.contains(&receipt.slot)
+                        || !receipt.verify_signature()
+                    {
+                        continue;
+                    }
+                    valid_first_writes_for_equiv.push(receipt.clone());
+                    let matches_requested = expected_entries.iter().any(|&(s, c, eh)| {
+                        s == receipt.slot && c == receipt.child_lock && eh == receipt.entry_hash
+                    });
+                    if receipt.recipient_nonce == req.recipient_nonce
+                        && matches_requested
+                        && seen_server_receipts.insert((
+                            receipt.slot,
+                            receipt.child_lock,
+                            receipt.entry_hash,
+                        ))
+                    {
+                        covered_requested_slots.insert(receipt.slot);
                         out.receipts.push(receipt);
                     }
                 }
+                if let Some(proof) = human_money_core::services::l2_gateway::detect_equivocation(
+                    &valid_first_writes_for_equiv,
+                ) {
+                    out.equivocation_proofs.push(proof);
+                }
+
+                let mut had_verified_conflict = false;
                 if let Some(conflict) = body.conflict {
                     let valid_receipt = conflict.receipt.verify_signature()
                         && conflict.receipt.lock_pub == server.lock_pub
+                        && conflict.receipt.bucket == req.bucket
+                        && conflict.receipt.slot == conflict.slot
+                        && requested_slots.contains(&conflict.slot)
                         && matches!(conflict.receipt.kind, LockReceiptKind::ConflictSeen)
                         && conflict.receipt.recipient_nonce == req.recipient_nonce;
                     if valid_receipt {
@@ -238,11 +291,14 @@ pub async fn dispatch_lock_committee_batches(
                                 out.receipts.push(conflict.receipt);
                                 out.competing_entries.push(entry);
                                 // No need to retry a slot already settled by verified ConflictSeen
-                                had_server_receipt = true;
+                                had_verified_conflict = true;
                             }
                         }
                     }
                 }
+                let had_server_receipt = had_verified_conflict
+                    || (!requested_slots.is_empty()
+                        && covered_requested_slots.len() == requested_slots.len());
                 if !had_server_receipt {
                     out.pending_retries.push((server, req));
                 }
@@ -253,6 +309,7 @@ pub async fn dispatch_lock_committee_batches(
                 latest_manifest,
             })) => {
                 out.http_statuses.push((server.lock_pub, Some(status_code)));
+                out.had_epoch_frozen = true;
                 if let Some(m) = latest_manifest {
                     out.epoch_frozen_manifests.push(*m);
                 }
@@ -385,8 +442,24 @@ mod tests {
         let bucket = [2u8; 32];
         let slot = [3u8; 32];
         let child_lock = [4u8; 32];
-        let entry_hash = [5u8; 32];
         let nonce = [6u8; 32];
+        let req_entry = LockEntry {
+            slot,
+            parent_slot: [0u8; 32],
+            output_branch: 0,
+            depth: 0,
+            child_lock,
+            sender_pubkey: [11u8; 32],
+            receiver_pubkey_hash: [12u8; 32],
+            change_pubkey_hash: None,
+            causal_sig: [13u8; 64],
+            root_mig_sig: Some([14u8; 64]),
+            encrypted_payload: [0u8;
+                human_money_core::humoco_proto::causal::HOP_ENCRYPTED_PAYLOAD_LEN],
+            pow_nonce: 0,
+        };
+        let req_entry_hex = req_entry.to_wire_hex().unwrap();
+        let entry_hash = req_entry.entry_hash().unwrap();
         let mut receipt = LockReceipt {
             kind: LockReceiptKind::FirstWrite,
             lock_pub,
@@ -446,7 +519,7 @@ mod tests {
             anchor_id,
             bucket,
             recipient_nonce: nonce,
-            entries: Vec::new(),
+            entries: vec![req_entry_hex],
             manifest: None,
             genesis_ticket: None,
             known_head_receipt: None,
@@ -562,7 +635,7 @@ mod tests {
                 anchor_id,
                 bucket,
                 recipient_nonce: nonce,
-                entries: Vec::new(),
+                entries: vec![entry_hex.clone()],
                 manifest: None,
                 genesis_ticket: None,
                 known_head_receipt: None,
@@ -592,5 +665,188 @@ mod tests {
             );
             server.await.unwrap();
         }
+    }
+
+    #[test]
+    fn test_s04_f4_sybil_fold_skips_candidates_without_registrable_domain() {
+        let c_empty = SybilServerCandidate {
+            write_url: String::new(),
+            lock_pub: [1u8; 32],
+            admin_pub: Some([11u8; 32]),
+            asn: None,
+        };
+        let c_invalid = SybilServerCandidate {
+            write_url: "not-a-valid-url".to_string(),
+            lock_pub: [2u8; 32],
+            admin_pub: Some([12u8; 32]),
+            asn: None,
+        };
+        let c_valid = SybilServerCandidate {
+            write_url: "https://honest.example/sync.php".to_string(),
+            lock_pub: [3u8; 32],
+            admin_pub: Some([13u8; 32]),
+            asn: None,
+        };
+        let folded = sybil_fold_committee(&[c_empty, c_invalid, c_valid]);
+        assert_eq!(
+            folded.len(),
+            1,
+            "S04-F4: candidates without a registrable domain must be excluded"
+        );
+        assert_eq!(folded[0].lock_pub, [3u8; 32]);
+    }
+
+    #[tokio::test]
+    async fn test_s04_f1_dispatch_rejects_unmatched_first_write_and_conflict_in_receipts_array() {
+        use ed25519_dalek::Signer;
+        use human_money_core::humoco_proto::causal::{LockEntry, HOP_ENCRYPTED_PAYLOAD_LEN};
+
+        let sk = ed25519_dalek::SigningKey::from_bytes(&[27u8; 32]);
+        let lock_pub = sk.verifying_key().to_bytes();
+        let anchor_id = [1u8; 32];
+        let bucket = [2u8; 32];
+        let slot = [3u8; 32];
+        let child_lock = [4u8; 32];
+        let nonce = [6u8; 32];
+
+        let req_entry = LockEntry {
+            slot,
+            parent_slot: [0u8; 32],
+            output_branch: 0,
+            depth: 0,
+            child_lock,
+            sender_pubkey: [11u8; 32],
+            receiver_pubkey_hash: [12u8; 32],
+            change_pubkey_hash: None,
+            causal_sig: [13u8; 64],
+            root_mig_sig: Some([14u8; 64]),
+            encrypted_payload: [0u8; HOP_ENCRYPTED_PAYLOAD_LEN],
+            pow_nonce: 0,
+        };
+        let req_entry_hex = req_entry.to_wire_hex().unwrap();
+        let req_entry_hash = req_entry.entry_hash().unwrap();
+
+        let sign = |mut r: LockReceipt| {
+            r.sig = sk.sign(&r.digest()).to_bytes();
+            r
+        };
+
+        // Case 1: ConflictSeen smuggled inside body.receipts (with conflict: null)
+        let smuggled_conflict = sign(LockReceipt {
+            kind: LockReceiptKind::ConflictSeen,
+            lock_pub,
+            bucket,
+            slot,
+            child_lock: [0xEE; 32],
+            entry_hash: [0xDD; 32],
+            retain_until_quarter: 8159,
+            write_seq: 1,
+            bucket_head: [9u8; 32],
+            recipient_nonce: nonce,
+            sig: [0u8; 64],
+        });
+        // Case 2: FirstWrite with wrong bucket
+        let wrong_bucket_fw = sign(LockReceipt {
+            kind: LockReceiptKind::FirstWrite,
+            lock_pub,
+            bucket: [0xFF; 32],
+            slot,
+            child_lock,
+            entry_hash: req_entry_hash,
+            retain_until_quarter: 8159,
+            write_seq: 1,
+            bucket_head: [9u8; 32],
+            recipient_nonce: nonce,
+            sig: [0u8; 64],
+        });
+        // Case 3: FirstWrite with wrong recipient_nonce
+        let wrong_nonce_fw = sign(LockReceipt {
+            kind: LockReceiptKind::FirstWrite,
+            lock_pub,
+            bucket,
+            slot,
+            child_lock,
+            entry_hash: req_entry_hash,
+            retain_until_quarter: 8159,
+            write_seq: 1,
+            bucket_head: [9u8; 32],
+            recipient_nonce: [0xAA; 32],
+            sig: [0u8; 64],
+        });
+        // Case 4: FirstWrite with wrong slot / child_lock
+        let wrong_entry_fw = sign(LockReceipt {
+            kind: LockReceiptKind::FirstWrite,
+            lock_pub,
+            bucket,
+            slot: [0xBB; 32],
+            child_lock,
+            entry_hash: req_entry_hash,
+            retain_until_quarter: 8159,
+            write_seq: 1,
+            bucket_head: [9u8; 32],
+            recipient_nonce: nonce,
+            sig: [0u8; 64],
+        });
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let resp_body = serde_json::json!({
+            "status": "ok",
+            "bucket": hex::encode(bucket),
+            "retain_until_quarter": 8159,
+            "receipts": [smuggled_conflict, wrong_bucket_fw, wrong_nonce_fw, wrong_entry_fw],
+            "conflict": null,
+        })
+        .to_string();
+
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 8192];
+            let _ = stream.read(&mut buf).await.unwrap();
+            let http = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                resp_body.len(),
+                resp_body
+            );
+            stream.write_all(http.as_bytes()).await.unwrap();
+        });
+
+        let srv = ServerEntry {
+            write_url: format!("http://127.0.0.1:{}/sync.php", addr.port()),
+            read_url: format!("http://127.0.0.1:{}/d", addr.port()),
+            admin_pub: [8u8; 32],
+            lock_pub,
+            nominated_by: NominatedBy::Creator,
+        };
+        let req = SyncLockBatchRequest {
+            anchor_id,
+            bucket,
+            recipient_nonce: nonce,
+            entries: vec![req_entry_hex],
+            manifest: None,
+            genesis_ticket: None,
+            known_head_receipt: None,
+        };
+
+        let client = sync_client::create_sync_http_client();
+        let empty_cache = std::collections::BTreeMap::new();
+        let res = dispatch_lock_committee_batches(
+            &client,
+            &[(srv, req)],
+            Duration::from_secs(2),
+            &empty_cache,
+        )
+        .await;
+        assert!(
+            res.receipts.is_empty(),
+            "S04-F1: smuggled ConflictSeen & mismatched FirstWrite receipts must all be dropped, got {:?}",
+            res.receipts
+        );
+        assert_eq!(
+            res.pending_retries.len(),
+            1,
+            "S04-F1: unmatched receipts must NOT satisfy had_server_receipt"
+        );
+        server.await.unwrap();
     }
 }

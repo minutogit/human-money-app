@@ -1,24 +1,18 @@
 use chrono::Utc;
 use human_money_core::humoco_proto::decode_hex_fixed;
-#[cfg(test)]
-use human_money_core::services::crypto::derive_ed25519_keypair;
-#[cfg(test)]
-use humoco_wot::{KeyRotationReason, KeySuccessorAttestation};
 use uuid::Uuid;
 
 use crate::l2_lifecycle::{
     discover_anchor_manifest, lifecycle_err, FrontendAnchorDiscoveryDto, FrontendClaimBundleDto,
 };
-#[cfg(test)]
-use crate::models::MnemonicLanguage;
 use crate::models::{
     FrontendError, FrontendLockProtectionOverviewDto, FrontendVoucherL2StatusDto, TransactionRecord,
 };
 use crate::services::l2_anchor_service;
-#[cfg(test)]
-use crate::state::DidWotSigner;
 use crate::state::{AppState, RequiredAccess};
 use crate::sync_client;
+
+const MAX_DISCOVERY_GUARANTOR_DIDS: usize = 20;
 
 #[tauri::command]
 pub fn get_lock_protection_overview(
@@ -65,25 +59,31 @@ pub async fn check_voucher_l2_status(
     l2_anchor_service::check_voucher_l2_status_impl(local_instance_id, password, &state).await
 }
 
-#[tauri::command]
-pub async fn discover_anchor_manifest_cmd(
+pub(crate) async fn discover_anchor_manifest_cmd_impl(
     anchor_id_hex: String,
     creator_did: Option<String>,
     guarantor_dids: Vec<String>,
     password: Option<String>,
-    state: tauri::State<'_, AppState>,
+    state: &AppState,
 ) -> Result<Option<FrontendAnchorDiscoveryDto>, FrontendError> {
-    let session = state.authorize_and_begin_session(RequiredAccess::Unlocked, None)?;
+    let (session, resolved_pw) =
+        state.authorize_and_begin_session_secret(RequiredAccess::Unlocked, password.as_deref())?;
+    if guarantor_dids.len() > MAX_DISCOVERY_GUARANTOR_DIDS {
+        return Err(lifecycle_err(format!(
+            "Too many guarantor DIDs for discovery (max {})",
+            MAX_DISCOVERY_GUARANTOR_DIDS
+        )));
+    }
     let anchor_id = decode_hex_fixed::<32>(anchor_id_hex.trim()).map_err(lifecycle_err)?;
     let client = sync_client::create_sync_probe_client();
     let found = discover_anchor_manifest(
-        state.inner(),
+        state,
         &session,
         &client,
         &anchor_id,
         creator_did.as_deref(),
         &guarantor_dids,
-        password.as_deref(),
+        resolved_pw.as_deref().map(String::as_str),
     )
     .await?;
 
@@ -97,89 +97,27 @@ pub async fn discover_anchor_manifest_cmd(
     }))
 }
 
-#[cfg(test)]
-pub(crate) fn create_key_successor_attestation_impl(
-    new_mnemonic: String,
-    language: Option<MnemonicLanguage>,
-    passphrase: Option<String>,
-    reason: String,
-    new_creator_mig_pub_hex: Option<String>,
+#[tauri::command]
+pub async fn discover_anchor_manifest_cmd(
+    anchor_id_hex: String,
+    creator_did: Option<String>,
+    guarantor_dids: Vec<String>,
     password: Option<String>,
-    state: &AppState,
-) -> Result<String, FrontendError> {
-    let rot_reason = match reason.trim().to_ascii_lowercase().as_str() {
-        "compromise" => KeyRotationReason::Compromise,
-        "device_migration" | "devicemigration" => KeyRotationReason::DeviceMigration,
-        _ => KeyRotationReason::Routine,
-    };
-    let core_lang: human_money_core::MnemonicLanguage =
-        language.unwrap_or(MnemonicLanguage::English).into();
-    let (new_vk, new_sk) = derive_ed25519_keypair(
-        new_mnemonic.trim(),
-        passphrase.as_deref().filter(|s| !s.is_empty()),
-        core_lang,
+    state: tauri::State<'_, AppState>,
+) -> Result<Option<FrontendAnchorDiscoveryDto>, FrontendError> {
+    discover_anchor_manifest_cmd_impl(
+        anchor_id_hex,
+        creator_did,
+        guarantor_dids,
+        password,
+        state.inner(),
     )
-    .map_err(FrontendError::from)?;
-    let new_did = human_money_core::services::crypto::create_user_id(&new_vk, None)
-        .map_err(|e| lifecycle_err(e.to_string()))?;
-    let new_mig_pub = match new_creator_mig_pub_hex
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    {
-        Some(h) => Some(decode_hex_fixed::<32>(h).map_err(lifecycle_err)?),
-        None => None,
-    };
-
-    let new_can_did = crate::state::canonicalize_did(&new_did)
-        .map_err(|e| lifecycle_err(format!("Invalid new_did: {}", e)))?;
-
-    let now_secs = sync_client::current_unix_timestamp().max(1);
-    let mut service = state.authorize_and_lock(RequiredAccess::Full, password.as_deref())?;
-
-    let att = service
-        .with_authorized_identity(
-            human_money_core::AccessMode::Full,
-            password.as_deref(),
-            |w, id| {
-                let old_can_did = crate::state::canonicalize_did(w.get_user_id())
-                    .map_err(|e| lifecycle_err(format!("Invalid wallet user_id: {}", e)))?;
-                let old_signer = DidWotSigner {
-                    did: old_can_did,
-                    signing_key: id.signing_key.clone(),
-                };
-                let new_signer = DidWotSigner {
-                    did: new_can_did,
-                    signing_key: new_sk.clone(),
-                };
-                KeySuccessorAttestation::sign_dual(
-                    &old_signer,
-                    &new_signer,
-                    rot_reason,
-                    new_mig_pub,
-                    now_secs,
-                )
-                .map_err(|e| lifecycle_err(e.to_string()))
-            },
-        )
-        .map_err(FrontendError::from)??;
-
-    let mut store =
-        crate::l2_lifecycle::load_key_successor_attestations(&mut service, password.as_deref())?;
-    if !store.contains(&att) {
-        store.push(att.clone());
-        crate::l2_lifecycle::save_key_successor_attestations(
-            &mut service,
-            &store,
-            password.as_deref(),
-        )?;
-    }
-
-    serde_json::to_string_pretty(&att).map_err(|e| lifecycle_err(e.to_string()))
+    .await
 }
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn create_guarantor_claim_bundle_impl(
+    app: Option<&tauri::AppHandle>,
     local_instance_id: String,
     guarantor_id: String,
     amount: String,
@@ -193,6 +131,12 @@ pub(crate) async fn create_guarantor_claim_bundle_impl(
         human_money_core::ValidatedUserId::parse(&guarantor_id).map_err(FrontendError::from)?;
     let guarantor_id = validated_guarantor.into_string();
     let normalized_amount = amount.trim().replace(',', ".");
+    let balances_are_summable =
+        human_money_core::models::voucher_standard_definition::VoucherStandardDefinition::from_toml(
+            &standard_toml,
+        )
+        .map(|(def, _)| def.immutable.features.balances_are_summable)
+        .unwrap_or(true);
     let (res, intents, pow_bits, session, resolved_pw) = {
         let (mut service, resolved_pw) =
             state.authorize_and_lock_secret(RequiredAccess::DailyPay, password.as_deref())?;
@@ -250,14 +194,31 @@ pub(crate) async fn create_guarantor_claim_bundle_impl(
                 human_money_core::L2TransferMode::DurableIntent(pow_bits),
                 pw,
                 |(claim_res, _intent_opt), wallet| {
-                    let mut summable_amounts = std::collections::HashMap::new();
+                    use crate::services::balance_service::{format_fixed_point, parse_fixed_point};
+                    let mut summable_sums: std::collections::HashMap<String, i128> =
+                        std::collections::HashMap::new();
                     let mut countable_items = std::collections::HashMap::new();
-                    if let Some(first) = claim_res.involved_sources_details.first() {
-                        summable_amounts
-                            .insert(first.display_currency.clone(), first.amount.clone());
-                    } else {
+                    if claim_res.involved_sources_details.is_empty() {
                         countable_items.insert("Claim".to_string(), 1);
+                    } else {
+                        for detail in &claim_res.involved_sources_details {
+                            if balances_are_summable {
+                                if let Some(amt) = parse_fixed_point(&detail.amount) {
+                                    *summable_sums
+                                        .entry(detail.display_currency.clone())
+                                        .or_default() += amt;
+                                }
+                            } else {
+                                *countable_items
+                                    .entry(detail.display_currency.clone())
+                                    .or_default() += 1;
+                            }
+                        }
                     }
+                    let summable_amounts = summable_sums
+                        .into_iter()
+                        .map(|(k, v)| (k, format_fixed_point(v)))
+                        .collect();
 
                     let record = TransactionRecord {
                         id: Uuid::new_v4().to_string(),
@@ -297,6 +258,49 @@ pub(crate) async fn create_guarantor_claim_bundle_impl(
                 },
             )
             .map_err(FrontendError::from)?;
+
+        if let Some(archive) =
+            app.and_then(|a| crate::services::common::open_wallet_archive(a, &service))
+        {
+            if let Ok((std_def, _)) =
+                human_money_core::models::voucher_standard_definition::VoucherStandardDefinition::from_toml(
+                    &standard_toml,
+                )
+            {
+                let _ = service.with_wallet(|w| {
+                    let user_id = w.get_user_id().to_string();
+                    let claimed_voucher_ids: std::collections::HashSet<&str> = res
+                        .involved_sources_details
+                        .iter()
+                        .map(|d| d.voucher_id.as_str())
+                        .collect();
+                    for inst in w.voucher_store.vouchers.values() {
+                        if claimed_voucher_ids.contains(inst.voucher.voucher_id.as_str())
+                            && inst
+                                .voucher
+                                .transactions
+                                .last()
+                                .is_some_and(|t| t.t_type == "claim")
+                        {
+                            if let Err(err) =
+                                human_money_core::archive::FileVoucherArchive::archive_voucher(
+                                    &archive,
+                                    &inst.voucher,
+                                    &user_id,
+                                    &std_def,
+                                )
+                            {
+                                log::warn!(
+                                    "Forensic archiving failed for claimed voucher {} (best effort): {}",
+                                    inst.voucher.voucher_id,
+                                    err
+                                );
+                            }
+                        }
+                    }
+                });
+            }
+        }
 
         if let Some(next_hist) = next_history_cell.into_inner() {
             state.write_cache_slot_for_service(&service, |c| &mut c.history, Some(next_hist));
@@ -366,6 +370,7 @@ pub(crate) async fn create_guarantor_claim_bundle_impl(
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn create_guarantor_claim_bundle(
+    app: tauri::AppHandle,
     local_instance_id: String,
     guarantor_id: String,
     amount: String,
@@ -376,6 +381,7 @@ pub async fn create_guarantor_claim_bundle(
     state: tauri::State<'_, AppState>,
 ) -> Result<FrontendClaimBundleDto, FrontendError> {
     create_guarantor_claim_bundle_impl(
+        Some(&app),
         local_instance_id,
         guarantor_id,
         amount,
@@ -441,6 +447,7 @@ mod tests {
         }
 
         let claim_err = create_guarantor_claim_bundle_impl(
+            None,
             "nonexistent-lid".into(),
             bob_did,
             "10.00".into(),
@@ -498,18 +505,6 @@ mod tests {
         bob_service.lock_session();
         let bob_state = crate::test_support::create_test_state(bob_service);
 
-        let att_err = create_key_successor_attestation_impl(
-            crate::test_support::ALICE_PHRASE.to_string(),
-            Some(crate::models::wallet::MnemonicLanguage::English),
-            None,
-            "routine".to_string(),
-            None,
-            None,
-            &bob_state,
-        )
-        .unwrap_err();
-        assert_eq!(att_err.code, "error.auth.sessionNotActive");
-
         let trust_err =
             l2_anchor_service::set_lock_server_trust_impl("11".repeat(32), false, None, &bob_state)
                 .unwrap_err();
@@ -523,6 +518,150 @@ mod tests {
             &bob_state,
         );
         assert!(trust_ok.is_ok(), "unexpected error: {:?}", trust_ok);
+
+        let _ = std::fs::remove_dir_all(&base_dir);
+    }
+
+    #[tokio::test]
+    async fn test_s04_f7_discover_anchor_manifest_rejects_excessive_guarantors() {
+        let base_dir = temp_test_dir("s04_f7_discover_limit");
+        let pw = "StrongTestPassword123!";
+        let svc = setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, pw);
+        let state = create_test_state(svc);
+
+        let too_many: Vec<String> = (0..21)
+            .map(|i| format!("did:key:z6MkgGuarantor{:02}", i))
+            .collect();
+        let err = discover_anchor_manifest_cmd_impl(
+            "aa".repeat(32),
+            None,
+            too_many,
+            Some(pw.to_string()),
+            &state,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            err.message.contains("Too many guarantor DIDs"),
+            "S04-F7: expected guarantor count cap error, got: {:?}",
+            err
+        );
+
+        let _ = std::fs::remove_dir_all(&base_dir);
+    }
+
+    #[tokio::test]
+    async fn test_s04_f10_guarantor_claim_non_summable_standard_records_countable_items() {
+        use human_money_core::models::profile::PublicProfile;
+        use human_money_core::models::voucher::{NewVoucherData, ValueDefinition};
+        use human_money_core::models::voucher_standard_definition::VoucherStandardDefinition;
+        use human_money_core::wallet::Wallet;
+
+        let base_dir = temp_test_dir("s04_f10_claim_countable");
+        let pw = "StrongTestPassword123!";
+        let mut svc_alice = setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, pw);
+        let mut svc_bob = setup_test_app(&base_dir.join("bob"), "Bob", BOB_PHRASE, pw);
+        let alice_id = svc_alice
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
+        let bob_id = svc_bob
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
+
+        let base_toml = test_utils::generate_signed_standard_toml(
+            "voucher_standards/freetaler_v1/standard.toml",
+        );
+        let (base_def, _) = VoucherStandardDefinition::from_toml(&base_toml).unwrap();
+        let (non_summable_def, _) = test_utils::create_custom_standard(&base_def, |s| {
+            s.immutable.features.balances_are_summable = false;
+        });
+        let old_sig = &base_def.signature.as_ref().unwrap().signature;
+        let new_sig = &non_summable_def.signature.as_ref().unwrap().signature;
+        let non_summable_toml = base_toml
+            .replace(
+                "balances_are_summable = true",
+                "balances_are_summable = false",
+            )
+            .replace(old_sig, new_sig);
+        let (parsed_check, _) = VoucherStandardDefinition::from_toml(&non_summable_toml).unwrap();
+        assert!(!parsed_check.immutable.features.balances_are_summable);
+
+        let voucher = svc_alice
+            .create_new_voucher(
+                &non_summable_toml,
+                NewVoucherData {
+                    creator_profile: PublicProfile {
+                        id: Some(alice_id.clone()),
+                        ..Default::default()
+                    },
+                    nominal_value: ValueDefinition {
+                        amount: "100".into(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                Some(pw),
+            )
+            .unwrap();
+
+        // Bob signs as guarantor and Alice attaches the detached signature
+        let bob_sig_bundle = svc_bob
+            .create_detached_signature_response_bundle(
+                &voucher,
+                "guarantor",
+                false,
+                human_money_core::ContainerConfig::TargetDid(
+                    alice_id.clone(),
+                    human_money_core::PrivacyMode::TrialDecryption,
+                ),
+                Some(pw),
+            )
+            .unwrap();
+        let standards = std::collections::HashMap::from([(
+            parsed_check.immutable.identity.uuid.clone(),
+            non_summable_toml.clone(),
+        )]);
+        svc_alice
+            .process_and_attach_signature(&bob_sig_bundle, &standards, None, Some(pw))
+            .unwrap();
+
+        let local_id = Wallet::calculate_local_instance_id(&voucher, &alice_id).unwrap();
+        let alice_state = create_test_state(svc_alice);
+        let dto = create_guarantor_claim_bundle_impl(
+            None,
+            local_id,
+            bob_id,
+            "100".into(),
+            non_summable_toml,
+            None,
+            Some(false),
+            Some(pw.into()),
+            &alice_state,
+        )
+        .await
+        .unwrap();
+        assert!(!dto.bundle_data.is_empty());
+
+        let history = {
+            let mut s = alice_state.service.lock().unwrap();
+            alice_state
+                .load_history_from_disk(&mut s, Some(pw))
+                .unwrap()
+        };
+        let claim_rec = history
+            .iter()
+            .find(|r| r.bundle_id == dto.bundle_id)
+            .expect("claim history record must be persisted");
+        assert!(
+            claim_rec.summable_amounts.is_empty(),
+            "S04-F10: non-summable standard claim must NOT populate summable_amounts: {:?}",
+            claim_rec.summable_amounts
+        );
+        assert!(
+            !claim_rec.countable_items.is_empty(),
+            "S04-F10: non-summable standard claim MUST populate countable_items: {:?}",
+            claim_rec.countable_items
+        );
 
         let _ = std::fs::remove_dir_all(&base_dir);
     }

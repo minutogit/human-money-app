@@ -17,6 +17,7 @@ use human_money_core::models::layer2_api::{
     CheckoutReleaseVerdict, L2ProcessingOutcome, LockEntry,
 };
 use human_money_core::services::{bundle_processor, l2_gateway};
+use rand::RngCore;
 
 use crate::{
     models::FrontendError,
@@ -25,6 +26,39 @@ use crate::{
 };
 
 const CHECKOUT_BATCH_TIMEOUT: Duration = Duration::from_secs(4);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct VerifiedServerBinding {
+    lock_pub: LockPubKey,
+    admin_pub: [u8; 32],
+}
+
+pub(crate) fn random_non_zero_nonce() -> [u8; 32] {
+    loop {
+        let mut nonce = [0u8; 32];
+        rand::rngs::OsRng.fill_bytes(&mut nonce);
+        if nonce != [0u8; 32] {
+            return nonce;
+        }
+    }
+}
+
+type ReceiptDedupKey = (LockPubKey, [u8; 32], [u8; 32], [u8; 32]);
+
+pub(crate) fn merge_receipts_dedup(
+    base: &mut Vec<human_money_core::humoco_proto::types::LockReceipt>,
+    extra: impl IntoIterator<Item = human_money_core::humoco_proto::types::LockReceipt>,
+) {
+    let mut seen: HashSet<ReceiptDedupKey> = base
+        .iter()
+        .map(|r| (r.lock_pub, r.slot, r.child_lock, r.entry_hash))
+        .collect();
+    for r in extra {
+        if seen.insert((r.lock_pub, r.slot, r.child_lock, r.entry_hash)) {
+            base.push(r);
+        }
+    }
+}
 
 fn fail(message: &str) -> FrontendError {
     FrontendError::from(message.to_string())
@@ -80,36 +114,52 @@ pub(crate) async fn resolve_trusted_lock_keys(
     manifest: Option<&AnchorManifest>,
     password: Option<&str>,
 ) -> Result<(Vec<LockPubKey>, Vec<LockPubKey>), FrontendError> {
-    let mut known_url_to_key: HashMap<String, LockPubKey> = HashMap::new();
+    let mut known_url_to_binding: HashMap<String, VerifiedServerBinding> = HashMap::new();
 
     for probe in lifecycle.l2_probe_cache.values() {
-        if probe.passed && crate::settings::is_lock_admin_trusted(security_policy, &probe.admin_pub)
+        if !probe.passed
+            || !probe.delegation_valid
+            || !crate::settings::is_lock_admin_trusted(security_policy, &probe.admin_pub)
         {
-            if let Ok(pk) = decode_hex_fixed::<32>(&probe.lock_pub) {
-                let norm = crate::services::common::normalize_sync_url(&probe.write_url);
-                if !norm.is_empty() {
-                    known_url_to_key.insert(norm, pk);
-                }
-                if let Some(ref del) = probe.delegation {
-                    let norm_del = crate::services::common::normalize_sync_url(&del.write_url);
-                    if !norm_del.is_empty() {
-                        known_url_to_key.insert(norm_del, pk);
-                    }
-                }
-            }
+            continue;
+        }
+        let Some(ref del) = probe.delegation else {
+            continue;
+        };
+        if !sync_client::verify_lock_delegation(&probe.lock_pub, del, Some(&probe.admin_pub)) {
+            continue;
+        }
+        let norm_del = crate::services::common::normalize_sync_url(&del.write_url);
+        let norm_probe = crate::services::common::normalize_sync_url(&probe.write_url);
+        if norm_del.is_empty() || norm_del != norm_probe {
+            continue;
+        }
+        if let (Ok(lock_pub), Ok(admin_pub)) = (
+            decode_hex_fixed::<32>(&probe.lock_pub),
+            decode_hex_fixed::<32>(&probe.admin_pub),
+        ) {
+            known_url_to_binding.insert(
+                norm_del,
+                VerifiedServerBinding {
+                    lock_pub,
+                    admin_pub,
+                },
+            );
         }
     }
 
-    let mut trusted_urls: HashSet<String> = HashSet::new();
-    let mut trusted_keys: HashSet<LockPubKey> = HashSet::new();
+    let mut own_pinned_urls: HashSet<String> = HashSet::new();
+    let mut contact_trusted_urls: HashSet<String> = HashSet::new();
+    let mut base_trusted_keys: HashSet<LockPubKey> = HashSet::new();
+    let mut independently_pinned_creator_keys: HashSet<LockPubKey> = HashSet::new();
 
-    if let Ok(Some(Some(admin))) = state.with_session(session, |svc| {
-        crate::services::sync_engine::admin::load_stored_sync_admin_opt(svc, password)
+    if let Ok(Some(Some(desc))) = state.with_session(session, |svc| {
+        state.get_or_load_own_sync_descriptor(svc, password)
     }) {
-        if crate::settings::is_lock_admin_trusted(security_policy, &admin.descriptor.drop_pub) {
-            let norm = crate::services::common::normalize_sync_url(&admin.descriptor.write_url);
+        if crate::settings::is_lock_admin_trusted(security_policy, &desc.drop_pub) {
+            let norm = crate::services::common::normalize_sync_url(&desc.write_url);
             if !norm.is_empty() {
-                trusted_urls.insert(norm);
+                own_pinned_urls.insert(norm);
             }
         }
     }
@@ -117,7 +167,7 @@ pub(crate) async fn resolve_trusted_lock_keys(
         if crate::settings::is_lock_admin_trusted(security_policy, &d.drop_pub) {
             let norm = crate::services::common::normalize_sync_url(&d.write_url);
             if !norm.is_empty() {
-                trusted_urls.insert(norm);
+                own_pinned_urls.insert(norm);
             }
         }
     }
@@ -128,7 +178,7 @@ pub(crate) async fn resolve_trusted_lock_keys(
         {
             let norm = crate::services::common::normalize_sync_url(&s.write_url);
             if !norm.is_empty() {
-                trusted_urls.insert(norm);
+                own_pinned_urls.insert(norm);
             }
         }
     }
@@ -138,137 +188,163 @@ pub(crate) async fn resolve_trusted_lock_keys(
         session,
         "Wallet session changed while resolving contact trust for checkout",
         |s| {
-            let caches_guard = state.profile_caches.lock().ok();
-            let caches_ref = caches_guard.as_ref().and_then(|g| g.as_ref());
-            let book_opt = caches_ref.and_then(|c| c.contacts.as_ref());
-            let wot_ref = caches_ref.and_then(|c| c.wot.as_ref());
+            s.with_wallet(|w| {
+                // Lock order strictly `service -> profile_caches`
+                let caches_guard = state.profile_caches.lock().ok();
+                let caches_ref = caches_guard.as_ref().and_then(|g| g.as_ref());
+                let book_opt = caches_ref.and_then(|c| c.contacts.as_ref());
+                let wot_ref = caches_ref.and_then(|c| c.wot.as_ref());
 
-            let self_did = wot_ref.map(|r| r.self_did.clone()).or_else(|| {
-                s.with_wallet(|w| w.get_user_id().to_string())
-                    .ok()
-                    .and_then(|d| canonicalize_did(&d).ok())
-            });
+                let self_did = wot_ref
+                    .map(|r| r.self_did.clone())
+                    .or_else(|| canonicalize_did(w.get_user_id()).ok());
 
-            let wallet_offenders: HashSet<String> = s
-                .with_wallet(|w| {
-                    book_opt
-                        .map(|book| {
-                            book.contacts
-                                .keys()
-                                .filter(|did| {
-                                    matches!(w.check_reputation(did), TrustStatus::KnownOffender(_))
-                                })
-                                .cloned()
-                                .collect::<HashSet<String>>()
-                        })
-                        .unwrap_or_default()
-                })
-                .unwrap_or_default();
+                let is_known_offender =
+                    |did: &str| matches!(w.check_reputation(did), TrustStatus::KnownOffender(_));
 
-            let mut urls = Vec::new();
-            if let Some(book) = book_opt {
-                for contact in book.contacts.values() {
-                    if wallet_offenders.contains(&contact.did) {
-                        continue;
-                    }
-                    let can_contact = canonicalize_did(&contact.did).ok();
-                    // LÜCKE-03: Never accept creator's own card syncs for stranger merchants.
-                    if let (Some(can_c), Some(can_cr)) = (&can_contact, &canonical_creator) {
-                        if can_c == can_cr && self_did.as_ref() != Some(can_cr) {
+                let mut urls = Vec::new();
+                if let Some(book) = book_opt {
+                    for contact in book.contacts.values() {
+                        if is_known_offender(&contact.did) {
                             continue;
                         }
-                    }
+                        let can_contact = canonicalize_did(&contact.did).ok();
+                        // LÜCKE-03: Never accept creator's own card syncs for stranger merchants.
+                        if let (Some(can_c), Some(can_cr)) = (&can_contact, &canonical_creator) {
+                            if can_c == can_cr && self_did.as_ref() != Some(can_cr) {
+                                continue;
+                            }
+                        }
 
-                    let mut contact_trusted =
-                        contact.trust_level.map(|lvl| lvl >= 1).unwrap_or(false);
-                    if !contact_trusted {
-                        if let (Some(reg), Some(can_c)) = (wot_ref, can_contact.as_ref()) {
-                            let hop1_trusted =
-                                reg.own_contacts.get(can_c).is_some_and(|e| e.level >= 1);
-                            let adr08_certified = reg.provider_filters.values().any(|pf| {
-                                pf.local_trust_level >= 1 && pf.certified_level(can_c).is_some()
-                            });
-                            // Hop-2 reachability check via ego graph (depth <= 2 from node 0 with positive weight)
-                            let graph = reg.get_or_build_graph_cache();
-                            let hop2_trusted =
-                                graph.did_to_id.get(can_c).is_some_and(|&target_idx| {
-                                    if target_idx == 0 {
-                                        return true;
-                                    }
-                                    let mut depth1_nodes = HashSet::new();
-                                    if let Some(edges0) = graph.outgoing.first() {
-                                        for e in edges0 {
-                                            if e.level >= 1 {
-                                                if e.to == target_idx {
-                                                    return true;
+                        let mut contact_trusted =
+                            contact.trust_level.map(|lvl| lvl >= 1).unwrap_or(false);
+                        if !contact_trusted {
+                            if let (Some(reg), Some(can_c)) = (wot_ref, can_contact.as_ref()) {
+                                let hop1_trusted =
+                                    reg.own_contacts.get(can_c).is_some_and(|e| e.level >= 1);
+                                let adr08_certified =
+                                    reg.provider_filters.iter().any(|(iss_did, pf)| {
+                                        pf.local_trust_level >= 1
+                                            && !is_known_offender(iss_did.as_str())
+                                            && !is_known_offender(pf.payload.iss.as_str())
+                                            && pf.certified_level(can_c).is_some()
+                                    });
+                                // Hop-2 reachability check via ego graph (depth <= 2 from node 0 with positive weight,
+                                // strictly excluding KnownOffender depth-1 bridges)
+                                let graph = reg.get_or_build_graph_cache();
+                                let hop2_trusted =
+                                    graph.did_to_id.get(can_c).is_some_and(|&target_idx| {
+                                        if target_idx == 0 {
+                                            return true;
+                                        }
+                                        let mut depth1_nodes = HashSet::new();
+                                        if let Some(edges0) = graph.outgoing.first() {
+                                            for e in edges0 {
+                                                if e.level >= 1 {
+                                                    if e.to == target_idx {
+                                                        return true;
+                                                    }
+                                                    let bridge_is_offender = graph
+                                                        .id_to_did
+                                                        .get(e.to as usize)
+                                                        .is_some_and(|bridge_did| {
+                                                            is_known_offender(bridge_did.as_str())
+                                                        });
+                                                    if !bridge_is_offender {
+                                                        depth1_nodes.insert(e.to);
+                                                    }
                                                 }
-                                                depth1_nodes.insert(e.to);
                                             }
                                         }
-                                    }
-                                    depth1_nodes.into_iter().any(|n1| {
-                                        graph.outgoing.get(n1 as usize).is_some_and(|edges1| {
-                                            edges1
-                                                .iter()
-                                                .any(|e| e.to == target_idx && e.level >= 1)
+                                        depth1_nodes.into_iter().any(|n1| {
+                                            graph.outgoing.get(n1 as usize).is_some_and(|edges1| {
+                                                edges1
+                                                    .iter()
+                                                    .any(|e| e.to == target_idx && e.level >= 1)
+                                            })
                                         })
-                                    })
-                                });
-                            contact_trusted = hop1_trusted || hop2_trusted || adr08_certified;
+                                    });
+                                contact_trusted = hop1_trusted || hop2_trusted || adr08_certified;
+                            }
                         }
-                    }
 
-                    if contact_trusted {
-                        for sync in &contact.syncs {
-                            if sync.status != "revoked" {
-                                let norm =
-                                    crate::services::common::normalize_sync_url(&sync.write_url);
-                                if !norm.is_empty() {
-                                    urls.push(norm);
+                        if contact_trusted {
+                            for sync in &contact.syncs {
+                                if sync.status != "revoked" {
+                                    let norm = crate::services::common::normalize_sync_url(
+                                        &sync.write_url,
+                                    );
+                                    if !norm.is_empty() {
+                                        urls.push(norm);
+                                    }
                                 }
                             }
                         }
                     }
                 }
-            }
-            Ok(urls)
+                urls
+            })
+            .map_err(FrontendError::from)
         },
     )?;
 
     for u in contact_candidates {
-        trusted_urls.insert(u);
+        contact_trusted_urls.insert(u);
     }
 
     let offenders = state.with_session_required(
         session,
         "Wallet session changed while loading server offenders for checkout",
-        |svc| crate::l2_lifecycle::load_server_offender_list(svc, password),
+        |svc| state.get_or_load_server_offender_list(svc, password),
     )?;
 
-    let mut urls_to_live_probe: HashMap<String, Option<String>> = HashMap::new();
+    let mut urls_to_live_probe: HashMap<(String, LockPubKey, [u8; 32]), (String, bool)> =
+        HashMap::new();
     if let Some(m) = manifest {
         for s in &m.servers {
             let expected_admin_hex = hex::encode(s.admin_pub);
-            if !crate::settings::is_lock_admin_trusted(security_policy, &expected_admin_hex) {
+            if !crate::settings::is_lock_admin_trusted(security_policy, &expected_admin_hex)
+                || crate::l2_lifecycle::is_server_key_revoked(
+                    &offenders,
+                    &s.lock_pub,
+                    Some(&s.admin_pub),
+                )
+            {
                 continue;
             }
             let (resolved_url, _) =
                 crate::services::common::resolve_server_locator(s, &lifecycle.l2_probe_cache);
             let norm_emb = crate::services::common::normalize_sync_url(&s.write_url);
             let norm_res = crate::services::common::normalize_sync_url(&resolved_url);
-            let url_trusted = trusted_urls.contains(&norm_emb) || trusted_urls.contains(&norm_res);
-            if !url_trusted {
+            let is_own_pinned =
+                own_pinned_urls.contains(&norm_emb) || own_pinned_urls.contains(&norm_res);
+            let is_contact_trusted = contact_trusted_urls.contains(&norm_emb)
+                || contact_trusted_urls.contains(&norm_res);
+            if !is_own_pinned && !is_contact_trusted {
                 continue;
             }
-            if let Some(pk) = known_url_to_key
+            if let Some(binding) = known_url_to_binding
                 .get(&norm_res)
-                .or_else(|| known_url_to_key.get(&norm_emb))
+                .or_else(|| known_url_to_binding.get(&norm_emb))
             {
-                if !crate::l2_lifecycle::is_server_key_revoked(&offenders, pk, Some(&s.admin_pub)) {
-                    trusted_keys.insert(*pk);
+                if binding.lock_pub == s.lock_pub
+                    && binding.admin_pub == s.admin_pub
+                    && !crate::l2_lifecycle::is_server_key_revoked(
+                        &offenders,
+                        &binding.lock_pub,
+                        Some(&binding.admin_pub),
+                    )
+                {
+                    base_trusted_keys.insert(binding.lock_pub);
+                    if is_own_pinned {
+                        independently_pinned_creator_keys.insert(binding.lock_pub);
+                    }
                 }
             } else if !norm_res.is_empty() {
-                urls_to_live_probe.insert(norm_res, Some(expected_admin_hex));
+                urls_to_live_probe
+                    .entry((norm_res, s.lock_pub, s.admin_pub))
+                    .and_modify(|(_, pinned)| *pinned |= is_own_pinned)
+                    .or_insert((expected_admin_hex, is_own_pinned));
             }
         }
     }
@@ -276,7 +352,9 @@ pub(crate) async fn resolve_trusted_lock_keys(
     if !urls_to_live_probe.is_empty() {
         let now_secs = sync_client::current_unix_timestamp();
         let mut join_set = tokio::task::JoinSet::new();
-        for (url, exp_admin_opt) in urls_to_live_probe {
+        for ((url, exp_lock_pub, exp_admin_pub), (exp_admin_hex, is_own_pinned)) in
+            urls_to_live_probe
+        {
             let c = client.clone();
             join_set.spawn(async move {
                 let res = tokio::time::timeout(
@@ -288,17 +366,14 @@ pub(crate) async fn resolve_trusted_lock_keys(
                 res.ok().and_then(|r| r.ok()).and_then(|info| {
                     let lock = info.lock?;
                     let del = lock.delegation.as_ref()?;
-                    if let Some(ref exp_admin) = exp_admin_opt {
-                        if !del.admin_pub.trim().eq_ignore_ascii_case(exp_admin) {
-                            return None;
-                        }
+                    if !del.admin_pub.trim().eq_ignore_ascii_case(&exp_admin_hex) {
+                        return None;
                     }
                     if crate::services::common::normalize_sync_url(&del.write_url) != norm_target {
                         return None;
                     }
                     if let Some(ref rev) = info.revocation {
-                        let rev_admin = exp_admin_opt.as_deref().unwrap_or(del.admin_pub.trim());
-                        if sync_client::verify_revocation_notice(rev, rev_admin).is_ok()
+                        if sync_client::verify_revocation_notice(rev, &exp_admin_hex).is_ok()
                             && rev.effective_at <= now_secs
                         {
                             return None;
@@ -307,29 +382,37 @@ pub(crate) async fn resolve_trusted_lock_keys(
                     if !sync_client::verify_lock_delegation(
                         &lock.lock_pub,
                         del,
-                        exp_admin_opt.as_deref(),
+                        Some(&exp_admin_hex),
                     ) {
                         return None;
                     }
                     let lock_pk = decode_hex_fixed::<32>(&lock.lock_pub).ok()?;
                     let admin_pk = decode_hex_fixed::<32>(&del.admin_pub).ok()?;
-                    Some((lock_pk, admin_pk, del.admin_pub.clone()))
+                    if lock_pk != exp_lock_pub || admin_pk != exp_admin_pub {
+                        return None;
+                    }
+                    Some((lock_pk, admin_pk, del.admin_pub.clone(), is_own_pinned))
                 })
             });
         }
         while let Some(res) = join_set.join_next().await {
-            if let Ok(Some((pk, admin_pk, admin_hex))) = res {
+            if let Ok(Some((pk, admin_pk, admin_hex, is_own_pinned))) = res {
                 if crate::settings::is_lock_admin_trusted(security_policy, &admin_hex)
                     && !crate::l2_lifecycle::is_server_key_revoked(&offenders, &pk, Some(&admin_pk))
                 {
-                    trusted_keys.insert(pk);
+                    base_trusted_keys.insert(pk);
+                    if is_own_pinned {
+                        independently_pinned_creator_keys.insert(pk);
+                    }
                 }
             }
         }
     }
 
-    let keys_vec: Vec<LockPubKey> = trusted_keys.into_iter().collect();
-    Ok((keys_vec.clone(), keys_vec))
+    Ok((
+        base_trusted_keys.into_iter().collect(),
+        independently_pinned_creator_keys.into_iter().collect(),
+    ))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -521,8 +604,10 @@ fn build_receive_payload_and_record(
 /// - `N >= 1`: Prepares Leap-Lock `m..=k` `SyncLockBatchRequest` payloads, fans them out in parallel
 ///   across the voucher's `AnchorManifest` committee, records any returned `ConflictSeen` evidence,
 ///   and evaluates Green / Yellow / Red via `l2_gateway::evaluate_bundle_checkout`.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn checkout_bundle(
     state: &AppState,
+    session: &crate::session::SessionToken,
     purchase_id: &str,
     bundle: &[u8],
     standards: &HashMap<String, String>,
@@ -532,6 +617,9 @@ pub(crate) async fn checkout_bundle(
     // 1. Idempotent replay check before any network I/O
     {
         let mut service = state.lock_service()?;
+        if !state.is_session_current(session, &service) {
+            return Err(fail("Wallet session changed before checkout"));
+        }
         if let Some(completion) = service
             .replay_checkout_purchase(purchase_id, bundle)
             .map_err(FrontendError::from)?
@@ -612,56 +700,90 @@ pub(crate) async fn checkout_bundle(
     }
 
     // 2. Decrypt & inspect bundle to check replay history and N = 0 offline-only vs anchored vouchers
-    let (opened_bundle, merchant_id, session, already_in_history) = {
-        let service = state.lock_service()?;
-        let (parsed, mid, in_history) = service
-            .with_wallet_and_identity(|wallet, identity| {
-                let parsed = bundle_processor::open_and_verify_bundle(identity, bundle)?;
-                let in_history = wallet
-                    .bundle_meta_store
-                    .history
-                    .contains_key(&parsed.bundle_id);
-                Ok::<_, human_money_core::Error>((
-                    parsed,
-                    wallet.get_user_id().to_string(),
-                    in_history,
-                ))
-            })
-            .map_err(FrontendError::from)?
-            .map_err(FrontendError::from)?;
-        let session = crate::session::SessionToken {
-            generation: state.current_session_generation(),
-            owner_did: mid.clone(),
-        };
-        (parsed, mid, session, in_history)
-    };
+    let (opened_bundle, merchant_id, already_in_history) = state.with_session_required(
+        session,
+        "Wallet session changed during checkout",
+        |service| {
+            service
+                .with_wallet_and_identity(|wallet, identity| {
+                    let parsed = bundle_processor::open_and_verify_bundle(identity, bundle)?;
+                    let in_history = wallet
+                        .bundle_meta_store
+                        .history
+                        .contains_key(&parsed.bundle_id);
+                    Ok::<_, human_money_core::Error>((
+                        parsed,
+                        wallet.get_user_id().to_string(),
+                        in_history,
+                    ))
+                })
+                .map_err(FrontendError::from)?
+                .map_err(FrontendError::from)
+        },
+    )?;
 
     if already_in_history {
-        let verdict_fe: crate::models::FrontendCheckoutReleaseVerdict =
-            CheckoutReleaseVerdict::new(
-                L2ProcessingOutcome::Confirmed {
-                    quorum_certificates: Vec::new(),
-                },
-                true,
-            )
-            .into();
-        let receive_payload = {
-            let mut service = state.lock_service()?;
-            build_receive_payload_and_record(
-                state,
-                &mut service,
-                purchase_id,
-                bundle,
-                standards,
-                false,
-                true,
-                verdict_fe.clone(),
-                None,
-                password,
-            )
-            .map(|(p, _)| p)
-            .ok()
-        };
+        let (verdict_fe, receive_payload) = state.with_session_required(
+            session,
+            "Wallet session changed during checkout",
+            |service| {
+                let any_quarantined = service
+                    .with_wallet(|wallet| {
+                        opened_bundle.vouchers.iter().any(|v| {
+                            human_money_core::wallet::Wallet::calculate_local_instance_id(
+                                v,
+                                &merchant_id,
+                            )
+                            .ok()
+                            .and_then(|lid| wallet.voucher_store.vouchers.get(&lid))
+                            .is_some_and(|inst| {
+                                matches!(
+                                    inst.status,
+                                    human_money_core::VoucherStatus::Quarantined { .. }
+                                )
+                            })
+                        })
+                    })
+                    .map_err(FrontendError::from)?;
+                let (conflict_summaries, _) =
+                    crate::services::transfer_service::filter_conflicts_for_received_vouchers(
+                        service,
+                        &opened_bundle.vouchers,
+                    )?;
+                let replay_outcome = if any_quarantined || !conflict_summaries.is_empty() {
+                    L2ProcessingOutcome::Quarantined {
+                        reason: "BundleAlreadyProcessedQuarantined".to_string(),
+                    }
+                } else if opened_bundle
+                    .vouchers
+                    .iter()
+                    .all(|v| v.layer2_anchor.is_none())
+                {
+                    L2ProcessingOutcome::OfflineOnly
+                } else {
+                    L2ProcessingOutcome::Yellow {
+                        reason: "BundleAlreadyProcessedReplay".to_string(),
+                    }
+                };
+                let verdict_fe: crate::models::FrontendCheckoutReleaseVerdict =
+                    CheckoutReleaseVerdict::new(replay_outcome, false).into();
+                let receive_payload = build_receive_payload_and_record(
+                    state,
+                    service,
+                    purchase_id,
+                    bundle,
+                    standards,
+                    false,
+                    true,
+                    verdict_fe.clone(),
+                    None,
+                    password,
+                )
+                .map(|(p, _)| p)
+                .ok();
+                Ok((verdict_fe, receive_payload))
+            },
+        )?;
         return Ok(PurchaseCompletion {
             purchase_id: purchase_id.to_string(),
             newly_committed: false,
@@ -681,23 +803,26 @@ pub(crate) async fn checkout_bundle(
     {
         let verdict_core = CheckoutReleaseVerdict::new(L2ProcessingOutcome::OfflineOnly, false);
         let verdict_fe: crate::models::FrontendCheckoutReleaseVerdict = verdict_core.into();
-        let receive_payload = {
-            let mut service = state.lock_service()?;
-            build_receive_payload_and_record(
-                state,
-                &mut service,
-                purchase_id,
-                bundle,
-                standards,
-                false,
-                false,
-                verdict_fe.clone(),
-                None,
-                password,
-            )
-            .map(|(p, _)| p)
-            .ok()
-        };
+        let receive_payload = state.with_session_required(
+            session,
+            "Wallet session changed during checkout",
+            |service| {
+                Ok(build_receive_payload_and_record(
+                    state,
+                    service,
+                    purchase_id,
+                    bundle,
+                    standards,
+                    false,
+                    false,
+                    verdict_fe.clone(),
+                    None,
+                    password,
+                )
+                .map(|(p, _)| p)
+                .ok())
+            },
+        )?;
         return Ok(PurchaseCompletion {
             purchase_id: purchase_id.to_string(),
             newly_committed: false,
@@ -715,23 +840,26 @@ pub(crate) async fn checkout_bundle(
             false,
         );
         let verdict_fe: crate::models::FrontendCheckoutReleaseVerdict = verdict_core.into();
-        let receive_payload = {
-            let mut service = state.lock_service()?;
-            build_receive_payload_and_record(
-                state,
-                &mut service,
-                purchase_id,
-                bundle,
-                standards,
-                false,
-                false,
-                verdict_fe.clone(),
-                None,
-                password,
-            )
-            .map(|(p, _)| p)
-            .ok()
-        };
+        let receive_payload = state.with_session_required(
+            session,
+            "Wallet session changed during checkout",
+            |service| {
+                Ok(build_receive_payload_and_record(
+                    state,
+                    service,
+                    purchase_id,
+                    bundle,
+                    standards,
+                    false,
+                    false,
+                    verdict_fe.clone(),
+                    None,
+                    password,
+                )
+                .map(|(p, _)| p)
+                .ok())
+            },
+        )?;
         return Ok(PurchaseCompletion {
             purchase_id: purchase_id.to_string(),
             newly_committed: false,
@@ -750,19 +878,26 @@ pub(crate) async fn checkout_bundle(
         .filter(|s| s.role.eq_ignore_ascii_case("guarantor"))
         .map(|s| s.signer_id.clone())
         .collect();
-    let security_policy = state
-        .get_cached_security_policy()
-        .map_err(FrontendError::from)?;
-    let lifecycle = state
-        .get_cached_internal_lifecycle()
-        .map_err(FrontendError::from)?;
+    let (security_policy, mut active_lifecycle) = state.with_session_required(
+        session,
+        "Wallet session changed during checkout",
+        |service| {
+            let sp = state
+                .get_or_load_security_policy(service, password)
+                .map_err(FrontendError::from)?;
+            let lc = state
+                .get_or_load_internal_lifecycle(service, password)
+                .map_err(FrontendError::from)?;
+            Ok((sp, lc))
+        },
+    )?;
     let client = sync_client::create_sync_http_client();
     let mut pow_base_bits = opened_bundle
         .anchor_manifest
         .as_ref()
         .map(|m| {
             crate::services::common::max_pow_base_bits_for_servers(
-                &lifecycle,
+                &active_lifecycle,
                 m.servers.iter().map(|s| s.lock_pub),
             )
         })
@@ -770,27 +905,28 @@ pub(crate) async fn checkout_bundle(
 
     // 3. Prepare durable challenge context + per-server SyncLockBatchRequests (running Discovery if local manifest missing).
     // Fail closed immediately if the local anti-rollback sidecar is corrupted BEFORE any discovery fallback.
-    let known_heads = {
-        let mut service = state.lock_service()?;
-        crate::state::load_known_head_receipts_for_anchor(&mut service, &anchor_id, password)?
-    };
-    let first_prepare = {
-        let mut service = state.lock_service()?;
-        service.prepare_checkout_requests(
-            purchase_id,
-            bundle,
-            pow_base_bits,
-            now()?,
-            &known_heads,
-            password,
-        )
-    };
+    let first_prepare = state.with_session_required(
+        session,
+        "Wallet session changed during checkout",
+        |service| {
+            let known_heads =
+                crate::state::load_known_head_receipts_for_anchor(service, &anchor_id, password)?;
+            Ok(service.prepare_checkout_requests(
+                purchase_id,
+                bundle,
+                pow_base_bits,
+                now()?,
+                &known_heads,
+                password,
+            ))
+        },
+    )?;
     let (mut context, mut requests) = match first_prepare {
         Ok(pair) => pair,
         Err(_) => {
             let discovered = crate::l2_lifecycle::discover_anchor_manifest(
                 state,
-                &session,
+                session,
                 &client,
                 &anchor_id,
                 voucher.creator_profile.id.as_deref(),
@@ -801,11 +937,11 @@ pub(crate) async fn checkout_bundle(
             if let Some(ref m) = discovered {
                 pow_base_bits =
                     pow_base_bits.max(crate::services::common::max_pow_base_bits_for_servers(
-                        &lifecycle,
+                        &active_lifecycle,
                         m.servers.iter().map(|s| s.lock_pub),
                     ));
             }
-            state.with_session_required(&session, "Wallet changed during checkout", |service| {
+            state.with_session_required(session, "Wallet changed during checkout", |service| {
                 let known_heads = crate::state::load_known_head_receipts_for_anchor(
                     service, &anchor_id, password,
                 )?;
@@ -826,9 +962,9 @@ pub(crate) async fn checkout_bundle(
     // 4. Resolve trusted LockPubKeys & fan out committee batches in parallel
     let (mut base_trusted_keys, mut independently_pinned_creator_keys) = resolve_trusted_lock_keys(
         state,
-        &session,
+        session,
         &security_policy,
-        &lifecycle,
+        &active_lifecycle,
         &client,
         voucher.creator_profile.id.as_deref(),
         Some(&context.manifest),
@@ -840,27 +976,34 @@ pub(crate) async fn checkout_bundle(
         &client,
         &requests,
         CHECKOUT_BATCH_TIMEOUT,
-        &lifecycle.l2_probe_cache,
+        &active_lifecycle.l2_probe_cache,
     )
     .await;
+    let mut all_competing_entries = dispatch.competing_entries.clone();
+    let mut all_receipts_for_equiv = dispatch.receipts.clone();
+    let mut all_equiv_proofs = dispatch.equivocation_proofs.clone();
+    for qc in &opened_bundle.quorum_certificates {
+        all_receipts_for_equiv.extend(qc.receipts.iter().cloned());
+    }
 
     // 4b. Handle `409 epoch_frozen`, `410 revoked`, or total NXDOMAIN committee failure via Discovery Cascade
     let upgrade = resolve_manifest_upgrade_after_dispatch(
         state,
-        &session,
+        session,
         &client,
         &anchor_id,
         voucher.creator_profile.id.as_deref(),
         &guarantor_dids,
-        &lifecycle,
+        &active_lifecycle,
         &context.manifest,
         &dispatch,
         password,
     )
     .await?;
     if upgrade.upgraded_manifest.is_some() || upgrade.relocated {
+        let upgraded = upgrade.upgraded_manifest.is_some();
         let fresh_lifecycle =
-            state.with_session_required(&session, "Wallet changed during checkout", |service| {
+            state.with_session_required(session, "Wallet changed during checkout", |service| {
                 if let Some((newer_manifest, upgraded_pow_bits)) = upgrade.upgraded_manifest {
                     pow_base_bits = pow_base_bits.max(upgraded_pow_bits);
                     service
@@ -886,11 +1029,12 @@ pub(crate) async fn checkout_bundle(
                     .get_or_load_internal_lifecycle(service, password)
                     .map_err(FrontendError::from)
             })?;
+        active_lifecycle = fresh_lifecycle;
         let keys = resolve_trusted_lock_keys(
             state,
-            &session,
+            session,
             &security_policy,
-            &fresh_lifecycle,
+            &active_lifecycle,
             &client,
             voucher.creator_profile.id.as_deref(),
             Some(&context.manifest),
@@ -899,27 +1043,91 @@ pub(crate) async fn checkout_bundle(
         .await?;
         base_trusted_keys = keys.0;
         independently_pinned_creator_keys = keys.1;
-        dispatch = crate::gateway_resolver::dispatch_lock_committee_batches(
-            &client,
-            &requests,
-            CHECKOUT_BATCH_TIMEOUT,
-            &fresh_lifecycle.l2_probe_cache,
-        )
-        .await;
+        if upgraded {
+            let dispatch2 = crate::gateway_resolver::dispatch_lock_committee_batches(
+                &client,
+                &requests,
+                CHECKOUT_BATCH_TIMEOUT,
+                &active_lifecycle.l2_probe_cache,
+            )
+            .await;
+            all_competing_entries.extend(dispatch2.competing_entries.iter().cloned());
+            all_receipts_for_equiv.extend(dispatch2.receipts.iter().cloned());
+            all_equiv_proofs.extend(dispatch2.equivocation_proofs.iter().cloned());
+            dispatch = dispatch2;
+        } else {
+            let pending_retry_pubs: HashSet<LockPubKey> = dispatch
+                .pending_retries
+                .iter()
+                .map(|(s, _)| s.lock_pub)
+                .collect();
+            let retry_requests: Vec<_> = requests
+                .iter()
+                .filter(|(s, _)| {
+                    upgrade.relocated_lock_pubs.contains(&s.lock_pub)
+                        || pending_retry_pubs.contains(&s.lock_pub)
+                })
+                .cloned()
+                .collect();
+            if !retry_requests.is_empty() {
+                let dispatch2 = crate::gateway_resolver::dispatch_lock_committee_batches(
+                    &client,
+                    &retry_requests,
+                    CHECKOUT_BATCH_TIMEOUT,
+                    &active_lifecycle.l2_probe_cache,
+                )
+                .await;
+                all_competing_entries.extend(dispatch2.competing_entries.iter().cloned());
+                all_receipts_for_equiv.extend(dispatch2.receipts.iter().cloned());
+                all_equiv_proofs.extend(dispatch2.equivocation_proofs.iter().cloned());
+                merge_receipts_dedup(&mut dispatch.receipts, dispatch2.receipts);
+                dispatch.pending_retries = dispatch2.pending_retries;
+            }
+        }
     }
 
-    if let Some(equiv_proof) = l2_gateway::detect_equivocation(&dispatch.receipts) {
-        let _ = state.with_session(&session, |service| {
-            let now_secs = sync_client::current_unix_timestamp().max(1);
-            let _ = crate::l2_lifecycle::record_equivocation_proof(
-                service,
-                None,
-                &equiv_proof,
-                now_secs,
-                password,
-            );
-            Ok(())
-        });
+    if let Some(equiv_proof) = l2_gateway::detect_equivocation(&all_receipts_for_equiv) {
+        all_equiv_proofs.push(equiv_proof);
+    }
+    if !all_equiv_proofs.is_empty() {
+        let updated_offenders = state
+            .with_session(session, |service| {
+                let now_secs = sync_client::current_unix_timestamp().max(1);
+                for equiv_proof in &all_equiv_proofs {
+                    let _ = crate::l2_lifecycle::record_equivocation_and_refresh_cache(
+                        state,
+                        service,
+                        &active_lifecycle.l2_probe_cache,
+                        equiv_proof,
+                        now_secs,
+                        password,
+                    );
+                }
+                state.get_or_load_server_offender_list(service, password)
+            })
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        let offending_locks: HashSet<LockPubKey> = all_equiv_proofs
+            .iter()
+            .map(|p| p.receipt_a.lock_pub)
+            .collect();
+        let admin_by_lock: HashMap<LockPubKey, [u8; 32]> = context
+            .manifest
+            .servers
+            .iter()
+            .map(|s| (s.lock_pub, s.admin_pub))
+            .collect();
+        let keep_key = |pk: &LockPubKey| {
+            !offending_locks.contains(pk)
+                && !crate::l2_lifecycle::is_server_key_revoked(
+                    &updated_offenders,
+                    pk,
+                    admin_by_lock.get(pk),
+                )
+        };
+        base_trusted_keys.retain(keep_key);
+        independently_pinned_creator_keys.retain(keep_key);
     }
 
     // 5. Evaluate outcome under Green-Rule & LÜCKE-03 isolation
@@ -942,15 +1150,15 @@ pub(crate) async fn checkout_bundle(
     let manifest_revision = Some(context.manifest.revision);
 
     let mut service = state.lock_service()?;
-    if !state.is_session_current(&session, &service) {
+    if !state.is_session_current(session, &service) {
         return Err(fail("Wallet changed during checkout"));
     }
 
-    for competing_entry in &dispatch.competing_entries {
+    for competing_entry in &all_competing_entries {
         if let Err(err) = service.record_checkout_upstream_conflict(
             bundle,
             competing_entry,
-            pow_base_bits,
+            DEFAULT_LOCK_POW_BASE_BITS,
             password,
         ) {
             log::warn!("Recording upstream conflict entry failed: {}", err);
@@ -960,7 +1168,7 @@ pub(crate) async fn checkout_bundle(
     crate::state::record_known_head_receipts(
         &mut service,
         &anchor_id,
-        &dispatch.receipts,
+        &all_receipts_for_equiv,
         password,
     )?;
 
@@ -1078,7 +1286,7 @@ pub(crate) async fn checkout_bundle(
             if !dispatch.pending_retries.is_empty() {
                 let retries = dispatch.pending_retries;
                 let retry_client = client.clone();
-                let retry_probe_cache = lifecycle.l2_probe_cache.clone();
+                let retry_probe_cache = active_lifecycle.l2_probe_cache.clone();
                 tokio::spawn(async move {
                     let _ = crate::gateway_resolver::dispatch_lock_committee_batches(
                         &retry_client,
@@ -1159,15 +1367,16 @@ pub(crate) async fn checkout_bundle(
     }
 }
 
-struct DispatchUpgradeResult {
-    upgraded_manifest: Option<(AnchorManifest, u32)>,
-    relocated: bool,
+pub(crate) struct DispatchUpgradeResult {
+    pub upgraded_manifest: Option<(AnchorManifest, u32)>,
+    pub relocated: bool,
+    pub relocated_lock_pubs: HashSet<LockPubKey>,
 }
 
 /// Records `410 revoked` notices and resolves any verified newer `AnchorManifest` from
-/// `409 epoch_frozen` responses or manifest discovery (H7/H10 shared path for checkout & PoST).
+/// `409 epoch_frozen` responses or manifest discovery (H7/H10 shared path for checkout, PoST & intents).
 #[allow(clippy::too_many_arguments)]
-async fn resolve_manifest_upgrade_after_dispatch(
+pub(crate) async fn resolve_manifest_upgrade_after_dispatch(
     state: &AppState,
     session: &crate::session::SessionToken,
     client: &reqwest::Client,
@@ -1181,8 +1390,8 @@ async fn resolve_manifest_upgrade_after_dispatch(
 ) -> Result<DispatchUpgradeResult, FrontendError> {
     let now_secs = sync_client::current_unix_timestamp();
     let mut relocated = false;
+    let mut relocated_lock_pubs: HashSet<LockPubKey> = HashSet::new();
     if !dispatch.revoked_notices.is_empty() {
-        let mut relocated_lock_pubs: HashSet<LockPubKey> = HashSet::new();
         let mut scratch_cache = lifecycle.l2_probe_cache.clone();
         let mut probe_cache_deltas = Vec::new();
         for (lock_pub, notice) in &dispatch.revoked_notices {
@@ -1249,7 +1458,11 @@ async fn resolve_manifest_upgrade_after_dispatch(
     let all_unreachable = dispatch.receipts.is_empty()
         && dispatch.competing_entries.is_empty()
         && (!dispatch.transport_errors.is_empty() || !dispatch.rejected_errors.is_empty());
-    if best_upgraded.is_none() && (all_unreachable || !dispatch.epoch_frozen_manifests.is_empty()) {
+    if best_upgraded.is_none()
+        && (all_unreachable
+            || dispatch.had_epoch_frozen
+            || !dispatch.epoch_frozen_manifests.is_empty())
+    {
         if let Ok(Some(discovered)) = crate::l2_lifecycle::discover_anchor_manifest(
             state,
             session,
@@ -1278,6 +1491,7 @@ async fn resolve_manifest_upgrade_after_dispatch(
             (m, pow_bits)
         }),
         relocated,
+        relocated_lock_pubs,
     })
 }
 
@@ -1315,6 +1529,7 @@ type PrecommitBatchPayload = (
         human_money_core::humoco_proto::manifest::ServerEntry,
         human_money_core::models::layer2_api::SyncLockBatchRequest,
     )>,
+    [u8; 32],
 );
 
 #[allow(clippy::too_many_arguments)]
@@ -1349,10 +1564,10 @@ fn collect_prefix_qcs_and_build_precommit_batch(
     }
 
     if first_unconfirmed >= voucher.transactions.len() {
-        return Ok((voucher_qcs, Vec::new(), Vec::new()));
+        return Ok((voucher_qcs, Vec::new(), Vec::new(), [0u8; 32]));
     }
 
-    let (entries, requests) = state.with_session_required(
+    let (entries, requests, nonce) = state.with_session_required(
         session,
         "Wallet session changed during pre-commit L2 verification",
         |service| {
@@ -1370,9 +1585,7 @@ fn collect_prefix_qcs_and_build_precommit_batch(
                 pow_base_bits,
             )
             .map_err(FrontendError::from)?;
-            let mut nonce = [0u8; 32];
-            nonce[..16].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
-            nonce[16..].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
+            let nonce = random_non_zero_nonce();
             let requests = l2_gateway::build_committee_batch_requests(
                 anchor_id,
                 manifest,
@@ -1382,11 +1595,11 @@ fn collect_prefix_qcs_and_build_precommit_batch(
                 &known_heads,
             )
             .map_err(FrontendError::from)?;
-            Ok((entries, requests))
+            Ok((entries, requests, nonce))
         },
     )?;
 
-    Ok((voucher_qcs, entries, requests))
+    Ok((voucher_qcs, entries, requests, nonce))
 }
 
 /// Verifies an incoming `TransactionBundle` against its Layer-2 Sync-Lock committee(s) BEFORE
@@ -1420,9 +1633,15 @@ pub(crate) async fn verify_bundle_l2_precommit(
         return Ok(PrecommitL2Verification::OfflineOnly);
     }
 
-    let lifecycle = state
-        .get_cached_internal_lifecycle()
-        .map_err(FrontendError::from)?;
+    let mut active_lifecycle = state.with_session_required(
+        session,
+        "Wallet session changed before pre-commit L2 verification",
+        |service| {
+            state
+                .get_or_load_internal_lifecycle(service, password)
+                .map_err(FrontendError::from)
+        },
+    )?;
     let client = sync_client::create_sync_http_client();
 
     let mut quorum_certificates: Vec<(
@@ -1496,11 +1715,11 @@ pub(crate) async fn verify_bundle_l2_precommit(
         };
 
         let mut pow_base_bits = crate::services::common::max_pow_base_bits_for_servers(
-            &lifecycle,
+            &active_lifecycle,
             manifest.servers.iter().map(|s| s.lock_pub),
         );
 
-        let (mut voucher_qcs, mut entries, mut requests) =
+        let (mut voucher_qcs, mut entries, mut requests, mut expected_nonce) =
             collect_prefix_qcs_and_build_precommit_batch(
                 state,
                 session,
@@ -1519,9 +1738,15 @@ pub(crate) async fn verify_bundle_l2_precommit(
                 &client,
                 &requests,
                 CHECKOUT_BATCH_TIMEOUT,
-                &lifecycle.l2_probe_cache,
+                &active_lifecycle.l2_probe_cache,
             )
             .await;
+            let mut all_competing_entries = dispatch.competing_entries.clone();
+            let mut all_receipts_for_equiv = dispatch.receipts.clone();
+            let mut all_equiv_proofs = dispatch.equivocation_proofs.clone();
+            for qc in &opened_bundle.quorum_certificates {
+                all_receipts_for_equiv.extend(qc.receipts.iter().cloned());
+            }
 
             // H7/H10: Bounded single retry after `409 epoch_frozen` / `410 revoked` relocation / unreachable manifest upgrade
             let upgrade = resolve_manifest_upgrade_after_dispatch(
@@ -1531,14 +1756,15 @@ pub(crate) async fn verify_bundle_l2_precommit(
                 &anchor_id,
                 voucher.creator_profile.id.as_deref(),
                 &guarantor_dids,
-                &lifecycle,
+                &active_lifecycle,
                 &manifest,
                 &dispatch,
                 password,
             )
             .await?;
             if upgrade.upgraded_manifest.is_some() || upgrade.relocated {
-                let fresh_probe_cache = state.with_session_required(
+                let upgraded = upgrade.upgraded_manifest.is_some();
+                let fresh_lifecycle = state.with_session_required(
                     session,
                     "Wallet session changed during pre-commit manifest upgrade",
                     |service| {
@@ -1552,61 +1778,107 @@ pub(crate) async fn verify_bundle_l2_precommit(
                         }
                         state
                             .get_or_load_internal_lifecycle(service, password)
-                            .map(|lc| lc.l2_probe_cache)
                             .map_err(FrontendError::from)
                     },
                 )?;
-                let rebuilt = collect_prefix_qcs_and_build_precommit_batch(
-                    state,
-                    session,
-                    &opened_bundle,
-                    voucher,
-                    &anchor_id,
-                    &manifest,
-                    pow_base_bits,
-                    password,
-                )?;
-                voucher_qcs = rebuilt.0;
-                entries = rebuilt.1;
-                requests = rebuilt.2;
-                if !requests.is_empty() {
-                    dispatch = crate::gateway_resolver::dispatch_lock_committee_batches(
-                        &client,
-                        &requests,
-                        CHECKOUT_BATCH_TIMEOUT,
-                        &fresh_probe_cache,
-                    )
-                    .await;
+                active_lifecycle = fresh_lifecycle;
+                if upgraded {
+                    let rebuilt = collect_prefix_qcs_and_build_precommit_batch(
+                        state,
+                        session,
+                        &opened_bundle,
+                        voucher,
+                        &anchor_id,
+                        &manifest,
+                        pow_base_bits,
+                        password,
+                    )?;
+                    voucher_qcs = rebuilt.0;
+                    entries = rebuilt.1;
+                    requests = rebuilt.2;
+                    expected_nonce = rebuilt.3;
+                    if !requests.is_empty() {
+                        let dispatch2 = crate::gateway_resolver::dispatch_lock_committee_batches(
+                            &client,
+                            &requests,
+                            CHECKOUT_BATCH_TIMEOUT,
+                            &active_lifecycle.l2_probe_cache,
+                        )
+                        .await;
+                        all_competing_entries.extend(dispatch2.competing_entries.iter().cloned());
+                        all_receipts_for_equiv.extend(dispatch2.receipts.iter().cloned());
+                        all_equiv_proofs.extend(dispatch2.equivocation_proofs.iter().cloned());
+                        dispatch = dispatch2;
+                    }
+                } else {
+                    let pending_retry_pubs: HashSet<LockPubKey> = dispatch
+                        .pending_retries
+                        .iter()
+                        .map(|(s, _)| s.lock_pub)
+                        .collect();
+                    let retry_requests: Vec<_> = requests
+                        .iter()
+                        .filter(|(s, _)| {
+                            upgrade.relocated_lock_pubs.contains(&s.lock_pub)
+                                || pending_retry_pubs.contains(&s.lock_pub)
+                        })
+                        .cloned()
+                        .collect();
+                    if !retry_requests.is_empty() {
+                        let dispatch2 = crate::gateway_resolver::dispatch_lock_committee_batches(
+                            &client,
+                            &retry_requests,
+                            CHECKOUT_BATCH_TIMEOUT,
+                            &active_lifecycle.l2_probe_cache,
+                        )
+                        .await;
+                        all_competing_entries.extend(dispatch2.competing_entries.iter().cloned());
+                        all_receipts_for_equiv.extend(dispatch2.receipts.iter().cloned());
+                        all_equiv_proofs.extend(dispatch2.equivocation_proofs.iter().cloned());
+                        merge_receipts_dedup(&mut dispatch.receipts, dispatch2.receipts);
+                    }
                 }
             }
 
             if entries.is_empty() {
                 VoucherPrecommitState::CleanQuorum
             } else {
-                let equiv_proof = l2_gateway::detect_equivocation(&dispatch.receipts);
-                state.with_session_required(
+                if let Some(eq) = l2_gateway::detect_equivocation(&all_receipts_for_equiv) {
+                    all_equiv_proofs.push(eq);
+                }
+                let has_equivocation = !all_equiv_proofs.is_empty();
+                let offenders = state.with_session_required(
                     session,
                     "Wallet session changed before recording PoST L2 check receipts",
                     |service| {
-                        if let Some(ref eq) = equiv_proof {
+                        if has_equivocation {
                             let now_secs = sync_client::current_unix_timestamp().max(1);
-                            let _ = crate::l2_lifecycle::record_equivocation_proof(
-                                service, None, eq, now_secs, password,
-                            );
+                            for eq in &all_equiv_proofs {
+                                let _ = crate::l2_lifecycle::record_equivocation_and_refresh_cache(
+                                    state,
+                                    service,
+                                    &active_lifecycle.l2_probe_cache,
+                                    eq,
+                                    now_secs,
+                                    password,
+                                );
+                            }
                         }
                         crate::state::record_known_head_receipts(
                             service,
                             &anchor_id,
-                            &dispatch.receipts,
+                            &all_receipts_for_equiv,
                             password,
-                        )
+                        )?;
+                        state.get_or_load_server_offender_list(service, password)
                     },
                 )?;
 
                 // K1: Verify each competing entry cryptographically against this voucher's hops
-                // and creator_mig_pub before counting it as VerifiedConflict.
+                // and creator_mig_pub before counting it as VerifiedConflict (always using
+                // historical DEFAULT_LOCK_POW_BASE_BITS, never live server pow_base_bits).
                 let mut verified_conflicts: Vec<(LockEntry, u32)> = Vec::new();
-                for ce in &dispatch.competing_entries {
+                for ce in &all_competing_entries {
                     let is_valid_conflict = voucher.transactions.iter().any(|hop_tx| {
                         let Ok(ds_tag) = l2_gateway::derive_challenge_tag_bytes(hop_tx) else {
                             return false;
@@ -1631,7 +1903,7 @@ pub(crate) async fn verify_bundle_l2_precommit(
                             ce,
                             voucher,
                             Some(&manifest.authority.creator_mig_pub),
-                            pow_base_bits,
+                            DEFAULT_LOCK_POW_BASE_BITS,
                         )
                         .is_ok()
                     });
@@ -1640,26 +1912,60 @@ pub(crate) async fn verify_bundle_l2_precommit(
                             .iter()
                             .any(|(existing, _)| existing == ce)
                     {
-                        verified_conflicts.push((ce.clone(), pow_base_bits));
+                        verified_conflicts.push((ce.clone(), DEFAULT_LOCK_POW_BASE_BITS));
                     }
                 }
 
                 if !verified_conflicts.is_empty() {
                     VoucherPrecommitState::VerifiedConflict(verified_conflicts)
-                } else if equiv_proof.is_some() {
+                } else if has_equivocation {
                     VoucherPrecommitState::Unsettled(format!(
                         "PoST L2 committee equivocation detected for voucher {}",
                         voucher.voucher_id
                     ))
                 } else {
-                    match manifest.committee() {
-                        Err(e) => VoucherPrecommitState::Unsettled(format!(
+                    let init_deletable_at_checked = match voucher
+                        .transactions
+                        .first()
+                        .and_then(|t| t.deletable_at.as_deref())
+                    {
+                        Some(raw) => human_money_core::services::utils::parse_timestamp_ms(raw)
+                            .ok()
+                            .map(Some),
+                        None => Some(None),
+                    };
+                    match (init_deletable_at_checked, manifest.committee()) {
+                        (None, _) => VoucherPrecommitState::Unsettled(format!(
+                            "PoST L2 voucher {} has invalid init.deletable_at timestamp",
+                            voucher.voucher_id
+                        )),
+                        (Some(Some(del_ms)), _)
+                            if !human_money_core::humoco_proto::retention_covers(
+                                del_ms,
+                                manifest.retain_until_quarter,
+                            ) =>
+                        {
+                            VoucherPrecommitState::Unsettled(format!(
+                                "PoST L2 manifest retention does not cover init.deletable_at for voucher {}",
+                                voucher.voucher_id
+                            ))
+                        }
+                        (_, Err(e)) => VoucherPrecommitState::Unsettled(format!(
                             "PoST L2 committee manifest invalid for voucher {}: {}",
                             voucher.voucher_id, e
                         )),
-                        Ok(committee) => {
+                        (Some(init_deletable_at_ms), Ok(committee)) => {
+                            let admin_by_lock: HashMap<LockPubKey, [u8; 32]> = manifest
+                                .servers
+                                .iter()
+                                .map(|s| (s.lock_pub, s.admin_pub))
+                                .collect();
                             let mut all_entries_ok = true;
                             for entry_req in &entries {
+                                let Ok(expected_entry_hash) = entry_req.entry_hash() else {
+                                    all_entries_ok = false;
+                                    break;
+                                };
                                 let mut valid_receipts = Vec::new();
                                 let mut seen_pubs = HashSet::new();
                                 for r in &dispatch.receipts {
@@ -1668,7 +1974,25 @@ pub(crate) async fn verify_bundle_l2_precommit(
                                         human_money_core::humoco_proto::types::LockReceiptKind::FirstWrite
                                     ) && r.slot == entry_req.slot
                                         && r.child_lock == entry_req.child_lock
+                                        && r.entry_hash == expected_entry_hash
+                                        && r.recipient_nonce == expected_nonce
+                                        && r.bucket
+                                            == human_money_core::humoco_proto::derive_bucket(
+                                                &anchor_id,
+                                                &r.lock_pub,
+                                            )
                                         && committee.contains(&r.lock_pub)
+                                        && !crate::l2_lifecycle::is_server_key_revoked(
+                                            &offenders,
+                                            &r.lock_pub,
+                                            admin_by_lock.get(&r.lock_pub),
+                                        )
+                                        && init_deletable_at_ms.is_none_or(|del_ms| {
+                                            human_money_core::humoco_proto::retention_covers(
+                                                del_ms,
+                                                r.retain_until_quarter,
+                                            )
+                                        })
                                         && r.verify_signature()
                                         && seen_pubs.insert(r.lock_pub)
                                     {
@@ -1856,8 +2180,13 @@ mod tests {
         let state_bob = AppState::new(svc_bob);
         state_bob.set_cached_security_policy(Some(SecurityPolicy::default()));
         state_bob.set_cached_internal_lifecycle(Some(InternalLifecycleState::default()));
+        let bob_session = {
+            let s = state_bob.service.lock().unwrap();
+            state_bob.session_token_for_service(&s).unwrap()
+        };
         let completion = checkout_bundle(
             &state_bob,
+            &bob_session,
             "pos-offline-1",
             &transfer.bundle_bytes,
             &standards,
@@ -2089,8 +2418,13 @@ mod tests {
         let state_bob = AppState::new(svc_bob);
         state_bob.set_cached_security_policy(Some(SecurityPolicy::default()));
         state_bob.set_cached_internal_lifecycle(Some(InternalLifecycleState::default()));
+        let bob_session = {
+            let s = state_bob.service.lock().unwrap();
+            state_bob.session_token_for_service(&s).unwrap()
+        };
         let yellow = checkout_bundle(
             &state_bob,
+            &bob_session,
             "pos-yellow",
             &transfer.bundle_bytes,
             &standards,
@@ -2109,9 +2443,10 @@ mod tests {
             let mut lc = state_bob.cache_internal_lifecycle().unwrap();
             for (port, sk) in [(p1, &sk1), (p2, &sk2)] {
                 let wurl = format!("http://127.0.0.1:{}/sync.php", port);
+                let rurl = format!("http://127.0.0.1:{}/d", port);
                 s.public_syncs.push(crate::settings::StoredPublicSync {
                     write_url: wurl.clone(),
-                    read_url: format!("http://127.0.0.1:{}/d", port),
+                    read_url: rurl.clone(),
                     drop_pub: hex::encode(sk.verifying_key().as_bytes()),
                     register_url: None,
                     access_pubkey: "aa".repeat(32),
@@ -2122,39 +2457,15 @@ mod tests {
                     revocation_reason: None,
                     replacement: None,
                 });
-                let lock_hex = hex::encode(sk.verifying_key().as_bytes());
-                lc.l2_probe_cache.insert(
-                    lock_hex.clone(),
-                    sync_client::FrontendLockServerProbeResult {
-                        write_url: wurl,
-                        read_url: format!("http://127.0.0.1:{}/d", port),
-                        drop_pub: lock_hex.clone(),
-                        admin_pub: lock_hex.clone(),
-                        lock_pub: lock_hex,
-                        delegation_valid: true,
-                        waf_probe_passed: true,
-                        selftest_passed: true,
-                        key_leak_safe: true,
-                        passed: true,
-                        latency_ms: 5,
-                        max_retention_quarter: retain_q,
-                        pow_base_bits: DEFAULT_LOCK_POW_BASE_BITS,
-                        allow_pow_tickets: true,
-                        ticket_pow_bits: 16,
-                        inode_warning: false,
-                        used_inodes: 0,
-                        max_inodes: 50000,
-                        probed_at_secs: 1,
-                        delegation: None,
-                        error: None,
-                    },
-                );
+                let probe = make_signed_probe_for_test(sk, sk, &wurl, &rurl, retain_q);
+                lc.l2_probe_cache.insert(probe.lock_pub.clone(), probe);
             }
             state_bob.set_cached_security_policy(Some(s));
             state_bob.set_cached_internal_lifecycle(Some(lc));
         }
         let green = checkout_bundle(
             &state_bob,
+            &bob_session,
             "pos-green",
             &transfer.bundle_bytes,
             &standards,
@@ -2171,6 +2482,7 @@ mod tests {
 
         let replay = checkout_bundle(
             &state_bob,
+            &bob_session,
             "pos-green",
             &transfer.bundle_bytes,
             &standards,
@@ -2245,6 +2557,7 @@ mod tests {
             .unwrap();
         let multi_res = checkout_bundle(
             &state_bob,
+            &bob_session,
             "pos-multi",
             &multi_transfer.bundle_bytes,
             &standards,
@@ -3288,6 +3601,1455 @@ mod tests {
 
         h1.abort();
         h2.abort();
+        let _ = std::fs::remove_dir_all(dir_alice);
+        let _ = std::fs::remove_dir_all(dir_bob);
+    }
+
+    fn make_signed_probe_for_test(
+        admin_sk: &SigningKey,
+        lock_sk: &SigningKey,
+        write_url: &str,
+        read_url: &str,
+        retain_q: u16,
+    ) -> sync_client::FrontendLockServerProbeResult {
+        let admin_hex = hex::encode(admin_sk.verifying_key().as_bytes());
+        let lock_hex = hex::encode(lock_sk.verifying_key().as_bytes());
+        let msg = humoco_market::format_lock_delegate_signature_message(
+            &admin_hex,
+            &lock_hex,
+            write_url,
+            read_url,
+            1_760_000_000,
+        );
+        let sig = hex::encode(admin_sk.sign(msg.as_bytes()).to_bytes());
+        sync_client::FrontendLockServerProbeResult {
+            write_url: write_url.to_string(),
+            read_url: read_url.to_string(),
+            drop_pub: admin_hex.clone(),
+            admin_pub: admin_hex.clone(),
+            lock_pub: lock_hex.clone(),
+            delegation_valid: true,
+            waf_probe_passed: true,
+            selftest_passed: true,
+            key_leak_safe: true,
+            passed: true,
+            latency_ms: 5,
+            max_retention_quarter: retain_q,
+            pow_base_bits: DEFAULT_LOCK_POW_BASE_BITS,
+            allow_pow_tickets: true,
+            ticket_pow_bits: 16,
+            inode_warning: false,
+            used_inodes: 0,
+            max_inodes: 50000,
+            probed_at_secs: 1_760_000_000,
+            delegation: Some(sync_client::SyncLockDelegationDto {
+                admin_pub: admin_hex,
+                lock_pub: lock_hex,
+                write_url: write_url.to_string(),
+                read_url: read_url.to_string(),
+                issued_at: 1_760_000_000,
+                sig,
+            }),
+            error: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_s04_f2_already_in_history_replay_never_fabricates_confirmed() {
+        let dir_alice = temp_dir("s04-f2-alice");
+        let dir_bob = temp_dir("s04-f2-bob");
+        let pw = "test-password";
+
+        let (mut svc_alice, _) =
+            test_utils::setup_service_with_profile(&dir_alice, &ACTORS.alice, "Alice", pw);
+        let (mut svc_bob, _) =
+            test_utils::setup_service_with_profile(&dir_bob, &ACTORS.bob, "Bob", pw);
+        svc_alice.unlock_session(pw, 600).unwrap();
+        svc_bob.unlock_session(pw, 600).unwrap();
+
+        let alice_id = svc_alice
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
+        let bob_id = svc_bob
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
+        let std_toml = test_utils::generate_signed_standard_toml(
+            "voucher_standards/freetaler_v1/standard.toml",
+        );
+        let (std_def, _) = VoucherStandardDefinition::from_toml(&std_toml).unwrap();
+        let standards = HashMap::from([(std_def.immutable.identity.uuid, std_toml.clone())]);
+
+        svc_alice
+            .create_new_voucher(
+                &std_toml,
+                NewVoucherData {
+                    creator_profile: PublicProfile {
+                        id: Some(alice_id),
+                        ..Default::default()
+                    },
+                    nominal_value: ValueDefinition {
+                        amount: "50".into(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                Some(pw),
+            )
+            .unwrap();
+        let lid = svc_alice
+            .with_wallet_and_identity(|w, id| w.list_vouchers(Some(id), None, None, None))
+            .unwrap()[0]
+            .local_instance_id
+            .clone();
+        let transfer = svc_alice
+            .create_transfer_bundle(
+                MultiTransferRequest {
+                    recipient_id: bob_id,
+                    sources: vec![SourceTransfer {
+                        local_instance_id: lid,
+                        amount_to_send: "10".into(),
+                    }],
+                    notes: None,
+                    sender_profile_name: None,
+                    use_privacy_mode: None,
+                    wot_sync_json: None,
+                    contact_card_json: None,
+                },
+                &standards,
+                None,
+                Some(pw),
+            )
+            .unwrap();
+
+        // Bob receives the N=0 bundle directly into wallet history (NOT via checkout_purchase)
+        svc_bob
+            .receive_bundle_with_companions(
+                &transfer.bundle_bytes,
+                &standards,
+                None,
+                Some(pw),
+                false,
+                None,
+                |_, _| Ok(vec![]),
+            )
+            .unwrap();
+
+        let state_bob = AppState::new(svc_bob);
+        state_bob.set_cached_security_policy(Some(SecurityPolicy::default()));
+        state_bob.set_cached_internal_lifecycle(Some(InternalLifecycleState::default()));
+        let bob_session = {
+            let s = state_bob.service.lock().unwrap();
+            state_bob.session_token_for_service(&s).unwrap()
+        };
+        let replay = checkout_bundle(
+            &state_bob,
+            &bob_session,
+            "pos-replay-hist",
+            &transfer.bundle_bytes,
+            &standards,
+            false,
+            Some(pw),
+        )
+        .await
+        .unwrap();
+        assert!(replay.is_replay);
+        assert_ne!(
+            replay.verdict.outcome, "Confirmed",
+            "S04-F2: already_in_history N=0 replay must NEVER fabricate Confirmed"
+        );
+        assert_eq!(replay.verdict.outcome, "OfflineOnly");
+        assert!(!replay.verdict.is_goods_release_authorized);
+
+        // S04-F2: if the already-received voucher is Quarantined, replay MUST report Quarantined
+        {
+            let mut s = state_bob.service.lock().unwrap();
+            let (wallet, _) = s.get_unlocked_mut_for_test();
+            for inst in wallet.voucher_store.vouchers.values_mut() {
+                inst.status = human_money_core::VoucherStatus::Quarantined {
+                    reason: "Upstream conflict".into(),
+                };
+            }
+        }
+        let replay_q = checkout_bundle(
+            &state_bob,
+            &bob_session,
+            "pos-replay-quarantined",
+            &transfer.bundle_bytes,
+            &standards,
+            false,
+            Some(pw),
+        )
+        .await
+        .unwrap();
+        assert!(replay_q.is_replay);
+        assert_eq!(
+            replay_q.verdict.outcome,
+            "Quarantined:BundleAlreadyProcessedQuarantined"
+        );
+        assert!(!replay_q.verdict.is_goods_release_authorized);
+
+        // S04-F7: stale SessionToken generation MUST be rejected immediately
+        let stale_session = crate::session::SessionToken {
+            generation: bob_session.generation.saturating_add(99),
+            owner_did: bob_session.owner_did.clone(),
+        };
+        let stale_err = checkout_bundle(
+            &state_bob,
+            &stale_session,
+            "pos-stale",
+            &transfer.bundle_bytes,
+            &standards,
+            false,
+            Some(pw),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            stale_err.message.contains("session changed"),
+            "S04-F7: stale session token must be rejected, got: {:?}",
+            stale_err
+        );
+
+        let _ = std::fs::remove_dir_all(dir_alice);
+        let _ = std::fs::remove_dir_all(dir_bob);
+    }
+
+    #[tokio::test]
+    async fn test_s04_f3_f8_f9_trusted_lock_keys_delegation_binding_and_lucke03_isolation() {
+        let dir_bob = temp_dir("s04-f3-f8-f9-bob");
+        let pw = "test-password";
+        let (mut svc_bob, _) =
+            test_utils::setup_service_with_profile(&dir_bob, &ACTORS.bob, "Bob", pw);
+        svc_bob.unlock_session(pw, 600).unwrap();
+
+        let retain_q = encode_quarter(2035, 4).unwrap();
+        let sk_unsigned = SigningKey::from_bytes(&[181u8; 32]);
+        let sk_contact = SigningKey::from_bytes(&[182u8; 32]);
+        let sk_offender_bridge = SigningKey::from_bytes(&[183u8; 32]);
+        let creator_mig_sk = SigningKey::from_bytes(&[184u8; 32]);
+
+        let url_unsigned = "https://unsigned.example/sync.php";
+        let url_contact = "https://hop1-contact.example/sync.php";
+        let url_bridge = "https://hop2-via-offender.example/sync.php";
+
+        let manifest = AnchorManifest {
+            revision: 1,
+            threshold: 2,
+            servers: vec![
+                ServerEntry {
+                    write_url: url_unsigned.to_string(),
+                    read_url: "https://unsigned.example/d".to_string(),
+                    admin_pub: sk_unsigned.verifying_key().to_bytes(),
+                    lock_pub: sk_unsigned.verifying_key().to_bytes(),
+                    nominated_by: NominatedBy::Creator,
+                },
+                ServerEntry {
+                    write_url: url_contact.to_string(),
+                    read_url: "https://hop1-contact.example/d".to_string(),
+                    admin_pub: sk_contact.verifying_key().to_bytes(),
+                    lock_pub: sk_contact.verifying_key().to_bytes(),
+                    nominated_by: NominatedBy::Creator,
+                },
+                ServerEntry {
+                    write_url: url_bridge.to_string(),
+                    read_url: "https://hop2-via-offender.example/d".to_string(),
+                    admin_pub: sk_offender_bridge.verifying_key().to_bytes(),
+                    lock_pub: sk_offender_bridge.verifying_key().to_bytes(),
+                    nominated_by: NominatedBy::Guarantor(0),
+                },
+            ],
+            successors: vec![],
+            authority: AnchorAuthority {
+                creator_mig_pub: creator_mig_sk.verifying_key().to_bytes(),
+                guarantor_mig_pubs: vec![[9u8; 32]],
+            },
+            migration_chain: vec![],
+            issued_at_ms: 1_760_000_000_000,
+            retain_until_quarter: retain_q,
+        };
+
+        // Mark Alice as KnownOffender in Bob's wallet proof_store (S04-F8 bridge test)
+        let alice_did = ACTORS.alice.identity.user_id.clone();
+        let charlie_did = ACTORS.charlie.identity.user_id.clone();
+        let dave_did = ACTORS.david.identity.user_id.clone();
+        {
+            use human_money_core::models::conflict::{
+                ConflictRole, ProofOfDoubleSpend, ProofStoreEntry,
+            };
+            let bob_uid = svc_bob
+                .with_wallet(|w| w.get_user_id().to_string())
+                .unwrap();
+            let (wallet, _) = svc_bob.get_unlocked_mut_for_test();
+            wallet.proof_store.proofs.insert(
+                "proof-s04-f8".to_string(),
+                ProofStoreEntry {
+                    proof: ProofOfDoubleSpend {
+                        proof_id: "proof-s04-f8".to_string(),
+                        offender_id: alice_did.clone(),
+                        suspected_identity: None,
+                        fork_point_prev_hash: "00".repeat(32),
+                        conflicting_transactions: Vec::new(),
+                        fingerprints: Vec::new(),
+                        victim_witnesses: Vec::new(),
+                        deletable_at: "2099-01-01T00:00:00Z".to_string(),
+                        reporter_id: bob_uid,
+                        report_timestamp: "2026-01-01T00:00:00Z".to_string(),
+                        reporter_signature: "sig".to_string(),
+                        affected_voucher_name: None,
+                        voucher_standard_uuid: None,
+                        resolutions: None,
+                        non_redeemable_test_voucher: false,
+                    },
+                    local_override: false,
+                    local_note: None,
+                    conflict_role: ConflictRole::default(),
+                },
+            );
+        }
+
+        let state_bob = AppState::new(svc_bob);
+        let session = {
+            let s = state_bob.service.lock().unwrap();
+            state_bob.session_token_for_service(&s).unwrap()
+        };
+
+        // Security policy pins ONLY url_unsigned (whose probe lacks a signed delegation!)
+        let mut policy = SecurityPolicy::default();
+        policy.market_selected_syncs.push(
+            humoco_market::DropDescriptor {
+                write_url: url_unsigned.to_string(),
+                read_url: "https://unsigned.example/d".to_string(),
+                slot_id: None,
+                drop_pub: hex::encode(sk_unsigned.verifying_key().as_bytes()),
+            }
+            .into(),
+        );
+
+        let mut lc = InternalLifecycleState::default();
+        // S04-F3: probe with delegation: None must NOT enter VerifiedServerBinding
+        let mut unsigned_probe = make_signed_probe_for_test(
+            &sk_unsigned,
+            &sk_unsigned,
+            url_unsigned,
+            "https://unsigned.example/d",
+            retain_q,
+        );
+        unsigned_probe.delegation = None;
+        lc.l2_probe_cache
+            .insert(unsigned_probe.lock_pub.clone(), unsigned_probe);
+        // S04-F9: valid signed probe for Hop-1 contact Charlie
+        let p_contact = make_signed_probe_for_test(
+            &sk_contact,
+            &sk_contact,
+            url_contact,
+            "https://hop1-contact.example/d",
+            retain_q,
+        );
+        lc.l2_probe_cache
+            .insert(p_contact.lock_pub.clone(), p_contact);
+        // S04-F8: valid signed probe for Hop-2 contact Dave (reachable ONLY through KnownOffender Alice!)
+        let p_bridge = make_signed_probe_for_test(
+            &sk_offender_bridge,
+            &sk_offender_bridge,
+            url_bridge,
+            "https://hop2-via-offender.example/d",
+            retain_q,
+        );
+        lc.l2_probe_cache
+            .insert(p_bridge.lock_pub.clone(), p_bridge);
+
+        // Populate AddressBook (Charlie trusted at Hop-1; Dave untrusted directly, reachable only via Alice)
+        let mut book = crate::models::FrontendAddressBook::default();
+        book.contacts.insert(
+            charlie_did.clone(),
+            crate::models::FrontendContact {
+                did: charlie_did.clone(),
+                profile: crate::models::FrontendUserProfile::default(),
+                tags: vec![],
+                added_at: "2026-01-01T00:00:00Z".to_string(),
+                notes: None,
+                trust_level: Some(2),
+                desired_hops: None,
+                has_peer_list: false,
+                peer_list_updated_at: None,
+                syncs: vec![humoco_market::DropDescriptor {
+                    write_url: url_contact.to_string(),
+                    read_url: "https://hop1-contact.example/d".to_string(),
+                    slot_id: None,
+                    drop_pub: hex::encode(sk_contact.verifying_key().as_bytes()),
+                }
+                .into()],
+            },
+        );
+        book.contacts.insert(
+            dave_did.clone(),
+            crate::models::FrontendContact {
+                did: dave_did.clone(),
+                profile: crate::models::FrontendUserProfile::default(),
+                tags: vec![],
+                added_at: "2026-01-01T00:00:00Z".to_string(),
+                notes: None,
+                trust_level: None,
+                desired_hops: None,
+                has_peer_list: false,
+                peer_list_updated_at: None,
+                syncs: vec![humoco_market::DropDescriptor {
+                    write_url: url_bridge.to_string(),
+                    read_url: "https://hop2-via-offender.example/d".to_string(),
+                    slot_id: None,
+                    drop_pub: hex::encode(sk_offender_bridge.verifying_key().as_bytes()),
+                }
+                .into()],
+            },
+        );
+
+        // Populate WoT graph: Bob -> Alice (KnownOffender, level 2) -> Dave (level 2)
+        let bob_can = canonicalize_did(&ACTORS.bob.identity.user_id).unwrap();
+        let alice_can = canonicalize_did(&alice_did).unwrap();
+        let dave_can = canonicalize_did(&dave_did).unwrap();
+        let mut reg =
+            humoco_wot::TrustRegister::new(&bob_can, humoco_wot::WotPolicy::default()).unwrap();
+        reg.set_contact_trust(&alice_can, 2, 2, 1_760_000_000)
+            .unwrap();
+        let mut alice_reg =
+            humoco_wot::TrustRegister::new(&alice_can, humoco_wot::WotPolicy::default()).unwrap();
+        alice_reg
+            .set_contact_trust(&dave_can, 2, 2, 1_760_000_000)
+            .unwrap();
+        let alice_signer = crate::state::DidWotSigner::from_identity(&ACTORS.alice.identity);
+        alice_reg
+            .ensure_own_list_signed(&alice_signer, 1_760_000_000)
+            .unwrap();
+        if let Some(ref signed) = alice_reg.own_signed_list {
+            reg.raw_list_store.insert(alice_can, signed.clone());
+            reg.invalidate_graph_cache();
+        }
+        {
+            let s = state_bob.service.lock().unwrap();
+            state_bob.write_cache_slot_for_service(&s, |c| &mut c.contacts, Some(book));
+            state_bob.write_cache_slot_for_service(&s, |c| &mut c.wot, Some(reg));
+        }
+
+        let client = sync_client::create_sync_http_client();
+        let (base_trusted, independently_pinned) = resolve_trusted_lock_keys(
+            &state_bob,
+            &session,
+            &policy,
+            &lc,
+            &client,
+            Some(&alice_did),
+            Some(&manifest),
+            Some(pw),
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            !base_trusted.contains(&sk_unsigned.verifying_key().to_bytes()),
+            "S04-F3: unsigned cached probe (delegation: None) must NOT be trusted"
+        );
+        assert!(
+            base_trusted.contains(&sk_contact.verifying_key().to_bytes()),
+            "S04-F9: Hop-1 contact sync must be in base_trusted_keys"
+        );
+        assert!(
+            !independently_pinned.contains(&sk_contact.verifying_key().to_bytes()),
+            "S04-F9: transitive Hop-1 contact sync must NOT enter independently_pinned_creator_keys"
+        );
+        assert!(
+            !base_trusted.contains(&sk_offender_bridge.verifying_key().to_bytes()),
+            "S04-F8: Hop-2 contact reachable only via KnownOffender bridge must NOT be trusted"
+        );
+
+        let _ = std::fs::remove_dir_all(dir_bob);
+    }
+
+    #[tokio::test]
+    async fn test_s04_f1_precommit_rejects_wrong_nonce_and_revoked_server_and_uses_default_pow() {
+        let dir_alice = temp_dir("s04-f1-pre-alice");
+        let dir_alice_clone = temp_dir("s04-f1-pre-clone");
+        let dir_bob = temp_dir("s04-f1-pre-bob");
+        let pw = "test-password";
+
+        let (mut svc_alice, _) =
+            test_utils::setup_service_with_profile(&dir_alice, &ACTORS.alice, "Alice", pw);
+        let (mut svc_bob, _) =
+            test_utils::setup_service_with_profile(&dir_bob, &ACTORS.bob, "Bob", pw);
+        svc_alice.unlock_session(pw, 600).unwrap();
+        svc_bob.unlock_session(pw, 600).unwrap();
+
+        let alice_id = svc_alice
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
+        let bob_id = svc_bob
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
+        let std_toml = test_utils::generate_signed_standard_toml(
+            "voucher_standards/freetaler_v1/standard.toml",
+        );
+        let (std_def, _) = VoucherStandardDefinition::from_toml(&std_toml).unwrap();
+        let standards = HashMap::from([(std_def.immutable.identity.uuid, std_toml.clone())]);
+
+        let sk1 = SigningKey::from_bytes(&[191u8; 32]);
+        let l1 = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let p1 = l1.local_addr().unwrap().port();
+        let anchor_nonce = [192u8; 32];
+        let creator_mig_pub = svc_alice
+            .with_wallet_and_identity(|_, id| {
+                l2_gateway::derive_anchor_mig_signing_key(id, &anchor_nonce)
+                    .map(|k| k.verifying_key().to_bytes())
+            })
+            .unwrap()
+            .unwrap();
+        let retain_q = encode_quarter(2035, 4).unwrap();
+        let manifest = AnchorManifest {
+            revision: 1,
+            threshold: 1,
+            servers: vec![ServerEntry {
+                write_url: format!("http://127.0.0.1:{}/sync.php", p1),
+                read_url: format!("http://127.0.0.1:{}/d", p1),
+                admin_pub: sk1.verifying_key().to_bytes(),
+                lock_pub: sk1.verifying_key().to_bytes(),
+                nominated_by: NominatedBy::Creator,
+            }],
+            successors: vec![],
+            authority: AnchorAuthority {
+                creator_mig_pub,
+                guarantor_mig_pubs: vec![],
+            },
+            migration_chain: vec![],
+            issued_at_ms: 1_760_000_000_000,
+            retain_until_quarter: retain_q,
+        };
+        let anchor_id = manifest.rev1_anchor_id().unwrap();
+        let mut t1 = GenesisTicket {
+            anchor_id,
+            retain_until_quarter: retain_q,
+            issued_at: 1_760_000_000,
+            lock_pub: sk1.verifying_key().to_bytes(),
+            sig: [0u8; 64],
+        };
+        t1.sig = sk1.sign(&t1.digest()).to_bytes();
+        svc_alice
+            .register_l2_anchor_template_with_nonce(
+                manifest.clone(),
+                vec![t1],
+                Some(&anchor_nonce),
+                Some(pw),
+            )
+            .unwrap();
+        svc_alice
+            .create_new_voucher(
+                &std_toml,
+                NewVoucherData {
+                    creator_profile: PublicProfile {
+                        id: Some(alice_id),
+                        ..Default::default()
+                    },
+                    nominal_value: ValueDefinition {
+                        amount: "50".into(),
+                        ..Default::default()
+                    },
+                    layer2_anchor: Some(anchor_id),
+                    ..Default::default()
+                },
+                Some(pw),
+            )
+            .unwrap();
+        let lid = svc_alice
+            .with_wallet_and_identity(|w, id| w.list_vouchers(Some(id), None, None, None))
+            .unwrap()[0]
+            .local_instance_id
+            .clone();
+
+        copy_dir_recursive(&dir_alice, &dir_alice_clone);
+        let mut svc_clone =
+            human_money_core::app_service::AppService::new(&dir_alice_clone).unwrap();
+        let folder = svc_alice.list_profiles().unwrap()[0].folder_name.clone();
+        svc_clone
+            .login(&folder, pw, false, "test-id".into())
+            .unwrap();
+        let alt_bundle = svc_clone
+            .create_transfer_bundle(
+                MultiTransferRequest {
+                    recipient_id: ACTORS.charlie.identity.user_id.clone(),
+                    sources: vec![SourceTransfer {
+                        local_instance_id: lid.clone(),
+                        amount_to_send: "20".into(),
+                    }],
+                    notes: None,
+                    sender_profile_name: None,
+                    use_privacy_mode: None,
+                    wot_sync_json: None,
+                    contact_card_json: None,
+                },
+                &standards,
+                None,
+                Some(pw),
+            )
+            .unwrap();
+        let opened_alt = bundle_processor::open_and_verify_bundle(
+            &ACTORS.charlie.identity,
+            &alt_bundle.bundle_bytes,
+        )
+        .unwrap();
+        let valid_comp = l2_gateway::build_voucher_lock_batch(
+            &opened_alt.vouchers[0],
+            0,
+            &opened_alt.causal_outputs,
+            opened_alt.root_mig_sig,
+            DEFAULT_LOCK_POW_BASE_BITS,
+        )
+        .unwrap()
+        .into_iter()
+        .last()
+        .unwrap();
+
+        let transfer_bob = svc_alice
+            .create_transfer_bundle(
+                MultiTransferRequest {
+                    recipient_id: bob_id,
+                    sources: vec![SourceTransfer {
+                        local_instance_id: lid,
+                        amount_to_send: "20".into(),
+                    }],
+                    notes: None,
+                    sender_profile_name: None,
+                    use_privacy_mode: None,
+                    wot_sync_json: None,
+                    contact_card_json: None,
+                },
+                &standards,
+                None,
+                Some(pw),
+            )
+            .unwrap();
+
+        // Mode 0: wrong recipient_nonce; Mode 1: valid FirstWrite (tested against revoked offender); Mode 2: ConflictSeen with 8-bit competing entry
+        let mode = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(0));
+        let mode_ref = mode.clone();
+        let comp_for_srv = valid_comp.clone();
+        let sk1_for_srv = sk1.clone();
+        let h1 = tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = l1.accept().await else {
+                    break;
+                };
+                let mut buf = [0u8; 65_536];
+                let n = stream.read(&mut buf).await.unwrap_or(0);
+                let raw = String::from_utf8_lossy(&buf[..n]);
+                let body_str = raw.split("\r\n\r\n").nth(1).unwrap_or("");
+                let req: SyncLockBatchRequest = serde_json::from_str(body_str).unwrap();
+                let m = mode_ref.load(std::sync::atomic::Ordering::SeqCst);
+                let (status_line, resp_json) = if m == 2 {
+                    let mut r = LockReceipt {
+                        kind: LockReceiptKind::ConflictSeen,
+                        lock_pub: sk1_for_srv.verifying_key().to_bytes(),
+                        bucket: req.bucket,
+                        slot: comp_for_srv.slot,
+                        child_lock: comp_for_srv.child_lock,
+                        entry_hash: comp_for_srv.entry_hash().unwrap(),
+                        retain_until_quarter: retain_q,
+                        write_seq: 1,
+                        bucket_head: [9u8; 32],
+                        recipient_nonce: req.recipient_nonce,
+                        sig: [0u8; 64],
+                    };
+                    r.sig = sk1_for_srv.sign(&r.digest()).to_bytes();
+                    let body = serde_json::to_string(&SyncLockBatchResponse {
+                        status: "conflict".into(),
+                        bucket: req.bucket,
+                        retain_until_quarter: retain_q,
+                        receipts: vec![],
+                        conflict: Some(SyncLockConflict {
+                            entry_index: 0,
+                            slot: comp_for_srv.slot,
+                            receipt: r,
+                            competing_entry: comp_for_srv.to_wire_hex().unwrap(),
+                        }),
+                    })
+                    .unwrap();
+                    ("HTTP/1.1 409 Conflict", body)
+                } else {
+                    let receipts: Vec<LockReceipt> = req
+                        .entries
+                        .iter()
+                        .enumerate()
+                        .map(|(i, h)| {
+                            let b = decode_hex_fixed::<
+                                { human_money_core::humoco_proto::causal::LOCK_ENTRY_WIRE_LEN },
+                            >(h)
+                            .unwrap();
+                            let e = LockEntry::from_wire_bytes(&b).unwrap();
+                            let mut r = LockReceipt {
+                                kind: LockReceiptKind::FirstWrite,
+                                lock_pub: sk1_for_srv.verifying_key().to_bytes(),
+                                bucket: req.bucket,
+                                slot: e.slot,
+                                child_lock: e.child_lock,
+                                entry_hash: e.entry_hash().unwrap(),
+                                retain_until_quarter: retain_q,
+                                write_seq: (i as u64) + 1,
+                                bucket_head: [8u8; 32],
+                                recipient_nonce: if m == 0 {
+                                    [0xee; 32]
+                                } else {
+                                    req.recipient_nonce
+                                },
+                                sig: [0u8; 64],
+                            };
+                            r.sig = sk1_for_srv.sign(&r.digest()).to_bytes();
+                            r
+                        })
+                        .collect();
+                    let body = serde_json::to_string(&SyncLockBatchResponse {
+                        status: "ok".into(),
+                        bucket: req.bucket,
+                        retain_until_quarter: retain_q,
+                        receipts,
+                        conflict: None,
+                    })
+                    .unwrap();
+                    ("HTTP/1.1 200 OK", body)
+                };
+                let http = format!(
+                    "{}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                    status_line,
+                    resp_json.len(),
+                    resp_json
+                );
+                let _ = stream.write_all(http.as_bytes()).await;
+            }
+        });
+
+        let state_bob = AppState::new(svc_bob);
+        let bob_session = {
+            let s = state_bob.service.lock().unwrap();
+            state_bob.session_token_for_service(&s).unwrap()
+        };
+        let mut lc = InternalLifecycleState::default();
+        let mut probe = make_signed_probe_for_test(
+            &sk1,
+            &sk1,
+            &format!("http://127.0.0.1:{}/sync.php", p1),
+            &format!("http://127.0.0.1:{}/d", p1),
+            retain_q,
+        );
+        probe.pow_base_bits = 18;
+        lc.l2_probe_cache.insert(probe.lock_pub.clone(), probe);
+        state_bob.set_cached_internal_lifecycle(Some(lc));
+
+        // 1. Wrong nonce MUST NOT yield CleanQuorum
+        let res_wrong_nonce = verify_bundle_l2_precommit(
+            &state_bob,
+            &bob_session,
+            &transfer_bob.bundle_bytes,
+            Some(pw),
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(res_wrong_nonce, PrecommitL2Verification::RetryLater { .. }),
+            "S04-F1: wrong recipient_nonce must return RetryLater, got {:?}",
+            res_wrong_nonce
+        );
+
+        // 2. Valid FirstWrite from revoked server MUST NOT yield CleanQuorum
+        mode.store(1, std::sync::atomic::Ordering::SeqCst);
+        {
+            let mut offenders = humoco_wot::ServerOffenderList::new();
+            offenders
+                .revoked_lock_pubs
+                .insert(sk1.verifying_key().to_bytes());
+            let s = state_bob.service.lock().unwrap();
+            state_bob.write_cache_slot_for_service(
+                &s,
+                |c| &mut c.server_offenders,
+                Some(offenders),
+            );
+        }
+        let res_revoked = verify_bundle_l2_precommit(
+            &state_bob,
+            &bob_session,
+            &transfer_bob.bundle_bytes,
+            Some(pw),
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(res_revoked, PrecommitL2Verification::RetryLater { .. }),
+            "S04-F1: revoked server receipt must return RetryLater, got {:?}",
+            res_revoked
+        );
+
+        // 3. Historical 8-bit competing entry MUST verify despite live probe pow_base_bits = 18
+        mode.store(2, std::sync::atomic::Ordering::SeqCst);
+        let res_conflict = verify_bundle_l2_precommit(
+            &state_bob,
+            &bob_session,
+            &transfer_bob.bundle_bytes,
+            Some(pw),
+        )
+        .await
+        .unwrap();
+        match res_conflict {
+            PrecommitL2Verification::ConflictDetected {
+                competing_entries, ..
+            } => {
+                assert_eq!(competing_entries.len(), 1);
+                assert_eq!(competing_entries[0].1, DEFAULT_LOCK_POW_BASE_BITS);
+            }
+            other => panic!(
+                "S04-F1: expected ConflictDetected with DEFAULT_LOCK_POW_BASE_BITS despite live PoW=18, got {:?}",
+                other
+            ),
+        }
+
+        h1.abort();
+        let _ = std::fs::remove_dir_all(dir_alice);
+        let _ = std::fs::remove_dir_all(dir_alice_clone);
+        let _ = std::fs::remove_dir_all(dir_bob);
+    }
+
+    #[tokio::test]
+    async fn test_s04_f3_live_equivocation_revokes_admin_sibling_before_checkout_evaluation() {
+        let dir_alice = temp_dir("s04-f3-equiv-alice");
+        let dir_bob = temp_dir("s04-f3-equiv-bob");
+        let pw = "test-password";
+
+        let (mut svc_alice, _) =
+            test_utils::setup_service_with_profile(&dir_alice, &ACTORS.alice, "Alice", pw);
+        let (mut svc_bob, _) =
+            test_utils::setup_service_with_profile(&dir_bob, &ACTORS.bob, "Bob", pw);
+        svc_alice.unlock_session(pw, 600).unwrap();
+        svc_bob.unlock_session(pw, 600).unwrap();
+
+        let alice_id = svc_alice
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
+        let bob_id = svc_bob
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
+        let std_toml = test_utils::generate_signed_standard_toml(
+            "voucher_standards/freetaler_v1/standard.toml",
+        );
+        let (std_def, _) = VoucherStandardDefinition::from_toml(&std_toml).unwrap();
+        let standards = HashMap::from([(std_def.immutable.identity.uuid, std_toml.clone())]);
+
+        // N=3, Q=2: Server 1 & sibling Server 2 share admin_pub A; Server 3 has independent admin_pub B.
+        // Even though Server 2 + Server 3 return clean FirstWrite (meeting Q=2), Server 1's live
+        // equivocation MUST revoke admin_pub A and prune sibling Server 2 before evaluate_bundle_checkout
+        // so only 1 trusted server (< N - Q + 1 = 2) remains and verdict is NOT Confirmed!
+        let admin_sk = SigningKey::from_bytes(&[201u8; 32]);
+        let sk_lock1 = SigningKey::from_bytes(&[202u8; 32]);
+        let sk_lock2 = SigningKey::from_bytes(&[203u8; 32]);
+        let sk_lock3 = SigningKey::from_bytes(&[205u8; 32]);
+        let l1 = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let p1 = l1.local_addr().unwrap().port();
+        let l2 = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let p2 = l2.local_addr().unwrap().port();
+        let l3 = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let p3 = l3.local_addr().unwrap().port();
+
+        let anchor_nonce = [204u8; 32];
+        let creator_mig_pub = svc_alice
+            .with_wallet_and_identity(|_, id| {
+                l2_gateway::derive_anchor_mig_signing_key(id, &anchor_nonce)
+                    .map(|k| k.verifying_key().to_bytes())
+            })
+            .unwrap()
+            .unwrap();
+        let retain_q = encode_quarter(2035, 4).unwrap();
+        let manifest = AnchorManifest {
+            revision: 1,
+            threshold: 2,
+            servers: vec![
+                ServerEntry {
+                    write_url: format!("http://127.0.0.1:{}/sync.php", p1),
+                    read_url: format!("http://127.0.0.1:{}/d", p1),
+                    admin_pub: admin_sk.verifying_key().to_bytes(),
+                    lock_pub: sk_lock1.verifying_key().to_bytes(),
+                    nominated_by: NominatedBy::Guarantor(0),
+                },
+                ServerEntry {
+                    write_url: format!("http://127.0.0.1:{}/sync.php", p2),
+                    read_url: format!("http://127.0.0.1:{}/d", p2),
+                    admin_pub: admin_sk.verifying_key().to_bytes(),
+                    lock_pub: sk_lock2.verifying_key().to_bytes(),
+                    nominated_by: NominatedBy::Guarantor(0),
+                },
+                ServerEntry {
+                    write_url: format!("http://127.0.0.1:{}/sync.php", p3),
+                    read_url: format!("http://127.0.0.1:{}/d", p3),
+                    admin_pub: sk_lock3.verifying_key().to_bytes(),
+                    lock_pub: sk_lock3.verifying_key().to_bytes(),
+                    nominated_by: NominatedBy::Guarantor(0),
+                },
+            ],
+            successors: vec![],
+            authority: AnchorAuthority {
+                creator_mig_pub,
+                guarantor_mig_pubs: vec![[9u8; 32]],
+            },
+            migration_chain: vec![],
+            issued_at_ms: 1_760_000_000_000,
+            retain_until_quarter: retain_q,
+        };
+        let anchor_id = manifest.rev1_anchor_id().unwrap();
+        let tickets: Vec<GenesisTicket> = [&sk_lock1, &sk_lock2, &sk_lock3]
+            .into_iter()
+            .map(|sk| {
+                let mut t = GenesisTicket {
+                    anchor_id,
+                    retain_until_quarter: retain_q,
+                    issued_at: 1_760_000_000,
+                    lock_pub: sk.verifying_key().to_bytes(),
+                    sig: [0u8; 64],
+                };
+                t.sig = sk.sign(&t.digest()).to_bytes();
+                t
+            })
+            .collect();
+        svc_alice
+            .register_l2_anchor_template_with_nonce(
+                manifest.clone(),
+                tickets,
+                Some(&anchor_nonce),
+                Some(pw),
+            )
+            .unwrap();
+        svc_alice
+            .create_new_voucher(
+                &std_toml,
+                NewVoucherData {
+                    creator_profile: PublicProfile {
+                        id: Some(alice_id),
+                        ..Default::default()
+                    },
+                    nominal_value: ValueDefinition {
+                        amount: "50".into(),
+                        ..Default::default()
+                    },
+                    layer2_anchor: Some(anchor_id),
+                    ..Default::default()
+                },
+                Some(pw),
+            )
+            .unwrap();
+        let lid = svc_alice
+            .with_wallet_and_identity(|w, id| w.list_vouchers(Some(id), None, None, None))
+            .unwrap()[0]
+            .local_instance_id
+            .clone();
+        let transfer = svc_alice
+            .create_transfer_bundle(
+                MultiTransferRequest {
+                    recipient_id: bob_id,
+                    sources: vec![SourceTransfer {
+                        local_instance_id: lid,
+                        amount_to_send: "20".into(),
+                    }],
+                    notes: None,
+                    sender_profile_name: None,
+                    use_privacy_mode: None,
+                    wot_sync_json: None,
+                    contact_card_json: None,
+                },
+                &standards,
+                None,
+                Some(pw),
+            )
+            .unwrap();
+
+        // Server 1 equivocates: signs TWO conflicting FirstWrite receipts for the same slot!
+        let sk1_srv = sk_lock1.clone();
+        let h1 = tokio::spawn(async move {
+            if let Ok((mut stream, _)) = l1.accept().await {
+                let mut buf = [0u8; 65_536];
+                let n = stream.read(&mut buf).await.unwrap_or(0);
+                let raw = String::from_utf8_lossy(&buf[..n]);
+                let body_str = raw.split("\r\n\r\n").nth(1).unwrap_or("");
+                let req: SyncLockBatchRequest = serde_json::from_str(body_str).unwrap();
+                let b = decode_hex_fixed::<
+                    { human_money_core::humoco_proto::causal::LOCK_ENTRY_WIRE_LEN },
+                >(req.entries.last().unwrap())
+                .unwrap();
+                let entry = LockEntry::from_wire_bytes(&b).unwrap();
+                let mut fw_a = LockReceipt {
+                    kind: LockReceiptKind::FirstWrite,
+                    lock_pub: sk1_srv.verifying_key().to_bytes(),
+                    bucket: req.bucket,
+                    slot: entry.slot,
+                    child_lock: entry.child_lock,
+                    entry_hash: entry.entry_hash().unwrap(),
+                    retain_until_quarter: retain_q,
+                    write_seq: 1,
+                    bucket_head: [1u8; 32],
+                    recipient_nonce: req.recipient_nonce,
+                    sig: [0u8; 64],
+                };
+                fw_a.sig = sk1_srv.sign(&fw_a.digest()).to_bytes();
+
+                let mut fw_b = fw_a.clone();
+                fw_b.child_lock = [0x77; 32];
+                fw_b.entry_hash = [0x88; 32];
+                fw_b.write_seq = 2;
+                fw_b.sig = sk1_srv.sign(&fw_b.digest()).to_bytes();
+                let body = serde_json::to_string(&SyncLockBatchResponse {
+                    status: "ok".into(),
+                    bucket: req.bucket,
+                    retain_until_quarter: retain_q,
+                    receipts: vec![fw_a, fw_b],
+                    conflict: None,
+                })
+                .unwrap();
+                let http = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = stream.write_all(http.as_bytes()).await;
+            }
+        });
+        let spawn_clean_fw = |listener: tokio::net::TcpListener, sk: SigningKey| {
+            tokio::spawn(async move {
+                if let Ok((mut stream, _)) = listener.accept().await {
+                    let mut buf = [0u8; 65_536];
+                    let n = stream.read(&mut buf).await.unwrap_or(0);
+                    let raw = String::from_utf8_lossy(&buf[..n]);
+                    let body_str = raw.split("\r\n\r\n").nth(1).unwrap_or("");
+                    let req: SyncLockBatchRequest = serde_json::from_str(body_str).unwrap();
+                    let receipts: Vec<LockReceipt> = req
+                        .entries
+                        .iter()
+                        .enumerate()
+                        .map(|(i, h)| {
+                            let b = decode_hex_fixed::<
+                                { human_money_core::humoco_proto::causal::LOCK_ENTRY_WIRE_LEN },
+                            >(h)
+                            .unwrap();
+                            let e = LockEntry::from_wire_bytes(&b).unwrap();
+                            let mut r = LockReceipt {
+                                kind: LockReceiptKind::FirstWrite,
+                                lock_pub: sk.verifying_key().to_bytes(),
+                                bucket: req.bucket,
+                                slot: e.slot,
+                                child_lock: e.child_lock,
+                                entry_hash: e.entry_hash().unwrap(),
+                                retain_until_quarter: retain_q,
+                                write_seq: (i as u64) + 1,
+                                bucket_head: [3u8; 32],
+                                recipient_nonce: req.recipient_nonce,
+                                sig: [0u8; 64],
+                            };
+                            r.sig = sk.sign(&r.digest()).to_bytes();
+                            r
+                        })
+                        .collect();
+                    let body = serde_json::to_string(&SyncLockBatchResponse {
+                        status: "ok".into(),
+                        bucket: req.bucket,
+                        retain_until_quarter: retain_q,
+                        receipts,
+                        conflict: None,
+                    })
+                    .unwrap();
+                    let http = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = stream.write_all(http.as_bytes()).await;
+                }
+            })
+        };
+        let h2 = spawn_clean_fw(l2, sk_lock2.clone());
+        let h3 = spawn_clean_fw(l3, sk_lock3.clone());
+
+        let state_bob = AppState::new(svc_bob);
+        let bob_session = {
+            let s = state_bob.service.lock().unwrap();
+            state_bob.session_token_for_service(&s).unwrap()
+        };
+        let mut policy = SecurityPolicy::default();
+        let mut lc = InternalLifecycleState::default();
+        for (port, adm_sk, lock_sk) in [
+            (p1, &admin_sk, &sk_lock1),
+            (p2, &admin_sk, &sk_lock2),
+            (p3, &sk_lock3, &sk_lock3),
+        ] {
+            let wurl = format!("http://127.0.0.1:{}/sync.php", port);
+            let rurl = format!("http://127.0.0.1:{}/d", port);
+            policy.public_syncs.push(crate::settings::StoredPublicSync {
+                write_url: wurl.clone(),
+                read_url: rurl.clone(),
+                drop_pub: hex::encode(adm_sk.verifying_key().as_bytes()),
+                register_url: None,
+                access_pubkey: "aa".repeat(32),
+                enabled: true,
+                authorized_channels: vec!["lock".into()],
+                status: "active".into(),
+                sunset_at: None,
+                revocation_reason: None,
+                replacement: None,
+            });
+            let probe = make_signed_probe_for_test(adm_sk, lock_sk, &wurl, &rurl, retain_q);
+            lc.l2_probe_cache.insert(probe.lock_pub.clone(), probe);
+        }
+        state_bob.set_cached_security_policy(Some(policy));
+        state_bob.set_cached_internal_lifecycle(Some(lc));
+
+        let res = checkout_bundle(
+            &state_bob,
+            &bob_session,
+            "pos-equiv-sibling",
+            &transfer.bundle_bytes,
+            &standards,
+            false,
+            Some(pw),
+        )
+        .await
+        .unwrap();
+        assert_ne!(
+            res.verdict.outcome, "Confirmed",
+            "S04-F3: pruning equivocating admin_pub sibling must drop trusted count below N-Q+1=2 and prevent Confirmed"
+        );
+
+        // Verify sibling lock_pub2 is now revoked via admin_pub A in ServerOffenderList!
+        let offenders = {
+            let mut s = state_bob.service.lock().unwrap();
+            state_bob
+                .get_or_load_server_offender_list(&mut s, Some(pw))
+                .unwrap()
+        };
+        assert!(
+            crate::l2_lifecycle::is_server_key_revoked(
+                &offenders,
+                &sk_lock2.verifying_key().to_bytes(),
+                Some(&admin_sk.verifying_key().to_bytes()),
+            ),
+            "S04-F3: ADR-10 equivocation must revoke shared admin_pub so sibling lock_pub2 is banned"
+        );
+
+        h1.abort();
+        h2.abort();
+        h3.abort();
+        let _ = std::fs::remove_dir_all(dir_alice);
+        let _ = std::fs::remove_dir_all(dir_bob);
+    }
+
+    #[tokio::test]
+    async fn test_s04_f6_inline_less_409_epoch_frozen_triggers_discovery() {
+        use human_money_core::humoco_proto::rotation::{
+            CommitteeSignature, ImportAck, MigrationCert, MigrationProposal, ProposalInitiator,
+        };
+
+        let dir_alice = temp_dir("s04-f6-disc-alice");
+        let dir_bob = temp_dir("s04-f6-disc-bob");
+        let pw = "test-password";
+
+        let (mut svc_alice, _) =
+            test_utils::setup_service_with_profile(&dir_alice, &ACTORS.alice, "Alice", pw);
+        let (mut svc_bob, _) =
+            test_utils::setup_service_with_profile(&dir_bob, &ACTORS.bob, "Bob", pw);
+        svc_alice.unlock_session(pw, 600).unwrap();
+        svc_bob.unlock_session(pw, 600).unwrap();
+
+        let alice_id = svc_alice
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
+        let bob_id = svc_bob
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
+        let std_toml = test_utils::generate_signed_standard_toml(
+            "voucher_standards/freetaler_v1/standard.toml",
+        );
+        let (std_def, _) = VoucherStandardDefinition::from_toml(&std_toml).unwrap();
+        let standards = HashMap::from([(std_def.immutable.identity.uuid, std_toml.clone())]);
+
+        let sk1 = SigningKey::from_bytes(&[211u8; 32]);
+        let sk2 = SigningKey::from_bytes(&[212u8; 32]);
+        let l1 = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let p1 = l1.local_addr().unwrap().port();
+        let l2 = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let p2 = l2.local_addr().unwrap().port();
+        let l_disc = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let p_disc = l_disc.local_addr().unwrap().port();
+
+        let anchor_nonce = [213u8; 32];
+        let creator_mig_sk = svc_alice
+            .with_wallet_and_identity(|_, id| {
+                l2_gateway::derive_anchor_mig_signing_key(id, &anchor_nonce)
+            })
+            .unwrap()
+            .unwrap();
+        let retain_q = encode_quarter(2035, 4).unwrap();
+        let srv1 = ServerEntry {
+            write_url: format!("http://127.0.0.1:{}/sync.php", p1),
+            read_url: format!("http://127.0.0.1:{}/d", p1),
+            admin_pub: sk1.verifying_key().to_bytes(),
+            lock_pub: sk1.verifying_key().to_bytes(),
+            nominated_by: NominatedBy::Creator,
+        };
+        let srv2 = ServerEntry {
+            write_url: format!("http://127.0.0.1:{}/sync.php", p2),
+            read_url: format!("http://127.0.0.1:{}/d", p2),
+            admin_pub: sk2.verifying_key().to_bytes(),
+            lock_pub: sk2.verifying_key().to_bytes(),
+            nominated_by: NominatedBy::Creator,
+        };
+        let rev1 = AnchorManifest {
+            revision: 1,
+            threshold: 1,
+            servers: vec![srv1],
+            successors: vec![srv2.clone()],
+            authority: AnchorAuthority {
+                creator_mig_pub: creator_mig_sk.verifying_key().to_bytes(),
+                guarantor_mig_pubs: vec![],
+            },
+            migration_chain: vec![],
+            issued_at_ms: 1_760_000_000_000,
+            retain_until_quarter: retain_q,
+        };
+        let anchor_id = rev1.rev1_anchor_id().unwrap();
+        let mut t1 = GenesisTicket {
+            anchor_id,
+            retain_until_quarter: retain_q,
+            issued_at: 1_760_000_000,
+            lock_pub: sk1.verifying_key().to_bytes(),
+            sig: [0u8; 64],
+        };
+        t1.sig = sk1.sign(&t1.digest()).to_bytes();
+
+        let mut proposal = MigrationProposal {
+            anchor_id,
+            from_rev: 1,
+            to_rev: 2,
+            new_threshold: 1,
+            new_servers: vec![srv2],
+            new_successors: vec![],
+            retain_until_quarter: retain_q,
+            proposed_at: 1_760_050_000,
+            initiator: ProposalInitiator::Creator,
+            proposer_sig: None,
+            guarantor_cosigs: vec![],
+        };
+        proposal.proposer_sig = Some(
+            creator_mig_sk
+                .sign(&proposal.core_digest().unwrap())
+                .to_bytes(),
+        );
+        let imported_state_hash = [0x44u8; 32];
+        let prop_hash = proposal.core_digest().unwrap();
+        let mut ack2 = ImportAck {
+            anchor_id,
+            proposal_hash: prop_hash,
+            to_rev: 2,
+            imported_state_hash,
+            retain_until_quarter: retain_q,
+            lock_pub: sk2.verifying_key().to_bytes(),
+            acked_at: 1_760_050_100,
+            sig: [0u8; 64],
+        };
+        ack2.sig = sk2.sign(&ack2.digest()).to_bytes();
+        let c_digest =
+            MigrationCert::commit_digest(&anchor_id, &prop_hash, 2, &imported_state_hash);
+        let commit_sig = CommitteeSignature {
+            lock_pub: sk1.verifying_key().to_bytes(),
+            committed_at: 1_760_050_200,
+            sig: sk1.sign(&c_digest).to_bytes(),
+        };
+        let cert = MigrationCert {
+            anchor_id,
+            genesis_manifest: Some(Box::new(rev1.clone())),
+            proposal,
+            imported_state_hash,
+            import_acks: vec![ack2],
+            commit_sigs: vec![commit_sig],
+        };
+        let (rev2, _) = cert.verify_step(&anchor_id, &rev1).unwrap();
+
+        svc_alice
+            .register_l2_anchor_template_with_nonce(
+                rev1.clone(),
+                vec![t1],
+                Some(&anchor_nonce),
+                Some(pw),
+            )
+            .unwrap();
+        svc_alice
+            .create_new_voucher(
+                &std_toml,
+                NewVoucherData {
+                    creator_profile: PublicProfile {
+                        id: Some(alice_id),
+                        ..Default::default()
+                    },
+                    nominal_value: ValueDefinition {
+                        amount: "50".into(),
+                        ..Default::default()
+                    },
+                    layer2_anchor: Some(anchor_id),
+                    ..Default::default()
+                },
+                Some(pw),
+            )
+            .unwrap();
+        let lid = svc_alice
+            .with_wallet_and_identity(|w, id| w.list_vouchers(Some(id), None, None, None))
+            .unwrap()[0]
+            .local_instance_id
+            .clone();
+        let bundle_res = svc_alice
+            .create_transfer_bundle(
+                MultiTransferRequest {
+                    recipient_id: bob_id,
+                    sources: vec![SourceTransfer {
+                        local_instance_id: lid,
+                        amount_to_send: "20".into(),
+                    }],
+                    notes: None,
+                    sender_profile_name: None,
+                    use_privacy_mode: None,
+                    wot_sync_json: None,
+                    contact_card_json: None,
+                },
+                &standards,
+                None,
+                Some(pw),
+            )
+            .unwrap();
+
+        // Server 1 returns inline-less `409 epoch_frozen` (NO latest_manifest!)
+        let h1 = tokio::spawn(async move {
+            if let Ok((mut stream, _)) = l1.accept().await {
+                let mut buf = [0u8; 65_536];
+                let _ = stream.read(&mut buf).await;
+                let body = r#"{"error":"epoch_frozen"}"#;
+                let http = format!(
+                    "HTTP/1.1 409 Conflict\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = stream.write_all(http.as_bytes()).await;
+            }
+        });
+        // Discovery server hosts Rev-2 manifest at `/anchors/{anchor_hex}.bin`
+        let rev2_bytes = serde_json::to_vec(&rev2).unwrap();
+        let expected_path = format!("/d/anchors/{}.bin", hex::encode(anchor_id));
+        let h_disc = tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = l_disc.accept().await else {
+                    break;
+                };
+                let mut buf = [0u8; 4096];
+                let n = stream.read(&mut buf).await.unwrap_or(0);
+                let raw = String::from_utf8_lossy(&buf[..n]);
+                if raw.starts_with(&format!("GET {} ", expected_path)) {
+                    let hdr = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\n\r\n",
+                        rev2_bytes.len()
+                    );
+                    let _ = stream.write_all(hdr.as_bytes()).await;
+                    let _ = stream.write_all(&rev2_bytes).await;
+                } else {
+                    let _ = stream
+                        .write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n")
+                        .await;
+                }
+            }
+        });
+        // Server 2 handles the retried Round-2 batch on Rev 2
+        let h2 = tokio::spawn(async move {
+            if let Ok((mut stream, _)) = l2.accept().await {
+                let mut buf = [0u8; 65_536];
+                let n = stream.read(&mut buf).await.unwrap_or(0);
+                let raw = String::from_utf8_lossy(&buf[..n]);
+                let body_str = raw.split("\r\n\r\n").nth(1).unwrap_or("");
+                let req: SyncLockBatchRequest = serde_json::from_str(body_str).unwrap();
+                let receipts: Vec<LockReceipt> = req
+                    .entries
+                    .iter()
+                    .enumerate()
+                    .map(|(i, h)| {
+                        let b = decode_hex_fixed::<
+                            { human_money_core::humoco_proto::causal::LOCK_ENTRY_WIRE_LEN },
+                        >(h)
+                        .unwrap();
+                        let e = LockEntry::from_wire_bytes(&b).unwrap();
+                        let mut r = LockReceipt {
+                            kind: LockReceiptKind::FirstWrite,
+                            lock_pub: sk2.verifying_key().to_bytes(),
+                            bucket: req.bucket,
+                            slot: e.slot,
+                            child_lock: e.child_lock,
+                            entry_hash: e.entry_hash().unwrap(),
+                            retain_until_quarter: retain_q,
+                            write_seq: (i as u64) + 1,
+                            bucket_head: [7u8; 32],
+                            recipient_nonce: req.recipient_nonce,
+                            sig: [0u8; 64],
+                        };
+                        r.sig = sk2.sign(&r.digest()).to_bytes();
+                        r
+                    })
+                    .collect();
+                let resp = serde_json::to_string(&SyncLockBatchResponse {
+                    status: "ok".into(),
+                    bucket: req.bucket,
+                    retain_until_quarter: retain_q,
+                    receipts,
+                    conflict: None,
+                })
+                .unwrap();
+                let http = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                    resp.len(),
+                    resp
+                );
+                let _ = stream.write_all(http.as_bytes()).await;
+            }
+        });
+
+        let state_bob = AppState::new(svc_bob);
+        let mut policy = SecurityPolicy::default();
+        policy.public_syncs.push(crate::settings::StoredPublicSync {
+            write_url: format!("http://127.0.0.1:{}/sync.php", p_disc),
+            read_url: format!("http://127.0.0.1:{}/d", p_disc),
+            drop_pub: "cc".repeat(32),
+            register_url: None,
+            access_pubkey: "dd".repeat(32),
+            enabled: true,
+            authorized_channels: vec!["lock".into()],
+            status: "active".into(),
+            sunset_at: None,
+            revocation_reason: None,
+            replacement: None,
+        });
+        state_bob.set_cached_security_policy(Some(policy));
+        state_bob.set_cached_internal_lifecycle(Some(InternalLifecycleState::default()));
+        let bob_session = {
+            let s = state_bob.service.lock().unwrap();
+            state_bob.session_token_for_service(&s).unwrap()
+        };
+
+        let upgraded = verify_bundle_l2_precommit(
+            &state_bob,
+            &bob_session,
+            &bundle_res.bundle_bytes,
+            Some(pw),
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(upgraded, PrecommitL2Verification::CleanQuorum { .. }),
+            "S04-F6: inline-less 409 epoch_frozen must trigger discovery and succeed on Rev 2, got {:?}",
+            upgraded
+        );
+
+        h1.abort();
+        h2.abort();
+        h_disc.abort();
         let _ = std::fs::remove_dir_all(dir_alice);
         let _ = std::fs::remove_dir_all(dir_bob);
     }

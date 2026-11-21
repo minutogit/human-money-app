@@ -933,7 +933,7 @@ pub(crate) fn evaluate_guarantor_anchor_check_impl(
     let mut offender_check_unverified = false;
     let offenders = {
         let mut service = state.lock_service()?;
-        match crate::l2_lifecycle::load_server_offender_list(&mut service, password) {
+        match state.get_or_load_server_offender_list(&mut service, password) {
             Ok(list) => list,
             Err(err)
                 if password.is_none()
@@ -1054,6 +1054,53 @@ mod tests {
             retain_until_quarter: encode_quarter(2035, 4).unwrap(),
         };
         let anchor_id = manifest.rev1_anchor_id().unwrap();
+        let mut creator_probe_cache = std::collections::BTreeMap::new();
+        for (srv, sk) in manifest.servers.iter().zip([&s1_sk, &s2_sk]) {
+            let admin_hex = hex::encode(srv.admin_pub);
+            let lock_hex = hex::encode(srv.lock_pub);
+            let msg = humoco_market::format_lock_delegate_signature_message(
+                &admin_hex,
+                &lock_hex,
+                &srv.write_url,
+                &srv.read_url,
+                1_760_000_000,
+            );
+            let sig = hex::encode(ed25519_dalek::Signer::sign(sk, msg.as_bytes()).to_bytes());
+            creator_probe_cache.insert(
+                lock_hex.clone(),
+                crate::sync_client::FrontendLockServerProbeResult {
+                    write_url: srv.write_url.clone(),
+                    read_url: srv.read_url.clone(),
+                    drop_pub: admin_hex.clone(),
+                    admin_pub: admin_hex.clone(),
+                    lock_pub: lock_hex.clone(),
+                    delegation_valid: true,
+                    waf_probe_passed: true,
+                    selftest_passed: true,
+                    key_leak_safe: true,
+                    passed: true,
+                    latency_ms: 5,
+                    max_retention_quarter: manifest.retain_until_quarter,
+                    pow_base_bits:
+                        human_money_core::humoco_proto::crypto::DEFAULT_LOCK_POW_BASE_BITS,
+                    allow_pow_tickets: true,
+                    ticket_pow_bits: 16,
+                    inode_warning: false,
+                    used_inodes: 0,
+                    max_inodes: 50_000,
+                    probed_at_secs: 1_760_000_000,
+                    delegation: Some(crate::sync_client::SyncLockDelegationDto {
+                        admin_pub: admin_hex,
+                        lock_pub: lock_hex,
+                        write_url: srv.write_url.clone(),
+                        read_url: srv.read_url.clone(),
+                        issued_at: 1_760_000_000,
+                        sig,
+                    }),
+                    error: None,
+                },
+            );
+        }
         svc_creator
             .update_l2_anchor_manifest(manifest, Some(pw))
             .unwrap();
@@ -1078,7 +1125,7 @@ mod tests {
         let ask_bytes = create_signing_request_bundle_impl(
             &local_id,
             ContainerConfig::TargetDid(guar_id, PrivacyMode::TrialDecryption),
-            None,
+            Some(&creator_probe_cache),
             &svc_creator,
         )
         .unwrap();
@@ -1542,7 +1589,50 @@ mod tests {
             )
             .unwrap();
         let rev2_json = serde_json::to_string(&rev2_manifest).unwrap();
+        let rev2_delegations: Vec<crate::sync_client::SyncLockDelegationDto> = rev2_manifest
+            .servers
+            .iter()
+            .zip([&s1_sk, &s2_sk])
+            .map(|(srv, sk)| {
+                let admin_hex = hex::encode(srv.admin_pub);
+                let lock_hex = hex::encode(srv.lock_pub);
+                let msg = humoco_market::format_lock_delegate_signature_message(
+                    &admin_hex,
+                    &lock_hex,
+                    &srv.write_url,
+                    &srv.read_url,
+                    1_760_000_010,
+                );
+                let sig = hex::encode(ed25519_dalek::Signer::sign(sk, msg.as_bytes()).to_bytes());
+                crate::sync_client::SyncLockDelegationDto {
+                    admin_pub: admin_hex,
+                    lock_pub: lock_hex,
+                    write_url: srv.write_url.clone(),
+                    read_url: srv.read_url.clone(),
+                    issued_at: 1_760_000_010,
+                    sig,
+                }
+            })
+            .collect();
+        let rev2_del_json = serde_json::to_string(&rev2_delegations).unwrap();
         let res_rev2 = evaluate_guarantor_anchor_check_impl(
+            details_n1.voucher.clone(),
+            minuto_toml.clone(),
+            Some(rev2_json.clone()),
+            Some(rev2_del_json),
+            Some(pw),
+            &guar_state,
+        )
+        .unwrap();
+        assert!(
+            res_rev2.passed,
+            "rev=2 manifest must verify against anchor_id: {:?}",
+            res_rev2.issues
+        );
+
+        // S04-F4 Fail-First: stripping anchor_delegations_json with empty probe cache MUST fail
+        // with GUARANTOR_ISSUE_SYBIL_BELOW_THRESHOLD (empty write_url candidates excluded)
+        let res_no_del = evaluate_guarantor_anchor_check_impl(
             details_n1.voucher,
             minuto_toml,
             Some(rev2_json),
@@ -1552,9 +1642,12 @@ mod tests {
         )
         .unwrap();
         assert!(
-            res_rev2.passed,
-            "rev=2 manifest must verify against anchor_id: {:?}",
-            res_rev2.issues
+            !res_no_del.passed
+                && res_no_del
+                    .issues
+                    .contains(&GUARANTOR_ISSUE_SYBIL_BELOW_THRESHOLD.to_string()),
+            "S04-F4: stripping anchor_delegations_json must fail Sybil check, got: {:?}",
+            res_no_del.issues
         );
 
         let _ = std::fs::remove_dir_all(&dir);

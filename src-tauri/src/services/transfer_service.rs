@@ -675,6 +675,7 @@ pub async fn receive_bundle_impl(
     if mode == ReceiveCommitMode::OnlineVerify {
         let completion = crate::checkout::checkout_bundle(
             state,
+            &session,
             &effective_purchase_id,
             &bundle_data,
             &standard_definitions_toml,
@@ -1964,14 +1965,23 @@ mod offline_and_degraded_transfer_tests {
                 .unwrap();
             let mut lc = InternalLifecycleState::default();
             let sk1_hex = hex::encode(sk1.verifying_key().as_bytes());
+            let read_url = format!("http://127.0.0.1:{}/d", p1);
+            let del_msg = humoco_market::format_lock_delegate_signature_message(
+                &sk1_hex,
+                &sk1_hex,
+                &write_url,
+                &read_url,
+                1_760_000_000,
+            );
+            let del_sig = hex::encode(sk1.sign(del_msg.as_bytes()).to_bytes());
             lc.l2_probe_cache.insert(
                 sk1_hex.clone(),
                 crate::sync_client::FrontendLockServerProbeResult {
                     write_url: write_url.clone(),
-                    read_url: format!("http://127.0.0.1:{}/d", p1),
+                    read_url: read_url.clone(),
                     drop_pub: sk1_hex.clone(),
                     admin_pub: sk1_hex.clone(),
-                    lock_pub: sk1_hex,
+                    lock_pub: sk1_hex.clone(),
                     delegation_valid: true,
                     waf_probe_passed: true,
                     selftest_passed: true,
@@ -1986,7 +1996,14 @@ mod offline_and_degraded_transfer_tests {
                     used_inodes: 0,
                     max_inodes: 50_000,
                     probed_at_secs: 1,
-                    delegation: None,
+                    delegation: Some(crate::sync_client::SyncLockDelegationDto {
+                        admin_pub: sk1_hex.clone(),
+                        lock_pub: sk1_hex,
+                        write_url: write_url.clone(),
+                        read_url,
+                        issued_at: 1_760_000_000,
+                        sig: del_sig,
+                    }),
                     error: None,
                 },
             );
