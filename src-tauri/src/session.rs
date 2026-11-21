@@ -36,6 +36,7 @@ pub struct ActiveProfileCaches {
     pub app_notices: Option<StoredAppNotices>,
     pub server_offenders: Option<humoco_wot::ServerOffenderList>,
     pub own_sync_descriptor: Option<Option<humoco_market::DropDescriptor>>,
+    pub post_state: Option<crate::state::StoredPostState>,
     pub media_negative_cache: std::collections::HashMap<(String, String), u64>,
 }
 

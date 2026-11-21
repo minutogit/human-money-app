@@ -1298,6 +1298,11 @@ pub async fn delete_own_sync_slots_impl(
                     password.as_deref(),
                 )
                 .map_err(FrontendError::from)?;
+                state.write_cache_slot_for_service(
+                    service,
+                    |c| &mut c.post_state,
+                    Some(post_state),
+                );
             }
 
             crate::state::save_local_sidecar_json(
@@ -1813,6 +1818,13 @@ pub async fn remove_public_sync_impl(
                 }
                 if let Some(reg) = updated_reg {
                     state.write_cache_slot_for_service(service, |c| &mut c.wot, Some(reg));
+                }
+                if let Some(post_state) = updated_post_state {
+                    state.write_cache_slot_for_service(
+                        service,
+                        |c| &mut c.post_state,
+                        Some(post_state),
+                    );
                 }
 
                 if let Some(mut backup_state) = crate::state::load_local_sidecar_json_opt::<

@@ -1,5 +1,5 @@
 use chrono::Utc;
-use human_money_core::models::secure_container::PayloadType;
+use human_money_core::models::secure_container::{EncryptionType, PayloadType, SecureContainer};
 use human_money_core::ValidatedUserId;
 use humoco_market::{
     merge_and_pack_post_slot, pack_post_slot, validate_market_inquiry,
@@ -14,16 +14,21 @@ use crate::models::{
     FrontendContact, FrontendError, FrontendInquiryChatMessage, FrontendMarketInquiryItem,
     FrontendPostDepositResult, FrontendSyncDescriptor, FrontendUserProfile,
 };
-use crate::services::common::{normalize_sync_url, DropChannelSigner, SyncIdentityContext};
+use crate::services::common::{
+    are_dids_equal, normalize_sync_url, DropChannelSigner, SyncIdentityContext,
+};
 use crate::session::SessionToken;
 use crate::state::{AppState, StoredPostState};
 use crate::sync_client::{self as sync_client, PutSlotOutcome};
 
 use super::{
     collect_own_reply_syncs, collect_post_upload_targets, enqueue_post_envelope,
-    load_post_signing_context_for_service, load_post_signing_context_for_session,
-    load_post_state_for_session, lookup_counterparty_syncs, merge_and_save_post_state,
-    resolve_counterparty_info_for_session, seal_post_container_bytes,
+    inquiry_rate_limit_key, load_post_signing_context_for_service,
+    load_post_signing_context_for_session, load_post_state_for_session,
+    load_post_state_with_service, lookup_counterparty_syncs, merge_and_save_post_state,
+    merge_post_state_with_service, resolve_counterparty_info_for_session,
+    sanitize_frontend_sync_descriptors, sanitize_sync_descriptors, scoped_processed_msg_key,
+    seal_post_container_bytes,
 };
 
 struct FlushContext {
@@ -38,15 +43,43 @@ struct FlushContext {
     now_secs: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FlushTargetScope {
+    All,
+    RecipientOnly,
+    OwnExcludingRecipient,
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct FlushPostSlotsOutcome {
     pub deposited_to: usize,
     pub recipient_deposited_to: usize,
-    pub uploaded_tags: std::collections::HashSet<[u8; 16]>,
     pub recipient_uploaded_tags: std::collections::HashSet<[u8; 16]>,
+    pub uploaded_counts_by_tag: std::collections::HashMap<[u8; 16], usize>,
+    pub recipient_uploaded_counts_by_tag: std::collections::HashMap<[u8; 16], usize>,
     pub deferred_tags: std::collections::HashSet<[u8; 16]>,
     pub deferred_count: usize,
     pub errors: Vec<String>,
+}
+
+fn verify_outgoing_post_container(
+    container_bytes: &[u8],
+    expected_payload: PayloadType,
+    expected_sender_did: &str,
+    label: &str,
+) -> Result<(), FrontendError> {
+    let container: SecureContainer = serde_json::from_slice(container_bytes)
+        .map_err(|e| FrontendError::from(format!("Invalid {} container JSON: {}", label, e)))?;
+    if container.et != EncryptionType::Asymmetric || container.c != expected_payload {
+        return Err(FrontendError::from(format!(
+            "{} must be an asymmetrically encrypted {:?} container",
+            label, expected_payload
+        )));
+    }
+    container.verify_integrity().map_err(FrontendError::from)?;
+    container
+        .verify_container_signature(expected_sender_did)
+        .map_err(FrontendError::from)
 }
 
 fn record_recipient_target(
@@ -59,6 +92,12 @@ fn record_recipient_target(
     canonical_did: &str,
     descriptor: DropDescriptor,
 ) {
+    if sync_client::validate_sync_url(&descriptor.write_url).is_err()
+        || sync_client::validate_sync_read_url(&descriptor.read_url).is_err()
+        || crate::services::common::canonical_drop_pub_hex(&descriptor.drop_pub).is_err()
+    {
+        return;
+    }
     let norm = normalize_sync_url(&descriptor.write_url);
     if !norm.is_empty() {
         recipient_write_urls.insert(norm.clone());
@@ -215,6 +254,9 @@ fn collect_flush_context(
 
                 if !extra_recipient_syncs.is_empty() {
                     for d in extra_recipient_syncs {
+                        if d.status.eq_ignore_ascii_case("revoked") {
+                            continue;
+                        }
                         if let Some(rcpt) = extra_trimmed {
                             exact_matched_recipients.insert(rcpt.to_string());
                             record_recipient_target(
@@ -224,7 +266,10 @@ fn collect_flush_context(
                                 rcpt,
                                 d.clone().into(),
                             );
-                        } else {
+                        } else if sync_client::validate_sync_url(&d.write_url).is_ok()
+                            && sync_client::validate_sync_read_url(&d.read_url).is_ok()
+                            && crate::services::common::canonical_drop_pub_hex(&d.drop_pub).is_ok()
+                        {
                             let norm = normalize_sync_url(&d.write_url);
                             if !norm.is_empty() {
                                 recipient_write_urls.insert(norm);
@@ -259,6 +304,9 @@ fn collect_flush_context(
                     for c in &contacts {
                         if c.did.trim() == rcpt {
                             for d in &c.syncs {
+                                if d.status.eq_ignore_ascii_case("revoked") {
+                                    continue;
+                                }
                                 found_exact = true;
                                 record_recipient_target(
                                     &mut recipient_write_urls,
@@ -273,6 +321,9 @@ fn collect_flush_context(
                     for inq in &post_state.inquiries {
                         if inq.counterparty_did.trim() == rcpt {
                             for d in &inq.reply_syncs {
+                                if d.status.eq_ignore_ascii_case("revoked") {
+                                    continue;
+                                }
                                 found_exact = true;
                                 record_recipient_target(
                                     &mut recipient_write_urls,
@@ -287,6 +338,9 @@ fn collect_flush_context(
                     for req in &post_state.pending_sign_requests {
                         if req.sender_did.trim() == rcpt {
                             for d in &req.reply_syncs {
+                                if d.status.eq_ignore_ascii_case("revoked") {
+                                    continue;
+                                }
                                 found_exact = true;
                                 record_recipient_target(
                                     &mut recipient_write_urls,
@@ -300,14 +354,17 @@ fn collect_flush_context(
                     }
                     if let Some(ref store) = card_store {
                         if let Some(sc) = store.cards.get(rcpt.as_str()) {
-                            for d in &sc.card.payload.drops {
+                            for d in sanitize_sync_descriptors(
+                                &sc.card.payload.drops,
+                                humoco_market::MAX_CARD_DROPS,
+                            ) {
                                 found_exact = true;
                                 record_recipient_target(
                                     &mut recipient_write_urls,
                                     &mut recipient_dids_by_write_url,
                                     &mut targets,
                                     rcpt,
-                                    d.clone(),
+                                    d.into(),
                                 );
                             }
                         }
@@ -328,6 +385,9 @@ fn collect_flush_context(
                             .unwrap_or_else(|_| c.did.clone());
                         if can_c == can_rcpt {
                             for d in &c.syncs {
+                                if d.status.eq_ignore_ascii_case("revoked") {
+                                    continue;
+                                }
                                 record_recipient_target(
                                     &mut recipient_write_urls,
                                     &mut recipient_dids_by_write_url,
@@ -343,6 +403,9 @@ fn collect_flush_context(
                             .unwrap_or_else(|_| inq.counterparty_did.clone());
                         if can_inq == can_rcpt {
                             for d in &inq.reply_syncs {
+                                if d.status.eq_ignore_ascii_case("revoked") {
+                                    continue;
+                                }
                                 record_recipient_target(
                                     &mut recipient_write_urls,
                                     &mut recipient_dids_by_write_url,
@@ -358,6 +421,9 @@ fn collect_flush_context(
                             .unwrap_or_else(|_| req.sender_did.clone());
                         if can_req == can_rcpt {
                             for d in &req.reply_syncs {
+                                if d.status.eq_ignore_ascii_case("revoked") {
+                                    continue;
+                                }
                                 record_recipient_target(
                                     &mut recipient_write_urls,
                                     &mut recipient_dids_by_write_url,
@@ -373,13 +439,16 @@ fn collect_flush_context(
                             let can_card = crate::state::canonicalize_did(&sc.card.payload.did)
                                 .unwrap_or_else(|_| sc.card.payload.did.clone());
                             if can_card == can_rcpt {
-                                for d in &sc.card.payload.drops {
+                                for d in sanitize_sync_descriptors(
+                                    &sc.card.payload.drops,
+                                    humoco_market::MAX_CARD_DROPS,
+                                ) {
                                     record_recipient_target(
                                         &mut recipient_write_urls,
                                         &mut recipient_dids_by_write_url,
                                         &mut targets,
                                         rcpt,
-                                        d.clone(),
+                                        d.into(),
                                     );
                                 }
                             }
@@ -624,6 +693,27 @@ pub(crate) async fn flush_post_slots_impl(
     extra_recipient_syncs: &[FrontendSyncDescriptor],
     password: Option<&str>,
 ) -> FlushPostSlotsOutcome {
+    flush_post_slots_with_scope(
+        state,
+        session,
+        post_state,
+        extra_recipient_did,
+        extra_recipient_syncs,
+        password,
+        FlushTargetScope::All,
+    )
+    .await
+}
+
+async fn flush_post_slots_with_scope(
+    state: &AppState,
+    session: &SessionToken,
+    post_state: &mut StoredPostState,
+    extra_recipient_did: Option<&str>,
+    extra_recipient_syncs: &[FrontendSyncDescriptor],
+    password: Option<&str>,
+    scope: FlushTargetScope,
+) -> FlushPostSlotsOutcome {
     let mut flush_ctx = match collect_flush_context(
         state,
         session,
@@ -645,21 +735,48 @@ pub(crate) async fn flush_post_slots_impl(
         return FlushPostSlotsOutcome::default();
     }
 
+    let own_targets_total = flush_ctx
+        .upload_targets
+        .iter()
+        .filter(|d| {
+            let norm_url = normalize_sync_url(&d.write_url);
+            let is_own = flush_ctx.own_write_urls.contains(&norm_url);
+            let is_rcpt = flush_ctx.recipient_write_urls.contains(&norm_url);
+            let matches_scope = match scope {
+                FlushTargetScope::All => true,
+                FlushTargetScope::RecipientOnly => is_rcpt,
+                FlushTargetScope::OwnExcludingRecipient => is_own && !is_rcpt,
+            };
+            is_own && matches_scope
+        })
+        .count();
+
     let client = sync_client::create_sync_http_client();
     let mut deposited_to = 0;
     let mut recipient_deposited_to = 0;
-    let mut own_targets_attempted = 0usize;
-    let mut own_targets_failed = 0usize;
+    let mut own_targets_succeeded = 0usize;
     let mut errors = Vec::new();
     let mut health_updates: Vec<(String, bool)> = Vec::new();
-    let mut uploaded_tags = std::collections::HashSet::new();
     let mut recipient_uploaded_tags = std::collections::HashSet::new();
+    let mut uploaded_counts_by_tag = std::collections::HashMap::new();
+    let mut recipient_uploaded_counts_by_tag = std::collections::HashMap::new();
     let mut all_deferred_tags = std::collections::HashSet::new();
     let mut reported_oversize_tags = std::collections::HashSet::new();
 
     for sync_desc in &flush_ctx.upload_targets {
         if !state.is_generation_current(session.generation) {
             break;
+        }
+        let norm_url = normalize_sync_url(&sync_desc.write_url);
+        let is_own_target = flush_ctx.own_write_urls.contains(&norm_url);
+        let is_recipient_target = flush_ctx.recipient_write_urls.contains(&norm_url);
+        match scope {
+            FlushTargetScope::All => {}
+            FlushTargetScope::RecipientOnly if !is_recipient_target => continue,
+            FlushTargetScope::OwnExcludingRecipient if !is_own_target || is_recipient_target => {
+                continue
+            }
+            _ => {}
         }
         if post_state
             .outbox_entries
@@ -679,11 +796,9 @@ pub(crate) async fn flush_post_slots_impl(
         }
         let if_match = post_state
             .slot_etags_by_write_url
-            .get(&sync_desc.write_url)
+            .get(&norm_url)
+            .or_else(|| post_state.slot_etags_by_write_url.get(&sync_desc.write_url))
             .cloned();
-        let norm_url = normalize_sync_url(&sync_desc.write_url);
-        let is_own_target = flush_ctx.own_write_urls.contains(&norm_url);
-        let is_recipient_target = flush_ctx.recipient_write_urls.contains(&norm_url);
         let target_entries = select_prioritized_entries_for_target(
             post_state,
             &flush_ctx,
@@ -725,13 +840,7 @@ pub(crate) async fn flush_post_slots_impl(
         }
 
         let remove_tags = collect_remove_tags_for_flush(post_state, &flush_ctx);
-        if is_own_target {
-            own_targets_attempted += 1;
-        }
         if state.is_origin_cooling_down(&sync_desc.write_url, std::time::Instant::now()) {
-            if is_own_target {
-                own_targets_failed += 1;
-            }
             errors.push(format!(
                 "Upload to {} deferred: server origin cooling down after HTTP 429",
                 sync_desc.write_url
@@ -752,13 +861,17 @@ pub(crate) async fn flush_post_slots_impl(
         {
             Ok((etag, included_tags, deferred_tags, oversized_tags)) => {
                 deposited_to += 1;
+                if is_own_target {
+                    own_targets_succeeded += 1;
+                }
                 if is_recipient_target {
                     recipient_deposited_to += 1;
                 }
                 for t in &included_tags {
-                    uploaded_tags.insert(*t);
+                    *uploaded_counts_by_tag.entry(*t).or_insert(0) += 1;
                     if is_recipient_target {
                         recipient_uploaded_tags.insert(*t);
+                        *recipient_uploaded_counts_by_tag.entry(*t).or_insert(0) += 1;
                     }
                 }
                 for t in deferred_tags {
@@ -777,13 +890,11 @@ pub(crate) async fn flush_post_slots_impl(
                 if let Some(et) = etag {
                     post_state
                         .slot_etags_by_write_url
-                        .insert(sync_desc.write_url.clone(), et);
+                        .remove(&sync_desc.write_url);
+                    post_state.slot_etags_by_write_url.insert(norm_url, et);
                 }
             }
             Err(e) => {
-                if is_own_target {
-                    own_targets_failed += 1;
-                }
                 state.record_origin_cooldown_if_429(&sync_desc.write_url, &e);
                 health_updates.push((sync_desc.write_url.clone(), false));
                 errors.push(e);
@@ -791,7 +902,10 @@ pub(crate) async fn flush_post_slots_impl(
         }
     }
 
-    if own_targets_attempted > 0 && own_targets_failed == 0 {
+    if scope == FlushTargetScope::All
+        && own_targets_total > 0
+        && own_targets_succeeded == own_targets_total
+    {
         post_state.pruned_outbox_tag16s.clear();
     }
 
@@ -809,7 +923,7 @@ pub(crate) async fn flush_post_slots_impl(
 
     let deferred_tags: std::collections::HashSet<[u8; 16]> = all_deferred_tags
         .into_iter()
-        .filter(|t| !uploaded_tags.contains(t))
+        .filter(|t| !uploaded_counts_by_tag.contains_key(t))
         .collect();
     let deferred_count = deferred_tags.len();
     if deferred_count > 0 {
@@ -819,8 +933,9 @@ pub(crate) async fn flush_post_slots_impl(
     FlushPostSlotsOutcome {
         deposited_to,
         recipient_deposited_to,
-        uploaded_tags,
         recipient_uploaded_tags,
+        uploaded_counts_by_tag,
+        recipient_uploaded_counts_by_tag,
         deferred_tags,
         deferred_count,
         errors,
@@ -858,19 +973,24 @@ async fn persist_and_flush_post_box(
     }
     merge_and_save_post_state(state, session, &mid_baseline, post_state, password)?;
 
-    let target_uploaded = target_tag16.is_some_and(|t| outcome.uploaded_tags.contains(&t));
-    let queued_for_next_flush =
-        !target_uploaded && target_tag16.is_some_and(|t| outcome.deferred_tags.contains(&t));
+    let target_deposited_to = target_tag16
+        .and_then(|t| outcome.uploaded_counts_by_tag.get(&t).copied())
+        .unwrap_or(0);
+    let target_recipient_deposited_to = target_tag16
+        .and_then(|t| outcome.recipient_uploaded_counts_by_tag.get(&t).copied())
+        .unwrap_or(0);
+    let queued_for_next_flush = target_deposited_to == 0
+        && target_tag16.is_some_and(|t| outcome.deferred_tags.contains(&t));
     let mut errors = outcome.errors;
     let (deposited_to, recipient_deposited_to) =
-        if outcome.deposited_to > 0 && !target_uploaded && !queued_for_next_flush {
+        if outcome.deposited_to > 0 && target_deposited_to == 0 && !queued_for_next_flush {
             errors.push(format!(
                 "Message {} was excluded or omitted during PoST flush and not deposited",
                 msg_id
             ));
             (0, 0)
         } else {
-            (outcome.deposited_to, outcome.recipient_deposited_to)
+            (target_deposited_to, target_recipient_deposited_to)
         };
 
     Ok(FrontendPostDepositResult {
@@ -1001,6 +1121,12 @@ pub async fn send_signing_request_via_post_impl(
     let recipient_did = validated_recipient.as_str().to_string();
     let recipient_ed_pk = validated_recipient.public_key();
     let signing_ctx = load_post_signing_context_for_session(state, &session, pw)?;
+    verify_outgoing_post_container(
+        &container_bytes,
+        PayloadType::VoucherForSigning,
+        &signing_ctx.identity.user_id,
+        "Signing request",
+    )?;
     let now_secs = sync_client::current_unix_timestamp();
 
     let _post_guard = state.post_op_lock.lock().await;
@@ -1069,13 +1195,22 @@ pub async fn reply_detached_signature_via_post_impl(
             Ok(signing_ctx)
         },
     )?;
+    verify_outgoing_post_container(
+        &container_bytes,
+        PayloadType::DetachedSignature,
+        &signing_ctx.identity.user_id,
+        "Detached signature reply",
+    )?;
     let now_secs = sync_client::current_unix_timestamp();
 
     let _post_guard = state.post_op_lock.lock().await;
     let msg_id = uuid::Uuid::new_v4().to_string();
     let mut post_state = load_post_state_for_session(state, &session, pw)?;
     if let Some(ref req_id) = request_msg_id {
-        if post_state.replied_sign_request_ids.contains(req_id) {
+        let scoped_req_id = scoped_processed_msg_key(&recipient_did, req_id);
+        if post_state.replied_sign_request_ids.contains(&scoped_req_id)
+            || post_state.replied_sign_request_ids.contains(req_id)
+        {
             return Err(FrontendError::with_code(
                 "error.post.duplicateReply",
                 "This signature request has already been answered.".to_string(),
@@ -1106,23 +1241,49 @@ pub async fn reply_detached_signature_via_post_impl(
     let mid_baseline = post_state.clone();
 
     let outcome = flush_post_slots_impl(state, &session, &mut post_state, None, &[], pw).await;
-    let delivered_any = outcome.deposited_to > 0;
+    let target_deposited_to = target_tag16
+        .and_then(|t| outcome.uploaded_counts_by_tag.get(&t).copied())
+        .unwrap_or(0);
+    let target_recipient_deposited_to = target_tag16
+        .and_then(|t| outcome.recipient_uploaded_counts_by_tag.get(&t).copied())
+        .unwrap_or(0);
+    let queued_for_next_flush = target_deposited_to == 0
+        && target_tag16.is_some_and(|t| outcome.deferred_tags.contains(&t));
+    let mut errors = outcome.errors;
+    if outcome.deposited_to > 0 && target_deposited_to == 0 && !queued_for_next_flush {
+        errors.push(format!(
+            "Detached signature box {} was excluded or omitted during PoST flush and not deposited",
+            msg_id
+        ));
+    }
+    let delivered_any = target_deposited_to > 0;
 
     if delivered_any {
         if let Some(ref req_id) = request_msg_id {
+            let scoped_req_id = scoped_processed_msg_key(&recipient_did, req_id);
             if post_state.replied_sign_request_ids.len() >= 512 {
                 if let Some(first) = post_state.replied_sign_request_ids.iter().next().cloned() {
                     post_state.replied_sign_request_ids.remove(&first);
                 }
             }
-            post_state.replied_sign_request_ids.insert(req_id.clone());
+            post_state.replied_sign_request_ids.insert(scoped_req_id);
             if let Some(idx) = post_state
                 .pending_sign_requests
                 .iter()
-                .position(|r| &r.msg_id == req_id)
+                .position(|r| &r.msg_id == req_id && are_dids_equal(&r.sender_did, &recipient_did))
+                .or_else(|| {
+                    post_state
+                        .pending_sign_requests
+                        .iter()
+                        .position(|r| &r.msg_id == req_id)
+                })
             {
                 let req = post_state.pending_sign_requests.remove(idx);
-                if !req.reply_syncs.is_empty() {
+                let sanitized_replies = sanitize_frontend_sync_descriptors(
+                    &req.reply_syncs,
+                    humoco_market::MAX_CARD_DROPS,
+                );
+                if !sanitized_replies.is_empty() {
                     state.with_session_required(
                         &session,
                         "Active wallet session changed before reply syncs could be updated",
@@ -1130,7 +1291,7 @@ pub async fn reply_detached_signature_via_post_impl(
                             if let Err(e) = state.update_contact_from_card(
                                 service,
                                 &recipient_did,
-                                &req.reply_syncs,
+                                &sanitized_replies,
                                 None,
                                 pw,
                             ) {
@@ -1149,15 +1310,13 @@ pub async fn reply_detached_signature_via_post_impl(
 
     merge_and_save_post_state(state, &session, &mid_baseline, &mut post_state, pw)?;
 
-    let queued_for_next_flush = target_tag16.is_some_and(|t| outcome.deferred_tags.contains(&t));
-
     Ok(FrontendPostDepositResult {
-        deposited_to: outcome.deposited_to,
-        recipient_deposited_to: outcome.recipient_deposited_to,
+        deposited_to: target_deposited_to,
+        recipient_deposited_to: target_recipient_deposited_to,
         msg_id,
         deferred_count: outcome.deferred_count,
         queued_for_next_flush,
-        errors: outcome.errors,
+        errors,
     })
 }
 
@@ -1319,34 +1478,45 @@ pub async fn accept_wot_handshake_impl(
 
     let sender_did = {
         let _post_guard = state.post_op_lock.lock().await;
-        let mut post_state = load_post_state_for_session(state, &session, pw)?;
-        let baseline = post_state.clone();
-        let idx = post_state
-            .pending_wot_handshakes
-            .iter()
-            .position(|h| h.msg_id == msg_id)
-            .ok_or_else(|| {
-                FrontendError::from(format!("Pending WoT handshake msg_id {} not found", msg_id))
-            })?;
-        let handshake = post_state.pending_wot_handshakes.remove(idx);
-        let sender_did = handshake.sender_did.clone();
         let now_secs = sync_client::current_unix_timestamp();
-
-        let pkg_opt = post_state
-            .pending_wot_packages_by_msg_id
-            .remove(&msg_id)
-            .and_then(|json_str| {
-                serde_json::from_str::<humoco_wot::WotSyncPackage>(&json_str).ok()
-            });
 
         state.with_session_required(
             &session,
             "Active wallet session changed before WoT handshake could be saved",
             |service| {
-                let mut contact = state
-                    .load_contacts(service, pw)
-                    .ok()
-                    .and_then(|list| list.into_iter().find(|c| c.did.trim() == sender_did.trim()))
+                let mut post_state = load_post_state_with_service(service, pw)?;
+                let baseline = post_state.clone();
+                let idx = post_state
+                    .pending_wot_handshakes
+                    .iter()
+                    .position(|h| {
+                        h.msg_id == msg_id
+                            || scoped_processed_msg_key(&h.sender_did, &h.msg_id) == msg_id
+                    })
+                    .ok_or_else(|| {
+                        FrontendError::from(format!(
+                            "Pending WoT handshake msg_id {} not found",
+                            msg_id
+                        ))
+                    })?;
+                let handshake = post_state.pending_wot_handshakes.remove(idx);
+                let sender_did = handshake.sender_did.clone();
+                let raw_msg_id = handshake.msg_id;
+                let scoped_pkg_key = scoped_processed_msg_key(&sender_did, &raw_msg_id);
+                let pkg_opt = post_state
+                    .pending_wot_packages_by_msg_id
+                    .remove(&scoped_pkg_key)
+                    .or_else(|| post_state.pending_wot_packages_by_msg_id.remove(&raw_msg_id))
+                    .and_then(|json_str| {
+                        serde_json::from_str::<humoco_wot::WotSyncPackage>(&json_str).ok()
+                    });
+
+                let contacts = state.load_contacts(service, pw).map_err(FrontendError::from)?;
+                let mut contact = contacts
+                    .iter()
+                    .find(|c| c.did.trim() == sender_did.trim())
+                    .or_else(|| contacts.iter().find(|c| are_dids_equal(&c.did, &sender_did)))
+                    .cloned()
                     .unwrap_or_else(|| FrontendContact {
                         did: sender_did.clone(),
                         profile: FrontendUserProfile {
@@ -1363,25 +1533,59 @@ pub async fn accept_wot_handshake_impl(
                         syncs: vec![],
                     });
                 contact.trust_level = Some(trust_level);
+
                 state
-                    .save_contact(service, contact, pw)
+                    .save_contact_with_companions(
+                        service,
+                        contact,
+                        pw,
+                        false,
+                        |svc, updated_wot_reg| {
+                            if let Some(ref pkg) = pkg_opt {
+                                let reg = match updated_wot_reg {
+                                    Some(r) => r,
+                                    None => {
+                                        let loaded = state.get_or_load_wot_register(svc, pw)?;
+                                        *updated_wot_reg = Some(loaded);
+                                        updated_wot_reg.as_mut().unwrap()
+                                    }
+                                };
+                                let can_sender_did = crate::state::canonicalize_did(&sender_did)
+                                    .unwrap_or_else(|_| sender_did.clone());
+                                if let Err(e) =
+                                    reg.import_sync_package(pkg, Some(&can_sender_did), now_secs)
+                                {
+                                    warn!(
+                                        "Rejected invalid WoT sync package while accepting handshake from {}: {}",
+                                        sender_did, e
+                                    );
+                                }
+                            }
+                            merge_post_state_with_service(svc, &baseline, &mut post_state, pw)
+                                .map_err(|e| {
+                                    human_money_core::app_service::AppFacadeError::Generic(
+                                        e.message,
+                                    )
+                                })?;
+                            let post_bytes = serde_json::to_vec(&post_state).map_err(|e| {
+                                human_money_core::app_service::AppFacadeError::Generic(format!(
+                                    "Failed to serialize PoST state: {}",
+                                    e
+                                ))
+                            })?;
+                            Ok(vec![(crate::state::MARKET_POST_STATE_KEY, post_bytes)])
+                        },
+                    )
                     .map_err(FrontendError::from)?;
 
-                if let Some(ref pkg) = pkg_opt {
-                    if let Ok(mut reg) = state.get_or_load_wot_register(service, pw) {
-                        let can_sender_did = crate::state::canonicalize_did(&sender_did)
-                            .unwrap_or_else(|_| sender_did.clone());
-                        let _ = reg.import_sync_package(pkg, Some(&can_sender_did), now_secs);
-                        let _ = state.ensure_wot_list_signed(service, &mut reg);
-                        let _ = state.save_wot_register(service, &reg, pw);
-                    }
-                }
-                Ok(())
+                state.write_cache_slot_for_service(
+                    service,
+                    |c| &mut c.post_state,
+                    Some(post_state),
+                );
+                Ok(sender_did)
             },
-        )?;
-
-        merge_and_save_post_state(state, &session, &baseline, &mut post_state, pw)?;
-        sender_did
+        )?
     };
 
     if send_return_handshake {
@@ -1434,28 +1638,8 @@ pub async fn send_market_inquiry_via_post_impl(
         created_at: now_secs,
     };
     validate_market_inquiry(&inquiry).map_err(FrontendError::from)?;
-
-    if !recipient_syncs.is_empty() {
-        state.with_session_required(
-            &session,
-            "Wallet session changed before saving inquiry recipient syncs",
-            |service| {
-                if let Err(e) = state.update_contact_from_card(
-                    service,
-                    &recipient_did,
-                    &recipient_syncs,
-                    None,
-                    pw,
-                ) {
-                    warn!(
-                        "Failed to save inquiry recipient syncs on contact: {}",
-                        e.message
-                    );
-                }
-                Ok(())
-            },
-        )?;
-    }
+    let recipient_syncs =
+        sanitize_frontend_sync_descriptors(&recipient_syncs, humoco_market::MAX_CARD_DROPS);
 
     let signing_ctx = load_post_signing_context_for_session(state, &session, pw)?;
 
@@ -1490,20 +1674,17 @@ pub async fn send_market_inquiry_via_post_impl(
         .find(|e| e.msg_id == msg_id)
         .map(|e| e.entry.tag16);
 
-    let flush_outcome = flush_post_slots_impl(
+    let flush_outcome = flush_post_slots_with_scope(
         state,
         &session,
         &mut post_state,
         Some(&recipient_did),
         &recipient_syncs,
         pw,
+        FlushTargetScope::RecipientOnly,
     )
     .await;
     if !target_tag16.is_some_and(|t| flush_outcome.recipient_uploaded_tags.contains(&t)) {
-        if flush_outcome.deposited_to > 0 {
-            post_state.outbox_entries.retain(|e| e.msg_id != msg_id);
-            let _ = merge_and_save_post_state(state, &session, &baseline, &mut post_state, pw);
-        }
         return Err(FrontendError::with_code(
             "error.post.recipientUnreachable",
             format!(
@@ -1513,6 +1694,28 @@ pub async fn send_market_inquiry_via_post_impl(
         ));
     }
 
+    if !recipient_syncs.is_empty() {
+        state.with_session_required(
+            &session,
+            "Wallet session changed before saving inquiry recipient syncs",
+            |service| {
+                if let Err(e) = state.update_contact_from_card(
+                    service,
+                    &recipient_did,
+                    &recipient_syncs,
+                    None,
+                    pw,
+                ) {
+                    warn!(
+                        "Failed to save inquiry recipient syncs on contact: {}",
+                        e.message
+                    );
+                }
+                Ok(())
+            },
+        )?;
+    }
+
     let (counterparty_name, counterparty_picture_url, is_contact) =
         resolve_counterparty_info_for_session(state, &session, &recipient_did, pw);
 
@@ -1520,7 +1723,7 @@ pub async fn send_market_inquiry_via_post_impl(
         inquiry_id,
         role: "buyer".to_string(),
         target,
-        counterparty_did: recipient_did,
+        counterparty_did: recipient_did.clone(),
         counterparty_name,
         counterparty_picture_url,
         is_contact,
@@ -1531,7 +1734,7 @@ pub async fn send_market_inquiry_via_post_impl(
         created_at: now_secs,
         updated_at: now_secs,
         unread: false,
-        reply_syncs: recipient_syncs,
+        reply_syncs: recipient_syncs.clone(),
         messages: vec![FrontendInquiryChatMessage {
             msg_id,
             sender: "me".to_string(),
@@ -1542,6 +1745,23 @@ pub async fn send_market_inquiry_via_post_impl(
     };
     post_state.inquiries.push(item.clone());
     merge_and_save_post_state(state, &session, &baseline, &mut post_state, pw)?;
+
+    let own_baseline = post_state.clone();
+    let _own_outcome = flush_post_slots_with_scope(
+        state,
+        &session,
+        &mut post_state,
+        Some(&recipient_did),
+        &recipient_syncs,
+        pw,
+        FlushTargetScope::OwnExcludingRecipient,
+    )
+    .await;
+    if post_state.slot_etags_by_write_url != own_baseline.slot_etags_by_write_url
+        || post_state.outbox_rotation_tick != own_baseline.outbox_rotation_tick
+    {
+        let _ = merge_and_save_post_state(state, &session, &own_baseline, &mut post_state, pw);
+    }
 
     Ok(item)
 }
@@ -1634,15 +1854,22 @@ pub async fn send_market_inquiry_message_via_post_impl(
         post_state.inquiries[item_idx].reply_syncs = discovered_syncs;
     }
 
+    let (wire_payment_uri, wire_amount_hint, wire_standard_uuid) =
+        if dec == Some(MarketInquiryDecision::Confirm) {
+            (payment_uri, amount_hint, standard_uuid)
+        } else {
+            (None, None, None)
+        };
+
     let msg_id = uuid::Uuid::new_v4().to_string();
     let msg_payload = MarketInquiryMessage {
         inquiry_id: inquiry_id.clone(),
         msg_id: msg_id.clone(),
         text: clean_text.clone(),
         decision: dec,
-        payment_uri: payment_uri.clone(),
-        amount_hint: amount_hint.clone(),
-        standard_uuid: standard_uuid.clone(),
+        payment_uri: wire_payment_uri.clone(),
+        amount_hint: wire_amount_hint.clone(),
+        standard_uuid: wire_standard_uuid.clone(),
         created_at: now_secs,
     };
     validate_market_inquiry_message(&msg_payload).map_err(FrontendError::from)?;
@@ -1651,13 +1878,6 @@ pub async fn send_market_inquiry_message_via_post_impl(
         ValidatedUserId::parse(&counterparty_did).map_err(FrontendError::from)?;
     let counterparty_did = validated_counterparty.as_str().to_string();
     let recipient_ed_pk = validated_counterparty.public_key();
-
-    if dec.is_some() {
-        post_state.inquiry_rate_tracker.resolve_inquiry(
-            &hex::encode(recipient_ed_pk.as_bytes()),
-            &target.target_key(),
-        );
-    }
 
     let signing_ctx = load_post_signing_context_for_session(state, &session, pw)?;
 
@@ -1688,13 +1908,17 @@ pub async fn send_market_inquiry_message_via_post_impl(
         .find(|e| e.msg_id == msg_id)
         .map(|e| e.entry.tag16);
 
-    let flush_outcome =
-        flush_post_slots_impl(state, &session, &mut post_state, None, &[], pw).await;
+    let flush_outcome = flush_post_slots_with_scope(
+        state,
+        &session,
+        &mut post_state,
+        None,
+        &[],
+        pw,
+        FlushTargetScope::RecipientOnly,
+    )
+    .await;
     if !target_tag16.is_some_and(|t| flush_outcome.recipient_uploaded_tags.contains(&t)) {
-        if flush_outcome.deposited_to > 0 {
-            post_state.outbox_entries.retain(|e| e.msg_id != msg_id);
-            let _ = merge_and_save_post_state(state, &session, &baseline, &mut post_state, pw);
-        }
         return Err(FrontendError::with_code(
             "error.post.recipientUnreachable",
             format!(
@@ -1702,6 +1926,13 @@ pub async fn send_market_inquiry_message_via_post_impl(
                 flush_outcome.errors
             ),
         ));
+    }
+
+    if dec.is_some() {
+        post_state.inquiry_rate_tracker.resolve_inquiry(
+            &hex::encode(recipient_ed_pk.as_bytes()),
+            &inquiry_rate_limit_key(&target),
+        );
     }
 
     let dec_str = dec.map(|d| match d {
@@ -1718,26 +1949,43 @@ pub async fn send_market_inquiry_message_via_post_impl(
         created_at: now_secs,
     });
     if let Some(ref d) = dec_str {
-        item.status = if d == "confirm" {
-            "confirmed".to_string()
+        if d == "confirm" {
+            item.status = "confirmed".to_string();
+            if wire_payment_uri.is_some() {
+                item.payment_uri = wire_payment_uri;
+            }
+            if wire_amount_hint.is_some() {
+                item.amount_hint = wire_amount_hint;
+            }
+            if wire_standard_uuid.is_some() {
+                item.standard_uuid = wire_standard_uuid;
+            }
         } else {
-            "declined".to_string()
-        };
-    }
-    if payment_uri.is_some() {
-        item.payment_uri = payment_uri;
-    }
-    if amount_hint.is_some() {
-        item.amount_hint = amount_hint;
-    }
-    if standard_uuid.is_some() {
-        item.standard_uuid = standard_uuid;
+            item.status = "declined".to_string();
+        }
     }
     item.updated_at = now_secs;
     item.unread = false;
 
     let mut updated_item = item.clone();
     merge_and_save_post_state(state, &session, &baseline, &mut post_state, pw)?;
+
+    let own_baseline = post_state.clone();
+    let _own_outcome = flush_post_slots_with_scope(
+        state,
+        &session,
+        &mut post_state,
+        None,
+        &[],
+        pw,
+        FlushTargetScope::OwnExcludingRecipient,
+    )
+    .await;
+    if post_state.slot_etags_by_write_url != own_baseline.slot_etags_by_write_url
+        || post_state.outbox_rotation_tick != own_baseline.outbox_rotation_tick
+    {
+        let _ = merge_and_save_post_state(state, &session, &own_baseline, &mut post_state, pw);
+    }
 
     let (name, pic, is_contact) =
         resolve_counterparty_info_for_session(state, &session, &updated_item.counterparty_did, pw);

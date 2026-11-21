@@ -1239,7 +1239,7 @@ async fn test_async_wot_handshake_and_1_step_marketplace_inquiry_cycle() {
         seller_inq.inquiry_id.clone(),
         Some("Yes, 2 jars reserved!".to_string()),
         Some("confirm".to_string()),
-        Some("humoco://pay?to=did:key:z123".to_string()),
+        Some(format!("humoco://pay?to={}", bob_did)),
         Some("20 Minuto".to_string()),
         None,
         Some(password.to_string()),
@@ -1273,11 +1273,17 @@ async fn test_async_wot_handshake_and_1_step_marketplace_inquiry_cycle() {
             .await
             .unwrap();
     assert_eq!(alice_sync_2.new_inquiry_messages, 1);
+    assert!(
+        alice_sync_2.errors.is_empty(),
+        "unexpected inquiry sync errors: {:?}",
+        alice_sync_2.errors
+    );
 
     let alice_post_2 = load_post_state(&alice_state, Some(password)).unwrap();
     assert_eq!(alice_post_2.inquiries[0].status, "confirmed");
     assert_eq!(alice_post_2.inquiries[0].messages.len(), 2);
     assert!(alice_post_2.inquiries[0].unread);
+    assert!(alice_post_2.inquiries[0].payment_uri.is_some());
 
     // Mark inquiry read works
     mark_inquiry_read_impl(
@@ -1672,7 +1678,7 @@ async fn test_deposit_transfer_to_post_persists_outbox_when_sync_server_unreacha
                         "1111111111111111111111111111111111111111111111111111111111111111"
                             .to_string(),
                     enabled: true,
-                    authorized_channels: vec!["pc".to_string()],
+                    authorized_channels: vec!["post".to_string()],
                     ..Default::default()
                 });
             })
@@ -2256,8 +2262,8 @@ async fn test_outbox_windowed_packing_defers_overflow_past_max_bytes_and_drains_
     assert_eq!(outcome1.deposited_to, 1, "errors: {:?}", outcome1.errors);
     assert!(outcome1.errors.is_empty());
     assert_eq!(outcome1.deferred_count, 1);
-    assert!(outcome1.uploaded_tags.contains(&tag1));
-    assert!(outcome1.uploaded_tags.contains(&tag3));
+    assert!(outcome1.uploaded_counts_by_tag.contains_key(&tag1));
+    assert!(outcome1.uploaded_counts_by_tag.contains_key(&tag3));
     assert!(outcome1.deferred_tags.contains(&tag2));
     assert_eq!(post_state.outbox_entries.len(), 3);
 
@@ -2289,8 +2295,8 @@ async fn test_outbox_windowed_packing_defers_overflow_past_max_bytes_and_drains_
     assert_eq!(outcome2.deposited_to, 1, "errors: {:?}", outcome2.errors);
     assert!(outcome2.errors.is_empty());
     assert_eq!(outcome2.deferred_count, 0);
-    assert!(outcome2.uploaded_tags.contains(&tag2));
-    assert!(outcome2.uploaded_tags.contains(&tag3));
+    assert!(outcome2.uploaded_counts_by_tag.contains_key(&tag2));
+    assert!(outcome2.uploaded_counts_by_tag.contains_key(&tag3));
 
     {
         let slots = server.slots.lock().unwrap();
@@ -2751,8 +2757,8 @@ async fn test_h5_outbox_holds_back_value_transfers_under_fork_lock_and_known_off
         Some(password),
     )
     .await;
-    assert!(outcome1.uploaded_tags.contains(&ctrl_tag));
-    assert!(!outcome1.uploaded_tags.contains(&value_tag));
+    assert!(outcome1.uploaded_counts_by_tag.contains_key(&ctrl_tag));
+    assert!(!outcome1.uploaded_counts_by_tag.contains_key(&value_tag));
 
     // Remove flushed Control entry, clear restore lock, then mark Bob as KnownOffender.
     post_state
@@ -2828,8 +2834,8 @@ async fn test_h5_outbox_holds_back_value_transfers_under_fork_lock_and_known_off
         Some(password),
     )
     .await;
-    assert!(outcome2.uploaded_tags.contains(&ctrl2_tag));
-    assert!(!outcome2.uploaded_tags.contains(&value_tag));
+    assert!(outcome2.uploaded_counts_by_tag.contains_key(&ctrl2_tag));
+    assert!(!outcome2.uploaded_counts_by_tag.contains_key(&value_tag));
     assert!(post_state
         .outbox_entries
         .iter()
@@ -3699,6 +3705,1072 @@ async fn test_post_anchored_signing_request_recovers_encrypted_manifest_and_dele
         "PoST signing request must recover encrypted delegations from SigningRequestBundle"
     );
     assert_eq!(opened.manifest_revision, Some(1));
+
+    let _ = std::fs::remove_dir_all(&base_dir);
+}
+
+#[tokio::test]
+async fn s10_f1_f9_f10_container_validation_skew_and_bounds() {
+    use human_money_core::models::secure_container::{
+        EncryptionType, PayloadType, SecureContainer,
+    };
+
+    let base_dir = temp_test_dir("s10_f1_f9_f10");
+    let password = "TestPassword123!";
+
+    let alice_service = setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
+    let bob_service = setup_test_app(&base_dir.join("bob"), "Bob", BOB_PHRASE, password);
+    let alice_state = create_test_state(alice_service);
+    let bob_state = create_test_state(bob_service);
+
+    let (alice_did, alice_id, alice_sk) = {
+        let s = alice_state.service.lock().unwrap();
+        let id = s.with_wallet_and_identity(|_, id| id.clone()).unwrap();
+        (id.user_id.clone(), id.clone(), id.signing_key.clone())
+    };
+    let (bob_did, bob_id) = {
+        let s = bob_state.service.lock().unwrap();
+        let id = s.with_wallet_and_identity(|_, id| id.clone()).unwrap();
+        (id.user_id.clone(), id)
+    };
+    let bob_pk = human_money_core::crypto::get_pubkey_from_user_id(&bob_did).unwrap();
+
+    // 1. Outgoing container validation rejects Cleartext and mismatched PayloadType
+    let cleartext = SecureContainer::seal(
+        &alice_id,
+        &ContainerConfig::Cleartext,
+        br#"{"hello":"world"}"#,
+        PayloadType::VoucherForSigning,
+    )
+    .unwrap();
+    let cleartext_bytes = serde_json::to_vec(&cleartext).unwrap();
+    assert!(send_signing_request_via_post_impl(
+        bob_did.clone(),
+        cleartext_bytes,
+        Some(password.to_string()),
+        &alice_state,
+    )
+    .await
+    .is_err());
+
+    let wrong_type = SecureContainer::seal(
+        &alice_id,
+        &ContainerConfig::TargetDid(bob_did.clone(), PrivacyMode::TrialDecryption),
+        br#"{"hello":"world"}"#,
+        PayloadType::VoucherForSigning,
+    )
+    .unwrap();
+    assert!(reply_detached_signature_via_post_impl(
+        None,
+        bob_did.clone(),
+        serde_json::to_vec(&wrong_type).unwrap(),
+        Some(password.to_string()),
+        &alice_state,
+    )
+    .await
+    .is_err());
+
+    // 2. Setup sync and establish mutual contact so Bob polls Alice's slot
+    let server = MockSyncServer::start(DROP_PUB_A.to_string(), ADMIN_A.to_string()).await;
+    let (write_url, _info) = setup_test_sync(&server, DROP_PUB_A, password, &alice_state).await;
+    let alice_read_url = format!("{}/{}", server.base_url, server.data_dir);
+    let _bob_info = setup_test_sync(&server, DROP_PUB_A, password, &bob_state).await;
+    {
+        let mut s_bob = bob_state.service.lock().unwrap();
+        bob_state
+            .save_contact(
+                &mut s_bob,
+                FrontendContact {
+                    did: alice_did.clone(),
+                    profile: FrontendUserProfile {
+                        first_name: Some("Alice".to_string()),
+                        ..Default::default()
+                    },
+                    tags: vec![],
+                    added_at: Utc::now().to_rfc3339(),
+                    notes: None,
+                    trust_level: Some(1),
+                    desired_hops: Some(3),
+                    has_peer_list: false,
+                    peer_list_updated_at: None,
+                    syncs: vec![FrontendSyncDescriptor {
+                        write_url: write_url.clone(),
+                        read_url: alice_read_url.clone(),
+                        slot_id: None,
+                        drop_pub: DROP_PUB_A.to_string(),
+                        status: "active".to_string(),
+                        ..Default::default()
+                    }],
+                },
+                Some(password),
+            )
+            .unwrap();
+        let mut s_alice = alice_state.service.lock().unwrap();
+        alice_state
+            .save_contact(
+                &mut s_alice,
+                FrontendContact {
+                    did: bob_did.clone(),
+                    profile: FrontendUserProfile {
+                        first_name: Some("Bob".to_string()),
+                        ..Default::default()
+                    },
+                    tags: vec![],
+                    added_at: Utc::now().to_rfc3339(),
+                    notes: None,
+                    trust_level: Some(1),
+                    desired_hops: Some(3),
+                    has_peer_list: false,
+                    peer_list_updated_at: None,
+                    syncs: vec![],
+                },
+                Some(password),
+            )
+            .unwrap();
+    }
+
+    // Bob publishes profile + inquiries enabled so MarketInquiry can execute if accepted
+    save_my_market_profile_impl(
+        FrontendSaveMyMarketProfileRequest {
+            profile: FrontendUserProfile {
+                first_name: Some("Bob".to_string()),
+                ..Default::default()
+            },
+            visibility: Default::default(),
+            skills: vec![],
+            max_hops: 2,
+            validity_years: 2,
+            allow_inquiries: true,
+            published: None,
+        },
+        Some(password.to_string()),
+        &bob_state,
+    )
+    .unwrap();
+    set_card_published_impl(true, Some(password.to_string()), &bob_state)
+        .await
+        .unwrap();
+
+    // Deposit:
+    // (a) unsigned Asymmetric non-TransactionBundle container (stripped signature)
+    // (b) Cleartext EncryptionType::None container
+    // (c) valid TrustAssertion/Signing request with control char msg_id
+    // (d) valid VoucherForSigning with far-future created_at timestamp
+    let now = crate::sync_client::current_unix_timestamp();
+    let mut unsigned_inq_container = SecureContainer::seal(
+        &alice_id,
+        &ContainerConfig::TargetDid(bob_did.clone(), PrivacyMode::TrialDecryption),
+        &serde_json::to_vec(&humoco_market::MarketInquiry {
+            inquiry_id: "inq-unsigned".to_string(),
+            target: InquiryTarget::Person { skill_title: None },
+            message: "hi".to_string(),
+            created_at: now,
+        })
+        .unwrap(),
+        PayloadType::Generic(humoco_market::PAYLOAD_MARKET_INQUIRY_V1.to_string()),
+    )
+    .unwrap();
+    unsigned_inq_container.signature.clear();
+
+    let cleartext_inq_container = SecureContainer::seal(
+        &alice_id,
+        &ContainerConfig::Cleartext,
+        &serde_json::to_vec(&humoco_market::MarketInquiry {
+            inquiry_id: "inq-cleartext".to_string(),
+            target: InquiryTarget::Person { skill_title: None },
+            message: "hi".to_string(),
+            created_at: now,
+        })
+        .unwrap(),
+        PayloadType::Generic(humoco_market::PAYLOAD_MARKET_INQUIRY_V1.to_string()),
+    )
+    .unwrap();
+    assert_eq!(cleartext_inq_container.et, EncryptionType::None);
+
+    let signed_req = SecureContainer::seal(
+        &alice_id,
+        &ContainerConfig::TargetDid(bob_did.clone(), PrivacyMode::TrialDecryption),
+        br#"{"dummy":true}"#,
+        PayloadType::VoucherForSigning,
+    )
+    .unwrap();
+    let signed_req_bytes = serde_json::to_vec(&signed_req).unwrap();
+
+    let boxes = vec![
+        humoco_market::seal_post_box(
+            &alice_sk,
+            &bob_pk,
+            &humoco_market::PostEnvelope::new(
+                "msg-unsigned",
+                alice_did.clone(),
+                now,
+                vec![],
+                serde_json::to_vec(&unsigned_inq_container).unwrap(),
+            ),
+        )
+        .unwrap(),
+        humoco_market::seal_post_box(
+            &alice_sk,
+            &bob_pk,
+            &humoco_market::PostEnvelope::new(
+                "msg-cleartext",
+                alice_did.clone(),
+                now,
+                vec![],
+                serde_json::to_vec(&cleartext_inq_container).unwrap(),
+            ),
+        )
+        .unwrap(),
+        humoco_market::seal_post_box(
+            &alice_sk,
+            &bob_pk,
+            &humoco_market::PostEnvelope::new(
+                "bad\nmsg-id",
+                alice_did.clone(),
+                now,
+                vec![],
+                signed_req_bytes.clone(),
+            ),
+        )
+        .unwrap(),
+        humoco_market::seal_post_box(
+            &alice_sk,
+            &bob_pk,
+            &humoco_market::PostEnvelope::new(
+                "msg-future-skew",
+                alice_did.clone(),
+                now + 999_999,
+                vec![humoco_market::DropDescriptor {
+                    write_url: "http://169.254.169.254/drop".to_string(),
+                    read_url: "http://169.254.169.254/read".to_string(),
+                    slot_id: None,
+                    drop_pub: DROP_PUB_A.to_string(),
+                }],
+                signed_req_bytes,
+            ),
+        )
+        .unwrap(),
+    ];
+
+    let master_seed = {
+        let s_alice = alice_state.service.lock().unwrap();
+        let ctx =
+            crate::services::common::SyncIdentityContext::from_service(&s_alice, Some(password))
+                .unwrap();
+        ctx.master_seed
+    };
+    let packed = humoco_market::pack_post_slot(&master_seed, &boxes, DROP_POST_MAX_BYTES).unwrap();
+    let alice_slot_key = {
+        let s_alice = alice_state.service.lock().unwrap();
+        let my_prefix = s_alice
+            .with_wallet(|w| {
+                human_money_core::crypto::get_prefix_from_user_id(w.get_user_id())
+                    .map(str::to_string)
+            })
+            .unwrap();
+        let ctx =
+            crate::services::common::SyncIdentityContext::from_service(&s_alice, Some(password))
+                .unwrap();
+        drop(bob_id);
+        let spk = {
+            let mut s2 = s_alice;
+            let pol = alice_state
+                .get_or_load_security_policy(&mut s2, Some(password))
+                .unwrap();
+            let desc = humoco_market::DropDescriptor {
+                write_url: pol.public_syncs[0].write_url.clone(),
+                read_url: pol.public_syncs[0].read_url.clone(),
+                slot_id: Some(pol.public_syncs[0].access_pubkey.clone()),
+                drop_pub: pol.public_syncs[0].drop_pub.clone(),
+            };
+            let signer = crate::services::common::DropChannelSigner {
+                is_public: true,
+                master_seed: &ctx.master_seed,
+                my_ed_sk: &ctx.my_ed_sk,
+                drop_desc: &desc,
+            };
+            signer.derive_slot_pubkey().unwrap()
+        };
+        let suffix = my_prefix.map(|p| format!("_{}", p)).unwrap_or_default();
+        format!("{}{}.post", spk, suffix)
+    };
+    server
+        .slots
+        .lock()
+        .unwrap()
+        .insert(alice_slot_key, packed.blob);
+
+    // Ensure Bob's contact entry for Alice carries Alice's slot_id + prefix
+    {
+        let mut s_alice = alice_state.service.lock().unwrap();
+        let pol = alice_state
+            .get_or_load_security_policy(&mut s_alice, Some(password))
+            .unwrap();
+        let alice_prefix =
+            human_money_core::crypto::get_prefix_from_user_id(&alice_did).map(str::to_string);
+        let alice_slot_id = humoco_market::format_slot_id(
+            &pol.public_syncs[0].access_pubkey,
+            alice_prefix.as_deref(),
+        )
+        .unwrap();
+        drop(s_alice);
+        let mut s_bob = bob_state.service.lock().unwrap();
+        let mut c = bob_state
+            .load_contacts(&mut s_bob, Some(password))
+            .unwrap()
+            .into_iter()
+            .find(|c| c.did == alice_did)
+            .unwrap();
+        c.syncs[0].slot_id = Some(alice_slot_id);
+        bob_state
+            .save_contact(&mut s_bob, c, Some(password))
+            .unwrap();
+    }
+
+    let bob_sync =
+        sync_post_channels_impl(None, None, None, Some(password.to_string()), &bob_state)
+            .await
+            .unwrap();
+    assert_eq!(bob_sync.new_inquiries, 0);
+    assert_eq!(bob_sync.new_sign_requests, 1);
+    assert!(bob_sync.errors.iter().any(|e| e.contains("signature")));
+    assert!(bob_sync.errors.iter().any(|e| e.contains("non-asymmetric")));
+    assert!(bob_sync.errors.iter().any(|e| e.contains("invalid msg_id")));
+
+    let bob_ps = load_post_state(&bob_state, Some(password)).unwrap();
+    assert_eq!(bob_ps.pending_sign_requests.len(), 1);
+    assert!(
+        bob_ps.pending_sign_requests[0].created_at <= now + MAX_POST_FUTURE_SKEW_SECS + 5,
+        "Future timestamp must be clamped to MAX_POST_FUTURE_SKEW_SECS"
+    );
+    assert!(
+        bob_ps.pending_sign_requests[0].reply_syncs.is_empty(),
+        "Untrusted SSRF reply_drop must be sanitized out"
+    );
+    let bob_contacts = {
+        let mut s_bob = bob_state.service.lock().unwrap();
+        bob_state.load_contacts(&mut s_bob, Some(password)).unwrap()
+    };
+    let alice_contact = bob_contacts.iter().find(|c| c.did == alice_did).unwrap();
+    assert!(
+        !alice_contact
+            .syncs
+            .iter()
+            .any(|s| s.write_url.contains("169.254.169.254")),
+        "Contact syncs must never be poisoned with rejected SSRF reply_drops"
+    );
+
+    let _ = std::fs::remove_dir_all(&base_dir);
+}
+
+#[tokio::test]
+async fn s10_f2_tombstones_survive_partial_own_flush_and_per_tag_attribution() {
+    let base_dir = temp_test_dir("s10_f2_tombstones");
+    let password = "TestPassword123!";
+    let alice_service = setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
+    let alice_state = create_test_state(alice_service);
+
+    let live_srv = MockSyncServer::start(DROP_PUB_A.to_string(), ADMIN_A.to_string()).await;
+    let (_live_w, _live_info) =
+        setup_test_sync(&live_srv, DROP_PUB_A, password, &alice_state).await;
+
+    // Bind and drop a dead port for second own sync
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let dead_port = listener.local_addr().unwrap().port();
+    drop(listener);
+    {
+        let mut s_alice = alice_state.service.lock().unwrap();
+        alice_state
+            .mutate_security_policy(&mut s_alice, Some(password), |p| {
+                p.public_syncs.push(crate::settings::StoredPublicSync {
+                    write_url: format!("http://127.0.0.1:{}/sync.php", dead_port),
+                    read_url: format!("http://127.0.0.1:{}/sync", dead_port),
+                    drop_pub: DROP_PUB_B.to_string(),
+                    access_pubkey: ADMIN_B.to_string(),
+                    enabled: true,
+                    authorized_channels: vec!["post".to_string()],
+                    ..Default::default()
+                });
+            })
+            .unwrap();
+    }
+
+    let mut ps = load_post_state(&alice_state, Some(password)).unwrap();
+    let tomb = hex::encode([0xAAu8; 16]);
+    ps.pruned_outbox_tag16s.insert(tomb.clone());
+    save_post_state(&alice_state, &ps, Some(password)).unwrap();
+
+    let session = alice_state.begin_session_op().unwrap();
+    let outcome =
+        flush_post_slots_impl(&alice_state, &session, &mut ps, None, &[], Some(password)).await;
+    assert_eq!(outcome.deposited_to, 1);
+    assert!(!outcome.errors.is_empty());
+    assert!(
+        ps.pruned_outbox_tag16s.contains(&tomb),
+        "Partial own-target failure must preserve pruned_outbox_tag16s tombstones"
+    );
+
+    // Also test deferred/omitted large item cannot steal another server's deposited_to attribution
+    let bob_vk = human_money_core::crypto::generate_ed25519_keypair_for_tests(None).0;
+    let bob_did = human_money_core::crypto::create_user_id(&bob_vk, None).unwrap();
+    let my_sk = {
+        let s_alice = alice_state.service.lock().unwrap();
+        crate::services::common::SyncIdentityContext::from_service(&s_alice, Some(password))
+            .unwrap()
+            .my_ed_sk
+    };
+    let large_payload = vec![9u8; 40_000];
+    let large1_env = humoco_market::PostEnvelope::new(
+        "large-box-1",
+        bob_did.clone(),
+        1_750_000_000,
+        vec![],
+        large_payload.clone(),
+    );
+    let large1_entry = humoco_market::seal_post_box(&my_sk, &bob_vk, &large1_env).unwrap();
+    let large2_env = humoco_market::PostEnvelope::new(
+        "large-box-2",
+        bob_did.clone(),
+        1_750_000_001,
+        vec![],
+        large_payload.clone(),
+    );
+    let large2_entry = humoco_market::seal_post_box(&my_sk, &bob_vk, &large2_env).unwrap();
+    let large3_env = humoco_market::PostEnvelope::new(
+        "large-box-3",
+        bob_did.clone(),
+        1_750_000_002,
+        vec![],
+        large_payload,
+    );
+    let large3_entry = humoco_market::seal_post_box(&my_sk, &bob_vk, &large3_env).unwrap();
+
+    for (id, entry, ts) in [
+        ("large-box-1", &large1_entry, 1_750_000_000u64),
+        ("large-box-2", &large2_entry, 1_750_000_001u64),
+        ("large-box-3", &large3_entry, 1_750_000_002u64),
+    ] {
+        ps.outbox_entries.push(crate::state::PostOutboxEntry {
+            msg_id: id.to_string(),
+            recipient_did: bob_did.clone(),
+            tag16_hex: hex::encode(entry.tag16),
+            bundle_id: None,
+            message_class: crate::state::OutboxMessageClass::Control,
+            entry: entry.clone(),
+            created_at: ts,
+        });
+    }
+
+    let outcome2 =
+        flush_post_slots_impl(&alice_state, &session, &mut ps, None, &[], Some(password)).await;
+    assert_eq!(
+        outcome2
+            .uploaded_counts_by_tag
+            .get(&large1_entry.tag16)
+            .copied(),
+        Some(1)
+    );
+    assert_eq!(
+        outcome2.uploaded_counts_by_tag.get(&large3_entry.tag16).copied(),
+        None,
+        "Deferred overflowing box must have 0 per-tag deposited count even when earlier boxes succeeded"
+    );
+
+    let _ = std::fs::remove_dir_all(&base_dir);
+}
+
+#[tokio::test]
+async fn s10_f3_canonical_inquiry_rate_limit_and_no_phantom_own_upload() {
+    let base_dir = temp_test_dir("s10_f3_inquiry");
+    let password = "TestPassword123!";
+    let alice_service = setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
+    let bob_service = setup_test_app(&base_dir.join("bob"), "Bob", BOB_PHRASE, password);
+    let alice_state = create_test_state(alice_service);
+    let bob_state = create_test_state(bob_service);
+
+    let alice_did = {
+        let s = alice_state.service.lock().unwrap();
+        s.with_wallet(|w| w.get_user_id().to_string()).unwrap()
+    };
+    let bob_did = {
+        let s = bob_state.service.lock().unwrap();
+        s.with_wallet(|w| w.get_user_id().to_string()).unwrap()
+    };
+
+    let alice_srv = MockSyncServer::start(DROP_PUB_A.to_string(), ADMIN_A.to_string()).await;
+    let (alice_w, alice_info) =
+        setup_test_sync(&alice_srv, DROP_PUB_A, password, &alice_state).await;
+
+    // Bind and drop a dead port for second own sync (keep _aw above unused)
+    let _ = (&alice_w, &alice_info);
+
+    // 1. Unreachable recipient upload must NOT leak a phantom box onto Alice's own sync server
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let dead_port = listener.local_addr().unwrap().port();
+    drop(listener);
+    let dead_rcpt_sync = FrontendSyncDescriptor {
+        write_url: format!("http://127.0.0.1:{}/sync.php", dead_port),
+        read_url: format!("http://127.0.0.1:{}/sync", dead_port),
+        slot_id: None,
+        drop_pub: DROP_PUB_B.to_string(),
+        status: "active".to_string(),
+        ..Default::default()
+    };
+    let err = send_market_inquiry_via_post_impl(
+        bob_did.clone(),
+        InquiryTarget::Person { skill_title: None },
+        "Hallo Bob".to_string(),
+        vec![dead_rcpt_sync],
+        Some(password.to_string()),
+        &alice_state,
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(err.code, "error.post.recipientUnreachable");
+    assert!(
+        alice_srv.slots.lock().unwrap().is_empty(),
+        "Failed recipient inquiry delivery must not deposit phantom box onto own sync server"
+    );
+
+    // 2. Canonical ad_title + Person skill_title shares single "person" rate-limit bucket + dismiss frees quota
+    let bob_srv = MockSyncServer::start(DROP_PUB_B.to_string(), ADMIN_B.to_string()).await;
+    let (bob_w, bob_info) = setup_test_sync(&bob_srv, DROP_PUB_B, password, &bob_state).await;
+    let alice_probe_b =
+        probe_public_sync_impl(bob_w.clone(), Some(password.to_string()), &alice_state)
+            .await
+            .unwrap();
+    bob_srv
+        .members
+        .lock()
+        .unwrap()
+        .push(alice_probe_b.access_pubkey);
+    let bob_prefix =
+        human_money_core::crypto::get_prefix_from_user_id(&bob_did).map(str::to_string);
+    let bob_slot_id =
+        humoco_market::format_slot_id(&bob_info.access_pubkey, bob_prefix.as_deref()).unwrap();
+    let bob_syncs = vec![FrontendSyncDescriptor {
+        write_url: bob_w,
+        read_url: bob_info.read_url,
+        slot_id: Some(bob_slot_id),
+        drop_pub: bob_info.drop_pub,
+        status: "active".to_string(),
+        ..Default::default()
+    }];
+    // Bob adds Alice so collect_authorized_post_senders includes Alice (while Alice keeps Alice's sync readable)
+    {
+        let mut s_bob = bob_state.service.lock().unwrap();
+        bob_state
+            .save_contact(
+                &mut s_bob,
+                FrontendContact {
+                    did: alice_did.clone(),
+                    profile: FrontendUserProfile {
+                        first_name: Some("Alice".to_string()),
+                        ..Default::default()
+                    },
+                    tags: vec![],
+                    added_at: Utc::now().to_rfc3339(),
+                    notes: None,
+                    trust_level: Some(1),
+                    desired_hops: Some(3),
+                    has_peer_list: false,
+                    peer_list_updated_at: None,
+                    syncs: vec![FrontendSyncDescriptor {
+                        write_url: alice_w,
+                        read_url: alice_info.read_url,
+                        slot_id: Some(
+                            humoco_market::format_slot_id(
+                                &alice_info.access_pubkey,
+                                human_money_core::crypto::get_prefix_from_user_id(&alice_did),
+                            )
+                            .unwrap(),
+                        ),
+                        drop_pub: alice_info.drop_pub,
+                        status: "active".to_string(),
+                        ..Default::default()
+                    }],
+                },
+                Some(password),
+            )
+            .unwrap();
+    }
+
+    save_my_market_profile_impl(
+        FrontendSaveMyMarketProfileRequest {
+            profile: FrontendUserProfile {
+                first_name: Some("Bob".to_string()),
+                ..Default::default()
+            },
+            visibility: Default::default(),
+            skills: vec![],
+            max_hops: 2,
+            validity_years: 2,
+            allow_inquiries: true,
+            published: None,
+        },
+        Some(password.to_string()),
+        &bob_state,
+    )
+    .unwrap();
+    set_card_published_impl(true, Some(password.to_string()), &bob_state)
+        .await
+        .unwrap();
+    let prof = upsert_ad_impl(
+        FrontendAdInput {
+            id: None,
+            kind: humoco_market::AdKind::Offer,
+            title: "Genuine Honey".to_string(),
+            text: None,
+            pricing: None,
+            duration_days: 30,
+            allow_inquiries: true,
+            is_remote: false,
+            image_webp_data_uri: None,
+        },
+        Some(password.to_string()),
+        &bob_state,
+    )
+    .unwrap();
+    let ad_id = prof.ads[0].id.clone();
+
+    // Send 1 ad inquiry with spoofed ad_title + 2 Person inquiries with distinct skill_title values
+    send_market_inquiry_via_post_impl(
+        bob_did.clone(),
+        InquiryTarget::Ad {
+            ad_id,
+            ad_title: "SPOOFED TITLE".to_string(),
+        },
+        "Interested in ad".to_string(),
+        bob_syncs.clone(),
+        Some(password.to_string()),
+        &alice_state,
+    )
+    .await
+    .unwrap();
+
+    send_market_inquiry_via_post_impl(
+        bob_did.clone(),
+        InquiryTarget::Person {
+            skill_title: Some("Skill 0".to_string()),
+        },
+        "Person inquiry 0".to_string(),
+        bob_syncs.clone(),
+        Some(password.to_string()),
+        &alice_state,
+    )
+    .await
+    .unwrap();
+    // Second Person inquiry with a different skill_title must be rate-limited ("person" bucket)
+    send_market_inquiry_via_post_impl(
+        bob_did.clone(),
+        InquiryTarget::Person {
+            skill_title: Some("Skill BypassAttempt".to_string()),
+        },
+        "Blocked bypass".to_string(),
+        bob_syncs.clone(),
+        Some(password.to_string()),
+        &alice_state,
+    )
+    .await
+    .unwrap();
+
+    let bob_sync =
+        sync_post_channels_impl(None, None, None, Some(password.to_string()), &bob_state)
+            .await
+            .unwrap();
+    assert_eq!(bob_sync.new_inquiries, 2);
+
+    let bob_ps = load_post_state(&bob_state, Some(password)).unwrap();
+    let ad_inq = bob_ps
+        .inquiries
+        .iter()
+        .find(|i| matches!(&i.target, InquiryTarget::Ad { .. }))
+        .unwrap();
+    assert_eq!(
+        ad_inq.target,
+        InquiryTarget::Ad {
+            ad_id: match &ad_inq.target {
+                InquiryTarget::Ad { ad_id, .. } => ad_id.clone(),
+                _ => unreachable!(),
+            },
+            ad_title: "Genuine Honey".to_string()
+        }
+    );
+
+    // Dismissing one open Person seller inquiry frees rate-limit slot so next Person inquiry succeeds
+    let person_inq_id = bob_ps
+        .inquiries
+        .iter()
+        .find(|i| matches!(&i.target, InquiryTarget::Person { .. }))
+        .unwrap()
+        .inquiry_id
+        .clone();
+    dismiss_pending_post_item_impl(
+        "inquiry".to_string(),
+        person_inq_id,
+        Some(password.to_string()),
+        &bob_state,
+    )
+    .unwrap();
+
+    send_market_inquiry_via_post_impl(
+        bob_did,
+        InquiryTarget::Person {
+            skill_title: Some("Skill AfterDismiss".to_string()),
+        },
+        "Now allowed".to_string(),
+        bob_syncs,
+        Some(password.to_string()),
+        &alice_state,
+    )
+    .await
+    .unwrap();
+
+    let bob_sync_after =
+        sync_post_channels_impl(None, None, None, Some(password.to_string()), &bob_state)
+            .await
+            .unwrap();
+    assert_eq!(bob_sync_after.new_inquiries, 1);
+    let _ = alice_did;
+
+    let _ = std::fs::remove_dir_all(&base_dir);
+}
+
+#[test]
+fn s10_f4_f5_timeout_zero_summary_and_3way_merge_safety() {
+    let base_dir = temp_test_dir("s10_f4_f5");
+    let password = "TestPassword123!";
+    let bob_pk = human_money_core::crypto::generate_ed25519_keypair_for_tests(None).0;
+    let bob_did = human_money_core::crypto::create_user_id(&bob_pk, None).unwrap();
+    let carol_pk = human_money_core::crypto::generate_ed25519_keypair_for_tests(None).0;
+    let carol_did = human_money_core::crypto::create_user_id(&carol_pk, None).unwrap();
+
+    let alice_service = setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
+    let alice_state = create_test_state(alice_service);
+
+    // Seed contact and inquiry in post_state, then reload wallet under session_timeout_seconds = 0 (!is_session_active())
+    let mut ps = StoredPostState::default();
+    ps.inquiries.push(crate::models::FrontendMarketInquiryItem {
+        inquiry_id: "inq-zero".to_string(),
+        role: "seller".to_string(),
+        target: InquiryTarget::Person { skill_title: None },
+        counterparty_did: bob_did.clone(),
+        counterparty_name: None,
+        counterparty_picture_url: None,
+        is_contact: false,
+        status: "open".to_string(),
+        payment_uri: None,
+        amount_hint: None,
+        standard_uuid: None,
+        created_at: 100,
+        updated_at: 100,
+        unread: true,
+        reply_syncs: vec![],
+        messages: vec![crate::models::FrontendInquiryChatMessage {
+            msg_id: "m1".to_string(),
+            sender: "them".to_string(),
+            text: Some("hi".to_string()),
+            decision: None,
+            created_at: 100,
+        }],
+    });
+    let wallet_dir = base_dir.join("alice");
+    {
+        let mut s = alice_state.service.lock().unwrap();
+        alice_state
+            .save_contact(
+                &mut s,
+                FrontendContact {
+                    did: bob_did.clone(),
+                    profile: FrontendUserProfile {
+                        first_name: Some("Cached Bob".to_string()),
+                        ..Default::default()
+                    },
+                    tags: vec![],
+                    added_at: Utc::now().to_rfc3339(),
+                    notes: None,
+                    trust_level: Some(1),
+                    desired_hops: Some(3),
+                    has_peer_list: false,
+                    peer_list_updated_at: None,
+                    syncs: vec![],
+                },
+                Some(password),
+            )
+            .unwrap();
+        super::save_post_state_with_service(&alice_state, &mut s, &ps, Some(password)).unwrap();
+        alice_state
+            .mutate_security_policy(&mut s, Some(password), |p| {
+                p.session_timeout_seconds = 0;
+            })
+            .unwrap();
+    }
+
+    let mut reloaded_svc = human_money_core::app_service::AppService::new(&wallet_dir).unwrap();
+    let folder = reloaded_svc.list_profiles().unwrap()[0].folder_name.clone();
+    reloaded_svc
+        .login(&folder, password, false, "device-drops-test".to_string())
+        .unwrap();
+    let reloaded_state =
+        create_test_state(human_money_core::app_service::AppService::new(&wallet_dir).unwrap());
+    reloaded_state
+        .initialize_profile_session(&mut reloaded_svc, password)
+        .unwrap();
+    *reloaded_state.service.lock().unwrap() = reloaded_svc;
+    assert!(!reloaded_state.service.lock().unwrap().is_session_active());
+
+    let summary = get_post_inbox_summary_impl(None, &reloaded_state)
+        .expect("get_post_inbox_summary_impl must succeed under timeout == 0 using caches");
+    assert_eq!(summary.inquiries.len(), 1);
+    assert_eq!(
+        summary.inquiries[0].counterparty_name.as_deref(),
+        Some("Cached Bob")
+    );
+    assert!(summary.inquiries[0].is_contact);
+
+    // 3-way merge tests: working marked unread=false, concurrent reply didn't set working_added_msgs falsely
+    let mut base = StoredPostState::default();
+    base.pruned_outbox_tag16s.insert("tomb-a".to_string());
+    base.replied_sign_request_ids
+        .insert(scoped_processed_msg_key(&bob_did, "req-1"));
+    let mut inq_base = summary.inquiries[0].clone();
+    inq_base.unread = true;
+    base.inquiries.push(inq_base.clone());
+
+    let mut latest = base.clone();
+    // Concurrent sync cleared tomb-a and kept inq_base untouched
+    latest.pruned_outbox_tag16s.clear();
+    latest
+        .pending_wot_handshakes
+        .push(crate::models::FrontendPendingWotHandshake {
+            msg_id: "shared-id".to_string(),
+            sender_did: carol_did.clone(),
+            sender_name: Some("Carol".to_string()),
+            proposed_level: 1,
+            reply_requested: false,
+            created_at: 200,
+        });
+
+    let mut working = base.clone();
+    // Working marked read and also received a same-msg_id handshake from Bob
+    working.inquiries[0].unread = false;
+    working
+        .pending_wot_handshakes
+        .push(crate::models::FrontendPendingWotHandshake {
+            msg_id: "shared-id".to_string(),
+            sender_did: bob_did.clone(),
+            sender_name: Some("Bob".to_string()),
+            proposed_level: 1,
+            reply_requested: false,
+            created_at: 201,
+        });
+
+    {
+        let mut s = alice_state.service.lock().unwrap();
+        super::save_post_state_with_service(&alice_state, &mut s, &latest, Some(password)).unwrap();
+        super::merge_post_state_with_service(&mut s, &base, &mut working, Some(password)).unwrap();
+    }
+    assert!(
+        !working.pruned_outbox_tag16s.contains("tomb-a"),
+        "Concurrent deletion of pruned_outbox_tag16s must propagate via 3-way set merge"
+    );
+    assert_eq!(
+        working.pending_wot_handshakes.len(),
+        2,
+        "Identical msg_id from distinct senders must both survive scoped 3-way merge"
+    );
+    assert!(
+        !working.inquiries[0].unread,
+        "Concurrent latest.messages must not clobber explicit mark-read"
+    );
+
+    let _ = std::fs::remove_dir_all(&base_dir);
+}
+
+#[tokio::test]
+async fn s10_f7_f8_locator_ordering_retry_and_accept_wot_preserves_contact() {
+    let base_dir = temp_test_dir("s10_f7_f8");
+    let password = "TestPassword123!";
+    let alice_service = setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
+    let bob_service = setup_test_app(&base_dir.join("bob"), "Bob", BOB_PHRASE, password);
+    let alice_state = create_test_state(alice_service);
+    let bob_state = create_test_state(bob_service);
+
+    let (alice_did, alice_id) = {
+        let s = alice_state.service.lock().unwrap();
+        let id = s.with_wallet_and_identity(|_, id| id.clone()).unwrap();
+        (id.user_id.clone(), id)
+    };
+    let (bob_did, _bob_id) = {
+        let s = bob_state.service.lock().unwrap();
+        let id = s.with_wallet_and_identity(|_, id| id.clone()).unwrap();
+        (id.user_id.clone(), id)
+    };
+
+    // 1. accept_wot_handshake_impl must preserve existing contact syncs, notes, and tags
+    let existing_sync = FrontendSyncDescriptor {
+        write_url: "https://sync.example.com/write".to_string(),
+        read_url: "https://sync.example.com/read".to_string(),
+        slot_id: None,
+        drop_pub: DROP_PUB_B.to_string(),
+        status: "active".to_string(),
+        ..Default::default()
+    };
+    {
+        let mut s_alice = alice_state.service.lock().unwrap();
+        alice_state
+            .save_contact(
+                &mut s_alice,
+                FrontendContact {
+                    did: bob_did.clone(),
+                    profile: FrontendUserProfile {
+                        first_name: Some("Bob".to_string()),
+                        ..Default::default()
+                    },
+                    tags: vec!["friend".to_string(), "neighbor".to_string()],
+                    added_at: "2026-01-01T00:00:00Z".to_string(),
+                    notes: Some("Met in Berlin".to_string()),
+                    trust_level: None,
+                    desired_hops: Some(3),
+                    has_peer_list: false,
+                    peer_list_updated_at: None,
+                    syncs: vec![existing_sync.clone()],
+                },
+                Some(password),
+            )
+            .unwrap();
+        let mut ps = load_post_state_with_service(&mut s_alice, Some(password)).unwrap();
+        let scoped_k = scoped_processed_msg_key(&bob_did, "hs-1");
+        ps.pending_wot_handshakes
+            .push(crate::models::FrontendPendingWotHandshake {
+                msg_id: "hs-1".to_string(),
+                sender_did: bob_did.clone(),
+                sender_name: Some("Bob".to_string()),
+                proposed_level: 1,
+                reply_requested: false,
+                created_at: 1_750_000_000,
+            });
+        let bob_reg = {
+            let mut sb = bob_state.service.lock().unwrap();
+            let mut r = bob_state
+                .get_or_load_wot_register(&mut sb, Some(password))
+                .unwrap();
+            bob_state.ensure_wot_list_signed(&mut sb, &mut r).unwrap();
+            r
+        };
+        let (pkg, _) = bob_reg.prepare_sync_package(None, None, true).unwrap();
+        ps.pending_wot_packages_by_msg_id
+            .insert(scoped_k, serde_json::to_string(&pkg).unwrap());
+        save_post_state_with_service(&alice_state, &mut s_alice, &ps, Some(password)).unwrap();
+    }
+
+    accept_wot_handshake_impl(
+        "hs-1".to_string(),
+        2,
+        false,
+        Some(password.to_string()),
+        &alice_state,
+    )
+    .await
+    .unwrap();
+
+    let updated_bob = {
+        let mut s_alice = alice_state.service.lock().unwrap();
+        alice_state
+            .load_contacts(&mut s_alice, Some(password))
+            .unwrap()
+            .into_iter()
+            .find(|c| c.did == bob_did)
+            .unwrap()
+    };
+    assert_eq!(updated_bob.trust_level, Some(2));
+    assert_eq!(updated_bob.notes.as_deref(), Some("Met in Berlin"));
+    assert_eq!(
+        updated_bob.tags,
+        vec!["friend".to_string(), "neighbor".to_string()]
+    );
+    assert_eq!(updated_bob.syncs.len(), 1);
+    assert_eq!(updated_bob.syncs[0].write_url, existing_sync.write_url);
+
+    // 2. handle_guardian_locator before guardian_assign returns RetryLater; stale/revoked returns Handled
+    let session = alice_state.begin_session_op().unwrap();
+    let now = 1_760_000_000u64;
+    let update = humoco_market::GuardianLocatorUpdate {
+        owner_did: bob_did.clone(),
+        rotation_epoch: 1,
+        backup_sync_descriptors: vec![],
+        updated_at: now,
+    };
+    let env = humoco_market::PostEnvelope::new("loc-1", bob_did.clone(), now, vec![], vec![]);
+    let my_sk = alice_id.signing_key.clone();
+    let ctx = super::handlers::PostEnvelopeContext {
+        state: &alice_state,
+        session: &session,
+        app: None,
+        extra_standards: None,
+        password: Some(password),
+        my_identity: &alice_id,
+        my_ed_sk: &my_sk,
+        own_reply_syncs: &[],
+        sender_did: &bob_did,
+        envelope: &env,
+        tag16: &[1u8; 16],
+        decrypted_bytes: &serde_json::to_vec(&update).unwrap(),
+        now_secs: now,
+    };
+    let mut ps = StoredPostState::default();
+    let mut base_ps = ps.clone();
+    let mut stats = super::handlers::PostDispatchStats::default();
+    let outcome_early = super::handlers::dispatch_post_payload(
+        &ctx,
+        &human_money_core::models::secure_container::PayloadType::Generic(
+            humoco_market::PAYLOAD_GUARDIAN_LOCATOR_V1.to_string(),
+        ),
+        &mut ps,
+        &mut base_ps,
+        &mut stats,
+    )
+    .await;
+    assert_eq!(
+        outcome_early,
+        super::handlers::PostDispatchOutcome::RetryLater,
+        "Locator arriving before guardian_assign must return RetryLater"
+    );
+
+    // Record revoked epoch 1 in guardian vault, then replay epoch 1 locator -> permanent Handled (no ACK)
+    {
+        let mut s_alice = alice_state.service.lock().unwrap();
+        let mut vault = humoco_market::GuardianVaultStore::new();
+        vault.revoked_epoch_by_owner.insert(
+            humoco_market::canonicalize_owner_account_id(&bob_did).unwrap(),
+            1,
+        );
+        crate::services::recovery_service::save_guardian_vault_with_cache(
+            &alice_state,
+            &mut s_alice,
+            &vault,
+            Some(password),
+        )
+        .unwrap();
+    }
+    let outbox_before = ps.outbox_entries.len();
+    let outcome_revoked = super::handlers::dispatch_post_payload(
+        &ctx,
+        &human_money_core::models::secure_container::PayloadType::Generic(
+            humoco_market::PAYLOAD_GUARDIAN_LOCATOR_V1.to_string(),
+        ),
+        &mut ps,
+        &mut base_ps,
+        &mut stats,
+    )
+    .await;
+    assert_eq!(
+        outcome_revoked,
+        super::handlers::PostDispatchOutcome::Handled,
+        "Revoked epoch locator must return permanent Handled so poison envelope stops retrying"
+    );
+    assert_eq!(ps.outbox_entries.len(), outbox_before);
+    let _ = alice_did;
 
     let _ = std::fs::remove_dir_all(&base_dir);
 }

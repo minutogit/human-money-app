@@ -14,6 +14,7 @@ use crate::models::{
     FrontendAppNotice, FrontendError, FrontendPendingTolerancePayment, FrontendPostInboxSummary,
     FrontendPostSyncResult, FrontendSyncDescriptor,
 };
+use crate::services::common::are_dids_equal;
 use crate::settings::{SecurityPolicy, UiPreferences};
 use crate::state::{AppState, StoredPostState, MARKET_CARD_STORE_KEY};
 use crate::sync_client;
@@ -21,8 +22,16 @@ use crate::sync_client;
 use super::handlers::{
     dispatch_post_payload, PostDispatchOutcome, PostDispatchStats, PostEnvelopeContext,
 };
-use super::{merge_and_save_post_state, resolve_counterparty_info_for_session};
+use super::{
+    clamp_post_ts, load_post_state_read_only_for_session, merge_and_save_post_state,
+    push_pruned_outbox_tag16, resolve_counterparty_info_for_session, sanitize_sync_descriptors,
+    save_post_state_with_service, scoped_processed_msg_key, CounterpartyInfoResolver,
+};
 use crate::services::post_service::outbox::flush_post_slots_impl;
+
+const MAX_POST_SLOTS_PER_SERVER: usize = 64;
+const MAX_POST_SLOTS_TOTAL: usize = 256;
+const MAX_POST_MSG_ID_LEN: usize = 128;
 
 /// Marks a marketplace inquiry thread as read atomically under `state.service`.
 pub fn mark_inquiry_read_impl(
@@ -47,13 +56,7 @@ pub fn mark_inquiry_read_impl(
         }
     }
     if changed {
-        crate::state::save_encrypted_json(
-            &mut service,
-            crate::state::MARKET_POST_STATE_KEY,
-            &post_state,
-            pw,
-        )
-        .map_err(FrontendError::from)?;
+        save_post_state_with_service(state, &mut service, &post_state, pw)?;
     }
     Ok(())
 }
@@ -158,10 +161,11 @@ pub async fn confirm_pending_post_payment_impl(
                 &baseline,
                 &post_state,
                 |ps, result| {
-                    ps.pending_tolerance_payments
-                        .retain(|p| p.msg_id != msg_id);
+                    ps.pending_tolerance_payments.retain(|p| {
+                        p.msg_id != item.msg_id || !are_dids_equal(&p.sender_did, &item.sender_did)
+                    });
                     ps.processed_msg_ids
-                        .insert(super::scoped_processed_msg_key(&item.sender_did, &item.msg_id));
+                        .insert(scoped_processed_msg_key(&item.sender_did, &item.msg_id));
                     if queue_confirm_ack(ps, Some(&result.header.bundle_id)) {
                         queued_ack = true;
                     }
@@ -184,22 +188,19 @@ pub async fn confirm_pending_post_payment_impl(
                     })
                 }
                 super::handlers::PostBundleCommitResult::CoreError(e) => {
-                    let err_lower = e.to_string().to_ascii_lowercase();
-                    let is_duplicate = err_lower.contains("already processed")
-                        || err_lower.contains("duplicate");
+                    let is_duplicate =
+                        matches!(e, human_money_core::Error::BundleAlreadyProcessed { .. });
                     let is_stale =
                         matches!(e, human_money_core::Error::BundlePredatesCurrentEpoch)
                             || is_duplicate;
                     if is_stale {
-                        post_state
-                            .pending_tolerance_payments
-                            .retain(|p| p.msg_id != msg_id);
+                        post_state.pending_tolerance_payments.retain(|p| {
+                            p.msg_id != item.msg_id
+                                || !are_dids_equal(&p.sender_did, &item.sender_did)
+                        });
                         post_state
                             .processed_msg_ids
-                            .insert(super::scoped_processed_msg_key(
-                                &item.sender_did,
-                                &item.msg_id,
-                            ));
+                            .insert(scoped_processed_msg_key(&item.sender_did, &item.msg_id));
                         if is_duplicate && queue_confirm_ack(&mut post_state, None) {
                             queued_ack = true;
                         }
@@ -209,13 +210,7 @@ pub async fn confirm_pending_post_payment_impl(
                             &mut post_state,
                             pw,
                         )?;
-                        crate::state::save_encrypted_json(
-                            service,
-                            crate::state::MARKET_POST_STATE_KEY,
-                            &post_state,
-                            pw,
-                        )
-                        .map_err(FrontendError::from)?;
+                        save_post_state_with_service(state, service, &post_state, pw)?;
                     }
                     Ok(ConfirmCommitOutcome::CoreError { err: e, queued_ack })
                 }
@@ -276,10 +271,41 @@ pub fn dismiss_pending_post_item_impl(
             post_state.pending_sign_requests.retain(|r| r.msg_id != id);
         }
         "wot_handshake" => {
-            post_state.pending_wot_handshakes.retain(|h| h.msg_id != id);
+            let scoped_to_remove: Vec<String> = post_state
+                .pending_wot_handshakes
+                .iter()
+                .filter(|h| {
+                    h.msg_id == id || scoped_processed_msg_key(&h.sender_did, &h.msg_id) == id
+                })
+                .map(|h| scoped_processed_msg_key(&h.sender_did, &h.msg_id))
+                .collect();
+            for key in scoped_to_remove {
+                post_state.pending_wot_packages_by_msg_id.remove(&key);
+            }
             post_state.pending_wot_packages_by_msg_id.remove(&id);
+            post_state.pending_wot_handshakes.retain(|h| {
+                h.msg_id != id && scoped_processed_msg_key(&h.sender_did, &h.msg_id) != id
+            });
         }
         "inquiry" => {
+            let keys_to_resolve: Vec<(String, String)> = post_state
+                .inquiries
+                .iter()
+                .filter(|i| i.inquiry_id == id && i.role == "seller" && i.status == "open")
+                .filter_map(|i| {
+                    get_pubkey_from_user_id(&i.counterparty_did).ok().map(|pk| {
+                        (
+                            hex::encode(pk.as_bytes()),
+                            super::inquiry_rate_limit_key(&i.target),
+                        )
+                    })
+                })
+                .collect();
+            for (sender_hex, target_key) in keys_to_resolve {
+                post_state
+                    .inquiry_rate_tracker
+                    .resolve_inquiry(&sender_hex, &target_key);
+            }
             post_state.inquiries.retain(|i| i.inquiry_id != id);
         }
         "unsupported" => {
@@ -293,9 +319,10 @@ pub fn dismiss_pending_post_item_impl(
         "outbox" => {
             post_state.outbox_entries.retain(|e| {
                 if e.msg_id == id {
-                    if post_state.pruned_outbox_tag16s.len() < 512 {
-                        post_state.pruned_outbox_tag16s.insert(e.tag16_hex.clone());
-                    }
+                    push_pruned_outbox_tag16(
+                        &mut post_state.pruned_outbox_tag16s,
+                        e.tag16_hex.clone(),
+                    );
                     false
                 } else {
                     true
@@ -309,13 +336,7 @@ pub fn dismiss_pending_post_item_impl(
             )));
         }
     }
-    crate::state::save_encrypted_json(
-        &mut service,
-        crate::state::MARKET_POST_STATE_KEY,
-        &post_state,
-        pw,
-    )
-    .map_err(FrontendError::from)
+    save_post_state_with_service(state, &mut service, &post_state, pw)
 }
 
 /// Returns the current Post inbox summary enriched with counterparty contact metadata.
@@ -328,16 +349,16 @@ pub fn get_post_inbox_summary_impl(
         password.as_deref(),
     )?;
     let pw = resolved_pw.as_deref().map(String::as_str);
-    let mut post_state = super::load_post_state_for_session(state, &session, pw)?;
+    let mut post_state = load_post_state_read_only_for_session(state, &session, pw)?;
     let unacknowledged_payments = post_state
         .outbox_entries
         .iter()
         .filter_map(|e| e.bundle_id.clone())
         .collect();
+    let resolver = CounterpartyInfoResolver::load_for_session_read_only(state, &session, pw)?;
 
     for inq in &mut post_state.inquiries {
-        let (name, pic, is_contact) =
-            resolve_counterparty_info_for_session(state, &session, &inq.counterparty_did, pw);
+        let (name, pic, is_contact) = resolver.resolve(&inq.counterparty_did);
         inq.counterparty_name = name;
         inq.counterparty_picture_url = pic;
         inq.is_contact = is_contact;
@@ -348,8 +369,7 @@ pub fn get_post_inbox_summary_impl(
 
     for item in &mut post_state.unsupported_messages {
         if item.sender_name.is_none() {
-            let (name, _, _) =
-                resolve_counterparty_info_for_session(state, &session, &item.sender_did, pw);
+            let (name, _, _) = resolver.resolve(&item.sender_did);
             item.sender_name = name;
         }
     }
@@ -358,11 +378,7 @@ pub fn get_post_inbox_summary_impl(
         .pending_tolerance_payments
         .into_iter()
         .map(|p| {
-            let sender_name = p.sender_name.or_else(|| {
-                let (name, _, _) =
-                    resolve_counterparty_info_for_session(state, &session, &p.sender_did, pw);
-                name
-            });
+            let sender_name = p.sender_name.or_else(|| resolver.resolve(&p.sender_did).0);
             FrontendPendingTolerancePayment {
                 msg_id: p.msg_id,
                 sender_did: p.sender_did,
@@ -392,12 +408,24 @@ fn push_sync_slot_targets(
     prefix: Option<&str>,
 ) {
     for d in descriptors {
-        if !d.read_url.is_empty() {
-            if let Some(ref sid) = d.slot_id {
-                direct.push((d.read_url.clone(), sid.clone(), prefix.map(str::to_string)));
-            } else {
-                index_urls.push(d.read_url.clone());
+        if d.status.eq_ignore_ascii_case("revoked")
+            || sync_client::validate_sync_read_url(&d.read_url).is_err()
+        {
+            continue;
+        }
+        let read_url = d.read_url.trim().to_string();
+        if let Some(ref sid) = d.slot_id {
+            let sid_trimmed = sid.trim();
+            if humoco_market::parse_slot_id(sid_trimmed).is_err() {
+                continue;
             }
+            direct.push((
+                read_url,
+                sid_trimmed.to_string(),
+                prefix.map(str::to_string),
+            ));
+        } else {
+            index_urls.push(read_url);
         }
     }
 }
@@ -411,15 +439,49 @@ struct AuthorizedSenders {
     inquiry: Vec<AuthorizedSenderKey>,
 }
 
+fn has_active_inquiry_listing(
+    state: &AppState,
+    service: &mut human_money_core::app_service::AppService,
+    now_secs: u64,
+    password: Option<&str>,
+) -> bool {
+    crate::services::market_service::load_own_market_profile_state(state, service, password)
+        .ok()
+        .map(|stored| {
+            stored.published
+                && (stored.allow_inquiries
+                    || stored
+                        .ads
+                        .iter()
+                        .any(|a| a.expires_at > now_secs && a.allow_inquiries))
+        })
+        .unwrap_or(false)
+}
+
+struct PollSourceParams<'a> {
+    security_policy: &'a SecurityPolicy,
+    ui_prefs: &'a UiPreferences,
+    my_did: &'a str,
+    my_prefix: Option<&'a str>,
+    post_state: &'a StoredPostState,
+    now_secs: u64,
+    password: Option<&'a str>,
+}
+
 fn collect_candidate_slot_sources(
     state: &AppState,
     session: &crate::session::SessionToken,
-    security_policy: &SecurityPolicy,
-    my_did: &str,
-    my_prefix: Option<&str>,
-    post_state: &StoredPostState,
-    password: Option<&str>,
+    params: &PollSourceParams<'_>,
 ) -> Result<PollSlotTargets, FrontendError> {
+    let PollSourceParams {
+        security_policy,
+        ui_prefs,
+        my_did,
+        my_prefix,
+        post_state,
+        now_secs,
+        password,
+    } = *params;
     state.with_session_required(
         session,
         "Active wallet session changed while collecting post slot sources",
@@ -435,7 +497,12 @@ fn collect_candidate_slot_sources(
             );
 
             for pd in &security_policy.public_syncs {
-                if pd.enabled && !pd.read_url.is_empty() {
+                if pd.enabled
+                    && !pd.status.eq_ignore_ascii_case("revoked")
+                    && !pd.read_url.is_empty()
+                    && (pd.authorized_channels.is_empty()
+                        || pd.authorized_channels.iter().any(|c| c == "post"))
+                {
                     direct.push((
                         pd.read_url.clone(),
                         pd.access_pubkey.clone(),
@@ -453,7 +520,12 @@ fn collect_candidate_slot_sources(
                     {
                         // Also poll sibling own-subaccount compartments on configured O(1) public syncs.
                         for pd in &security_policy.public_syncs {
-                            if pd.enabled && !pd.read_url.is_empty() {
+                            if pd.enabled
+                                && !pd.status.eq_ignore_ascii_case("revoked")
+                                && !pd.read_url.is_empty()
+                                && (pd.authorized_channels.is_empty()
+                                    || pd.authorized_channels.iter().any(|c| c == "post"))
+                            {
                                 direct.push((
                                     pd.read_url.clone(),
                                     pd.access_pubkey.clone(),
@@ -466,30 +538,35 @@ fn collect_candidate_slot_sources(
                 }
             }
 
-            match crate::state::load_encrypted_json_opt::<humoco_market::CardStore>(
-                service,
-                MARKET_CARD_STORE_KEY,
-                password,
-            ) {
-                Ok(Some(store)) => {
-                    for sc in store.cards.values() {
-                        for d in &sc.card.payload.drops {
-                            if !d.read_url.is_empty() {
-                                if let Some(ref sid) = d.slot_id {
-                                    direct.push((d.read_url.clone(), sid.clone(), None));
-                                } else {
-                                    index_urls.push(d.read_url.clone());
-                                }
+            let has_inquiry_listing =
+                has_active_inquiry_listing(state, service, now_secs, password);
+            if ui_prefs.post_accept_from_contacts || has_inquiry_listing {
+                match crate::state::load_encrypted_json_opt::<humoco_market::CardStore>(
+                    service,
+                    MARKET_CARD_STORE_KEY,
+                    password,
+                ) {
+                    Ok(Some(store)) => {
+                        for sc in store.cards.values() {
+                            if !((ui_prefs.post_accept_from_contacts && sc.hops <= 2)
+                                || has_inquiry_listing)
+                            {
+                                continue;
                             }
+                            let card_drops = sanitize_sync_descriptors(
+                                &sc.card.payload.drops,
+                                humoco_market::MAX_CARD_DROPS,
+                            );
+                            push_sync_slot_targets(&mut direct, &mut index_urls, &card_drops, None);
                         }
                     }
-                }
-                Ok(None) => {}
-                Err(e) => {
-                    log::warn!(
-                        "Failed to load CardStore in collect_post_poll_targets: {}",
-                        e
-                    );
+                    Ok(None) => {}
+                    Err(e) => {
+                        log::warn!(
+                            "Failed to load CardStore in collect_post_poll_targets: {}",
+                            e
+                        );
+                    }
                 }
             }
 
@@ -551,19 +628,7 @@ fn collect_authorized_post_senders(
             }
 
             let has_inquiry_listing =
-                crate::services::market_service::load_own_market_profile_state(
-                    state, service, password,
-                )
-                .ok()
-                .map(|stored| {
-                    stored.published
-                        && (stored.allow_inquiries
-                            || stored
-                                .ads
-                                .iter()
-                                .any(|a| a.expires_at > now_secs && a.allow_inquiries))
-                })
-                .unwrap_or(false);
+                has_active_inquiry_listing(state, service, now_secs, password);
 
             match crate::state::load_encrypted_json_opt::<humoco_market::CardStore>(
                 service,
@@ -621,6 +686,9 @@ async fn download_post_slots(
     let mut errors = Vec::new();
 
     for (read_url, slot_id, prefix_opt) in direct_slot_fetches {
+        if fetched_slots.len() >= MAX_POST_SLOTS_TOTAL {
+            break;
+        }
         if state.is_origin_cooling_down(&read_url, std::time::Instant::now()) {
             errors.push(format!(
                 "Poll of {} deferred: server origin cooling down after HTTP 429",
@@ -628,9 +696,14 @@ async fn download_post_slots(
             ));
             continue;
         }
+        let Ok((base_slot_pk, slot_prefix)) = humoco_market::parse_slot_id(&slot_id) else {
+            errors.push(format!(
+                "Skipped direct post slot poll due to invalid slot_id for {}",
+                read_url
+            ));
+            continue;
+        };
         polled_syncs += 1;
-        let (base_slot_pk, slot_prefix) =
-            humoco_market::parse_slot_id(&slot_id).unwrap_or_else(|_| (slot_id.clone(), None));
         let post_prefix = slot_prefix.as_deref().or(prefix_opt.as_deref());
         match sync_client::get_slot(client, &read_url, &base_slot_pk, post_prefix, "post", None)
             .await
@@ -656,6 +729,9 @@ async fn download_post_slots(
     }
 
     for read_url in candidate_read_urls {
+        if fetched_slots.len() >= MAX_POST_SLOTS_TOTAL {
+            break;
+        }
         if state.is_origin_cooling_down(&read_url, std::time::Instant::now()) {
             errors.push(format!(
                 "Poll of {} deferred: server origin cooling down after HTTP 429",
@@ -667,10 +743,17 @@ async fn download_post_slots(
         match sync_client::list_index(client, &read_url, None, None).await {
             Ok(sync_client::IndexFetchResult::Modified { entries, .. }) => {
                 health_updates.push((read_url.clone(), true));
+                let mut server_post_count = 0usize;
                 for entry in entries {
                     if entry.channel != "post" {
                         continue;
                     }
+                    if server_post_count >= MAX_POST_SLOTS_PER_SERVER
+                        || fetched_slots.len() >= MAX_POST_SLOTS_TOTAL
+                    {
+                        break;
+                    }
+                    server_post_count += 1;
                     match sync_client::get_slot(
                         client,
                         &read_url,
@@ -721,12 +804,25 @@ fn open_verified_container(
     sender_did: &str,
     errors: &mut Vec<String>,
 ) -> Option<Vec<u8>> {
+    if container.et != human_money_core::models::secure_container::EncryptionType::Asymmetric {
+        errors.push(format!(
+            "Rejected PoST container with non-asymmetric encryption type: {:?}",
+            container.et
+        ));
+        return None;
+    }
+
     if let Err(e) = container.verify_integrity() {
         errors.push(format!("Integrity check failed: {}", e));
         return None;
     }
 
-    if !container.signature.is_empty() {
+    // Anonymous/stealth `TransactionBundle` containers omit the outer signature per
+    // `HMC-SEC-06-02` to prevent a permanent-key de-anonymization oracle; Core's
+    // `open_and_verify_bundle` (`S05-F3`) enforces that only anonymous bundles omit
+    // it and verifies `bundle.sender_signature`. All other payload types and signed
+    // bundles MUST carry a valid container signature from `sender_did`.
+    if container.c != PayloadType::TransactionBundle || !container.signature.is_empty() {
         if let Err(e) = container.verify_container_signature(sender_did) {
             errors.push(format!("Container signature check failed: {}", e));
             return None;
@@ -903,22 +999,31 @@ pub async fn sync_post_channels_impl(
     // 1. Pruning pass (§6.2)
     {
         let before_count = post_state.outbox_entries.len();
-        post_state
-            .outbox_entries
-            .retain(|e| now_secs.saturating_sub(e.created_at) <= POST_TTL_SECS);
+        let mut pruned_tags = std::mem::take(&mut post_state.pruned_outbox_tag16s);
+        post_state.outbox_entries.retain(|e| {
+            if now_secs.saturating_sub(e.created_at) <= POST_TTL_SECS {
+                true
+            } else {
+                push_pruned_outbox_tag16(&mut pruned_tags, e.tag16_hex.clone());
+                false
+            }
+        });
+        post_state.pruned_outbox_tag16s = pruned_tags;
         stats.pruned_boxes += before_count - post_state.outbox_entries.len();
     }
 
     // 2. Build candidate direct fetches and index URLs
-    let (direct_slot_fetches, candidate_read_urls) = collect_candidate_slot_sources(
-        state,
-        &session,
-        &security_policy,
-        &signing_ctx.identity.user_id,
-        signing_ctx.sync_ctx.my_prefix.as_deref(),
-        &post_state,
-        pw,
-    )?;
+    let poll_params = PollSourceParams {
+        security_policy: &security_policy,
+        ui_prefs: &ui_prefs,
+        my_did: &signing_ctx.identity.user_id,
+        my_prefix: signing_ctx.sync_ctx.my_prefix.as_deref(),
+        post_state: &post_state,
+        now_secs,
+        password: pw,
+    };
+    let (direct_slot_fetches, candidate_read_urls) =
+        collect_candidate_slot_sources(state, &session, &poll_params)?;
 
     // 3. Build authorized_senders, card_signers, and inquiry_only_senders
     let authorized_groups =
@@ -967,6 +1072,14 @@ pub async fn sync_post_channels_impl(
 
     let mut decrypted_items: Vec<DecryptedEnvelopeItem> = Vec::new();
     for slot_bytes in fetched_slots {
+        if slot_bytes.len() > humoco_market::DROP_POST_MAX_BYTES {
+            stats.errors.push(format!(
+                "Rejected oversized post slot ({} > {} bytes)",
+                slot_bytes.len(),
+                humoco_market::DROP_POST_MAX_BYTES
+            ));
+            continue;
+        }
         if slot_bytes.len() < 10 || &slot_bytes[0..8] != POST_SLOT_MAGIC {
             continue;
         }
@@ -1014,7 +1127,9 @@ pub async fn sync_post_channels_impl(
                         None
                     };
                     if let Some((did, env)) = card_attempt {
-                        let also_inquiry = inquiry_only_senders.iter().any(|(d, _)| d == &did);
+                        let also_inquiry = inquiry_only_senders
+                            .iter()
+                            .any(|(d, _)| are_dids_equal(d, &did));
                         (
                             did,
                             env,
@@ -1039,6 +1154,17 @@ pub async fn sync_post_channels_impl(
                 }
             };
 
+            let msg_id_trimmed = envelope.msg_id.trim();
+            if msg_id_trimmed.is_empty()
+                || envelope.msg_id.len() > MAX_POST_MSG_ID_LEN
+                || envelope.msg_id.chars().any(char::is_control)
+            {
+                stats
+                    .errors
+                    .push("Rejected PostEnvelope with invalid msg_id".to_string());
+                continue;
+            }
+
             let sender_did = {
                 let Ok(parsed_sender) =
                     human_money_core::ValidatedUserId::parse(&envelope.sender_did)
@@ -1056,7 +1182,7 @@ pub async fn sync_post_channels_impl(
                 parsed_sender.into_string()
             };
 
-            let scoped_key = super::scoped_processed_msg_key(&sender_did, &envelope.msg_id);
+            let scoped_key = scoped_processed_msg_key(&sender_did, &envelope.msg_id);
             if post_state.processed_msg_ids.contains(&scoped_key) {
                 continue;
             }
@@ -1133,32 +1259,9 @@ pub async fn sync_post_channels_impl(
     });
 
     for item in decrypted_items {
-        let scoped_key = super::scoped_processed_msg_key(&item.sender_did, &item.envelope.msg_id);
+        let scoped_key = scoped_processed_msg_key(&item.sender_did, &item.envelope.msg_id);
         if post_state.processed_msg_ids.contains(&scoped_key) {
             continue;
-        }
-        if !item.envelope.reply_drops.is_empty() {
-            let reply_dtos: Vec<FrontendSyncDescriptor> = item
-                .envelope
-                .reply_drops
-                .iter()
-                .cloned()
-                .map(Into::into)
-                .collect();
-            let committed = state.with_session(&session, |service| {
-                if let Err(e) =
-                    state.update_contact_from_card(service, &item.sender_did, &reply_dtos, None, pw)
-                {
-                    warn!(
-                        "Failed to update contact from PoST reply syncs: {}",
-                        e.message
-                    );
-                }
-                Ok(())
-            })?;
-            if committed.is_none() {
-                break;
-            }
         }
 
         let env_ctx = PostEnvelopeContext {
@@ -1187,15 +1290,40 @@ pub async fn sync_post_channels_impl(
         {
             PostDispatchOutcome::Handled => {
                 post_state.processed_msg_ids.insert(scoped_key);
+                if !item.envelope.reply_drops.is_empty() {
+                    let reply_dtos = sanitize_sync_descriptors(
+                        &item.envelope.reply_drops,
+                        humoco_market::MAX_CARD_DROPS,
+                    );
+                    if !reply_dtos.is_empty() {
+                        let committed = state.with_session(&session, |service| {
+                            if let Err(e) = state.update_contact_from_card(
+                                service,
+                                &item.sender_did,
+                                &reply_dtos,
+                                None,
+                                pw,
+                            ) {
+                                warn!(
+                                    "Failed to update contact from PoST reply syncs: {}",
+                                    e.message
+                                );
+                            }
+                            Ok(())
+                        })?;
+                        if committed.is_none() {
+                            break;
+                        }
+                    }
+                }
             }
             PostDispatchOutcome::UnsupportedPayload { payload_type } => {
                 let (sender_name, _, _) =
                     resolve_counterparty_info_for_session(state, &session, &item.sender_did, pw);
-                if !post_state
-                    .unsupported_messages
-                    .iter()
-                    .any(|u| u.msg_id == item.envelope.msg_id && u.sender_did == item.sender_did)
-                {
+                if !post_state.unsupported_messages.iter().any(|u| {
+                    u.msg_id == item.envelope.msg_id
+                        && are_dids_equal(&u.sender_did, &item.sender_did)
+                }) {
                     if post_state.unsupported_messages.len() >= 50 {
                         post_state.unsupported_messages.remove(0);
                     }
@@ -1205,7 +1333,7 @@ pub async fn sync_post_channels_impl(
                             sender_did: item.sender_did.clone(),
                             sender_name,
                             payload_type,
-                            created_at: item.envelope.created_at,
+                            created_at: clamp_post_ts(item.envelope.created_at, now_secs),
                         },
                     );
                 }

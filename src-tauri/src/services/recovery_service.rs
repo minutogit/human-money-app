@@ -195,6 +195,11 @@ fn save_post_and_recovery_owner_atomic(
             )
             .map_err(FrontendError::from)?;
         state.set_cached_recovery_owner_for_service(service, Some(Some(owner_state.clone())));
+        state.write_cache_slot_for_service(
+            service,
+            |c| &mut c.post_state,
+            Some(working_post.clone()),
+        );
         Ok(())
     })
 }

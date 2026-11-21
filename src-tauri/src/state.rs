@@ -2248,9 +2248,29 @@ impl AppState {
     pub fn save_contact_with_options(
         &self,
         service: &mut AppService,
+        contact: FrontendContact,
+        password: Option<&str>,
+        preserve_manual_card: bool,
+    ) -> Result<(), AppFacadeError> {
+        self.save_contact_with_companions(
+            service,
+            contact,
+            password,
+            preserve_manual_card,
+            |_service, _reg| Ok(Vec::new()),
+        )
+    }
+
+    pub(crate) fn save_contact_with_companions(
+        &self,
+        service: &mut AppService,
         mut contact: FrontendContact,
         password: Option<&str>,
         preserve_manual_card: bool,
+        before_commit: impl FnOnce(
+            &mut AppService,
+            &mut Option<humoco_wot::TrustRegister>,
+        ) -> Result<Vec<(&'static str, Vec<u8>)>, AppFacadeError>,
     ) -> Result<(), AppFacadeError> {
         let validated_did = human_money_core::ValidatedUserId::parse(&contact.did)
             .map_err(|e| AppFacadeError::Generic(format!("Invalid contact DID: {}", e)))?;
@@ -2422,6 +2442,7 @@ impl AppState {
         }
 
         // Synchronize TrustRegister if wallet is unlocked (skip for own subaccounts: self-trust is forbidden)
+        let mut updated_wot_reg: Option<humoco_wot::TrustRegister> = None;
         if is_own_root {
             contact.trust_level = None;
             contact.desired_hops = None;
@@ -2436,6 +2457,7 @@ impl AppState {
                 }
             }
             let new_eff_level = contact.trust_level.unwrap_or(0);
+            let mut wot_modified = false;
 
             if let Some(level) = contact.trust_level {
                 if level > 3 {
@@ -2462,8 +2484,7 @@ impl AppState {
                 } else {
                     reg.prune_unreachable_lists();
                 }
-                self.ensure_wot_list_signed(service, &mut reg)?;
-                self.save_wot_register(service, &reg, password)?;
+                wot_modified = true;
                 contact.trust_level = Some(level);
                 contact.desired_hops = Some(hops);
             } else {
@@ -2478,10 +2499,7 @@ impl AppState {
                         password,
                         preserve_manual_card,
                     );
-                    if reg.own_list_dirty {
-                        self.ensure_wot_list_signed(service, &mut reg)?;
-                    }
-                    self.save_wot_register(service, &reg, password)?;
+                    wot_modified = true;
                 }
             }
 
@@ -2489,6 +2507,16 @@ impl AppState {
                 crate::services::market_service::bump_own_card_version_for_eviction(
                     self, service, password,
                 );
+            }
+            if wot_modified {
+                updated_wot_reg = Some(reg);
+            }
+        }
+
+        let companion_blobs = before_commit(service, &mut updated_wot_reg)?;
+        if let Some(ref mut reg) = updated_wot_reg {
+            if reg.own_list_dirty || contact.trust_level.is_some() {
+                self.ensure_wot_list_signed(service, reg)?;
             }
         }
 
@@ -2517,10 +2545,31 @@ impl AppState {
 
         address_book.contacts.insert(contact.did.clone(), contact);
 
-        save_encrypted_json(service, CONTACTS_DATA_NAME, &address_book, password)
-            .map_err(|e| AppFacadeError::Generic(format!("Failed to save address book: {}", e)))?;
+        let ab_bytes = serde_json::to_vec(&address_book).map_err(|e| {
+            AppFacadeError::Generic(format!("Failed to serialize address book: {}", e))
+        })?;
+        let mut owned_blobs: Vec<(&str, Vec<u8>)> = Vec::with_capacity(2 + companion_blobs.len());
+        owned_blobs.push((CONTACTS_DATA_NAME, ab_bytes));
+        if let Some(ref reg) = updated_wot_reg {
+            let reg_bytes = serde_json::to_vec(reg).map_err(|e| {
+                AppFacadeError::Generic(format!("Failed to serialize TrustRegister: {}", e))
+            })?;
+            owned_blobs.push((WOT_DATA_NAME, reg_bytes));
+        }
+        owned_blobs.extend(companion_blobs);
+
+        let batch_refs: Vec<(&str, &[u8])> = owned_blobs
+            .iter()
+            .map(|(k, v)| (*k, v.as_slice()))
+            .collect();
+        service
+            .save_encrypted_batch(&batch_refs, password)
+            .map_err(|e| AppFacadeError::Generic(format!("Failed to save contact batch: {}", e)))?;
 
         self.set_cached_contacts_for_service(service, Some(address_book.clone()));
+        if let Some(reg) = updated_wot_reg {
+            self.write_cache_slot_for_service(service, |c| &mut c.wot, Some(reg));
+        }
         self.prune_orphaned_market_selected_syncs(
             service,
             &address_book,
@@ -3061,6 +3110,20 @@ impl AppState {
             }
             Err(e) => {
                 log::warn!("Failed to pre-load own sync descriptor: {}", e.message);
+            }
+        }
+
+        // 12. Pre-cache PoST outbox/inbox state (supports timeout = 0)
+        match load_encrypted_json_or_default::<StoredPostState>(
+            service,
+            MARKET_POST_STATE_KEY,
+            Some(credential),
+        ) {
+            Ok(post_state) => {
+                self.write_cache_slot_for_service(service, |c| &mut c.post_state, Some(post_state));
+            }
+            Err(e) => {
+                log::warn!("Failed to pre-load PoST state: {}", e);
             }
         }
 
