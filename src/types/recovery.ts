@@ -29,7 +29,7 @@ export interface ExportedMnemonicKitDto {
     phrase: string;
     languageCode: number;
     hasBip39Passphrase: boolean;
-    userPrefix: string;
+    userPrefix?: string;
     kitUri: string;
     qrSvg: string;
     syncUrls: string[];
@@ -156,7 +156,7 @@ export interface RecoveryCompletionResultDto {
     activeVoucherQueriesCount: number;
     reconciledSpentCount: number;
     restoredStandardsCount: number;
-    l2ReconciliationStatus: 'no_servers' | 'offline' | 'reconciled' | string;
+    l2ReconciliationStatus: 'no_servers' | 'offline' | 'partial' | 'reconciled' | string;
     pendingRestoreL2Reconciliation: boolean;
     localCollision: LocalProfileCollisionDto | null;
     resolvedSyncTargets: ResolvedSyncTargetDto[];

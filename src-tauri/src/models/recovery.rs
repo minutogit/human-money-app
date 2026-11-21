@@ -181,6 +181,17 @@ pub struct ActiveRecoverySessionFile {
     pub replies: Vec<humoco_market::GuardianReleasePayload>,
 }
 
+impl Drop for ActiveRecoverySessionFile {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        self.sk_temp.zeroize();
+        for reply in &mut self.replies {
+            reply.entry.share.zeroize();
+            reply.entry.r_enc.zeroize();
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GuardianRecoveryRequestInspectionDto {

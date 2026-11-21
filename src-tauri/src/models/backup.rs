@@ -123,14 +123,14 @@ pub struct FrontendRestoreOutcomeDto {
     pub active_voucher_queries_count: usize,
     pub reconciled_spent_count: usize,
     pub restored_standards_count: usize,
-    pub l2_reconciliation_status: String, // "no_servers" | "offline" | "reconciled"
+    pub l2_reconciliation_status: String, // "no_servers" | "offline" | "partial" | "reconciled"
 }
 
 /// Status and metadata for automated background backup and synchronization.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct FrontendAutoBackupStatusDto {
-    pub status: String, // "ok" | "pending" | "warning" | "disconnected" | "notConfigured"
+    pub status: String, // "ok" | "pending" | "warning" | "disconnected" | "notConfigured" | "locked"
     pub last_backup_at: Option<String>,
     pub backup_dirty: bool,
     pub sync_folder: Option<String>,
@@ -175,6 +175,6 @@ pub struct SyncBackupProbeResultDto {
 pub struct FrontendRestoreReconcileResultDto {
     pub active_voucher_queries_count: usize,
     pub reconciled_spent_count: usize,
-    pub l2_reconciliation_status: String, // "no_servers" | "offline" | "reconciled"
+    pub l2_reconciliation_status: String, // "no_servers" | "offline" | "partial" | "reconciled"
     pub pending_restore_l2_reconciliation: bool,
 }

@@ -1985,15 +1985,18 @@ pub(crate) async fn reconcile_vouchers_via_static_locks(
 pub(crate) fn clear_fork_lock_for_service(
     service: &mut human_money_core::app_service::AppService,
     password: Option<&str>,
-) {
+) -> Result<(), FrontendError> {
     if matches!(
-        service.get_seal_lock_reason(password),
-        Ok(Some(
-            human_money_core::models::seal::SealLockReason::ForkDetected
-        ))
+        service
+            .get_seal_lock_reason(password)
+            .map_err(FrontendError::from)?,
+        Some(human_money_core::models::seal::SealLockReason::ForkDetected)
     ) {
-        let _ = service.reconcile_rollback_with_diagnostics(&[], None, password);
+        service
+            .reconcile_rollback_with_diagnostics(&[], None, password)
+            .map_err(FrontendError::from)?;
     }
+    Ok(())
 }
 
 pub(crate) fn has_fork_or_stale_alert_and_offline_vouchers(

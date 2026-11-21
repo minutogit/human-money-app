@@ -1,4 +1,3 @@
-use chrono::Utc;
 use humoco_market::RecoveryKdfParams;
 use tauri::{Manager, State};
 
@@ -17,11 +16,11 @@ pub fn inspect_emergency_kit_uri(uri: String) -> Result<InspectedEmergencyKitDto
 }
 
 #[tauri::command]
-pub async fn export_profile_mnemonic(
+pub fn export_profile_mnemonic(
     password: String,
     state: State<'_, AppState>,
 ) -> Result<Option<ExportedMnemonicKitDto>, FrontendError> {
-    recovery_service::export_profile_mnemonic_impl(password, &state).await
+    recovery_service::export_profile_mnemonic_impl(password, &state)
 }
 
 #[tauri::command]
@@ -43,18 +42,19 @@ pub async fn confirm_emergency_sheet_saved(
 }
 
 #[tauri::command]
-pub fn verify_recovery_rehearsal(
+pub async fn verify_recovery_rehearsal(
     answers: [String; 3],
     password: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<RehearsalCheckResultDto, FrontendError> {
-    let now_secs = Utc::now().timestamp() as u64;
+    let now_secs = crate::sync_client::current_unix_timestamp();
     recovery_service::verify_recovery_rehearsal_with_password_impl(
         answers,
         now_secs,
         password.as_deref(),
         &state,
     )
+    .await
 }
 
 #[tauri::command]
@@ -63,7 +63,7 @@ pub fn snooze_recovery_rehearsal(
     password: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<u64, FrontendError> {
-    let now_secs = Utc::now().timestamp() as u64;
+    let now_secs = crate::sync_client::current_unix_timestamp();
     recovery_service::snooze_recovery_rehearsal_with_password_impl(
         hours,
         now_secs,
@@ -113,12 +113,14 @@ pub async fn revoke_social_recovery(
 }
 
 #[tauri::command]
-pub fn start_social_recovery_session(
+pub async fn start_social_recovery_session(
     name_hint: Option<String>,
     session_mode: Option<String>,
     target_folder_name: Option<String>,
+    state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<ActiveRecoverySessionDto, FrontendError> {
+    let _recovery_guard = state.recovery_op_lock.lock().await;
     let session_path = recovery_service::get_session_file_path(&app)?;
     recovery_service::start_social_recovery_session_impl(
         name_hint,
@@ -129,24 +131,32 @@ pub fn start_social_recovery_session(
 }
 
 #[tauri::command]
-pub fn get_active_recovery_session(
+pub async fn get_active_recovery_session(
+    state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<Option<ActiveRecoverySessionDto>, FrontendError> {
+    let _recovery_guard = state.recovery_op_lock.lock().await;
     let session_path = recovery_service::get_session_file_path(&app)?;
     recovery_service::get_active_recovery_session_impl(&session_path)
 }
 
 #[tauri::command]
-pub fn cancel_social_recovery_session(app: tauri::AppHandle) -> Result<(), FrontendError> {
+pub async fn cancel_social_recovery_session(
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<(), FrontendError> {
+    let _recovery_guard = state.recovery_op_lock.lock().await;
     let session_path = recovery_service::get_session_file_path(&app)?;
     recovery_service::cancel_social_recovery_session_impl(&session_path)
 }
 
 #[tauri::command]
-pub fn import_guardian_recovery_reply(
+pub async fn import_guardian_recovery_reply(
     reply_uri: String,
+    state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<ActiveRecoverySessionDto, FrontendError> {
+    let _recovery_guard = state.recovery_op_lock.lock().await;
     let session_path = recovery_service::get_session_file_path(&app)?;
     recovery_service::import_guardian_recovery_reply_impl(reply_uri, &session_path)
 }

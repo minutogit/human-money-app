@@ -47,6 +47,28 @@ impl From<MnemonicLanguage> for human_money_core::MnemonicLanguage {
     }
 }
 
+impl From<human_money_core::MnemonicLanguage> for MnemonicLanguage {
+    fn from(lang: human_money_core::MnemonicLanguage) -> Self {
+        match lang {
+            human_money_core::MnemonicLanguage::English => MnemonicLanguage::English,
+            human_money_core::MnemonicLanguage::German => MnemonicLanguage::German,
+            human_money_core::MnemonicLanguage::Spanish => MnemonicLanguage::Spanish,
+            human_money_core::MnemonicLanguage::French => MnemonicLanguage::French,
+            human_money_core::MnemonicLanguage::Italian => MnemonicLanguage::Italian,
+            human_money_core::MnemonicLanguage::Japanese => MnemonicLanguage::Japanese,
+            human_money_core::MnemonicLanguage::Korean => MnemonicLanguage::Korean,
+            human_money_core::MnemonicLanguage::Portuguese => MnemonicLanguage::Portuguese,
+            human_money_core::MnemonicLanguage::Czech => MnemonicLanguage::Czech,
+            human_money_core::MnemonicLanguage::ChineseSimplified => {
+                MnemonicLanguage::ChineseSimplified
+            }
+            human_money_core::MnemonicLanguage::ChineseTraditional => {
+                MnemonicLanguage::ChineseTraditional
+            }
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ProfileInfo {

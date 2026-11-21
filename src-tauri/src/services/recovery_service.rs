@@ -3,13 +3,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::Manager;
 
-use chrono::Utc;
 use human_money_core::app_service::AppService;
 use human_money_core::models::backup::BackupRestoreCredentials;
 use human_money_core::models::secure_container::{
     ContainerConfig, PayloadType, PrivacyMode, SecureContainer,
 };
-use human_money_core::services::mnemonic::MnemonicLanguage;
 use human_money_core::UserIdentity;
 use human_money_core::ValidatedUserId;
 use humoco_market::{
@@ -19,8 +17,8 @@ use humoco_market::{
     parse_emergency_kit_uri, parse_recovery_request_uri, recover_master_payload_from_shares,
     seal_guardian_release_reply, seal_post_box, DropDescriptor, GuardianLocatorUpdate,
     GuardianReleasePayload, GuardianRevoke, GuardianVaultEntry, GuardianVaultStore, PostEnvelope,
-    RecoveryKdfParams, RecoveryMasterPayload, PAYLOAD_GUARDIAN_ASSIGN_V1,
-    PAYLOAD_GUARDIAN_LOCATOR_V1, PAYLOAD_GUARDIAN_REVOKE_V1,
+    RecoveryKdfParams, RecoveryMasterPayload, MAX_RECOVERY_SYNC_DESCRIPTORS,
+    PAYLOAD_GUARDIAN_ASSIGN_V1, PAYLOAD_GUARDIAN_LOCATOR_V1, PAYLOAD_GUARDIAN_REVOKE_V1,
 };
 
 use crate::models::{
@@ -36,8 +34,11 @@ use crate::services::{
         finalize_restored_wallet_and_reconcile_l2, find_local_profile_collision_impl,
         probe_sync_backup_impl, sync_backup_impl, user_ids_from_metadata_dir,
     },
-    common::are_dids_equal,
-    fs_helpers::{record_profile_metadata_in_dir, write_file_atomic},
+    common::{are_dids_equal, collect_backup_sync_targets_with_service},
+    fs_helpers::{
+        is_canonical_child_of, is_safe_filename_component, record_profile_metadata_in_dir,
+        write_file_atomic,
+    },
     post_service::{
         collect_own_reply_syncs, flush_post_slots_impl, merge_and_save_post_state,
         sync_post_channels_impl,
@@ -208,78 +209,6 @@ fn is_same_account_id(a: &str, b: &str) -> bool {
     }
 }
 
-pub(crate) fn collect_candidate_backup_sync_descriptors_with_service(
-    state: &AppState,
-    service: &mut human_money_core::app_service::AppService,
-    password: Option<&str>,
-) -> Result<Vec<DropDescriptor>, FrontendError> {
-    let security_policy = state
-        .get_or_load_security_policy(service, password)
-        .map_err(FrontendError::from)?;
-    let mut candidate_targets: Vec<DropDescriptor> = security_policy
-        .market_selected_syncs
-        .iter()
-        .cloned()
-        .map(Into::into)
-        .collect();
-
-    let pfx = service
-        .with_wallet_and_identity(|_w, i| {
-            human_money_core::crypto::get_prefix_from_user_id(&i.user_id).map(|s| s.to_string())
-        })
-        .ok()
-        .flatten();
-    let admin_opt =
-        match crate::services::sync_engine::admin::load_stored_sync_admin_opt(service, password) {
-            Ok(admin) => admin,
-            Err(err)
-                if password.is_none()
-                    && (err.code == "error.auth.sessionNotActive"
-                        || err.code == "error.auth.sessionTimeout") =>
-            {
-                None
-            }
-            Err(err) => return Err(err),
-        };
-    if let Some(admin) = admin_opt {
-        if !admin.descriptor.write_url.is_empty()
-            && !candidate_targets
-                .iter()
-                .any(|d| d.write_url == admin.descriptor.write_url)
-        {
-            candidate_targets.push(admin.descriptor);
-        }
-    }
-
-    for pd in &security_policy.public_syncs {
-        if pd.enabled
-            && !pd.write_url.is_empty()
-            && !candidate_targets
-                .iter()
-                .any(|d| d.write_url == pd.write_url)
-        {
-            let slot_id = humoco_market::format_slot_id(&pd.access_pubkey, pfx.as_deref())
-                .unwrap_or_else(|_| pd.access_pubkey.clone());
-            candidate_targets.push(DropDescriptor {
-                write_url: pd.write_url.clone(),
-                read_url: pd.read_url.clone(),
-                slot_id: Some(slot_id),
-                drop_pub: pd.drop_pub.clone(),
-            });
-        }
-    }
-
-    Ok(candidate_targets)
-}
-
-pub fn collect_candidate_backup_sync_descriptors(
-    state: &AppState,
-    password: Option<&str>,
-) -> Result<Vec<DropDescriptor>, FrontendError> {
-    let mut service = state.lock_service()?;
-    collect_candidate_backup_sync_descriptors_with_service(state, &mut service, password)
-}
-
 fn seal_recovery_container(
     my_identity: &UserIdentity,
     recipient_did: &str,
@@ -393,10 +322,11 @@ pub async fn enqueue_guardian_locator_updates_if_configured(
         &session,
         "Active wallet session changed during guardian locator update",
         |service| {
-            let descriptors = collect_candidate_backup_sync_descriptors_with_service(
+            let descriptors = collect_backup_sync_targets_with_service(
                 state,
                 service,
                 password.as_deref(),
+                Some(MAX_RECOVERY_SYNC_DESCRIPTORS),
             )?;
             let policy = state
                 .get_or_load_security_policy(service, password.as_deref())
@@ -416,7 +346,7 @@ pub async fn enqueue_guardian_locator_updates_if_configured(
         canonicalize_owner_account_id(&my_identity.user_id).map_err(FrontendError::from)?;
 
     let _post_guard = state.post_op_lock.lock().await;
-    let now_secs = Utc::now().timestamp() as u64;
+    let now_secs = crate::sync_client::current_unix_timestamp();
     let mut post_state = state.with_session_required(
         &session,
         "Active wallet session changed before loading post state for locator update",
@@ -658,28 +588,13 @@ pub(crate) fn build_active_session_dto(
     }
 }
 
-fn core_to_frontend_language(lang: MnemonicLanguage) -> crate::models::MnemonicLanguage {
-    match lang {
-        MnemonicLanguage::English => crate::models::MnemonicLanguage::English,
-        MnemonicLanguage::German => crate::models::MnemonicLanguage::German,
-        MnemonicLanguage::Spanish => crate::models::MnemonicLanguage::Spanish,
-        MnemonicLanguage::French => crate::models::MnemonicLanguage::French,
-        MnemonicLanguage::Italian => crate::models::MnemonicLanguage::Italian,
-        MnemonicLanguage::Japanese => crate::models::MnemonicLanguage::Japanese,
-        MnemonicLanguage::Korean => crate::models::MnemonicLanguage::Korean,
-        MnemonicLanguage::Portuguese => crate::models::MnemonicLanguage::Portuguese,
-        MnemonicLanguage::Czech => crate::models::MnemonicLanguage::Czech,
-        MnemonicLanguage::ChineseSimplified => crate::models::MnemonicLanguage::ChineseSimplified,
-        MnemonicLanguage::ChineseTraditional => crate::models::MnemonicLanguage::ChineseTraditional,
-    }
-}
-
 pub fn inspect_emergency_kit_uri_impl(
     uri: String,
 ) -> Result<InspectedEmergencyKitDto, FrontendError> {
     let kit = parse_emergency_kit_uri(&uri).map_err(FrontendError::from)?;
-    let entropy_bytes =
-        hex::decode(&kit.entropy_hex).map_err(|e| FrontendError::from(e.to_string()))?;
+    let entropy_bytes = zeroize::Zeroizing::new(
+        hex::decode(&kit.entropy_hex).map_err(|e| FrontendError::from(e.to_string()))?,
+    );
     let core_lang = code_to_mnemonic_language(kit.language_code).map_err(FrontendError::from)?;
     let phrase = human_money_core::services::mnemonic::MnemonicProcessor::from_entropy(
         &entropy_bytes,
@@ -703,7 +618,7 @@ pub fn inspect_emergency_kit_uri_impl(
     Ok(InspectedEmergencyKitDto {
         phrase,
         word_count,
-        language: core_to_frontend_language(core_lang),
+        language: core_lang.into(),
         has_bip39_passphrase: kit.has_bip39_passphrase,
         user_prefix: kit.user_prefix.clone(),
         sync_urls,
@@ -715,12 +630,12 @@ pub fn inspect_emergency_kit_uri_impl(
 // Service Implementations
 // ============================================================================
 
-pub async fn export_profile_mnemonic_impl(
+pub fn export_profile_mnemonic_impl(
     password: String,
     state: &AppState,
 ) -> Result<Option<ExportedMnemonicKitDto>, FrontendError> {
-    let (phrase, lang, has_bip39_passphrase, user_prefix) = {
-        let service =
+    let (phrase, lang, has_bip39_passphrase, user_prefix, active_descriptors, guardian_names) = {
+        let mut service =
             state.authorize_and_lock(crate::state::RequiredAccess::Full, Some(&password))?;
         let exported = service
             .export_mnemonic(&password)
@@ -735,27 +650,34 @@ pub async fn export_profile_mnemonic_impl(
             })
             .ok()
             .flatten();
-        (phrase, lang, has_bip39_passphrase, user_prefix)
-    };
-
-    let entropy_bytes =
-        human_money_core::services::mnemonic::MnemonicProcessor::to_entropy(&phrase, lang)
-            .map_err(|e| FrontendError::from(e.to_string()))?;
-    let entropy_hex = hex::encode(&entropy_bytes);
-
-    let active_descriptors = collect_candidate_backup_sync_descriptors(state, Some(&password))?;
-
-    let guardian_names = {
-        let mut service = state.lock_service()?;
-        let owner_state = load_recovery_owner_state(&mut service, Some(&password))?;
-        owner_state
+        let active_descriptors = collect_backup_sync_targets_with_service(
+            state,
+            &mut service,
+            Some(&password),
+            Some(MAX_RECOVERY_SYNC_DESCRIPTORS),
+        )?;
+        let guardian_names = load_recovery_owner_state(&mut service, Some(&password))?
             .map(|s| s.guardians.into_iter().map(|g| g.display_name).collect())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        (
+            phrase,
+            lang,
+            has_bip39_passphrase,
+            user_prefix,
+            active_descriptors,
+            guardian_names,
+        )
     };
+
+    let entropy_bytes = zeroize::Zeroizing::new(
+        human_money_core::services::mnemonic::MnemonicProcessor::to_entropy(&phrase, lang)
+            .map_err(|e| FrontendError::from(e.to_string()))?,
+    );
+    let entropy_hex = zeroize::Zeroizing::new(hex::encode(entropy_bytes.as_slice()));
 
     let kit = humoco_market::EmergencyKitData {
         version: 1,
-        entropy_hex,
+        entropy_hex: (*entropy_hex).clone(),
         language_code: mnemonic_language_to_code(lang),
         user_prefix: user_prefix.clone(),
         has_bip39_passphrase,
@@ -819,7 +741,7 @@ pub async fn confirm_emergency_sheet_saved_impl(
         ));
     }
 
-    let now_secs = Utc::now().timestamp() as u64;
+    let now_secs = crate::sync_client::current_unix_timestamp();
     {
         let _recovery_guard = state.recovery_op_lock.lock().await;
         state.with_session_required(
@@ -857,10 +779,20 @@ pub fn get_recovery_protection_status_impl(
     password: Option<&str>,
     state: &AppState,
 ) -> Result<RecoveryProtectionStatusDto, FrontendError> {
-    let now_secs = Utc::now().timestamp() as u64;
+    let now_secs = crate::sync_client::current_unix_timestamp();
 
-    let (has_voucher, owner_state, guardian_vault, contacts) = {
-        let mut service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
+    let (
+        has_voucher,
+        owner_state,
+        guardian_vault,
+        contacts,
+        security_policy,
+        lifecycle,
+        candidate_syncs,
+    ) = {
+        let (mut service, resolved_pw) =
+            state.authorize_and_lock_secret(crate::state::RequiredAccess::Unlocked, password)?;
+        let pw = resolved_pw.as_deref().map(String::as_str);
         let has_voucher = service
             .with_wallet(|w| !w.voucher_store.vouchers.is_empty())
             .unwrap_or_else(|_| {
@@ -869,14 +801,34 @@ pub fn get_recovery_protection_status_impl(
                     .map(|h| !h.is_empty())
                     .unwrap_or(false)
             });
-        let owner = load_recovery_owner_state_with_cache(state, &mut service, password)?
-            .unwrap_or_default();
-        let vault = load_guardian_vault_with_cache(state, &mut service, password)?;
+        let owner =
+            load_recovery_owner_state_with_cache(state, &mut service, pw)?.unwrap_or_default();
+        let vault = load_guardian_vault_with_cache(state, &mut service, pw)?;
         let contacts = state
-            .load_contacts(&mut service, password)
+            .load_contacts(&mut service, pw)
             .or_else(|_| state.get_cached_contacts())
             .unwrap_or_default();
-        (has_voucher, owner, vault, contacts)
+        let security_policy = state
+            .get_or_load_security_policy(&mut service, pw)
+            .map_err(FrontendError::from)?;
+        let lifecycle = state
+            .get_or_load_internal_lifecycle(&mut service, pw)
+            .map_err(FrontendError::from)?;
+        let candidate_syncs = collect_backup_sync_targets_with_service(
+            state,
+            &mut service,
+            pw,
+            Some(MAX_RECOVERY_SYNC_DESCRIPTORS),
+        )?;
+        (
+            has_voucher,
+            owner,
+            vault,
+            contacts,
+            security_policy,
+            lifecycle,
+            candidate_syncs,
+        )
     };
 
     let confirmed_guardians_count = owner_state
@@ -915,16 +867,14 @@ pub fn get_recovery_protection_status_impl(
         && required_threshold >= 2)
         || emergency_sheet_confirmed_at.is_some();
 
-    let security_policy = state.get_or_load_security_policy_locked(password)?;
-    let lifecycle = state.get_or_load_internal_lifecycle_locked(password)?;
-    let candidate_syncs = collect_candidate_backup_sync_descriptors(state, password)?;
     let sync_backup_count = candidate_syncs.len();
     let has_sync_backup =
         security_policy.sync_backup_enabled && lifecycle.last_sync_backup_at.is_some();
-    let has_local_backup = security_policy
-        .backup_sync_folder
-        .as_ref()
-        .is_some_and(|f| !f.trim().is_empty() && Path::new(f).is_dir());
+    let has_local_backup = lifecycle.last_backup_at.is_some()
+        && security_policy
+            .backup_sync_folder
+            .as_ref()
+            .is_some_and(|f| !f.trim().is_empty() && Path::new(f).is_dir());
     let has_voucher_backup = has_sync_backup || has_local_backup;
 
     let guardian_wards: Vec<GuardianWardDto> = guardian_vault
@@ -972,62 +922,116 @@ pub fn get_recovery_protection_status_impl(
     })
 }
 
-pub fn verify_recovery_rehearsal_with_password_impl(
+pub async fn verify_recovery_rehearsal_with_password_impl(
     answers: [String; 3],
     now_secs: u64,
     password: Option<&str>,
     state: &AppState,
 ) -> Result<RehearsalCheckResultDto, FrontendError> {
-    let (mut service, resolved_pw) =
-        state.authorize_and_lock_secret(crate::state::RequiredAccess::DailyPay, password)?;
+    let (session, resolved_pw) = state
+        .authorize_and_begin_session_secret(crate::state::RequiredAccess::DailyPay, password)?;
     let pw = resolved_pw.as_deref().map(String::as_str);
 
-    let mut owner_state = load_recovery_owner_state(&mut service, pw)?.ok_or_else(|| {
-        FrontendError::from("Social recovery is not configured for this profile.".to_string())
-    })?;
-    let expected = owner_state.answer_verifiers.ok_or_else(|| {
-        FrontendError::from(
-            "Recovery rehearsal verifiers are not configured. Please update your recovery questions."
-                .to_string(),
-        )
-    })?;
-
-    let user_id = service
-        .with_wallet_and_identity(|_, id| id.user_id.clone())
-        .map_err(FrontendError::from)?;
-    let owner_account_id = canonicalize_owner_account_id(&user_id).map_err(FrontendError::from)?;
-
-    let kdf_params = RecoveryKdfParams {
-        m_kib: owner_state.rehearsal_kdf_m_kib,
-        t_cost: owner_state.rehearsal_kdf_t_cost,
-        p_cost: 1,
-        salt: [0u8; 16],
-    };
-    let ans_refs = [
-        answers[0].as_str(),
-        answers[1].as_str(),
-        answers[2].as_str(),
-    ];
-    let question_matches = humoco_market::verify_rehearsal_answers(
-        &owner_account_id,
-        owner_state.rotation_epoch,
-        &owner_state.question_ids,
-        &ans_refs,
-        &expected,
-        &kdf_params,
+    let (
+        owner_account_id,
+        rotation_epoch,
+        question_ids,
+        expected,
+        kdf_params,
+        current_stage,
+        current_next_at,
+    ) = state.with_session_required(
+        &session,
+        "Active wallet session changed before starting recovery rehearsal verification",
+        |service| {
+            let owner_state = load_recovery_owner_state(service, pw)?.ok_or_else(|| {
+                FrontendError::from(
+                    "Social recovery is not configured for this profile.".to_string(),
+                )
+            })?;
+            let expected = owner_state.answer_verifiers.ok_or_else(|| {
+                FrontendError::from(
+                    "Recovery rehearsal verifiers are not configured. Please update your recovery questions."
+                        .to_string(),
+                )
+            })?;
+            let user_id = service
+                .with_wallet_and_identity(|_, id| id.user_id.clone())
+                .map_err(FrontendError::from)?;
+            let owner_account_id =
+                canonicalize_owner_account_id(&user_id).map_err(FrontendError::from)?;
+            let kdf_params = RecoveryKdfParams {
+                m_kib: owner_state.rehearsal_kdf_m_kib,
+                t_cost: owner_state.rehearsal_kdf_t_cost,
+                p_cost: 1,
+                salt: [0u8; 16],
+            };
+            Ok((
+                owner_account_id,
+                owner_state.rotation_epoch,
+                owner_state.question_ids,
+                expected,
+                kdf_params,
+                owner_state.rehearsal_stage,
+                owner_state.next_rehearsal_at,
+            ))
+        },
     )?;
+
+    // Run heavy Argon2id verification outside ALL mutexes on the blocking threadpool.
+    let question_matches = tokio::task::spawn_blocking(move || {
+        let ans_refs = [
+            answers[0].as_str(),
+            answers[1].as_str(),
+            answers[2].as_str(),
+        ];
+        humoco_market::verify_rehearsal_answers(
+            &owner_account_id,
+            rotation_epoch,
+            &question_ids,
+            &ans_refs,
+            &expected,
+            &kdf_params,
+        )
+    })
+    .await
+    .map_err(|e| {
+        FrontendError::from(format!(
+            "Recovery rehearsal verification task failed: {}",
+            e
+        ))
+    })?
+    .map_err(FrontendError::from)?;
 
     let all_correct = question_matches.iter().all(|&m| m);
     if all_correct {
-        let next_stage = owner_state
-            .rehearsal_stage
-            .saturating_add(1)
-            .min((REHEARSAL_INTERVAL_SECS.len() - 1) as u8);
-        let interval = REHEARSAL_INTERVAL_SECS[next_stage as usize];
-        let next_at = now_secs.saturating_add(interval);
-        owner_state.rehearsal_stage = next_stage;
-        owner_state.next_rehearsal_at = Some(next_at);
-        save_recovery_owner_state_with_cache(state, &mut service, &owner_state, pw)?;
+        let (next_stage, next_at) = state.with_session_required(
+            &session,
+            "Active wallet session changed during recovery rehearsal verification",
+            |service| {
+                let mut owner_state = load_recovery_owner_state(service, pw)?.ok_or_else(|| {
+                    FrontendError::from(
+                        "Social recovery is not configured for this profile.".to_string(),
+                    )
+                })?;
+                if owner_state.rotation_epoch != rotation_epoch {
+                    return Err(FrontendError::from(
+                        "Social recovery configuration changed during rehearsal verification."
+                            .to_string(),
+                    ));
+                }
+                let next_stage = owner_state
+                    .rehearsal_stage
+                    .saturating_add(1)
+                    .min((REHEARSAL_INTERVAL_SECS.len() - 1) as u8);
+                let interval = REHEARSAL_INTERVAL_SECS[next_stage as usize];
+                let next_at = now_secs.saturating_add(interval);
+                owner_state.rehearsal_stage = next_stage;
+                owner_state.next_rehearsal_at = Some(next_at);
+                save_recovery_owner_state_with_cache(state, service, &owner_state, pw)?;
+                Ok((next_stage, next_at))
+            },
+        )?;
         Ok(RehearsalCheckResultDto {
             all_correct: true,
             question_matches,
@@ -1038,8 +1042,8 @@ pub fn verify_recovery_rehearsal_with_password_impl(
         Ok(RehearsalCheckResultDto {
             all_correct: false,
             question_matches,
-            rehearsal_stage: owner_state.rehearsal_stage,
-            next_rehearsal_at: owner_state.next_rehearsal_at.unwrap_or(now_secs),
+            rehearsal_stage: current_stage,
+            next_rehearsal_at: current_next_at.unwrap_or(now_secs),
         })
     }
 }
@@ -1089,16 +1093,25 @@ pub async fn setup_social_recovery_guardians_with_params(
         )));
     }
 
-    // Check pairwise distinct
-    let mut unique_dids = std::collections::HashSet::new();
+    // Validate every guardian DID strictly and deduplicate by canonical Ed25519 root public key bytes
+    // so two subaccounts or formatting variants of the same person cannot hold multiple shares.
+    let mut normalized_guardian_dids = Vec::with_capacity(guardian_dids.len());
+    let mut unique_root_keys = std::collections::HashSet::<[u8; 32]>::new();
     for did in &guardian_dids {
-        if !unique_dids.insert(did) {
+        let trimmed = did.trim();
+        let validated = ValidatedUserId::parse(trimmed).map_err(|e| {
+            FrontendError::from(format!("Invalid guardian DID '{}': {}", trimmed, e))
+        })?;
+        let root_key_bytes = validated.public_key().to_bytes();
+        if !unique_root_keys.insert(root_key_bytes) {
             return Err(FrontendError::from(format!(
-                "Duplicate guardian DID in setup: {}",
-                did
+                "Duplicate guardian identity in setup: {}",
+                trimmed
             )));
         }
+        normalized_guardian_dids.push(validated.as_str().to_string());
     }
+    let guardian_dids = normalized_guardian_dids;
 
     // Serialize concurrent setup/revocation operations under `recovery_op_lock` BEFORE reading epoch & committing.
     let (new_epoch, guardians_count, setup_session) = {
@@ -1126,37 +1139,6 @@ pub async fn setup_social_recovery_guardians_with_params(
                 FrontendError::from("Mnemonic phrase required to setup social recovery".to_string())
             })?;
             let contacts = state.load_contacts(&mut service, Some(&password))?;
-
-            for g_did in &guardian_dids {
-                let contact = contacts
-                    .iter()
-                    .find(|c| are_dids_equal(&c.did, g_did))
-                    .ok_or_else(|| {
-                        FrontendError::from(format!("Guardian {} is not in your contacts", g_did))
-                    })?;
-                let contact_name =
-                    format_contact_display_name(contact).unwrap_or_else(|| contact.did.clone());
-                if contact.trust_level.unwrap_or(0) < 1 {
-                    return Err(FrontendError::from(format!(
-                        "Guardian {} does not have trust level >= 1 (Acquaintance/Bekannt)",
-                        contact_name
-                    )));
-                }
-                let is_offender = service
-                    .with_wallet(|w| {
-                        matches!(
-                            w.check_reputation(g_did),
-                            human_money_core::models::conflict::TrustStatus::KnownOffender(_)
-                        )
-                    })
-                    .unwrap_or(false);
-                if is_offender {
-                    return Err(FrontendError::from(format!(
-                        "Guardian {} is flagged as KnownOffender",
-                        contact_name
-                    )));
-                }
-            }
 
             let local_fallback_name = {
                 let profiles = service.list_profiles().unwrap_or_default();
@@ -1205,6 +1187,42 @@ pub async fn setup_social_recovery_guardians_with_params(
                 })
                 .map_err(|e| FrontendError::from(e.to_string()))?;
 
+            for g_did in &guardian_dids {
+                if are_dids_equal(g_did, &my_identity.user_id) {
+                    return Err(FrontendError::from(
+                        "Cannot assign your own identity as a recovery guardian".to_string(),
+                    ));
+                }
+                let contact = contacts
+                    .iter()
+                    .find(|c| are_dids_equal(&c.did, g_did))
+                    .ok_or_else(|| {
+                        FrontendError::from(format!("Guardian {} is not in your contacts", g_did))
+                    })?;
+                let contact_name =
+                    format_contact_display_name(contact).unwrap_or_else(|| contact.did.clone());
+                if contact.trust_level.unwrap_or(0) < 1 {
+                    return Err(FrontendError::from(format!(
+                        "Guardian {} does not have trust level >= 1 (Acquaintance/Bekannt)",
+                        contact_name
+                    )));
+                }
+                let is_offender = service
+                    .with_wallet(|w| {
+                        matches!(
+                            w.check_reputation(g_did),
+                            human_money_core::models::conflict::TrustStatus::KnownOffender(_)
+                        )
+                    })
+                    .unwrap_or(false);
+                if is_offender {
+                    return Err(FrontendError::from(format!(
+                        "Guardian {} is flagged as KnownOffender",
+                        contact_name
+                    )));
+                }
+            }
+
             let old_owner_state = load_recovery_owner_state(&mut service, Some(&password))?;
             (
                 session,
@@ -1219,16 +1237,17 @@ pub async fn setup_social_recovery_guardians_with_params(
             )
         };
 
-        let entropy =
+        let entropy = zeroize::Zeroizing::new(
             human_money_core::services::mnemonic::MnemonicProcessor::to_entropy(&phrase, lang)
-                .map_err(|e| FrontendError::from(e.to_string()))?;
+                .map_err(|e| FrontendError::from(e.to_string()))?,
+        );
 
         let old_epoch = old_owner_state
             .as_ref()
             .map(|s| s.rotation_epoch)
             .unwrap_or(0);
         let new_epoch = old_epoch + 1;
-        let now_secs = Utc::now().timestamp() as u64;
+        let now_secs = crate::sync_client::current_unix_timestamp();
 
         let (security_policy, backup_descriptors) = state.with_session_required(
             &session,
@@ -1237,10 +1256,11 @@ pub async fn setup_social_recovery_guardians_with_params(
                 let sp = state
                     .get_or_load_security_policy(service, Some(password.as_str()))
                     .map_err(FrontendError::from)?;
-                let bd = collect_candidate_backup_sync_descriptors_with_service(
+                let bd = collect_backup_sync_targets_with_service(
                     state,
                     service,
                     Some(&password),
+                    Some(MAX_RECOVERY_SYNC_DESCRIPTORS),
                 )?;
                 Ok((sp, bd))
             },
@@ -1258,44 +1278,54 @@ pub async fn setup_social_recovery_guardians_with_params(
 
         let master_payload = RecoveryMasterPayload::new(
             &owner_account_id,
-            entropy,
+            entropy.to_vec(),
             lang,
             my_prefix,
             has_bip39_passphrase,
         );
 
-        let ans_refs = [
-            answers[0].as_str(),
-            answers[1].as_str(),
-            answers[2].as_str(),
-        ];
+        let total_n = guardian_dids.len() as u8;
+        let kdf_signing_key = my_identity.signing_key.clone();
+        let kdf_owner_id = owner_account_id.clone();
+        let kdf_profile_name = my_profile_name.clone();
+        let kdf_backup_descriptors = backup_descriptors;
+        let kdf_params_for_task = kdf_params.clone();
+        let kdf_answers = answers;
 
-        let entries = create_social_recovery_vault_bundle(
-            &my_identity.signing_key,
-            &owner_account_id,
-            &my_profile_name,
-            new_epoch,
-            threshold_m,
-            guardian_dids.len() as u8,
-            &question_ids,
-            &ans_refs,
-            &kdf_params,
-            &master_payload,
-            &backup_descriptors,
-            now_secs,
-        )
-        .map_err(FrontendError::from)?;
+        let (entries, answer_verifiers) = tokio::task::spawn_blocking(move || {
+            let ans_refs = [
+                kdf_answers[0].as_str(),
+                kdf_answers[1].as_str(),
+                kdf_answers[2].as_str(),
+            ];
+            let entries = create_social_recovery_vault_bundle(
+                &kdf_signing_key,
+                &kdf_owner_id,
+                &kdf_profile_name,
+                new_epoch,
+                threshold_m,
+                total_n,
+                &question_ids,
+                &ans_refs,
+                &kdf_params_for_task,
+                &master_payload,
+                &kdf_backup_descriptors,
+                now_secs,
+            )
+            .map_err(FrontendError::from)?;
 
-        let answer_verifiers = Some(
-            humoco_market::compute_rehearsal_verifiers(
-                &owner_account_id,
+            let verifiers = humoco_market::compute_rehearsal_verifiers(
+                &kdf_owner_id,
                 new_epoch,
                 &question_ids,
                 &ans_refs,
-                &kdf_params,
+                &kdf_params_for_task,
             )
-            .map_err(FrontendError::from)?,
-        );
+            .map_err(FrontendError::from)?;
+            Ok::<_, FrontendError>((entries, Some(verifiers)))
+        })
+        .await
+        .map_err(|e| FrontendError::from(format!("Recovery setup KDF task failed: {}", e)))??;
 
         let mut assignment_records = Vec::with_capacity(guardian_dids.len());
         {
@@ -1381,7 +1411,7 @@ pub async fn setup_social_recovery_guardians_with_params(
                     .and_then(|s| s.emergency_sheet_confirmed_at),
                 answer_verifiers,
                 rehearsal_stage: 0,
-                next_rehearsal_at: Some(now_secs + REHEARSAL_INTERVAL_SECS[0]),
+                next_rehearsal_at: Some(now_secs.saturating_add(REHEARSAL_INTERVAL_SECS[0])),
                 rehearsal_kdf_m_kib: kdf_params.m_kib,
                 rehearsal_kdf_t_cost: kdf_params.t_cost,
             };
@@ -1406,7 +1436,13 @@ pub async fn setup_social_recovery_guardians_with_params(
         ));
     }
     let post_sync_result =
-        sync_post_channels_impl(app, None, None, Some(password.clone()), state).await?;
+        match sync_post_channels_impl(app, None, None, Some(password.clone()), state).await {
+            Ok(res) => res,
+            Err(err) => crate::models::FrontendPostSyncResult {
+                errors: vec![err.message],
+                ..Default::default()
+            },
+        };
     let backup_sync_result = if state.is_generation_current(setup_session.generation) {
         match app {
             Some(handle) => sync_backup_impl(Some(password), None, state, handle)
@@ -1453,7 +1489,7 @@ pub async fn revoke_social_recovery_impl(
         };
 
         let new_epoch = old_epoch + 1;
-        let now_secs = Utc::now().timestamp() as u64;
+        let now_secs = crate::sync_client::current_unix_timestamp();
         let security_policy = state.with_session_required(
             &session,
             "Active wallet session changed before recovery revocation could load policy",
@@ -1524,7 +1560,13 @@ pub async fn revoke_social_recovery_impl(
         ));
     }
     let post_sync_result =
-        sync_post_channels_impl(app, None, None, password.clone(), state).await?;
+        match sync_post_channels_impl(app, None, None, password.clone(), state).await {
+            Ok(res) => res,
+            Err(err) => crate::models::FrontendPostSyncResult {
+                errors: vec![err.message],
+                ..Default::default()
+            },
+        };
     let backup_sync_result = if state.is_generation_current(revoke_session.generation) {
         match app {
             Some(handle) => sync_backup_impl(password, None, state, handle).await.ok(),
@@ -1556,7 +1598,7 @@ pub fn start_social_recovery_session_impl(
     let pk_temp = x25519_dalek::PublicKey::from(&sk_temp);
 
     let sas_code = compute_recovery_sas(pk_temp.as_bytes());
-    let now_secs = Utc::now().timestamp() as u64;
+    let now_secs = crate::sync_client::current_unix_timestamp();
     let request_uri =
         build_recovery_request_uri(pk_temp.as_bytes(), now_secs, name_hint.as_deref());
     let resolved_mode = match session_mode.as_deref() {
@@ -1641,6 +1683,20 @@ pub fn import_guardian_recovery_reply_impl(
                 .replies
                 .retain(|r| r.entry.rotation_epoch == payload.entry.rotation_epoch);
         }
+        if let Some(existing) = session.replies.first() {
+            if payload.entry.threshold_m != existing.entry.threshold_m
+                || payload.entry.total_n != existing.entry.total_n
+                || payload.entry.question_ids != existing.entry.question_ids
+                || payload.entry.kdf_params != existing.entry.kdf_params
+                || payload.entry.r_enc != existing.entry.r_enc
+                || payload.entry.share_commitments != existing.entry.share_commitments
+            {
+                return Err(FrontendError::with_code(
+                    "error.recovery.inconsistentEpochMetadata",
+                    "This guardian release has conflicting recovery metadata for the same epoch.",
+                ));
+            }
+        }
     }
 
     // Deduplicate reply
@@ -1676,7 +1732,7 @@ pub fn inspect_guardian_recovery_request_impl(
     state: &AppState,
 ) -> Result<GuardianRecoveryRequestInspectionDto, FrontendError> {
     let link = parse_recovery_request_uri(&request_uri).map_err(FrontendError::from)?;
-    let now_secs = Utc::now().timestamp() as u64;
+    let now_secs = crate::sync_client::current_unix_timestamp();
     let is_stale_48h = link.is_stale_48h(now_secs);
     let sas_code = compute_recovery_sas(&link.pk_temp);
 
@@ -1757,7 +1813,7 @@ pub fn approve_guardian_recovery_request_impl(
         (entry, extras, resolved_name)
     };
 
-    let now_secs = Utc::now().timestamp() as u64;
+    let now_secs = crate::sync_client::current_unix_timestamp();
     let payload = GuardianReleasePayload {
         entry,
         extra_sync_descriptors: extra_descriptors,
@@ -1799,6 +1855,27 @@ pub async fn complete_social_recovery_impl(
     wallet_data_dir: &Path,
     app_opt: Option<&tauri::AppHandle>,
 ) -> Result<RecoveryCompletionResultDto, FrontendError> {
+    if mode != "restore_new_device" && mode != "reset_local_password" {
+        return Err(FrontendError::from(format!(
+            "Invalid recovery mode: {}",
+            mode
+        )));
+    }
+    if new_password.is_empty() {
+        return Err(FrontendError::from(
+            "New password cannot be empty".to_string(),
+        ));
+    }
+    if local_instance_id.trim().is_empty() {
+        return Err(FrontendError::from(
+            "Device instance ID is required".to_string(),
+        ));
+    }
+    let normalized_bip39_passphrase: Option<&str> =
+        bip39_passphrase.as_deref().filter(|p| !p.is_empty());
+
+    let _recovery_guard = state.recovery_op_lock.lock().await;
+
     let session = load_active_session_from_path(session_file_path)?.ok_or_else(|| {
         FrontendError::with_code(
             "error.recovery.noActiveSession",
@@ -1831,27 +1908,36 @@ pub async fn complete_social_recovery_impl(
         )));
     }
 
-    let ans_refs = [
-        answers[0].as_str(),
-        answers[1].as_str(),
-        answers[2].as_str(),
-    ];
-
     // NOTE: On error, session_file_path is NOT deleted so user can retry!
-    let master_payload =
-        recover_master_payload_from_shares(&matching_entries, &ans_refs).map_err(|e| {
+    // Offload heavy Argon2id derivation to the blocking threadpool.
+    let kdf_entries = matching_entries;
+    let kdf_answers = answers;
+    let master_payload = tokio::task::spawn_blocking(move || {
+        let ans_refs = [
+            kdf_answers[0].as_str(),
+            kdf_answers[1].as_str(),
+            kdf_answers[2].as_str(),
+        ];
+        recover_master_payload_from_shares(&kdf_entries, &ans_refs)
+    })
+    .await
+    .map_err(|e| FrontendError::from(format!("Recovery KDF task failed: {}", e)))?
+    .map_err(|err| match err {
+        humoco_market::MarketError::Crypto(ref msg)
+            if msg.starts_with("AEAD master unsealing failed") =>
+        {
             FrontendError::with_code(
                 "error.recovery.wrongAnswers",
                 format!(
                     "Deine Antworten stimmen noch nicht – bitte in Ruhe prüfen: {}",
-                    e
+                    err
                 ),
             )
-        })?;
+        }
+        other => FrontendError::from(other),
+    })?;
 
-    if master_payload.has_bip39_passphrase
-        && bip39_passphrase.as_deref().unwrap_or("").trim().is_empty()
-    {
+    if master_payload.has_bip39_passphrase && normalized_bip39_passphrase.is_none() {
         return Err(FrontendError::with_code(
             "error.recovery.bip39PassphraseRequired",
             "BIP39_PASSPHRASE_REQUIRED: Für dieses Profil wurde bei der Erstellung eine Passphrase (25. Wort) festgelegt.",
@@ -1859,11 +1945,13 @@ pub async fn complete_social_recovery_impl(
     }
 
     let lang = master_payload.language().map_err(FrontendError::from)?;
-    let phrase = human_money_core::services::mnemonic::MnemonicProcessor::from_entropy(
-        &master_payload.mnemonic_entropy,
-        lang,
-    )
-    .map_err(|e| FrontendError::from(e.to_string()))?;
+    let phrase = zeroize::Zeroizing::new(
+        human_money_core::services::mnemonic::MnemonicProcessor::from_entropy(
+            &master_payload.mnemonic_entropy,
+            lang,
+        )
+        .map_err(|e| FrontendError::from(e.to_string()))?,
+    );
 
     if mode == "reset_local_password" {
         let target_folder = target_folder_name.ok_or_else(|| {
@@ -1879,7 +1967,7 @@ pub async fn complete_social_recovery_impl(
                 .recover_wallet_and_set_new_password(
                     &target_folder,
                     &phrase,
-                    bip39_passphrase.as_deref(),
+                    normalized_bip39_passphrase,
                     &new_password,
                     lang,
                     local_instance_id.clone(),
@@ -1890,15 +1978,22 @@ pub async fn complete_social_recovery_impl(
                 .with_wallet_and_identity(|_, id| id.user_id.clone())
                 .ok();
             let _ = record_profile_metadata_in_dir(wallet_data_dir, &target_folder, user_id);
-            if let Err(err) = state
-                .initialize_profile_session(&mut service, &new_password)
-                .map_err(FrontendError::from)
-            {
-                state.rollback_failed_session(&mut service);
-                return Err(err);
-            }
-            let session = state.session_token_for_service(&service)?;
-            state.commit_profile_lock(pending_lock);
+            let session_res = (|| -> Result<crate::session::SessionToken, FrontendError> {
+                state
+                    .initialize_profile_session(&mut service, &new_password)
+                    .map_err(FrontendError::from)?;
+                state.session_token_for_service(&service)
+            })();
+            let session = match session_res {
+                Ok(sess) => {
+                    state.commit_profile_lock(pending_lock);
+                    sess
+                }
+                Err(err) => {
+                    state.rollback_failed_session(&mut service);
+                    return Err(err);
+                }
+            };
             if let Some(app) = app_opt {
                 if let Ok(config_dir) = app.path().app_config_dir() {
                     let _ = crate::pin_keystore::remove_entry(&config_dir, &target_folder);
@@ -1976,7 +2071,7 @@ pub async fn complete_social_recovery_impl(
 
     let (_, derived_identity) = human_money_core::Wallet::new_from_mnemonic(
         &phrase,
-        bip39_passphrase.as_deref().filter(|p| !p.is_empty()),
+        normalized_bip39_passphrase,
         master_payload.user_prefix.as_deref(),
         lang,
         "social_check".to_string(),
@@ -1984,20 +2079,27 @@ pub async fn complete_social_recovery_impl(
     )
     .map_err(FrontendError::from)?;
 
+    if !is_same_account_id(&derived_identity.user_id, &master_payload.target_did) {
+        return Err(FrontendError::with_code(
+            "error.recovery.wrongBip39Passphrase",
+            "Die eingegebene BIP39-Passphrase stimmt nicht mit dem wiederherzustellenden Profil überein.",
+        ));
+    }
+
     let sync_inputs: Vec<String> = candidate_descriptors
         .iter()
         .filter_map(|d| serde_json::to_string(d).ok())
         .collect();
     let has_sync_inputs = !sync_inputs.is_empty();
-    let fe_lang = core_to_frontend_language(lang);
+    let fe_lang: crate::models::MnemonicLanguage = lang.into();
     let allow_empty = allow_empty_fallback.unwrap_or(false);
 
     let start_generation = state.current_session_generation();
     let (resolved_targets, local_collision) = if has_sync_inputs {
         let probe = probe_sync_backup_impl(
             sync_inputs,
-            phrase.clone(),
-            bip39_passphrase.clone(),
+            (*phrase).clone(),
+            normalized_bip39_passphrase.map(str::to_string),
             master_payload.user_prefix.clone(),
             Some(fe_lang),
             wallet_data_dir,
@@ -2015,7 +2117,11 @@ pub async fn complete_social_recovery_impl(
                     .ok_or_else(|| FrontendError::from("Missing staged backup path".to_string()))?;
 
                 if probe.local_collision.is_some() && replace_folder_name.is_none() {
-                    let _ = fs::remove_file(&staged_path);
+                    if is_canonical_child_of(&staged_path, &tmp_restore_dir)
+                        && staged_path.is_file()
+                    {
+                        let _ = fs::remove_file(&staged_path);
+                    }
                     return Ok(RecoveryCompletionResultDto {
                         folder_name: String::new(),
                         profile_name: probe
@@ -2039,30 +2145,40 @@ pub async fn complete_social_recovery_impl(
 
                 let credentials = BackupRestoreCredentials::Mnemonic {
                     phrase: &phrase,
-                    passphrase: bip39_passphrase.as_deref(),
+                    passphrase: normalized_bip39_passphrase,
                     prefix: master_payload.user_prefix.as_deref(),
                     language: lang,
                 };
                 let standards_dir = app_data_dir.join("voucher_standards");
-                let restore_outcome = finalize_restored_wallet_and_reconcile_l2(
-                    &staged_path,
-                    credentials,
-                    &new_password,
-                    local_instance_id,
-                    replace_folder_name.as_deref(),
-                    wallet_data_dir,
-                    &standards_dir,
-                    &tmp_restore_dir,
-                    state,
-                    app_opt,
-                )
-                .await?;
+                let (restore_outcome, restored_session) =
+                    match finalize_restored_wallet_and_reconcile_l2(
+                        &staged_path,
+                        credentials,
+                        &new_password,
+                        local_instance_id,
+                        replace_folder_name.as_deref(),
+                        wallet_data_dir,
+                        &standards_dir,
+                        &tmp_restore_dir,
+                        state,
+                        app_opt,
+                    )
+                    .await
+                    {
+                        Ok(res) => res,
+                        Err(err) => {
+                            if is_canonical_child_of(&staged_path, &tmp_restore_dir)
+                                && staged_path.is_file()
+                            {
+                                let _ = fs::remove_file(&staged_path);
+                            }
+                            return Err(err);
+                        }
+                    };
 
                 let expected_owner_id = derived_identity.user_id.clone();
                 state.with_session_required(
-                    &state
-                        .lock_service()
-                        .and_then(|s| state.session_token_for_service(&s))?,
+                    &restored_session,
                     "Restored wallet session changed before updating recovery rotation epoch",
                     |service| {
                         let current_owner_id = service
@@ -2229,7 +2345,7 @@ pub async fn complete_social_recovery_impl(
             .create_profile(
                 &final_name,
                 &phrase,
-                bip39_passphrase.as_deref(),
+                normalized_bip39_passphrase,
                 master_payload.user_prefix.as_deref(),
                 &new_password,
                 lang,
@@ -2308,17 +2424,27 @@ pub async fn complete_social_recovery_impl(
             Err(err) => {
                 state.rollback_failed_session(&mut service);
                 if let Some(ref folder) = created_folder_opt {
-                    if !existing_folders.contains(folder)
-                        && !folder.is_empty()
-                        && !folder.contains('/')
-                        && !folder.contains('\\')
-                        && !folder.contains("..")
-                    {
+                    if !existing_folders.contains(folder) && is_safe_filename_component(folder) {
                         let _ = std::fs::remove_dir_all(wallet_data_dir.join(folder));
                         let _ = crate::services::fs_helpers::remove_profile_metadata_entry_in_dir(
                             wallet_data_dir,
                             folder,
                         );
+                        let profiles_path = wallet_data_dir.join("profiles.json");
+                        if let Ok(bytes) = std::fs::read(&profiles_path) {
+                            if let Ok(mut profiles) = serde_json::from_slice::<
+                                Vec<human_money_core::app_service::ProfileInfo>,
+                            >(&bytes)
+                            {
+                                let before_len = profiles.len();
+                                profiles.retain(|p| p.folder_name != *folder);
+                                if profiles.len() != before_len {
+                                    if let Ok(updated) = serde_json::to_vec_pretty(&profiles) {
+                                        let _ = write_file_atomic(&profiles_path, &updated);
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
                 return Err(err);
@@ -2474,7 +2600,6 @@ mod tests {
             create_wallet_state(&base_dir, "Alice", ALICE_PHRASE, password);
 
         let kit = export_profile_mnemonic_impl(password.to_string(), &alice_state)
-            .await
             .unwrap()
             .expect("Mnemonic kit DTO should be generated");
 
@@ -3049,7 +3174,6 @@ mod tests {
         let (alice_state, _) = create_wallet_state(&base_dir, "Alice", ALICE_PHRASE, pass);
 
         let kit_12 = export_profile_mnemonic_impl(pass.to_string(), &alice_state)
-            .await
             .unwrap()
             .unwrap();
         let inspected_12 = inspect_emergency_kit_uri_impl(kit_12.kit_uri).unwrap();
@@ -3637,6 +3761,7 @@ mod tests {
             None,
             &alice_state,
         )
+        .await
         .unwrap();
         assert!(!wrong_res.all_correct);
         assert_eq!(wrong_res.question_matches, [true, false, true]);
@@ -3663,6 +3788,7 @@ mod tests {
             None,
             &alice_state,
         )
+        .await
         .unwrap();
         assert!(ok_res.all_correct);
         assert_eq!(ok_res.question_matches, [true, true, true]);
@@ -3844,5 +3970,441 @@ mod tests {
         assert_eq!(status.guardians.len(), 3);
         assert_eq!(status.required_threshold, 2);
         assert_eq!(status.question_ids, Some([1, 2, 3]));
+    }
+
+    #[tokio::test]
+    async fn s07_f5_setup_rejects_self_guardian_and_same_root_subaccount_duplicates() {
+        let base_dir = temp_test_dir("s07_f5_guardian_validation");
+        let pass = "TestPassword123!";
+        let (alice_state, alice_did) = create_wallet_state(&base_dir, "Alice", ALICE_PHRASE, pass);
+        let (_bob_state, bob_did) = create_wallet_state(&base_dir, "Bob", BOB_PHRASE, pass);
+        let (_carol_state, carol_did) =
+            create_wallet_state(&base_dir, "Carol", CHARLIE_PHRASE, pass);
+
+        let bob_sub_dir = base_dir.join("bob_sub");
+        let mut bob_sub_svc = AppService::new(&bob_sub_dir).unwrap();
+        bob_sub_svc
+            .create_profile(
+                "Bob Work",
+                BOB_PHRASE,
+                None,
+                Some("work"),
+                pass,
+                human_money_core::MnemonicLanguage::English,
+                "inst-bob-work".into(),
+                true,
+            )
+            .unwrap();
+        let bob_work_did = bob_sub_svc
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
+
+        {
+            let mut s = alice_state.service.lock().unwrap();
+            s.unlock_session(pass, 300).unwrap();
+            // Inject self-contact directly into address book to prove setup_social_recovery_guardians
+            // itself rejects own identity even if a self entry exists in storage.
+            let mut contacts_map = std::collections::HashMap::new();
+            for (did, name) in [
+                (&alice_did, "Self"),
+                (&bob_did, "Bob"),
+                (&bob_work_did, "Bob Work"),
+                (&carol_did, "Carol"),
+            ] {
+                contacts_map.insert(did.clone(), make_test_contact(did, name, Some(2)));
+            }
+            let ab = crate::models::FrontendAddressBook {
+                contacts: contacts_map,
+            };
+            crate::state::save_encrypted_json(
+                &mut s,
+                crate::state::CONTACTS_DATA_NAME,
+                &ab,
+                Some(pass),
+            )
+            .unwrap();
+            alice_state.set_cached_contacts_for_service(&s, Some(ab));
+        }
+
+        // 1. Self-guardian must be rejected explicitly (even when present in contacts)
+        let self_err = setup_social_recovery_guardians_with_params(
+            pass.to_string(),
+            vec![alice_did.clone(), bob_did.clone(), carol_did.clone()],
+            2,
+            [1, 2, 3],
+            [
+                "Berlin".to_string(),
+                "Fluffy".to_string(),
+                "Pizza".to_string(),
+            ],
+            RecoveryKdfParams::new_fast_test(),
+            &alice_state,
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            self_err.message.contains("own identity"),
+            "S07-F5: own identity must be rejected explicitly, got: {}",
+            self_err.message
+        );
+
+        // 2. Two subaccounts sharing the same root key (Bob + Bob Work) must be rejected as duplicates
+        let dup_root_res = setup_social_recovery_guardians_with_params(
+            pass.to_string(),
+            vec![bob_did, bob_work_did, carol_did],
+            2,
+            [1, 2, 3],
+            [
+                "Berlin".to_string(),
+                "Fluffy".to_string(),
+                "Pizza".to_string(),
+            ],
+            RecoveryKdfParams::new_fast_test(),
+            &alice_state,
+            None,
+        )
+        .await;
+        assert!(
+            dup_root_res.is_err(),
+            "S07-F5: two guardian DIDs with the same Ed25519 root key must be rejected as duplicate"
+        );
+
+        let _ = fs::remove_dir_all(base_dir);
+    }
+
+    #[tokio::test]
+    async fn s07_f11_wrong_bip39_passphrase_rejected_and_preserves_session() {
+        let base_dir = temp_test_dir("s07_f11_bip39_mismatch");
+        let pass = "TestPassword123!";
+        let bip39_pw = "Correct25thWord!";
+
+        let alice_dir = base_dir.join("alice");
+        let mut alice_svc = AppService::new(&alice_dir).unwrap();
+        alice_svc
+            .create_profile(
+                "Alice Passphrase",
+                ALICE_PHRASE,
+                Some(bip39_pw),
+                None,
+                pass,
+                human_money_core::MnemonicLanguage::English,
+                "inst-alice-bp".into(),
+                true,
+            )
+            .unwrap();
+        alice_svc.unlock_session(pass, 300).unwrap();
+        let alice_did = alice_svc
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
+        let alice_state = create_test_state(alice_svc);
+
+        let (bob_state, bob_did) = create_wallet_state(&base_dir, "Bob", BOB_PHRASE, pass);
+        let (carol_state, carol_did) =
+            create_wallet_state(&base_dir, "Carol", CHARLIE_PHRASE, pass);
+        let (_dave_state, dave_did) = create_wallet_state(&base_dir, "Dave", READER1_PHRASE, pass);
+
+        {
+            let mut s = alice_state.service.lock().unwrap();
+            for (did, name) in [
+                (&bob_did, "Bob"),
+                (&carol_did, "Carol"),
+                (&dave_did, "Dave"),
+            ] {
+                alice_state
+                    .save_contact(&mut s, make_test_contact(did, name, Some(2)), Some(pass))
+                    .unwrap();
+            }
+        }
+
+        setup_social_recovery_guardians_with_params(
+            pass.to_string(),
+            vec![bob_did.clone(), carol_did.clone(), dave_did.clone()],
+            2,
+            [1, 2, 3],
+            [
+                "Berlin".to_string(),
+                "Fluffy".to_string(),
+                "Pizza".to_string(),
+            ],
+            RecoveryKdfParams::new_fast_test(),
+            &alice_state,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let owner_state = {
+            let mut s = alice_state.service.lock().unwrap();
+            load_recovery_owner_state(&mut s, Some(pass))
+                .unwrap()
+                .unwrap()
+        };
+        for (g_state, g_did) in [(&bob_state, &bob_did), (&carol_state, &carol_did)] {
+            let rec = owner_state
+                .guardians
+                .iter()
+                .find(|g| g.user_id == *g_did)
+                .unwrap();
+            let mut s = g_state.service.lock().unwrap();
+            let mut vault = load_guardian_vault(&mut s, Some(pass)).unwrap();
+            vault.upsert_ward(rec.sealed_entry.clone()).unwrap();
+            save_guardian_vault(&mut s, &vault, Some(pass)).unwrap();
+        }
+
+        let session_file = base_dir.join("active_recovery_session.json");
+        let sess = start_social_recovery_session_impl(None, None, None, &session_file).unwrap();
+        let bob_rep = approve_guardian_recovery_request_impl(
+            sess.request_uri.clone(),
+            alice_did.clone(),
+            Some(pass),
+            &bob_state,
+        )
+        .unwrap();
+        let carol_rep = approve_guardian_recovery_request_impl(
+            sess.request_uri.clone(),
+            alice_did.clone(),
+            Some(pass),
+            &carol_state,
+        )
+        .unwrap();
+        import_guardian_recovery_reply_impl(bob_rep.reply_uri, &session_file).unwrap();
+        import_guardian_recovery_reply_impl(carol_rep.reply_uri, &session_file).unwrap();
+
+        let new_device_dir = base_dir.join("new_device");
+        let new_wallet_dir = new_device_dir.join("wallet_data");
+        fs::create_dir_all(&new_wallet_dir).unwrap();
+        let new_state = create_test_state(AppService::new(&new_wallet_dir).unwrap());
+
+        let err = complete_social_recovery_impl(
+            alice_did.clone(),
+            1,
+            [
+                "Berlin".to_string(),
+                "Fluffy".to_string(),
+                "Pizza".to_string(),
+            ],
+            Some("Wrong25thWord!".to_string()),
+            "restore_new_device".to_string(),
+            "FreshPass!123".to_string(),
+            Some("Alice".to_string()),
+            None,
+            "inst-new".to_string(),
+            Some(true),
+            None,
+            &session_file,
+            &new_state,
+            &new_device_dir,
+            &new_wallet_dir,
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            err.code, "error.recovery.wrongBip39Passphrase",
+            "S07-F11: wrong BIP39 passphrase must fail with error.recovery.wrongBip39Passphrase"
+        );
+        assert!(
+            session_file.exists(),
+            "S07-F11: active_recovery_session.json must NOT be deleted on wrong BIP39 passphrase"
+        );
+
+        // S07-F11: Invalid mode must be rejected cleanly without deleting session file
+        let bad_mode = complete_social_recovery_impl(
+            alice_did.clone(),
+            1,
+            [
+                "Berlin".to_string(),
+                "Fluffy".to_string(),
+                "Pizza".to_string(),
+            ],
+            Some(bip39_pw.to_string()),
+            "invalid_mode".to_string(),
+            "FreshPass!123".to_string(),
+            Some("Alice".to_string()),
+            None,
+            "inst-new".to_string(),
+            Some(true),
+            None,
+            &session_file,
+            &new_state,
+            &new_device_dir,
+            &new_wallet_dir,
+            None,
+        )
+        .await;
+        assert!(bad_mode.is_err());
+        assert!(session_file.exists());
+
+        let _ = fs::remove_dir_all(base_dir);
+    }
+
+    #[tokio::test]
+    async fn s07_f19_inconsistent_same_epoch_reply_rejected_and_tampered_share_not_wrong_answers() {
+        let base_dir = temp_test_dir("s07_f19_epoch_metadata_and_error_honesty");
+        let pass = "TestPassword123!";
+        let (alice_state, alice_did) = create_wallet_state(&base_dir, "Alice", ALICE_PHRASE, pass);
+        let (bob_state, bob_did) = create_wallet_state(&base_dir, "Bob", BOB_PHRASE, pass);
+        let (carol_state, carol_did) =
+            create_wallet_state(&base_dir, "Carol", CHARLIE_PHRASE, pass);
+        let (_dave_state, dave_did) = create_wallet_state(&base_dir, "Dave", READER1_PHRASE, pass);
+
+        {
+            let mut s = alice_state.service.lock().unwrap();
+            s.unlock_session(pass, 300).unwrap();
+            for (did, name) in [
+                (&bob_did, "Bob"),
+                (&carol_did, "Carol"),
+                (&dave_did, "Dave"),
+            ] {
+                alice_state
+                    .save_contact(&mut s, make_test_contact(did, name, Some(2)), Some(pass))
+                    .unwrap();
+            }
+        }
+
+        // Run setup #1 -> epoch 1 (bundle A)
+        setup_social_recovery_guardians_with_params(
+            pass.to_string(),
+            vec![bob_did.clone(), carol_did.clone(), dave_did.clone()],
+            2,
+            [1, 2, 3],
+            [
+                "Berlin".to_string(),
+                "Fluffy".to_string(),
+                "Pizza".to_string(),
+            ],
+            RecoveryKdfParams::new_fast_test(),
+            &alice_state,
+            None,
+        )
+        .await
+        .unwrap();
+        let owner_a = {
+            let mut s = alice_state.service.lock().unwrap();
+            load_recovery_owner_state(&mut s, Some(pass))
+                .unwrap()
+                .unwrap()
+        };
+
+        // Create a conflicting valid bundle B ALSO at epoch 1 (equivocating r_enc / commitments)
+        let alice_sk = {
+            let s = alice_state.service.lock().unwrap();
+            s.with_wallet_and_identity(|_, id| id.signing_key.clone())
+                .unwrap()
+        };
+        let entropy = human_money_core::services::mnemonic::MnemonicProcessor::to_entropy(
+            ALICE_PHRASE,
+            human_money_core::MnemonicLanguage::English,
+        )
+        .unwrap();
+        let owner_canonical = canonicalize_owner_account_id(&alice_did).unwrap();
+        let master_b = RecoveryMasterPayload::new(
+            &owner_canonical,
+            entropy,
+            human_money_core::MnemonicLanguage::English,
+            None,
+            false,
+        );
+        let entries_b = create_social_recovery_vault_bundle(
+            &alice_sk,
+            &owner_canonical,
+            "Alice",
+            1, // same epoch 1!
+            2,
+            3,
+            &[1, 2, 3],
+            &["Berlin", "Fluffy", "Pizza"],
+            &RecoveryKdfParams::new_fast_test(),
+            &master_b,
+            &[],
+            1_760_000_000,
+        )
+        .unwrap();
+
+        // Bob gets share 1 from bundle A; Carol gets share 2 from equivocating bundle B
+        {
+            let mut s = bob_state.service.lock().unwrap();
+            let mut v = load_guardian_vault(&mut s, Some(pass)).unwrap();
+            v.upsert_ward(owner_a.guardians[0].sealed_entry.clone())
+                .unwrap();
+            save_guardian_vault(&mut s, &v, Some(pass)).unwrap();
+        }
+        {
+            let mut s = carol_state.service.lock().unwrap();
+            let mut v = load_guardian_vault(&mut s, Some(pass)).unwrap();
+            v.upsert_ward(entries_b[1].clone()).unwrap();
+            save_guardian_vault(&mut s, &v, Some(pass)).unwrap();
+        }
+
+        let session_file = base_dir.join("active_recovery_session.json");
+        let sess = start_social_recovery_session_impl(None, None, None, &session_file).unwrap();
+        let bob_rep = approve_guardian_recovery_request_impl(
+            sess.request_uri.clone(),
+            alice_did.clone(),
+            Some(pass),
+            &bob_state,
+        )
+        .unwrap();
+        let carol_rep = approve_guardian_recovery_request_impl(
+            sess.request_uri.clone(),
+            alice_did.clone(),
+            Some(pass),
+            &carol_state,
+        )
+        .unwrap();
+
+        import_guardian_recovery_reply_impl(bob_rep.reply_uri, &session_file).unwrap();
+        let inc_err =
+            import_guardian_recovery_reply_impl(carol_rep.reply_uri, &session_file).unwrap_err();
+        assert_eq!(
+            inc_err.code, "error.recovery.inconsistentEpochMetadata",
+            "S07-F19: conflicting same-epoch guardian release must be rejected at import time"
+        );
+
+        // Also verify tampered share commitment on disk does NOT report error.recovery.wrongAnswers
+        let mut raw_sess = load_active_session_from_path(&session_file)
+            .unwrap()
+            .unwrap();
+        let mut tampered_reply = raw_sess.replies[0].clone();
+        tampered_reply.entry.share.index = 2;
+        tampered_reply.entry.share.y[0] ^= 0xff;
+        raw_sess.replies.push(tampered_reply);
+        save_active_session_to_path(&session_file, &raw_sess).unwrap();
+
+        let new_dev = base_dir.join("new_dev");
+        let new_w = new_dev.join("wallet_data");
+        fs::create_dir_all(&new_w).unwrap();
+        let new_state = create_test_state(AppService::new(&new_w).unwrap());
+        let tamper_err = complete_social_recovery_impl(
+            alice_did,
+            1,
+            [
+                "Berlin".to_string(),
+                "Fluffy".to_string(),
+                "Pizza".to_string(),
+            ],
+            None,
+            "restore_new_device".to_string(),
+            "FreshPass!123".to_string(),
+            Some("Alice".to_string()),
+            None,
+            "inst-f19".to_string(),
+            Some(true),
+            None,
+            &session_file,
+            &new_state,
+            &new_dev,
+            &new_w,
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert_ne!(
+            tamper_err.code, "error.recovery.wrongAnswers",
+            "S07-F19: share commitment tampering must NOT be misreported as wrongAnswers"
+        );
+
+        let _ = fs::remove_dir_all(base_dir);
     }
 }

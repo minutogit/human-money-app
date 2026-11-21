@@ -14,7 +14,7 @@ use tauri::Manager;
 pub(crate) struct SyncIdentityContext {
     pub my_did: String,
     pub my_ed_sk: ed25519_dalek::SigningKey,
-    pub master_seed: [u8; 32],
+    pub master_seed: zeroize::Zeroizing<[u8; 32]>,
     pub my_prefix: Option<String>,
 }
 
@@ -29,7 +29,7 @@ impl SyncIdentityContext {
                 password,
                 |_w, id| {
                     let my_ed_sk = id.signing_key.clone();
-                    let master_seed = my_ed_sk.to_bytes();
+                    let master_seed = zeroize::Zeroizing::new(my_ed_sk.to_bytes());
                     let my_prefix = get_prefix_from_user_id(&id.user_id).map(|s| s.to_string());
                     Self {
                         my_did: id.user_id.clone(),
@@ -47,7 +47,7 @@ impl SyncIdentityContext {
 pub(crate) fn get_wallet_master_seed(
     service: &mut AppService,
     password: Option<&str>,
-) -> Result<[u8; 32], FrontendError> {
+) -> Result<zeroize::Zeroizing<[u8; 32]>, FrontendError> {
     let signing_key = service
         .with_authorized_identity(
             human_money_core::AccessMode::DailyPay,
@@ -55,7 +55,7 @@ pub(crate) fn get_wallet_master_seed(
             |_w, id| id.signing_key.clone(),
         )
         .map_err(FrontendError::from)?;
-    Ok(signing_key.to_bytes())
+    Ok(zeroize::Zeroizing::new(signing_key.to_bytes()))
 }
 
 /// Unifies direct public-sync and stealth drop-channel signing across `sync`, `post`, and `backup`.
@@ -180,6 +180,91 @@ pub(crate) fn normalize_sync_url(raw: &str) -> String {
     }
 }
 
+/// Collects active, non-revoked, URL-validated backup sync descriptors in deterministic priority
+/// order (`own` -> `market_selected_syncs` -> `public_syncs`), deduplicated by normalized `write_url`.
+pub(crate) fn collect_backup_sync_targets(
+    security_policy: &crate::settings::SecurityPolicy,
+    own_sync_descriptor: Option<&humoco_market::DropDescriptor>,
+    user_prefix: Option<&str>,
+    max_count: Option<usize>,
+) -> Vec<humoco_market::DropDescriptor> {
+    let mut targets = Vec::new();
+    let mut seen_write_urls = std::collections::HashSet::new();
+
+    let mut try_push = |desc: humoco_market::DropDescriptor| {
+        if let Some(cap) = max_count {
+            if targets.len() >= cap {
+                return;
+            }
+        }
+        let write_trimmed = desc.write_url.trim();
+        let read_trimmed = desc.read_url.trim();
+        if write_trimmed.is_empty()
+            || read_trimmed.is_empty()
+            || desc.drop_pub.trim().is_empty()
+            || crate::sync_client::validate_sync_url(write_trimmed).is_err()
+            || crate::sync_client::validate_sync_read_url(read_trimmed).is_err()
+        {
+            return;
+        }
+        let norm_write = normalize_sync_url(write_trimmed);
+        if norm_write.is_empty() || !seen_write_urls.insert(norm_write) {
+            return;
+        }
+        targets.push(desc);
+    };
+
+    if let Some(own) = own_sync_descriptor {
+        try_push(own.clone());
+    }
+
+    for sd in &security_policy.market_selected_syncs {
+        if sd.status.eq_ignore_ascii_case("revoked") {
+            continue;
+        }
+        try_push(sd.clone().into());
+    }
+
+    for pd in &security_policy.public_syncs {
+        if !pd.enabled || pd.status.eq_ignore_ascii_case("revoked") {
+            continue;
+        }
+        let slot_id = humoco_market::format_slot_id(&pd.access_pubkey, user_prefix)
+            .unwrap_or_else(|_| pd.access_pubkey.clone());
+        try_push(humoco_market::DropDescriptor {
+            write_url: pd.write_url.clone(),
+            read_url: pd.read_url.clone(),
+            slot_id: Some(slot_id),
+            drop_pub: pd.drop_pub.clone(),
+        });
+    }
+
+    targets
+}
+
+/// Collects active backup sync targets for the current profile using cached policy/descriptor getters.
+pub(crate) fn collect_backup_sync_targets_with_service(
+    state: &AppState,
+    service: &mut AppService,
+    password: Option<&str>,
+    max_count: Option<usize>,
+) -> Result<Vec<humoco_market::DropDescriptor>, FrontendError> {
+    let security_policy = state
+        .get_or_load_security_policy(service, password)
+        .map_err(FrontendError::from)?;
+    let own_desc = state.get_or_load_own_sync_descriptor(service, password)?;
+    let user_prefix = service
+        .with_wallet(|w| get_prefix_from_user_id(w.get_user_id()).map(|s| s.to_string()))
+        .ok()
+        .flatten();
+    Ok(collect_backup_sync_targets(
+        &security_policy,
+        own_desc.as_ref(),
+        user_prefix.as_deref(),
+        max_count,
+    ))
+}
+
 /// Upserts a lock server probe keyed by lowercase 64-hex `lock_pub`, keeping verified
 /// delegation metadata independent from live health/liveness observations so a newer failure or
 /// revocation cannot be dropped while signed locators are never downgraded.
@@ -197,6 +282,12 @@ pub(crate) fn upsert_verified_lock_probe(
     probe.lock_pub = lock_key.clone();
     probe.admin_pub = probe.admin_pub.trim().to_ascii_lowercase();
     probe.drop_pub = probe.drop_pub.trim().to_ascii_lowercase();
+    probe.pow_base_bits = probe
+        .pow_base_bits
+        .min(human_money_core::humoco_proto::crypto::MAX_LOCK_POW_BITS);
+    probe.ticket_pow_bits = probe
+        .ticket_pow_bits
+        .min(human_money_core::humoco_proto::crypto::MAX_LOCK_POW_BITS);
 
     let Some(existing) = cache.get_mut(&lock_key) else {
         cache.insert(lock_key, probe);
@@ -285,13 +376,35 @@ pub(crate) fn upsert_verified_locator_only(
     let lock_key = probe.lock_pub.trim().to_ascii_lowercase();
     if human_money_core::humoco_proto::decode_hex_fixed::<32>(&lock_key).is_err()
         || !probe.delegation_valid
-        || probe.delegation.is_none()
     {
         return false;
     }
+    let Some(ref del) = probe.delegation else {
+        return false;
+    };
     probe.lock_pub = lock_key.clone();
     probe.admin_pub = probe.admin_pub.trim().to_ascii_lowercase();
     probe.drop_pub = probe.drop_pub.trim().to_ascii_lowercase();
+    probe.pow_base_bits = probe
+        .pow_base_bits
+        .min(human_money_core::humoco_proto::crypto::MAX_LOCK_POW_BITS);
+    probe.ticket_pow_bits = probe
+        .ticket_pow_bits
+        .min(human_money_core::humoco_proto::crypto::MAX_LOCK_POW_BITS);
+
+    let expected_admin = (!probe.admin_pub.is_empty()).then_some(probe.admin_pub.as_str());
+    if !del.lock_pub.trim().eq_ignore_ascii_case(&lock_key)
+        || !crate::sync_client::verify_lock_delegation(&lock_key, del, expected_admin)
+        || crate::sync_client::validate_sync_url(del.write_url.trim()).is_err()
+        || crate::sync_client::validate_sync_read_url(del.read_url.trim()).is_err()
+        || normalize_sync_url(&del.write_url) != normalize_sync_url(&probe.write_url)
+        || normalize_sync_url(&del.read_url) != normalize_sync_url(&probe.read_url)
+    {
+        return false;
+    }
+    if probe.admin_pub.is_empty() {
+        probe.admin_pub = del.admin_pub.trim().to_ascii_lowercase();
+    }
 
     let Some(existing) = cache.get_mut(&lock_key) else {
         cache.insert(lock_key, probe);
@@ -306,7 +419,8 @@ pub(crate) fn upsert_verified_locator_only(
         .map(|d| d.issued_at)
         .unwrap_or(0);
 
-    if !existing.delegation_valid || incoming_issued_at >= existing_issued_at {
+    let delegation_fresh = !existing.delegation_valid || incoming_issued_at >= existing_issued_at;
+    if delegation_fresh {
         if !probe.write_url.trim().is_empty() {
             existing.write_url = probe.write_url;
         }
@@ -322,7 +436,11 @@ pub(crate) fn upsert_verified_locator_only(
         existing.delegation_valid = probe.delegation_valid;
         existing.delegation = probe.delegation;
     }
-    if probe.max_retention_quarter > 0 {
+    let can_update_caps = probe.max_retention_quarter > 0
+        && probe.probed_at_secs >= existing.probed_at_secs
+        && delegation_fresh
+        && !(existing.passed && !probe.passed && existing.max_retention_quarter > 0);
+    if can_update_caps {
         existing.max_retention_quarter = probe.max_retention_quarter;
         existing.pow_base_bits = probe.pow_base_bits;
         existing.allow_pow_tickets = probe.allow_pow_tickets;
@@ -441,7 +559,15 @@ pub(crate) fn parse_and_verify_embedded_delegations(
             .find(|s| hex::encode(s.lock_pub).eq_ignore_ascii_case(del.lock_pub.trim()))
         {
             if is_valid_delegation_for_entry(entry, &del) {
-                verified.insert(hex::encode(entry.lock_pub), del);
+                let lock_hex = hex::encode(entry.lock_pub);
+                let replace = verified.get(&lock_hex).is_none_or(
+                    |prev: &crate::sync_client::SyncLockDelegationDto| {
+                        del.issued_at > prev.issued_at
+                    },
+                );
+                if replace {
+                    verified.insert(lock_hex, del);
+                }
             }
         }
     }
@@ -513,8 +639,11 @@ pub(crate) fn open_wallet_archive(
     let (user_id, key) = service
         .with_wallet_and_identity(|w, id| {
             let uid = w.get_user_id().to_string();
-            let derived =
-                blake3::derive_key("HUMOCO_APP_ARCHIVE_KEY_V1", &id.signing_key.to_bytes());
+            let sk_bytes = zeroize::Zeroizing::new(id.signing_key.to_bytes());
+            let derived = zeroize::Zeroizing::new(blake3::derive_key(
+                "HUMOCO_APP_ARCHIVE_KEY_V1",
+                sk_bytes.as_slice(),
+            ));
             (uid, derived)
         })
         .ok()?;
@@ -523,7 +652,7 @@ pub(crate) fn open_wallet_archive(
     }
     let folder_hash = &blake3::hash(user_id.as_bytes()).to_hex()[..32];
     let archive_dir = app_data_dir.join("voucher_archives").join(folder_hash);
-    Some(FileVoucherArchive::with_key(archive_dir, key))
+    Some(FileVoucherArchive::with_key(archive_dir, *key))
 }
 
 /// Blocks voucher spending operations until the mandatory post-restore L2 reconciliation completes.
@@ -560,4 +689,273 @@ pub(crate) fn spawn_pending_l2_reconciliation(
         )
         .await;
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ed25519_dalek::{Signer, SigningKey};
+    use human_money_core::humoco_proto::crypto::MAX_LOCK_POW_BITS;
+    use human_money_core::humoco_proto::manifest::{AnchorManifest, NominatedBy, ServerEntry};
+
+    fn make_signed_delegation(
+        admin_sk: &SigningKey,
+        lock_pub: &str,
+        write_url: &str,
+        read_url: &str,
+        issued_at: u64,
+    ) -> crate::sync_client::SyncLockDelegationDto {
+        let admin_hex = hex::encode(admin_sk.verifying_key().as_bytes());
+        let lock_lower = lock_pub.to_ascii_lowercase();
+        let msg = humoco_market::format_lock_delegate_signature_message(
+            &admin_hex,
+            &lock_lower,
+            write_url,
+            read_url,
+            issued_at,
+        );
+        let sig = admin_sk.sign(msg.as_bytes());
+        crate::sync_client::SyncLockDelegationDto {
+            admin_pub: admin_hex,
+            lock_pub: lock_lower,
+            write_url: write_url.to_string(),
+            read_url: read_url.to_string(),
+            issued_at,
+            sig: hex::encode(sig.to_bytes()),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn make_probe(
+        lock_pub: &str,
+        admin_pub: &str,
+        write_url: &str,
+        read_url: &str,
+        passed: bool,
+        probed_at_secs: u64,
+        max_retention_quarter: u16,
+        pow_base_bits: u32,
+        ticket_pow_bits: u32,
+        delegation: Option<crate::sync_client::SyncLockDelegationDto>,
+    ) -> crate::sync_client::FrontendLockServerProbeResult {
+        crate::sync_client::FrontendLockServerProbeResult {
+            write_url: write_url.to_string(),
+            read_url: read_url.to_string(),
+            drop_pub: admin_pub.to_string(),
+            lock_pub: lock_pub.to_string(),
+            admin_pub: admin_pub.to_string(),
+            delegation_valid: delegation.is_some(),
+            waf_probe_passed: passed,
+            selftest_passed: passed,
+            key_leak_safe: passed,
+            passed,
+            latency_ms: 10,
+            max_retention_quarter,
+            pow_base_bits,
+            allow_pow_tickets: true,
+            ticket_pow_bits,
+            inode_warning: false,
+            used_inodes: 1,
+            max_inodes: 100,
+            probed_at_secs,
+            delegation,
+            error: None,
+        }
+    }
+
+    #[test]
+    fn s07_f6_probe_cache_clamps_pow_verifies_delegation_and_prevents_downgrade() {
+        let admin_sk = SigningKey::from_bytes(&[0x33u8; 32]);
+        let admin_hex = hex::encode(admin_sk.verifying_key().as_bytes());
+        let lock_bytes = [0x44u8; 32];
+        let lock_hex = hex::encode(lock_bytes);
+        let write_url = "https://sync.example.org/sync.php";
+        let read_url = "https://sync.example.org/data";
+
+        let valid_del_v2 = make_signed_delegation(&admin_sk, &lock_hex, write_url, read_url, 200);
+        let valid_del_v1 = make_signed_delegation(&admin_sk, &lock_hex, write_url, read_url, 100);
+
+        let mut cache = std::collections::BTreeMap::new();
+
+        // 1. upsert_verified_lock_probe must clamp excessive PoW bits on insert
+        let high_pow_probe = make_probe(
+            &lock_hex,
+            &admin_hex,
+            write_url,
+            read_url,
+            true,
+            500,
+            20304,
+            MAX_LOCK_POW_BITS + 12,
+            MAX_LOCK_POW_BITS + 9,
+            Some(valid_del_v2.clone()),
+        );
+        assert!(upsert_verified_lock_probe(&mut cache, high_pow_probe));
+        let stored = cache.get(&lock_hex).unwrap();
+        assert_eq!(stored.pow_base_bits, MAX_LOCK_POW_BITS);
+        assert_eq!(stored.ticket_pow_bits, MAX_LOCK_POW_BITS);
+
+        // 2. upsert_verified_locator_only must reject forged delegation even with delegation_valid=true
+        let mut forged_del = valid_del_v2.clone();
+        forged_del.sig = "00".repeat(64);
+        let mut forged_cache = std::collections::BTreeMap::new();
+        let forged_probe = make_probe(
+            &lock_hex,
+            &admin_hex,
+            write_url,
+            read_url,
+            false,
+            600,
+            20304,
+            12,
+            12,
+            Some(forged_del),
+        );
+        assert!(
+            !upsert_verified_locator_only(&mut forged_cache, forged_probe),
+            "S07-F6: upsert_verified_locator_only must cryptographically verify delegation"
+        );
+        assert!(forged_cache.is_empty());
+
+        // 3. upsert_verified_locator_only must NOT overwrite capability metadata of a full-probed entry
+        let locator_probe = make_probe(
+            &lock_hex,
+            &admin_hex,
+            write_url,
+            read_url,
+            false,
+            600,
+            20261,
+            8,
+            8,
+            Some(valid_del_v2.clone()),
+        );
+        upsert_verified_locator_only(&mut cache, locator_probe);
+        assert_eq!(
+            cache.get(&lock_hex).unwrap().max_retention_quarter,
+            20304,
+            "S07-F6: locator-only probe must not overwrite full-probed capability metadata"
+        );
+
+        // 4. parse_and_verify_embedded_delegations must keep highest issued_at (no downgrade)
+        let manifest = AnchorManifest {
+            revision: 0,
+            threshold: 1,
+            servers: vec![ServerEntry {
+                lock_pub: lock_bytes,
+                admin_pub: admin_sk.verifying_key().to_bytes(),
+                write_url: write_url.to_string(),
+                read_url: read_url.to_string(),
+                nominated_by: NominatedBy::Creator,
+            }],
+            successors: vec![],
+            authority: human_money_core::humoco_proto::manifest::AnchorAuthority {
+                creator_mig_pub: [0x11u8; 32],
+                guarantor_mig_pubs: vec![],
+            },
+            migration_chain: vec![],
+            issued_at_ms: 1_760_000_000_000,
+            retain_until_quarter: 20284,
+        };
+        let raw_json = serde_json::to_string(&vec![valid_del_v2.clone(), valid_del_v1]).unwrap();
+        let parsed = parse_and_verify_embedded_delegations(Some(&raw_json), &manifest);
+        assert_eq!(
+            parsed.get(&lock_hex).map(|d| d.issued_at),
+            Some(200),
+            "S07-F6: embedded delegations must keep highest issued_at and reject downgrade"
+        );
+    }
+
+    #[test]
+    fn s07_f12_collect_backup_sync_targets_prioritizes_dedups_filters_revoked_and_caps() {
+        let mut policy = crate::settings::SecurityPolicy::default();
+        let own = humoco_market::DropDescriptor {
+            write_url: "https://OWN.example.org/sync.php/".to_string(),
+            read_url: "https://own.example.org/data".to_string(),
+            slot_id: None,
+            drop_pub: "11".repeat(32),
+        };
+        // Duplicate of own with different casing/slash + revoked friend + valid friends
+        policy.market_selected_syncs = vec![
+            crate::models::FrontendSyncDescriptor {
+                write_url: "https://own.example.org/sync.php".to_string(),
+                read_url: "https://own.example.org/data".to_string(),
+                drop_pub: "11".repeat(32),
+                ..Default::default()
+            },
+            crate::models::FrontendSyncDescriptor {
+                write_url: "https://revoked-friend.example.org/sync.php".to_string(),
+                read_url: "https://revoked-friend.example.org/data".to_string(),
+                drop_pub: "22".repeat(32),
+                status: "revoked".to_string(),
+                ..Default::default()
+            },
+            crate::models::FrontendSyncDescriptor {
+                write_url: "http://evil-non-https.example.org/sync.php".to_string(),
+                read_url: "http://evil-non-https.example.org/data".to_string(),
+                drop_pub: "23".repeat(32),
+                ..Default::default()
+            },
+            crate::models::FrontendSyncDescriptor {
+                write_url: "https://friend1.example.org/sync.php".to_string(),
+                read_url: "https://friend1.example.org/data".to_string(),
+                drop_pub: "33".repeat(32),
+                ..Default::default()
+            },
+        ];
+        // Add 10 public syncs (1 revoked, 1 disabled, 8 active)
+        policy.public_syncs.push(crate::settings::StoredPublicSync {
+            write_url: "https://revoked-pub.example.org/sync.php".to_string(),
+            read_url: "https://revoked-pub.example.org/data".to_string(),
+            drop_pub: "44".repeat(32),
+            register_url: None,
+            access_pubkey: "aa".repeat(32),
+            enabled: true,
+            authorized_channels: vec![],
+            status: "revoked".to_string(),
+            sunset_at: None,
+            revocation_reason: None,
+            replacement: None,
+        });
+        for i in 0..9 {
+            policy.public_syncs.push(crate::settings::StoredPublicSync {
+                write_url: format!("https://pub{}.example.org/sync.php", i),
+                read_url: format!("https://pub{}.example.org/data", i),
+                drop_pub: "55".repeat(32),
+                register_url: None,
+                access_pubkey: "bb".repeat(32),
+                enabled: i > 0, // pub0 disabled
+                authorized_channels: vec![],
+                status: "active".to_string(),
+                sunset_at: None,
+                revocation_reason: None,
+                replacement: None,
+            });
+        }
+
+        let capped = collect_backup_sync_targets(
+            &policy,
+            Some(&own),
+            Some("pc"),
+            Some(humoco_market::MAX_RECOVERY_SYNC_DESCRIPTORS),
+        );
+        assert_eq!(
+            capped.len(),
+            humoco_market::MAX_RECOVERY_SYNC_DESCRIPTORS,
+            "S07-F12: recovery targets must be capped at MAX_RECOVERY_SYNC_DESCRIPTORS (8)"
+        );
+        assert_eq!(
+            normalize_sync_url(&capped[0].write_url),
+            "https://own.example.org/sync.php",
+            "S07-F12: own sync must be prioritized first"
+        );
+        assert_eq!(capped[1].write_url, "https://friend1.example.org/sync.php");
+        assert!(capped
+            .iter()
+            .all(|d| !d.write_url.contains("revoked") && !d.write_url.contains("evil")));
+        assert!(capped[2]
+            .slot_id
+            .as_deref()
+            .is_some_and(|s| s.ends_with("_pc")));
+    }
 }
