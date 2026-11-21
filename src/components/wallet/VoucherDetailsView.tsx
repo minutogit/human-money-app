@@ -343,21 +343,58 @@ export function VoucherDetailsView() {
                         </Card>
 
                         {Boolean(voucher.layer2Anchor) &&
-                            (state.l2Status?.status === 'offline' || state.l2Status?.status === 'no_servers') && (
+                            (state.l2Status?.status === 'offline' ||
+                                state.l2Status?.status === 'no_servers' ||
+                                state.l2Status?.status === 'inconclusive') && (
                                 <AlertBanner
-                                    variant="info"
-                                    icon={<AlertCircle size={18} className="text-sky-600" />}
+                                    variant="warning"
+                                    data-testid="voucher-l2-unreachable-banner"
+                                    icon={<AlertCircle size={18} className="text-amber-600" />}
                                     title={t(
                                         'voucher.l2UnreachableTitle',
-                                        'Protection committee currently unreachable'
+                                        'Online-Absicherung derzeit nicht erreichbar'
                                     )}
                                 >
-                                    <p className="text-xs leading-relaxed">
-                                        {t(
-                                            'voucher.l2UnreachableDesc',
-                                            'The security services for this voucher cannot currently be reached. Transfers still work offline using cryptographic signature traps, though instant online double-spend prevention is paused until connectivity returns.'
-                                        )}
-                                    </p>
+                                    <div className="space-y-2.5 text-xs leading-relaxed">
+                                        <p>{t('voucher.l2UnreachableDesc')}</p>
+                                        <ul className="list-disc pl-4 space-y-1">
+                                            <li>{t('voucher.l2UnreachableStepRetry')}</li>
+                                            <li>{t('voucher.l2UnreachableStepOffline')}</li>
+                                            <li>{t('voucher.l2UnreachableStepExchange')}</li>
+                                        </ul>
+                                        <div className="flex flex-wrap gap-2 pt-1">
+                                            <button
+                                                type="button"
+                                                data-testid="voucher-l2-recheck-btn"
+                                                disabled={state.isCheckingL2}
+                                                onClick={state.handleCheckL2Status}
+                                                className="px-3 py-1.5 rounded-xl text-xs font-bold bg-white/90 hover:bg-white text-amber-900 border border-amber-300 transition-colors disabled:opacity-50 cursor-pointer"
+                                            >
+                                                {state.isCheckingL2
+                                                    ? t('voucher.checkingL2Status')
+                                                    : t('voucher.l2UnreachableRecheckBtn')}
+                                            </button>
+                                            {canRedeemAtIssuer && (
+                                                <button
+                                                    type="button"
+                                                    data-testid="voucher-l2-return-issuer-btn"
+                                                    onClick={() =>
+                                                        state.navigate({
+                                                            view: 'send_vouchers',
+                                                            initialRecipientId: voucher.creator.id,
+                                                            initialVoucherId: details.localInstanceId,
+                                                            initialNote: t('voucher.l2UnreachableReturnNote', {
+                                                                voucherId: voucher.voucherId.slice(0, 8),
+                                                            }),
+                                                        })
+                                                    }
+                                                    className="px-3 py-1.5 rounded-xl text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white transition-colors cursor-pointer"
+                                                >
+                                                    {t('voucher.l2UnreachableReturnIssuerBtn')}
+                                                </button>
+                                            )}
+                                        </div>
+                                    </div>
                                 </AlertBanner>
                             )}
                     </div>

@@ -940,21 +940,76 @@ pub(crate) async fn checkout_bundle(
                         m.servers.iter().map(|s| s.lock_pub),
                     ));
             }
-            state.with_session_required(session, "Wallet changed during checkout", |service| {
-                let known_heads = crate::state::load_known_head_receipts_for_anchor(
-                    service, &anchor_id, password,
-                )?;
-                service
-                    .prepare_checkout_requests(
+            let anchor_hex = hex::encode(anchor_id);
+            let retry_res = state.with_session_required(
+                session,
+                "Wallet changed during checkout",
+                |service| {
+                    let known_heads = crate::state::load_known_head_receipts_for_anchor(
+                        service, &anchor_id, password,
+                    )?;
+                    let has_manifest = service
+                        .with_wallet(|w| w.profile.l2_anchor_manifests.contains_key(&anchor_hex))
+                        .unwrap_or(false)
+                        || opened_bundle.anchor_manifest_for(&anchor_id).is_some();
+                    match service.prepare_checkout_requests(
                         purchase_id,
                         bundle,
                         pow_base_bits,
                         now()?,
                         &known_heads,
                         password,
-                    )
-                    .map_err(FrontendError::from)
-            })?
+                    ) {
+                        Ok(pair) => Ok(Ok(pair)),
+                        Err(e) if !has_manifest => Ok(Err(e)),
+                        Err(e) => Err(FrontendError::from(e)),
+                    }
+                },
+            )?;
+            match retry_res {
+                Ok(pair) => pair,
+                Err(prep_err) => {
+                    log::warn!(
+                        "Checkout manifest unavailable after discovery (offline/unreachable): {}",
+                        prep_err
+                    );
+                    let verdict_core = CheckoutReleaseVerdict::new(
+                        L2ProcessingOutcome::Yellow {
+                            reason: "Protection committee manifest unavailable (offline/unreachable); manual trust approval required".to_string(),
+                        },
+                        false,
+                    );
+                    let verdict_fe: crate::models::FrontendCheckoutReleaseVerdict =
+                        verdict_core.into();
+                    let receive_payload = state.with_session_required(
+                        session,
+                        "Wallet session changed during checkout",
+                        |service| {
+                            Ok(build_receive_payload_and_record(
+                                state,
+                                service,
+                                purchase_id,
+                                bundle,
+                                standards,
+                                false,
+                                false,
+                                verdict_fe.clone(),
+                                None,
+                                password,
+                            )
+                            .map(|(p, _)| p)
+                            .ok())
+                        },
+                    )?;
+                    return Ok(PurchaseCompletion {
+                        purchase_id: purchase_id.to_string(),
+                        newly_committed: false,
+                        is_replay: false,
+                        verdict: verdict_fe,
+                        receive_payload,
+                    });
+                }
+            }
         }
     };
 
@@ -5057,6 +5112,145 @@ mod tests {
         h1.abort();
         h2.abort();
         h_disc.abort();
+        let _ = std::fs::remove_dir_all(dir_alice);
+        let _ = std::fs::remove_dir_all(dir_bob);
+    }
+
+    #[tokio::test]
+    async fn test_s04_q2_checkout_bundle_degrades_to_yellow_when_manifest_missing_and_allows_offline_commit(
+    ) {
+        let dir_alice = temp_dir("s04-q2-missing-manifest-alice");
+        let dir_bob = temp_dir("s04-q2-missing-manifest-bob");
+        let pw = "test-password";
+
+        let (mut svc_alice, _) =
+            test_utils::setup_service_with_profile(&dir_alice, &ACTORS.alice, "Alice", pw);
+        let (mut svc_bob, _) =
+            test_utils::setup_service_with_profile(&dir_bob, &ACTORS.bob, "Bob", pw);
+        svc_alice.unlock_session(pw, 600).unwrap();
+        svc_bob.unlock_session(pw, 600).unwrap();
+
+        let alice_id = svc_alice
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
+        let bob_id = svc_bob
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
+        let std_toml = test_utils::generate_signed_standard_toml(
+            "voucher_standards/freetaler_v1/standard.toml",
+        );
+        let (std_def, _) = VoucherStandardDefinition::from_toml(&std_toml).unwrap();
+        let standards = HashMap::from([(std_def.immutable.identity.uuid, std_toml.clone())]);
+
+        let anchor_id = [0xD4u8; 32];
+        let voucher = svc_alice
+            .create_new_voucher(
+                &std_toml,
+                NewVoucherData {
+                    creator_profile: PublicProfile {
+                        id: Some(alice_id),
+                        ..Default::default()
+                    },
+                    nominal_value: ValueDefinition {
+                        amount: "40".into(),
+                        ..Default::default()
+                    },
+                    layer2_anchor: Some(anchor_id),
+                    ..Default::default()
+                },
+                Some(pw),
+            )
+            .unwrap();
+        let lid = svc_alice
+            .with_wallet_and_identity(|w, id| w.list_vouchers(Some(id), None, None, None))
+            .unwrap()[0]
+            .local_instance_id
+            .clone();
+        let bundle_res = svc_alice
+            .create_transfer_bundle(
+                MultiTransferRequest {
+                    recipient_id: bob_id,
+                    sources: vec![SourceTransfer {
+                        local_instance_id: lid,
+                        amount_to_send: "15".into(),
+                    }],
+                    notes: None,
+                    sender_profile_name: None,
+                    use_privacy_mode: None,
+                    wot_sync_json: None,
+                    contact_card_json: None,
+                },
+                &standards,
+                None,
+                Some(pw),
+            )
+            .unwrap();
+
+        let state_bob = AppState::new(svc_bob);
+        state_bob.set_cached_ui_preferences(Some(crate::settings::UiPreferences::default()));
+        state_bob.set_cached_security_policy(Some(SecurityPolicy::default()));
+        state_bob.set_cached_internal_lifecycle(Some(InternalLifecycleState::default()));
+        let bob_session = {
+            let s = state_bob.service.lock().unwrap();
+            state_bob.session_token_for_service(&s).unwrap()
+        };
+
+        let completion = checkout_bundle(
+            &state_bob,
+            &bob_session,
+            "purchase-s04-q2-missing-manifest",
+            &bundle_res.bundle_bytes,
+            &standards,
+            false,
+            Some(pw),
+        )
+        .await
+        .expect("missing manifest must degrade gracefully to Yellow, not hard-fail");
+
+        assert!(!completion.newly_committed);
+        assert!(!completion.is_replay);
+        assert!(
+            completion.verdict.outcome.starts_with("Yellow"),
+            "Expected Yellow outcome, got {}",
+            completion.verdict.outcome
+        );
+        assert!(completion.verdict.requires_merchant_approval);
+        assert!(!completion.verdict.can_release_goods_automatically);
+        assert!(completion.receive_payload.is_some());
+
+        let recv = crate::services::transfer_service::receive_bundle_impl(
+            None,
+            bundle_res.bundle_bytes,
+            standards,
+            Some(pw.to_string()),
+            false,
+            Some(crate::models::ReceiveCommitMode::ForceTrustOffline),
+            None,
+            &state_bob,
+        )
+        .await
+        .expect("ForceTrustOffline must commit anchored voucher even without manifest");
+
+        assert_eq!(recv.newly_committed, Some(true));
+        let active_count = state_bob
+            .service
+            .lock()
+            .unwrap()
+            .with_wallet(|w| {
+                w.voucher_store
+                    .vouchers
+                    .values()
+                    .filter(|inst| {
+                        inst.voucher.voucher_id == voucher.voucher_id
+                            && matches!(inst.status, human_money_core::VoucherStatus::Active)
+                    })
+                    .count()
+            })
+            .unwrap();
+        assert_eq!(active_count, 1);
+
+        drop(state_bob);
+        drop(svc_alice);
         let _ = std::fs::remove_dir_all(dir_alice);
         let _ = std::fs::remove_dir_all(dir_bob);
     }

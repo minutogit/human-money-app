@@ -172,9 +172,10 @@ pub async fn create_transfer_bundle_impl(
             }
         }
 
-        let pow_bits = service
+        let (pow_bits, all_anchored_have_manifest) = service
             .with_wallet(|wallet| {
                 let mut lock_pubs: Vec<[u8; 32]> = Vec::new();
+                let mut all_have_manifest = true;
                 for src in &source_transfers {
                     if let Some(anchor_id) = wallet
                         .get_voucher_instance(&src.local_instance_id)
@@ -184,12 +185,20 @@ pub async fn create_transfer_bundle_impl(
                         if let Some(manifest) = wallet.profile.l2_anchor_manifests.get(&anchor_hex)
                         {
                             lock_pubs.extend(manifest.servers.iter().map(|s| s.lock_pub));
+                        } else {
+                            all_have_manifest = false;
                         }
                     }
                 }
-                crate::services::common::max_pow_base_bits_for_servers(&loaded_lifecycle, lock_pubs)
+                (
+                    crate::services::common::max_pow_base_bits_for_servers(
+                        &loaded_lifecycle,
+                        lock_pubs,
+                    ),
+                    all_have_manifest,
+                )
             })
-            .unwrap_or(DEFAULT_LOCK_POW_BASE_BITS);
+            .unwrap_or((DEFAULT_LOCK_POW_BASE_BITS, true));
         let source_count = source_transfers.len();
         let record_recipient_id = recipient_id.clone();
         let record_notes = notes.clone();
@@ -223,46 +232,62 @@ pub async fn create_transfer_bundle_impl(
         };
 
         let archive = app.and_then(|a| crate::services::common::open_wallet_archive(a, service));
-        let result = service
-            .create_transfer_bundle_with_l2_intents_and_companions(
+        let build_companions =
+            |res: &human_money_core::wallet::CreateBundleResult,
+             wallet: &human_money_core::wallet::Wallet| {
+                let record = build_sent_transaction_record(
+                    wallet,
+                    wallet.get_user_id().to_string(),
+                    record_recipient_id.clone(),
+                    res,
+                    &summable_by_uuid,
+                    &summable_by_name,
+                    record_notes.clone(),
+                    record_sender_profile_name.clone(),
+                );
+                let batch = crate::state::prepare_outgoing_history_and_bundle_companions(
+                    &baseline_history,
+                    &baseline_outgoing,
+                    vec![(record, res.bundle_bytes.clone())],
+                )
+                .map_err(|e| {
+                    human_money_core::Error::Storage(human_money_core::StorageError::InvalidFormat(
+                        e.message,
+                    ))
+                })?;
+                *next_history_cell.borrow_mut() = Some(batch.history);
+                *next_outgoing_cell.borrow_mut() = Some(batch.outgoing);
+                Ok(batch.blobs)
+            };
+        let result = if all_anchored_have_manifest {
+            service.create_transfer_bundle_with_l2_intents_and_companions(
                 request,
                 &standard_definitions_toml,
                 archive.as_ref(),
                 pw,
                 pow_bits,
-                |res, wallet| {
-                    let record = build_sent_transaction_record(
-                        wallet,
-                        wallet.get_user_id().to_string(),
-                        record_recipient_id.clone(),
-                        res,
-                        &summable_by_uuid,
-                        &summable_by_name,
-                        record_notes.clone(),
-                        record_sender_profile_name.clone(),
-                    );
-                    let batch = crate::state::prepare_outgoing_history_and_bundle_companions(
-                        &baseline_history,
-                        &baseline_outgoing,
-                        vec![(record, res.bundle_bytes.clone())],
-                    )
-                    .map_err(|e| {
-                        human_money_core::Error::Storage(
-                            human_money_core::StorageError::InvalidFormat(e.message),
-                        )
-                    })?;
-                    *next_history_cell.borrow_mut() = Some(batch.history);
-                    *next_outgoing_cell.borrow_mut() = Some(batch.outgoing);
-                    Ok(batch.blobs)
-                },
+                build_companions,
             )
-            .map_err(|e| {
-                error!(
-                    "create_transfer_bundle failed (durable_sync_lock, sources={}): {}",
-                    source_count, e
-                );
-                FrontendError::from(e)
-            })?;
+        } else {
+            log::warn!(
+                "Offline-first transfer fallback: local AnchorManifest missing for anchored source(s) (sources={}); committing offline without L2SendIntent",
+                source_count
+            );
+            service.create_transfer_bundle_with_companions(
+                request,
+                &standard_definitions_toml,
+                archive.as_ref(),
+                pw,
+                build_companions,
+            )
+        }
+        .map_err(|e| {
+            error!(
+                "create_transfer_bundle failed (durable_sync_lock, sources={}): {}",
+                source_count, e
+            );
+            FrontendError::from(e)
+        })?;
 
         if let Some(next_hist) = next_history_cell.into_inner() {
             state.write_cache_slot_for_service(service, |c| &mut c.history, Some(next_hist));
@@ -2515,5 +2540,107 @@ mod offline_and_degraded_transfer_tests {
         );
         drop(service);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn s04_q2_create_transfer_bundle_falls_back_offline_when_manifest_missing() {
+        let base_dir = temp_test_dir("s04_q2_send_missing_manifest");
+        let password = "TestPassword123!";
+        let alice_state = create_test_state(setup_test_app(
+            &base_dir.join("alice"),
+            "Alice",
+            ALICE_PHRASE,
+            password,
+        ));
+        let bob_state = create_test_state(setup_test_app(
+            &base_dir.join("bob"),
+            "Bob",
+            BOB_PHRASE,
+            password,
+        ));
+
+        let (std_map, standard_toml) = std_map();
+        let anchor_id = [0xD5u8; 32];
+        let local_instance_id = {
+            let mut s = alice_state.service.lock().unwrap();
+            alice_state
+                .save_ui_preferences(&mut s, UiPreferences::default(), Some(password))
+                .unwrap();
+            alice_state
+                .save_internal_lifecycle(&mut s, InternalLifecycleState::default(), Some(password))
+                .unwrap();
+            let user_id = s.with_wallet(|w| w.get_user_id().to_string()).unwrap();
+            s.create_new_voucher(
+                &standard_toml,
+                NewVoucherData {
+                    creator_profile: PublicProfile {
+                        id: Some(user_id.clone()),
+                        ..Default::default()
+                    },
+                    nominal_value: ValueDefinition {
+                        amount: "50".to_string(),
+                        unit: "Taler".to_string(),
+                        ..Default::default()
+                    },
+                    layer2_anchor: Some(anchor_id),
+                    ..Default::default()
+                },
+                Some(password),
+            )
+            .unwrap();
+            s.with_wallet_and_identity(|w, id| w.list_vouchers(Some(id), None, None, None))
+                .unwrap()
+                .into_iter()
+                .find(|v| v.status == VoucherStatus::Active)
+                .unwrap()
+                .local_instance_id
+        };
+
+        let bob_did = bob_state
+            .service
+            .lock()
+            .unwrap()
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
+
+        let res = create_transfer_bundle_impl(
+            None,
+            bob_did,
+            vec![FrontendSourceTransfer {
+                local_instance_id,
+                amount_to_send: "20".into(),
+            }],
+            None,
+            None,
+            std_map.clone(),
+            Some(false),
+            Some(false),
+            None,
+            Some(password.into()),
+            &alice_state,
+        )
+        .await
+        .expect("sending anchored voucher without local manifest must fall back offline");
+
+        assert!(
+            res.l2_dispatch.is_empty(),
+            "Offline fallback send must not stage online L2 dispatch intents"
+        );
+
+        let recv = receive_bundle_impl(
+            None,
+            res.bundle_data,
+            std_map,
+            Some(password.into()),
+            false,
+            Some(ReceiveCommitMode::ForceTrustOffline),
+            None,
+            &bob_state,
+        )
+        .await
+        .expect("Bob must accept offline-fallback bundle on trust basis");
+        assert_eq!(recv.newly_committed, Some(true));
+
+        let _ = std::fs::remove_dir_all(base_dir);
     }
 }
