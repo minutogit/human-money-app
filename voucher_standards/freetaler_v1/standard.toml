@@ -10,6 +10,7 @@ uuid = "a1b2c3d4-e5f6-4789-8012-3456789abcde"
 name = "FreeTaler"
 # (String) Official currency abbreviation
 abbreviation = "Taler"
+issuer_id = "issuer:3iQ@did:key:z6Mkis9kjqMUCyP1nM6MmyTgN6JGpG9XyUYYCfQSwr9CVPox"
 
 [immutable.blueprint]
 # (String) Countable unit of service
@@ -72,8 +73,5 @@ en = "This voucher is technically usable immediately after signature by the issu
 de = "Dieser Gutschein ist sofort nach der Signatur durch den Aussteller technisch nutzbar. Weitere Signaturen (z. B. durch Bürgen oder Institutionen) sind möglich und im Web of Trust empfohlen, um die soziale Akzeptanz zu erhöhen, für dieses MVP aber nicht zwingend erforderlich."
 
 [signature]
-# The issuer `did:key` containing their public key.
-issuer_id = "0:KjY@did:key:z6Mkis9kjqMUCyP1nM6MmyTgN6JGpG9XyUYYCfQSwr9CVPox"
-
-# The final Base58-encoded Ed25519 signature of the canonicalized content (without this block).
-signature = "4e88qmvL5nvR3gWQpA9YmD3DdrFqbu7UmAcwpfBLWBzUEY83hZnKwu3yV6wa1hRHXYYyotu7VpxpAPmdXRXStHso"
+# The final Base58-encoded Ed25519 signature bound to immutable.identity.issuer_id.
+signature = "52RPtNNthrg2PZfVuMfMDJmzncNXWN9C4PzUZAniXUszL5Ev6JiA4ib7ucJkUGXQDEqT2NjW6rAgj91ypQn7VDUU"

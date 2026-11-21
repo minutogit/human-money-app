@@ -147,15 +147,20 @@ uuid = "minuto-uuid-123"`,
       if (cmd === 'parse_standard_toml') {
         return Promise.resolve({
           immutable: {
-            identity: { uuid: 'minuto-uuid-123', name: 'Minuto Standard', abbreviation: 'MIN' },
+            identity: {
+              uuid: 'minuto-uuid-123',
+              name: 'Minuto Standard',
+              abbreviation: 'MIN',
+              issuerId: '0:is@did:key:z6MkexampleIssuerDidKeyForTest1234567890',
+            },
             blueprint: { unit: 'Minutos', primaryRedemptionType: 'goodsOrServices', collateralType: 'personalGuarantee' },
             features: { allowPartialTransfers: true, balancesAreSummable: true, amountDecimalPlaces: 0, privacyMode: 'flexible', allowedTTypes: ['init', 'transfer', 'split'] },
-            issuance: { validityDurationRange: ['P1Y', 'P10Y'], issuanceMinimumValidityDuration: 'P3Y', additionalSignaturesRange: [2, 2], allowedSignatureRoles: ['guarantor'] },
+            issuance: { validityDurationRange: ['P1Y', 'P10Y'], issuanceMinimumValidityDuration: 'P3Y', additionalSignaturesRange: [2, 2], allowedSignatureRoles: ['guarantor'], roundUpValidityTo: 'P1Y' },
             customRules: {},
           },
           mutable: {
             metadata: { issuerName: 'Human Money Project', keywords: [] },
-            appConfig: { defaultValidityDuration: 'P5Y', roundUpValidityTo: 'P1Y', serverHistoryRetention: 'P3M' },
+            appConfig: { defaultValidityDuration: 'P5Y', serverHistoryRetention: 'P3M' },
             i18n: { descriptions: {}, footnotes: {}, collateralDescriptions: {} },
           }
         });

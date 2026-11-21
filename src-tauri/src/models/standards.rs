@@ -24,6 +24,7 @@ pub struct ImmutableIdentityDto {
     pub uuid: String,
     pub name: String,
     pub abbreviation: String,
+    pub issuer_id: String,
 }
 
 impl From<core::ImmutableIdentity> for ImmutableIdentityDto {
@@ -32,6 +33,7 @@ impl From<core::ImmutableIdentity> for ImmutableIdentityDto {
             uuid: identity.uuid,
             name: identity.name,
             abbreviation: identity.abbreviation,
+            issuer_id: identity.issuer_id,
         }
     }
 }
@@ -139,6 +141,7 @@ pub struct ImmutableIssuanceDto {
     pub issuance_minimum_validity_duration: String,
     pub additional_signatures_range: Vec<u32>,
     pub allowed_signature_roles: Vec<String>,
+    pub round_up_validity_to: Option<String>,
 }
 
 impl From<core::ImmutableIssuance> for ImmutableIssuanceDto {
@@ -148,6 +151,7 @@ impl From<core::ImmutableIssuance> for ImmutableIssuanceDto {
             issuance_minimum_validity_duration: i.issuance_minimum_validity_duration,
             additional_signatures_range: i.additional_signatures_range,
             allowed_signature_roles: i.allowed_signature_roles,
+            round_up_validity_to: i.round_up_validity_to,
         }
     }
 }
@@ -202,7 +206,6 @@ impl From<core::MutableMetadata> for MutableMetadataDto {
 #[serde(rename_all = "camelCase")]
 pub struct MutableAppConfigDto {
     pub default_validity_duration: Option<String>,
-    pub round_up_validity_to: Option<String>,
     pub server_history_retention: Option<String>,
 }
 
@@ -210,7 +213,6 @@ impl From<core::MutableAppConfig> for MutableAppConfigDto {
     fn from(c: core::MutableAppConfig) -> Self {
         Self {
             default_validity_duration: c.default_validity_duration,
-            round_up_validity_to: c.round_up_validity_to,
             server_history_retention: c.server_history_retention,
         }
     }
@@ -255,14 +257,12 @@ impl From<core::MutableZone> for MutableZoneDto {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SignatureBlockDto {
-    pub issuer_id: String,
     pub signature: String,
 }
 
 impl From<core::SignatureBlock> for SignatureBlockDto {
     fn from(s: core::SignatureBlock) -> Self {
         Self {
-            issuer_id: s.issuer_id,
             signature: s.signature,
         }
     }

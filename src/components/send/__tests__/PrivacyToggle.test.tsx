@@ -48,7 +48,7 @@ const makeVoucher = (id: string, standardUuid: string): VoucherSummary => ({
 
 const makeStandard = (uuid: string, privacyMode: 'stealth' | 'public' | 'flexible'): VoucherStandardDefinition => ({
   immutable: {
-    identity: { uuid, name: 'Std', abbreviation: 'T' },
+    identity: { uuid, name: 'Std', abbreviation: 'T', issuerId: '0:is@did:key:z6Mkexample' },
     blueprint: { unit: 'T', primaryRedemptionType: 'goodsOrServices', collateralType: 'personalGuarantee' },
     features: {
       allowPartialTransfers: true,

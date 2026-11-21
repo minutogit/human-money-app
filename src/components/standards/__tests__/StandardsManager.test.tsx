@@ -142,6 +142,7 @@ en = "Backed by personal labor guarantee."
                 name: 'Minuto Voucher',
                 uuid: 'minuto-standard-uuid-1234',
                 abbreviation: 'MIN',
+                issuerId: '0:is@did:key:z6Mkexample',
             },
             blueprint: {
                 unit: 'Minuto',

@@ -65,6 +65,7 @@ export interface ImmutableIdentity {
     uuid: string;
     name: string;
     abbreviation: string;
+    issuerId: string;
 }
 
 export type PrimaryRedemptionType = "goodsOrServices" | "time" | "physicalAsset";
@@ -96,6 +97,7 @@ export interface ImmutableIssuance {
     issuanceMinimumValidityDuration: string;
     additionalSignaturesRange: number[];
     allowedSignatureRoles: string[];
+    roundUpValidityTo?: string;
 }
 
 export interface ImmutableZone {
@@ -115,7 +117,6 @@ export interface MutableMetadata {
 
 export interface MutableAppConfig {
     defaultValidityDuration?: string;
-    roundUpValidityTo?: string;
     serverHistoryRetention?: string;
 }
 
@@ -132,7 +133,6 @@ export interface MutableZone {
 }
 
 export interface SignatureBlock {
-    issuerId: string;
     signature: string;
 }
 

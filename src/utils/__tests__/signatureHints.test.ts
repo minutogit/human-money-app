@@ -21,7 +21,8 @@ describe('signatureHints', () => {
                 identity: {
                     uuid: 'test-uuid',
                     name: 'Test Standard',
-                    abbreviation: 'TST'
+                    abbreviation: 'TST',
+                    issuerId: '0:is@did:key:z6Mkexample',
                 },
                 blueprint: {} as any,
                 features: {} as any,

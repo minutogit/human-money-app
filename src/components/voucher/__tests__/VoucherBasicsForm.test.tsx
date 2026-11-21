@@ -12,7 +12,7 @@ const mockStandardsWithNames = [
 
 const mockParsedStandard: VoucherStandardDefinition = {
     immutable: {
-        identity: { uuid: 'freetaler-uuid', name: 'FreeTaler', abbreviation: 'Taler' },
+        identity: { uuid: 'freetaler-uuid', name: 'FreeTaler', abbreviation: 'Taler', issuerId: '0:is@did:key:z6Mkexample' },
         blueprint: { unit: 'Taler', primaryRedemptionType: 'goodsOrServices', collateralType: 'personalGuarantee' },
         features: {
             allowPartialTransfers: true,
