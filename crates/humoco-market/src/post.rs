@@ -147,10 +147,6 @@ pub struct PostEnvelope {
     pub reply_drops: Vec<DropDescriptor>,
     /// Raw serialized `SecureContainer` bytes (JSON/JWE).
     pub container_bytes: Vec<u8>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub anchor_manifest_json: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub anchor_delegations_json: Option<String>,
 }
 
 impl PostEnvelope {
@@ -167,19 +163,7 @@ impl PostEnvelope {
             created_at,
             reply_drops,
             container_bytes,
-            anchor_manifest_json: None,
-            anchor_delegations_json: None,
         }
-    }
-
-    pub fn with_anchor_manifest_json(mut self, manifest_json: Option<String>) -> Self {
-        self.anchor_manifest_json = manifest_json;
-        self
-    }
-
-    pub fn with_anchor_delegations_json(mut self, delegations_json: Option<String>) -> Self {
-        self.anchor_delegations_json = delegations_json;
-        self
     }
 }
 

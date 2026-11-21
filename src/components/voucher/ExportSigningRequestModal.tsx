@@ -194,7 +194,6 @@ export function ExportSigningRequestModal({
                     normalizedDid,
                     bundleBytes,
                     pwd || undefined,
-                    voucherId,
                 );
             });
             const recipientDelivered = res?.recipientDepositedTo ?? 0;

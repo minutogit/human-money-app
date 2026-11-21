@@ -143,8 +143,6 @@ fn s01_f2_try_open_post_box_any_sender_skips_non_contributory_sender() {
             drop_pub: hex::encode(make_key(33).verifying_key().as_bytes()),
         }],
         container_bytes: vec![7u8; 64],
-        anchor_manifest_json: None,
-        anchor_delegations_json: None,
     };
     let entry = seal_post_box(&alice_sk, &bob_vk, &env).unwrap();
 

@@ -25,10 +25,6 @@ pub struct FrontendPendingSignRequest {
     pub created_at: u64,
     pub reply_syncs: Vec<FrontendSyncDescriptor>,
     pub container_bytes: Vec<u8>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub anchor_manifest_json: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub anchor_delegations_json: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]

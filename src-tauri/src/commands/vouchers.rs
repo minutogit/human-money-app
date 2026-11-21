@@ -330,52 +330,35 @@ pub(crate) fn create_signing_request_bundle_impl(
     password: Option<&str>,
     service: &human_money_core::app_service::AppService,
 ) -> Result<Vec<u8>, FrontendError> {
-    let raw = service
-        .create_signing_request_bundle(local_instance_id, config, password)
-        .map_err(FrontendError::from)?;
+    let delegations_json = probe_cache_opt.and_then(|cache| {
+        service
+            .with_wallet(|w| {
+                w.get_voucher_details(local_instance_id)
+                    .ok()
+                    .and_then(|inst| inst.voucher.layer2_anchor)
+                    .and_then(|aid| {
+                        w.profile
+                            .l2_anchor_manifests
+                            .get(&hex::encode(aid))
+                            .and_then(|manifest| {
+                                crate::services::common::collect_verified_delegations_for_manifest(
+                                    manifest, cache,
+                                )
+                            })
+                    })
+            })
+            .ok()
+            .flatten()
+    });
 
-    let embedded_manifest = service
-        .with_wallet(|w| {
-            w.get_voucher_details(local_instance_id)
-                .ok()
-                .and_then(|inst| inst.voucher.layer2_anchor)
-                .and_then(|aid| {
-                    w.profile
-                        .l2_anchor_manifests
-                        .get(&hex::encode(aid))
-                        .cloned()
-                })
-        })
-        .ok()
-        .flatten();
-
-    if let Some(ref manifest) = embedded_manifest {
-        if let Ok(manifest_json) = serde_json::to_string(manifest) {
-            if let Ok(mut container_val) = serde_json::from_slice::<serde_json::Value>(&raw) {
-                if let Some(obj) = container_val.as_object_mut() {
-                    obj.insert(
-                        "anchor_manifest_json".to_string(),
-                        serde_json::Value::String(manifest_json),
-                    );
-                    if let Some(delegations_json) = probe_cache_opt.and_then(|cache| {
-                        crate::services::common::collect_verified_delegations_for_manifest(
-                            manifest, cache,
-                        )
-                    }) {
-                        obj.insert(
-                            "anchor_delegations_json".to_string(),
-                            serde_json::Value::String(delegations_json),
-                        );
-                    }
-                    if let Ok(enriched) = serde_json::to_vec_pretty(&container_val) {
-                        return Ok(enriched);
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(raw)
+    service
+        .create_signing_request_bundle(
+            local_instance_id,
+            config,
+            delegations_json.as_deref(),
+            password,
+        )
+        .map_err(FrontendError::from)
 }
 
 #[tauri::command]
@@ -411,7 +394,13 @@ pub(crate) fn open_voucher_signing_request_impl(
     service: &human_money_core::app_service::AppService,
 ) -> Result<crate::models::FrontendVoucherDetails, FrontendError> {
     match service.open_voucher_signing_request(container_bytes, password) {
-        Ok(v) => {
+        Ok(bundle) => {
+            let human_money_core::SigningRequestBundle {
+                voucher: v,
+                anchor_manifest: embedded_manifest,
+                anchor_delegations_json,
+            } = bundle;
+
             info!(
                 "Signature request opened successfully. Voucher ID: {}, Creator: {}",
                 v.voucher_id,
@@ -438,32 +427,6 @@ pub(crate) fn open_voucher_signing_request_impl(
                 };
             let current_amount = v.nominal_value.amount.clone();
 
-            let container_json = serde_json::from_slice::<serde_json::Value>(container_bytes).ok();
-            let embedded_manifest = v.layer2_anchor.and_then(|aid| {
-                container_json
-                    .as_ref()
-                    .and_then(|val| {
-                        val.get("anchor_manifest_json")
-                            .and_then(|m| m.as_str())
-                            .map(str::to_string)
-                    })
-                    .and_then(|raw_m| {
-                        serde_json::from_str::<human_money_core::humoco_proto::AnchorManifest>(
-                            &raw_m,
-                        )
-                        .ok()
-                        .filter(|m| m.verify_anchor_id(&aid).is_ok())
-                        .map(|m| (raw_m, m))
-                    })
-            });
-            let anchor_delegations_json = v.layer2_anchor.and_then(|_| {
-                container_json.as_ref().and_then(|val| {
-                    val.get("anchor_delegations_json")
-                        .and_then(|d| d.as_str())
-                        .map(str::to_string)
-                })
-            });
-
             let local_manifest = v.layer2_anchor.and_then(|aid| {
                 service
                     .with_wallet(|w| {
@@ -477,23 +440,21 @@ pub(crate) fn open_voucher_signing_request_impl(
                     .filter(|m| m.verify_anchor_id(&aid).is_ok())
             });
 
-            let (resolved_manifest, anchor_manifest_json) =
-                match (embedded_manifest, local_manifest) {
-                    (Some((raw_m, emb)), Some(local)) => {
-                        if local.revision >= emb.revision {
-                            let json = serde_json::to_string(&local).ok();
-                            (Some(local), json)
-                        } else {
-                            (Some(emb), Some(raw_m))
-                        }
+            let resolved_manifest = match (embedded_manifest, local_manifest) {
+                (Some(emb), Some(local)) => {
+                    if local.revision >= emb.revision {
+                        Some(local)
+                    } else {
+                        Some(emb)
                     }
-                    (Some((raw_m, emb)), None) => (Some(emb), Some(raw_m)),
-                    (None, Some(local)) => {
-                        let json = serde_json::to_string(&local).ok();
-                        (Some(local), json)
-                    }
-                    (None, None) => (None, None),
-                };
+                }
+                (Some(emb), None) => Some(emb),
+                (None, Some(local)) => Some(local),
+                (None, None) => None,
+            };
+            let anchor_manifest_json = resolved_manifest
+                .as_ref()
+                .and_then(|m| serde_json::to_string(m).ok());
 
             let reduced_guarantor_protection = resolved_manifest
                 .as_ref()
@@ -2016,6 +1977,256 @@ mod tests {
             check_no_downgrade.server_count, 3,
             "S06-F8: supplying older rev=1 must NOT downgrade local verified rev=2 (3 servers)"
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn s06_f10_ask_signing_request_encrypts_anchor_metadata_and_ignores_outer_json() {
+        let dir = std::env::temp_dir().join(format!("vouchers-s06-f10-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pw = "pw-s06-f10";
+
+        let (mut svc_creator, _) =
+            test_utils::setup_service_with_profile(&dir.join("c"), &ACTORS.alice, "Alice", pw);
+        svc_creator.unlock_session(pw, 600).unwrap();
+        let (svc_guarantor, _) =
+            test_utils::setup_service_with_profile(&dir.join("g"), &ACTORS.bob, "Bob", pw);
+        let guar_id = svc_guarantor
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
+        let creator_id = svc_creator
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
+
+        let s1_sk = SigningKey::from_bytes(&[41u8; 32]);
+        let s2_sk = SigningKey::from_bytes(&[42u8; 32]);
+        let creator_mig_sk = SigningKey::from_bytes(&[43u8; 32]);
+        let guar_mig_sk = SigningKey::from_bytes(&[44u8; 32]);
+        let creator_mig_pub_hex = hex::encode(creator_mig_sk.verifying_key().to_bytes());
+        let manifest = AnchorManifest {
+            revision: 1,
+            threshold: 2,
+            servers: vec![
+                ServerEntry {
+                    write_url: "https://private-lock-a.example/sync.php".into(),
+                    read_url: "https://private-lock-a.example/d".into(),
+                    admin_pub: s1_sk.verifying_key().to_bytes(),
+                    lock_pub: s1_sk.verifying_key().to_bytes(),
+                    nominated_by: NominatedBy::Creator,
+                },
+                ServerEntry {
+                    write_url: "https://private-lock-b.example/sync.php".into(),
+                    read_url: "https://private-lock-b.example/d".into(),
+                    admin_pub: s2_sk.verifying_key().to_bytes(),
+                    lock_pub: s2_sk.verifying_key().to_bytes(),
+                    nominated_by: NominatedBy::Guarantor(0),
+                },
+            ],
+            successors: vec![],
+            authority: AnchorAuthority {
+                creator_mig_pub: creator_mig_sk.verifying_key().to_bytes(),
+                guarantor_mig_pubs: vec![guar_mig_sk.verifying_key().to_bytes()],
+            },
+            migration_chain: vec![],
+            issued_at_ms: 1_760_000_000_000,
+            retain_until_quarter: encode_quarter(2035, 4).unwrap(),
+        };
+        let anchor_id = manifest.rev1_anchor_id().unwrap();
+
+        let mut creator_probe_cache = std::collections::BTreeMap::new();
+        for (srv, sk) in manifest.servers.iter().zip([&s1_sk, &s2_sk]) {
+            let admin_hex = hex::encode(srv.admin_pub);
+            let lock_hex = hex::encode(srv.lock_pub);
+            let msg = humoco_market::format_lock_delegate_signature_message(
+                &admin_hex,
+                &lock_hex,
+                &srv.write_url,
+                &srv.read_url,
+                1_760_000_000,
+            );
+            let sig = hex::encode(ed25519_dalek::Signer::sign(sk, msg.as_bytes()).to_bytes());
+            creator_probe_cache.insert(
+                lock_hex.clone(),
+                crate::sync_client::FrontendLockServerProbeResult {
+                    write_url: srv.write_url.clone(),
+                    read_url: srv.read_url.clone(),
+                    drop_pub: admin_hex.clone(),
+                    admin_pub: admin_hex.clone(),
+                    lock_pub: lock_hex.clone(),
+                    delegation_valid: true,
+                    waf_probe_passed: true,
+                    selftest_passed: true,
+                    key_leak_safe: true,
+                    passed: true,
+                    latency_ms: 5,
+                    max_retention_quarter: manifest.retain_until_quarter,
+                    pow_base_bits:
+                        human_money_core::humoco_proto::crypto::DEFAULT_LOCK_POW_BASE_BITS,
+                    allow_pow_tickets: true,
+                    ticket_pow_bits: 16,
+                    inode_warning: false,
+                    used_inodes: 0,
+                    max_inodes: 50_000,
+                    probed_at_secs: 1_760_000_000,
+                    delegation: Some(crate::sync_client::SyncLockDelegationDto {
+                        admin_pub: admin_hex,
+                        lock_pub: lock_hex,
+                        write_url: srv.write_url.clone(),
+                        read_url: srv.read_url.clone(),
+                        issued_at: 1_760_000_000,
+                        sig,
+                    }),
+                    error: None,
+                },
+            );
+        }
+
+        svc_creator
+            .update_l2_anchor_manifest(manifest.clone(), Some(pw))
+            .unwrap();
+
+        let minuto_toml = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../voucher_standards/minuto_v1/standard.toml"
+        ))
+        .unwrap();
+        let mut v_data = test_utils::create_minuto_voucher_data(
+            human_money_core::models::profile::PublicProfile {
+                id: Some(creator_id.clone()),
+                ..Default::default()
+            },
+        );
+        v_data.layer2_anchor = Some(anchor_id);
+        let voucher = svc_creator
+            .create_new_voucher(&minuto_toml, v_data, Some(pw))
+            .unwrap();
+        let local_id = Wallet::calculate_local_instance_id(&voucher, &creator_id).unwrap();
+
+        let forbidden_leaks = [
+            "private-lock-a.example",
+            "private-lock-b.example",
+            "anchor_manifest_json",
+            "anchor_delegations_json",
+            creator_mig_pub_hex.as_str(),
+        ];
+
+        // 1. TargetDid (TrialDecryption) privacy + round-trip
+        let ask_target = create_signing_request_bundle_impl(
+            &local_id,
+            ContainerConfig::TargetDid(guar_id.clone(), PrivacyMode::TrialDecryption),
+            Some(&creator_probe_cache),
+            Some(pw),
+            &svc_creator,
+        )
+        .unwrap();
+        let ask_target_text = String::from_utf8_lossy(&ask_target);
+        for needle in forbidden_leaks {
+            assert!(
+                !ask_target_text.contains(needle),
+                "S06-F10 privacy violation: TargetDid .ask leaked '{}' in plaintext",
+                needle
+            );
+        }
+        let opened_target =
+            open_voucher_signing_request_impl(&ask_target, None, &svc_guarantor).unwrap();
+        assert!(opened_target.anchor_manifest_json.is_some());
+        assert!(opened_target.anchor_delegations_json.is_some());
+        assert_eq!(opened_target.manifest_revision, Some(1));
+
+        // 2. Password (Symmetric) privacy + round-trip
+        let ask_pw = "super-secret-ask-password";
+        let ask_sym = create_signing_request_bundle_impl(
+            &local_id,
+            ContainerConfig::Password(ask_pw.to_string()),
+            Some(&creator_probe_cache),
+            Some(pw),
+            &svc_creator,
+        )
+        .unwrap();
+        let ask_sym_text = String::from_utf8_lossy(&ask_sym);
+        for needle in forbidden_leaks {
+            assert!(
+                !ask_sym_text.contains(needle),
+                "S06-F10 privacy violation: Password .ask leaked '{}' in plaintext",
+                needle
+            );
+        }
+        let opened_sym =
+            open_voucher_signing_request_impl(&ask_sym, Some(ask_pw), &svc_guarantor).unwrap();
+        assert_eq!(
+            opened_sym.anchor_manifest_json,
+            opened_target.anchor_manifest_json
+        );
+        assert_eq!(
+            opened_sym.anchor_delegations_json,
+            opened_target.anchor_delegations_json
+        );
+
+        // 3. Appending bogus outer anchor_manifest_json / anchor_delegations_json has ZERO effect
+        let mut outer_tampered: serde_json::Value = serde_json::from_slice(&ask_target).unwrap();
+        outer_tampered.as_object_mut().unwrap().insert(
+            "anchor_manifest_json".to_string(),
+            serde_json::Value::String("{\"bogus\":true}".to_string()),
+        );
+        outer_tampered.as_object_mut().unwrap().insert(
+            "anchor_delegations_json".to_string(),
+            serde_json::Value::String("[{\"bogus\":true}]".to_string()),
+        );
+        let tampered_bytes = serde_json::to_vec(&outer_tampered).unwrap();
+        if let Ok(opened_tampered) =
+            open_voucher_signing_request_impl(&tampered_bytes, None, &svc_guarantor)
+        {
+            assert_eq!(
+                opened_tampered.anchor_manifest_json, opened_target.anchor_manifest_json,
+                "bogus outer anchor_manifest_json must be ignored"
+            );
+            assert_eq!(
+                opened_tampered.anchor_delegations_json, opened_target.anchor_delegations_json,
+                "bogus outer anchor_delegations_json must be ignored"
+            );
+        }
+
+        // 4. Full guarantor end-to-end check -> detached signature response succeeds
+        let guar_state = AppState::new(svc_guarantor);
+        guar_state.set_cached_security_policy(Some(SecurityPolicy::default()));
+        guar_state.set_cached_internal_lifecycle(Some(InternalLifecycleState::default()));
+        guar_state
+            .service
+            .lock()
+            .unwrap()
+            .unlock_session(pw, 600)
+            .unwrap();
+
+        let check = evaluate_guarantor_anchor_check_impl(
+            opened_target.voucher.clone(),
+            minuto_toml,
+            opened_target.anchor_manifest_json.clone(),
+            opened_target.anchor_delegations_json.clone(),
+            Some(pw),
+            &guar_state,
+        )
+        .unwrap();
+        assert!(
+            check.passed,
+            "guarantor anchor check must pass from encrypted .ask bundle, got {:?}",
+            check.issues
+        );
+        assert_eq!(check.sybil_independent_count, 2);
+
+        let sig_bytes = create_detached_signature_response_bundle_impl(
+            opened_target.voucher,
+            "guarantor".to_string(),
+            false,
+            ContainerConfig::TargetDid(creator_id, PrivacyMode::TrialDecryption),
+            Some(pw.to_string()),
+            opened_target.anchor_manifest_json,
+            opened_target.anchor_delegations_json,
+            None,
+            &guar_state,
+        )
+        .unwrap();
+        assert!(!sig_bytes.is_empty());
 
         let _ = std::fs::remove_dir_all(&dir);
     }

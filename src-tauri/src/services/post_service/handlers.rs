@@ -521,8 +521,6 @@ fn handle_voucher_for_signing(
                 .map(Into::into)
                 .collect(),
             container_bytes: ctx.envelope.container_bytes.clone(),
-            anchor_manifest_json: ctx.envelope.anchor_manifest_json.clone(),
-            anchor_delegations_json: ctx.envelope.anchor_delegations_json.clone(),
         });
     stats.new_sign_requests += 1;
     queue_ack_receipt(ctx, post_state, None);

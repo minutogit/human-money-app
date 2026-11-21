@@ -35,14 +35,12 @@ export const postService = {
     sendSigningRequestViaPost: async (
         recipientDid: string,
         containerBytes: number[] | Uint8Array,
-        password?: string,
-        localInstanceId?: string
+        password?: string
     ): Promise<FrontendPostDepositResult> => {
         const bytes = Array.isArray(containerBytes) ? containerBytes : Array.from(containerBytes);
         const res = await invoke<FrontendPostDepositResult>("send_signing_request_via_post", {
             recipientDid,
             containerBytes: bytes,
-            localInstanceId: localInstanceId || undefined,
             password: password || undefined,
         });
         notifyPostInboxUpdated();

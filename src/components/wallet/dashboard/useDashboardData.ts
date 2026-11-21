@@ -233,8 +233,8 @@ export function useDashboardData() {
                         voucherData,
                         requestMsgId: req.msgId,
                         senderDid: req.senderDid,
-                        anchorManifestJson: req.anchorManifestJson ?? voucherData.anchorManifestJson ?? undefined,
-                        anchorDelegationsJson: req.anchorDelegationsJson ?? voucherData.anchorDelegationsJson ?? undefined,
+                        anchorManifestJson: voucherData.anchorManifestJson ?? undefined,
+                        anchorDelegationsJson: voucherData.anchorDelegationsJson ?? undefined,
                     });
                 }
             } catch (e) {

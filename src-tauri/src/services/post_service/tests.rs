@@ -913,7 +913,7 @@ async fn test_async_co_signing_voucher_for_signing_to_detached_signature() {
     let signing_req_bytes = {
         let s = alice_state.service.lock().unwrap();
         let config = ContainerConfig::TargetDid(bob_did.clone(), PrivacyMode::HashedRouting);
-        s.create_signing_request_bundle(&local_id, config, Some(password))
+        s.create_signing_request_bundle(&local_id, config, None, Some(password))
             .unwrap()
     };
 
@@ -921,7 +921,6 @@ async fn test_async_co_signing_voucher_for_signing_to_detached_signature() {
     send_signing_request_via_post_impl(
         bob_did.clone(),
         signing_req_bytes,
-        Some(local_id.clone()),
         Some(password.to_string()),
         &alice_state,
     )
@@ -941,13 +940,13 @@ async fn test_async_co_signing_voucher_for_signing_to_detached_signature() {
     // Bob signs and creates detached signature response
     let sig_response_bytes = {
         let mut bob_s = bob_state.service.lock().unwrap();
-        let voucher = bob_s
+        let req_bundle = bob_s
             .open_voucher_signing_request(&sign_req.container_bytes, None)
             .unwrap();
         let config = ContainerConfig::TargetDid(alice_did.clone(), PrivacyMode::HashedRouting);
         bob_s
             .create_detached_signature_response_bundle(
-                &voucher,
+                &req_bundle.voucher,
                 "guarantor",
                 false,
                 config,
@@ -2208,8 +2207,6 @@ async fn test_outbox_windowed_packing_defers_overflow_past_max_bytes_and_drains_
         &signing_ctx.own_reply_syncs,
         vec![1u8; 40_000],
         1_700_000_010,
-        None,
-        None,
     )
     .unwrap();
     enqueue_post_envelope(
@@ -2224,8 +2221,6 @@ async fn test_outbox_windowed_packing_defers_overflow_past_max_bytes_and_drains_
         &signing_ctx.own_reply_syncs,
         vec![2u8; 40_000],
         1_700_000_020,
-        None,
-        None,
     )
     .unwrap();
     enqueue_post_envelope(
@@ -2240,8 +2235,6 @@ async fn test_outbox_windowed_packing_defers_overflow_past_max_bytes_and_drains_
         &signing_ctx.own_reply_syncs,
         vec![3u8; 120],
         1_700_000_030,
-        None,
-        None,
     )
     .unwrap();
 
@@ -2704,8 +2697,6 @@ async fn test_h5_outbox_holds_back_value_transfers_under_fork_lock_and_known_off
         &signing_ctx.own_reply_syncs,
         vec![0xAA; 64],
         1_700_000_010,
-        None,
-        None,
     )
     .unwrap();
     enqueue_post_envelope(
@@ -2720,8 +2711,6 @@ async fn test_h5_outbox_holds_back_value_transfers_under_fork_lock_and_known_off
         &signing_ctx.own_reply_syncs,
         vec![0xBB; 64],
         1_700_000_020,
-        None,
-        None,
     )
     .unwrap();
     save_post_state(&alice_state, &post_state, Some(password)).unwrap();
@@ -2820,8 +2809,6 @@ async fn test_h5_outbox_holds_back_value_transfers_under_fork_lock_and_known_off
         &signing_ctx.own_reply_syncs,
         vec![0xCC; 64],
         1_700_000_030,
-        None,
-        None,
     )
     .unwrap();
     let ctrl2_tag = post_state
@@ -3212,8 +3199,6 @@ async fn test_h1_h6_claim_bearing_outflow_guard_and_stale_session_rejection() {
         &[],
         b"claim".to_vec(),
         1_760_000_000,
-        None,
-        None,
     )
     .unwrap();
     let (blocked, _) =
@@ -3443,6 +3428,277 @@ async fn k5_flush_post_slots_412_removes_pruned_outbox_tags_with_fresh_etag() {
     assert_eq!(real_entries_after.len(), 1);
     assert_eq!(real_entries_after[0].tag16, kept_tag);
     assert!(!real_entries_after.iter().any(|e| e.tag16 == pruned_tag));
+
+    let _ = std::fs::remove_dir_all(&base_dir);
+}
+
+#[tokio::test]
+async fn test_post_anchored_signing_request_recovers_encrypted_manifest_and_delegations() {
+    use ed25519_dalek::{Signer, SigningKey};
+    use human_money_core::humoco_proto::{
+        encode_quarter, AnchorAuthority, AnchorManifest, NominatedBy, ServerEntry,
+    };
+
+    let base_dir = temp_test_dir("post_anchored_sign_req_s06_f10");
+    let alice_dir = base_dir.join("alice");
+    let bob_dir = base_dir.join("bob");
+    let password = "post-s06-f10-password";
+
+    let alice_svc = setup_test_app(&alice_dir, "Alice", ALICE_PHRASE, password);
+    let bob_svc = setup_test_app(&bob_dir, "Bob", BOB_PHRASE, password);
+    let alice_state = create_test_state(alice_svc);
+    let bob_state = create_test_state(bob_svc);
+
+    let alice_did = {
+        let s = alice_state.service.lock().unwrap();
+        s.with_wallet(|w| w.get_user_id().to_string()).unwrap()
+    };
+    let bob_did = {
+        let s = bob_state.service.lock().unwrap();
+        s.with_wallet(|w| w.get_user_id().to_string()).unwrap()
+    };
+
+    let server_a = MockSyncServer::start("d-alice".to_string(), ADMIN_A.to_string()).await;
+    let server_b = MockSyncServer::start("d-bob".to_string(), ADMIN_B.to_string()).await;
+
+    let (server_a_url, alice_drop) =
+        setup_test_sync(&server_a, DROP_PUB_A, password, &alice_state).await;
+    let (server_b_url, bob_drop) =
+        setup_test_sync(&server_b, DROP_PUB_B, password, &bob_state).await;
+
+    {
+        let mut s_alice = alice_state.service.lock().unwrap();
+        let contact_bob = FrontendContact {
+            did: bob_did.clone(),
+            profile: FrontendUserProfile {
+                first_name: Some("Bob".to_string()),
+                ..Default::default()
+            },
+            tags: vec![],
+            added_at: Utc::now().to_rfc3339(),
+            notes: None,
+            trust_level: Some(2),
+            desired_hops: Some(3),
+            has_peer_list: false,
+            peer_list_updated_at: None,
+            syncs: vec![FrontendSyncDescriptor {
+                write_url: server_b_url.clone(),
+                read_url: format!("{}/{}", server_b.base_url, server_b.data_dir),
+                slot_id: Some(
+                    humoco_market::format_slot_id(&bob_drop.access_pubkey, Some("pc")).unwrap(),
+                ),
+                drop_pub: DROP_PUB_B.to_string(),
+                last_seen_at: None,
+                last_error_at: None,
+                fail_count: 0,
+                status: "active".to_string(),
+                last_probed_at: None,
+                ..Default::default()
+            }],
+        };
+        alice_state
+            .save_contact(&mut s_alice, contact_bob, Some(password))
+            .unwrap();
+    }
+    {
+        let mut s_bob = bob_state.service.lock().unwrap();
+        let contact_alice = FrontendContact {
+            did: alice_did.clone(),
+            profile: FrontendUserProfile {
+                first_name: Some("Alice".to_string()),
+                ..Default::default()
+            },
+            tags: vec![],
+            added_at: Utc::now().to_rfc3339(),
+            notes: None,
+            trust_level: Some(2),
+            desired_hops: Some(3),
+            has_peer_list: false,
+            peer_list_updated_at: None,
+            syncs: vec![FrontendSyncDescriptor {
+                write_url: server_a_url.clone(),
+                read_url: format!("{}/{}", server_a.base_url, server_a.data_dir),
+                slot_id: Some(
+                    humoco_market::format_slot_id(&alice_drop.access_pubkey, Some("pc")).unwrap(),
+                ),
+                drop_pub: DROP_PUB_A.to_string(),
+                last_seen_at: None,
+                last_error_at: None,
+                fail_count: 0,
+                status: "active".to_string(),
+                last_probed_at: None,
+                ..Default::default()
+            }],
+        };
+        bob_state
+            .save_contact(&mut s_bob, contact_alice, Some(password))
+            .unwrap();
+    }
+
+    let s1_sk = SigningKey::from_bytes(&[61u8; 32]);
+    let s2_sk = SigningKey::from_bytes(&[62u8; 32]);
+    let creator_mig_sk = SigningKey::from_bytes(&[63u8; 32]);
+    let guar_mig_sk = SigningKey::from_bytes(&[64u8; 32]);
+    let manifest = AnchorManifest {
+        revision: 1,
+        threshold: 2,
+        servers: vec![
+            ServerEntry {
+                write_url: "https://post-lock-1.example/sync.php".into(),
+                read_url: "https://post-lock-1.example/d".into(),
+                admin_pub: s1_sk.verifying_key().to_bytes(),
+                lock_pub: s1_sk.verifying_key().to_bytes(),
+                nominated_by: NominatedBy::Creator,
+            },
+            ServerEntry {
+                write_url: "https://post-lock-2.example/sync.php".into(),
+                read_url: "https://post-lock-2.example/d".into(),
+                admin_pub: s2_sk.verifying_key().to_bytes(),
+                lock_pub: s2_sk.verifying_key().to_bytes(),
+                nominated_by: NominatedBy::Guarantor(0),
+            },
+        ],
+        successors: vec![],
+        authority: AnchorAuthority {
+            creator_mig_pub: creator_mig_sk.verifying_key().to_bytes(),
+            guarantor_mig_pubs: vec![guar_mig_sk.verifying_key().to_bytes()],
+        },
+        migration_chain: vec![],
+        issued_at_ms: 1_760_000_000_000,
+        retain_until_quarter: encode_quarter(2035, 4).unwrap(),
+    };
+    let anchor_id = manifest.rev1_anchor_id().unwrap();
+
+    let mut creator_probe_cache = std::collections::BTreeMap::new();
+    for (srv, sk) in manifest.servers.iter().zip([&s1_sk, &s2_sk]) {
+        let admin_hex = hex::encode(srv.admin_pub);
+        let lock_hex = hex::encode(srv.lock_pub);
+        let msg = humoco_market::format_lock_delegate_signature_message(
+            &admin_hex,
+            &lock_hex,
+            &srv.write_url,
+            &srv.read_url,
+            1_760_000_000,
+        );
+        let sig = hex::encode(sk.sign(msg.as_bytes()).to_bytes());
+        creator_probe_cache.insert(
+            lock_hex.clone(),
+            crate::sync_client::FrontendLockServerProbeResult {
+                write_url: srv.write_url.clone(),
+                read_url: srv.read_url.clone(),
+                drop_pub: admin_hex.clone(),
+                admin_pub: admin_hex.clone(),
+                lock_pub: lock_hex.clone(),
+                delegation_valid: true,
+                waf_probe_passed: true,
+                selftest_passed: true,
+                key_leak_safe: true,
+                passed: true,
+                latency_ms: 5,
+                max_retention_quarter: manifest.retain_until_quarter,
+                pow_base_bits: human_money_core::humoco_proto::crypto::DEFAULT_LOCK_POW_BASE_BITS,
+                allow_pow_tickets: true,
+                ticket_pow_bits: 16,
+                inode_warning: false,
+                used_inodes: 0,
+                max_inodes: 50_000,
+                probed_at_secs: 1_760_000_000,
+                delegation: Some(crate::sync_client::SyncLockDelegationDto {
+                    admin_pub: admin_hex,
+                    lock_pub: lock_hex,
+                    write_url: srv.write_url.clone(),
+                    read_url: srv.read_url.clone(),
+                    issued_at: 1_760_000_000,
+                    sig,
+                }),
+                error: None,
+            },
+        );
+    }
+
+    let standard_toml =
+        test_utils::generate_signed_standard_toml("voucher_standards/freetaler_v1/standard.toml");
+    let local_id = {
+        let mut s_alice = alice_state.service.lock().unwrap();
+        s_alice
+            .update_l2_anchor_manifest(manifest, Some(password))
+            .unwrap();
+        let v = s_alice
+            .create_new_voucher(
+                &standard_toml,
+                human_money_core::NewVoucherData {
+                    creator_profile: human_money_core::models::profile::PublicProfile {
+                        id: Some(alice_did.clone()),
+                        first_name: Some("Alice".to_string()),
+                        ..Default::default()
+                    },
+                    nominal_value: human_money_core::models::voucher::ValueDefinition {
+                        amount: "100".to_string(),
+                        unit: "Taler".to_string(),
+                        ..Default::default()
+                    },
+                    validity_duration: Some("P1Y".to_string()),
+                    non_redeemable_test_voucher: false,
+                    collateral: None,
+                    layer2_anchor: Some(anchor_id),
+                },
+                Some(password),
+            )
+            .unwrap();
+        human_money_core::Wallet::calculate_local_instance_id(&v, &alice_did).unwrap()
+    };
+
+    let signing_req_bytes = {
+        let s = alice_state.service.lock().unwrap();
+        crate::commands::vouchers::create_signing_request_bundle_impl(
+            &local_id,
+            ContainerConfig::TargetDid(bob_did.clone(), PrivacyMode::TrialDecryption),
+            Some(&creator_probe_cache),
+            Some(password),
+            &s,
+        )
+        .unwrap()
+    };
+    let req_text = String::from_utf8_lossy(&signing_req_bytes);
+    assert!(!req_text.contains("post-lock-1.example"));
+    assert!(!req_text.contains("anchor_manifest_json"));
+
+    send_signing_request_via_post_impl(
+        bob_did.clone(),
+        signing_req_bytes,
+        Some(password.to_string()),
+        &alice_state,
+    )
+    .await
+    .unwrap();
+
+    let bob_sync =
+        sync_post_channels_impl(None, None, None, Some(password.to_string()), &bob_state)
+            .await
+            .unwrap();
+    assert_eq!(bob_sync.new_sign_requests, 1);
+
+    let bob_post = load_post_state(&bob_state, Some(password)).unwrap();
+    let sign_req = &bob_post.pending_sign_requests[0];
+
+    let opened = {
+        let s_bob = bob_state.service.lock().unwrap();
+        crate::commands::vouchers::open_voucher_signing_request_impl(
+            &sign_req.container_bytes,
+            None,
+            &s_bob,
+        )
+        .unwrap()
+    };
+    assert!(
+        opened.anchor_manifest_json.is_some(),
+        "PoST signing request must recover encrypted AnchorManifest from SigningRequestBundle"
+    );
+    assert!(
+        opened.anchor_delegations_json.is_some(),
+        "PoST signing request must recover encrypted delegations from SigningRequestBundle"
+    );
+    assert_eq!(opened.manifest_revision, Some(1));
 
     let _ = std::fs::remove_dir_all(&base_dir);
 }

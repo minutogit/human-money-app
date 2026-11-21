@@ -957,8 +957,6 @@ pub(crate) async fn deposit_transfer_to_post_with_session(
             &signing_ctx.own_reply_syncs,
             bundle_bytes, // EXACT bytes! Never call create_transfer_bundle!
             now_secs,
-            None,
-            None,
         )?;
         fresh_msg_id
     };
@@ -980,66 +978,14 @@ pub async fn deposit_transfer_to_post_impl(
     deposit_transfer_to_post_with_session(&session, bundle_id, pw, state).await
 }
 
-fn resolve_signing_request_anchor_metadata(
-    state: &AppState,
-    session: &SessionToken,
-    local_instance_id: Option<&str>,
-    password: Option<&str>,
-) -> Result<(Option<String>, Option<String>), FrontendError> {
-    state.with_session_required(
-        session,
-        "Active wallet session changed before loading signing request anchor metadata",
-        |service| {
-            let manifest_opt = service
-                .with_wallet(|w| {
-                    let aid_hex = if let Some(lid) =
-                        local_instance_id.map(str::trim).filter(|s| !s.is_empty())
-                    {
-                        w.get_voucher_instance(lid)
-                            .and_then(|inst| inst.voucher.layer2_anchor)
-                            .map(hex::encode)
-                    } else {
-                        let mut candidates = std::collections::BTreeSet::new();
-                        for inst in w.voucher_store.vouchers.values() {
-                            if let Some(aid) = inst.voucher.layer2_anchor {
-                                let hx = hex::encode(aid);
-                                if w.profile.l2_anchor_manifests.contains_key(&hx) {
-                                    candidates.insert(hx);
-                                }
-                            }
-                        }
-                        if candidates.len() == 1 {
-                            candidates.into_iter().next()
-                        } else {
-                            None
-                        }
-                    };
-                    aid_hex.and_then(|hx| w.profile.l2_anchor_manifests.get(&hx).cloned())
-                })
-                .map_err(FrontendError::from)?;
-            let Some(manifest) = manifest_opt else {
-                return Ok((None, None));
-            };
-            let manifest_json = serde_json::to_string(&manifest).ok();
-            let delegations_json = state
-                .get_or_load_internal_lifecycle(service, password)
-                .ok()
-                .and_then(|lc| {
-                    crate::services::common::collect_verified_delegations_for_manifest(
-                        &manifest,
-                        &lc.l2_probe_cache,
-                    )
-                });
-            Ok((manifest_json, delegations_json))
-        },
-    )
-}
-
 /// Sends a voucher co-signing request container to a guarantor via Post.
+///
+/// The `container_bytes` payload is already a signed, AEAD-encrypted Core `SecureContainer`
+/// (`SigningRequestBundle`) carrying the voucher together with its anchor manifest and
+/// delegations inside the ciphertext.
 pub async fn send_signing_request_via_post_impl(
     recipient_did: String,
     container_bytes: Vec<u8>,
-    local_instance_id: Option<String>,
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendPostDepositResult, FrontendError> {
@@ -1053,8 +999,6 @@ pub async fn send_signing_request_via_post_impl(
     let recipient_did = validated_recipient.as_str().to_string();
     let recipient_ed_pk = validated_recipient.public_key();
     let signing_ctx = load_post_signing_context_for_session(state, &session, pw)?;
-    let (anchor_manifest_json, anchor_delegations_json) =
-        resolve_signing_request_anchor_metadata(state, &session, local_instance_id.as_deref(), pw)?;
     let now_secs = sync_client::current_unix_timestamp();
 
     let _post_guard = state.post_op_lock.lock().await;
@@ -1073,8 +1017,6 @@ pub async fn send_signing_request_via_post_impl(
         &signing_ctx.own_reply_syncs,
         container_bytes,
         now_secs,
-        anchor_manifest_json,
-        anchor_delegations_json,
     )?;
 
     persist_and_flush_post_box(state, &session, &baseline, &mut post_state, msg_id, pw).await
@@ -1151,8 +1093,6 @@ pub async fn reply_detached_signature_via_post_impl(
         &signing_ctx.own_reply_syncs,
         container_bytes,
         now_secs,
-        None,
-        None,
     )?;
     let target_tag16 = post_state
         .outbox_entries
@@ -1349,8 +1289,6 @@ pub(crate) async fn send_wot_handshake_via_post_with_session(
         &own_reply_syncs,
         container_bytes,
         now_secs,
-        None,
-        None,
     )?;
 
     persist_and_flush_post_box(state, session, &baseline, &mut post_state, msg_id, pw).await
@@ -1543,8 +1481,6 @@ pub async fn send_market_inquiry_via_post_impl(
         &signing_ctx.own_reply_syncs,
         container_bytes,
         now_secs,
-        None,
-        None,
     )?;
     let target_tag16 = post_state
         .outbox_entries
@@ -1743,8 +1679,6 @@ pub async fn send_market_inquiry_message_via_post_impl(
         &signing_ctx.own_reply_syncs,
         container_bytes,
         now_secs,
-        None,
-        None,
     )?;
     let target_tag16 = post_state
         .outbox_entries

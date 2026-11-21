@@ -4116,15 +4116,16 @@ mod tests {
                     guar_id.clone(),
                     human_money_core::models::secure_container::PrivacyMode::TrialDecryption,
                 ),
+                None,
                 Some(pw),
             )
             .unwrap();
-        let opened_v = svc_guar
+        let opened_req = svc_guar
             .open_voucher_signing_request(&sig_req, Some(pw))
             .unwrap();
         let detached = svc_guar
             .create_detached_signature_response_bundle(
-                &opened_v,
+                &opened_req.voucher,
                 "guarantor",
                 false,
                 human_money_core::models::secure_container::ContainerConfig::TargetDid(
