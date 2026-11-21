@@ -12,14 +12,14 @@
       "member_did": "did:key:z6MktULudTtAsAhRegYPiZ6631RV3viv12qd4GQF8z1xB22S",
       "stealth_pubkey_hex": "135ac0024dcf147b30fa22616f9e50aaaeb827cc341b6c28a0ca728a86c5a3d1",
       "test_message": "Humoco Stealth Protocol Test Message V1",
-      "stealth_signature_hex": "1a837eedcf4ec67d0f5c3569d6da890f46b7369bdaae2fa4325f7952af509a22f473cc9141cb72e93613da189b23aabdc10dbce349bf8bab7421ed3bc786f40a"
+      "stealth_signature_hex": "f23e4252fffdcbd21aac95522db5862f3350fef05468ef9b3ecceee85ea84f895da170bc2cd084d9d3d18531c2115de89538b68d8ecb8ddd60eec8befab40f0e"
     },
     {
       "member_seed_hex": "2222222222222222222222222222222222222222222222222222222222222222",
       "member_did": "did:key:z6MkqGC3nWZhYieEVTVDKW5v588CiGfsDSmRVG9ZwwWTvLSK",
       "stealth_pubkey_hex": "79cf609e05e27a9f99f7290bf45f35b9525094bca4bf31f69658f3df61e6ad70",
       "test_message": "Humoco Stealth Protocol Test Message V1",
-      "stealth_signature_hex": "a20b433433c2e2792db752c590f1e57551ae096192cbf1ab15f56cbda6449e30c789a51be5b7eb9e89cdc5b281f88baade52090dc34b40bed2fb4c766178190e"
+      "stealth_signature_hex": "e35e8a0b1483145c017f35a9e8d2c7c3ed0fe78aaf9ac110d2d8601c0c42a88c27f85210685946f6553625ebc11bacc8c00c46a07486b19cf1ce503782a8b109"
     }
   ],
   "public_drops": [

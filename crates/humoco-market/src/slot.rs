@@ -14,6 +14,7 @@ use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
+use zeroize::Zeroizing;
 
 use crate::card::forward_envelope;
 use crate::card_store::{haversine_km, parse_coordinates_pair};
@@ -42,7 +43,7 @@ pub fn slot_overhead_bytes(recipient_count: usize) -> Result<usize, MarketError>
     Ok(8 + 2 + bucket * RECIPIENT_ENTRY_SIZE + 24 + 16)
 }
 
-fn deflate_compress(data: &[u8]) -> Result<Vec<u8>, MarketError> {
+pub(crate) fn deflate_compress(data: &[u8]) -> Result<Vec<u8>, MarketError> {
     let mut encoder = DeflateEncoder::new(Vec::new(), Compression::default());
     encoder
         .write_all(data)
@@ -52,7 +53,10 @@ fn deflate_compress(data: &[u8]) -> Result<Vec<u8>, MarketError> {
         .map_err(|e| MarketError::Serialization(format!("Deflate finish failed: {}", e)))
 }
 
-fn deflate_decompress_bounded(compressed: &[u8], max_bytes: usize) -> Result<Vec<u8>, MarketError> {
+pub(crate) fn deflate_decompress_bounded(
+    compressed: &[u8],
+    max_bytes: usize,
+) -> Result<Vec<u8>, MarketError> {
     let decoder = DeflateDecoder::new(compressed);
     let mut limited = decoder.take((max_bytes + 1) as u64);
     let mut out = Vec::new();
@@ -244,11 +248,11 @@ pub fn seal_slot_payload(
     let bucket_size = target_recipient_bucket(unique_readers.len())?;
 
     // 2. Deflate-compress plaintext before AEAD encryption
-    let compressed_plaintext = deflate_compress(plaintext)?;
+    let compressed_plaintext = Zeroizing::new(deflate_compress(plaintext)?);
 
     // 3. Random 32-byte content key k
-    let mut k = [0u8; 32];
-    OsRng.fill_bytes(&mut k);
+    let mut k = Zeroizing::new([0u8; 32]);
+    OsRng.fill_bytes(&mut *k);
 
     // 4. Encrypt compressed payload with XChaCha20Poly1305
     let mut payload_nonce_bytes = [0u8; 24];
@@ -256,7 +260,7 @@ pub fn seal_slot_payload(
     let payload_nonce = XNonce::from_slice(&payload_nonce_bytes);
 
     let payload_cipher =
-        XChaCha20Poly1305::new_from_slice(&k).map_err(|e| MarketError::Crypto(e.to_string()))?;
+        XChaCha20Poly1305::new_from_slice(&*k).map_err(|e| MarketError::Crypto(e.to_string()))?;
     let payload_ciphertext = payload_cipher
         .encrypt(payload_nonce, compressed_plaintext.as_slice())
         .map_err(|e| MarketError::Crypto(e.to_string()))?;
@@ -271,16 +275,21 @@ pub fn seal_slot_payload(
         let eph_pub = X25519PublicKey::from(&eph_secret);
 
         let shared = eph_secret.diffie_hellman(&reader_x_pub);
+        if !shared.was_contributory() || shared.as_bytes() == &[0u8; 32] {
+            return Err(MarketError::Crypto(
+                "Non-contributory Diffie-Hellman exchange".to_string(),
+            ));
+        }
         let hkdf = Hkdf::<Sha256>::new(None, shared.as_bytes());
-        let mut kek = [0u8; 32];
-        hkdf.expand(b"humoco-slot-recipient-kek", &mut kek)
-            .expect("32 bytes is valid length for HKDF");
+        let mut kek = Zeroizing::new([0u8; 32]);
+        hkdf.expand(b"humoco-slot-recipient-kek", &mut *kek)
+            .map_err(|e| MarketError::Crypto(format!("HKDF expand failed: {}", e)))?;
 
         let mut nonce_bytes = [0u8; 12];
         OsRng.fill_bytes(&mut nonce_bytes);
         let nonce = Nonce::from_slice(&nonce_bytes);
 
-        let kek_cipher = ChaCha20Poly1305::new_from_slice(&kek)
+        let kek_cipher = ChaCha20Poly1305::new_from_slice(&*kek)
             .map_err(|e| MarketError::Crypto(e.to_string()))?;
         let enc_k = kek_cipher
             .encrypt(nonce, k.as_ref())
@@ -349,16 +358,12 @@ pub fn seal_slot_blob(
     seal_slot_payload(&payload_bytes, readers, max_bytes)
 }
 
-pub fn open_slot_payload(
+fn open_single_class_slot_payload(
     blob: &[u8],
     my_x25519_secret: &StaticSecret,
 ) -> Result<Option<Vec<u8>>, MarketError> {
     if blob.len() < 10 {
         return Err(MarketError::Slot("SlotBlob too short".to_string()));
-    }
-
-    if &blob[0..8] == SLOT_MULTI_MAGIC {
-        return open_multi_class_slot_blob(blob, my_x25519_secret);
     }
 
     if &blob[0..8] != SLOT_MAGIC {
@@ -405,35 +410,54 @@ pub fn open_slot_payload(
         }
 
         let hkdf = Hkdf::<Sha256>::new(None, shared.as_bytes());
-        let mut kek = [0u8; 32];
-        if hkdf.expand(b"humoco-slot-recipient-kek", &mut kek).is_err() {
+        let mut kek = Zeroizing::new([0u8; 32]);
+        if hkdf
+            .expand(b"humoco-slot-recipient-kek", &mut *kek)
+            .is_err()
+        {
             continue;
         }
 
-        let kek_cipher = match ChaCha20Poly1305::new_from_slice(&kek) {
+        let kek_cipher = match ChaCha20Poly1305::new_from_slice(&*kek) {
             Ok(c) => c,
             Err(_) => continue,
         };
         let nonce = Nonce::from_slice(&nonce_bytes);
 
-        if let Ok(decrypted_k) = kek_cipher.decrypt(nonce, enc_k) {
+        if let Ok(decrypted_k) = kek_cipher.decrypt(nonce, enc_k).map(Zeroizing::new) {
             if decrypted_k.len() == 32 {
-                let payload_cipher = match XChaCha20Poly1305::new_from_slice(&decrypted_k) {
-                    Ok(c) => c,
-                    Err(_) => continue,
-                };
-                if let Ok(compressed_bytes) =
-                    payload_cipher.decrypt(payload_nonce, payload_ciphertext)
-                {
-                    let decompressed =
-                        deflate_decompress_bounded(&compressed_bytes, MAX_DECOMPRESSED_SLOT_BYTES)?;
-                    return Ok(Some(decompressed));
-                }
+                let payload_cipher = XChaCha20Poly1305::new_from_slice(&decrypted_k)
+                    .map_err(|e| MarketError::Crypto(e.to_string()))?;
+                let compressed_bytes = Zeroizing::new(
+                    payload_cipher
+                        .decrypt(payload_nonce, payload_ciphertext)
+                        .map_err(|_| {
+                            MarketError::Crypto("Slot payload authentication failed".to_string())
+                        })?,
+                );
+                let decompressed =
+                    deflate_decompress_bounded(&compressed_bytes, MAX_DECOMPRESSED_SLOT_BYTES)?;
+                return Ok(Some(decompressed));
             }
         }
     }
 
     Ok(None)
+}
+
+pub fn open_slot_payload(
+    blob: &[u8],
+    my_x25519_secret: &StaticSecret,
+) -> Result<Option<Vec<u8>>, MarketError> {
+    if blob.len() < 10 {
+        return Err(MarketError::Slot("SlotBlob too short".to_string()));
+    }
+
+    if &blob[0..8] == SLOT_MULTI_MAGIC {
+        return open_multi_class_slot_blob(blob, my_x25519_secret);
+    }
+
+    open_single_class_slot_payload(blob, my_x25519_secret)
 }
 
 pub fn open_slot_blob(
@@ -492,8 +516,13 @@ pub fn seal_multi_class_slot_blob(
     encoded.push(classes.len() as u8);
 
     for sub_blob in &sub_blobs {
-        let len_bytes = (sub_blob.len() as u32).to_be_bytes();
-        encoded.extend_from_slice(&len_bytes);
+        let len_u32 = u32::try_from(sub_blob.len()).map_err(|_| {
+            MarketError::PayloadTooLarge(format!(
+                "Sub-blob length {} exceeds 32-bit limit",
+                sub_blob.len()
+            ))
+        })?;
+        encoded.extend_from_slice(&len_u32.to_be_bytes());
         encoded.extend_from_slice(sub_blob);
     }
 
@@ -529,9 +558,13 @@ pub fn open_multi_class_slot_blob(
         )));
     }
 
-    let mut offset = 9;
+    let mut offset = 9usize;
+    let mut sub_blobs: Vec<&[u8]> = Vec::with_capacity(count);
     for _ in 0..count {
-        if offset + 4 > blob.len() {
+        let len_end = offset.checked_add(4).ok_or_else(|| {
+            MarketError::Slot("Integer overflow in multi-class SlotBlob header".to_string())
+        })?;
+        if len_end > blob.len() {
             return Err(MarketError::Slot(
                 "Truncated class length in multi-class SlotBlob".to_string(),
             ));
@@ -542,18 +575,29 @@ pub fn open_multi_class_slot_blob(
             blob[offset + 2],
             blob[offset + 3],
         ]) as usize;
-        offset += 4;
+        offset = len_end;
 
-        if offset + sub_len > blob.len() {
+        let sub_end = offset.checked_add(sub_len).ok_or_else(|| {
+            MarketError::Slot("Integer overflow in multi-class SlotBlob length".to_string())
+        })?;
+        if sub_end > blob.len() {
             return Err(MarketError::Slot(
                 "Truncated sub-blob in multi-class SlotBlob".to_string(),
             ));
         }
 
-        let sub_blob = &blob[offset..offset + sub_len];
-        offset += sub_len;
+        sub_blobs.push(&blob[offset..sub_end]);
+        offset = sub_end;
+    }
 
-        if let Some(plaintext) = open_slot_payload(sub_blob, my_x25519_secret)? {
+    if offset != blob.len() {
+        return Err(MarketError::Slot(
+            "Trailing unexpected bytes in multi-class SlotBlob".to_string(),
+        ));
+    }
+
+    for sub_blob in sub_blobs {
+        if let Some(plaintext) = open_single_class_slot_payload(sub_blob, my_x25519_secret)? {
             return Ok(Some(plaintext));
         }
     }
@@ -641,7 +685,11 @@ pub fn unpad_backup_slot_bytes(slot_bytes: &[u8]) -> Result<Vec<u8>, MarketError
     let inner_len =
         u32::from_be_bytes([slot_bytes[8], slot_bytes[9], slot_bytes[10], slot_bytes[11]]) as usize;
 
-    if inner_len == 0 || 12 + inner_len > slot_bytes.len() {
+    if inner_len == 0
+        || 12usize
+            .checked_add(inner_len)
+            .is_none_or(|end| end > slot_bytes.len())
+    {
         return Err(MarketError::Slot(format!(
             "Invalid inner backup payload length: {} in slot size {}",
             inner_len,

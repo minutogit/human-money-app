@@ -9,6 +9,7 @@ use human_money_core::services::crypto::keys::{
 use human_money_core::services::crypto::utils::sign_ed25519_scalar;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use zeroize::Zeroizing;
 
 use crate::error::MarketError;
 
@@ -68,7 +69,10 @@ pub fn compute_drop_members_with_stats(
                 continue;
             }
             if *level >= policy.direct_min {
-                direct_members.insert(can_did, *level);
+                direct_members
+                    .entry(can_did)
+                    .and_modify(|e| *e = (*e).max(*level))
+                    .or_insert(*level);
             }
         }
     }
@@ -79,7 +83,10 @@ pub fn compute_drop_members_with_stats(
         let hop2_min_threshold = policy.hop2_min.max(1);
 
         for (friend_did, my_level_for_friend, disclosed) in bridges {
-            if canonicalize_did(friend_did).is_none() {
+            let Some(can_friend) = canonicalize_did(friend_did) else {
+                continue;
+            };
+            if deny_set.contains(&can_friend) {
                 continue;
             }
             if *my_level_for_friend < bridge_min_threshold {
@@ -107,11 +114,14 @@ pub fn compute_drop_members_with_stats(
         }
     }
 
-    // 3. Allow list (highest priority unless denied)
+    // 3. Allow list (highest priority unless denied, deterministically capped at max_members)
     let allow_set: BTreeSet<String> = allow
         .iter()
         .filter_map(|d| canonicalize_did(d))
         .filter(|d| !deny_set.contains(d))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .take(max_members)
         .collect();
 
     for allowed_did in &allow_set {
@@ -208,8 +218,14 @@ pub fn parse_ed25519_pubkey_hex64(hex_str: &str) -> Result<VerifyingKey, MarketE
     let mut bytes = [0u8; 32];
     hex::decode_to_slice(hex_str, &mut bytes)
         .map_err(|e| MarketError::Validation(format!("Invalid hex encoding: {}", e)))?;
-    VerifyingKey::from_bytes(&bytes)
-        .map_err(|e| MarketError::Validation(format!("Invalid Ed25519 public key bytes: {}", e)))
+    let vk = VerifyingKey::from_bytes(&bytes)
+        .map_err(|e| MarketError::Validation(format!("Invalid Ed25519 public key bytes: {}", e)))?;
+    if vk.is_weak() {
+        return Err(MarketError::Validation(
+            "Ed25519 public key is a weak small-order point".to_string(),
+        ));
+    }
+    Ok(vk)
 }
 
 fn sha256_hex(data: &[u8]) -> String {
@@ -222,17 +238,17 @@ fn sha256_hex(data: &[u8]) -> String {
 // =========================================================================
 
 pub fn derive_drop_admin_seed(master_seed: &[u8; 32], drop_index: u32) -> [u8; 32] {
-    let mut material = [0u8; 36];
+    let mut material = Zeroizing::new([0u8; 36]);
     material[..32].copy_from_slice(master_seed);
     material[32..36].copy_from_slice(&drop_index.to_be_bytes());
-    blake3::derive_key("HUMOCO_DROP_ADMIN_KEY_V1", &material)
+    blake3::derive_key("HUMOCO_DROP_ADMIN_KEY_V1", &*material)
 }
 
 pub fn derive_drop_admin_keypair(
     master_seed: &[u8; 32],
     drop_index: u32,
 ) -> (SigningKey, VerifyingKey, String) {
-    let seed = derive_drop_admin_seed(master_seed, drop_index);
+    let seed = Zeroizing::new(derive_drop_admin_seed(master_seed, drop_index));
     let sk = SigningKey::from_bytes(&seed);
     let vk = sk.verifying_key();
     let vk_hex = hex::encode(vk.as_bytes());
@@ -240,9 +256,9 @@ pub fn derive_drop_admin_keypair(
 }
 
 pub fn derive_drop_data_dir(master_seed: &[u8; 32], drop_index: u32) -> String {
-    let seed_0 = derive_drop_admin_seed(master_seed, drop_index);
-    let derived = blake3::derive_key("HUMOCO_DROP_DATADIR_V1", &seed_0);
-    format!("d-{}", &hex::encode(derived)[..16])
+    let seed_0 = Zeroizing::new(derive_drop_admin_seed(master_seed, drop_index));
+    let derived = Zeroizing::new(blake3::derive_key("HUMOCO_DROP_DATADIR_V1", &*seed_0));
+    format!("d-{}", &hex::encode(*derived)[..16])
 }
 
 // =========================================================================
@@ -261,7 +277,10 @@ pub fn derive_member_stealth_pubkey_admin(
             "Non-contributory Diffie-Hellman exchange".to_string(),
         ));
     }
-    let stealth_seed = blake3::derive_key("HUMOCO_DROP_STEALTH_SEED_V1", shared.as_bytes());
+    let stealth_seed = Zeroizing::new(blake3::derive_key(
+        "HUMOCO_DROP_STEALTH_SEED_V1",
+        shared.as_bytes(),
+    ));
     let point = derive_stealth_ephemeral_point(member_ed_pub, &stealth_seed)
         .map_err(|e| MarketError::Crypto(e.to_string()))?;
     Ok(hex::encode(point.compress().as_bytes()))
@@ -280,9 +299,13 @@ pub fn derive_member_stealth_pubkey(
             "Non-contributory Diffie-Hellman exchange".to_string(),
         ));
     }
-    let stealth_seed = blake3::derive_key("HUMOCO_DROP_STEALTH_SEED_V1", shared.as_bytes());
-    let (_, _, p_pub) = derive_stealth_secret_key(member_ed_sk, &stealth_seed)
+    let stealth_seed = Zeroizing::new(blake3::derive_key(
+        "HUMOCO_DROP_STEALTH_SEED_V1",
+        shared.as_bytes(),
+    ));
+    let (scalar, _, p_pub) = derive_stealth_secret_key(member_ed_sk, &stealth_seed)
         .map_err(|e| MarketError::Crypto(e.to_string()))?;
+    let _scalar = Zeroizing::new(scalar);
     Ok(hex::encode(p_pub.as_bytes()))
 }
 
@@ -300,9 +323,13 @@ pub fn sign_member_stealth_message(
             "Non-contributory Diffie-Hellman exchange".to_string(),
         ));
     }
-    let stealth_seed = blake3::derive_key("HUMOCO_DROP_STEALTH_SEED_V1", shared.as_bytes());
+    let stealth_seed = Zeroizing::new(blake3::derive_key(
+        "HUMOCO_DROP_STEALTH_SEED_V1",
+        shared.as_bytes(),
+    ));
     let (scalar, public_point, p_pub) = derive_stealth_secret_key(member_ed_sk, &stealth_seed)
         .map_err(|e| MarketError::Crypto(e.to_string()))?;
+    let scalar = Zeroizing::new(scalar);
     let sig = sign_ed25519_scalar(&scalar, &public_point, message);
     Ok((hex::encode(p_pub.as_bytes()), hex::encode(sig.to_bytes())))
 }
@@ -318,98 +345,77 @@ pub fn canonicalize_write_url(raw_url: &str) -> Result<String, MarketError> {
             "write_url cannot be empty".to_string(),
         ));
     }
+    if trimmed
+        .chars()
+        .any(|c| c.is_control() || c.is_whitespace() || c == '\\')
+    {
+        return Err(MarketError::Validation(
+            "write_url contains invalid whitespace, control, or backslash characters".to_string(),
+        ));
+    }
+
     let url_string = if !trimmed.contains("://") {
         format!("https://{}", trimmed)
     } else {
         trimmed.to_string()
     };
 
-    let (scheme, rest) = url_string
+    let after_scheme = url_string
         .split_once("://")
-        .ok_or_else(|| MarketError::Validation("Missing URL scheme".to_string()))?;
-    let mut scheme_lower = scheme.to_ascii_lowercase();
-
-    // Strip fragment (#) and query (?)
-    let before_fragment = rest.split_once('#').map(|(a, _)| a).unwrap_or(rest);
-    let before_query = before_fragment
-        .split_once('?')
-        .map(|(a, _)| a)
-        .unwrap_or(before_fragment);
-
-    // Split authority and path
-    let (authority, raw_path) = match before_query.split_once('/') {
-        Some((auth, path)) => (auth, format!("/{}", path)),
-        None => (before_query, "/".to_string()),
-    };
-
-    if authority.is_empty() {
-        return Err(MarketError::Validation("Missing host in URL".to_string()));
+        .map(|(_, rest)| rest)
+        .unwrap_or("");
+    let raw_authority = after_scheme.split(['/', '?', '#']).next().unwrap_or("");
+    if raw_authority.contains('@') {
+        return Err(MarketError::Validation(
+            "write_url must not contain userinfo credentials".to_string(),
+        ));
     }
 
-    // Split host and port in authority.
-    let (host, port_opt) = if authority.starts_with('[') {
-        if let Some(end_bracket) = authority.find(']') {
-            let host_part = &authority[..=end_bracket];
-            let after = &authority[end_bracket + 1..];
-            if let Some(port_str) = after.strip_prefix(':') {
-                (host_part, Some(port_str))
-            } else if after.is_empty() {
-                (host_part, None)
-            } else {
-                return Err(MarketError::Validation(format!(
-                    "Invalid IPv6 authority: {}",
-                    authority
-                )));
-            }
-        } else {
-            return Err(MarketError::Validation(format!(
-                "Unclosed IPv6 bracket in {}",
-                authority
-            )));
-        }
-    } else if let Some((h, p)) = authority.split_once(':') {
-        (h, Some(p))
-    } else {
-        (authority, None)
-    };
+    let parsed = url::Url::parse(&url_string)
+        .map_err(|e| MarketError::Validation(format!("Invalid write_url '{}': {}", raw_url, e)))?;
 
-    let host_lower = host.to_ascii_lowercase();
-
-    let port_num: Option<u16> = if let Some(p) = port_opt {
-        let p_num = p
-            .parse::<u16>()
-            .map_err(|e| MarketError::Validation(format!("Invalid port '{}': {}", p, e)))?;
-        Some(p_num)
-    } else {
-        None
-    };
-
-    let is_loopback =
-        host_lower == "localhost" || host_lower == "127.0.0.1" || host_lower == "[::1]";
-
-    match scheme_lower.as_str() {
-        "https" => {}
-        "http" => {
-            if !is_loopback {
-                // Auto-upgrade remote HTTP to HTTPS for user forgiveness
-                scheme_lower = "https".to_string();
-            }
-        }
+    let mut scheme_lower = match parsed.scheme() {
+        "https" => "https",
+        "http" => "http",
         other => {
             return Err(MarketError::Validation(format!(
                 "Unsupported scheme '{}', only https (and loopback http) are allowed",
                 other
             )));
         }
+    };
+
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err(MarketError::Validation(
+            "write_url must not contain userinfo credentials".to_string(),
+        ));
     }
 
-    // Strip default ports: 443 for https, 80 for http
-    let final_port = match (scheme_lower.as_str(), port_num) {
-        ("https", Some(443)) => None,
-        ("http", Some(80)) => None,
+    let Some(host) = parsed.host() else {
+        return Err(MarketError::Validation("Missing host in URL".to_string()));
+    };
+    let Some(host_str) = parsed.host_str() else {
+        return Err(MarketError::Validation("Missing host in URL".to_string()));
+    };
+    if parsed.port() == Some(0) {
+        return Err(MarketError::Validation("Port 0 is not allowed".to_string()));
+    }
+
+    let is_loopback = matches!(host, url::Host::Domain(d) if d.eq_ignore_ascii_case("localhost"))
+        || matches!(host, url::Host::Ipv4(ip) if ip == std::net::Ipv4Addr::LOCALHOST)
+        || matches!(host, url::Host::Ipv6(ip) if ip == std::net::Ipv6Addr::LOCALHOST);
+
+    if scheme_lower == "http" && !is_loopback {
+        // Auto-upgrade remote HTTP to HTTPS for user forgiveness
+        scheme_lower = "https";
+    }
+
+    let final_port = match (scheme_lower, parsed.port()) {
+        ("https", Some(443)) | ("http", Some(80)) => None,
         (_, other_port) => other_port,
     };
 
+    let host_lower = host_str.to_ascii_lowercase();
     let canonical_authority = match final_port {
         Some(p) => format!("{}:{}", host_lower, p),
         None => host_lower,
@@ -417,10 +423,10 @@ pub fn canonicalize_write_url(raw_url: &str) -> Result<String, MarketError> {
 
     // Normalize path: always ensure the endpoint ends in /sync.php, whether
     // user passed "example.com", "example.com/sync", "example.com/sync/", or "example.com/sync/sync.php"
-    let clean_path = raw_path.trim_end_matches('/');
+    let clean_path = parsed.path().trim_end_matches('/');
     let canonical_path = if clean_path.is_empty() {
         "/sync.php".to_string()
-    } else if clean_path.ends_with("/sync.php") || clean_path == "/sync.php" {
+    } else if clean_path.ends_with("/sync.php") {
         clean_path.to_string()
     } else {
         format!("{}/sync.php", clean_path)
@@ -437,10 +443,10 @@ pub fn derive_public_drop_keypair(
     write_url: &str,
 ) -> Result<(SigningKey, VerifyingKey, String), MarketError> {
     let canonical = canonicalize_write_url(write_url)?;
-    let mut material = Vec::with_capacity(32 + canonical.len());
+    let mut material = Zeroizing::new(Vec::with_capacity(32 + canonical.len()));
     material.extend_from_slice(master_seed);
     material.extend_from_slice(canonical.as_bytes());
-    let seed_reg = blake3::derive_key("HUMOCO_PUBLIC_DROP_USER_V1", &material);
+    let seed_reg = Zeroizing::new(blake3::derive_key("HUMOCO_PUBLIC_DROP_USER_V1", &material));
     let r = SigningKey::from_bytes(&seed_reg);
     let r_pk = r.verifying_key();
     let r_hex = hex::encode(r_pk.as_bytes());
@@ -599,8 +605,8 @@ pub fn sign_member_request_direct(
     timestamp: u64,
     nonce_hex: &str,
     body: &[u8],
-) -> SignedDropHeaders {
-    let normalized_prefix = prefix.filter(|s| !s.is_empty()).map(str::to_string);
+) -> Result<SignedDropHeaders, MarketError> {
+    let normalized_prefix = validate_sync_prefix(prefix)?;
     let msg = format_member_request_message(
         method,
         channel,
@@ -610,29 +616,13 @@ pub fn sign_member_request_direct(
         body,
     );
     let sig = signing_key.sign(msg.as_bytes());
-    SignedDropHeaders {
+    Ok(SignedDropHeaders {
         pubkey_hex: hex::encode(signing_key.verifying_key().as_bytes()),
         prefix: normalized_prefix,
         timestamp,
         nonce_hex: nonce_hex.to_string(),
         signature_hex: hex::encode(sig.to_bytes()),
-    }
-}
-
-pub fn sign_member_request(
-    member_stealth_sk: &[u8; 32],
-    method: &str,
-    channel: &str,
-    prefix: Option<&str>,
-    timestamp: u64,
-    nonce_hex: &str,
-    body: &[u8],
-) -> Result<SignedDropHeaders, MarketError> {
-    validate_sync_prefix(prefix)?;
-    let sk = SigningKey::from_bytes(member_stealth_sk);
-    Ok(sign_member_request_direct(
-        &sk, method, channel, prefix, timestamp, nonce_hex, body,
-    ))
+    })
 }
 
 pub fn sign_admin_request(
@@ -685,14 +675,25 @@ pub fn derive_delta_prefix(base_prefix: Option<&str>) -> String {
     match base_prefix.map(str::trim).filter(|p| !p.is_empty()) {
         None => "delta".to_string(),
         Some(pfx) => {
-            if pfx.len() + 6 <= 63 {
-                format!("{}-delta", pfx)
+            let clean = pfx.trim_end_matches('-');
+            if clean.is_empty() {
+                return "delta".to_string();
+            }
+            if clean.len() + 6 <= 63 {
+                format!("{}-delta", clean)
             } else {
-                let truncated = pfx[..57].trim_end_matches('-');
-                if truncated.is_empty() {
+                let mut truncated = String::with_capacity(57);
+                for ch in clean.chars() {
+                    if truncated.len() + ch.len_utf8() > 57 {
+                        break;
+                    }
+                    truncated.push(ch);
+                }
+                let trimmed = truncated.trim_end_matches('-');
+                if trimmed.is_empty() {
                     "delta".to_string()
                 } else {
-                    format!("{}-delta", truncated)
+                    format!("{}-delta", trimmed)
                 }
             }
         }
@@ -705,13 +706,13 @@ pub fn sign_delete_account_request(
     timestamp: u64,
     nonce_hex: &str,
 ) -> SignedDropHeaders {
-    sign_member_request_direct(
-        signing_key,
-        "DELETE_ACCOUNT",
-        "",
-        None,
+    let msg = format_member_request_message("DELETE_ACCOUNT", "", None, timestamp, nonce_hex, &[]);
+    let sig = signing_key.sign(msg.as_bytes());
+    SignedDropHeaders {
+        pubkey_hex: hex::encode(signing_key.verifying_key().as_bytes()),
+        prefix: None,
         timestamp,
-        nonce_hex,
-        &[],
-    )
+        nonce_hex: nonce_hex.to_string(),
+        signature_hex: hex::encode(sig.to_bytes()),
+    }
 }

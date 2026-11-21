@@ -10,6 +10,7 @@ use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
+use zeroize::Zeroizing;
 
 use crate::error::MarketError;
 use crate::model::{DropDescriptor, MAX_AD_TITLE_CHARS, MAX_SKILL_TITLE_CHARS};
@@ -44,6 +45,12 @@ pub const PAYLOAD_MARKET_INQUIRY_MESSAGE_V1: &str = "market_inquiry_message_v1";
 pub const MAX_INQUIRY_CHARS: usize = 280;
 pub const MAX_INQUIRY_MESSAGES_PER_THREAD: usize = 20;
 pub const DEFAULT_MAX_OPEN_INQUIRIES_PER_LISTING: usize = 20;
+pub const MAX_INQUIRY_TRACKER_TARGETS: usize = 64;
+const MAX_POST_ID_BYTES: usize = 128;
+const MAX_SENDER_NAME_CHARS: usize = 128;
+const MAX_RAW_INQUIRY_TEXT_BYTES: usize = 2048;
+const MAX_RAW_TITLE_BYTES: usize = 512;
+const MAX_WOT_SYNC_JSON_BYTES: usize = 256 * 1024;
 
 /// Derives a contributory X25519 shared secret between an Ed25519 signing key and a peer Ed25519 verifying key.
 pub fn derive_post_shared_secret(
@@ -111,7 +118,7 @@ pub fn compute_dummy_tag16(dummy_key: &[u8; 32], msg_nonce: &[u8; 24]) -> [u8; 1
 
 /// Creates a 4 KB dummy post box entry that is recognizable only by devices possessing `master_seed`.
 pub fn create_dummy_post_box(master_seed: &[u8; 32]) -> PostBoxEntry {
-    let dummy_key = derive_dummy_key(master_seed);
+    let dummy_key = Zeroizing::new(derive_dummy_key(master_seed));
     let mut msg_nonce = [0u8; 24];
     OsRng.fill_bytes(&mut msg_nonce);
     let tag16 = compute_dummy_tag16(&dummy_key, &msg_nonce);
@@ -126,7 +133,7 @@ pub fn create_dummy_post_box(master_seed: &[u8; 32]) -> PostBoxEntry {
 
 /// Checks in constant time whether an entry is an internal dummy box belonging to the holder of `master_seed`.
 pub fn is_own_dummy_post_box(master_seed: &[u8; 32], entry: &PostBoxEntry) -> bool {
-    let dummy_key = derive_dummy_key(master_seed);
+    let dummy_key = Zeroizing::new(derive_dummy_key(master_seed));
     let expected = compute_dummy_tag16(&dummy_key, &entry.msg_nonce);
     bool::from(expected.ct_eq(&entry.tag16))
 }
@@ -191,15 +198,16 @@ pub fn seal_post_box(
     recipient_ed_pk: &VerifyingKey,
     envelope: &PostEnvelope,
 ) -> Result<PostBoxEntry, MarketError> {
-    let shared_secret = derive_post_shared_secret(sender_ed_sk, recipient_ed_pk)?;
+    let shared_secret = Zeroizing::new(derive_post_shared_secret(sender_ed_sk, recipient_ed_pk)?);
     let mut msg_nonce = [0u8; 24];
     OsRng.fill_bytes(&mut msg_nonce);
 
     let tag16 = compute_post_tag16(&shared_secret, &msg_nonce);
-    let k_box = derive_post_box_key(&shared_secret, &msg_nonce)?;
+    let k_box = Zeroizing::new(derive_post_box_key(&shared_secret, &msg_nonce)?);
 
-    let envelope_json =
-        serde_json::to_vec(envelope).map_err(|e| MarketError::Serialization(e.to_string()))?;
+    let envelope_json = Zeroizing::new(
+        serde_json::to_vec(envelope).map_err(|e| MarketError::Serialization(e.to_string()))?,
+    );
 
     let needed = 4 + envelope_json.len() + 16;
     let target_tier = POST_BOX_TIERS
@@ -215,18 +223,18 @@ pub fn seal_post_box(
         })?;
 
     let plain_len = target_tier - 16;
-    let mut padded_plaintext = Vec::with_capacity(plain_len);
+    let mut padded_plaintext = Zeroizing::new(Vec::with_capacity(plain_len));
     padded_plaintext.extend_from_slice(&(envelope_json.len() as u32).to_be_bytes());
     padded_plaintext.extend_from_slice(&envelope_json);
 
     let pad_len = plain_len - padded_plaintext.len();
     if pad_len > 0 {
-        let mut pad = vec![0u8; pad_len];
-        OsRng.fill_bytes(&mut pad);
-        padded_plaintext.extend_from_slice(&pad);
+        let start = padded_plaintext.len();
+        padded_plaintext.resize(plain_len, 0);
+        OsRng.fill_bytes(&mut padded_plaintext[start..]);
     }
 
-    let cipher = XChaCha20Poly1305::new_from_slice(&k_box)
+    let cipher = XChaCha20Poly1305::new_from_slice(&*k_box)
         .map_err(|e| MarketError::Crypto(e.to_string()))?;
     let nonce = XNonce::from_slice(&msg_nonce);
 
@@ -248,17 +256,11 @@ pub fn seal_post_box(
     })
 }
 
-/// Attempts to open a `PostBoxEntry` from a specific sender.
-///
-/// First verifies `tag16` in constant time without AEAD decryption. If the tag does not match,
-/// returns `Ok(None)` immediately. If matching, decrypts, validates tier length and authenticates.
-pub fn try_open_post_box_from_sender(
-    recipient_ed_sk: &SigningKey,
-    sender_ed_pk: &VerifyingKey,
+fn try_open_post_box_with_shared_secret(
+    shared_secret: &[u8; 32],
     entry: &PostBoxEntry,
 ) -> Result<Option<PostEnvelope>, MarketError> {
-    let shared_secret = derive_post_shared_secret(recipient_ed_sk, sender_ed_pk)?;
-    let expected_tag16 = compute_post_tag16(&shared_secret, &entry.msg_nonce);
+    let expected_tag16 = compute_post_tag16(shared_secret, &entry.msg_nonce);
 
     if !bool::from(expected_tag16.ct_eq(&entry.tag16)) {
         return Ok(None);
@@ -271,8 +273,8 @@ pub fn try_open_post_box_from_sender(
         )));
     }
 
-    let k_box = derive_post_box_key(&shared_secret, &entry.msg_nonce)?;
-    let cipher = XChaCha20Poly1305::new_from_slice(&k_box)
+    let k_box = Zeroizing::new(derive_post_box_key(shared_secret, &entry.msg_nonce)?);
+    let cipher = XChaCha20Poly1305::new_from_slice(&*k_box)
         .map_err(|e| MarketError::Crypto(e.to_string()))?;
     let nonce = XNonce::from_slice(&entry.msg_nonce);
 
@@ -281,9 +283,11 @@ pub fn try_open_post_box_from_sender(
         aad: &entry.tag16,
     };
 
-    let decrypted = cipher
-        .decrypt(nonce, payload)
-        .map_err(|e| MarketError::Crypto(format!("AEAD authentication failed: {}", e)))?;
+    let decrypted = Zeroizing::new(
+        cipher
+            .decrypt(nonce, payload)
+            .map_err(|e| MarketError::Crypto(format!("AEAD authentication failed: {}", e)))?,
+    );
 
     if decrypted.len() < 4 {
         return Err(MarketError::Slot(
@@ -293,7 +297,10 @@ pub fn try_open_post_box_from_sender(
 
     let inner_len =
         u32::from_be_bytes([decrypted[0], decrypted[1], decrypted[2], decrypted[3]]) as usize;
-    if 4 + inner_len > decrypted.len() {
+    if 4usize
+        .checked_add(inner_len)
+        .is_none_or(|end| end > decrypted.len())
+    {
         return Err(MarketError::Slot(format!(
             "Invalid inner envelope length {} in post box decrypted length {}",
             inner_len,
@@ -307,6 +314,19 @@ pub fn try_open_post_box_from_sender(
     Ok(Some(envelope))
 }
 
+/// Attempts to open a `PostBoxEntry` from a specific sender.
+///
+/// First verifies `tag16` in constant time without AEAD decryption. If the tag does not match,
+/// returns `Ok(None)` immediately. If matching, decrypts, validates tier length and authenticates.
+pub fn try_open_post_box_from_sender(
+    recipient_ed_sk: &SigningKey,
+    sender_ed_pk: &VerifyingKey,
+    entry: &PostBoxEntry,
+) -> Result<Option<PostEnvelope>, MarketError> {
+    let shared_secret = Zeroizing::new(derive_post_shared_secret(recipient_ed_sk, sender_ed_pk)?);
+    try_open_post_box_with_shared_secret(&shared_secret, entry)
+}
+
 /// Checks `entry` against all precomputed/authorized senders and returns `(sender_did, envelope)` on match.
 pub fn try_open_post_box_any_sender(
     recipient_ed_sk: &SigningKey,
@@ -314,7 +334,12 @@ pub fn try_open_post_box_any_sender(
     entry: &PostBoxEntry,
 ) -> Result<Option<(String, PostEnvelope)>, MarketError> {
     for (sender_did, sender_pk) in authorized_senders {
-        if let Some(envelope) = try_open_post_box_from_sender(recipient_ed_sk, sender_pk, entry)? {
+        let Ok(shared_secret) =
+            derive_post_shared_secret(recipient_ed_sk, sender_pk).map(Zeroizing::new)
+        else {
+            continue;
+        };
+        if let Some(envelope) = try_open_post_box_with_shared_secret(&shared_secret, entry)? {
             return Ok(Some((sender_did.clone(), envelope)));
         }
     }
@@ -331,11 +356,19 @@ pub fn encode_post_slot(
     real_entries: &[PostBoxEntry],
     max_bytes: usize,
 ) -> Result<Vec<u8>, MarketError> {
-    let mut entries: Vec<PostBoxEntry> = real_entries
-        .iter()
-        .filter(|e| !is_own_dummy_post_box(master_seed, e))
-        .cloned()
-        .collect();
+    let mut entries: Vec<PostBoxEntry> = Vec::with_capacity(real_entries.len());
+    for entry in real_entries {
+        if is_own_dummy_post_box(master_seed, entry) {
+            continue;
+        }
+        if !POST_BOX_TIERS.contains(&entry.ciphertext.len()) {
+            return Err(MarketError::Validation(format!(
+                "Invalid post box ciphertext tier length: {}",
+                entry.ciphertext.len()
+            )));
+        }
+        entries.push(entry.clone());
+    }
 
     let needed_dummies = 2usize.saturating_sub(entries.len());
     for _ in 0..needed_dummies {
@@ -406,7 +439,8 @@ pub fn decode_post_slot(slot_bytes: &[u8]) -> Result<Vec<PostBoxEntry>, MarketEr
 
     let count = u16::from_be_bytes([slot_bytes[8], slot_bytes[9]]) as usize;
     let remaining = slot_bytes.len().saturating_sub(POST_SLOT_HEADER_BYTES);
-    let mut entries = Vec::with_capacity(count.min(remaining / POST_ENTRY_HEADER_BYTES));
+    let min_entry_bytes = POST_ENTRY_HEADER_BYTES + POST_BOX_TIERS[0];
+    let mut entries = Vec::with_capacity(count.min(remaining / min_entry_bytes));
     let mut offset = 10;
 
     for i in 0..count {
@@ -440,7 +474,10 @@ pub fn decode_post_slot(slot_bytes: &[u8]) -> Result<Vec<PostBoxEntry>, MarketEr
             )));
         }
 
-        if offset + ct_len > slot_bytes.len() {
+        if offset
+            .checked_add(ct_len)
+            .is_none_or(|end| end > slot_bytes.len())
+        {
             return Err(MarketError::Slot(format!(
                 "Truncated ciphertext for entry {}: expected {} bytes, have {}",
                 i,
@@ -485,6 +522,12 @@ pub fn pack_post_slot(
     for entry in ordered_entries {
         if is_own_dummy_post_box(master_seed, entry) {
             continue;
+        }
+        if !POST_BOX_TIERS.contains(&entry.ciphertext.len()) {
+            return Err(MarketError::Validation(format!(
+                "Invalid post box ciphertext tier length: {}",
+                entry.ciphertext.len()
+            )));
         }
         if seen_tags.insert(entry.tag16) {
             deduped.push(entry.clone());
@@ -576,17 +619,31 @@ pub struct PostDeliveryReceipt {
 }
 
 pub fn validate_post_delivery_receipt(receipt: &PostDeliveryReceipt) -> Result<(), MarketError> {
-    if receipt.acknowledged_msg_id.trim().is_empty() {
-        return Err(MarketError::Validation(
-            "acknowledged_msg_id cannot be empty".to_string(),
-        ));
+    if receipt.acknowledged_msg_id.trim().is_empty()
+        || receipt.acknowledged_msg_id.len() > MAX_POST_ID_BYTES
+    {
+        return Err(MarketError::Validation(format!(
+            "acknowledged_msg_id must be non-empty and <= {} bytes",
+            MAX_POST_ID_BYTES
+        )));
     }
     if receipt.acknowledged_tag16_hex.len() != 32
-        || hex::decode(&receipt.acknowledged_tag16_hex).is_err()
+        || !receipt
+            .acknowledged_tag16_hex
+            .bytes()
+            .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
     {
         return Err(MarketError::Validation(
-            "acknowledged_tag16_hex must be a valid 32-hex character string".to_string(),
+            "acknowledged_tag16_hex must be a valid 32-lowercase-hex string".to_string(),
         ));
+    }
+    if let Some(ref bid) = receipt.bundle_id {
+        if bid.trim().is_empty() || bid.len() > MAX_POST_ID_BYTES {
+            return Err(MarketError::Validation(format!(
+                "bundle_id must be non-empty and <= {} bytes",
+                MAX_POST_ID_BYTES
+            )));
+        }
     }
     Ok(())
 }
@@ -614,16 +671,28 @@ pub fn validate_wot_handshake_assertion(
     human_money_core::ValidatedUserId::parse(&assertion.sender_did)
         .map_err(|e| MarketError::Identity(format!("Invalid sender_did: {}", e)))?;
 
+    if let Some(ref name) = assertion.sender_name {
+        if name.len() > MAX_RAW_TITLE_BYTES || name.chars().count() > MAX_SENDER_NAME_CHARS {
+            return Err(MarketError::Validation(format!(
+                "sender_name exceeds maximum length ({} chars / {} bytes)",
+                MAX_SENDER_NAME_CHARS, MAX_RAW_TITLE_BYTES
+            )));
+        }
+    }
+
     if assertion.proposed_level > 1 {
         return Err(MarketError::Validation(format!(
             "proposed_level must be 0 or 1, got {}",
             assertion.proposed_level
         )));
     }
-    if assertion.wot_sync_json.trim().is_empty() {
-        return Err(MarketError::Validation(
-            "wot_sync_json cannot be empty".to_string(),
-        ));
+    if assertion.wot_sync_json.trim().is_empty()
+        || assertion.wot_sync_json.len() > MAX_WOT_SYNC_JSON_BYTES
+    {
+        return Err(MarketError::Validation(format!(
+            "wot_sync_json must be non-empty and <= {} bytes",
+            MAX_WOT_SYNC_JSON_BYTES
+        )));
     }
     Ok(())
 }
@@ -664,10 +733,11 @@ pub struct MarketInquiry {
 }
 
 pub fn validate_market_inquiry(inquiry: &MarketInquiry) -> Result<(), MarketError> {
-    if inquiry.inquiry_id.trim().is_empty() {
-        return Err(MarketError::Validation(
-            "inquiry_id cannot be empty".to_string(),
-        ));
+    if inquiry.inquiry_id.trim().is_empty() || inquiry.inquiry_id.len() > MAX_POST_ID_BYTES {
+        return Err(MarketError::Validation(format!(
+            "inquiry_id must be non-empty and <= {} bytes",
+            MAX_POST_ID_BYTES
+        )));
     }
     match &inquiry.target {
         InquiryTarget::Ad { ad_id, ad_title } => {
@@ -675,6 +745,12 @@ pub fn validate_market_inquiry(inquiry: &MarketInquiry) -> Result<(), MarketErro
                 return Err(MarketError::Validation(format!(
                     "ad_id must be exactly 16 lowercase hex chars, got {}",
                     ad_id
+                )));
+            }
+            if ad_title.len() > MAX_RAW_TITLE_BYTES {
+                return Err(MarketError::Validation(format!(
+                    "ad_title raw length exceeds {} bytes",
+                    MAX_RAW_TITLE_BYTES
                 )));
             }
             let title_trimmed = ad_title.trim();
@@ -688,6 +764,12 @@ pub fn validate_market_inquiry(inquiry: &MarketInquiry) -> Result<(), MarketErro
         }
         InquiryTarget::Person { skill_title } => {
             if let Some(ref title) = skill_title {
+                if title.len() > MAX_RAW_TITLE_BYTES {
+                    return Err(MarketError::Validation(format!(
+                        "skill_title raw length exceeds {} bytes",
+                        MAX_RAW_TITLE_BYTES
+                    )));
+                }
                 let title_trimmed = title.trim();
                 let title_count = title_trimmed.chars().count();
                 if title_count == 0 || title_count > MAX_SKILL_TITLE_CHARS {
@@ -698,6 +780,12 @@ pub fn validate_market_inquiry(inquiry: &MarketInquiry) -> Result<(), MarketErro
                 }
             }
         }
+    }
+    if inquiry.message.len() > MAX_RAW_INQUIRY_TEXT_BYTES {
+        return Err(MarketError::Validation(format!(
+            "message raw length exceeds {} bytes",
+            MAX_RAW_INQUIRY_TEXT_BYTES
+        )));
     }
     let msg_chars = inquiry.message.trim().chars().count();
     if msg_chars == 0 {
@@ -741,15 +829,17 @@ pub struct MarketInquiryMessage {
 }
 
 pub fn validate_market_inquiry_message(msg: &MarketInquiryMessage) -> Result<(), MarketError> {
-    if msg.inquiry_id.trim().is_empty() {
-        return Err(MarketError::Validation(
-            "inquiry_id cannot be empty".to_string(),
-        ));
+    if msg.inquiry_id.trim().is_empty() || msg.inquiry_id.len() > MAX_POST_ID_BYTES {
+        return Err(MarketError::Validation(format!(
+            "inquiry_id must be non-empty and <= {} bytes",
+            MAX_POST_ID_BYTES
+        )));
     }
-    if msg.msg_id.trim().is_empty() {
-        return Err(MarketError::Validation(
-            "msg_id cannot be empty".to_string(),
-        ));
+    if msg.msg_id.trim().is_empty() || msg.msg_id.len() > MAX_POST_ID_BYTES {
+        return Err(MarketError::Validation(format!(
+            "msg_id must be non-empty and <= {} bytes",
+            MAX_POST_ID_BYTES
+        )));
     }
     if msg.decision.is_none() && msg.text.is_none() {
         return Err(MarketError::Validation(
@@ -757,6 +847,12 @@ pub fn validate_market_inquiry_message(msg: &MarketInquiryMessage) -> Result<(),
         ));
     }
     if let Some(ref txt) = msg.text {
+        if txt.len() > MAX_RAW_INQUIRY_TEXT_BYTES {
+            return Err(MarketError::Validation(format!(
+                "message text raw length exceeds {} bytes",
+                MAX_RAW_INQUIRY_TEXT_BYTES
+            )));
+        }
         let trimmed_chars = txt.trim().chars().count();
         if trimmed_chars == 0 {
             return Err(MarketError::Validation(
@@ -771,19 +867,24 @@ pub fn validate_market_inquiry_message(msg: &MarketInquiryMessage) -> Result<(),
         }
     }
     if let Some(ref payment_uri) = msg.payment_uri {
+        if payment_uri.len() > 512 || payment_uri.chars().any(char::is_control) {
+            return Err(MarketError::Validation(
+                "payment_uri exceeds maximum length 512 or contains control characters".to_string(),
+            ));
+        }
         let trimmed = payment_uri.trim();
         if !trimmed.to_ascii_lowercase().starts_with("humoco://pay?") {
             return Err(MarketError::Validation(
                 "payment_uri must start with 'humoco://pay?'".to_string(),
             ));
         }
-        if trimmed.len() > 512 {
-            return Err(MarketError::Validation(
-                "payment_uri exceeds maximum length 512".to_string(),
-            ));
-        }
     }
     if let Some(ref amount_hint) = msg.amount_hint {
+        if amount_hint.len() > 128 {
+            return Err(MarketError::Validation(
+                "amount_hint exceeds maximum raw length 128".to_string(),
+            ));
+        }
         let count = amount_hint.trim().chars().count();
         if count == 0 || count > 64 {
             return Err(MarketError::Validation(
@@ -792,6 +893,11 @@ pub fn validate_market_inquiry_message(msg: &MarketInquiryMessage) -> Result<(),
         }
     }
     if let Some(ref standard_uuid) = msg.standard_uuid {
+        if standard_uuid.len() > 128 {
+            return Err(MarketError::Validation(
+                "standard_uuid exceeds maximum raw length 128".to_string(),
+            ));
+        }
         let count = standard_uuid.trim().chars().count();
         if count == 0 || count > 128 {
             return Err(MarketError::Validation(
@@ -840,7 +946,25 @@ impl InquiryRateTracker {
     ) -> Result<(), MarketError> {
         let sender = sender_pubkey_hex.trim().to_ascii_lowercase();
         let target = target_key.trim().to_string();
+        if sender.is_empty() || target.is_empty() {
+            return Err(MarketError::Validation(
+                "Inquiry rate tracker sender and target cannot be empty".to_string(),
+            ));
+        }
+        if !self.inquiries.contains_key(&target)
+            && self.inquiries.len() >= MAX_INQUIRY_TRACKER_TARGETS
+        {
+            return Err(MarketError::Validation(format!(
+                "Inquiry tracker reached maximum distinct targets ({})",
+                MAX_INQUIRY_TRACKER_TARGETS
+            )));
+        }
 
+        let limit = if self.max_per_target == 0 {
+            DEFAULT_MAX_OPEN_INQUIRIES_PER_LISTING
+        } else {
+            self.max_per_target
+        };
         let entry = self.inquiries.entry(target.clone()).or_default();
 
         if entry.contains(&sender) {
@@ -850,10 +974,10 @@ impl InquiryRateTracker {
             )));
         }
 
-        if entry.len() >= self.max_per_target {
+        if entry.len() >= limit {
             return Err(MarketError::Validation(format!(
                 "Target {} reached maximum open inquiries ({})",
-                target, self.max_per_target
+                target, limit
             )));
         }
 

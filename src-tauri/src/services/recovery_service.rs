@@ -705,7 +705,7 @@ pub fn inspect_emergency_kit_uri_impl(
         word_count,
         language: core_to_frontend_language(core_lang),
         has_bip39_passphrase: kit.has_bip39_passphrase,
-        user_prefix: kit.user_prefix,
+        user_prefix: kit.user_prefix.clone(),
         sync_urls,
         sync_descriptors_json,
     })

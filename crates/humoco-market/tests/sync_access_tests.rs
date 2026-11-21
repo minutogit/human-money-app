@@ -280,7 +280,8 @@ fn test_http_request_signers() {
 
     // Direct member signer (for public drop user R, None prefix)
     let direct_headers =
-        sign_member_request_direct(&member_sk, "PUT", "card", None, timestamp, nonce, body);
+        sign_member_request_direct(&member_sk, "PUT", "card", None, timestamp, nonce, body)
+            .unwrap();
     assert_eq!(
         direct_headers.pubkey_hex,
         hex::encode(member_sk.verifying_key().as_bytes())
@@ -325,7 +326,8 @@ fn test_http_request_signers() {
         timestamp,
         nonce,
         body,
-    );
+    )
+    .unwrap();
     assert_eq!(direct_pfx_headers.prefix, Some("bob-2".to_string()));
     let expected_bob_msg =
         format_member_request_message("PUT", "card", Some("bob-2"), timestamp, nonce, body);

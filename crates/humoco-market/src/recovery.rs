@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use argon2::{Algorithm, Argon2, Params, Version};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
+use bincode::Options;
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
 use ed25519_dalek::{Signature, Signer, SigningKey};
@@ -15,6 +16,7 @@ use rand::rngs::OsRng;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
+use subtle::ConstantTimeEq;
 use unicode_normalization::UnicodeNormalization;
 use url::form_urlencoded;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
@@ -46,6 +48,93 @@ pub const PAYLOAD_GUARDIAN_ACK_V1: &str = "guardian_ack_v1";
 pub const PAYLOAD_GUARDIAN_LOCATOR_V1: &str = "guardian_locator_v1";
 pub const PAYLOAD_GUARDIAN_REVOKE_V1: &str = "guardian_revoke_v1";
 pub const MAX_GUARDIAN_WARDS: usize = 64;
+pub const MAX_GUARDIAN_WATERMARKS: usize = MAX_GUARDIAN_WARDS * 4;
+pub const MAX_RECOVERY_SYNC_DESCRIPTORS: usize = 8;
+const MAX_RECOVERY_DISPLAY_NAME_CHARS: usize = 128;
+const MAX_RECOVERY_URL_BYTES: usize = 512;
+const MAX_RECOVERY_R_ENC_BYTES: usize = 16 * 1024;
+const MAX_RECOVERY_BINCODE_BYTES: u64 = 64 * 1024;
+const MAX_RECOVERY_REPLY_JSON_BYTES: usize = 64 * 1024;
+const MAX_RECOVERY_URI_INPUT_BYTES: usize = 128 * 1024;
+const MAX_RECOVERY_B64_FIELD_BYTES: usize = 96 * 1024;
+
+fn validate_question_ids(question_ids: &[u8; 3]) -> Result<(), MarketError> {
+    for &qid in question_ids {
+        if !(1..=RECOVERY_QUESTION_COUNT).contains(&qid) {
+            return Err(MarketError::Validation(format!(
+                "Invalid question ID {}: must be between 1 and {}",
+                qid, RECOVERY_QUESTION_COUNT
+            )));
+        }
+    }
+
+    if question_ids[0] == question_ids[1]
+        || question_ids[0] == question_ids[2]
+        || question_ids[1] == question_ids[2]
+    {
+        return Err(MarketError::Validation(
+            "Question IDs must be pairwise distinct".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_recovery_sync_descriptors(
+    descriptors: &[DropDescriptor],
+    ctx: &str,
+) -> Result<(), MarketError> {
+    if descriptors.len() > MAX_RECOVERY_SYNC_DESCRIPTORS {
+        return Err(MarketError::Validation(format!(
+            "{} sync descriptor count {} exceeds maximum {}",
+            ctx,
+            descriptors.len(),
+            MAX_RECOVERY_SYNC_DESCRIPTORS
+        )));
+    }
+    for (i, d) in descriptors.iter().enumerate() {
+        for (field, url) in [("write_url", &d.write_url), ("read_url", &d.read_url)] {
+            if url.is_empty()
+                || url.len() > MAX_RECOVERY_URL_BYTES
+                || url.chars().any(|c| c.is_control() || c.is_whitespace())
+            {
+                return Err(MarketError::Validation(format!(
+                    "{} sync[{}] {} is empty, too long, or contains invalid characters",
+                    ctx, i, field
+                )));
+            }
+            if !url.starts_with("https://") && !crate::sd_card::is_loopback_http(url) {
+                return Err(MarketError::Validation(format!(
+                    "{} sync[{}] {} must be HTTPS or loopback HTTP",
+                    ctx, i, field
+                )));
+            }
+        }
+        let dp = d.drop_pub.trim();
+        if dp.is_empty() || dp.len() > 128 || dp.chars().any(char::is_control) {
+            return Err(MarketError::Validation(format!(
+                "{} sync[{}] drop_pub must be 1..=128 non-control chars",
+                ctx, i
+            )));
+        }
+        if let Some(ref slot_id) = d.slot_id {
+            if slot_id.is_empty() || slot_id.len() > 128 || slot_id.chars().any(char::is_control) {
+                return Err(MarketError::Validation(format!(
+                    "{} sync[{}] slot_id must be 1..=128 non-control chars",
+                    ctx, i
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn recovery_reply_aad(eph_pk: &[u8; 32], pk_temp: &[u8; 32]) -> [u8; 19 + 32 + 32] {
+    let mut aad = [0u8; 19 + 32 + 32];
+    aad[..19].copy_from_slice(b"HUMOCO-REC-REPLY-V1");
+    aad[19..51].copy_from_slice(eph_pk);
+    aad[51..83].copy_from_slice(pk_temp);
+    aad
+}
 
 // ============================================================================
 // Normalization & Answer Validation
@@ -59,9 +148,9 @@ pub const MAX_GUARDIAN_WARDS: usize = 64;
 /// 3. German umlaut / eszett folding (`ä -> ae`, `ö -> oe`, `ü -> ue`, `ß -> ss`).
 /// 4. Replace `-` and `_` with `' '`, collapse consecutive whitespace runs to a single `' '`, and trim ends.
 pub fn normalize_recovery_input(raw: &str) -> String {
-    let nfc: String = raw.nfc().collect();
-    let lower = nfc.to_lowercase();
-    let mut folded = String::with_capacity(lower.len());
+    let nfc = Zeroizing::new(raw.nfc().collect::<String>());
+    let lower = Zeroizing::new(nfc.to_lowercase());
+    let mut folded = Zeroizing::new(String::with_capacity(lower.len()));
     for ch in lower.chars() {
         match ch {
             'ä' => folded.push_str("ae"),
@@ -86,27 +175,11 @@ pub fn validate_and_canonicalize_answers(
     question_ids: &[u8; 3],
     answers: &[&str; 3],
 ) -> Result<Zeroizing<String>, MarketError> {
-    for &qid in question_ids {
-        if !(1..=RECOVERY_QUESTION_COUNT).contains(&qid) {
-            return Err(MarketError::Validation(format!(
-                "Invalid question ID {}: must be between 1 and {}",
-                qid, RECOVERY_QUESTION_COUNT
-            )));
-        }
-    }
+    validate_question_ids(question_ids)?;
 
-    if question_ids[0] == question_ids[1]
-        || question_ids[0] == question_ids[2]
-        || question_ids[1] == question_ids[2]
-    {
-        return Err(MarketError::Validation(
-            "Question IDs must be pairwise distinct".to_string(),
-        ));
-    }
-
-    let norm_0 = normalize_recovery_input(answers[0]);
-    let norm_1 = normalize_recovery_input(answers[1]);
-    let norm_2 = normalize_recovery_input(answers[2]);
+    let norm_0 = Zeroizing::new(normalize_recovery_input(answers[0]));
+    let norm_1 = Zeroizing::new(normalize_recovery_input(answers[1]));
+    let norm_2 = Zeroizing::new(normalize_recovery_input(answers[2]));
 
     let len_0 = norm_0.chars().count();
     let len_1 = norm_1.chars().count();
@@ -132,7 +205,7 @@ pub fn validate_and_canonicalize_answers(
 
     let canonical = format!(
         "HUMOCO-REC-KDF-V1|q3|{}:{}|{}:{}|{}:{}",
-        question_ids[0], norm_0, question_ids[1], norm_1, question_ids[2], norm_2
+        question_ids[0], &*norm_0, question_ids[1], &*norm_1, question_ids[2], &*norm_2
     );
 
     Ok(Zeroizing::new(canonical))
@@ -196,6 +269,13 @@ pub fn validate_kdf_params(params: &RecoveryKdfParams) -> Result<(), MarketError
             params.p_cost, KDF_P_COST_MIN, KDF_P_COST_MAX
         )));
     }
+    if params.m_kib < 8u32.saturating_mul(params.p_cost) {
+        return Err(MarketError::Validation(format!(
+            "m_kib {} must be at least 8 * p_cost ({})",
+            params.m_kib,
+            8u32.saturating_mul(params.p_cost)
+        )));
+    }
     Ok(())
 }
 
@@ -212,12 +292,12 @@ pub fn derive_recovery_key(
         .map_err(|e| MarketError::Crypto(format!("Invalid Argon2 parameters: {}", e)))?;
 
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, argon_params);
-    let mut key = [0u8; 32];
+    let mut key = Zeroizing::new([0u8; 32]);
     argon2
-        .hash_password_into(canonical.as_bytes(), &params.salt, &mut key)
+        .hash_password_into(canonical.as_bytes(), &params.salt, &mut *key)
         .map_err(|e| MarketError::Crypto(format!("Argon2id derivation failed: {}", e)))?;
 
-    Ok(Zeroizing::new(key))
+    Ok(key)
 }
 
 fn derive_single_answer_verifier(
@@ -236,9 +316,9 @@ fn derive_single_answer_verifier(
         )));
     }
     validate_kdf_params(kdf_params)?;
-    let m_kib = (kdf_params.m_kib / 4).max(KDF_M_KIB_MIN);
-    let t_cost = (kdf_params.t_cost / 4).max(KDF_T_COST_MIN);
     let p_cost = kdf_params.p_cost;
+    let m_kib = (kdf_params.m_kib / 4).max(8 * p_cost).max(KDF_M_KIB_MIN);
+    let t_cost = (kdf_params.t_cost / 4).max(KDF_T_COST_MIN);
 
     let mut salt_hash = Sha256::new();
     salt_hash.update(b"HUMOCO-REC-REHEARSAL-SALT-V1");
@@ -295,6 +375,9 @@ pub fn verify_rehearsal_answers(
     expected_verifiers: &[[u8; 32]; 3],
     kdf_params: &RecoveryKdfParams,
 ) -> Result<[bool; 3], MarketError> {
+    validate_question_ids(question_ids)?;
+    validate_kdf_params(kdf_params)?;
+
     let mut matches = [false; 3];
     for i in 0..3 {
         let norm = Zeroizing::new(normalize_recovery_input(answers[i]));
@@ -309,10 +392,7 @@ pub fn verify_rehearsal_answers(
             &norm,
             kdf_params,
         )?;
-        let diff = (0..32).fold(0u8, |acc, idx| {
-            acc | (actual[idx] ^ expected_verifiers[i][idx])
-        });
-        matches[i] = diff == 0;
+        matches[i] = bool::from(actual.ct_eq(&expected_verifiers[i]));
     }
     Ok(matches)
 }
@@ -362,8 +442,9 @@ pub fn gf256_inv(a: u8) -> Result<u8, MarketError> {
     Ok(a254)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
 pub struct ShamirShare {
+    #[zeroize(skip)]
     pub index: u8,
     pub y: [u8; 32],
 }
@@ -470,7 +551,7 @@ pub fn combine_shares_32(
         lambdas.push(lambda);
     }
 
-    let mut secret = [0u8; 32];
+    let mut secret = Zeroizing::new([0u8; 32]);
     for (byte_idx, sec_byte) in secret.iter_mut().enumerate() {
         let mut acc = 0u8;
         for (j, share) in selected.iter().enumerate() {
@@ -480,7 +561,7 @@ pub fn combine_shares_32(
         *sec_byte = acc;
     }
 
-    Ok(Zeroizing::new(secret))
+    Ok(secret)
 }
 
 // ============================================================================
@@ -607,6 +688,13 @@ pub fn unseal_recovery_master_payload(
     if r_enc.len() < 24 + 16 {
         return Err(MarketError::Crypto("r_enc payload too short".to_string()));
     }
+    if r_enc.len() > MAX_RECOVERY_R_ENC_BYTES {
+        return Err(MarketError::PayloadTooLarge(format!(
+            "r_enc length {} exceeds maximum {}",
+            r_enc.len(),
+            MAX_RECOVERY_R_ENC_BYTES
+        )));
+    }
 
     let nonce = XNonce::from_slice(&r_enc[0..24]);
     let ciphertext = &r_enc[24..];
@@ -626,8 +714,25 @@ pub fn unseal_recovery_master_payload(
             .map_err(|e| MarketError::Crypto(format!("AEAD master unsealing failed: {}", e)))?,
     );
 
-    let payload: RecoveryMasterPayload = bincode::deserialize(&plaintext)
+    let payload: RecoveryMasterPayload = bincode::DefaultOptions::new()
+        .with_fixint_encoding()
+        .with_limit(MAX_RECOVERY_BINCODE_BYTES)
+        .reject_trailing_bytes()
+        .deserialize(&plaintext)
         .map_err(|e| MarketError::Serialization(format!("AEAD master unsealing failed: {}", e)))?;
+
+    if payload.version != 1 {
+        return Err(MarketError::Validation(format!(
+            "Unsupported RecoveryMasterPayload version: {}",
+            payload.version
+        )));
+    }
+    if !matches!(payload.mnemonic_entropy.len(), 16 | 32) {
+        return Err(MarketError::Validation(format!(
+            "Invalid mnemonic_entropy length {} (expected 16 or 32)",
+            payload.mnemonic_entropy.len()
+        )));
+    }
     Ok(payload)
 }
 
@@ -775,22 +880,30 @@ pub fn verify_guardian_vault_entry(entry: &GuardianVaultEntry) -> Result<(), Mar
         )));
     }
 
-    for &qid in &entry.question_ids {
-        if !(1..=RECOVERY_QUESTION_COUNT).contains(&qid) {
-            return Err(MarketError::Validation(format!(
-                "Invalid question ID {} in entry",
-                qid
-            )));
-        }
-    }
-    if entry.question_ids[0] == entry.question_ids[1]
-        || entry.question_ids[0] == entry.question_ids[2]
-        || entry.question_ids[1] == entry.question_ids[2]
+    if entry.owner_display_name.chars().count() > MAX_RECOVERY_DISPLAY_NAME_CHARS
+        || entry.owner_display_name.chars().any(char::is_control)
     {
-        return Err(MarketError::Validation(
-            "question_ids must be pairwise distinct".to_string(),
-        ));
+        return Err(MarketError::Validation(format!(
+            "owner_display_name exceeds {} chars or contains control characters",
+            MAX_RECOVERY_DISPLAY_NAME_CHARS
+        )));
     }
+
+    validate_question_ids(&entry.question_ids)?;
+
+    if entry.r_enc.len() < 24 + 16 || entry.r_enc.len() > MAX_RECOVERY_R_ENC_BYTES {
+        return Err(MarketError::Validation(format!(
+            "r_enc length {} out of bounds (expected {}..={})",
+            entry.r_enc.len(),
+            24 + 16,
+            MAX_RECOVERY_R_ENC_BYTES
+        )));
+    }
+
+    validate_recovery_sync_descriptors(
+        &entry.backup_sync_descriptors,
+        "entry backup_sync_descriptors",
+    )?;
 
     if entry.share.index < 1 || entry.share.index > entry.total_n {
         return Err(MarketError::Validation(format!(
@@ -892,14 +1005,9 @@ impl GuardianVaultStore {
         self.wards.is_empty()
     }
 
-    fn canonical_owner_key(owner_did: &str) -> String {
-        let trimmed = owner_did.trim();
-        canonicalize_owner_account_id(trimmed).unwrap_or_else(|_| trimmed.to_string())
-    }
-
     pub fn get_ward(&self, owner_did: &str) -> Option<&GuardianVaultEntry> {
-        let key = Self::canonical_owner_key(owner_did);
-        self.wards.get(&key).or_else(|| self.wards.get(owner_did))
+        let key = canonicalize_owner_account_id(owner_did).ok()?;
+        self.wards.get(&key)
     }
 
     /// Stores or updates a ward's recovery entry.
@@ -912,7 +1020,7 @@ impl GuardianVaultStore {
     /// - If existing entry exists, `entry.rotation_epoch >= old.rotation_epoch` (preserving idempotent active re-upsert).
     pub fn upsert_ward(&mut self, entry: GuardianVaultEntry) -> Result<(), MarketError> {
         verify_guardian_vault_entry(&entry)?;
-        let key = Self::canonical_owner_key(&entry.owner_did);
+        let key = canonicalize_owner_account_id(&entry.owner_did)?;
 
         if let Some(&rev_epoch) = self.revoked_epoch_by_owner.get(&key) {
             if entry.rotation_epoch <= rev_epoch {
@@ -965,10 +1073,11 @@ impl GuardianVaultStore {
         Ok(())
     }
 
-    /// Updates the backup sync descriptors for an existing ward if `update.rotation_epoch` is monotonic
-    /// and not revoked.
+    /// Updates the backup sync descriptors for an existing ward if `update.rotation_epoch` matches
+    /// the stored entry epoch and is not revoked or older than `entry.updated_at`.
     pub fn update_locator(&mut self, update: &GuardianLocatorUpdate) -> Result<bool, MarketError> {
-        let key = Self::canonical_owner_key(&update.owner_did);
+        let key = canonicalize_owner_account_id(&update.owner_did)?;
+        validate_recovery_sync_descriptors(&update.backup_sync_descriptors, "locator update")?;
         if let Some(&rev_epoch) = self.revoked_epoch_by_owner.get(&key) {
             if update.rotation_epoch <= rev_epoch {
                 return Err(MarketError::Validation(format!(
@@ -993,10 +1102,17 @@ impl GuardianVaultStore {
                     update.rotation_epoch, entry.rotation_epoch
                 )));
             }
+            if update.rotation_epoch > entry.rotation_epoch {
+                return Err(MarketError::Validation(format!(
+                    "Future locator update epoch {} > existing {} (awaiting assign)",
+                    update.rotation_epoch, entry.rotation_epoch
+                )));
+            }
+            if update.updated_at < entry.updated_at {
+                return Ok(false);
+            }
             entry.backup_sync_descriptors = update.backup_sync_descriptors.clone();
             entry.updated_at = update.updated_at;
-            let hi = self.highest_epoch_by_owner.entry(key).or_insert(0);
-            *hi = (*hi).max(update.rotation_epoch);
             Ok(true)
         } else {
             Ok(false)
@@ -1006,7 +1122,27 @@ impl GuardianVaultStore {
     /// Removes a ward from the guardian vault and records monotonic high-water & revoke marks so
     /// replayed or out-of-order assigns at `<= revoke.rotation_epoch` are permanently rejected.
     pub fn revoke_ward(&mut self, revoke: &GuardianRevoke) -> Result<bool, MarketError> {
-        let key = Self::canonical_owner_key(&revoke.owner_did);
+        let key = canonicalize_owner_account_id(&revoke.owner_did)?;
+        if revoke.rotation_epoch == 0 {
+            return Err(MarketError::Validation(
+                "Revoke rotation_epoch must be >= 1".to_string(),
+            ));
+        }
+        let known_owner = self.wards.contains_key(&key)
+            || self.highest_epoch_by_owner.contains_key(&key)
+            || self.revoked_epoch_by_owner.contains_key(&key);
+        if !known_owner
+            && self
+                .revoked_epoch_by_owner
+                .len()
+                .max(self.highest_epoch_by_owner.len())
+                >= MAX_GUARDIAN_WATERMARKS
+        {
+            return Err(MarketError::Validation(format!(
+                "Guardian watermark capacity reached (maximum {} owners)",
+                MAX_GUARDIAN_WATERMARKS
+            )));
+        }
         if let Some(&hi_epoch) = self.highest_epoch_by_owner.get(&key) {
             if revoke.rotation_epoch < hi_epoch {
                 return Err(MarketError::Validation(format!(
@@ -1070,7 +1206,7 @@ pub struct RecoveryRequestLink {
 
 impl RecoveryRequestLink {
     pub fn is_stale_48h(&self, now_unix: u64) -> bool {
-        now_unix.saturating_sub(self.ts) > 48 * 3600
+        now_unix.abs_diff(self.ts) > 48 * 3600
     }
 }
 
@@ -1185,6 +1321,12 @@ fn extract_query_from_uri_text(uri: &str, action: &str) -> Option<String> {
 
 /// Parses a `humoco://recovery-req` URI.
 pub fn parse_recovery_request_uri(uri: &str) -> Result<RecoveryRequestLink, MarketError> {
+    if uri.len() > MAX_RECOVERY_URI_INPUT_BYTES {
+        return Err(MarketError::PayloadTooLarge(format!(
+            "Recovery request URI exceeds maximum {} bytes",
+            MAX_RECOVERY_URI_INPUT_BYTES
+        )));
+    }
     let query_str = extract_query_from_uri_text(uri, "recovery-req").ok_or_else(|| {
         MarketError::Validation("Invalid recovery request URI: missing 'recovery-req?'".to_string())
     })?;
@@ -1220,6 +1362,14 @@ pub fn parse_recovery_request_uri(uri: &str) -> Result<RecoveryRequestLink, Mark
             "name" => {
                 let n = val.trim().to_string();
                 if !n.is_empty() {
+                    if n.chars().count() > MAX_RECOVERY_DISPLAY_NAME_CHARS
+                        || n.chars().any(char::is_control)
+                    {
+                        return Err(MarketError::Validation(format!(
+                            "name_hint exceeds {} characters or contains control characters",
+                            MAX_RECOVERY_DISPLAY_NAME_CHARS
+                        )));
+                    }
                     name_opt = Some(n);
                 }
             }
@@ -1282,28 +1432,31 @@ pub fn seal_guardian_release_reply(
     }
 
     let hkdf = Hkdf::<Sha256>::new(None, shared.as_bytes());
-    let mut k_reply = [0u8; 32];
-    hkdf.expand(b"HUMOCO-REC-REPLY-V1", &mut k_reply)
+    let mut k_reply = Zeroizing::new([0u8; 32]);
+    hkdf.expand(b"HUMOCO-REC-REPLY-V1", &mut *k_reply)
         .map_err(|e| {
             MarketError::Crypto(format!("HKDF expand failed for recovery reply: {}", e))
         })?;
 
-    let cipher = XChaCha20Poly1305::new_from_slice(&k_reply)
+    let cipher = XChaCha20Poly1305::new_from_slice(&*k_reply)
         .map_err(|e| MarketError::Crypto(e.to_string()))?;
 
     let mut msg_nonce = [0u8; 24];
     OsRng.fill_bytes(&mut msg_nonce);
     let nonce = XNonce::from_slice(&msg_nonce);
 
-    let plaintext =
-        bincode::serialize(payload).map_err(|e| MarketError::Serialization(e.to_string()))?;
+    let json_bytes = Zeroizing::new(
+        serde_json::to_vec(payload).map_err(|e| MarketError::Serialization(e.to_string()))?,
+    );
+    let plaintext = Zeroizing::new(crate::slot::deflate_compress(&json_bytes)?);
 
+    let aad = recovery_reply_aad(eph_pk.as_bytes(), pk_temp);
     let ciphertext = cipher
         .encrypt(
             nonce,
             Payload {
                 msg: &plaintext,
-                aad: b"HUMOCO-REC-REPLY-V1",
+                aad: &aad,
             },
         )
         .map_err(|e| MarketError::Crypto(format!("Encryption failed for recovery reply: {}", e)))?;
@@ -1322,6 +1475,12 @@ pub fn open_and_verify_guardian_release_reply(
     sk_temp: &[u8; 32],
     uri: &str,
 ) -> Result<GuardianReleasePayload, MarketError> {
+    if uri.len() > MAX_RECOVERY_URI_INPUT_BYTES {
+        return Err(MarketError::PayloadTooLarge(format!(
+            "Recovery reply URI exceeds maximum {} bytes",
+            MAX_RECOVERY_URI_INPUT_BYTES
+        )));
+    }
     let query_str = extract_query_from_uri_text(uri, "recovery-reply").ok_or_else(|| {
         MarketError::Validation("Invalid recovery reply URI: missing 'recovery-reply?'".to_string())
     })?;
@@ -1355,6 +1514,12 @@ pub fn open_and_verify_guardian_release_reply(
     let data_b64 = data_opt.ok_or_else(|| {
         MarketError::Validation("Missing 'data' in recovery reply URI".to_string())
     })?;
+    if data_b64.len() > MAX_RECOVERY_B64_FIELD_BYTES {
+        return Err(MarketError::PayloadTooLarge(format!(
+            "Recovery reply data exceeds maximum {} bytes",
+            MAX_RECOVERY_B64_FIELD_BYTES
+        )));
+    }
 
     let package = URL_SAFE_NO_PAD
         .decode(data_b64.as_bytes())
@@ -1371,6 +1536,7 @@ pub fn open_and_verify_guardian_release_reply(
     let ciphertext = &package[56..];
 
     let my_sk = x25519_dalek::StaticSecret::from(*sk_temp);
+    let my_pk = x25519_dalek::PublicKey::from(&my_sk);
     let peer_pk = x25519_dalek::PublicKey::from(eph_pk_bytes);
     let shared = my_sk.diffie_hellman(&peer_pk);
     if !shared.was_contributory() {
@@ -1385,31 +1551,39 @@ pub fn open_and_verify_guardian_release_reply(
     }
 
     let hkdf = Hkdf::<Sha256>::new(None, shared.as_bytes());
-    let mut k_reply = [0u8; 32];
-    hkdf.expand(b"HUMOCO-REC-REPLY-V1", &mut k_reply)
+    let mut k_reply = Zeroizing::new([0u8; 32]);
+    hkdf.expand(b"HUMOCO-REC-REPLY-V1", &mut *k_reply)
         .map_err(|e| {
             MarketError::Crypto(format!("HKDF expand failed for recovery reply: {}", e))
         })?;
 
-    let cipher = XChaCha20Poly1305::new_from_slice(&k_reply)
+    let cipher = XChaCha20Poly1305::new_from_slice(&*k_reply)
         .map_err(|e| MarketError::Crypto(e.to_string()))?;
     let nonce = XNonce::from_slice(&msg_nonce);
+    let aad = recovery_reply_aad(&eph_pk_bytes, my_pk.as_bytes());
 
-    let plaintext = cipher
-        .decrypt(
-            nonce,
-            Payload {
-                msg: ciphertext,
-                aad: b"HUMOCO-REC-REPLY-V1",
-            },
-        )
-        .map_err(|e| MarketError::Crypto(format!("Failed to decrypt recovery reply: {}", e)))?;
+    let plaintext = Zeroizing::new(
+        cipher
+            .decrypt(
+                nonce,
+                Payload {
+                    msg: ciphertext,
+                    aad: &aad,
+                },
+            )
+            .map_err(|e| MarketError::Crypto(format!("Failed to decrypt recovery reply: {}", e)))?,
+    );
 
-    let payload: GuardianReleasePayload = bincode::deserialize(&plaintext).map_err(|e| {
+    let decompressed = Zeroizing::new(crate::slot::deflate_decompress_bounded(
+        &plaintext,
+        MAX_RECOVERY_REPLY_JSON_BYTES,
+    )?);
+    let payload: GuardianReleasePayload = serde_json::from_slice(&decompressed).map_err(|e| {
         MarketError::Serialization(format!("Failed to parse GuardianReleasePayload: {}", e))
     })?;
 
     verify_guardian_vault_entry(&payload.entry)?;
+    validate_recovery_sync_descriptors(&payload.extra_sync_descriptors, "extra_sync_descriptors")?;
 
     Ok(payload)
 }
@@ -1458,19 +1632,17 @@ pub fn create_social_recovery_vault_bundle(
     let p = derive_recovery_key(question_ids, answers, kdf_params)?;
 
     // Generate random secret S (32 bytes)
-    let mut s_bytes = [0u8; 32];
-    OsRng.fill_bytes(&mut s_bytes);
-    let s = Zeroizing::new(s_bytes);
+    let mut s = Zeroizing::new([0u8; 32]);
+    OsRng.fill_bytes(&mut *s);
 
     // Seal master payload with S
     let r_enc = seal_recovery_master_payload(master_payload, &s)?;
 
     // Mask C = S XOR P
-    let mut c_bytes = [0u8; 32];
+    let mut c = Zeroizing::new([0u8; 32]);
     for i in 0..32 {
-        c_bytes[i] = s[i] ^ p[i];
+        c[i] = s[i] ^ p[i];
     }
-    let c = Zeroizing::new(c_bytes);
 
     // Split C into N Shamir shares
     let shares = split_secret_32(&c, threshold_m, total_n)?;
@@ -1557,6 +1729,24 @@ pub fn recover_master_payload_from_shares(
                 i, entry.rotation_epoch, first.rotation_epoch
             )));
         }
+        if entry.threshold_m != first.threshold_m || entry.total_n != first.total_n {
+            return Err(MarketError::Validation(format!(
+                "Mismatched threshold parameters in entry {}: ({}, {}) != ({}, {})",
+                i, entry.threshold_m, entry.total_n, first.threshold_m, first.total_n
+            )));
+        }
+        if entry.kdf_params != first.kdf_params {
+            return Err(MarketError::Validation(format!(
+                "Mismatched kdf_params in entry {}",
+                i
+            )));
+        }
+        if entry.question_ids != first.question_ids {
+            return Err(MarketError::Validation(format!(
+                "Mismatched question_ids in entry {}",
+                i
+            )));
+        }
         if entry.share_commitments != first.share_commitments {
             return Err(MarketError::Validation(format!(
                 "Mismatched share_commitments in entry {}",
@@ -1579,11 +1769,10 @@ pub fn recover_master_payload_from_shares(
     let p = derive_recovery_key(&first.question_ids, answers, &first.kdf_params)?;
 
     // Reconstruct S = C XOR P
-    let mut s_bytes = [0u8; 32];
+    let mut s = Zeroizing::new([0u8; 32]);
     for i in 0..32 {
-        s_bytes[i] = c[i] ^ p[i];
+        s[i] = c[i] ^ p[i];
     }
-    let s = Zeroizing::new(s_bytes);
 
     // Unseal master payload
     let payload = unseal_recovery_master_payload(&first.r_enc, &s)?;
@@ -1602,13 +1791,18 @@ pub fn recover_master_payload_from_shares(
 // Emergency Kit URI
 // ============================================================================
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
 pub struct EmergencyKitData {
+    #[zeroize(skip)]
     pub version: u8,
     pub entropy_hex: String,
+    #[zeroize(skip)]
     pub language_code: u8,
+    #[zeroize(skip)]
     pub user_prefix: Option<String>,
+    #[zeroize(skip)]
     pub has_bip39_passphrase: bool,
+    #[zeroize(skip)]
     pub sync_descriptors: Vec<DropDescriptor>,
 }
 
@@ -1621,8 +1815,10 @@ pub fn build_emergency_kit_uri(kit: &EmergencyKitData) -> Result<String, MarketE
         )));
     }
 
-    let entropy_bytes = hex::decode(&kit.entropy_hex)
-        .map_err(|e| MarketError::Validation(format!("Invalid entropy hex: {}", e)))?;
+    let entropy_bytes = Zeroizing::new(
+        hex::decode(&kit.entropy_hex)
+            .map_err(|e| MarketError::Validation(format!("Invalid entropy hex: {}", e)))?,
+    );
     if entropy_bytes.len() != 16 && entropy_bytes.len() != 32 {
         return Err(MarketError::Validation(format!(
             "Emergency kit entropy must be 16 or 32 bytes (got {})",
@@ -1660,6 +1856,12 @@ pub fn build_emergency_kit_uri(kit: &EmergencyKitData) -> Result<String, MarketE
 
 /// Parses a `humoco://kit` URI.
 pub fn parse_emergency_kit_uri(uri: &str) -> Result<EmergencyKitData, MarketError> {
+    if uri.len() > MAX_RECOVERY_URI_INPUT_BYTES {
+        return Err(MarketError::PayloadTooLarge(format!(
+            "Emergency kit URI exceeds maximum {} bytes",
+            MAX_RECOVERY_URI_INPUT_BYTES
+        )));
+    }
     let query_str = extract_query_from_uri_text(uri, "kit").ok_or_else(|| {
         MarketError::Validation("Invalid emergency kit URI: missing 'kit?'".to_string())
     })?;
@@ -1681,8 +1883,10 @@ pub fn parse_emergency_kit_uri(uri: &str) -> Result<EmergencyKitData, MarketErro
             }
             "ent" => {
                 let ent_str = val.into_owned();
-                let bytes = hex::decode(&ent_str)
-                    .map_err(|e| MarketError::Validation(format!("Invalid entropy hex: {}", e)))?;
+                let bytes =
+                    Zeroizing::new(hex::decode(&ent_str).map_err(|e| {
+                        MarketError::Validation(format!("Invalid entropy hex: {}", e))
+                    })?);
                 if bytes.len() != 16 && bytes.len() != 32 {
                     return Err(MarketError::Validation(format!(
                         "Entropy must be 16 or 32 bytes, got {}",
@@ -1714,7 +1918,12 @@ pub fn parse_emergency_kit_uri(uri: &str) -> Result<EmergencyKitData, MarketErro
                 }
             },
             "sync" => {
-                const MAX_KIT_SYNC_DESCRIPTORS: usize = 8;
+                if val.len() > MAX_RECOVERY_B64_FIELD_BYTES {
+                    return Err(MarketError::PayloadTooLarge(format!(
+                        "Emergency kit sync field exceeds maximum {} bytes",
+                        MAX_RECOVERY_B64_FIELD_BYTES
+                    )));
+                }
                 let sync_bytes = URL_SAFE_NO_PAD.decode(val.as_bytes()).map_err(|e| {
                     MarketError::Validation(format!("Invalid sync base64url: {}", e))
                 })?;
@@ -1722,38 +1931,7 @@ pub fn parse_emergency_kit_uri(uri: &str) -> Result<EmergencyKitData, MarketErro
                     .map_err(|e| {
                         MarketError::Serialization(format!("Invalid sync descriptors JSON: {}", e))
                     })?;
-                if descriptors.len() > MAX_KIT_SYNC_DESCRIPTORS {
-                    return Err(MarketError::Validation(format!(
-                        "Emergency kit sync descriptor count {} exceeds maximum {}",
-                        descriptors.len(),
-                        MAX_KIT_SYNC_DESCRIPTORS
-                    )));
-                }
-                for (i, d) in descriptors.iter().enumerate() {
-                    if !d.write_url.starts_with("https://")
-                        && !crate::sd_card::is_loopback_http(&d.write_url)
-                    {
-                        return Err(MarketError::Validation(format!(
-                            "kit sync[{}] write_url must be HTTPS or loopback HTTP",
-                            i
-                        )));
-                    }
-                    if !d.read_url.starts_with("https://")
-                        && !crate::sd_card::is_loopback_http(&d.read_url)
-                    {
-                        return Err(MarketError::Validation(format!(
-                            "kit sync[{}] read_url must be HTTPS or loopback HTTP",
-                            i
-                        )));
-                    }
-                    let dp = d.drop_pub.trim();
-                    if dp.is_empty() || dp.len() > 128 {
-                        return Err(MarketError::Validation(format!(
-                            "kit sync[{}] drop_pub must be 1..=128 chars",
-                            i
-                        )));
-                    }
-                }
+                validate_recovery_sync_descriptors(&descriptors, "kit")?;
                 sync = Some(descriptors);
             }
             "prefix" => {

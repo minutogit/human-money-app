@@ -1720,7 +1720,8 @@ pub async fn request_genesis_ticket(
                 now_secs,
                 &nonce,
                 &raw_bytes,
-            );
+            )
+            .map_err(|e| format!("Failed direct lock_ticket signing: {}", e))?;
             req = apply_signed_headers(req, &signed, false);
         }
         LockTicketAuth::Stealth {

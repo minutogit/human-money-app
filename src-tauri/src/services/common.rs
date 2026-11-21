@@ -96,9 +96,10 @@ impl<'a> DropChannelSigner<'a> {
                 &self.drop_desc.write_url,
             )
             .map_err(|e| format!("Public drop key derivation error: {}", e))?;
-            Ok(humoco_market::sign_member_request_direct(
+            humoco_market::sign_member_request_direct(
                 &r_sk, method, channel, prefix, now_secs, nonce, payload,
-            ))
+            )
+            .map_err(|e| format!("Direct signing error: {}", e))
         } else {
             humoco_market::sign_member_request_stealth(
                 self.my_ed_sk,
