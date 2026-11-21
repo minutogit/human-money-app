@@ -16,7 +16,7 @@ pub struct SessionToken {
 
 /// Consolidated profile-scoped caches bound to a specific session generation and owner DID.
 ///
-/// Bundling all 11 caches under one mutex guarantees atomic clearing on logout/switch and
+/// Bundling all profile caches under one mutex guarantees atomic clearing on logout/switch and
 /// eliminates multi-cache lock-ordering hazards.
 #[derive(Clone, Default)]
 pub struct ActiveProfileCaches {
@@ -34,6 +34,8 @@ pub struct ActiveProfileCaches {
     pub recovery_owner: Option<Option<crate::models::recovery::RecoveryOwnerState>>,
     pub guardian_vault: Option<humoco_market::GuardianVaultStore>,
     pub app_notices: Option<StoredAppNotices>,
+    pub server_offenders: Option<humoco_wot::ServerOffenderList>,
+    pub own_sync_descriptor: Option<Option<humoco_market::DropDescriptor>>,
     pub media_negative_cache: std::collections::HashMap<(String, String), u64>,
 }
 

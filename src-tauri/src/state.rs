@@ -1397,6 +1397,25 @@ impl AppState {
             .ok_or_else(|| AppFacadeError::Generic(format!("{} not loaded", name)))
     }
 
+    pub(crate) fn read_cache_slot_for_service<T: Clone>(
+        &self,
+        service: &AppService,
+        field: fn(&ActiveProfileCaches) -> &Option<T>,
+    ) -> Option<T> {
+        let current_gen = self.current_session_generation();
+        let owner_did = service
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap_or_default();
+        let guard = self.profile_caches.lock().unwrap();
+        let caches = guard.as_ref()?;
+        if caches.generation != current_gen
+            || (!owner_did.is_empty() && caches.owner_did != owner_did)
+        {
+            return None;
+        }
+        field(caches).clone()
+    }
+
     pub(crate) fn write_cache_slot_for_service<T>(
         &self,
         service: &AppService,
@@ -1417,6 +1436,39 @@ impl AppState {
         if let Some(ref mut caches) = *guard {
             *field(caches) = value;
         }
+    }
+
+    pub fn get_or_load_server_offender_list(
+        &self,
+        service: &mut AppService,
+        password: Option<&str>,
+    ) -> Result<humoco_wot::ServerOffenderList, crate::models::FrontendError> {
+        if let Some(cached) = self.read_cache_slot_for_service(service, |c| &c.server_offenders) {
+            return Ok(cached);
+        }
+        let list = crate::l2_lifecycle::load_server_offender_list(service, password)?;
+        self.write_cache_slot_for_service(service, |c| &mut c.server_offenders, Some(list.clone()));
+        Ok(list)
+    }
+
+    pub fn get_or_load_own_sync_descriptor(
+        &self,
+        service: &mut AppService,
+        password: Option<&str>,
+    ) -> Result<Option<humoco_market::DropDescriptor>, crate::models::FrontendError> {
+        if let Some(cached) = self.read_cache_slot_for_service(service, |c| &c.own_sync_descriptor)
+        {
+            return Ok(cached);
+        }
+        let desc =
+            crate::services::sync_engine::admin::load_stored_sync_admin_opt(service, password)?
+                .map(|a| a.descriptor);
+        self.write_cache_slot_for_service(
+            service,
+            |c| &mut c.own_sync_descriptor,
+            Some(desc.clone()),
+        );
+        Ok(desc)
     }
 
     pub fn cache_contacts(&self) -> Option<FrontendAddressBook> {
@@ -2931,6 +2983,37 @@ impl AppState {
             }
             Err(e) => {
                 log::warn!("Failed to pre-load app notices: {}", e);
+            }
+        }
+
+        // 10. Pre-cache server offender list (supports timeout = 0)
+        match crate::l2_lifecycle::load_server_offender_list(service, Some(credential)) {
+            Ok(offenders) => {
+                self.write_cache_slot_for_service(
+                    service,
+                    |c| &mut c.server_offenders,
+                    Some(offenders),
+                );
+            }
+            Err(e) => {
+                log::warn!("Failed to pre-load server offender list: {}", e.message);
+            }
+        }
+
+        // 11. Pre-cache non-sensitive own sync descriptor (supports timeout = 0)
+        match crate::services::sync_engine::admin::load_stored_sync_admin_opt(
+            service,
+            Some(credential),
+        ) {
+            Ok(admin_opt) => {
+                self.write_cache_slot_for_service(
+                    service,
+                    |c| &mut c.own_sync_descriptor,
+                    Some(admin_opt.map(|a| a.descriptor)),
+                );
+            }
+            Err(e) => {
+                log::warn!("Failed to pre-load own sync descriptor: {}", e.message);
             }
         }
 

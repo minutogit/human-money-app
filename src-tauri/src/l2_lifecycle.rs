@@ -10,10 +10,12 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use ed25519_dalek::SigningKey;
 use human_money_core::humoco_proto::{
-    self, decode_hex_fixed, resolve_import_union,
+    self,
+    crypto::{verify_ed25519_strict, DEFAULT_LOCK_POW_BASE_BITS},
+    decode_hex_fixed, resolve_import_union,
     types::{EquivocationProof, LockPubKey, LockReceiptKind, QuorumCertificate},
-    AnchorManifest, CommitteeSignature, ImportAck, MigrationProposal, NominatedBy, ServerEntry,
-    SnapshotExport,
+    AnchorManifest, CommitteeSignature, ImportAck, LockEntry, MigrationCert, MigrationProposal,
+    NominatedBy, ServerEntry, SnapshotExport,
 };
 use human_money_core::services::{l2_gateway, l2_rotation};
 use humoco_market::CardStore;
@@ -26,8 +28,7 @@ use serde::{Deserialize, Serialize};
 use crate::gateway_resolver::{sybil_fold_committee, SybilServerCandidate};
 use crate::models::{FrontendAddressBook, FrontendError};
 use crate::services::common::{
-    max_pow_base_bits_for_servers, normalize_sync_url, resolve_server_locator,
-    upsert_verified_lock_probe,
+    normalize_sync_url, resolve_server_locator, upsert_verified_lock_probe,
 };
 use crate::settings::{is_lock_admin_trusted, InternalLifecycleState, SecurityPolicy};
 use crate::state::{AppState, CONTACTS_DATA_NAME, MARKET_CARD_STORE_KEY};
@@ -198,13 +199,13 @@ pub fn is_server_key_revoked(
         || admin_pub.is_some_and(|a| offenders.is_admin_pub_revoked(a))
 }
 
-pub fn record_equivocation_proof(
+fn record_equivocation_proof_inner(
     service: &mut human_money_core::app_service::AppService,
     delegation_opt: Option<WotLockDelegation>,
     proof: &EquivocationProof,
     now_secs: u64,
     password: Option<&str>,
-) -> Result<bool, FrontendError> {
+) -> Result<(bool, ServerOffenderList), FrontendError> {
     let wot_proof = WotEquivocationProof {
         receipt_a: to_wot_receipt(&proof.receipt_a),
         receipt_b: to_wot_receipt(&proof.receipt_b),
@@ -220,7 +221,58 @@ pub fn record_equivocation_proof(
     list.insert_verified(record, now_secs.max(1))
         .map_err(|e| lifecycle_err(format!("Invalid equivocation proof: {}", e)))?;
     save_server_offender_list(service, &list, password)?;
-    Ok(!already)
+    Ok((!already, list))
+}
+
+pub fn record_equivocation_proof(
+    service: &mut human_money_core::app_service::AppService,
+    delegation_opt: Option<WotLockDelegation>,
+    proof: &EquivocationProof,
+    now_secs: u64,
+    password: Option<&str>,
+) -> Result<bool, FrontendError> {
+    record_equivocation_proof_inner(service, delegation_opt, proof, now_secs, password)
+        .map(|(newly, _)| newly)
+}
+
+pub(crate) fn sync_delegation_to_wot(
+    del: &sync_client::SyncLockDelegationDto,
+) -> Option<WotLockDelegation> {
+    let admin_pub = decode_hex_fixed::<32>(del.admin_pub.trim()).ok()?;
+    let lock_pub = decode_hex_fixed::<32>(del.lock_pub.trim()).ok()?;
+    let sig = decode_hex_fixed::<64>(del.sig.trim()).ok()?;
+    Some(WotLockDelegation {
+        admin_pub,
+        lock_pub,
+        write_url: del.write_url.trim().to_string(),
+        read_url: del.read_url.trim().to_string(),
+        issued_at: del.issued_at,
+        sig,
+    })
+}
+
+/// Persists a verified `EquivocationProof`, attaching the verified `WotLockDelegation` from
+/// `probe_cache` when available (enabling ADR-10 `revoked_admin_pubs` operator bans), and updates
+/// `state`'s `server_offenders` cache slot atomically while `service` is held.
+pub fn record_equivocation_and_refresh_cache(
+    state: &AppState,
+    service: &mut human_money_core::app_service::AppService,
+    probe_cache: &BTreeMap<String, FrontendLockServerProbeResult>,
+    proof: &EquivocationProof,
+    now_secs: u64,
+    password: Option<&str>,
+) -> Result<bool, FrontendError> {
+    let lock_hex = hex::encode(proof.receipt_a.lock_pub);
+    let wot_delegation = probe_cache
+        .get(&lock_hex)
+        .filter(|probe| probe.delegation_valid)
+        .and_then(|probe| probe.delegation.as_ref())
+        .filter(|del| sync_client::verify_lock_delegation(&lock_hex, del, None))
+        .and_then(sync_delegation_to_wot);
+    let (newly_recorded, updated_list) =
+        record_equivocation_proof_inner(service, wot_delegation, proof, now_secs, password)?;
+    state.write_cache_slot_for_service(service, |c| &mut c.server_offenders, Some(updated_list));
+    Ok(newly_recorded)
 }
 
 pub fn load_key_successor_attestations(
@@ -613,9 +665,14 @@ pub async fn discover_anchor_manifest(
                 password,
             )
             .map_err(FrontendError::from)?;
-            let disk_contacts: Option<FrontendAddressBook> =
-                crate::state::load_encrypted_json_opt(service, CONTACTS_DATA_NAME, password)
-                    .map_err(FrontendError::from)?;
+            let address_book_opt: Option<FrontendAddressBook> =
+                match state.read_cache_slot_for_service(service, |c| &c.contacts) {
+                    Some(cached) => Some(cached),
+                    None => {
+                        crate::state::load_encrypted_json_opt(service, CONTACTS_DATA_NAME, password)
+                            .map_err(FrontendError::from)?
+                    }
+                };
 
             let resolved_creator = match creator_did {
                 Some(c) => {
@@ -635,7 +692,7 @@ pub async fn discover_anchor_manifest(
                 local_manifest,
                 local_rev,
                 card_store,
-                disk_contacts,
+                address_book_opt,
                 resolved_creator,
                 resolved_guarantors,
                 security_policy,
@@ -644,8 +701,7 @@ pub async fn discover_anchor_manifest(
         },
     )?;
 
-    let cached_contacts = state.cache_contacts();
-    let address_book_ref = cached_contacts.as_ref().or(address_book_opt.as_ref());
+    let address_book_ref = address_book_opt.as_ref();
 
     let mut stage_urls: Vec<String> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
@@ -734,10 +790,16 @@ pub async fn discover_anchor_manifest(
 
     if let Some(ref found) = best_manifest {
         if found.revision > local_rev {
-            let _ = state.with_session(session, |service| {
-                let _ = service.update_l2_anchor_manifest(found.clone(), password);
-                Ok(())
-            })?;
+            state.with_session_required(
+                session,
+                "Wallet session changed before saving discovered anchor manifest",
+                |service| {
+                    service
+                        .update_l2_anchor_manifest(found.clone(), password)
+                        .map_err(FrontendError::from)?;
+                    Ok(())
+                },
+            )?;
         }
     }
 
@@ -789,23 +851,25 @@ pub(crate) fn select_rotation_proposal(
     }
 
     // 1. Try authority-free HolderStandby promotion if standby pool covers all failed seats
+    // and every promoted standby successor is non-revoked and locally trusted.
+    let existing_pubs: HashSet<LockPubKey> = manifest.servers.iter().map(|s| s.lock_pub).collect();
     let failed_vec: Vec<LockPubKey> = failed_lock_pubs.iter().copied().collect();
     if let Ok(prop) =
         l2_rotation::build_holder_standby_proposal(anchor_id, manifest, &failed_vec, now_secs)
     {
-        return Some(prop);
+        let promoted_ok = prop.new_servers.iter().all(|s| {
+            existing_pubs.contains(&s.lock_pub)
+                || (!is_server_key_revoked(offenders, &s.lock_pub, Some(&s.admin_pub))
+                    && is_lock_admin_trusted(security_policy, &hex::encode(s.admin_pub)))
+        });
+        if promoted_ok {
+            return Some(prop);
+        }
     }
 
-    let mut remaining_successors: Vec<ServerEntry> = manifest
-        .successors
-        .iter()
-        .filter(|s| {
-            !failed_lock_pubs.contains(&s.lock_pub)
-                && !is_server_key_revoked(offenders, &s.lock_pub, Some(&s.admin_pub))
-                && is_lock_admin_trusted(security_policy, &hex::encode(s.admin_pub))
-        })
-        .cloned()
-        .collect();
+    // Preserve all declared successors initially so non-signing nominators' FIFO standby lists
+    // remain intact for `humoco-proto::verify_nomination_binding`.
+    let mut remaining_successors: Vec<ServerEntry> = manifest.successors.clone();
     let mut new_servers: Vec<ServerEntry> = Vec::with_capacity(manifest.servers.len());
     let mut used_lock_pubs: HashSet<LockPubKey> = manifest
         .servers
@@ -818,39 +882,66 @@ pub(crate) fn select_rotation_proposal(
         .servers
         .iter()
         .filter(|s| !failed_lock_pubs.contains(&s.lock_pub))
-        .map(|s| SybilServerCandidate {
-            write_url: s.write_url.clone(),
-            lock_pub: s.lock_pub,
-            admin_pub: Some(s.admin_pub),
-            asn: None,
+        .map(|s| {
+            let (resolved_w, _) = resolve_server_locator(s, &lifecycle.l2_probe_cache);
+            SybilServerCandidate {
+                write_url: resolved_w,
+                lock_pub: s.lock_pub,
+                admin_pub: Some(s.admin_pub),
+                asn: None,
+            }
         })
         .collect();
+
+    let is_role_signed = |role: NominatedBy| match role {
+        NominatedBy::Creator => creator_mig_sk.is_some(),
+        NominatedBy::Guarantor(g_idx) => guarantor_auth
+            .as_ref()
+            .is_some_and(|(auth_idx, _, _)| *auth_idx == g_idx),
+    };
+    let is_successor_eligible = |s: &ServerEntry, used: &HashSet<LockPubKey>| {
+        !used.contains(&s.lock_pub)
+            && !failed_lock_pubs.contains(&s.lock_pub)
+            && !is_server_key_revoked(offenders, &s.lock_pub, Some(&s.admin_pub))
+            && is_lock_admin_trusted(security_policy, &hex::encode(s.admin_pub))
+    };
 
     for srv in &manifest.servers {
         if !failed_lock_pubs.contains(&srv.lock_pub) {
             new_servers.push(srv.clone());
             continue;
         }
-        if let Some(pos) = remaining_successors
-            .iter()
-            .position(|c| c.nominated_by == srv.nominated_by)
-        {
+        let can_pick_probe = is_role_signed(srv.nominated_by);
+        let promoted_pos = if can_pick_probe {
+            remaining_successors.iter().position(|c| {
+                c.nominated_by == srv.nominated_by && is_successor_eligible(c, &used_lock_pubs)
+            })
+        } else {
+            // Non-signing nominator: strictly respect FIFO head without dropping/skipping successors.
+            remaining_successors
+                .iter()
+                .position(|c| c.nominated_by == srv.nominated_by)
+                .filter(|&pos| is_successor_eligible(&remaining_successors[pos], &used_lock_pubs))
+        };
+        if let Some(pos) = promoted_pos {
             let succ = remaining_successors.remove(pos);
+            let (resolved_w, _) = resolve_server_locator(&succ, &lifecycle.l2_probe_cache);
             used_lock_pubs.insert(succ.lock_pub);
+            sybil_existing.push(SybilServerCandidate {
+                write_url: resolved_w,
+                lock_pub: succ.lock_pub,
+                admin_pub: Some(succ.admin_pub),
+                asn: None,
+            });
             new_servers.push(succ);
             continue;
         }
 
-        let can_pick_probe = match srv.nominated_by {
-            NominatedBy::Creator => creator_mig_sk.is_some(),
-            NominatedBy::Guarantor(g_idx) => guarantor_auth
-                .as_ref()
-                .is_some_and(|(auth_idx, _, _)| *auth_idx == g_idx),
-        };
         if can_pick_probe {
             let mut picked: Option<ServerEntry> = None;
             for probe in lifecycle.l2_probe_cache.values() {
                 if !probe.passed
+                    || !probe.delegation_valid
                     || probe.max_retention_quarter < manifest.retain_until_quarter
                     || !is_lock_admin_trusted(security_policy, &probe.admin_pub)
                 {
@@ -1185,17 +1276,21 @@ async fn check_guarantor_vetoes(
                 "Wallet session changed while signing guarantor veto",
                 |service| {
                     service
-                        .with_wallet_and_identity(|_, id| {
-                            let g_sk =
-                                l2_rotation::derive_guarantor_mig_signing_key(id, &ctx_nonce)?;
-                            l2_rotation::sign_migration_veto(
-                                &g_sk,
-                                anchor_id,
-                                manifest.revision,
-                                prop_hash,
-                                now_secs.max(1),
-                            )
-                        })
+                        .with_authorized_identity(
+                            human_money_core::AccessMode::DailyPay,
+                            password,
+                            |_, id| {
+                                let g_sk =
+                                    l2_rotation::derive_guarantor_mig_signing_key(id, &ctx_nonce)?;
+                                l2_rotation::sign_migration_veto(
+                                    &g_sk,
+                                    anchor_id,
+                                    manifest.revision,
+                                    prop_hash,
+                                    now_secs.max(1),
+                                )
+                            },
+                        )
                         .map_err(FrontendError::from)
                 },
             )?;
@@ -1253,12 +1348,93 @@ pub(crate) enum CommitPhaseDecision {
     Finalized(AnchorManifest),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum RotationStepOutcome {
+    InProgress(Box<StoredRotationPhase>),
+    Completed { new_revision: u64 },
+    Aborted { reason: String },
+}
+
 pub(crate) fn is_proposal_timelock_elapsed(effective_at_secs: u64, now_secs: u64) -> bool {
     now_secs >= effective_at_secs
 }
 
+/// Computes panic-free quorum order statistic for `last_creator_activity_secs` from healthy,
+/// non-revoked servers, clamping every reported timestamp to `<= now_secs`.
+pub(crate) fn compute_quorum_creator_activity_secs(
+    baseline: u64,
+    reported_activities: &[u64],
+    threshold: u8,
+    now_secs: u64,
+) -> u64 {
+    let mut activities: Vec<u64> = reported_activities
+        .iter()
+        .map(|&a| a.min(now_secs))
+        .collect();
+    let q = usize::from(threshold).max(1);
+    if activities.len() >= q {
+        activities.sort_unstable();
+        activities[q - 1].max(baseline)
+    } else {
+        activities
+            .into_iter()
+            .max()
+            .unwrap_or(baseline)
+            .max(baseline)
+    }
+}
+
+/// Strictly validates an in-place delegation refresh probe before persisting into `l2_probe_cache`.
+pub(crate) fn validate_in_place_delegation_refresh(
+    srv: &ServerEntry,
+    del: &sync_client::SyncLockDelegationDto,
+    updated_probe: &FrontendLockServerProbeResult,
+    offenders: &ServerOffenderList,
+) -> bool {
+    if is_server_key_revoked(offenders, &srv.lock_pub, Some(&srv.admin_pub)) {
+        return false;
+    }
+    let del_write_raw = del.write_url.trim();
+    let del_read_raw = del.read_url.trim();
+    if sync_client::validate_sync_url(del_write_raw).is_err()
+        || sync_client::validate_sync_read_url(del_read_raw).is_err()
+    {
+        return false;
+    }
+    if !updated_probe.passed || !updated_probe.delegation_valid {
+        return false;
+    }
+    let lock_hex = hex::encode(srv.lock_pub);
+    let admin_hex = hex::encode(srv.admin_pub);
+    if !updated_probe
+        .lock_pub
+        .trim()
+        .eq_ignore_ascii_case(&lock_hex)
+        || !updated_probe
+            .admin_pub
+            .trim()
+            .eq_ignore_ascii_case(&admin_hex)
+    {
+        return false;
+    }
+    let del_w = normalize_sync_url(del_write_raw);
+    let del_r = normalize_sync_url(del_read_raw);
+    if del_w.is_empty()
+        || del_r.is_empty()
+        || normalize_sync_url(&updated_probe.write_url) != del_w
+        || normalize_sync_url(&updated_probe.read_url) != del_r
+    {
+        return false;
+    }
+    updated_probe.delegation.as_ref().is_some_and(|ud| {
+        normalize_sync_url(&ud.write_url) == del_w
+            && normalize_sync_url(&ud.read_url) == del_r
+            && crate::services::common::is_valid_delegation_for_entry(srv, ud)
+    })
+}
+
 /// Pure Phase 1 -> Phase 2 state transition: enters `Proposed` only if `>= threshold` servers
-/// acknowledged the proposal, picking the earliest `effective_at` capped at the protocol timelock.
+/// acknowledged the proposal, computing the quorum order statistic over clamped `effective_at`s.
 pub(crate) fn compute_proposal_phase(
     manifest: &AnchorManifest,
     proposal: MigrationProposal,
@@ -1266,7 +1442,8 @@ pub(crate) fn compute_proposal_phase(
     threshold: u8,
     now_secs: u64,
 ) -> Option<StoredRotationPhase> {
-    if accepted_effective_ats.len() < usize::from(threshold) {
+    let q = usize::from(threshold).max(1);
+    if accepted_effective_ats.len() < q {
         return None;
     }
     let default_timelock = if matches!(proposal.initiator, humoco_proto::ProposalInitiator::Creator)
@@ -1277,18 +1454,133 @@ pub(crate) fn compute_proposal_phase(
     } else {
         humoco_proto::PROPOSAL_TIMELOCK_SECS
     };
-    let mut effective_at_secs = now_secs.saturating_add(default_timelock);
-    for eff in accepted_effective_ats.iter().flatten() {
-        effective_at_secs = effective_at_secs.min(*eff);
-    }
+    let max_eff = now_secs.saturating_add(default_timelock);
+    let mut effs: Vec<u64> = accepted_effective_ats
+        .iter()
+        .flatten()
+        .map(|&e| e.min(max_eff))
+        .collect();
+    effs.sort_unstable();
+    let effective_at_secs = if effs.len() >= q {
+        effs[q - 1]
+    } else {
+        max_eff
+    };
     Some(StoredRotationPhase::Proposed {
         proposal,
         effective_at_secs,
     })
 }
 
-/// Pure `Proposed` phase evaluator: checks timelock expiry, deduplicates and verifies
-/// `FreezeSnapshot`s, enforces `>= manifest.threshold`, and computes the deterministic import union.
+fn decode_and_verify_snapshot_export(
+    exp: &SnapshotExport,
+    anchor_id: &[u8; 32],
+    manifest: &AnchorManifest,
+    committee: &humoco_proto::LockCommittee,
+    prop_hash: &[u8; 32],
+) -> Option<(Vec<LockEntry>, Vec<Vec<LockEntry>>)> {
+    let snap = &exp.snapshot;
+    if !committee.contains(&snap.lock_pub)
+        || snap.anchor_id != *anchor_id
+        || snap.from_rev != manifest.revision
+        || snap.retain_until_quarter != manifest.retain_until_quarter
+        || !snap.permanent
+        || snap.proposal_hash != Some(*prop_hash)
+    {
+        return None;
+    }
+    let mut decoded_entries = Vec::with_capacity(exp.entries.len());
+    for hex_s in &exp.entries {
+        decoded_entries.push(LockEntry::from_wire_hex(hex_s).ok()?);
+    }
+    let mut decoded_conflicts = Vec::with_capacity(exp.conflicts.len());
+    for group in &exp.conflicts {
+        let mut decoded_group = Vec::with_capacity(group.len());
+        for hex_s in group {
+            decoded_group.push(LockEntry::from_wire_hex(hex_s).ok()?);
+        }
+        decoded_conflicts.push(decoded_group);
+    }
+    snap.verify_with_entries(&decoded_entries, &decoded_conflicts)
+        .ok()?;
+    Some((decoded_entries, decoded_conflicts))
+}
+
+fn is_decoded_export_causally_valid(
+    anchor_id: &[u8; 32],
+    creator_mig_pub: &[u8; 32],
+    entries: &[LockEntry],
+    conflicts: &[Vec<LockEntry>],
+    pow_base_bits: u32,
+) -> bool {
+    let mut by_slot: BTreeMap<[u8; 32], BTreeMap<[u8; 32], LockEntry>> = BTreeMap::new();
+    for entry in entries
+        .iter()
+        .chain(conflicts.iter().flat_map(|g| g.iter()))
+    {
+        let Ok(eh) = entry.entry_hash() else {
+            return false;
+        };
+        by_slot
+            .entry(entry.slot)
+            .or_default()
+            .insert(eh, entry.clone());
+    }
+    let mut ordered: Vec<(u32, [u8; 32], Vec<LockEntry>)> = by_slot
+        .into_iter()
+        .map(|(slot, map)| {
+            let mut list: Vec<LockEntry> = map.into_values().collect();
+            list.sort_by_key(|e| e.depth);
+            let min_depth = list.first().map(|e| e.depth).unwrap_or(0);
+            (min_depth, slot, list)
+        })
+        .collect();
+    ordered.sort_by_key(|(d, s, _)| (*d, *s));
+
+    let mut verified_slots: BTreeMap<[u8; 32], Vec<LockEntry>> = BTreeMap::new();
+    let mut output_claims: BTreeMap<([u8; 32], u8), [u8; 32]> = BTreeMap::new();
+    for (_d, slot, list) in ordered {
+        let mut valid_list = Vec::with_capacity(list.len());
+        for entry in list {
+            if entry.depth == 0 {
+                if entry
+                    .verify_entry(anchor_id, creator_mig_pub, pow_base_bits, None)
+                    .is_err()
+                {
+                    return false;
+                }
+            } else {
+                let Some(parents) = verified_slots.get(&entry.parent_slot) else {
+                    return false;
+                };
+                let ok_parent = parents.iter().any(|p| {
+                    entry
+                        .verify_entry(anchor_id, creator_mig_pub, pow_base_bits, Some(p))
+                        .is_ok()
+                });
+                if !ok_parent {
+                    return false;
+                }
+                if let Some(existing) = output_claims.get(&(entry.parent_slot, entry.output_branch))
+                {
+                    if *existing != entry.slot {
+                        return false;
+                    }
+                } else {
+                    output_claims.insert((entry.parent_slot, entry.output_branch), entry.slot);
+                }
+            }
+            valid_list.push(entry);
+        }
+        verified_slots.insert(slot, valid_list);
+    }
+    true
+}
+
+/// Pure `Proposed` phase evaluator: checks timelock expiry, strictly validates `SnapshotExport`
+/// committee membership, metadata, and `verify_with_entries` before deduplicating and counting
+/// `>= manifest.threshold`, and computes the deterministic import union (filtering any Byzantine
+/// export whose entries fail causal/PoW verification when `> threshold` exports are present).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn evaluate_proposed_phase_transition(
     anchor_id: [u8; 32],
@@ -1309,15 +1601,30 @@ pub(crate) fn evaluate_proposed_phase_transition(
         ));
     }
 
-    let mut verified_exports: Vec<SnapshotExport> = Vec::new();
+    let prop_hash = proposal
+        .core_digest()
+        .map_err(|e| lifecycle_err(format!("Invalid migration proposal: {}", e)))?;
+    let committee = manifest
+        .committee()
+        .map_err(|e| lifecycle_err(format!("Invalid manifest committee: {}", e)))?;
+
+    let mut verified_with_decoded: Vec<(SnapshotExport, Vec<LockEntry>, Vec<Vec<LockEntry>>)> =
+        Vec::new();
     let mut seen_pubs: HashSet<LockPubKey> = HashSet::new();
     for exp in candidate_exports {
-        if seen_pubs.insert(exp.snapshot.lock_pub) && exp.snapshot.verify() {
-            verified_exports.push(exp);
+        if seen_pubs.contains(&exp.snapshot.lock_pub) {
+            continue;
+        }
+        if let Some((decoded_entries, decoded_conflicts)) =
+            decode_and_verify_snapshot_export(&exp, &anchor_id, manifest, &committee, &prop_hash)
+        {
+            seen_pubs.insert(exp.snapshot.lock_pub);
+            verified_with_decoded.push((exp, decoded_entries, decoded_conflicts));
         }
     }
 
-    if verified_exports.len() < usize::from(manifest.threshold) {
+    let threshold = usize::from(manifest.threshold);
+    if verified_with_decoded.len() < threshold {
         return Ok(ProposedPhaseDecision::AwaitSnapshots(
             StoredRotationPhase::Proposed {
                 proposal,
@@ -1326,15 +1633,55 @@ pub(crate) fn evaluate_proposed_phase_transition(
         ));
     }
 
-    let resolved = resolve_import_union(
+    let mut verified_exports: Vec<SnapshotExport> = verified_with_decoded
+        .iter()
+        .map(|(exp, _, _)| exp.clone())
+        .collect();
+
+    let resolved = match resolve_import_union(
         &anchor_id,
         manifest,
         &proposal,
         &verified_exports,
         qcs,
         pow_base_bits,
-    )
-    .map_err(|e| lifecycle_err(format!("resolve_import_union failed: {}", e)))?;
+    ) {
+        Ok(res) => res,
+        Err(first_err) if verified_with_decoded.len() > threshold => {
+            let filtered: Vec<SnapshotExport> = verified_with_decoded
+                .into_iter()
+                .filter(|(_, entries, conflicts)| {
+                    is_decoded_export_causally_valid(
+                        &anchor_id,
+                        &manifest.authority.creator_mig_pub,
+                        entries,
+                        conflicts,
+                        pow_base_bits,
+                    )
+                })
+                .map(|(exp, _, _)| exp)
+                .collect();
+            if filtered.len() < threshold {
+                return Err(lifecycle_err(format!(
+                    "resolve_import_union failed: {}",
+                    first_err
+                )));
+            }
+            verified_exports = filtered;
+            resolve_import_union(
+                &anchor_id,
+                manifest,
+                &proposal,
+                &verified_exports,
+                qcs,
+                pow_base_bits,
+            )
+            .map_err(|e| lifecycle_err(format!("resolve_import_union failed: {}", e)))?
+        }
+        Err(e) => {
+            return Err(lifecycle_err(format!("resolve_import_union failed: {}", e)));
+        }
+    };
 
     Ok(ProposedPhaseDecision::ReadyToImport {
         proposal,
@@ -1343,20 +1690,68 @@ pub(crate) fn evaluate_proposed_phase_transition(
     })
 }
 
-pub(crate) fn verify_collected_import_acks(
-    acks: &[ImportAck],
+pub(crate) fn verify_single_import_ack(
+    ack: &ImportAck,
+    expected_lock_pub: &LockPubKey,
+    anchor_id: &[u8; 32],
+    proposal: &MigrationProposal,
     expected_state_hash: &[u8; 32],
 ) -> Result<(), FrontendError> {
+    let prop_hash = proposal
+        .core_digest()
+        .map_err(|e| lifecycle_err(format!("Invalid migration proposal: {}", e)))?;
+    if ack.lock_pub != *expected_lock_pub {
+        return Err(lifecycle_err("Target server ImportAck lock_pub mismatch"));
+    }
+    if ack.anchor_id != *anchor_id
+        || ack.proposal_hash != prop_hash
+        || ack.to_rev != proposal.to_rev
+        || ack.retain_until_quarter != proposal.retain_until_quarter
+    {
+        return Err(lifecycle_err("Target server ImportAck metadata mismatch"));
+    }
+    if ack.imported_state_hash != *expected_state_hash {
+        return Err(lifecycle_err("Target server ImportAck state hash mismatch"));
+    }
+    if !ack.verify() {
+        return Err(lifecycle_err(
+            "Target server ImportAck failed Ed25519 signature verification",
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn verify_collected_import_acks(
+    acks: &[ImportAck],
+    anchor_id: &[u8; 32],
+    proposal: &MigrationProposal,
+    expected_state_hash: &[u8; 32],
+) -> Result<(), FrontendError> {
+    let expected_targets: HashSet<LockPubKey> =
+        proposal.new_servers.iter().map(|s| s.lock_pub).collect();
+    if acks.len() != expected_targets.len() {
+        return Err(lifecycle_err(
+            "ImportAck set does not match proposal.new_servers count",
+        ));
+    }
+    let mut seen: HashSet<LockPubKey> = HashSet::with_capacity(acks.len());
     for ack in acks {
-        if ack.imported_state_hash != *expected_state_hash {
-            return Err(lifecycle_err("Target server ImportAck state hash mismatch"));
+        if !expected_targets.contains(&ack.lock_pub) {
+            return Err(lifecycle_err(
+                "ImportAck signer is not in proposal.new_servers",
+            ));
+        }
+        verify_single_import_ack(ack, &ack.lock_pub, anchor_id, proposal, expected_state_hash)?;
+        if !seen.insert(ack.lock_pub) {
+            return Err(lifecycle_err("Duplicate ImportAck from same target server"));
         }
     }
     Ok(())
 }
 
-/// Pure `Imported` -> `Finalized` evaluator: deduplicates `commit_sigs` by `lock_pub`, stays in
-/// `StoredRotationPhase::Imported` until `>= manifest.threshold`, and assembles the next manifest.
+/// Pure `Imported` -> `Finalized` evaluator: validates old-committee membership, `committed_at > 0`,
+/// and strict Ed25519 signature over `MigrationCert::commit_digest` before deduplicating and
+/// counting `>= manifest.threshold`, then assembles the next manifest.
 pub(crate) fn evaluate_imported_commit_transition(
     manifest: &AnchorManifest,
     anchor_id: &[u8; 32],
@@ -1365,12 +1760,27 @@ pub(crate) fn evaluate_imported_commit_transition(
     import_acks: Vec<ImportAck>,
     commit_sigs: Vec<CommitteeSignature>,
 ) -> Result<CommitPhaseDecision, FrontendError> {
+    let committee = manifest
+        .committee()
+        .map_err(|e| lifecycle_err(format!("Invalid manifest committee: {}", e)))?;
+    let prop_hash = proposal
+        .core_digest()
+        .map_err(|e| lifecycle_err(format!("Invalid migration proposal: {}", e)))?;
+    let commit_digest =
+        MigrationCert::commit_digest(anchor_id, &prop_hash, proposal.to_rev, &imported_state_hash);
+
     let mut unique_sigs: Vec<CommitteeSignature> = Vec::new();
     let mut signed_pubs: HashSet<LockPubKey> = HashSet::new();
     for cs in commit_sigs {
-        if signed_pubs.insert(cs.lock_pub) {
-            unique_sigs.push(cs);
+        if cs.committed_at == 0
+            || !committee.contains(&cs.lock_pub)
+            || signed_pubs.contains(&cs.lock_pub)
+            || !verify_ed25519_strict(&cs.lock_pub, &commit_digest, &cs.sig)
+        {
+            continue;
         }
+        signed_pubs.insert(cs.lock_pub);
+        unique_sigs.push(cs);
     }
 
     if unique_sigs.len() < usize::from(manifest.threshold) {
@@ -1397,22 +1807,33 @@ pub(crate) fn evaluate_imported_commit_transition(
 }
 
 /// Pure state transition updating `StoredAnchorHealth` from the result of a rotation step.
+///
+/// Only `RotationStepOutcome::Completed` clears `unhealthy_since_by_lock_pub` and
+/// `revoked_lock_pubs` and advances `last_rotated_rev`. `Aborted` clears `active_rotation`,
+/// records `last_error`, and preserves health/revocation state.
 pub(crate) fn apply_rotation_step_outcome(
     health: &mut StoredAnchorHealth,
-    outcome: Result<&Option<StoredRotationPhase>, &str>,
-    current_manifest_rev: u64,
+    outcome: Result<&RotationStepOutcome, &str>,
     now_secs: u64,
 ) {
     match outcome {
-        Ok(next_phase) => {
+        Ok(RotationStepOutcome::InProgress(next_phase)) => {
             health.last_checked_secs = now_secs;
-            health.active_rotation = next_phase.clone();
+            health.active_rotation = Some((**next_phase).clone());
             health.last_error = None;
-            if next_phase.is_none() {
-                health.unhealthy_since_by_lock_pub.clear();
-                health.revoked_lock_pubs.clear();
-                health.last_rotated_rev = current_manifest_rev.saturating_add(1);
-            }
+        }
+        Ok(RotationStepOutcome::Completed { new_revision }) => {
+            health.last_checked_secs = now_secs;
+            health.active_rotation = None;
+            health.last_error = None;
+            health.unhealthy_since_by_lock_pub.clear();
+            health.revoked_lock_pubs.clear();
+            health.last_rotated_rev = health.last_rotated_rev.max(*new_revision);
+        }
+        Ok(RotationStepOutcome::Aborted { reason }) => {
+            health.last_checked_secs = now_secs;
+            health.active_rotation = None;
+            health.last_error = Some(reason.clone());
         }
         Err(err_msg) => {
             health.last_error = Some(err_msg.to_string());
@@ -1431,12 +1852,19 @@ struct RotationEnv<'a> {
     password: Option<&'a str>,
 }
 
+fn phase_proposal_revs(phase: &StoredRotationPhase) -> (u64, u64) {
+    match phase {
+        StoredRotationPhase::Proposed { proposal, .. }
+        | StoredRotationPhase::Imported { proposal, .. } => (proposal.from_rev, proposal.to_rev),
+    }
+}
+
 async fn drive_active_rotation(
     env: RotationEnv<'_>,
     anchor_id: [u8; 32],
     manifest: AnchorManifest,
     phase: StoredRotationPhase,
-) -> Result<Option<StoredRotationPhase>, FrontendError> {
+) -> Result<RotationStepOutcome, FrontendError> {
     let RotationEnv {
         state,
         session,
@@ -1447,6 +1875,21 @@ async fn drive_active_rotation(
         password,
     } = env;
     let anchor_hex = hex::encode(anchor_id);
+    let (proposal_from_rev, proposal_to_rev) = phase_proposal_revs(&phase);
+
+    if manifest.revision >= proposal_to_rev {
+        return Ok(RotationStepOutcome::Completed {
+            new_revision: manifest.revision,
+        });
+    }
+    if manifest.revision != proposal_from_rev {
+        return Ok(RotationStepOutcome::Aborted {
+            reason: format!(
+                "Stored rotation proposal from_rev {} mismatches active manifest revision {}",
+                proposal_from_rev, manifest.revision
+            ),
+        });
+    }
 
     let (creator_did, guarantor_dids): (Option<String>, Vec<String>) = state
         .with_session_required(
@@ -1488,8 +1931,18 @@ async fn drive_active_rotation(
     )
     .await
     {
-        if discovered.revision > manifest.revision {
-            return Ok(None);
+        if discovered.revision >= proposal_to_rev {
+            return Ok(RotationStepOutcome::Completed {
+                new_revision: discovered.revision,
+            });
+        }
+        if discovered.revision != proposal_from_rev {
+            return Ok(RotationStepOutcome::Aborted {
+                reason: format!(
+                    "Discovered manifest revision {} superseded proposal from_rev {}",
+                    discovered.revision, proposal_from_rev
+                ),
+            });
         }
     }
 
@@ -1499,26 +1952,95 @@ async fn drive_active_rotation(
             effective_at_secs,
         } => {
             if !is_proposal_timelock_elapsed(effective_at_secs, now_secs) {
-                return Ok(Some(StoredRotationPhase::Proposed {
-                    proposal,
-                    effective_at_secs,
-                }));
+                return Ok(RotationStepOutcome::InProgress(Box::new(
+                    StoredRotationPhase::Proposed {
+                        proposal,
+                        effective_at_secs,
+                    },
+                )));
             }
+
+            let prop_hash = proposal
+                .core_digest()
+                .map_err(|e| lifecycle_err(format!("Invalid migration proposal: {}", e)))?;
+            let abort_threshold = manifest
+                .servers
+                .len()
+                .saturating_sub(usize::from(manifest.threshold))
+                .saturating_add(1);
 
             // Ensure permanent freeze & collect >= Q_old FreezeSnapshots
             let mut candidate_exports: Vec<SnapshotExport> = Vec::new();
+            let mut aborted_votes: HashSet<LockPubKey> = HashSet::new();
             for srv in &manifest.servers {
                 let (write_url, _) = resolve_server_locator(srv, &lifecycle.l2_probe_cache);
                 let mut got_export = false;
                 if let Ok(Some(st)) =
                     sync_client::get_lock_freeze_status(client, &write_url, &anchor_hex).await
                 {
+                    if let Some(m) = st.active_manifest {
+                        if m.revision > manifest.revision && m.verify_anchor_id(&anchor_id).is_ok()
+                        {
+                            let new_rev = m.revision;
+                            state.with_session_required(
+                                session,
+                                "Wallet session changed before committing discovered active manifest",
+                                |service| {
+                                    service
+                                        .update_l2_anchor_manifest(m.clone(), password)
+                                        .map_err(FrontendError::from)?;
+                                    let mut lc = load_lifecycle_state(service, password)?;
+                                    let entry = lc
+                                        .anchors
+                                        .entry(anchor_hex.clone())
+                                        .or_insert_with(|| StoredAnchorHealth::new(anchor_hex.clone()));
+                                    apply_rotation_step_outcome(
+                                        entry,
+                                        Ok(&RotationStepOutcome::Completed {
+                                            new_revision: new_rev,
+                                        }),
+                                        now_secs,
+                                    );
+                                    save_lifecycle_state(service, &lc, password)
+                                },
+                            )?;
+                            return Ok(RotationStepOutcome::Completed {
+                                new_revision: new_rev,
+                            });
+                        }
+                    }
+
+                    let mut export_matches = false;
                     if let Some(exp) = st.snapshot_export {
-                        candidate_exports.push(exp);
-                        got_export = true;
+                        if exp.snapshot.lock_pub == srv.lock_pub {
+                            export_matches = exp.snapshot.permanent
+                                && exp.snapshot.proposal_hash == Some(prop_hash);
+                            candidate_exports.push(exp);
+                            got_export = true;
+                        }
+                    }
+
+                    let voted_matches = st
+                        .voted_proposal
+                        .as_ref()
+                        .and_then(|p| p.core_digest().ok())
+                        .is_some_and(|h| h == prop_hash);
+                    let voted_different = st
+                        .voted_proposal
+                        .as_ref()
+                        .and_then(|p| p.core_digest().ok())
+                        .is_some_and(|h| h != prop_hash);
+                    let reported_active_without_proposal = st
+                        .bucket_freeze_state
+                        .as_str()
+                        .is_some_and(|s| s.eq_ignore_ascii_case("active"))
+                        && !voted_matches
+                        && !export_matches;
+                    if voted_different || reported_active_without_proposal {
+                        aborted_votes.insert(srv.lock_pub);
                     }
                 }
-                if !got_export {
+                if !got_export && !aborted_votes.contains(&srv.lock_pub) {
                     let fetch_body = serde_json::json!({
                         "action": "fetch_snapshot",
                         "anchor_id": anchor_hex,
@@ -1528,11 +2050,19 @@ async fn drive_active_rotation(
                     {
                         if let Some(exp_val) = val.get("snapshot_export").cloned() {
                             if let Ok(exp) = serde_json::from_value::<SnapshotExport>(exp_val) {
-                                candidate_exports.push(exp);
+                                if exp.snapshot.lock_pub == srv.lock_pub {
+                                    candidate_exports.push(exp);
+                                }
                             }
                         }
                     }
                 }
+            }
+
+            if aborted_votes.len() >= abort_threshold {
+                return Ok(RotationStepOutcome::Aborted {
+                    reason: "Rotation proposal was vetoed or cleared on committee".to_string(),
+                });
             }
 
             let qcs: Vec<QuorumCertificate> = state.with_session_required(
@@ -1560,10 +2090,6 @@ async fn drive_active_rotation(
                         .map_err(FrontendError::from)
                 },
             )?;
-            let pow_bits = max_pow_base_bits_for_servers(
-                lifecycle,
-                manifest.servers.iter().map(|srv| srv.lock_pub),
-            );
 
             let (proposal, exports, expected_state_hash) = match evaluate_proposed_phase_transition(
                 anchor_id,
@@ -1572,11 +2098,13 @@ async fn drive_active_rotation(
                 effective_at_secs,
                 candidate_exports,
                 &qcs,
-                pow_bits,
+                DEFAULT_LOCK_POW_BASE_BITS,
                 now_secs,
             )? {
                 ProposedPhaseDecision::WaitTimelock(p)
-                | ProposedPhaseDecision::AwaitSnapshots(p) => return Ok(Some(p)),
+                | ProposedPhaseDecision::AwaitSnapshots(p) => {
+                    return Ok(RotationStepOutcome::InProgress(Box::new(p)))
+                }
                 ProposedPhaseDecision::ReadyToImport {
                     proposal,
                     verified_exports,
@@ -1592,9 +2120,21 @@ async fn drive_active_rotation(
                 )
                 .await
                 .map_err(lifecycle_err)?;
-                verify_collected_import_acks(std::slice::from_ref(&ack), &expected_state_hash)?;
+                verify_single_import_ack(
+                    &ack,
+                    &new_srv.lock_pub,
+                    &anchor_id,
+                    &proposal,
+                    &expected_state_hash,
+                )?;
                 import_acks.push(ack);
             }
+            verify_collected_import_acks(
+                &import_acks,
+                &anchor_id,
+                &proposal,
+                &expected_state_hash,
+            )?;
 
             (proposal, Some((expected_state_hash, import_acks)))
         }
@@ -1605,6 +2145,12 @@ async fn drive_active_rotation(
         } => {
             let imported_state_hash =
                 decode_hex_fixed::<32>(&imported_state_hash_hex).map_err(lifecycle_err)?;
+            verify_collected_import_acks(
+                &import_acks,
+                &anchor_id,
+                &proposal,
+                &imported_state_hash,
+            )?;
             (proposal, Some((imported_state_hash, import_acks)))
         }
     };
@@ -1613,7 +2159,16 @@ async fn drive_active_rotation(
         unreachable!("handled in Proposed guard");
     };
 
-    // Phase 3: Collect >= Q_old commit signatures
+    // Phase 3: Collect >= Q_old verified commit signatures
+    let prop_hash = proposal
+        .core_digest()
+        .map_err(|e| lifecycle_err(format!("Invalid migration proposal: {}", e)))?;
+    let commit_digest = MigrationCert::commit_digest(
+        &anchor_id,
+        &prop_hash,
+        proposal.to_rev,
+        &imported_state_hash,
+    );
     let mut commit_sigs: Vec<CommitteeSignature> = Vec::new();
     for old_srv in &manifest.servers {
         let (write_url, _) = resolve_server_locator(old_srv, &lifecycle.l2_probe_cache);
@@ -1627,9 +2182,12 @@ async fn drive_active_rotation(
         )
         .await
         {
-            if !commit_sigs
-                .iter()
-                .any(|existing| existing.lock_pub == cs.lock_pub)
+            if cs.lock_pub == old_srv.lock_pub
+                && cs.committed_at > 0
+                && verify_ed25519_strict(&cs.lock_pub, &commit_digest, &cs.sig)
+                && !commit_sigs
+                    .iter()
+                    .any(|existing| existing.lock_pub == cs.lock_pub)
             {
                 commit_sigs.push(cs);
             }
@@ -1647,7 +2205,9 @@ async fn drive_active_rotation(
         import_acks,
         commit_sigs,
     )? {
-        CommitPhaseDecision::AwaitCommitSigs(phase) => return Ok(Some(phase)),
+        CommitPhaseDecision::AwaitCommitSigs(phase) => {
+            return Ok(RotationStepOutcome::InProgress(Box::new(phase)))
+        }
         CommitPhaseDecision::Finalized(m) => m,
     };
 
@@ -1661,18 +2221,34 @@ async fn drive_active_rotation(
             sync_client::post_lock_commit_finalize(client, &url, &anchor_id, &next_manifest).await;
     }
 
+    let new_rev = next_manifest.revision;
     state.with_session_required(
         session,
         "Wallet session changed before committing rotated anchor manifest",
         |service| {
             service
                 .update_l2_anchor_manifest(next_manifest.clone(), password)
-                .map_err(FrontendError::from)
+                .map_err(FrontendError::from)?;
+            let mut lc = load_lifecycle_state(service, password)?;
+            let entry = lc
+                .anchors
+                .entry(anchor_hex.clone())
+                .or_insert_with(|| StoredAnchorHealth::new(anchor_hex.clone()));
+            apply_rotation_step_outcome(
+                entry,
+                Ok(&RotationStepOutcome::Completed {
+                    new_revision: new_rev,
+                }),
+                now_secs,
+            );
+            save_lifecycle_state(service, &lc, password)
         },
     )?;
 
     mirror_manifest_to_own_syncs(client, security_policy, &anchor_id, &next_manifest).await;
-    Ok(None)
+    Ok(RotationStepOutcome::Completed {
+        new_revision: new_rev,
+    })
 }
 
 async fn initiate_rotation_proposal(
@@ -1735,43 +2311,41 @@ async fn initiate_rotation_proposal(
         )?;
 
         if is_proposal_timelock_elapsed(phase_effective_at, now_secs) {
-            if let Ok(next_phase) =
-                drive_active_rotation(env, anchor_id, manifest.clone(), phase).await
-            {
-                state.with_session_required(
-                    session,
-                    "Wallet session changed after driving L2 rotation step",
-                    |service| {
-                        let mut lc = load_lifecycle_state(service, password)?;
-                        let health = lc
-                            .anchors
-                            .entry(anchor_hex.to_string())
-                            .or_insert_with(|| StoredAnchorHealth::new(anchor_hex.to_string()));
-                        apply_rotation_step_outcome(
-                            health,
-                            Ok(&next_phase),
-                            manifest.revision,
-                            now_secs,
-                        );
-                        save_lifecycle_state(service, &lc, password)
-                    },
-                )?;
-            }
+            let step_result = drive_active_rotation(env, anchor_id, manifest.clone(), phase).await;
+            state.with_session_required(
+                session,
+                "Wallet session changed after driving L2 rotation step",
+                |service| {
+                    let mut lc = load_lifecycle_state(service, password)?;
+                    let health = lc
+                        .anchors
+                        .entry(anchor_hex.to_string())
+                        .or_insert_with(|| StoredAnchorHealth::new(anchor_hex.to_string()));
+                    match &step_result {
+                        Ok(outcome) => apply_rotation_step_outcome(health, Ok(outcome), now_secs),
+                        Err(err) => {
+                            apply_rotation_step_outcome(health, Err(err.message.as_str()), now_secs)
+                        }
+                    }
+                    save_lifecycle_state(service, &lc, password)
+                },
+            )?;
         }
     }
 
     Ok(())
 }
 
-/// Executes one health check, guarantor-veto scan, and crash-resumable rotation step using `now_secs`.
-pub(crate) async fn run_lifecycle_tick_with_now(
+/// Executes one health check, guarantor-veto scan, and crash-resumable rotation step using `now_secs`
+/// without building a frontend status DTO (used by background ticks).
+pub(crate) async fn run_lifecycle_tick_core(
     state: &AppState,
     session: &crate::session::SessionToken,
     client: &reqwest::Client,
     now_secs: u64,
     force: bool,
     password: Option<&str>,
-) -> Result<FrontendL2LifecycleStatusDto, FrontendError> {
+) -> Result<(), FrontendError> {
     let (security_policy, mut internal_lc) = state.with_session_required(
         session,
         "Wallet session changed before starting L2 lifecycle tick",
@@ -1791,7 +2365,7 @@ pub(crate) async fn run_lifecycle_tick_with_now(
 
     // 2. Collect tracked anchors
     enum CollectOutcome {
-        Early(FrontendL2LifecycleStatusDto),
+        Early,
         Ready(
             Vec<(String, AnchorManifest, Option<StoredGuarantorRole>, bool)>,
             ServerOffenderList,
@@ -1812,7 +2386,7 @@ pub(crate) async fn run_lifecycle_tick_with_now(
         |service| {
             let mut lc = load_lifecycle_state(service, password)?;
             if !force && now_secs.saturating_sub(lc.last_tick_secs) < HEALTH_CHECK_INTERVAL_SECS {
-                return build_status_dto(service, &lc, password).map(CollectOutcome::Early);
+                return Ok(CollectOutcome::Early);
             }
             lc.last_tick_secs = now_secs;
             let anchors: Vec<(String, AnchorManifest, Option<StoredGuarantorRole>, bool)> = service
@@ -1829,8 +2403,9 @@ pub(crate) async fn run_lifecycle_tick_with_now(
                 })
                 .map_err(FrontendError::from)?;
             save_lifecycle_state(service, &lc, password)?;
-            let offenders = load_server_offender_list(service, password)?;
+            let offenders = state.get_or_load_server_offender_list(service, password)?;
             let known_sources = crate::services::l2_anchor_service::collect_known_sync_sources(
+                state,
                 service,
                 &security_policy,
                 password,
@@ -1855,12 +2430,12 @@ pub(crate) async fn run_lifecycle_tick_with_now(
                     }
                 }
             }
-            let own_write_url_norm =
-                crate::services::sync_engine::admin::load_stored_sync_admin_opt(service, password)
-                    .ok()
-                    .flatten()
-                    .map(|a| normalize_sync_url(&a.descriptor.write_url))
-                    .filter(|u| !u.is_empty());
+            let own_write_url_norm = state
+                .get_or_load_own_sync_descriptor(service, password)
+                .ok()
+                .flatten()
+                .map(|d| normalize_sync_url(&d.write_url))
+                .filter(|u| !u.is_empty());
             let preflight = crate::services::preflight::ValueOutflowPreflight {
                 require_restore_reconciled: true,
                 check_known_offender_dids: &[],
@@ -1871,12 +2446,7 @@ pub(crate) async fn run_lifecycle_tick_with_now(
                 state, service, password, &preflight,
             )
             .is_ok()
-                && !matches!(
-                    service.get_seal_lock_reason(password),
-                    Ok(Some(
-                        human_money_core::models::seal::SealLockReason::ForkDetected
-                    ))
-                );
+                && matches!(service.get_seal_lock_reason(password), Ok(None));
             Ok(CollectOutcome::Ready(
                 anchors,
                 offenders,
@@ -1886,7 +2456,7 @@ pub(crate) async fn run_lifecycle_tick_with_now(
             ))
         },
     )? {
-        CollectOutcome::Early(dto) => return Ok(dto),
+        CollectOutcome::Early => return Ok(()),
         CollectOutcome::Ready(anchors, offenders, known_prio, own_w, outflow_ok) => {
             (anchors, offenders, known_prio, own_w, outflow_ok)
         }
@@ -1936,21 +2506,11 @@ pub(crate) async fn run_lifecycle_tick_with_now(
                         .entry(anchor_hex.clone())
                         .or_insert_with(|| StoredAnchorHealth::new(anchor_hex.clone()));
                     match &step_result {
-                        Ok(next_phase) => {
-                            apply_rotation_step_outcome(
-                                entry,
-                                Ok(next_phase),
-                                manifest.revision,
-                                now_secs,
-                            );
+                        Ok(outcome) => {
+                            apply_rotation_step_outcome(entry, Ok(outcome), now_secs);
                         }
                         Err(err) => {
-                            apply_rotation_step_outcome(
-                                entry,
-                                Err(err.message.as_str()),
-                                manifest.revision,
-                                now_secs,
-                            );
+                            apply_rotation_step_outcome(entry, Err(err.message.as_str()), now_secs);
                         }
                     }
                     save_lifecycle_state(service, &lc, password)
@@ -1963,7 +2523,7 @@ pub(crate) async fn run_lifecycle_tick_with_now(
         let mut unhealthy_now: HashSet<String> = HashSet::new();
         let mut revoked_now: HashSet<String> = HashSet::new();
         let mut probe_cache_deltas: Vec<FrontendLockServerProbeResult> = Vec::new();
-        let mut last_creator_activity_secs = manifest.issued_at_ms / 1_000;
+        let mut reported_creator_activities: Vec<u64> = Vec::new();
 
         for srv in &manifest.servers {
             let lock_hex = hex::encode(srv.lock_pub);
@@ -1974,6 +2534,7 @@ pub(crate) async fn run_lifecycle_tick_with_now(
             let (mut active_write_url, _) =
                 resolve_server_locator(srv, &internal_lc.l2_probe_cache);
             let admin_hex = hex::encode(srv.admin_pub);
+            let mut is_healthy_now = false;
             match sync_client::fetch_sync_info(client, &active_write_url).await {
                 Ok(info) => {
                     if let Some(ref rev) = info.revocation {
@@ -1988,10 +2549,13 @@ pub(crate) async fn run_lifecycle_tick_with_now(
                             probe_cache_deltas.push(relocated_probe);
                             active_write_url =
                                 resolve_server_locator(srv, &internal_lc.l2_probe_cache).0;
+                            is_healthy_now = true;
                         } else {
                             match classify_server_probe_info(&info, &lock_hex, &admin_hex, now_secs)
                             {
-                                ServerProbeOutcome::Healthy => {}
+                                ServerProbeOutcome::Healthy => {
+                                    is_healthy_now = true;
+                                }
                                 ServerProbeOutcome::Unhealthy => {
                                     unhealthy_now.insert(lock_hex.clone());
                                 }
@@ -2003,6 +2567,7 @@ pub(crate) async fn run_lifecycle_tick_with_now(
                     } else {
                         match classify_server_probe_info(&info, &lock_hex, &admin_hex, now_secs) {
                             ServerProbeOutcome::Healthy => {
+                                is_healthy_now = true;
                                 if let Some(ref lock_info) = info.lock {
                                     if let Some(ref del) = lock_info.delegation {
                                         if sync_client::verify_lock_delegation(
@@ -2020,6 +2585,10 @@ pub(crate) async fn run_lifecycle_tick_with_now(
                                             if del.issued_at > cur_cached
                                                 && sync_client::validate_sync_url(target_url)
                                                     .is_ok()
+                                                && sync_client::validate_sync_read_url(
+                                                    del.read_url.trim(),
+                                                )
+                                                .is_ok()
                                             {
                                                 let updated_probe = sync_client::probe_lock_server(
                                                     client,
@@ -2027,7 +2596,12 @@ pub(crate) async fn run_lifecycle_tick_with_now(
                                                     Some(&admin_hex),
                                                 )
                                                 .await;
-                                                if upsert_verified_lock_probe(
+                                                if validate_in_place_delegation_refresh(
+                                                    srv,
+                                                    del,
+                                                    &updated_probe,
+                                                    &offenders,
+                                                ) && upsert_verified_lock_probe(
                                                     &mut internal_lc.l2_probe_cache,
                                                     updated_probe.clone(),
                                                 ) {
@@ -2052,17 +2626,24 @@ pub(crate) async fn run_lifecycle_tick_with_now(
                 }
             }
 
-            if g_role_opt.is_some() {
+            if g_role_opt.is_some() && is_healthy_now {
                 if let Ok(Some(st)) =
                     sync_client::get_lock_freeze_status(client, &active_write_url, &anchor_hex)
                         .await
                 {
                     if let Some(act) = st.last_creator_activity_secs {
-                        last_creator_activity_secs = last_creator_activity_secs.max(act);
+                        reported_creator_activities.push(act);
                     }
                 }
             }
         }
+
+        let last_creator_activity_secs = compute_quorum_creator_activity_secs(
+            manifest.issued_at_ms / 1_000,
+            &reported_creator_activities,
+            manifest.threshold,
+            now_secs,
+        );
 
         if !probe_cache_deltas.is_empty() {
             let _ = state.mutate_internal_lifecycle_for_session(session, password, |lc| {
@@ -2095,33 +2676,37 @@ pub(crate) async fn run_lifecycle_tick_with_now(
             },
         )?;
 
-        // Derive signing authority keys if present in wallet
+        // Derive signing authority keys if present in wallet (strictly gated on DailyPay)
         let (creator_sk_opt, guarantor_sk_opt): (Option<SigningKey>, Option<(u8, SigningKey)>) =
             state.with_session_required(
                 session,
                 "Wallet session changed before deriving L2 rotation authority keys",
                 |service| {
                     service
-                        .with_wallet_and_identity(|w, id| {
-                            let c_sk = if has_creator {
-                                w.profile
-                                    .l2_anchor_nonces
-                                    .get(&anchor_hex)
-                                    .and_then(|h| hex::decode(h).ok())
-                                    .and_then(|b| {
-                                        l2_gateway::derive_anchor_mig_signing_key(id, &b).ok()
-                                    })
-                            } else {
-                                None
-                            };
-                            let g_sk = g_role_opt.as_ref().and_then(|r| {
-                                let nb = hex::decode(&r.context_nonce_hex).ok()?;
-                                let sk =
-                                    l2_rotation::derive_guarantor_mig_signing_key(id, &nb).ok()?;
-                                Some((r.guarantor_index, sk))
-                            });
-                            (c_sk, g_sk)
-                        })
+                        .with_authorized_identity(
+                            human_money_core::AccessMode::DailyPay,
+                            password,
+                            |w, id| {
+                                let c_sk = if has_creator {
+                                    w.profile
+                                        .l2_anchor_nonces
+                                        .get(&anchor_hex)
+                                        .and_then(|h| hex::decode(h).ok())
+                                        .and_then(|b| {
+                                            l2_gateway::derive_anchor_mig_signing_key(id, &b).ok()
+                                        })
+                                } else {
+                                    None
+                                };
+                                let g_sk = g_role_opt.as_ref().and_then(|r| {
+                                    let nb = hex::decode(&r.context_nonce_hex).ok()?;
+                                    let sk = l2_rotation::derive_guarantor_mig_signing_key(id, &nb)
+                                        .ok()?;
+                                    Some((r.guarantor_index, sk))
+                                });
+                                (c_sk, g_sk)
+                            },
+                        )
                         .map_err(FrontendError::from)
                 },
             )?;
@@ -2202,22 +2787,39 @@ pub(crate) async fn run_lifecycle_tick_with_now(
         .await?;
     }
 
+    Ok(())
+}
+
+/// Executes one health check, guarantor-veto scan, and crash-resumable rotation step using `now_secs`,
+/// returning the refreshed frontend status DTO.
+#[cfg(test)]
+pub(crate) async fn run_lifecycle_tick_with_now(
+    state: &AppState,
+    session: &crate::session::SessionToken,
+    client: &reqwest::Client,
+    now_secs: u64,
+    force: bool,
+    password: Option<&str>,
+) -> Result<FrontendL2LifecycleStatusDto, FrontendError> {
+    run_lifecycle_tick_core(state, session, client, now_secs, force, password).await?;
     state.with_session_required(
         session,
         "Wallet session changed before completing L2 lifecycle status",
         |service| {
             let lc = load_lifecycle_state(service, password)?;
-            build_status_dto(service, &lc, password)
+            build_status_dto(state, service, &lc, password)
         },
     )
 }
 
+#[cfg(test)]
 pub(crate) fn build_status_dto(
+    state: &AppState,
     service: &mut human_money_core::app_service::AppService,
     lc: &StoredL2LifecycleState,
     password: Option<&str>,
 ) -> Result<FrontendL2LifecycleStatusDto, FrontendError> {
-    let offenders = load_server_offender_list(service, password)?;
+    let offenders = state.get_or_load_server_offender_list(service, password)?;
     let anchors: Vec<FrontendAnchorLifecycleDto> = service
         .with_wallet(|w| {
             w.profile
@@ -2272,7 +2874,12 @@ pub(crate) async fn maybe_run_background_lifecycle_tick(state: &AppState) {
         let Ok(mut service) = state.service.lock() else {
             return;
         };
-        if !service.is_wallet_unlocked() || !service.is_session_active() {
+        if !service.is_wallet_unlocked()
+            || !service.is_session_active()
+            || service
+                .require_access_mode(human_money_core::AccessMode::DailyPay, None)
+                .is_err()
+        {
             return;
         }
         let Ok(session) = state.session_token_for_service(&service) else {
@@ -2296,8 +2903,7 @@ pub(crate) async fn maybe_run_background_lifecycle_tick(state: &AppState) {
     };
     let client = sync_client::create_sync_probe_client();
     let now_secs = sync_client::current_unix_timestamp();
-    if let Err(err) =
-        run_lifecycle_tick_with_now(state, &session, &client, now_secs, false, None).await
+    if let Err(err) = run_lifecycle_tick_core(state, &session, &client, now_secs, false, None).await
     {
         log::debug!(
             "Background L2 lifecycle tick skipped/failed: {}",
@@ -2309,6 +2915,7 @@ pub(crate) async fn maybe_run_background_lifecycle_tick(state: &AppState) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::common::max_pow_base_bits_for_servers;
     use ed25519_dalek::{Signer, SigningKey};
     use human_money_core::{
         humoco_proto::{
@@ -3939,7 +4546,7 @@ mod tests {
         let proposed_phase = compute_proposal_phase(
             &manifest,
             standby_prop.clone(),
-            &[None, Some(now0 + 500)],
+            &[Some(now0 + 400), Some(now0 + 500)],
             manifest.threshold,
             now0,
         )
@@ -4050,12 +4657,23 @@ mod tests {
             sig: [0u8; 64],
         };
         ack_s2.sig = s2_sk.sign(&ack_s2.digest()).to_bytes();
-        verify_collected_import_acks(&[ack_s3.clone(), ack_s2.clone()], &expected_state_hash)
-            .unwrap();
+        verify_collected_import_acks(
+            &[ack_s3.clone(), ack_s2.clone()],
+            &anchor_id,
+            &prop,
+            &expected_state_hash,
+        )
+        .unwrap();
 
         let mut bad_ack = ack_s3.clone();
         bad_ack.imported_state_hash = [0xAAu8; 32];
-        assert!(verify_collected_import_acks(&[bad_ack], &expected_state_hash).is_err());
+        assert!(verify_collected_import_acks(
+            &[bad_ack, ack_s2.clone()],
+            &anchor_id,
+            &prop,
+            &expected_state_hash,
+        )
+        .is_err());
 
         // 7. Phase 3: Commit sigs < threshold stays Imported; >= threshold finalizes Rev 2
         let c_digest =
@@ -4098,15 +4716,17 @@ mod tests {
         };
         assert_eq!(rev2_manifest.revision, 2);
 
-        // 8. StoredAnchorHealth transition updates on error vs pause vs completion
+        // 8. StoredAnchorHealth transition updates on error vs pause vs abort vs completion
         let mut health = StoredAnchorHealth::new(hex::encode(anchor_id));
         health
             .unhealthy_since_by_lock_pub
             .insert(hex::encode(s1_sk.verifying_key().as_bytes()), now0);
+        health
+            .revoked_lock_pubs
+            .insert(hex::encode(s2_sk.verifying_key().as_bytes()));
         apply_rotation_step_outcome(
             &mut health,
-            Ok(&Some(imported_phase)),
-            manifest.revision,
+            Ok(&RotationStepOutcome::InProgress(Box::new(imported_phase))),
             now0 + 10,
         );
         assert!(matches!(
@@ -4115,16 +4735,40 @@ mod tests {
         ));
         assert_eq!(health.last_rotated_rev, 1);
 
-        apply_rotation_step_outcome(
-            &mut health,
-            Err("temporary timeout"),
-            manifest.revision,
-            now0 + 20,
-        );
+        apply_rotation_step_outcome(&mut health, Err("temporary timeout"), now0 + 20);
         assert_eq!(health.last_error.as_deref(), Some("temporary timeout"));
         assert!(health.active_rotation.is_some());
 
-        apply_rotation_step_outcome(&mut health, Ok(&None), manifest.revision, now0 + 30);
+        apply_rotation_step_outcome(
+            &mut health,
+            Ok(&RotationStepOutcome::Aborted {
+                reason: "Rotation proposal was vetoed or cleared on committee".into(),
+            }),
+            now0 + 25,
+        );
+        assert!(health.active_rotation.is_none());
+        assert_eq!(
+            health.last_error.as_deref(),
+            Some("Rotation proposal was vetoed or cleared on committee")
+        );
+        assert!(
+            !health.unhealthy_since_by_lock_pub.is_empty(),
+            "Aborted must preserve unhealthy_since_by_lock_pub"
+        );
+        assert!(
+            !health.revoked_lock_pubs.is_empty(),
+            "Aborted must preserve revoked_lock_pubs"
+        );
+        assert_eq!(
+            health.last_rotated_rev, 1,
+            "Aborted must preserve last_rotated_rev"
+        );
+
+        apply_rotation_step_outcome(
+            &mut health,
+            Ok(&RotationStepOutcome::Completed { new_revision: 2 }),
+            now0 + 30,
+        );
         assert!(health.active_rotation.is_none());
         assert!(health.last_error.is_none());
         assert!(health.unhealthy_since_by_lock_pub.is_empty());
@@ -4805,5 +5449,1100 @@ mod tests {
             "https://s1-new.example/sync.php"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_s05_f1_rotation_rejects_unverified_snapshot_and_bad_commit_sig() {
+        let s1_sk = SigningKey::from_bytes(&[101u8; 32]);
+        let s2_sk = SigningKey::from_bytes(&[102u8; 32]);
+        let s3_sk = SigningKey::from_bytes(&[103u8; 32]);
+        let non_member_sk = SigningKey::from_bytes(&[104u8; 32]);
+        let creator_mig_sk = SigningKey::from_bytes(&[105u8; 32]);
+        let g_mig_sk = SigningKey::from_bytes(&[106u8; 32]);
+
+        let s3_standby = ServerEntry {
+            write_url: "https://s3.gamma.example/sync.php".into(),
+            read_url: "https://s3.gamma.example/d".into(),
+            admin_pub: s3_sk.verifying_key().to_bytes(),
+            lock_pub: s3_sk.verifying_key().to_bytes(),
+            nominated_by: NominatedBy::Creator,
+        };
+        let manifest = make_test_manifest(
+            &s1_sk,
+            &s2_sk,
+            "https://s1.alpha.example",
+            "https://s2.beta.example",
+            Some(s3_standby),
+            creator_mig_sk.verifying_key().to_bytes(),
+            vec![g_mig_sk.verifying_key().to_bytes()],
+        );
+        let anchor_id = manifest.rev1_anchor_id().unwrap();
+        let now0 = 1_760_100_000u64;
+        let prop = l2_rotation::build_holder_standby_proposal(
+            anchor_id,
+            &manifest,
+            &[s1_sk.verifying_key().to_bytes()],
+            now0,
+        )
+        .unwrap();
+        let prop_hash = prop.core_digest().unwrap();
+
+        let exp1 = make_freeze_export(
+            anchor_id,
+            &s1_sk,
+            manifest.retain_until_quarter,
+            prop_hash,
+            now0,
+        );
+        let exp2 = make_freeze_export(
+            anchor_id,
+            &s2_sk,
+            manifest.retain_until_quarter,
+            prop_hash,
+            now0,
+        );
+        let exp_non_member = make_freeze_export(
+            anchor_id,
+            &non_member_sk,
+            manifest.retain_until_quarter,
+            prop_hash,
+            now0,
+        );
+
+        // Non-member snapshot must not count toward threshold -> AwaitSnapshots (not error)
+        let d_non_member = evaluate_proposed_phase_transition(
+            anchor_id,
+            &manifest,
+            prop.clone(),
+            now0,
+            vec![exp1.clone(), exp_non_member],
+            &[],
+            0,
+            now0,
+        )
+        .expect("non-member snapshot must be ignored and yield AwaitSnapshots");
+        assert!(matches!(
+            d_non_member,
+            ProposedPhaseDecision::AwaitSnapshots(_)
+        ));
+
+        // Tampered entries (state_hash mismatch) before a valid export from the same server must be ignored
+        let mut exp1_tampered = exp1.clone();
+        exp1_tampered.entries.push("deadbeef".to_string());
+        let d_recovered = evaluate_proposed_phase_transition(
+            anchor_id,
+            &manifest,
+            prop.clone(),
+            now0,
+            vec![exp1_tampered, exp1, exp2],
+            &[],
+            0,
+            now0,
+        )
+        .expect("tampered export must not shadow valid export for same lock_pub");
+        let ProposedPhaseDecision::ReadyToImport {
+            expected_state_hash,
+            ..
+        } = d_recovered
+        else {
+            panic!("expected ReadyToImport");
+        };
+
+        // Phase 3: bad commit_sig must be rejected before threshold counting & must not shadow valid sig
+        let mut ack_s3 = ImportAck {
+            anchor_id,
+            proposal_hash: prop_hash,
+            to_rev: 2,
+            imported_state_hash: expected_state_hash,
+            retain_until_quarter: manifest.retain_until_quarter,
+            lock_pub: s3_sk.verifying_key().to_bytes(),
+            acked_at: now0 + 1,
+            sig: [0u8; 64],
+        };
+        ack_s3.sig = s3_sk.sign(&ack_s3.digest()).to_bytes();
+        let mut ack_s2 = ImportAck {
+            anchor_id,
+            proposal_hash: prop_hash,
+            to_rev: 2,
+            imported_state_hash: expected_state_hash,
+            retain_until_quarter: manifest.retain_until_quarter,
+            lock_pub: s2_sk.verifying_key().to_bytes(),
+            acked_at: now0 + 1,
+            sig: [0u8; 64],
+        };
+        ack_s2.sig = s2_sk.sign(&ack_s2.digest()).to_bytes();
+
+        let c_digest =
+            MigrationCert::commit_digest(&anchor_id, &prop_hash, 2, &expected_state_hash);
+        let cs1_bad = CommitteeSignature {
+            lock_pub: s1_sk.verifying_key().to_bytes(),
+            committed_at: now0 + 2,
+            sig: [0xEEu8; 64],
+        };
+        let cs1_good = CommitteeSignature {
+            lock_pub: s1_sk.verifying_key().to_bytes(),
+            committed_at: now0 + 2,
+            sig: s1_sk.sign(&c_digest).to_bytes(),
+        };
+        let cs2_good = CommitteeSignature {
+            lock_pub: s2_sk.verifying_key().to_bytes(),
+            committed_at: now0 + 2,
+            sig: s2_sk.sign(&c_digest).to_bytes(),
+        };
+
+        // Only 1 valid sig + 1 forged sig -> AwaitCommitSigs (not Err)
+        let c_wait = evaluate_imported_commit_transition(
+            &manifest,
+            &anchor_id,
+            prop.clone(),
+            expected_state_hash,
+            vec![ack_s3.clone(), ack_s2.clone()],
+            vec![cs1_bad.clone(), cs2_good.clone()],
+        )
+        .expect("forged commit_sig must be filtered -> AwaitCommitSigs");
+        assert!(matches!(c_wait, CommitPhaseDecision::AwaitCommitSigs(_)));
+
+        // Forged sig before valid sig for same lock_pub must not shadow valid sig
+        let c_done = evaluate_imported_commit_transition(
+            &manifest,
+            &anchor_id,
+            prop,
+            expected_state_hash,
+            vec![ack_s3, ack_s2],
+            vec![cs1_bad, cs1_good, cs2_good],
+        )
+        .expect("forged sig must not block subsequent valid sig for same lock_pub");
+        assert!(matches!(c_done, CommitPhaseDecision::Finalized(_)));
+    }
+
+    #[test]
+    fn test_s05_f2_max_pow_ignores_unverified_probes_and_clamps_to_max() {
+        let mut lc = InternalLifecycleState::default();
+        let lp_unverified = [0x11u8; 32];
+        let lp_verified = [0x22u8; 32];
+        let lp_unver_hex = hex::encode(lp_unverified);
+        let lp_ver_hex = hex::encode(lp_verified);
+
+        lc.l2_probe_cache.insert(
+            lp_unver_hex.clone(),
+            sync_client::FrontendLockServerProbeResult {
+                write_url: "https://evil.example/sync.php".into(),
+                read_url: "https://evil.example/d".into(),
+                drop_pub: lp_unver_hex.clone(),
+                admin_pub: lp_unver_hex.clone(),
+                lock_pub: lp_unver_hex,
+                delegation_valid: false,
+                waf_probe_passed: false,
+                selftest_passed: false,
+                key_leak_safe: false,
+                passed: false,
+                latency_ms: 5,
+                max_retention_quarter: 8159,
+                pow_base_bits: 24,
+                allow_pow_tickets: false,
+                ticket_pow_bits: 16,
+                inode_warning: false,
+                used_inodes: 0,
+                max_inodes: 1000,
+                probed_at_secs: 100,
+                delegation: None,
+                error: None,
+            },
+        );
+        assert_eq!(
+            max_pow_base_bits_for_servers(&lc, [lp_unverified]),
+            humoco_proto::crypto::DEFAULT_LOCK_POW_BASE_BITS,
+            "unverified probe must not inflate pow_base_bits"
+        );
+
+        lc.l2_probe_cache.insert(
+            lp_ver_hex.clone(),
+            sync_client::FrontendLockServerProbeResult {
+                write_url: "https://good.example/sync.php".into(),
+                read_url: "https://good.example/d".into(),
+                drop_pub: lp_ver_hex.clone(),
+                admin_pub: lp_ver_hex.clone(),
+                lock_pub: lp_ver_hex,
+                delegation_valid: true,
+                waf_probe_passed: true,
+                selftest_passed: true,
+                key_leak_safe: true,
+                passed: true,
+                latency_ms: 5,
+                max_retention_quarter: 8159,
+                pow_base_bits: 99,
+                allow_pow_tickets: false,
+                ticket_pow_bits: 16,
+                inode_warning: false,
+                used_inodes: 0,
+                max_inodes: 1000,
+                probed_at_secs: 100,
+                delegation: None,
+                error: None,
+            },
+        );
+        assert_eq!(
+            max_pow_base_bits_for_servers(&lc, [lp_verified]),
+            humoco_proto::crypto::MAX_LOCK_POW_BITS,
+            "verified probe pow_base_bits must clamp to MAX_LOCK_POW_BITS"
+        );
+    }
+
+    #[test]
+    fn test_s05_f6_standby_and_probe_filtering_preserves_unsigned_successors() {
+        let s1_sk = SigningKey::from_bytes(&[111u8; 32]);
+        let s2_sk = SigningKey::from_bytes(&[112u8; 32]);
+        let s3_standby_sk = SigningKey::from_bytes(&[113u8; 32]);
+        let g_succ_sk = SigningKey::from_bytes(&[114u8; 32]);
+        let bad_probe_sk = SigningKey::from_bytes(&[115u8; 32]);
+        let good_probe_sk = SigningKey::from_bytes(&[116u8; 32]);
+        let creator_mig_sk = SigningKey::from_bytes(&[117u8; 32]);
+        let g_mig_sk = SigningKey::from_bytes(&[118u8; 32]);
+
+        let s3_standby = ServerEntry {
+            write_url: "https://standby.gamma.example/sync.php".into(),
+            read_url: "https://standby.gamma.example/d".into(),
+            admin_pub: s3_standby_sk.verifying_key().to_bytes(),
+            lock_pub: s3_standby_sk.verifying_key().to_bytes(),
+            nominated_by: NominatedBy::Creator,
+        };
+        let g_succ = ServerEntry {
+            write_url: "https://gsucc.epsilon.example/sync.php".into(),
+            read_url: "https://gsucc.epsilon.example/d".into(),
+            admin_pub: g_succ_sk.verifying_key().to_bytes(),
+            lock_pub: g_succ_sk.verifying_key().to_bytes(),
+            nominated_by: NominatedBy::Guarantor(0),
+        };
+        let mut manifest = make_test_manifest(
+            &s1_sk,
+            &s2_sk,
+            "https://s1.alpha.example",
+            "https://s2.beta.example",
+            Some(s3_standby.clone()),
+            creator_mig_sk.verifying_key().to_bytes(),
+            vec![g_mig_sk.verifying_key().to_bytes()],
+        );
+        manifest.successors.push(g_succ.clone());
+        let anchor_id = manifest.rev1_anchor_id().unwrap();
+        let now0 = 1_760_200_000u64;
+        let failed = HashSet::from([s1_sk.verifying_key().to_bytes()]);
+
+        // (a) Revoked Creator standby MUST NOT be promoted by HolderStandby
+        let mut offenders = ServerOffenderList::new();
+        offenders.revoked_lock_pubs.insert(s3_standby.lock_pub);
+        // Mark Guarantor's successor admin untrusted locally -> Creator rotation MUST STILL preserve g_succ in new_successors!
+        let mut policy = SecurityPolicy::default();
+        policy
+            .lock_trust_by_admin_pub
+            .insert(hex::encode(g_succ.admin_pub), false);
+
+        // Add one probe with delegation_valid=false (must be ignored) and one valid probe
+        let mut lc = InternalLifecycleState::default();
+        let bad_hex = hex::encode(bad_probe_sk.verifying_key().as_bytes());
+        let good_hex = hex::encode(good_probe_sk.verifying_key().as_bytes());
+        lc.l2_probe_cache.insert(
+            bad_hex.clone(),
+            sync_client::FrontendLockServerProbeResult {
+                write_url: "https://badprobe.zeta.example/sync.php".into(),
+                read_url: "https://badprobe.zeta.example/d".into(),
+                drop_pub: bad_hex.clone(),
+                admin_pub: bad_hex.clone(),
+                lock_pub: bad_hex,
+                delegation_valid: false,
+                waf_probe_passed: true,
+                selftest_passed: true,
+                key_leak_safe: true,
+                passed: true,
+                latency_ms: 1,
+                max_retention_quarter: manifest.retain_until_quarter,
+                pow_base_bits: 8,
+                allow_pow_tickets: true,
+                ticket_pow_bits: 16,
+                inode_warning: false,
+                used_inodes: 0,
+                max_inodes: 1000,
+                probed_at_secs: now0,
+                delegation: None,
+                error: None,
+            },
+        );
+        lc.l2_probe_cache.insert(
+            good_hex.clone(),
+            sync_client::FrontendLockServerProbeResult {
+                write_url: "https://goodprobe.eta.example/sync.php".into(),
+                read_url: "https://goodprobe.eta.example/d".into(),
+                drop_pub: good_hex.clone(),
+                admin_pub: good_hex.clone(),
+                lock_pub: good_hex,
+                delegation_valid: true,
+                waf_probe_passed: true,
+                selftest_passed: true,
+                key_leak_safe: true,
+                passed: true,
+                latency_ms: 50,
+                max_retention_quarter: manifest.retain_until_quarter,
+                pow_base_bits: 8,
+                allow_pow_tickets: true,
+                ticket_pow_bits: 16,
+                inode_warning: false,
+                used_inodes: 0,
+                max_inodes: 1000,
+                probed_at_secs: now0,
+                delegation: None,
+                error: None,
+            },
+        );
+
+        let prop = select_rotation_proposal(
+            anchor_id,
+            &manifest,
+            &failed,
+            Some(&creator_mig_sk),
+            None,
+            &policy,
+            &lc,
+            &offenders,
+            now0,
+        )
+        .expect("must fall back to Creator proposal while preserving guarantor's successor");
+        assert_eq!(prop.initiator, ProposalInitiator::Creator);
+        assert_eq!(
+            prop.new_servers[0].lock_pub,
+            good_probe_sk.verifying_key().to_bytes(),
+            "must skip delegation_valid=false probe and banned standby"
+        );
+        assert!(
+            prop.new_successors.iter().any(|s| s.same_identity(&g_succ)),
+            "must preserve non-signing Guarantor successor in new_successors"
+        );
+        assert!(
+            prop.verify_against_manifest(&anchor_id, &manifest).is_ok(),
+            "resulting proposal must satisfy humoco-proto verify_against_manifest"
+        );
+    }
+
+    #[test]
+    fn test_s05_f13_rogue_server_cannot_shorten_proposal_timelock() {
+        let s1_sk = SigningKey::from_bytes(&[121u8; 32]);
+        let s2_sk = SigningKey::from_bytes(&[122u8; 32]);
+        let s3_sk = SigningKey::from_bytes(&[123u8; 32]);
+        let creator_mig_sk = SigningKey::from_bytes(&[124u8; 32]);
+        let g_mig_sk = SigningKey::from_bytes(&[125u8; 32]);
+        let s3_standby = ServerEntry {
+            write_url: "https://s3.gamma.example/sync.php".into(),
+            read_url: "https://s3.gamma.example/d".into(),
+            admin_pub: s3_sk.verifying_key().to_bytes(),
+            lock_pub: s3_sk.verifying_key().to_bytes(),
+            nominated_by: NominatedBy::Creator,
+        };
+        let manifest = make_test_manifest(
+            &s1_sk,
+            &s2_sk,
+            "https://s1.alpha.example",
+            "https://s2.beta.example",
+            Some(s3_standby),
+            creator_mig_sk.verifying_key().to_bytes(),
+            vec![g_mig_sk.verifying_key().to_bytes()],
+        );
+        let anchor_id = manifest.rev1_anchor_id().unwrap();
+        let now0 = 1_760_300_000u64;
+        let prop = l2_rotation::build_holder_standby_proposal(
+            anchor_id,
+            &manifest,
+            &[s1_sk.verifying_key().to_bytes()],
+            now0,
+        )
+        .unwrap();
+
+        // 1 rogue server claiming effective_at=now0+1 + 1 honest server claiming now0+500 -> must use 2nd order statistic (now0+500)
+        let phase_quorum = compute_proposal_phase(
+            &manifest,
+            prop.clone(),
+            &[Some(now0 + 1), Some(now0 + 500)],
+            2,
+            now0,
+        )
+        .unwrap();
+        let StoredRotationPhase::Proposed {
+            effective_at_secs, ..
+        } = phase_quorum
+        else {
+            panic!("expected Proposed");
+        };
+        assert_eq!(effective_at_secs, now0 + 500);
+
+        // Only 1 server returned effective_at (< threshold=2) -> must fall back to full timelock
+        let phase_partial =
+            compute_proposal_phase(&manifest, prop, &[None, Some(now0 + 1)], 2, now0).unwrap();
+        let StoredRotationPhase::Proposed {
+            effective_at_secs: eff_partial,
+            ..
+        } = phase_partial
+        else {
+            panic!("expected Proposed");
+        };
+        assert_eq!(
+            eff_partial,
+            now0 + humoco_proto::PROPOSAL_TIMELOCK_SECS,
+            "single server effective_at must not shorten timelock below threshold"
+        );
+    }
+
+    #[test]
+    fn test_s05_f1_byzantine_export_filtered_out_and_import_ack_verified() {
+        let s1_sk = SigningKey::from_bytes(&[131u8; 32]);
+        let s2_sk = SigningKey::from_bytes(&[132u8; 32]);
+        let s3_sk = SigningKey::from_bytes(&[133u8; 32]);
+        let s4_sk = SigningKey::from_bytes(&[134u8; 32]);
+        let creator_mig_sk = SigningKey::from_bytes(&[135u8; 32]);
+
+        let retain_q = encode_quarter(2035, 4).unwrap();
+        let make_srv = |sk: &SigningKey, host: &str| ServerEntry {
+            write_url: format!("https://{host}.example/sync.php"),
+            read_url: format!("https://{host}.example/d"),
+            admin_pub: sk.verifying_key().to_bytes(),
+            lock_pub: sk.verifying_key().to_bytes(),
+            nominated_by: NominatedBy::Creator,
+        };
+        let manifest = AnchorManifest {
+            revision: 1,
+            threshold: 2,
+            servers: vec![
+                make_srv(&s1_sk, "s1"),
+                make_srv(&s2_sk, "s2"),
+                make_srv(&s3_sk, "s3"),
+            ],
+            successors: vec![make_srv(&s4_sk, "s4")],
+            authority: AnchorAuthority {
+                creator_mig_pub: creator_mig_sk.verifying_key().to_bytes(),
+                guarantor_mig_pubs: vec![],
+            },
+            migration_chain: vec![],
+            issued_at_ms: 1_760_000_000_000,
+            retain_until_quarter: retain_q,
+        };
+        let anchor_id = manifest.rev1_anchor_id().unwrap();
+        let now0 = 1_760_400_000u64;
+        // Evicting Byzantine s3 via standby s4
+        let prop = l2_rotation::build_holder_standby_proposal(
+            anchor_id,
+            &manifest,
+            &[s3_sk.verifying_key().to_bytes()],
+            now0,
+        )
+        .unwrap();
+        let prop_hash = prop.core_digest().unwrap();
+
+        let exp1 = make_freeze_export(anchor_id, &s1_sk, retain_q, prop_hash, now0);
+        let exp2 = make_freeze_export(anchor_id, &s2_sk, retain_q, prop_hash, now0);
+
+        // s3 validly signs its FreezeSnapshot, but injects a causally invalid depth-0 LockEntry
+        let bogus_entry = LockEntry {
+            slot: [0x99u8; 32],
+            parent_slot: [0u8; 32],
+            output_branch: 0,
+            depth: 0,
+            child_lock: [0x88u8; 32],
+            sender_pubkey: [0x77u8; 32],
+            receiver_pubkey_hash: [0x66u8; 32],
+            change_pubkey_hash: None,
+            causal_sig: [0x55u8; 64],
+            root_mig_sig: Some([0x44u8; 64]),
+            encrypted_payload: [0x33u8; 265],
+            pow_nonce: 0,
+        };
+        let s3_pub = s3_sk.verifying_key().to_bytes();
+        let s3_bucket = humoco_proto::derive_bucket(&anchor_id, &s3_pub);
+        let mut s3_snap = humoco_proto::FreezeSnapshot {
+            anchor_id,
+            bucket: s3_bucket,
+            from_rev: 1,
+            retain_until_quarter: retain_q,
+            write_seq: 1,
+            bucket_head: [0x22u8; 32],
+            state_hash: humoco_proto::compute_freeze_state_hash(
+                &anchor_id,
+                1,
+                std::slice::from_ref(&bogus_entry),
+                &[],
+            )
+            .unwrap(),
+            permanent: true,
+            proposal_hash: Some(prop_hash),
+            frozen_at: now0,
+            expires_at: None,
+            lock_pub: s3_pub,
+            sig: [0u8; 64],
+        };
+        s3_snap.sig = s3_sk.sign(&s3_snap.digest()).to_bytes();
+        let exp3_byzantine = SnapshotExport {
+            snapshot: s3_snap,
+            entries: vec![bogus_entry.to_wire_hex().unwrap()],
+            conflicts: vec![],
+        };
+
+        // 1 Byzantine server among 3 (threshold=2) MUST be filtered out so its own eviction proceeds
+        let dec = evaluate_proposed_phase_transition(
+            anchor_id,
+            &manifest,
+            prop.clone(),
+            now0,
+            vec![exp1, exp2, exp3_byzantine],
+            &[],
+            DEFAULT_LOCK_POW_BASE_BITS,
+            now0,
+        )
+        .expect("Byzantine export must be filtered out when >= threshold honest exports remain");
+        let ProposedPhaseDecision::ReadyToImport {
+            verified_exports,
+            expected_state_hash,
+            ..
+        } = dec
+        else {
+            panic!("expected ReadyToImport");
+        };
+        assert_eq!(verified_exports.len(), 2);
+        assert!(verified_exports
+            .iter()
+            .all(|e| e.snapshot.lock_pub != s3_pub));
+
+        // verify_single_import_ack / verify_collected_import_acks reject forged metadata & signatures
+        let sign_ack = |sk: &SigningKey| {
+            let mut a = ImportAck {
+                anchor_id,
+                proposal_hash: prop_hash,
+                to_rev: prop.to_rev,
+                imported_state_hash: expected_state_hash,
+                retain_until_quarter: prop.retain_until_quarter,
+                lock_pub: sk.verifying_key().to_bytes(),
+                acked_at: now0 + 1,
+                sig: [0u8; 64],
+            };
+            a.sig = sk.sign(&a.digest()).to_bytes();
+            a
+        };
+        let a1 = sign_ack(&s1_sk);
+        let a2 = sign_ack(&s2_sk);
+        let a4 = sign_ack(&s4_sk);
+        verify_collected_import_acks(
+            &[a1.clone(), a2.clone(), a4.clone()],
+            &anchor_id,
+            &prop,
+            &expected_state_hash,
+        )
+        .unwrap();
+
+        // Tampered signature must fail
+        let mut a4_bad_sig = a4.clone();
+        a4_bad_sig.sig[0] ^= 0xFF;
+        assert!(verify_single_import_ack(
+            &a4_bad_sig,
+            &s4_sk.verifying_key().to_bytes(),
+            &anchor_id,
+            &prop,
+            &expected_state_hash,
+        )
+        .is_err());
+
+        // Wrong lock_pub for expected server must fail
+        assert!(verify_single_import_ack(
+            &a1,
+            &s4_sk.verifying_key().to_bytes(),
+            &anchor_id,
+            &prop,
+            &expected_state_hash,
+        )
+        .is_err());
+
+        // Missing server / duplicate server in collected set must fail
+        assert!(verify_collected_import_acks(
+            &[a1.clone(), a1, a2],
+            &anchor_id,
+            &prop,
+            &expected_state_hash,
+        )
+        .is_err());
+    }
+
+    #[tokio::test]
+    async fn test_s05_f3_vetoed_committee_aborts_preserving_health_and_active_manifest_completes() {
+        let dir = temp_dir("s05_f3_veto_abort");
+        let pw = "pw";
+        let (mut svc, _) = test_utils::setup_service_with_profile(&dir, &ACTORS.alice, "Alice", pw);
+        svc.unlock_session(pw, 600).unwrap();
+
+        let s1_sk = SigningKey::from_bytes(&[141u8; 32]);
+        let s2_sk = SigningKey::from_bytes(&[142u8; 32]);
+        let s3_sk = SigningKey::from_bytes(&[143u8; 32]);
+        let creator_mig_sk = SigningKey::from_bytes(&[144u8; 32]);
+        let g_mig_sk = SigningKey::from_bytes(&[145u8; 32]);
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let base_url = format!("http://127.0.0.1:{}", addr.port());
+
+        let s3_standby = ServerEntry {
+            write_url: format!("{base_url}/s3/sync.php"),
+            read_url: format!("{base_url}/s3/d"),
+            admin_pub: s3_sk.verifying_key().to_bytes(),
+            lock_pub: s3_sk.verifying_key().to_bytes(),
+            nominated_by: NominatedBy::Creator,
+        };
+        let manifest = make_test_manifest(
+            &s1_sk,
+            &s2_sk,
+            &format!("{base_url}/s1"),
+            &format!("{base_url}/s2"),
+            Some(s3_standby),
+            creator_mig_sk.verifying_key().to_bytes(),
+            vec![g_mig_sk.verifying_key().to_bytes()],
+        );
+        let anchor_id = manifest.rev1_anchor_id().unwrap();
+        let anchor_hex = hex::encode(anchor_id);
+        let now0 = 1_760_500_000u64;
+        let prop = l2_rotation::build_holder_standby_proposal(
+            anchor_id,
+            &manifest,
+            &[s1_sk.verifying_key().to_bytes()],
+            now0,
+        )
+        .unwrap();
+
+        // Build a valid Rev 2 manifest for Phase B (active_manifest upgrade discovery)
+        let prop_hash = prop.core_digest().unwrap();
+        let exp1 = make_freeze_export(
+            anchor_id,
+            &s1_sk,
+            manifest.retain_until_quarter,
+            prop_hash,
+            now0,
+        );
+        let exp2 = make_freeze_export(
+            anchor_id,
+            &s2_sk,
+            manifest.retain_until_quarter,
+            prop_hash,
+            now0,
+        );
+        let resolved = resolve_import_union(
+            &anchor_id,
+            &manifest,
+            &prop,
+            &[exp1, exp2],
+            &[],
+            DEFAULT_LOCK_POW_BASE_BITS,
+        )
+        .unwrap();
+        let mut ack_s3 = ImportAck {
+            anchor_id,
+            proposal_hash: prop_hash,
+            to_rev: 2,
+            imported_state_hash: resolved.imported_state_hash,
+            retain_until_quarter: manifest.retain_until_quarter,
+            lock_pub: s3_sk.verifying_key().to_bytes(),
+            acked_at: now0 + 1,
+            sig: [0u8; 64],
+        };
+        ack_s3.sig = s3_sk.sign(&ack_s3.digest()).to_bytes();
+        let mut ack_s2 = ImportAck {
+            anchor_id,
+            proposal_hash: prop_hash,
+            to_rev: 2,
+            imported_state_hash: resolved.imported_state_hash,
+            retain_until_quarter: manifest.retain_until_quarter,
+            lock_pub: s2_sk.verifying_key().to_bytes(),
+            acked_at: now0 + 1,
+            sig: [0u8; 64],
+        };
+        ack_s2.sig = s2_sk.sign(&ack_s2.digest()).to_bytes();
+        let c_digest =
+            MigrationCert::commit_digest(&anchor_id, &prop_hash, 2, &resolved.imported_state_hash);
+        let cs1 = CommitteeSignature {
+            lock_pub: s1_sk.verifying_key().to_bytes(),
+            committed_at: now0 + 2,
+            sig: s1_sk.sign(&c_digest).to_bytes(),
+        };
+        let cs2 = CommitteeSignature {
+            lock_pub: s2_sk.verifying_key().to_bytes(),
+            committed_at: now0 + 2,
+            sig: s2_sk.sign(&c_digest).to_bytes(),
+        };
+        let (rev2_manifest, _) = l2_rotation::assemble_migrated_manifest(
+            &manifest,
+            &anchor_id,
+            prop.clone(),
+            resolved.imported_state_hash,
+            vec![ack_s3, ack_s2],
+            vec![cs1, cs2],
+        )
+        .unwrap();
+
+        let tickets: Vec<GenesisTicket> = [&s1_sk, &s2_sk]
+            .into_iter()
+            .map(|sk| {
+                let mut t = GenesisTicket {
+                    anchor_id,
+                    retain_until_quarter: manifest.retain_until_quarter,
+                    issued_at: now0,
+                    lock_pub: sk.verifying_key().to_bytes(),
+                    sig: [0u8; 64],
+                };
+                t.sig = sk.sign(&t.digest()).to_bytes();
+                t
+            })
+            .collect();
+        svc.register_l2_anchor_template(manifest.clone(), tickets, Some(pw))
+            .unwrap();
+
+        let serve_rev2 = Arc::new(AtomicBool::new(false));
+        let stop = Arc::new(AtomicBool::new(false));
+        let serve_rev2_c = serve_rev2.clone();
+        let stop_c = stop.clone();
+        let rev2_c = rev2_manifest.clone();
+        let anchor_hex_c = anchor_hex.clone();
+
+        let server = tokio::spawn(async move {
+            while !stop_c.load(Ordering::Relaxed) {
+                let Ok(Ok((mut stream, _))) =
+                    tokio::time::timeout(std::time::Duration::from_millis(50), listener.accept())
+                        .await
+                else {
+                    continue;
+                };
+                let mut buf = [0u8; 4096];
+                let n = stream.read(&mut buf).await.unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..n]);
+                let first_line = req.lines().next().unwrap_or("");
+                let resp = if first_line.contains("lock_freeze") {
+                    let body = if serve_rev2_c.load(Ordering::Relaxed) {
+                        serde_json::json!({
+                            "anchor_id": anchor_hex_c,
+                            "bucket": "00".repeat(32),
+                            "active_manifest": rev2_c,
+                            "last_creator_activity_secs": now0,
+                            "bucket_freeze_state": "active",
+                            "voted_proposal": serde_json::Value::Null,
+                            "snapshot_export": serde_json::Value::Null,
+                        })
+                    } else {
+                        serde_json::json!({
+                            "anchor_id": anchor_hex_c,
+                            "bucket": "00".repeat(32),
+                            "active_manifest": serde_json::Value::Null,
+                            "last_creator_activity_secs": now0,
+                            "bucket_freeze_state": "active",
+                            "voted_proposal": serde_json::Value::Null,
+                            "snapshot_export": serde_json::Value::Null,
+                        })
+                    };
+                    let s = body.to_string();
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        s.len(),
+                        s
+                    )
+                } else {
+                    "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                        .to_string()
+                };
+                let _ = stream.write_all(resp.as_bytes()).await;
+            }
+        });
+
+        let state = AppState::new(svc);
+        let session = {
+            let mut s = state.service.lock().unwrap();
+            let mut lc = StoredL2LifecycleState::default();
+            let mut health = StoredAnchorHealth::new(anchor_hex.clone());
+            health
+                .unhealthy_since_by_lock_pub
+                .insert(hex::encode(s1_sk.verifying_key().as_bytes()), now0 - 10);
+            health
+                .revoked_lock_pubs
+                .insert(hex::encode(s1_sk.verifying_key().as_bytes()));
+            health.active_rotation = Some(StoredRotationPhase::Proposed {
+                proposal: prop.clone(),
+                effective_at_secs: now0,
+            });
+            lc.anchors.insert(anchor_hex.clone(), health);
+            save_lifecycle_state(&mut s, &lc, Some(pw)).unwrap();
+            state.session_token_for_service(&s).unwrap()
+        };
+
+        let client = sync_client::create_sync_probe_client();
+        // Phase A: Committee reports "active" without proposal -> Aborted, preserving health/revocations
+        let status_abort =
+            run_lifecycle_tick_with_now(&state, &session, &client, now0 + 5, true, Some(pw))
+                .await
+                .unwrap();
+        let a_abort = status_abort
+            .anchors
+            .iter()
+            .find(|a| a.anchor_id == anchor_hex)
+            .unwrap();
+        assert!(a_abort.active_rotation_phase.is_none());
+        assert!(a_abort
+            .last_error
+            .as_deref()
+            .unwrap_or("")
+            .contains("vetoed or cleared"));
+        assert_eq!(a_abort.unhealthy_servers.len(), 1);
+        assert_eq!(a_abort.revoked_servers.len(), 1);
+        assert_eq!(a_abort.revision, 1);
+
+        // Phase B: Re-arm Proposed, server returns verified Rev 2 active_manifest -> Completed atomically
+        serve_rev2.store(true, Ordering::Relaxed);
+        {
+            let mut s = state.service.lock().unwrap();
+            let mut lc = load_lifecycle_state(&mut s, Some(pw)).unwrap();
+            lc.anchors.get_mut(&anchor_hex).unwrap().active_rotation =
+                Some(StoredRotationPhase::Proposed {
+                    proposal: prop,
+                    effective_at_secs: now0,
+                });
+            save_lifecycle_state(&mut s, &lc, Some(pw)).unwrap();
+        }
+        let status_done =
+            run_lifecycle_tick_with_now(&state, &session, &client, now0 + 10, true, Some(pw))
+                .await
+                .unwrap();
+        let a_done = status_done
+            .anchors
+            .iter()
+            .find(|a| a.anchor_id == anchor_hex)
+            .unwrap();
+        assert_eq!(a_done.revision, 2);
+        assert!(a_done.active_rotation_phase.is_none());
+        assert!(a_done.last_error.is_none());
+        assert!(a_done.unhealthy_servers.is_empty());
+        assert!(a_done.revoked_servers.is_empty());
+
+        stop.store(true, Ordering::Relaxed);
+        let _ = server.await;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_s05_f7_cashier_receive_only_blocked_from_background_tick() {
+        let dir = temp_dir("s05_f7_receive_only");
+        let pw = "pw-full";
+        let cashier_pin = "pin-cashier-1234";
+        let (mut svc, profile_info) =
+            test_utils::setup_service_with_profile(&dir, &ACTORS.alice, "Alice", pw);
+        svc.unlock_session(pw, 600).unwrap();
+        svc.enable_secondary_auth(
+            pw,
+            cashier_pin,
+            human_money_core::SecondaryScope::ReceiveOnly,
+        )
+        .unwrap();
+        svc.logout();
+        let granted = svc
+            .login_with_secondary(
+                &profile_info.folder_name,
+                cashier_pin,
+                true,
+                "test-id".into(),
+            )
+            .unwrap();
+        assert_eq!(granted, human_money_core::AccessMode::ReceiveOnly);
+        svc.unlock_secondary_session(cashier_pin, 600).unwrap();
+
+        let state = AppState::new(svc);
+        // Background tick MUST skip ReceiveOnly session without advancing last_tick_secs
+        maybe_run_background_lifecycle_tick(&state).await;
+        let last_tick = {
+            let mut s = state.service.lock().unwrap();
+            load_lifecycle_state(&mut s, None).unwrap().last_tick_secs
+        };
+        assert_eq!(
+            last_tick, 0,
+            "S05-F7: ReceiveOnly session must not execute background lifecycle tick"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_s05_f9_in_place_delegation_refresh_validation() {
+        let admin_sk = SigningKey::from_bytes(&[151u8; 32]);
+        let lock_sk = SigningKey::from_bytes(&[152u8; 32]);
+        let other_sk = SigningKey::from_bytes(&[153u8; 32]);
+        let srv = ServerEntry {
+            write_url: "https://old.example/sync.php".into(),
+            read_url: "https://old.example/d".into(),
+            admin_pub: admin_sk.verifying_key().to_bytes(),
+            lock_pub: lock_sk.verifying_key().to_bytes(),
+            nominated_by: NominatedBy::Creator,
+        };
+        let valid_probe = make_signed_probe_result(
+            &admin_sk,
+            &lock_sk,
+            "https://new.example/sync.php",
+            "https://new.example/d",
+            200,
+            8159,
+        );
+        let valid_del = valid_probe.delegation.clone().unwrap();
+        let mut offenders = ServerOffenderList::new();
+
+        assert!(validate_in_place_delegation_refresh(
+            &srv,
+            &valid_del,
+            &valid_probe,
+            &offenders
+        ));
+
+        // Failed probe rejected
+        let mut failed_probe = valid_probe.clone();
+        failed_probe.passed = false;
+        assert!(!validate_in_place_delegation_refresh(
+            &srv,
+            &valid_del,
+            &failed_probe,
+            &offenders
+        ));
+
+        // Mismatched lock_pub rejected
+        let mut wrong_lock_probe = valid_probe.clone();
+        wrong_lock_probe.lock_pub = hex::encode(other_sk.verifying_key().as_bytes());
+        assert!(!validate_in_place_delegation_refresh(
+            &srv,
+            &valid_del,
+            &wrong_lock_probe,
+            &offenders
+        ));
+
+        // Mismatched write_url rejected
+        let mut wrong_url_probe = valid_probe.clone();
+        wrong_url_probe.write_url = "https://attacker.example/sync.php".into();
+        assert!(!validate_in_place_delegation_refresh(
+            &srv,
+            &valid_del,
+            &wrong_url_probe,
+            &offenders
+        ));
+
+        // Private/loopback read_url rejected
+        let mut bad_read_del = valid_del.clone();
+        bad_read_del.read_url = "http://169.254.169.254/latest".into();
+        assert!(!validate_in_place_delegation_refresh(
+            &srv,
+            &bad_read_del,
+            &valid_probe,
+            &offenders
+        ));
+
+        // Revoked server on ServerOffenderList rejected
+        offenders.revoked_lock_pubs.insert(srv.lock_pub);
+        assert!(!validate_in_place_delegation_refresh(
+            &srv,
+            &valid_del,
+            &valid_probe,
+            &offenders
+        ));
+    }
+
+    #[test]
+    fn test_s05_f11_record_equivocation_and_refresh_cache_revokes_admin_pub_and_updates_cache() {
+        let dir = temp_dir("s05_f11_equiv_delegation");
+        let pw = "pw";
+        let (mut svc, _) = test_utils::setup_service_with_profile(&dir, &ACTORS.alice, "Alice", pw);
+        svc.unlock_session(pw, 600).unwrap();
+
+        let admin_sk = SigningKey::from_bytes(&[161u8; 32]);
+        let lock_sk = SigningKey::from_bytes(&[162u8; 32]);
+        let admin_pub = admin_sk.verifying_key().to_bytes();
+        let lock_pub = lock_sk.verifying_key().to_bytes();
+
+        let probe = make_signed_probe_result(
+            &admin_sk,
+            &lock_sk,
+            "https://equiv.example/sync.php",
+            "https://equiv.example/d",
+            100,
+            8159,
+        );
+        let mut probe_cache = BTreeMap::new();
+        probe_cache.insert(probe.lock_pub.clone(), probe);
+
+        let make_rcpt = |child: [u8; 32], eh: [u8; 32]| {
+            let mut r = LockReceipt {
+                kind: LockReceiptKind::FirstWrite,
+                lock_pub,
+                bucket: [1u8; 32],
+                slot: [2u8; 32],
+                child_lock: child,
+                entry_hash: eh,
+                retain_until_quarter: 8159,
+                write_seq: 1,
+                bucket_head: [3u8; 32],
+                recipient_nonce: [4u8; 32],
+                sig: [0u8; 64],
+            };
+            r.sig = lock_sk.sign(&r.digest()).to_bytes();
+            r
+        };
+        let eq = EquivocationProof {
+            receipt_a: make_rcpt([0xAAu8; 32], [0x11u8; 32]),
+            receipt_b: make_rcpt([0xBBu8; 32], [0x22u8; 32]),
+        };
+
+        let state = AppState::new(svc);
+        {
+            let mut s = state.lock_service().unwrap();
+            let newly = record_equivocation_and_refresh_cache(
+                &state,
+                &mut s,
+                &probe_cache,
+                &eq,
+                1_760_000_000,
+                Some(pw),
+            )
+            .unwrap();
+            assert!(newly);
+
+            // Lock session to verify ActiveProfileCaches holds the refreshed ServerOffenderList!
+            s.lock_session();
+            let cached = state
+                .get_or_load_server_offender_list(&mut s, None)
+                .unwrap();
+            assert!(
+                cached.is_lock_pub_revoked(&lock_pub),
+                "S05-F11: lock_pub must be revoked in refreshed cache"
+            );
+            assert!(
+                cached.is_admin_pub_revoked(&admin_pub),
+                "S05-F11: ADR-10 admin_pub must be revoked via probe_cache delegation"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_s05_f13_quorum_creator_activity_resists_byzantine_outlier() {
+        let now = 1_800_000_000u64;
+        let baseline = 1_700_000_000u64;
+        let t_old = 1_750_000_000u64;
+
+        // 1 Byzantine server reporting u64::MAX among 3 (threshold=2) cannot mask inactivity
+        assert_eq!(
+            compute_quorum_creator_activity_secs(baseline, &[t_old, t_old, u64::MAX], 2, now),
+            t_old
+        );
+        // 1 stale server reporting 0 among 3 (threshold=2) cannot forge premature inactivity
+        assert_eq!(
+            compute_quorum_creator_activity_secs(baseline, &[0, now - 10, now - 10], 2, now),
+            now - 10
+        );
+        // Future timestamp clamped to <= now even when < threshold responses arrive
+        assert_eq!(
+            compute_quorum_creator_activity_secs(baseline, &[u64::MAX], 2, now),
+            now
+        );
+        // Zero threshold must be panic-free
+        assert_eq!(
+            compute_quorum_creator_activity_secs(baseline, &[t_old], 0, now),
+            t_old
+        );
     }
 }

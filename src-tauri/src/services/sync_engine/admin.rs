@@ -83,12 +83,19 @@ fn load_admin_with_signing_key(
 }
 
 fn save_stored_sync_admin(
+    state: &AppState,
     service: &mut AppService,
     admin: &StoredSyncAdmin,
     password: Option<&str>,
 ) -> Result<(), FrontendError> {
     crate::state::save_encrypted_json(service, MARKET_SYNC_ADMIN_KEY, admin, password)
-        .map_err(FrontendError::from)
+        .map_err(FrontendError::from)?;
+    state.write_cache_slot_for_service(
+        service,
+        |c| &mut c.own_sync_descriptor,
+        Some(Some(admin.descriptor.clone())),
+    );
+    Ok(())
 }
 
 fn remove_sync_from_selected_settings(
@@ -349,7 +356,7 @@ pub(crate) async fn push_all_channel_members(
                         .last_members_hash
                         .insert(key.clone(), hash.clone());
                 }
-                save_stored_sync_admin(service, &target_admin, password)
+                save_stored_sync_admin(state, service, &target_admin, password)
             },
         )?;
     }
@@ -478,7 +485,7 @@ pub fn prepare_sync_setup_impl(
         revocation: None,
     };
 
-    save_stored_sync_admin(&mut service, &stored_admin, password.as_deref())?;
+    save_stored_sync_admin(state, &mut service, &stored_admin, password.as_deref())?;
 
     let zip_bytes = crate::sync_zip::build_sync_zip_bytes(
         &admin_pubkey,
@@ -693,7 +700,8 @@ pub async fn finalize_sync_setup_impl(
         Ok(st) => st,
         Err(err) => {
             let _ = state.with_session(&session, |service| {
-                let _ = save_stored_sync_admin(service, &original_admin, password.as_deref());
+                let _ =
+                    save_stored_sync_admin(state, service, &original_admin, password.as_deref());
                 Ok(())
             });
             return Err(FrontendError::from(err));
@@ -711,7 +719,7 @@ pub async fn finalize_sync_setup_impl(
     .await
     {
         let _ = state.with_session(&session, |service| {
-            let _ = save_stored_sync_admin(service, &original_admin, password.as_deref());
+            let _ = save_stored_sync_admin(state, service, &original_admin, password.as_deref());
             Ok(())
         });
         return Err(err);
@@ -752,7 +760,7 @@ pub async fn finalize_sync_setup_impl(
         state.with_session_required(
             &session,
             "Active wallet session changed before sync admin could be saved",
-            |service| save_stored_sync_admin(service, &admin, password.as_deref()),
+            |service| save_stored_sync_admin(state, service, &admin, password.as_deref()),
         )?;
     }
 
@@ -973,7 +981,7 @@ pub async fn update_sync_admin_config_impl(
         &session,
         "Active wallet session changed before admin config could be saved",
         |service| {
-            save_stored_sync_admin(service, &admin, password.as_deref())?;
+            save_stored_sync_admin(state, service, &admin, password.as_deref())?;
             compute_admin_sync_members_with_stats(
                 state,
                 service,
@@ -1016,7 +1024,7 @@ pub(crate) async fn block_sync_slot_impl(
         &session,
         "Active wallet session changed before blocked slot could be saved",
         |service| {
-            save_stored_sync_admin(service, &admin, password.as_deref())?;
+            save_stored_sync_admin(state, service, &admin, password.as_deref())?;
             compute_admin_sync_members_with_stats(
                 state,
                 service,
@@ -1045,6 +1053,7 @@ pub fn delete_sync_admin_impl(
         password.as_deref(),
     )
     .map_err(FrontendError::from)?;
+    state.write_cache_slot_for_service(&service, |c| &mut c.own_sync_descriptor, Some(None));
 
     if let Some(admin) = admin_opt {
         remove_sync_from_selected_settings(
@@ -1141,7 +1150,7 @@ pub async fn revoke_own_sync_server_impl(
             &session,
             "Active wallet session changed before revocation state could be saved",
             |service| {
-                save_stored_sync_admin(service, &admin, password.as_deref())?;
+                save_stored_sync_admin(state, service, &admin, password.as_deref())?;
                 remove_sync_from_selected_settings(
                     state,
                     service,
@@ -1166,7 +1175,7 @@ pub async fn revoke_own_sync_server_impl(
         state.with_session_required(
             &session,
             "Active wallet session changed before revocation clearance could be saved",
-            |service| save_stored_sync_admin(service, &admin, password.as_deref()),
+            |service| save_stored_sync_admin(state, service, &admin, password.as_deref()),
         )?;
     }
 

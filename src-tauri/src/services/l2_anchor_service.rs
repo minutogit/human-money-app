@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::Duration;
 
 use human_money_core::humoco_proto::{
-    crypto::DEFAULT_LOCK_POW_BASE_BITS,
+    crypto::{DEFAULT_LOCK_POW_BASE_BITS, MAX_LOCK_POW_BITS},
     decode_hex_fixed,
     manifest::{AnchorAuthority, AnchorManifest, NominatedBy, ServerEntry},
     quarter_of_timestamp_ms, retention_covers,
@@ -21,8 +21,8 @@ use crate::{
         FrontendVoucherL2StatusDto,
     },
     services::common::{
-        get_wallet_master_seed, max_pow_base_bits_for_servers, normalize_sync_url,
-        resolve_verified_server_locator, upsert_verified_locator_only, upsert_verified_lock_probe,
+        get_wallet_master_seed, normalize_sync_url, resolve_verified_server_locator,
+        upsert_verified_locator_only, upsert_verified_lock_probe,
     },
     settings::{is_lock_admin_trusted, InternalLifecycleState, SecurityPolicy},
     sync_client::{self, FrontendLockServerProbeResult, LockTicketAuth},
@@ -115,11 +115,9 @@ async fn verify_and_cache_static_read_locator(
         passed: false,
         latency_ms: 0,
         max_retention_quarter: lock_info.max_retention_quarter,
-        pow_base_bits: lock_info.pow_base_bits,
+        pow_base_bits: lock_info.pow_base_bits.min(MAX_LOCK_POW_BITS),
         allow_pow_tickets: lock_info.allow_pow_tickets,
-        ticket_pow_bits: lock_info
-            .ticket_pow_bits
-            .min(human_money_core::humoco_proto::crypto::MAX_LOCK_POW_BITS),
+        ticket_pow_bits: lock_info.ticket_pow_bits.min(MAX_LOCK_POW_BITS),
         inode_warning: lock_info.inode_warning,
         used_inodes: lock_info.used_inodes,
         max_inodes: lock_info.max_inodes,
@@ -274,23 +272,22 @@ pub(crate) struct KnownSyncSource {
 }
 
 pub(crate) fn collect_known_sync_sources(
+    state: &AppState,
     service: &mut human_money_core::app_service::AppService,
     policy: &SecurityPolicy,
     password: Option<&str>,
 ) -> Vec<KnownSyncSource> {
     let mut by_url: BTreeMap<String, KnownSyncSource> = BTreeMap::new();
 
-    if let Ok(Some(admin)) =
-        crate::services::sync_engine::admin::load_stored_sync_admin_opt(service, password)
-    {
-        let norm = normalize_sync_url(&admin.descriptor.write_url);
+    if let Ok(Some(desc)) = state.get_or_load_own_sync_descriptor(service, password) {
+        let norm = normalize_sync_url(&desc.write_url);
         if !norm.is_empty() {
             by_url.insert(
                 norm,
                 KnownSyncSource {
-                    write_url: admin.descriptor.write_url.trim().to_string(),
-                    read_url: admin.descriptor.read_url.trim().to_string(),
-                    admin_pub: admin.descriptor.drop_pub.trim().to_ascii_lowercase(),
+                    write_url: desc.write_url.trim().to_string(),
+                    read_url: desc.read_url.trim().to_string(),
+                    admin_pub: desc.drop_pub.trim().to_ascii_lowercase(),
                     source: "own",
                     priority: 0,
                 },
@@ -356,23 +353,39 @@ pub(crate) struct AssembledAutoCommittee {
     pub source: &'static str, // "live" | "cached"
 }
 
+/// Matches a stored sync endpoint against a probed server.
+/// When both public keys are non-empty, requires exact case-insensitive pubkey equality;
+/// URL fallback is permitted ONLY when at least one public key is empty.
+pub(crate) fn matches_sync_endpoint(
+    stored_pub: &str,
+    stored_url: &str,
+    probe_admin: &str,
+    probe_url: &str,
+) -> bool {
+    let sp = stored_pub.trim();
+    let pa = probe_admin.trim();
+    if !sp.is_empty() && !pa.is_empty() {
+        return sp.eq_ignore_ascii_case(pa);
+    }
+    let su = normalize_sync_url(stored_url);
+    let pu = normalize_sync_url(probe_url);
+    !su.is_empty() && su == pu
+}
+
 fn has_usable_ticket_auth(
+    state: &AppState,
     service: &mut human_money_core::app_service::AppService,
     policy: &SecurityPolicy,
     probe: &FrontendLockServerProbeResult,
     password: Option<&str>,
 ) -> Result<bool, FrontendError> {
-    let probe_write_norm = normalize_sync_url(&probe.write_url);
-    let probe_admin_lower = probe.admin_pub.trim().to_ascii_lowercase();
-
-    if let Some(admin) =
-        crate::services::sync_engine::admin::load_stored_sync_admin_opt(service, password)?
-    {
-        let admin_write_norm = normalize_sync_url(&admin.descriptor.write_url);
-        let admin_pub_lower = admin.descriptor.drop_pub.trim().to_ascii_lowercase();
-        let matches = (!admin_pub_lower.is_empty() && admin_pub_lower == probe_admin_lower)
-            || (!admin_write_norm.is_empty() && admin_write_norm == probe_write_norm);
-        if matches {
+    if let Some(desc) = state.get_or_load_own_sync_descriptor(service, password)? {
+        if matches_sync_endpoint(
+            &desc.drop_pub,
+            &desc.write_url,
+            &probe.admin_pub,
+            &probe.write_url,
+        ) {
             return Ok(true);
         }
     }
@@ -381,11 +394,14 @@ fn has_usable_ticket_auth(
         if d.slot_id.is_some() {
             continue;
         }
-        let d_write_norm = normalize_sync_url(&d.write_url);
         let d_drop_lower = d.drop_pub.trim().to_ascii_lowercase();
-        let matches = (!d_drop_lower.is_empty() && d_drop_lower == probe_admin_lower)
-            || (!d_write_norm.is_empty() && d_write_norm == probe_write_norm);
-        if matches && humoco_market::parse_ed25519_pubkey_hex64(&d_drop_lower).is_ok() {
+        if matches_sync_endpoint(
+            &d_drop_lower,
+            &d.write_url,
+            &probe.admin_pub,
+            &probe.write_url,
+        ) && humoco_market::parse_ed25519_pubkey_hex64(&d_drop_lower).is_ok()
+        {
             return Ok(true);
         }
     }
@@ -395,20 +411,24 @@ fn has_usable_ticket_auth(
         .iter()
         .filter(|s| s.enabled && s.status != "revoked")
         .any(|s| {
-            let s_write_norm = normalize_sync_url(&s.write_url);
-            let s_drop_lower = s.drop_pub.trim().to_ascii_lowercase();
-            (!s_drop_lower.is_empty() && s_drop_lower == probe_admin_lower)
-                || (!s_write_norm.is_empty() && s_write_norm == probe_write_norm)
+            matches_sync_endpoint(
+                &s.drop_pub,
+                &s.write_url,
+                &probe.admin_pub,
+                &probe.write_url,
+            )
         })
         || policy
             .market_selected_syncs
             .iter()
             .filter(|d| d.slot_id.is_some())
             .any(|d| {
-                let d_write_norm = normalize_sync_url(&d.write_url);
-                let d_drop_lower = d.drop_pub.trim().to_ascii_lowercase();
-                (!d_drop_lower.is_empty() && d_drop_lower == probe_admin_lower)
-                    || (!d_write_norm.is_empty() && d_write_norm == probe_write_norm)
+                matches_sync_endpoint(
+                    &d.drop_pub,
+                    &d.write_url,
+                    &probe.admin_pub,
+                    &probe.write_url,
+                )
             });
     if has_public {
         return Ok(true);
@@ -423,19 +443,18 @@ pub(crate) fn resolve_ticket_auth_for_server(
     probe: &FrontendLockServerProbeResult,
     password: Option<&str>,
 ) -> Result<Option<LockTicketAuth>, FrontendError> {
-    let probe_write_norm = normalize_sync_url(&probe.write_url);
-    let probe_admin_lower = probe.admin_pub.trim().to_ascii_lowercase();
     let master_seed = get_wallet_master_seed(service, password)?;
 
     // 1. Own Sync Admin -> Direct signature with admin_sk
     if let Some(admin) =
         crate::services::sync_engine::admin::load_stored_sync_admin_opt(service, password)?
     {
-        let admin_write_norm = normalize_sync_url(&admin.descriptor.write_url);
-        let admin_pub_lower = admin.descriptor.drop_pub.trim().to_ascii_lowercase();
-        let matches = (!admin_pub_lower.is_empty() && admin_pub_lower == probe_admin_lower)
-            || (!admin_write_norm.is_empty() && admin_write_norm == probe_write_norm);
-        if matches {
+        if matches_sync_endpoint(
+            &admin.descriptor.drop_pub,
+            &admin.descriptor.write_url,
+            &probe.admin_pub,
+            &probe.write_url,
+        ) {
             let (admin_sk, _, _) =
                 humoco_market::derive_drop_admin_keypair(&master_seed, admin.sync_index);
             return Ok(Some(LockTicketAuth::Direct(admin_sk)));
@@ -447,11 +466,14 @@ pub(crate) fn resolve_ticket_auth_for_server(
         if d.slot_id.is_some() {
             continue;
         }
-        let d_write_norm = normalize_sync_url(&d.write_url);
         let d_drop_lower = d.drop_pub.trim().to_ascii_lowercase();
-        let matches = (!d_drop_lower.is_empty() && d_drop_lower == probe_admin_lower)
-            || (!d_write_norm.is_empty() && d_write_norm == probe_write_norm);
-        if matches && humoco_market::parse_ed25519_pubkey_hex64(&d_drop_lower).is_ok() {
+        if matches_sync_endpoint(
+            &d_drop_lower,
+            &d.write_url,
+            &probe.admin_pub,
+            &probe.write_url,
+        ) && humoco_market::parse_ed25519_pubkey_hex64(&d_drop_lower).is_ok()
+        {
             let wallet_ed_sk = service
                 .with_wallet_and_identity(|_, id| id.signing_key.clone())
                 .map_err(FrontendError::from)?;
@@ -468,10 +490,12 @@ pub(crate) fn resolve_ticket_auth_for_server(
         .iter()
         .filter(|s| s.enabled && s.status != "revoked")
         .find(|s| {
-            let s_write_norm = normalize_sync_url(&s.write_url);
-            let s_drop_lower = s.drop_pub.trim().to_ascii_lowercase();
-            (!s_drop_lower.is_empty() && s_drop_lower == probe_admin_lower)
-                || (!s_write_norm.is_empty() && s_write_norm == probe_write_norm)
+            matches_sync_endpoint(
+                &s.drop_pub,
+                &s.write_url,
+                &probe.admin_pub,
+                &probe.write_url,
+            )
         })
         .map(|s| s.write_url.clone())
         .or_else(|| {
@@ -480,10 +504,12 @@ pub(crate) fn resolve_ticket_auth_for_server(
                 .iter()
                 .filter(|d| d.slot_id.is_some())
                 .find(|d| {
-                    let d_write_norm = normalize_sync_url(&d.write_url);
-                    let d_drop_lower = d.drop_pub.trim().to_ascii_lowercase();
-                    (!d_drop_lower.is_empty() && d_drop_lower == probe_admin_lower)
-                        || (!d_write_norm.is_empty() && d_write_norm == probe_write_norm)
+                    matches_sync_endpoint(
+                        &d.drop_pub,
+                        &d.write_url,
+                        &probe.admin_pub,
+                        &probe.write_url,
+                    )
                 })
                 .map(|d| d.write_url.clone())
         });
@@ -581,7 +607,9 @@ fn estimate_deletable_ms(
     u64::try_from(deletable_dt.timestamp_millis().max(0)).unwrap_or(fallback_ms)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn select_expected_candidates_from_lifecycle(
+    state: &AppState,
     service: &mut human_money_core::app_service::AppService,
     policy: &SecurityPolicy,
     lifecycle: &InternalLifecycleState,
@@ -624,7 +652,7 @@ fn select_expected_candidates_from_lifecycle(
         if crate::l2_lifecycle::is_server_key_revoked(offenders, &lock_pub, Some(&admin_pub)) {
             continue;
         }
-        if !has_usable_ticket_auth(service, policy, probe, password)? {
+        if !has_usable_ticket_auth(state, service, policy, probe, password)? {
             continue;
         }
         let prio = source_prio_by_url
@@ -719,6 +747,7 @@ fn find_reusable_offline_anchor(
 }
 
 pub(crate) fn build_lock_protection_overview_from_service(
+    state: &AppState,
     service: &mut human_money_core::app_service::AppService,
     policy: &SecurityPolicy,
     lifecycle: &InternalLifecycleState,
@@ -726,7 +755,7 @@ pub(crate) fn build_lock_protection_overview_from_service(
     validity_duration: Option<&str>,
     password: Option<&str>,
 ) -> Result<FrontendLockProtectionOverviewDto, FrontendError> {
-    let offenders = crate::l2_lifecycle::load_server_offender_list(service, password)?;
+    let offenders = state.get_or_load_server_offender_list(service, password)?;
     let is_offender_hex = |lock_hex: &str, admin_hex: &str| -> bool {
         let lock_pk = decode_hex_fixed::<32>(lock_hex).ok();
         let admin_pk = decode_hex_fixed::<32>(admin_hex).ok();
@@ -738,7 +767,7 @@ pub(crate) fn build_lock_protection_overview_from_service(
             (None, None) => false,
         }
     };
-    let sources = collect_known_sync_sources(service, policy, None);
+    let sources = collect_known_sync_sources(state, service, policy, password);
     let mut probe_by_write_norm: BTreeMap<String, &FrontendLockServerProbeResult> = BTreeMap::new();
     let mut probe_by_admin: BTreeMap<String, &FrontendLockServerProbeResult> = BTreeMap::new();
     for probe in lifecycle.l2_probe_cache.values() {
@@ -776,13 +805,19 @@ pub(crate) fn build_lock_protection_overview_from_service(
 
     for src in &sources {
         let norm_w = normalize_sync_url(&src.write_url);
-        let probe_opt = probe_by_write_norm.get(&norm_w).copied().or_else(|| {
-            if !src.admin_pub.is_empty() {
-                probe_by_admin.get(&src.admin_pub).copied()
-            } else {
-                None
-            }
-        });
+        let probe_opt = probe_by_write_norm
+            .get(&norm_w)
+            .copied()
+            .filter(|p| {
+                matches_sync_endpoint(&src.admin_pub, &src.write_url, &p.admin_pub, &p.write_url)
+            })
+            .or_else(|| {
+                if !src.admin_pub.is_empty() {
+                    probe_by_admin.get(&src.admin_pub).copied()
+                } else {
+                    None
+                }
+            });
         let admin_pub = probe_opt
             .map(|p| p.admin_pub.clone())
             .filter(|a| !a.is_empty())
@@ -878,14 +913,14 @@ pub(crate) fn build_lock_protection_overview_from_service(
     }
 
     let now_secs = sync_client::current_unix_timestamp();
-    let now_ms = now_secs.saturating_mul(1000);
-    let has_offline_cached_anchor =
-        find_reusable_offline_anchor(service, policy, &offenders, now_ms).is_some();
     let preview_deletable_ms = estimate_deletable_ms(now_secs, standard_toml, validity_duration);
+    let reusable_offline =
+        find_reusable_offline_anchor(service, policy, &offenders, preview_deletable_ms);
+    let has_offline_cached_anchor = reusable_offline.is_some();
     let preview_quarter = required_retention_quarter(preview_deletable_ms).ok();
     let live_expected = if let Some(req_q) = preview_quarter {
         select_expected_candidates_from_lifecycle(
-            service, policy, lifecycle, &offenders, &sources, req_q, password,
+            state, service, policy, lifecycle, &offenders, &sources, req_q, password,
         )?
     } else {
         Vec::new()
@@ -898,9 +933,7 @@ pub(crate) fn build_lock_protection_overview_from_service(
         pks.sort();
         let thr = ((pks.len() / 2) + 1) as u8;
         (pks, thr, "live".to_string())
-    } else if let Some((_, manifest)) =
-        find_reusable_offline_anchor(service, policy, &offenders, preview_deletable_ms)
-    {
+    } else if let Some((_, manifest)) = reusable_offline {
         let mut pks: Vec<String> = manifest
             .servers
             .iter()
@@ -953,6 +986,7 @@ pub(crate) fn get_lock_protection_overview_impl(
         .get_or_load_internal_lifecycle(&mut service, None)
         .map_err(FrontendError::from)?;
     build_lock_protection_overview_from_service(
+        state,
         &mut service,
         &policy,
         &lifecycle,
@@ -990,6 +1024,7 @@ pub(crate) fn set_lock_server_trust_impl(
         .get_or_load_internal_lifecycle(&mut service, password.as_deref())
         .map_err(FrontendError::from)?;
     build_lock_protection_overview_from_service(
+        state,
         &mut service,
         &policy,
         &lifecycle,
@@ -1013,7 +1048,7 @@ async fn probe_known_sync_sources_into_cache(
     let offenders = state.with_session_required(
         session,
         "Wallet session changed before loading offender list for sync probe",
-        |service| crate::l2_lifecycle::load_server_offender_list(service, password),
+        |service| state.get_or_load_server_offender_list(service, password),
     )?;
 
     let src_admin_by_write_norm: HashMap<String, String> = sources
@@ -1323,8 +1358,8 @@ async fn gather_committee_candidates(
             let lifecycle = state
                 .get_or_load_internal_lifecycle(service, password)
                 .map_err(FrontendError::from)?;
-            let offenders = crate::l2_lifecycle::load_server_offender_list(service, password)?;
-            let sources = collect_known_sync_sources(service, &policy, password);
+            let offenders = state.get_or_load_server_offender_list(service, password)?;
+            let sources = collect_known_sync_sources(state, service, &policy, password);
             Ok((sources, policy, lifecycle, offenders))
         },
     )?;
@@ -1373,6 +1408,7 @@ async fn gather_committee_candidates(
                 .get_or_load_internal_lifecycle(service, password)
                 .map_err(FrontendError::from)?;
             let expected = select_expected_candidates_from_lifecycle(
+                state,
                 service,
                 &policy,
                 &fresh_lc,
@@ -1467,7 +1503,7 @@ pub(crate) async fn assemble_auto_committee_for_voucher(
             let policy = state
                 .get_or_load_security_policy(service, password)
                 .map_err(FrontendError::from)?;
-            let offenders = crate::l2_lifecycle::load_server_offender_list(service, password)?;
+            let offenders = state.get_or_load_server_offender_list(service, password)?;
             Ok(
                 find_reusable_offline_anchor(service, &policy, &offenders, deletable_ms).map(
                     |(aid, m)| {
@@ -1506,7 +1542,7 @@ pub(crate) async fn prewarm_offline_anchor_if_missing(
             let policy = state
                 .get_or_load_security_policy(service, password)
                 .map_err(FrontendError::from)?;
-            let offenders = crate::l2_lifecycle::load_server_offender_list(service, password)?;
+            let offenders = state.get_or_load_server_offender_list(service, password)?;
             Ok(find_reusable_offline_anchor(service, &policy, &offenders, horizon_ms).is_some())
         })
         .ok()
@@ -1549,7 +1585,9 @@ pub(crate) async fn refresh_lock_servers_with_session(
             let policy = state
                 .get_or_load_security_policy(service, password)
                 .map_err(FrontendError::from)?;
-            Ok(collect_known_sync_sources(service, &policy, password))
+            Ok(collect_known_sync_sources(
+                state, service, &policy, password,
+            ))
         },
     )?;
 
@@ -1568,7 +1606,7 @@ pub(crate) async fn refresh_lock_servers_with_session(
                 .get_or_load_internal_lifecycle(service, password)
                 .map_err(FrontendError::from)?;
             build_lock_protection_overview_from_service(
-                service, &policy, &lifecycle, None, None, password,
+                state, service, &policy, &lifecycle, None, None, password,
             )
         },
     )
@@ -1627,52 +1665,130 @@ pub(crate) async fn prewarm_l2_checkout_impl(state: &AppState) -> Result<(), Fro
     Ok(())
 }
 
-struct ReconcileTargetInfo {
+struct VoucherStaticProbeDescriptor {
     local_id: String,
     anchor_id: [u8; 32],
-    manifest_rev: u64,
+    manifest_rev: Option<u64>,
+    reduced_protection: bool,
     creator_did: Option<String>,
     guarantor_dids: Vec<String>,
-    target: VoucherLockReadTarget,
-    pow_bits: u32,
+    target: Option<VoucherLockReadTarget>,
 }
 
-struct MissingManifestInfo {
-    local_id: String,
-    anchor_id: [u8; 32],
-    creator_did: Option<String>,
-    guarantor_dids: Vec<String>,
+struct VoucherStaticProbeWithDiscoveryResult {
+    probe: Option<StaticSlotProbeResult>,
+    manifest_rev: Option<u64>,
+    reduced_protection: bool,
 }
 
 async fn rebuild_reconcile_read_target(
     state: &AppState,
     session: &crate::session::SessionToken,
     local_id: &str,
-    password: Option<&str>,
-) -> Option<(VoucherLockReadTarget, u32)> {
+) -> Option<VoucherLockReadTarget> {
     state
         .with_session(session, |service| {
-            let lc = state
-                .get_or_load_internal_lifecycle(service, password)
-                .map_err(FrontendError::from)?;
             service
                 .with_wallet_and_identity(|wallet, identity| {
                     wallet
                         .build_voucher_read_targets(identity, local_id, None)
                         .ok()
-                        .map(|t| {
-                            let pow_bits = max_pow_base_bits_for_servers(
-                                &lc,
-                                t.server_paths.iter().map(|(s, _)| s.lock_pub),
-                            );
-                            (t, pow_bits)
-                        })
                 })
                 .map_err(FrontendError::from)
         })
         .ok()
         .flatten()
         .flatten()
+}
+
+/// Shared static-lock probe helper used by BOTH `reconcile_vouchers_via_static_locks` and
+/// `check_voucher_l2_status_impl`, handling both missing local manifests and empty/404-after-rotation
+/// manifest discovery while returning the latest verified `manifest_rev` and `reduced_protection`.
+#[allow(clippy::too_many_arguments)]
+async fn probe_voucher_static_lock_with_discovery(
+    state: &AppState,
+    session: &crate::session::SessionToken,
+    client: &reqwest::Client,
+    mut desc: VoucherStaticProbeDescriptor,
+    probe_cache: &mut BTreeMap<String, FrontendLockServerProbeResult>,
+    offenders: &humoco_wot::ServerOffenderList,
+    learned_probes: &mut Vec<FrontendLockServerProbeResult>,
+    password: Option<&str>,
+) -> VoucherStaticProbeWithDiscoveryResult {
+    let mut manifest_rev = desc.manifest_rev;
+    let mut reduced_protection = desc.reduced_protection;
+
+    if desc.target.is_none() {
+        if let Ok(Some(discovered)) = crate::l2_lifecycle::discover_anchor_manifest(
+            state,
+            session,
+            client,
+            &desc.anchor_id,
+            desc.creator_did.as_deref(),
+            &desc.guarantor_dids,
+            password,
+        )
+        .await
+        {
+            manifest_rev = Some(discovered.revision);
+            reduced_protection = discovered
+                .has_reduced_guarantor_protection()
+                .unwrap_or(false);
+            desc.target = rebuild_reconcile_read_target(state, session, &desc.local_id).await;
+        }
+    }
+
+    let Some(mut target) = desc.target else {
+        return VoucherStaticProbeWithDiscoveryResult {
+            probe: None,
+            manifest_rev,
+            reduced_protection,
+        };
+    };
+
+    let mut probe =
+        probe_voucher_static_lock(client, &target, probe_cache, offenders, learned_probes).await;
+
+    if probe.candidate_entries.is_empty() {
+        let current_rev = manifest_rev.unwrap_or(0);
+        if let Ok(Some(discovered)) = crate::l2_lifecycle::discover_anchor_manifest(
+            state,
+            session,
+            client,
+            &desc.anchor_id,
+            desc.creator_did.as_deref(),
+            &desc.guarantor_dids,
+            password,
+        )
+        .await
+        {
+            if discovered.revision > current_rev {
+                manifest_rev = Some(discovered.revision);
+                reduced_protection = discovered
+                    .has_reduced_guarantor_protection()
+                    .unwrap_or(false);
+                if let Some(new_target) =
+                    rebuild_reconcile_read_target(state, session, &desc.local_id).await
+                {
+                    target = new_target;
+                    probe = probe_voucher_static_lock(
+                        client,
+                        &target,
+                        probe_cache,
+                        offenders,
+                        learned_probes,
+                    )
+                    .await;
+                }
+            }
+        }
+    }
+
+    VoucherStaticProbeWithDiscoveryResult {
+        probe: Some(probe),
+        manifest_rev,
+        reduced_protection,
+    }
 }
 
 pub(crate) async fn reconcile_vouchers_via_static_locks(
@@ -1684,16 +1800,15 @@ pub(crate) async fn reconcile_vouchers_via_static_locks(
     let filter_set: Option<HashSet<&str>> =
         filter_ids.map(|ids| ids.iter().map(|s| s.as_str()).collect());
 
-    let Some((mut probe_cache, offenders, mut targets, mut missing_infos)) =
+    let Some((mut probe_cache, offenders, descriptors)) =
         state.with_session(session, |service| {
             let lifecycle = state
                 .get_or_load_internal_lifecycle(service, password)
                 .map_err(FrontendError::from)?;
-            let offenders = crate::l2_lifecycle::load_server_offender_list(service, password)?;
-            let (targets, missing_infos) = service
+            let offenders = state.get_or_load_server_offender_list(service, password)?;
+            let descriptors = service
                 .with_wallet_and_identity(|wallet, identity| {
-                    let mut ready = Vec::new();
-                    let mut missing = Vec::new();
+                    let mut list = Vec::new();
                     for (id, instance) in &wallet.voucher_store.vouchers {
                         if instance.status
                             != human_money_core::wallet::instance::VoucherStatus::Active
@@ -1716,42 +1831,32 @@ pub(crate) async fn reconcile_vouchers_via_static_locks(
                             .filter(|s| s.role.eq_ignore_ascii_case("guarantor"))
                             .map(|s| s.signer_id.clone())
                             .collect();
-                        let manifest_rev = wallet
+                        let (reduced_protection, manifest_rev) = wallet
                             .profile
                             .l2_anchor_manifests
                             .get(&hex::encode(anchor_id))
-                            .map(|m| m.revision)
-                            .unwrap_or(0);
-                        match wallet.build_voucher_read_targets(identity, id, None) {
-                            Ok(target) => {
-                                let pow_bits = max_pow_base_bits_for_servers(
-                                    &lifecycle,
-                                    target.server_paths.iter().map(|(srv, _)| srv.lock_pub),
-                                );
-                                ready.push(ReconcileTargetInfo {
-                                    local_id: id.clone(),
-                                    anchor_id,
-                                    manifest_rev,
-                                    creator_did,
-                                    guarantor_dids,
-                                    target,
-                                    pow_bits,
-                                });
-                            }
-                            Err(_) => {
-                                missing.push(MissingManifestInfo {
-                                    local_id: id.clone(),
-                                    anchor_id,
-                                    creator_did,
-                                    guarantor_dids,
-                                });
-                            }
-                        }
+                            .map(|m| {
+                                (
+                                    m.has_reduced_guarantor_protection().unwrap_or(false),
+                                    Some(m.revision),
+                                )
+                            })
+                            .unwrap_or((false, None));
+                        let target = wallet.build_voucher_read_targets(identity, id, None).ok();
+                        list.push(VoucherStaticProbeDescriptor {
+                            local_id: id.clone(),
+                            anchor_id,
+                            manifest_rev,
+                            reduced_protection,
+                            creator_did,
+                            guarantor_dids,
+                            target,
+                        });
                     }
-                    (ready, missing)
+                    list
                 })
                 .map_err(FrontendError::from)?;
-            Ok((lifecycle.l2_probe_cache, offenders, targets, missing_infos))
+            Ok((lifecycle.l2_probe_cache, offenders, descriptors))
         })?
     else {
         return Err(FrontendError::from(
@@ -1759,7 +1864,7 @@ pub(crate) async fn reconcile_vouchers_via_static_locks(
         ));
     };
 
-    let active_anchored_count = targets.len().saturating_add(missing_infos.len());
+    let active_anchored_count = descriptors.len();
     if active_anchored_count == 0 {
         return Ok(StaticReconcileSummary {
             active_anchored_count: 0,
@@ -1771,85 +1876,29 @@ pub(crate) async fn reconcile_vouchers_via_static_locks(
 
     let client = sync_client::create_sync_probe_client();
     let mut unresolved_missing_count = 0usize;
-    for info in missing_infos.drain(..) {
-        let mut rebuilt: Option<ReconcileTargetInfo> = None;
-        if let Ok(Some(discovered)) = crate::l2_lifecycle::discover_anchor_manifest(
-            state,
-            session,
-            &client,
-            &info.anchor_id,
-            info.creator_did.as_deref(),
-            &info.guarantor_dids,
-            password,
-        )
-        .await
-        {
-            if let Some((t, bits)) =
-                rebuild_reconcile_read_target(state, session, &info.local_id, password).await
-            {
-                rebuilt = Some(ReconcileTargetInfo {
-                    local_id: info.local_id.clone(),
-                    anchor_id: info.anchor_id,
-                    manifest_rev: discovered.revision,
-                    creator_did: info.creator_did.clone(),
-                    guarantor_dids: info.guarantor_dids.clone(),
-                    target: t,
-                    pow_bits: bits,
-                });
-            }
-        }
-        if let Some(t) = rebuilt {
-            targets.push(t);
-        } else {
-            unresolved_missing_count += 1;
-        }
-    }
-
     let mut reconciled_spent_count = 0usize;
-    let mut inconclusive_count = unresolved_missing_count;
+    let mut inconclusive_count = 0usize;
     let mut any_committee_reachable = false;
     let mut learned_probes = Vec::new();
 
-    for mut info in targets {
-        let mut probe = probe_voucher_static_lock(
+    for desc in descriptors {
+        let local_id = desc.local_id.clone();
+        let probe_res = probe_voucher_static_lock_with_discovery(
+            state,
+            session,
             &client,
-            &info.target,
+            desc,
             &mut probe_cache,
             &offenders,
             &mut learned_probes,
+            password,
         )
         .await;
-        if probe.candidate_entries.is_empty() {
-            if let Ok(Some(discovered)) = crate::l2_lifecycle::discover_anchor_manifest(
-                state,
-                session,
-                &client,
-                &info.anchor_id,
-                info.creator_did.as_deref(),
-                &info.guarantor_dids,
-                password,
-            )
-            .await
-            {
-                if discovered.revision > info.manifest_rev {
-                    if let Some((new_target, new_pow_bits)) =
-                        rebuild_reconcile_read_target(state, session, &info.local_id, password)
-                            .await
-                    {
-                        info.target = new_target;
-                        info.pow_bits = new_pow_bits;
-                        probe = probe_voucher_static_lock(
-                            &client,
-                            &info.target,
-                            &mut probe_cache,
-                            &offenders,
-                            &mut learned_probes,
-                        )
-                        .await;
-                    }
-                }
-            }
-        }
+        let Some(probe) = probe_res.probe else {
+            unresolved_missing_count += 1;
+            inconclusive_count += 1;
+            continue;
+        };
         if probe.any_server_answered {
             any_committee_reachable = true;
         }
@@ -1860,9 +1909,9 @@ pub(crate) async fn reconcile_vouchers_via_static_locks(
             |service| {
                 reconcile_static_probe_on_service(
                     service,
-                    &info.local_id,
+                    &local_id,
                     &probe,
-                    info.pow_bits,
+                    DEFAULT_LOCK_POW_BASE_BITS,
                     password,
                 )
             },
@@ -1877,7 +1926,7 @@ pub(crate) async fn reconcile_vouchers_via_static_locks(
                 VoucherReconciliationResult::Inconclusive { reason } => {
                     log::debug!(
                         "Static lock reconciliation inconclusive for {}: {}",
-                        info.local_id,
+                        local_id,
                         reason
                     );
                     inconclusive_count += 1;
@@ -1886,7 +1935,7 @@ pub(crate) async fn reconcile_vouchers_via_static_locks(
             Ok(StaticVoucherReconcileOutcome::Inconclusive { reason, .. }) => {
                 log::debug!(
                     "Static lock probe inconclusive for {}: {}",
-                    info.local_id,
+                    local_id,
                     reason
                 );
                 inconclusive_count += 1;
@@ -1894,7 +1943,7 @@ pub(crate) async fn reconcile_vouchers_via_static_locks(
             Err(err) => {
                 log::warn!(
                     "Failed persisting static lock reconciliation for {}: {}",
-                    info.local_id,
+                    local_id,
                     err.message
                 );
                 inconclusive_count += 1;
@@ -1977,19 +2026,12 @@ pub(crate) async fn reconcile_restored_wallet_if_pending(
     session: &crate::session::SessionToken,
     password: Option<&str>,
 ) -> Result<bool, FrontendError> {
-    let Some((is_pending, fork_or_stale_alert, has_active_offline_vouchers)) =
-        state.with_session(session, |service| {
-            let lifecycle = state
-                .get_or_load_internal_lifecycle(service, password)
-                .map_err(FrontendError::from)?;
-            let (fork_or_stale, has_offline) =
-                has_fork_or_stale_alert_and_offline_vouchers(service, &lifecycle, password);
-            Ok((
-                lifecycle.pending_restore_l2_reconciliation,
-                fork_or_stale,
-                has_offline,
-            ))
-        })?
+    let Some(is_pending) = state.with_session(session, |service| {
+        let lifecycle = state
+            .get_or_load_internal_lifecycle(service, password)
+            .map_err(FrontendError::from)?;
+        Ok(lifecycle.pending_restore_l2_reconciliation)
+    })?
     else {
         return Ok(false);
     };
@@ -1998,31 +2040,31 @@ pub(crate) async fn reconcile_restored_wallet_if_pending(
     }
 
     let summary = reconcile_vouchers_via_static_locks(state, session, None, password).await?;
-    let can_auto_clear =
-        !fork_or_stale_alert && (summary.all_resolved || summary.active_anchored_count == 0);
-    let _ = has_active_offline_vouchers;
-    if can_auto_clear {
-        let cleared = state.with_session(session, |service| {
-            clear_fork_lock_for_service(service, password);
-            Ok(())
-        })?;
-        if cleared.is_none() {
+    if !(summary.all_resolved || summary.active_anchored_count == 0) {
+        return Ok(false);
+    }
+
+    // Re-load and verify atomically under ONE session-bound lock so a concurrent fork/stale alert
+    // or seal lock is never silently wiped or bypassed.
+    let updated = state.with_session(session, |service| {
+        let mut lc = state
+            .get_or_load_internal_lifecycle(service, password)
+            .map_err(FrontendError::from)?;
+        if !lc.pending_restore_l2_reconciliation {
             return Ok(false);
         }
-        let updated = state.mutate_internal_lifecycle_for_session(session, password, |lc| {
-            lc.pending_restore_l2_reconciliation = false;
-            if lc
-                .wallet_sync_alert
-                .as_ref()
-                .is_some_and(|a| a.kind == "stale_local_backup" || a.kind == "fork_detected")
-            {
-                lc.wallet_sync_alert = None;
-            }
-            true
-        })?;
-        return Ok(updated.is_some());
-    }
-    Ok(false)
+        let (fork_or_stale_alert, _) =
+            has_fork_or_stale_alert_and_offline_vouchers(service, &lc, password);
+        if fork_or_stale_alert {
+            return Ok(false);
+        }
+        lc.pending_restore_l2_reconciliation = false;
+        state
+            .save_internal_lifecycle(service, lc, password)
+            .map_err(FrontendError::from)?;
+        Ok(true)
+    })?;
+    Ok(updated.unwrap_or(false))
 }
 
 pub(crate) async fn check_voucher_l2_status_impl(
@@ -2036,103 +2078,99 @@ pub(crate) async fn check_voucher_l2_status_impl(
     )?;
     let pw = resolved_pw.as_deref().map(String::as_str);
 
-    let (
-        target_opt,
-        mut probe_cache,
-        offenders,
-        is_currently_archived,
-        pow_bits,
-        reduced_protection,
-        manifest_rev,
-    ) = state.with_session_required(
-        &session,
-        "Wallet session changed before checking voucher L2 status",
-        |service| {
-            let lifecycle = state
-                .get_or_load_internal_lifecycle(service, pw)
-                .map_err(FrontendError::from)?;
-            let probe_cache = lifecycle.l2_probe_cache.clone();
-            let offenders = crate::l2_lifecycle::load_server_offender_list(service, pw)?;
-            let tup = service
-                .with_wallet_and_identity(|wallet, identity| {
-                    let instance = wallet
-                        .voucher_store
-                        .vouchers
-                        .get(&local_instance_id)
-                        .ok_or_else(|| {
-                            human_money_core::Error::App(
-                                human_money_core::error::AppError::InvariantViolation {
-                                    message: "Voucher not found".into(),
-                                },
-                            )
-                        })?;
-                    let is_archived = matches!(
-                        instance.status,
-                        human_money_core::wallet::instance::VoucherStatus::Archived
-                    );
-                    let Some(anchor_id) = instance.voucher.layer2_anchor else {
-                        return Ok::<_, human_money_core::Error>((
-                            None,
+    let (desc_opt, mut probe_cache, offenders, is_currently_archived) = state
+        .with_session_required(
+            &session,
+            "Wallet session changed before checking voucher L2 status",
+            |service| {
+                let lifecycle = state
+                    .get_or_load_internal_lifecycle(service, pw)
+                    .map_err(FrontendError::from)?;
+                let probe_cache = lifecycle.l2_probe_cache.clone();
+                let offenders = state.get_or_load_server_offender_list(service, pw)?;
+                let (desc_opt, is_archived) = service
+                    .with_wallet_and_identity(|wallet, identity| {
+                        let instance = wallet
+                            .voucher_store
+                            .vouchers
+                            .get(&local_instance_id)
+                            .ok_or_else(|| {
+                                human_money_core::Error::App(
+                                    human_money_core::error::AppError::InvariantViolation {
+                                        message: "Voucher not found".into(),
+                                    },
+                                )
+                            })?;
+                        let is_archived = matches!(
+                            instance.status,
+                            human_money_core::wallet::instance::VoucherStatus::Archived
+                        );
+                        let Some(anchor_id) = instance.voucher.layer2_anchor else {
+                            return Ok::<_, human_money_core::Error>((None, is_archived));
+                        };
+                        let anchor_hex = hex::encode(anchor_id);
+                        let (reduced_protection, manifest_rev) = wallet
+                            .profile
+                            .l2_anchor_manifests
+                            .get(&anchor_hex)
+                            .map(|m| {
+                                (
+                                    m.has_reduced_guarantor_protection().unwrap_or(false),
+                                    Some(m.revision),
+                                )
+                            })
+                            .unwrap_or((false, None));
+                        let creator_did = instance.voucher.creator_profile.id.clone();
+                        let guarantor_dids: Vec<String> = instance
+                            .voucher
+                            .signatures
+                            .iter()
+                            .filter(|s| s.role.eq_ignore_ascii_case("guarantor"))
+                            .map(|s| s.signer_id.clone())
+                            .collect();
+                        let target = wallet
+                            .build_voucher_read_targets(identity, &local_instance_id, None)
+                            .ok();
+                        Ok((
+                            Some(VoucherStaticProbeDescriptor {
+                                local_id: local_instance_id.clone(),
+                                anchor_id,
+                                manifest_rev,
+                                reduced_protection,
+                                creator_did,
+                                guarantor_dids,
+                                target,
+                            }),
                             is_archived,
-                            DEFAULT_LOCK_POW_BASE_BITS,
-                            false,
-                            None,
-                        ));
-                    };
-                    let anchor_hex = hex::encode(anchor_id);
-                    let (reduced, rev) = wallet
-                        .profile
-                        .l2_anchor_manifests
-                        .get(&anchor_hex)
-                        .map(|m| {
-                            (
-                                m.has_reduced_guarantor_protection().unwrap_or(false),
-                                Some(m.revision),
-                            )
-                        })
-                        .unwrap_or((false, None));
-                    let target =
-                        wallet.build_voucher_read_targets(identity, &local_instance_id, None)?;
-                    let bits = max_pow_base_bits_for_servers(
-                        &lifecycle,
-                        target.server_paths.iter().map(|(srv, _)| srv.lock_pub),
-                    );
-                    Ok((Some(target), is_archived, bits, reduced, rev))
-                })
-                .map_err(FrontendError::from)?
-                .map_err(FrontendError::from)?;
-            Ok((tup.0, probe_cache, offenders, tup.1, tup.2, tup.3, tup.4))
-        },
-    )?;
+                        ))
+                    })
+                    .map_err(FrontendError::from)?
+                    .map_err(FrontendError::from)?;
+                Ok((desc_opt, probe_cache, offenders, is_archived))
+            },
+        )?;
 
-    let Some(target) = target_opt else {
+    let Some(desc) = desc_opt else {
         return Ok(FrontendVoucherL2StatusDto {
             status: "offline_only".to_string(),
             archived: is_currently_archived,
             successor_t_id: None,
-            reduced_guarantor_protection: reduced_protection,
-            manifest_revision: manifest_rev,
+            reduced_guarantor_protection: false,
+            manifest_revision: None,
         });
     };
 
-    if target.server_paths.is_empty() {
-        return Ok(FrontendVoucherL2StatusDto {
-            status: "no_servers".to_string(),
-            archived: is_currently_archived,
-            successor_t_id: None,
-            reduced_guarantor_protection: reduced_protection,
-            manifest_revision: manifest_rev,
-        });
-    }
-
     let client = sync_client::create_sync_probe_client();
     let mut learned_probes = Vec::new();
-    let probe = probe_voucher_static_lock(
+    let probe_res = probe_voucher_static_lock_with_discovery(
+        state,
+        &session,
         &client,
-        &target,
+        desc,
         &mut probe_cache,
         &offenders,
         &mut learned_probes,
+        pw,
     )
     .await;
     if !learned_probes.is_empty() {
@@ -2147,11 +2185,39 @@ pub(crate) async fn check_voucher_l2_status_impl(
         });
     }
 
+    let manifest_rev = probe_res.manifest_rev;
+    let reduced_protection = probe_res.reduced_protection;
+    let Some(probe) = probe_res.probe else {
+        return Ok(FrontendVoucherL2StatusDto {
+            status: "no_servers".to_string(),
+            archived: is_currently_archived,
+            successor_t_id: None,
+            reduced_guarantor_protection: reduced_protection,
+            manifest_revision: manifest_rev,
+        });
+    };
+
+    if probe.total_servers == 0 {
+        return Ok(FrontendVoucherL2StatusDto {
+            status: "no_servers".to_string(),
+            archived: is_currently_archived,
+            successor_t_id: None,
+            reduced_guarantor_protection: reduced_protection,
+            manifest_revision: manifest_rev,
+        });
+    }
+
     let outcome = state.with_session_required(
         &session,
         "Wallet session changed while verifying voucher L2 status",
         |service| {
-            reconcile_static_probe_on_service(service, &local_instance_id, &probe, pow_bits, pw)
+            reconcile_static_probe_on_service(
+                service,
+                &local_instance_id,
+                &probe,
+                DEFAULT_LOCK_POW_BASE_BITS,
+                pw,
+            )
         },
     )?;
 
@@ -2936,6 +3002,7 @@ mod tests {
             let policy = state.get_or_load_security_policy(&mut s, Some(pw)).unwrap();
             lc.pending_restore_l2_reconciliation = false;
             let overview = build_lock_protection_overview_from_service(
+                &state,
                 &mut s,
                 &policy,
                 &lc,
@@ -2949,6 +3016,422 @@ mod tests {
                 "H9: revoked server must not count as ready"
             );
         }
+
+        stop.store(true, Ordering::Relaxed);
+        let _ = srv.await;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_s05_f8_get_lock_protection_overview_succeeds_with_zero_timeout() {
+        let dir = crate::test_support::temp_test_dir("s05_f8_zero_timeout");
+        let pw = "pw-s05-f8";
+        let mut svc = crate::test_support::setup_test_app(
+            &dir,
+            "Alice",
+            crate::test_support::ALICE_PHRASE,
+            pw,
+        );
+        svc.unlock_session(pw, 600).unwrap();
+        let state = AppState::new(svc);
+        {
+            let mut s = state.lock_service().unwrap();
+            let mut sp = state.get_or_load_security_policy(&mut s, Some(pw)).unwrap();
+            sp.session_timeout_seconds = 0;
+            state.save_security_policy(&mut s, sp, Some(pw)).unwrap();
+            s.lock_session();
+            state.initialize_profile_session(&mut s, pw).unwrap();
+        }
+        let overview = get_lock_protection_overview_impl(None, None, &state)
+            .expect("S05-F8: get_lock_protection_overview_impl must succeed when timeout == 0 using ActiveProfileCaches");
+        assert_eq!(overview.status, "none");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_s05_f12_ticket_auth_rejects_mismatched_admin_pub_on_same_url() {
+        let dir = crate::test_support::temp_test_dir("s05_f12_endpoint_match");
+        let pw = "pw-s05-f12";
+        let mut svc = crate::test_support::setup_test_app(
+            &dir,
+            "Alice",
+            crate::test_support::ALICE_PHRASE,
+            pw,
+        );
+        svc.unlock_session(pw, 600).unwrap();
+        let mut policy = SecurityPolicy::default();
+        let expected_drop_pub = hex::encode([0xAAu8; 32]);
+        let hijacked_admin_pub = hex::encode([0xBBu8; 32]);
+        let hijacked_lock_pub = hex::encode([0xCCu8; 32]);
+        policy.market_selected_syncs.push(
+            humoco_market::DropDescriptor {
+                write_url: "https://sync.example/sync.php".to_string(),
+                read_url: "https://sync.example/d".to_string(),
+                slot_id: None,
+                drop_pub: expected_drop_pub,
+            }
+            .into(),
+        );
+        let probe = FrontendLockServerProbeResult {
+            write_url: "https://sync.example/sync.php".to_string(),
+            read_url: "https://sync.example/d".to_string(),
+            drop_pub: hijacked_admin_pub.clone(),
+            admin_pub: hijacked_admin_pub,
+            lock_pub: hijacked_lock_pub,
+            delegation_valid: true,
+            waf_probe_passed: true,
+            selftest_passed: true,
+            key_leak_safe: true,
+            passed: true,
+            latency_ms: 10,
+            max_retention_quarter: 8159,
+            pow_base_bits: 8,
+            allow_pow_tickets: false,
+            ticket_pow_bits: 16,
+            inode_warning: false,
+            used_inodes: 0,
+            max_inodes: 1000,
+            probed_at_secs: 1_760_000_000,
+            delegation: None,
+            error: None,
+        };
+        let state = AppState::new(svc);
+        let mut s = state.lock_service().unwrap();
+        assert!(
+            !has_usable_ticket_auth(&state, &mut s, &policy, &probe, Some(pw)).unwrap(),
+            "S05-F12: mismatched non-empty admin_pub on same URL must NOT match circle sync"
+        );
+        assert!(
+            resolve_ticket_auth_for_server(&mut s, &policy, &probe, Some(pw))
+                .unwrap()
+                .is_none(),
+            "S05-F12: resolve_ticket_auth_for_server must NOT sign stealth auth for mismatched admin_pub"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_s05_f14_has_offline_cached_anchor_requires_preview_deletable_coverage() {
+        use ed25519_dalek::{Signer, SigningKey};
+        use human_money_core::humoco_proto::manifest::GenesisTicket;
+
+        let dir = crate::test_support::temp_test_dir("s05_f14_preview_del");
+        let pw = "pw-s05-f14";
+        let mut svc = crate::test_support::setup_test_app(
+            &dir,
+            "Alice",
+            crate::test_support::ALICE_PHRASE,
+            pw,
+        );
+        svc.unlock_session(pw, 600).unwrap();
+
+        let now_secs = sync_client::current_unix_timestamp();
+        let short_ms = now_secs.saturating_add(30 * 86_400).saturating_mul(1000);
+        let short_quarter = required_retention_quarter(short_ms).unwrap();
+
+        let sk1 = SigningKey::from_bytes(&[131u8; 32]);
+        let anchor_nonce = [132u8; 32];
+        let creator_mig_pub = svc
+            .with_wallet_and_identity(|_, id| {
+                l2_gateway::derive_anchor_mig_signing_key(id, &anchor_nonce)
+                    .map(|k| k.verifying_key().to_bytes())
+            })
+            .unwrap()
+            .unwrap();
+        let manifest = AnchorManifest {
+            revision: 1,
+            threshold: 1,
+            servers: vec![ServerEntry {
+                write_url: "https://short.example/sync.php".into(),
+                read_url: "https://short.example/d".into(),
+                admin_pub: sk1.verifying_key().to_bytes(),
+                lock_pub: sk1.verifying_key().to_bytes(),
+                nominated_by: NominatedBy::Creator,
+            }],
+            successors: vec![],
+            authority: AnchorAuthority {
+                creator_mig_pub,
+                guarantor_mig_pubs: vec![],
+            },
+            migration_chain: vec![],
+            issued_at_ms: now_secs.saturating_mul(1000),
+            retain_until_quarter: short_quarter,
+        };
+        let anchor_id = manifest.rev1_anchor_id().unwrap();
+        let mut ticket = GenesisTicket {
+            anchor_id,
+            retain_until_quarter: short_quarter,
+            issued_at: now_secs,
+            lock_pub: sk1.verifying_key().to_bytes(),
+            sig: [0u8; 64],
+        };
+        ticket.sig = sk1.sign(&ticket.digest()).to_bytes();
+        svc.register_l2_anchor_template_with_nonce(
+            manifest,
+            vec![ticket],
+            Some(&anchor_nonce),
+            Some(pw),
+        )
+        .unwrap();
+
+        let state = AppState::new(svc);
+        let mut s = state.lock_service().unwrap();
+        let policy = state.get_or_load_security_policy(&mut s, Some(pw)).unwrap();
+        let lc = InternalLifecycleState::default();
+        let std_toml = human_money_core::test_utils::generate_signed_standard_toml(
+            "voucher_standards/freetaler_v1/standard.toml",
+        );
+        let overview = build_lock_protection_overview_from_service(
+            &state,
+            &mut s,
+            &policy,
+            &lc,
+            Some(&std_toml),
+            Some("P2Y"),
+            Some(pw),
+        )
+        .unwrap();
+        assert!(
+            !overview.has_offline_cached_anchor,
+            "S05-F14: anchor covering only 30 days must NOT report has_offline_cached_anchor for P2Y voucher"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_s05_f4_reconcile_restored_wallet_preserves_fork_or_stale_alert() {
+        let dir = crate::test_support::temp_test_dir("s05_f4_atomic_restore");
+        let pw = "pw-s05-f4";
+        let mut svc = crate::test_support::setup_test_app(
+            &dir,
+            "Alice",
+            crate::test_support::ALICE_PHRASE,
+            pw,
+        );
+        svc.unlock_session(pw, 600).unwrap();
+        let state = AppState::new(svc);
+        let session = {
+            let mut s = state.lock_service().unwrap();
+            let mut lc = state
+                .get_or_load_internal_lifecycle(&mut s, Some(pw))
+                .unwrap();
+            lc.pending_restore_l2_reconciliation = true;
+            lc.wallet_sync_alert = Some(crate::settings::WalletSyncAlert {
+                kind: "stale_local_backup".to_string(),
+                mirror_write_url: "https://mirror.example/sync.php".to_string(),
+                remote_epoch: Some(5),
+                remote_tx_nonce: Some(12),
+                local_epoch: 5,
+                local_tx_nonce: 8,
+                detected_at: "2026-11-21T12:00:00Z".to_string(),
+                has_signed_ack_proof: true,
+            });
+            state.save_internal_lifecycle(&mut s, lc, Some(pw)).unwrap();
+            state.session_token_for_service(&s).unwrap()
+        };
+
+        let cleared = reconcile_restored_wallet_if_pending(&state, &session, Some(pw))
+            .await
+            .unwrap();
+        assert!(
+            !cleared,
+            "S05-F4: must NOT auto-clear pending_restore_l2_reconciliation while stale_local_backup alert is active"
+        );
+        let lc_after = {
+            let mut s = state.lock_service().unwrap();
+            state
+                .get_or_load_internal_lifecycle(&mut s, Some(pw))
+                .unwrap()
+        };
+        assert!(lc_after.pending_restore_l2_reconciliation);
+        assert_eq!(
+            lc_after.wallet_sync_alert.as_ref().map(|a| a.kind.as_str()),
+            Some("stale_local_backup"),
+            "S05-F4: must preserve wallet_sync_alert"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_s05_f5_check_voucher_l2_status_discovers_missing_manifest() {
+        use ed25519_dalek::{Signer, SigningKey};
+        use human_money_core::humoco_proto::encode_quarter;
+        use human_money_core::models::profile::PublicProfile;
+        use human_money_core::models::voucher::{NewVoucherData, ValueDefinition};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let dir = crate::test_support::temp_test_dir("s05_f5_discover_missing");
+        let pw = "pw-s05-f5";
+        let std_toml = human_money_core::test_utils::generate_signed_standard_toml(
+            "voucher_standards/freetaler_v1/standard.toml",
+        );
+        let mut svc = crate::test_support::setup_test_app(
+            &dir,
+            "Alice",
+            crate::test_support::ALICE_PHRASE,
+            pw,
+        );
+        svc.unlock_session(pw, 600).unwrap();
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let base_url = format!("http://127.0.0.1:{}", addr.port());
+        let write_url = format!("{base_url}/sync.php");
+        let read_url = format!("{base_url}/d");
+
+        let admin_sk = SigningKey::from_bytes(&[171u8; 32]);
+        let lock_sk = SigningKey::from_bytes(&[172u8; 32]);
+        let admin_pub = admin_sk.verifying_key().to_bytes();
+        let lock_pub = lock_sk.verifying_key().to_bytes();
+        let anchor_nonce = [173u8; 32];
+        let creator_mig_pub = svc
+            .with_wallet_and_identity(|_, id| {
+                l2_gateway::derive_anchor_mig_signing_key(id, &anchor_nonce)
+                    .map(|k| k.verifying_key().to_bytes())
+            })
+            .unwrap()
+            .unwrap();
+        let retain_q = encode_quarter(2035, 4).unwrap();
+        let manifest = AnchorManifest {
+            revision: 1,
+            threshold: 1,
+            servers: vec![ServerEntry {
+                write_url: write_url.clone(),
+                read_url: read_url.clone(),
+                admin_pub,
+                lock_pub,
+                nominated_by: NominatedBy::Creator,
+            }],
+            successors: vec![],
+            authority: AnchorAuthority {
+                creator_mig_pub,
+                guarantor_mig_pubs: vec![],
+            },
+            migration_chain: vec![],
+            issued_at_ms: 1_760_000_000_000,
+            retain_until_quarter: retain_q,
+        };
+        let anchor_id = manifest.rev1_anchor_id().unwrap();
+        let anchor_hex = hex::encode(anchor_id);
+
+        let my_id = svc.with_wallet(|w| w.get_user_id().to_string()).unwrap();
+        // Intentionally do NOT register the manifest locally so disk & memory both lack it
+        svc.create_new_voucher(
+            &std_toml,
+            NewVoucherData {
+                creator_profile: PublicProfile {
+                    id: Some(my_id),
+                    ..Default::default()
+                },
+                nominal_value: ValueDefinition {
+                    amount: "25".into(),
+                    ..Default::default()
+                },
+                layer2_anchor: Some(anchor_id),
+                ..Default::default()
+            },
+            Some(pw),
+        )
+        .unwrap();
+        let local_id = svc
+            .with_wallet_and_identity(|w, id| w.list_vouchers(Some(id), None, None, None))
+            .unwrap()[0]
+            .local_instance_id
+            .clone();
+
+        let admin_hex = hex::encode(admin_pub);
+        let lock_hex = hex::encode(lock_pub);
+        let del_msg = humoco_market::format_lock_delegate_signature_message(
+            &admin_hex,
+            &lock_hex,
+            &write_url,
+            &read_url,
+            1_760_000_000,
+        );
+        let del_sig = hex::encode(admin_sk.sign(del_msg.as_bytes()).to_bytes());
+        let manifest_bytes = serde_json::to_vec(&manifest).unwrap();
+        let info_body = serde_json::json!({
+            "version": 1,
+            "drop_pub": admin_hex,
+            "read_url": read_url,
+            "channels": ["card", "wot", "backup", "post", "lock"],
+            "lock": {
+                "lock_pub": lock_hex,
+                "max_retention_quarter": retain_q,
+                "pow_base_bits": 8,
+                "allow_pow_tickets": true,
+                "ticket_pow_bits": 16,
+                "delegation": {
+                    "admin_pub": admin_hex,
+                    "lock_pub": lock_hex,
+                    "write_url": write_url,
+                    "read_url": read_url,
+                    "issued_at": 1_760_000_000u64,
+                    "sig": del_sig
+                }
+            }
+        })
+        .to_string();
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_c = stop.clone();
+        let manifest_path = format!("/anchors/{anchor_hex}.bin");
+        let srv = tokio::spawn(async move {
+            while !stop_c.load(Ordering::Relaxed) {
+                let Ok(Ok((mut stream, _))) =
+                    tokio::time::timeout(std::time::Duration::from_millis(50), listener.accept())
+                        .await
+                else {
+                    continue;
+                };
+                let mut buf = [0u8; 4096];
+                let n = stream.read(&mut buf).await.unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..n]);
+                let first_line = req.lines().next().unwrap_or("");
+                if first_line.contains(&manifest_path) {
+                    let hdr = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        manifest_bytes.len()
+                    );
+                    let _ = stream.write_all(hdr.as_bytes()).await;
+                    let _ = stream.write_all(&manifest_bytes).await;
+                } else if first_line.contains("?info") {
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        info_body.len(),
+                        info_body
+                    );
+                    let _ = stream.write_all(resp.as_bytes()).await;
+                } else {
+                    let _ = stream
+                        .write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                        .await;
+                }
+            }
+        });
+
+        let state = AppState::new(svc);
+        {
+            let mut s = state.lock_service().unwrap();
+            let mut sp = state.get_or_load_security_policy(&mut s, Some(pw)).unwrap();
+            sp.market_selected_syncs.push(
+                humoco_market::DropDescriptor {
+                    write_url: write_url.clone(),
+                    read_url: read_url.clone(),
+                    slot_id: None,
+                    drop_pub: admin_hex,
+                }
+                .into(),
+            );
+            state.save_security_policy(&mut s, sp, Some(pw)).unwrap();
+        }
+
+        let dto = check_voucher_l2_status_impl(local_id, Some(pw.to_string()), &state)
+            .await
+            .expect("S05-F5: check_voucher_l2_status_impl must discover missing manifest instead of failing");
+        assert_eq!(dto.status, "unspent");
+        assert_eq!(dto.manifest_revision, Some(1));
+        assert!(!dto.reduced_guarantor_protection);
 
         stop.store(true, Ordering::Relaxed);
         let _ = srv.await;

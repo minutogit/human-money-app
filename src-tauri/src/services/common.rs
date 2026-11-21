@@ -486,7 +486,8 @@ pub(crate) fn resolve_server_locator(
         .unwrap_or_else(|| (entry.write_url.clone(), entry.read_url.clone()))
 }
 
-/// Computes the maximum `pow_base_bits` across probed lock servers identified by `lock_pub`.
+/// Computes the maximum `pow_base_bits` across verified probed lock servers identified by
+/// `lock_pub`, clamped to `MAX_LOCK_POW_BITS`.
 pub(crate) fn max_pow_base_bits_for_servers(
     lifecycle: &InternalLifecycleState,
     lock_pubs: impl IntoIterator<Item = [u8; 32]>,
@@ -495,10 +496,12 @@ pub(crate) fn max_pow_base_bits_for_servers(
     for lp in lock_pubs {
         let key = hex::encode(lp);
         if let Some(probe) = lifecycle.l2_probe_cache.get(&key) {
-            bits = bits.max(probe.pow_base_bits);
+            if probe.passed && probe.delegation_valid {
+                bits = bits.max(probe.pow_base_bits);
+            }
         }
     }
-    bits
+    bits.min(human_money_core::humoco_proto::crypto::MAX_LOCK_POW_BITS)
 }
 
 /// Opens the profile-scoped encrypted `FileVoucherArchive` in `app_data_dir/voucher_archives/<hash>`.
