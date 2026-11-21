@@ -58,6 +58,14 @@ pub(crate) fn get_wallet_master_seed(
     Ok(zeroize::Zeroizing::new(signing_key.to_bytes()))
 }
 
+/// Validates and normalizes an Ed25519 drop public key to lowercase 64-char hex.
+pub(crate) fn canonical_drop_pub_hex(raw: &str) -> Result<String, FrontendError> {
+    let clean = raw.trim().to_ascii_lowercase();
+    humoco_market::parse_ed25519_pubkey_hex64(&clean)
+        .map(|_| clean)
+        .map_err(|e| FrontendError::from(e.to_string()))
+}
+
 /// Unifies direct public-sync and stealth drop-channel signing across `sync`, `post`, and `backup`.
 pub(crate) struct DropChannelSigner<'a> {
     pub is_public: bool,

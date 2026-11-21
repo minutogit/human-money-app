@@ -18,10 +18,10 @@ use crate::test_support::{
     create_test_state, setup_test_app, temp_test_dir, MockSyncServer, ALICE_PHRASE, BOB_PHRASE,
 };
 
-const DROP_PUB_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-const DROP_PUB_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const ADMIN_A: &str = "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1";
-const ADMIN_B: &str = "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1";
+const ADMIN_B: &str = "1111111111111111111111111111111111111111111111111111111111111111";
+const DROP_PUB_A: &str = ADMIN_A;
+const DROP_PUB_B: &str = ADMIN_B;
 
 async fn setup_test_sync(
     server: &MockSyncServer,

@@ -1,18 +1,23 @@
 use std::collections::HashSet;
 
+use zeroize::Zeroizing;
+
 use crate::models::{
     FrontendAddressBook, FrontendError, FrontendPublicSyncInfo, FrontendSyncDescriptor,
 };
-use crate::services::common::{normalize_sync_url, DropChannelSigner, SyncIdentityContext};
-use crate::services::market_service::sync_own_card_drops_on_settings_change;
+use crate::services::common::{
+    canonical_drop_pub_hex, normalize_sync_url, DropChannelSigner, SyncIdentityContext,
+};
 use crate::services::recovery_service::enqueue_guardian_locator_updates_if_configured;
 use crate::session::SessionToken;
-use crate::settings::{SecurityPolicy, StoredPublicSync, UiPreferences, MAX_POLLED_SYNCS};
+use crate::settings::{
+    SecurityPolicy, StoredPublicSync, UiPreferences, MAX_POLLED_SYNCS, SECURITY_POLICY_KEY,
+};
 use crate::state::{
     apply_revocation_notice, apply_revocation_notice_to_address_book, canonicalize_did,
     clear_revocation, AppState, StoredBackupSyncState, StoredPostState, StoredSyncState,
-    BACKUP_SYNC_STATE_KEY, CONTACTS_DATA_NAME, MARKET_CARD_STORE_KEY, MARKET_POST_STATE_KEY,
-    MARKET_SYNC_KEY,
+    BACKUP_SYNC_STATE_KEY, CONTACTS_DATA_NAME, MARKET_CARD_STORE_KEY, MARKET_OWN_PROFILE_KEY,
+    MARKET_POST_STATE_KEY, MARKET_SYNC_KEY, WOT_DATA_NAME,
 };
 use crate::sync_client::{self, IndexFetchResult, SlotFetchResult};
 
@@ -85,12 +90,14 @@ pub(crate) fn collect_upload_targets_for_channel(
     let mut targets: Vec<humoco_market::DropDescriptor> = security_policy
         .market_selected_syncs
         .iter()
+        .filter(|d| !d.status.eq_ignore_ascii_case("revoked"))
         .cloned()
         .map(Into::into)
         .collect();
 
     for pd in &security_policy.public_syncs {
         if pd.enabled
+            && !pd.status.eq_ignore_ascii_case("revoked")
             && !pd.write_url.is_empty()
             && (pd.authorized_channels.is_empty()
                 || pd.authorized_channels.iter().any(|c| c == channel))
@@ -167,7 +174,7 @@ pub(crate) async fn delete_delta_card_slot(
         .is_ok()
 }
 
-/// Checks `revocation.json` (max once per 24h per `read_url`) across own and contact syncs.
+/// Checks `revocation.json` (max once per 24h per `(normalized read_url, drop_pub)`) across own and contact syncs.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn check_revocations(
     client: &reqwest::Client,
@@ -180,15 +187,14 @@ pub(crate) async fn check_revocations(
 ) -> Vec<FrontendSyncDescriptor> {
     let mut revoked_own_syncs: Vec<FrontendSyncDescriptor> = Vec::new();
     let Ok(Some(revocation_candidates)) = state.with_session(session, |service| {
-        let mut seen_urls = HashSet::new();
+        let mut seen_pairs: HashSet<(String, String)> = HashSet::new();
         let mut list = Vec::new();
         let mut push_pair = |read_url: &str, drop_pub: &str| {
             let r = read_url.trim();
-            let p = drop_pub.trim().to_lowercase();
-            if !r.is_empty() && p.len() == 64 && p.chars().all(|c| c.is_ascii_hexdigit()) {
+            if let Ok(p) = canonical_drop_pub_hex(drop_pub) {
                 let norm = normalize_sync_url(r);
-                if seen_urls.insert(norm) {
-                    list.push((r.to_string(), p));
+                if !norm.is_empty() && seen_pairs.insert((norm.clone(), p.clone())) {
+                    list.push((norm, p));
                 }
             }
         };
@@ -210,26 +216,33 @@ pub(crate) async fn check_revocations(
         return revoked_own_syncs;
     };
 
-    for (rev_read_url, rev_drop_pub) in revocation_candidates {
+    for (norm_target, rev_drop_pub) in revocation_candidates {
         if !state.is_generation_current(session.generation) {
             break;
         }
+        let rev_key = format!("{}::{}", norm_target, rev_drop_pub);
         let last_chk = sync_state
             .last_revocation_check_at
-            .get(&rev_read_url)
+            .get(&rev_key)
             .copied()
             .unwrap_or(0);
-        if now_secs.saturating_sub(last_chk) < 86_400 {
+        if last_chk <= now_secs && now_secs - last_chk < 86_400 {
             continue;
         }
-        sync_state
-            .last_revocation_check_at
-            .insert(rev_read_url.clone(), now_secs);
+        if state.is_origin_cooling_down(&norm_target, std::time::Instant::now()) {
+            continue;
+        }
 
-        match sync_client::fetch_revocation_notice(client, &rev_read_url, &rev_drop_pub).await {
+        match sync_client::fetch_revocation_notice(client, &norm_target, &rev_drop_pub).await {
             Ok(Some(notice)) => {
-                let norm_target = normalize_sync_url(&rev_read_url);
+                sync_state
+                    .last_revocation_check_at
+                    .insert(rev_key, now_secs);
                 let committed = state.with_session(session, |service| {
+                    let mut owned_blobs: Vec<(&str, Vec<u8>)> = Vec::with_capacity(2);
+                    let mut saved_policy: Option<SecurityPolicy> = None;
+                    let mut saved_contacts: Option<FrontendAddressBook> = None;
+
                     if let Ok(mut fresh_policy) =
                         state.get_or_load_security_policy(service, password)
                     {
@@ -262,12 +275,11 @@ pub(crate) async fn check_revocations(
                                 policy_changed = true;
                             }
                         }
-                        if policy_changed
-                            && state
-                                .save_security_policy(service, fresh_policy.clone(), password)
-                                .is_ok()
-                        {
-                            *security_policy = fresh_policy;
+                        if policy_changed {
+                            if let Ok(bytes) = serde_json::to_vec(&fresh_policy) {
+                                owned_blobs.push((SECURITY_POLICY_KEY, bytes));
+                                saved_policy = Some(fresh_policy);
+                            }
                         }
                     }
 
@@ -279,22 +291,13 @@ pub(crate) async fn check_revocations(
                         Ok(Some(mut ab)) => {
                             if apply_revocation_notice_to_address_book(
                                 &mut ab,
-                                &rev_read_url,
+                                &norm_target,
                                 &notice,
                                 now_secs,
                             ) {
-                                if let Err(e) = crate::state::save_encrypted_json(
-                                    service,
-                                    CONTACTS_DATA_NAME,
-                                    &ab,
-                                    password,
-                                ) {
-                                    log::warn!(
-                                        "Failed to save address book after revocation notice: {}",
-                                        e
-                                    );
-                                } else {
-                                    state.set_cached_contacts_for_service(service, Some(ab));
+                                if let Ok(bytes) = serde_json::to_vec(&ab) {
+                                    owned_blobs.push((CONTACTS_DATA_NAME, bytes));
+                                    saved_contacts = Some(ab);
                                 }
                             }
                         }
@@ -306,6 +309,28 @@ pub(crate) async fn check_revocations(
                             );
                         }
                     }
+
+                    if !owned_blobs.is_empty() {
+                        let batch_refs: Vec<(&str, &[u8])> = owned_blobs
+                            .iter()
+                            .map(|(k, v)| (*k, v.as_slice()))
+                            .collect();
+                        if let Err(e) = service.save_encrypted_batch(&batch_refs, password) {
+                            log::warn!("Failed to persist revocation notice updates: {}", e);
+                        } else {
+                            if let Some(pol) = saved_policy {
+                                state.write_cache_slot_for_service(
+                                    service,
+                                    |c| &mut c.security_policy,
+                                    Some(pol.clone()),
+                                );
+                                *security_policy = pol;
+                            }
+                            if let Some(ab) = saved_contacts {
+                                state.set_cached_contacts_for_service(service, Some(ab));
+                            }
+                        }
+                    }
                     Ok(())
                 });
                 if !matches!(committed, Ok(Some(()))) {
@@ -314,8 +339,14 @@ pub(crate) async fn check_revocations(
             }
             Ok(None) => {
                 // Server returned 404 (no revocation / revocation cleared): clear stale local state.
-                let norm_target = normalize_sync_url(&rev_read_url);
+                sync_state
+                    .last_revocation_check_at
+                    .insert(rev_key, now_secs);
                 let committed = state.with_session(session, |service| {
+                    let mut owned_blobs: Vec<(&str, Vec<u8>)> = Vec::with_capacity(2);
+                    let mut saved_policy: Option<SecurityPolicy> = None;
+                    let mut saved_contacts: Option<FrontendAddressBook> = None;
+
                     if let Ok(mut fresh_policy) =
                         state.get_or_load_security_policy(service, password)
                     {
@@ -342,12 +373,11 @@ pub(crate) async fn check_revocations(
                                 }
                             }
                         }
-                        if policy_changed
-                            && state
-                                .save_security_policy(service, fresh_policy.clone(), password)
-                                .is_ok()
-                        {
-                            *security_policy = fresh_policy;
+                        if policy_changed {
+                            if let Ok(bytes) = serde_json::to_vec(&fresh_policy) {
+                                owned_blobs.push((SECURITY_POLICY_KEY, bytes));
+                                saved_policy = Some(fresh_policy);
+                            }
                         }
                     }
 
@@ -369,18 +399,9 @@ pub(crate) async fn check_revocations(
                                 }
                             }
                             if ab_changed {
-                                if let Err(e) = crate::state::save_encrypted_json(
-                                    service,
-                                    CONTACTS_DATA_NAME,
-                                    &ab,
-                                    password,
-                                ) {
-                                    log::warn!(
-                                        "Failed to save address book after clearing revocation: {}",
-                                        e
-                                    );
-                                } else {
-                                    state.set_cached_contacts_for_service(service, Some(ab));
+                                if let Ok(bytes) = serde_json::to_vec(&ab) {
+                                    owned_blobs.push((CONTACTS_DATA_NAME, bytes));
+                                    saved_contacts = Some(ab);
                                 }
                             }
                         }
@@ -392,13 +413,37 @@ pub(crate) async fn check_revocations(
                             );
                         }
                     }
+
+                    if !owned_blobs.is_empty() {
+                        let batch_refs: Vec<(&str, &[u8])> = owned_blobs
+                            .iter()
+                            .map(|(k, v)| (*k, v.as_slice()))
+                            .collect();
+                        if let Err(e) = service.save_encrypted_batch(&batch_refs, password) {
+                            log::warn!("Failed to persist cleared revocation updates: {}", e);
+                        } else {
+                            if let Some(pol) = saved_policy {
+                                state.write_cache_slot_for_service(
+                                    service,
+                                    |c| &mut c.security_policy,
+                                    Some(pol.clone()),
+                                );
+                                *security_policy = pol;
+                            }
+                            if let Some(ab) = saved_contacts {
+                                state.set_cached_contacts_for_service(service, Some(ab));
+                            }
+                        }
+                    }
                     Ok(())
                 });
                 if !matches!(committed, Ok(Some(()))) {
                     break;
                 }
             }
-            Err(_) => {}
+            Err(e) => {
+                state.record_origin_cooldown_if_429(&norm_target, &e);
+            }
         }
     }
 
@@ -513,8 +558,9 @@ fn collect_poll_targets(
     let mut deduped_urls = Vec::new();
     let mut seen_urls = HashSet::new();
     for u in index_urls {
-        if seen_urls.insert(u.clone()) {
-            deduped_urls.push(u);
+        let norm = normalize_sync_url(&u);
+        if !norm.is_empty() && seen_urls.insert(norm.clone()) {
+            deduped_urls.push(norm);
             if deduped_urls.len() >= MAX_POLLED_SYNCS {
                 break;
             }
@@ -523,9 +569,10 @@ fn collect_poll_targets(
 
     let mut deduped_direct = Vec::new();
     let mut seen_direct = HashSet::new();
-    for item in direct_fetches {
-        if seen_direct.insert(item.clone()) {
-            deduped_direct.push(item);
+    for (read_url, sid, pfx) in direct_fetches {
+        let norm = normalize_sync_url(&read_url);
+        if !norm.is_empty() && seen_direct.insert((norm.clone(), sid.clone(), pfx.clone())) {
+            deduped_direct.push((norm, sid, pfx));
         }
     }
 
@@ -742,9 +789,17 @@ pub(crate) async fn poll_sync_channels(
             ));
             continue;
         }
+        let (base_slot_pk, slot_prefix) = match humoco_market::parse_slot_id(&slot_id) {
+            Ok(parsed) => parsed,
+            Err(e) => {
+                decode_ctx.errors.push(format!(
+                    "Skipping invalid direct slot_id '{}' for {}: {}",
+                    slot_id, read_url, e
+                ));
+                continue;
+            }
+        };
         decode_ctx.outcome.polled_syncs += 1;
-        let (base_slot_pk, slot_prefix) =
-            humoco_market::parse_slot_id(&slot_id).unwrap_or_else(|_| (slot_id.clone(), None));
         let card_prefix = slot_prefix.as_deref().or(prefix_opt.as_deref());
 
         if ui_prefs.market_sync_enabled {
@@ -1085,8 +1140,14 @@ fn purge_urls_from_sync_state(sync_state: &mut StoredSyncState, candidate_urls: 
         let nu = normalize_sync_url(url);
         !nu.is_empty() && norms.iter().any(|n| n == &nu)
     };
-    let matches_channel_key = |key: &str| norms.iter().any(|n| key.starts_with(&format!("{}:", n)));
+    let matches_index_key = |key: &str| matches_norm(key.strip_prefix("index:").unwrap_or(key));
+    let matches_channel_key =
+        |key: &str| key.rsplit_once(':').is_some_and(|(u, _)| matches_norm(u));
     let matches_media_blob = |key: &str| key.split_once("::").is_some_and(|(u, _)| matches_norm(u));
+    let matches_rev_key = |key: &str| {
+        let url_part = key.split_once("::").map(|(u, _)| u).unwrap_or(key);
+        matches_norm(url_part)
+    };
     let matches_slot_etag = |key: &str| {
         key.split_once(':').is_some_and(|(_, rest)| {
             norms
@@ -1095,10 +1156,12 @@ fn purge_urls_from_sync_state(sync_state: &mut StoredSyncState, candidate_urls: 
         })
     };
 
-    sync_state.etags_by_read_url.retain(|k, _| !matches_norm(k));
+    sync_state
+        .etags_by_read_url
+        .retain(|k, _| !matches_index_key(k));
     sync_state
         .last_modified_by_read_url
-        .retain(|k, _| !matches_norm(k));
+        .retain(|k, _| !matches_index_key(k));
     sync_state.slot_etags.retain(|k, _| !matches_slot_etag(k));
     sync_state
         .channel_max_bytes_by_write_url
@@ -1120,7 +1183,7 @@ fn purge_urls_from_sync_state(sync_state: &mut StoredSyncState, candidate_urls: 
         .retain(|k, _| !matches_norm(k));
     sync_state
         .last_revocation_check_at
-        .retain(|k, _| !matches_norm(k));
+        .retain(|k, _| !matches_rev_key(k));
     sync_state
         .uploaded_media_blobs
         .retain(|k| !matches_media_blob(k));
@@ -1264,12 +1327,18 @@ async fn probe_public_sync_capabilities(
     let mut authorized_channels = Vec::new();
     let mut channel_max_bytes_updates = Vec::new();
     for ch in ["card", "wot", "backup", "post", "lock"] {
+        if !state.is_generation_current(session.generation) {
+            return authorized_channels;
+        }
+        if state.is_origin_cooling_down(canonical_url, std::time::Instant::now()) {
+            break;
+        }
         let ch_prefix = if ch == "wot" || ch == "lock" {
             None
         } else {
             my_prefix
         };
-        if let Ok(cap) = sync_client::head_slot_capability(
+        match sync_client::head_slot_capability(
             probe_client,
             canonical_url,
             access_pubkey,
@@ -1278,15 +1347,22 @@ async fn probe_public_sync_capabilities(
         )
         .await
         {
-            if let Some(mb) = cap.max_bytes.filter(|&v| v > 0) {
-                channel_max_bytes_updates.push((canonical_url.to_string(), ch.to_string(), mb));
+            Ok(cap) => {
+                if let Some(mb) = cap.max_bytes.filter(|&v| v > 0) {
+                    channel_max_bytes_updates.push((canonical_url.to_string(), ch.to_string(), mb));
+                }
+                if cap.authorized {
+                    authorized_channels.push(ch.to_string());
+                }
             }
-            if cap.authorized {
-                authorized_channels.push(ch.to_string());
+            Err(e) => {
+                state.record_origin_cooldown_if_429(canonical_url, &e);
             }
         }
     }
-    save_channel_max_bytes_updates(state, session, password, &channel_max_bytes_updates);
+    if state.is_generation_current(session.generation) {
+        save_channel_max_bytes_updates(state, session, password, &channel_max_bytes_updates);
+    }
     authorized_channels
 }
 
@@ -1308,6 +1384,19 @@ pub async fn probe_public_sync_impl(
     let info = sync_client::fetch_sync_info(&probe_client, &canonical_url)
         .await
         .map_err(FrontendError::from)?;
+    let norm_read_url = normalize_sync_url(&info.read_url);
+    sync_client::validate_sync_read_url(&norm_read_url).map_err(|e| {
+        FrontendError::from(format!(
+            "Sync server returned invalid read_url in ?info: {}",
+            e
+        ))
+    })?;
+    let clean_drop_pub = canonical_drop_pub_hex(&info.drop_pub).map_err(|e| {
+        FrontendError::from(format!(
+            "Sync server returned invalid drop_pub in ?info: {}",
+            e.message
+        ))
+    })?;
 
     let id_ctx_opt = state.with_session_required(
         &session,
@@ -1343,8 +1432,8 @@ pub async fn probe_public_sync_impl(
 
     Ok(FrontendPublicSyncInfo {
         write_url: canonical_url,
-        read_url: info.read_url,
-        drop_pub: info.drop_pub,
+        read_url: norm_read_url,
+        drop_pub: clean_drop_pub,
         register_url: info.register_url,
         access_pubkey,
         authorized_channels,
@@ -1360,20 +1449,39 @@ pub async fn save_public_sync_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendPublicSyncInfo, FrontendError> {
-    state.authorize(crate::state::RequiredAccess::Full, password.as_deref())?;
+    let password_z = password.clone().map(Zeroizing::new);
+    let pw = password_z.as_deref().map(String::as_str);
+
     let canonical_url = humoco_market::canonicalize_write_url(&write_url)
         .map_err(|e| FrontendError::from(e.to_string()))?;
     sync_client::validate_sync_url(&canonical_url).map_err(FrontendError::from)?;
-    sync_client::validate_sync_read_url(&read_url).map_err(FrontendError::from)?;
-    humoco_market::parse_ed25519_pubkey_hex64(&drop_pub)
-        .map_err(|e| FrontendError::from(e.to_string()))?;
+    let norm_read_url = normalize_sync_url(&read_url);
+    sync_client::validate_sync_read_url(&norm_read_url).map_err(FrontendError::from)?;
+    let clean_drop_pub = canonical_drop_pub_hex(&drop_pub)?;
 
-    let session = state
-        .authorize_and_begin_session(crate::state::RequiredAccess::Full, password.as_deref())?;
+    let session = state.authorize_and_begin_session(crate::state::RequiredAccess::Full, pw)?;
     let id_ctx = state.with_session_required(
         &session,
         "Active wallet changed before public sync could be prepared",
-        |service| SyncIdentityContext::from_service(service, password.as_deref()),
+        |service| {
+            let policy = state
+                .get_or_load_security_policy(service, pw)
+                .map_err(FrontendError::from)?;
+            if let Some(existing) = policy
+                .public_syncs
+                .iter()
+                .find(|d| normalize_sync_url(&d.write_url) == canonical_url)
+            {
+                let pinned = existing.drop_pub.trim();
+                if !pinned.is_empty() && !pinned.eq_ignore_ascii_case(&clean_drop_pub) {
+                    return Err(FrontendError::from(format!(
+                        "Public sync key pin mismatch for {}: existing {}, got {}",
+                        canonical_url, pinned, clean_drop_pub
+                    )));
+                }
+            }
+            SyncIdentityContext::from_service(service, pw)
+        },
     )?;
 
     let (_r_sk, _r_vk, access_pubkey) =
@@ -1384,6 +1492,22 @@ pub async fn save_public_sync_impl(
     let info_opt = sync_client::fetch_sync_info(&probe_client, &canonical_url)
         .await
         .ok();
+    if let Some(ref info) = info_opt {
+        if !info.drop_pub.trim().is_empty() {
+            let live_drop_pub = canonical_drop_pub_hex(&info.drop_pub).map_err(|e| {
+                FrontendError::from(format!(
+                    "Public sync server at {} returned invalid drop_pub in ?info: {}",
+                    canonical_url, e.message
+                ))
+            })?;
+            if live_drop_pub != clean_drop_pub {
+                return Err(FrontendError::from(format!(
+                    "Public sync server key mismatch at {}: expected {}, got {}",
+                    canonical_url, clean_drop_pub, live_drop_pub
+                )));
+            }
+        }
+    }
     let clean_register_url = register_url
         .map(|u| u.trim().to_string())
         .filter(|u| !u.is_empty() && sync_client::validate_sync_url(u).is_ok())
@@ -1396,7 +1520,7 @@ pub async fn save_public_sync_impl(
         id_ctx.my_prefix.as_deref(),
         state,
         &session,
-        password.as_deref(),
+        pw,
     )
     .await;
 
@@ -1406,8 +1530,8 @@ pub async fn save_public_sync_impl(
         |service| {
             let mut stored = StoredPublicSync {
                 write_url: canonical_url.clone(),
-                read_url: read_url.clone(),
-                drop_pub: drop_pub.clone(),
+                read_url: norm_read_url.clone(),
+                drop_pub: clean_drop_pub.clone(),
                 register_url: clean_register_url.clone(),
                 access_pubkey: access_pubkey.clone(),
                 enabled,
@@ -1422,7 +1546,7 @@ pub async fn save_public_sync_impl(
 
             if let Some(ref info) = info_opt {
                 if let Some(ref notice) = info.revocation {
-                    if sync_client::verify_revocation_notice(notice, &drop_pub).is_ok() {
+                    if sync_client::verify_revocation_notice(notice, &clean_drop_pub).is_ok() {
                         apply_revocation_notice(
                             &mut stored,
                             notice,
@@ -1432,50 +1556,90 @@ pub async fn save_public_sync_impl(
                 }
             }
 
-            let updated_policy = state
-                .mutate_security_policy(service, password.as_deref(), |policy| {
-                    if let Some(pos) = policy
-                        .public_syncs
-                        .iter()
-                        .position(|d| d.write_url == canonical_url)
-                    {
-                        policy.public_syncs[pos] = stored;
-                    } else {
-                        policy.public_syncs.push(stored);
-                    }
-                })
+            let mut policy = state
+                .get_or_load_security_policy(service, pw)
+                .map_err(FrontendError::from)?;
+            if let Some(pos) = policy
+                .public_syncs
+                .iter()
+                .position(|d| normalize_sync_url(&d.write_url) == canonical_url)
+            {
+                let pinned = policy.public_syncs[pos].drop_pub.trim();
+                if !pinned.is_empty() && !pinned.eq_ignore_ascii_case(&clean_drop_pub) {
+                    return Err(FrontendError::from(format!(
+                        "Public sync key pin mismatch for {}: existing {}, got {}",
+                        canonical_url, pinned, clean_drop_pub
+                    )));
+                }
+                policy.public_syncs[pos] = stored;
+            } else {
+                policy.public_syncs.push(stored);
+            }
+
+            let updated_profile = super::admin::build_resigned_own_card_profile_for_policy(
+                state, service, &policy, pw,
+            );
+
+            let mut owned_blobs: Vec<(&str, Vec<u8>)> = Vec::with_capacity(2);
+            owned_blobs.push((
+                SECURITY_POLICY_KEY,
+                serde_json::to_vec(&policy).map_err(|e| {
+                    FrontendError::from(format!("Failed to serialize security policy: {}", e))
+                })?,
+            ));
+            if let Some(ref prof) = updated_profile {
+                owned_blobs.push((
+                    MARKET_OWN_PROFILE_KEY,
+                    serde_json::to_vec(prof).map_err(|e| {
+                        FrontendError::from(format!(
+                            "Failed to serialize own market profile: {}",
+                            e
+                        ))
+                    })?,
+                ));
+            }
+            let batch_refs: Vec<(&str, &[u8])> = owned_blobs
+                .iter()
+                .map(|(k, v)| (*k, v.as_slice()))
+                .collect();
+            service
+                .save_encrypted_batch(&batch_refs, pw)
                 .map_err(FrontendError::from)?;
 
-            sync_own_card_drops_on_settings_change(
-                state,
-                service,
-                &updated_policy.market_selected_syncs,
-                password.as_deref(),
-            );
+            state.write_cache_slot_for_service(service, |c| &mut c.security_policy, Some(policy));
+            if let Some(prof) = updated_profile {
+                state.set_cached_own_market_profile_for_service(service, Some(prof));
+            }
             Ok(())
         },
     )?;
 
-    if enabled && info_opt.as_ref().is_some_and(|i| i.lock.is_some()) {
+    if enabled
+        && info_opt.as_ref().is_some_and(|i| i.lock.is_some())
+        && state.is_generation_current(session.generation)
+    {
         let lock_probe =
-            sync_client::probe_lock_server(&probe_client, &canonical_url, Some(&drop_pub)).await;
-        if !lock_probe.lock_pub.trim().is_empty() {
-            let _ =
-                state.mutate_internal_lifecycle_for_session(&session, password.as_deref(), |lc| {
-                    crate::services::common::upsert_verified_lock_probe(
-                        &mut lc.l2_probe_cache,
-                        lock_probe.clone(),
-                    )
-                });
+            sync_client::probe_lock_server(&probe_client, &canonical_url, Some(&clean_drop_pub))
+                .await;
+        if !lock_probe.lock_pub.trim().is_empty() && state.is_generation_current(session.generation)
+        {
+            let _ = state.mutate_internal_lifecycle_for_session(&session, pw, |lc| {
+                crate::services::common::upsert_verified_lock_probe(
+                    &mut lc.l2_probe_cache,
+                    lock_probe.clone(),
+                )
+            });
         }
     }
 
-    let _ = enqueue_guardian_locator_updates_if_configured(state, password.clone()).await;
+    if state.is_generation_current(session.generation) {
+        let _ = enqueue_guardian_locator_updates_if_configured(state, password.clone()).await;
+    }
 
     Ok(FrontendPublicSyncInfo {
         write_url: canonical_url,
-        read_url,
-        drop_pub,
+        read_url: norm_read_url,
+        drop_pub: clean_drop_pub,
         register_url: clean_register_url,
         access_pubkey,
         authorized_channels,
@@ -1488,8 +1652,10 @@ pub async fn remove_public_sync_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<(), FrontendError> {
-    let session = state
-        .authorize_and_begin_session(crate::state::RequiredAccess::Full, password.as_deref())?;
+    let password_z = password.clone().map(Zeroizing::new);
+    let pw = password_z.as_deref().map(String::as_str);
+
+    let session = state.authorize_and_begin_session(crate::state::RequiredAccess::Full, pw)?;
     let canonical_url = humoco_market::canonicalize_write_url(&write_url)
         .map_err(|e| FrontendError::from(e.to_string()))?;
 
@@ -1497,7 +1663,7 @@ pub async fn remove_public_sync_impl(
         let id_ctx = state.with_session_required(
             &session,
             "Active wallet changed before public sync deletion could be prepared",
-            |service| SyncIdentityContext::from_service(service, password.as_deref()),
+            |service| SyncIdentityContext::from_service(service, pw),
         )?;
         let (r_sk, _, _) =
             humoco_market::derive_public_drop_keypair(&id_ctx.master_seed, &canonical_url)
@@ -1521,100 +1687,161 @@ pub async fn remove_public_sync_impl(
             })?;
     }
 
-    let _backup_guard = state.backup_op_lock.lock().await;
-    state.with_session_required(
-        &session,
-        "Active wallet changed before public sync could be removed",
-        |service| {
-            let mut removed_urls = vec![canonical_url.clone(), write_url.clone()];
-            let updated_policy = state
-                .mutate_security_policy(service, password.as_deref(), |policy| {
-                    for d in &policy.public_syncs {
-                        if d.write_url == canonical_url && !d.read_url.is_empty() {
-                            removed_urls.push(d.read_url.clone());
-                        }
+    {
+        let _backup_guard = state.backup_op_lock.lock().await;
+        let _post_guard = state.post_op_lock.lock().await;
+        let _market_guard = state.market_op_lock.lock().await;
+
+        state.with_session_required(
+            &session,
+            "Active wallet changed before public sync could be removed",
+            |service| {
+                let mut removed_urls = vec![canonical_url.clone(), normalize_sync_url(&write_url)];
+                let mut policy = state
+                    .get_or_load_security_policy(service, pw)
+                    .map_err(FrontendError::from)?;
+                for d in &policy.public_syncs {
+                    if normalize_sync_url(&d.write_url) == canonical_url && !d.read_url.is_empty() {
+                        removed_urls.push(normalize_sync_url(&d.read_url));
                     }
-                    policy.public_syncs.retain(|d| d.write_url != canonical_url);
-                })
-                .map_err(FrontendError::from)?;
+                }
+                policy
+                    .public_syncs
+                    .retain(|d| normalize_sync_url(&d.write_url) != canonical_url);
+                let removed_norms: HashSet<String> = removed_urls
+                    .iter()
+                    .map(|u| normalize_sync_url(u))
+                    .filter(|u| !u.is_empty())
+                    .collect();
 
-            sync_own_card_drops_on_settings_change(
-                state,
-                service,
-                &updated_policy.market_selected_syncs,
-                password.as_deref(),
-            );
+                let updated_profile = super::admin::build_resigned_own_card_profile_for_policy(
+                    state, service, &policy, pw,
+                );
 
-            if let Ok(mut reg) = state.get_or_load_wot_register(service, password.as_deref()) {
-                reg.clear_drop_sent_log(Some(&canonical_url));
-                let _ = state.save_wot_register(service, &reg, password.as_deref());
-            }
+                let updated_reg = if let Ok(mut reg) = state.get_or_load_wot_register(service, pw) {
+                    reg.clear_drop_sent_log(Some(&canonical_url));
+                    if normalize_sync_url(&write_url) != canonical_url {
+                        reg.clear_drop_sent_log(Some(&write_url));
+                    }
+                    Some(reg)
+                } else {
+                    None
+                };
 
-            if let Some(mut sync_state) = crate::state::load_encrypted_json_opt::<StoredSyncState>(
-                service,
-                MARKET_SYNC_KEY,
-                password.as_deref(),
-            )
-            .map_err(FrontendError::from)?
-            {
-                purge_urls_from_sync_state(&mut sync_state, &removed_urls);
-                crate::state::save_encrypted_json(
+                let updated_sync_state = crate::state::load_encrypted_json_opt::<StoredSyncState>(
                     service,
                     MARKET_SYNC_KEY,
-                    &sync_state,
-                    password.as_deref(),
+                    pw,
                 )
-                .map_err(FrontendError::from)?;
-            }
+                .map_err(FrontendError::from)?
+                .map(|mut sync_state| {
+                    purge_urls_from_sync_state(&mut sync_state, &removed_urls);
+                    sync_state
+                });
 
-            if let Some(mut post_state) = crate::state::load_encrypted_json_opt::<StoredPostState>(
-                service,
-                MARKET_POST_STATE_KEY,
-                password.as_deref(),
-            )
-            .map_err(FrontendError::from)?
-            {
-                post_state.slot_etags_by_write_url.remove(&canonical_url);
-                post_state.slot_etags_by_write_url.remove(&write_url);
-                crate::state::save_encrypted_json(
+                let updated_post_state = crate::state::load_encrypted_json_opt::<StoredPostState>(
                     service,
                     MARKET_POST_STATE_KEY,
-                    &post_state,
-                    password.as_deref(),
+                    pw,
                 )
-                .map_err(FrontendError::from)?;
-            }
+                .map_err(FrontendError::from)?
+                .map(|mut post_state| {
+                    post_state
+                        .slot_etags_by_write_url
+                        .retain(|k, _| !removed_norms.contains(&normalize_sync_url(k)));
+                    post_state
+                });
 
-            if let Some(mut backup_state) = crate::state::load_local_sidecar_json_opt::<
-                StoredBackupSyncState,
-            >(
-                service, BACKUP_SYNC_STATE_KEY, password.as_deref()
-            )
-            .map_err(FrontendError::from)?
-            {
-                let removed = backup_state
-                    .mirrors_by_write_url
-                    .remove(&canonical_url)
-                    .is_some()
-                    || backup_state
-                        .mirrors_by_write_url
-                        .remove(&write_url)
-                        .is_some();
-                if removed {
-                    crate::state::save_local_sidecar_json(
-                        service,
-                        BACKUP_SYNC_STATE_KEY,
-                        &backup_state,
-                        password.as_deref(),
-                    )
-                    .map_err(FrontendError::from)?;
+                let mut owned_blobs: Vec<(&str, Vec<u8>)> = Vec::with_capacity(5);
+                owned_blobs.push((
+                    SECURITY_POLICY_KEY,
+                    serde_json::to_vec(&policy).map_err(|e| {
+                        FrontendError::from(format!("Failed to serialize policy: {}", e))
+                    })?,
+                ));
+                if let Some(ref prof) = updated_profile {
+                    owned_blobs.push((
+                        MARKET_OWN_PROFILE_KEY,
+                        serde_json::to_vec(prof).map_err(|e| {
+                            FrontendError::from(format!(
+                                "Failed to serialize own market profile: {}",
+                                e
+                            ))
+                        })?,
+                    ));
                 }
-            }
-            Ok(())
-        },
-    )?;
+                if let Some(ref reg) = updated_reg {
+                    owned_blobs.push((
+                        WOT_DATA_NAME,
+                        serde_json::to_vec(reg).map_err(|e| {
+                            FrontendError::from(format!("Failed to serialize WoT register: {}", e))
+                        })?,
+                    ));
+                }
+                if let Some(ref sync_state) = updated_sync_state {
+                    owned_blobs.push((
+                        MARKET_SYNC_KEY,
+                        serde_json::to_vec(sync_state).map_err(|e| {
+                            FrontendError::from(format!("Failed to serialize sync state: {}", e))
+                        })?,
+                    ));
+                }
+                if let Some(ref post_state) = updated_post_state {
+                    owned_blobs.push((
+                        MARKET_POST_STATE_KEY,
+                        serde_json::to_vec(post_state).map_err(|e| {
+                            FrontendError::from(format!("Failed to serialize PoST state: {}", e))
+                        })?,
+                    ));
+                }
 
-    let _ = enqueue_guardian_locator_updates_if_configured(state, password.clone()).await;
+                let batch_refs: Vec<(&str, &[u8])> = owned_blobs
+                    .iter()
+                    .map(|(k, v)| (*k, v.as_slice()))
+                    .collect();
+                service
+                    .save_encrypted_batch(&batch_refs, pw)
+                    .map_err(FrontendError::from)?;
+
+                state.write_cache_slot_for_service(
+                    service,
+                    |c| &mut c.security_policy,
+                    Some(policy),
+                );
+                if let Some(prof) = updated_profile {
+                    state.set_cached_own_market_profile_for_service(service, Some(prof));
+                }
+                if let Some(reg) = updated_reg {
+                    state.write_cache_slot_for_service(service, |c| &mut c.wot, Some(reg));
+                }
+
+                if let Some(mut backup_state) = crate::state::load_local_sidecar_json_opt::<
+                    StoredBackupSyncState,
+                >(service, BACKUP_SYNC_STATE_KEY, pw)
+                .map_err(FrontendError::from)?
+                {
+                    let prev_len = backup_state.mirrors_by_write_url.len();
+                    backup_state
+                        .mirrors_by_write_url
+                        .retain(|k, _| !removed_norms.contains(&normalize_sync_url(k)));
+                    if backup_state.mirrors_by_write_url.len() != prev_len {
+                        crate::state::save_local_sidecar_json(
+                            service,
+                            BACKUP_SYNC_STATE_KEY,
+                            &backup_state,
+                            pw,
+                        )
+                        .map_err(FrontendError::from)?;
+                    }
+                }
+                Ok(())
+            },
+        )?;
+    }
+
+    if state.is_generation_current(session.generation) {
+        let _ = enqueue_guardian_locator_updates_if_configured(state, password.clone()).await;
+    }
 
     Ok(())
 }
@@ -1745,5 +1972,120 @@ mod tests {
 
         let _ = srv.await;
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn s09_f3_f4_f5_purge_urls_and_exclude_revoked_targets() {
+        let mut sync_state = StoredSyncState::default();
+        let target_read = "https://sync1.example:8443/d";
+        let target_write = "https://sync1.example:8443/sync.php";
+        let other_read = "https://other.example/d";
+        let other_write = "https://other.example/sync.php";
+
+        sync_state
+            .etags_by_read_url
+            .insert(index_etag_key(target_read), "etag-1".to_string());
+        sync_state
+            .etags_by_read_url
+            .insert(index_etag_key(other_read), "etag-2".to_string());
+        sync_state
+            .last_modified_by_read_url
+            .insert(index_etag_key(target_read), "Mon, 01 Jan 2026".to_string());
+        sync_state
+            .last_modified_by_read_url
+            .insert(index_etag_key(other_read), "Tue, 02 Jan 2026".to_string());
+        sync_state
+            .channel_max_bytes_by_write_url
+            .insert(channel_max_bytes_key(target_write, "card"), 1024);
+        sync_state
+            .channel_max_bytes_by_write_url
+            .insert(channel_max_bytes_key(other_write, "card"), 2048);
+        sync_state.last_revocation_check_at.insert(
+            format!("{}::{}", normalize_sync_url(target_read), "11".repeat(32)),
+            1000,
+        );
+        sync_state.last_revocation_check_at.insert(
+            format!("{}::{}", normalize_sync_url(other_read), "22".repeat(32)),
+            2000,
+        );
+        sync_state
+            .uploaded_media_blobs
+            .insert(format!("{}/::blob1", normalize_sync_url(target_write)));
+
+        purge_urls_from_sync_state(
+            &mut sync_state,
+            &[format!("{}/", target_read), target_write.to_string()],
+        );
+
+        assert!(!sync_state
+            .etags_by_read_url
+            .contains_key(&index_etag_key(target_read)));
+        assert!(sync_state
+            .etags_by_read_url
+            .contains_key(&index_etag_key(other_read)));
+        assert!(!sync_state
+            .last_modified_by_read_url
+            .contains_key(&index_etag_key(target_read)));
+        assert!(sync_state
+            .last_modified_by_read_url
+            .contains_key(&index_etag_key(other_read)));
+        assert!(!sync_state
+            .channel_max_bytes_by_write_url
+            .contains_key(&channel_max_bytes_key(target_write, "card")));
+        assert!(sync_state
+            .channel_max_bytes_by_write_url
+            .contains_key(&channel_max_bytes_key(other_write, "card")));
+        assert_eq!(sync_state.last_revocation_check_at.len(), 1);
+        assert!(sync_state
+            .last_revocation_check_at
+            .keys()
+            .all(|k| k.starts_with(other_read)));
+        assert!(sync_state.uploaded_media_blobs.is_empty());
+
+        let policy = SecurityPolicy {
+            market_selected_syncs: vec![
+                FrontendSyncDescriptor {
+                    write_url: target_write.to_string(),
+                    read_url: target_read.to_string(),
+                    drop_pub: "11".repeat(32),
+                    status: "active".to_string(),
+                    ..Default::default()
+                },
+                FrontendSyncDescriptor {
+                    write_url: "https://revoked.example/sync.php".to_string(),
+                    read_url: "https://revoked.example/d".to_string(),
+                    drop_pub: "22".repeat(32),
+                    status: "revoked".to_string(),
+                    ..Default::default()
+                },
+            ],
+            public_syncs: vec![
+                StoredPublicSync {
+                    write_url: other_write.to_string(),
+                    read_url: other_read.to_string(),
+                    drop_pub: "33".repeat(32),
+                    access_pubkey: "44".repeat(32),
+                    enabled: true,
+                    authorized_channels: vec!["card".to_string()],
+                    status: "active".to_string(),
+                    ..Default::default()
+                },
+                StoredPublicSync {
+                    write_url: "https://pub-rev.example/sync.php".to_string(),
+                    read_url: "https://pub-rev.example/d".to_string(),
+                    drop_pub: "55".repeat(32),
+                    access_pubkey: "66".repeat(32),
+                    enabled: true,
+                    authorized_channels: vec!["card".to_string()],
+                    status: "revoked".to_string(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let targets = collect_upload_targets_for_channel(&policy, "card");
+        assert_eq!(targets.len(), 2);
+        assert_eq!(targets[0].write_url, target_write);
+        assert_eq!(targets[1].write_url, other_write);
     }
 }

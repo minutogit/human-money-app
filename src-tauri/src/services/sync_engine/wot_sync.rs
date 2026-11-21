@@ -4,13 +4,21 @@ use human_money_core::models::conflict::TrustStatus;
 use sha2::{Digest, Sha256};
 
 use crate::models::{FrontendAddressBook, FrontendError, FrontendTrustChangeImpact};
-use crate::services::common::{DropChannelSigner, SyncIdentityContext};
+use crate::services::common::{normalize_sync_url, DropChannelSigner, SyncIdentityContext};
 use crate::session::SessionToken;
 use crate::settings::{SecurityPolicy, UiPreferences, SYNC_WOT_MAX_BYTES};
 use crate::state::{canonicalize_did, AppState, StoredSyncState, CONTACTS_DATA_NAME};
 use crate::sync_client::{self, PutSlotOutcome};
 
-use super::channel_reader::{collect_upload_targets_for_channel, ensure_cached_channel_max_bytes};
+use super::channel_reader::{
+    channel_max_bytes_key, collect_upload_targets_for_channel, ensure_cached_channel_max_bytes,
+};
+
+#[derive(Default)]
+pub(crate) struct WotSyncUploadOutcome {
+    pub committed_receipts: Vec<humoco_wot::DropSyncReceipt>,
+    pub cleared_drop_urls: Vec<String>,
+}
 
 struct WotUploadContext {
     reg_opt: Option<humoco_wot::TrustRegister>,
@@ -121,13 +129,13 @@ fn build_wot_tombstone_bundle(
     is_offender_set: &HashSet<String>,
     now_secs: u64,
 ) -> WotTombstoneBundle {
-    let mut tombstone_dids_set: BTreeSet<String> = BTreeSet::new();
+    let mut direct_tomb_dids: BTreeSet<String> = BTreeSet::new();
     for (did, entry) in &reg.own_contacts {
         if entry.level == 0
             && !filtered_dids.contains(did.as_str())
             && !is_offender_set.contains(did)
         {
-            tombstone_dids_set.insert(did.clone());
+            direct_tomb_dids.insert(did.clone());
         }
     }
     for did in zero_book_dids {
@@ -135,10 +143,13 @@ fn build_wot_tombstone_bundle(
             && !filtered_dids.contains(did.as_str())
             && !is_offender_set.contains(did)
         {
-            tombstone_dids_set.insert(did.clone());
+            direct_tomb_dids.insert(did.clone());
         }
     }
-    if let Some(own_list) = reg.own_signed_list.clone() {
+
+    let mut graph_tomb_dids: BTreeSet<String> = BTreeSet::new();
+    if reg.own_signed_list.is_some() {
+        let own_list = reg.own_signed_list.clone().unwrap();
         let eff_shrink = if reg.shrink_until > now_secs {
             reg.shrink_hops.min(3)
         } else {
@@ -153,6 +164,7 @@ fn build_wot_tombstone_bundle(
                 if did == &self_did
                     || filtered_dids.contains(did.as_str())
                     || is_offender_set.contains(did)
+                    || direct_tomb_dids.contains(did)
                 {
                     continue;
                 }
@@ -160,13 +172,16 @@ fn build_wot_tombstone_bundle(
                     .get(&id)
                     .is_some_and(|&dist| (1..=tomb_max_hops).contains(&dist))
                 {
-                    tombstone_dids_set.insert(did.clone());
+                    graph_tomb_dids.insert(did.clone());
                 }
             }
         }
     }
 
-    let tombstone_dids: Vec<String> = tombstone_dids_set.into_iter().collect();
+    let mut tombstone_dids: Vec<String> = direct_tomb_dids.into_iter().collect();
+    tombstone_dids.extend(graph_tomb_dids);
+    tombstone_dids.truncate(humoco_market::MAX_SLOT_RECIPIENTS);
+
     let mut reader_vks: Vec<ed25519_dalek::VerifyingKey> = Vec::with_capacity(tombstone_dids.len());
     for did in &tombstone_dids {
         if let Ok(vk) = human_money_core::crypto::get_pubkey_from_user_id(did) {
@@ -241,7 +256,7 @@ async fn upload_wot_subpackages_to_target(
         ));
         return false;
     }
-    let effective_wot_max_bytes = ensure_cached_channel_max_bytes(
+    let mut effective_wot_max_bytes = ensure_cached_channel_max_bytes(
         ctx.client,
         ctx.sync_state,
         ctx.id_ctx,
@@ -251,24 +266,37 @@ async fn upload_wot_subpackages_to_target(
         SYNC_WOT_MAX_BYTES,
     )
     .await;
+    if !ctx.state.is_generation_current(ctx.session.generation) {
+        ctx.errors
+            .push("Active wallet session changed before WoT upload completed".to_string());
+        return false;
+    }
 
-    let initial_class_budget = effective_wot_max_bytes
-        .saturating_sub(total_overhead)
-        .saturating_sub(tomb_overhead)
-        / active_classes;
+    let norm_write_url = normalize_sync_url(&drop_desc.write_url);
     let tomb_changed = ctx
         .sync_state
         .wot_tombstone_fp_by_write_url
-        .get(&drop_desc.write_url)
+        .get(&norm_write_url)
         != tombstone.fingerprint.as_ref();
     let force_wot = ctx.force_upload || tomb_changed;
 
     let mut reg_modified = false;
     for attempt in 0..2 {
+        if !ctx.state.is_generation_current(ctx.session.generation) {
+            ctx.errors
+                .push("Active wallet session changed during WoT upload retry".to_string());
+            break;
+        }
+        let initial_class_budget = effective_wot_max_bytes
+            .saturating_sub(total_overhead)
+            .saturating_sub(tomb_overhead)
+            / active_classes;
         let class_budget = if attempt == 0 {
             initial_class_budget
         } else {
-            (initial_class_budget / 2).max(1024)
+            (initial_class_budget / 2)
+                .max(1024)
+                .min(initial_class_budget)
         };
 
         match reg.prepare_drop_sync_subpackages(
@@ -329,6 +357,7 @@ async fn upload_wot_subpackages_to_target(
                             my_ed_sk: &ctx.id_ctx.my_ed_sk,
                             drop_desc,
                         };
+                        let mut retry_after_413 = false;
                         match signer.sign_request(
                             "PUT",
                             "wot",
@@ -358,15 +387,12 @@ async fn upload_wot_subpackages_to_target(
                                             Some(ref fp) => {
                                                 ctx.sync_state
                                                     .wot_tombstone_fp_by_write_url
-                                                    .insert(
-                                                        drop_desc.write_url.clone(),
-                                                        fp.clone(),
-                                                    );
+                                                    .insert(norm_write_url.clone(), fp.clone());
                                             }
                                             None => {
                                                 ctx.sync_state
                                                     .wot_tombstone_fp_by_write_url
-                                                    .remove(&drop_desc.write_url);
+                                                    .remove(&norm_write_url);
                                             }
                                         }
                                     }
@@ -381,10 +407,42 @@ async fn upload_wot_subpackages_to_target(
                                             &drop_desc.write_url,
                                             &e,
                                         );
-                                        ctx.errors.push(format!(
-                                            "Upload wot to {}: {}",
-                                            drop_desc.write_url, e
-                                        ));
+                                        if e.contains("HTTP 413") {
+                                            ctx.sync_state.channel_max_bytes_by_write_url.remove(
+                                                &channel_max_bytes_key(&drop_desc.write_url, "wot"),
+                                            );
+                                            if attempt == 0
+                                                && !ctx.state.is_origin_cooling_down(
+                                                    &drop_desc.write_url,
+                                                    std::time::Instant::now(),
+                                                )
+                                            {
+                                                let prev_effective = effective_wot_max_bytes;
+                                                let reprobed = ensure_cached_channel_max_bytes(
+                                                    ctx.client,
+                                                    ctx.sync_state,
+                                                    ctx.id_ctx,
+                                                    drop_desc,
+                                                    None,
+                                                    "wot",
+                                                    SYNC_WOT_MAX_BYTES,
+                                                )
+                                                .await;
+                                                effective_wot_max_bytes =
+                                                    if reprobed < prev_effective {
+                                                        reprobed
+                                                    } else {
+                                                        (prev_effective / 2).max(1024)
+                                                    };
+                                                retry_after_413 = true;
+                                            }
+                                        }
+                                        if !retry_after_413 {
+                                            ctx.errors.push(format!(
+                                                "Upload wot to {}: {}",
+                                                drop_desc.write_url, e
+                                            ));
+                                        }
                                     }
                                 }
                             }
@@ -394,6 +452,9 @@ async fn upload_wot_subpackages_to_target(
                                     drop_desc.write_url, e
                                 ));
                             }
+                        }
+                        if retry_after_413 {
+                            continue;
                         }
                         break;
                     }
@@ -437,7 +498,8 @@ async fn upload_wot_tombstones_only(
         if !ctx.state.is_generation_current(ctx.session.generation) {
             break;
         }
-        if drop_desc.write_url.is_empty() {
+        let norm_write_url = normalize_sync_url(&drop_desc.write_url);
+        if norm_write_url.is_empty() {
             continue;
         }
         if ctx
@@ -453,7 +515,7 @@ async fn upload_wot_tombstones_only(
         let tomb_changed = ctx
             .sync_state
             .wot_tombstone_fp_by_write_url
-            .get(&drop_desc.write_url)
+            .get(&norm_write_url)
             .map(|s| s.as_str())
             != Some(tomb_fp);
         if !ctx.force_upload
@@ -473,6 +535,9 @@ async fn upload_wot_tombstones_only(
             SYNC_WOT_MAX_BYTES,
         )
         .await;
+        if !ctx.state.is_generation_current(ctx.session.generation) {
+            break;
+        }
 
         match humoco_market::seal_slot_payload(
             tomb_bytes,
@@ -486,7 +551,7 @@ async fn upload_wot_tombstones_only(
                     my_ed_sk: &ctx.id_ctx.my_ed_sk,
                     drop_desc,
                 };
-                if let Ok(signed) = signer.sign_request(
+                match signer.sign_request(
                     "PUT",
                     "wot",
                     None,
@@ -494,25 +559,54 @@ async fn upload_wot_tombstones_only(
                     &sync_client::generate_sync_nonce(),
                     &blob,
                 ) {
-                    if let Ok(PutSlotOutcome::Saved { .. }) = sync_client::put_slot(
-                        ctx.client,
-                        &drop_desc.write_url,
-                        &signed,
-                        "wot",
-                        &blob,
-                        None,
-                    )
-                    .await
-                    {
-                        *ctx.uploaded_to += 1;
-                        ctx.sync_state.last_upload_at = Some(ctx.now_secs);
-                        if reg.drop_sent_log.remove(&drop_desc.write_url).is_some() {
-                            ctx.cleared_drop_urls.push(drop_desc.write_url.clone());
-                            reg_modified = true;
+                    Ok(signed) => {
+                        match sync_client::put_slot(
+                            ctx.client,
+                            &drop_desc.write_url,
+                            &signed,
+                            "wot",
+                            &blob,
+                            None,
+                        )
+                        .await
+                        {
+                            Ok(PutSlotOutcome::Saved { .. }) => {
+                                *ctx.uploaded_to += 1;
+                                ctx.sync_state.last_upload_at = Some(ctx.now_secs);
+                                if reg.drop_sent_log.remove(&drop_desc.write_url).is_some() {
+                                    ctx.cleared_drop_urls.push(drop_desc.write_url.clone());
+                                    reg_modified = true;
+                                }
+                                ctx.sync_state
+                                    .wot_tombstone_fp_by_write_url
+                                    .insert(norm_write_url, tomb_fp.to_string());
+                            }
+                            Ok(PutSlotOutcome::PreconditionFailed { .. }) => {
+                                ctx.errors.push(format!(
+                                    "Upload wot tombstone to {}: Precondition failed (ETag)",
+                                    drop_desc.write_url
+                                ));
+                            }
+                            Err(e) => {
+                                if e.contains("HTTP 413") {
+                                    ctx.sync_state.channel_max_bytes_by_write_url.remove(
+                                        &channel_max_bytes_key(&drop_desc.write_url, "wot"),
+                                    );
+                                }
+                                ctx.state
+                                    .record_origin_cooldown_if_429(&drop_desc.write_url, &e);
+                                ctx.errors.push(format!(
+                                    "Upload wot tombstone to {}: {}",
+                                    drop_desc.write_url, e
+                                ));
+                            }
                         }
-                        ctx.sync_state
-                            .wot_tombstone_fp_by_write_url
-                            .insert(drop_desc.write_url.clone(), tomb_fp.to_string());
+                    }
+                    Err(e) => {
+                        ctx.errors.push(format!(
+                            "Signing error for wot tombstone on {}: {}",
+                            drop_desc.write_url, e
+                        ));
                     }
                 }
             }
@@ -535,7 +629,8 @@ async fn delete_unshared_wot_slots(
         if !ctx.state.is_generation_current(ctx.session.generation) {
             break;
         }
-        if drop_desc.write_url.is_empty() {
+        let norm_write_url = normalize_sync_url(&drop_desc.write_url);
+        if norm_write_url.is_empty() {
             continue;
         }
         if ctx
@@ -553,7 +648,7 @@ async fn delete_unshared_wot_slots(
             && !ctx
                 .sync_state
                 .wot_tombstone_fp_by_write_url
-                .contains_key(&drop_desc.write_url)
+                .contains_key(&norm_write_url)
         {
             continue;
         }
@@ -564,7 +659,7 @@ async fn delete_unshared_wot_slots(
             my_ed_sk: &ctx.id_ctx.my_ed_sk,
             drop_desc,
         };
-        if let Ok(signed) = signer.sign_request(
+        match signer.sign_request(
             "DELETE",
             "wot",
             None,
@@ -572,17 +667,34 @@ async fn delete_unshared_wot_slots(
             &sync_client::generate_sync_nonce(),
             b"",
         ) {
-            if sync_client::delete_slot(ctx.client, &drop_desc.write_url, &signed, "wot")
-                .await
-                .is_ok()
-            {
-                if reg.drop_sent_log.remove(&drop_desc.write_url).is_some() {
-                    ctx.cleared_drop_urls.push(drop_desc.write_url.clone());
-                    reg_modified = true;
+            Ok(signed) => {
+                match sync_client::delete_slot(ctx.client, &drop_desc.write_url, &signed, "wot")
+                    .await
+                {
+                    Ok(_) => {
+                        if reg.drop_sent_log.remove(&drop_desc.write_url).is_some() {
+                            ctx.cleared_drop_urls.push(drop_desc.write_url.clone());
+                            reg_modified = true;
+                        }
+                        ctx.sync_state
+                            .wot_tombstone_fp_by_write_url
+                            .remove(&norm_write_url);
+                    }
+                    Err(e) => {
+                        ctx.state
+                            .record_origin_cooldown_if_429(&drop_desc.write_url, &e);
+                        ctx.errors.push(format!(
+                            "Failed to delete unshared WoT slot on {}: {}",
+                            drop_desc.write_url, e
+                        ));
+                    }
                 }
-                ctx.sync_state
-                    .wot_tombstone_fp_by_write_url
-                    .remove(&drop_desc.write_url);
+            }
+            Err(e) => {
+                ctx.errors.push(format!(
+                    "Failed to sign WoT slot DELETE for {}: {}",
+                    drop_desc.write_url, e
+                ));
             }
         }
     }
@@ -590,6 +702,7 @@ async fn delete_unshared_wot_slots(
 }
 
 /// Uploads encrypted selective-disclosure WoT packages or revokes stale WoT slots across sync targets.
+/// Returns pending `TrustRegister` mutations (`committed_receipts`, `cleared_drop_urls`) for atomic persistence.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn sync_wot_upload_channel(
     client: &reqwest::Client,
@@ -604,19 +717,19 @@ pub(crate) async fn sync_wot_upload_channel(
     sync_state: &mut StoredSyncState,
     uploaded_to: &mut usize,
     errors: &mut Vec<String>,
-) {
+) -> WotSyncUploadOutcome {
     let wot_upload_targets = collect_upload_targets_for_channel(security_policy, "wot");
     let ctx_data =
         match load_wot_upload_context(state, session, ui_prefs, &wot_upload_targets, password) {
             Ok(c) => c,
             Err(e) => {
                 errors.push(format!("WoT upload context failed: {}", e.message));
-                return;
+                return WotSyncUploadOutcome::default();
             }
         };
 
     let Some(mut reg) = ctx_data.reg_opt else {
-        return;
+        return WotSyncUploadOutcome::default();
     };
 
     let mut delete_unshared = !ui_prefs.wot_share_via_sync;
@@ -639,21 +752,45 @@ pub(crate) async fn sync_wot_upload_channel(
         let needs_signing =
             reg.own_list_dirty || (reg.own_signed_list.is_none() && !reg.own_contacts.is_empty());
         if needs_signing {
-            let signed_ok = state.with_session(session, |service| {
-                let _ = state.ensure_wot_list_signed(service, &mut reg);
-                let _ = state.save_wot_register(service, &reg, password);
+            let signed_res = state.with_session(session, |service| {
+                state
+                    .ensure_wot_list_signed(service, &mut reg)
+                    .map_err(FrontendError::from)?;
+                state
+                    .save_wot_register(service, &reg, password)
+                    .map_err(FrontendError::from)?;
                 Ok(())
             });
-            if !matches!(signed_ok, Ok(Some(()))) {
-                return;
+            match signed_res {
+                Ok(Some(())) => {}
+                Ok(None) => return WotSyncUploadOutcome::default(),
+                Err(e) => {
+                    upload_state
+                        .errors
+                        .push(format!("Failed to sign or save WoT list: {}", e.message));
+                    return WotSyncUploadOutcome::default();
+                }
             }
         }
 
         let auth_readers = reg.authorized_drop_readers();
-        let filtered_readers: Vec<(humoco_wot::Did, u8)> = auth_readers
-            .into_iter()
-            .filter(|(did, _)| !ctx_data.offenders.contains(did))
-            .collect();
+        let mut class_buckets: [Vec<(humoco_wot::Did, u8)>; 3] =
+            [Vec::new(), Vec::new(), Vec::new()];
+        for (did, cls) in auth_readers {
+            if !ctx_data.offenders.contains(&did) && (1..=3).contains(&cls) {
+                class_buckets[(cls - 1) as usize].push((did, cls));
+            }
+        }
+        let mut filtered_readers: Vec<(humoco_wot::Did, u8)> = Vec::new();
+        for bucket in &mut class_buckets {
+            bucket.sort_by(|(did_a, _), (did_b, _)| {
+                let a_direct = reg.own_contacts.contains_key(did_a);
+                let b_direct = reg.own_contacts.contains_key(did_b);
+                b_direct.cmp(&a_direct).then_with(|| did_a.cmp(did_b))
+            });
+            bucket.truncate(humoco_market::MAX_SLOT_RECIPIENTS);
+            filtered_readers.extend(bucket.iter().cloned());
+        }
         let filtered_dids: HashSet<&str> = filtered_readers
             .iter()
             .map(|(did, _)| did.as_str())
@@ -695,7 +832,7 @@ pub(crate) async fn sync_wot_upload_channel(
 
             for drop_desc in &wot_upload_targets {
                 if !state.is_generation_current(session.generation) {
-                    return;
+                    return WotSyncUploadOutcome::default();
                 }
                 if drop_desc.write_url.is_empty() {
                     continue;
@@ -737,27 +874,9 @@ pub(crate) async fn sync_wot_upload_channel(
         let _ = delete_unshared_wot_slots(&mut upload_state, &mut reg, &wot_upload_targets).await;
     }
 
-    let committed_receipts = upload_state.committed_receipts;
-    let cleared_drop_urls = upload_state.cleared_drop_urls;
-    if !committed_receipts.is_empty() || !cleared_drop_urls.is_empty() {
-        let _ = state.with_session(session, |service| {
-            if let Ok(mut fresh_reg) = state.get_or_load_wot_register(service, password) {
-                let mut changed = false;
-                for receipt in committed_receipts {
-                    fresh_reg.commit_drop_sync_receipt(receipt, now_secs);
-                    changed = true;
-                }
-                for url in cleared_drop_urls {
-                    if fresh_reg.drop_sent_log.remove(&url).is_some() {
-                        changed = true;
-                    }
-                }
-                if changed {
-                    let _ = state.save_wot_register(service, &fresh_reg, password);
-                }
-            }
-            Ok(())
-        });
+    WotSyncUploadOutcome {
+        committed_receipts: upload_state.committed_receipts,
+        cleared_drop_urls: upload_state.cleared_drop_urls,
     }
 }
 
@@ -767,10 +886,25 @@ pub fn preview_contact_trust_change_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendTrustChangeImpact, FrontendError> {
-    let mut service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
-    let ui_prefs = state
-        .get_or_load_ui_preferences(&mut service, password.as_deref())
-        .map_err(FrontendError::from)?;
+    let (mut service, resolved_pw) = state
+        .authorize_and_lock_secret(crate::state::RequiredAccess::Unlocked, password.as_deref())?;
+    let pw = resolved_pw.as_deref().map(String::as_str);
+
+    let (ui_prefs, reg, admin_opt) = if pw.is_some() || service.is_session_active() {
+        let ui_prefs = state
+            .get_or_load_ui_preferences(&mut service, pw)
+            .map_err(FrontendError::from)?;
+        let reg = state.get_or_load_wot_register(&mut service, pw).ok();
+        let admin_opt = super::admin::load_stored_sync_admin_opt(&mut service, pw)?;
+        (ui_prefs, reg, admin_opt)
+    } else {
+        // timeout == 0 graceful cache fallback
+        let ui_prefs = state
+            .read_cache_slot_for_service(&service, |c| &c.ui_preferences)
+            .unwrap_or_default();
+        let reg = state.read_cache_slot_for_service(&service, |c| &c.wot);
+        (ui_prefs, reg, None)
+    };
 
     let can_target = canonicalize_did(&did).unwrap_or_else(|_| did.clone());
 
@@ -791,15 +925,9 @@ pub fn preview_contact_trust_change_impl(
         });
     }
 
-    let reg = state
-        .get_or_load_wot_register(&mut service, password.as_deref())
-        .ok();
     let current_level = reg
         .as_ref()
         .and_then(|r| r.own_contacts.get(&can_target).map(|e| e.level));
-
-    let can_read_my_market_before = current_level.unwrap_or(0) >= ui_prefs.share_min_level;
-    let can_read_my_market_after = new_level >= ui_prefs.share_min_level;
 
     let is_offender = service
         .with_wallet(|w| {
@@ -810,13 +938,17 @@ pub fn preview_contact_trust_change_impl(
         })
         .unwrap_or(false);
 
+    let can_read_my_market_before =
+        current_level.unwrap_or(0) >= ui_prefs.share_min_level && !is_offender;
+    let can_read_my_market_after = new_level >= ui_prefs.share_min_level && !is_offender;
+
     let can_read_my_wot_before =
         ui_prefs.wot_share_via_sync && current_level.unwrap_or(0) >= 1 && !is_offender;
     let can_read_my_wot_after = ui_prefs.wot_share_via_sync && new_level >= 1 && !is_offender;
 
-    let admin_opt = super::admin::load_stored_sync_admin_opt(&mut service, password.as_deref())?;
-
-    let (can_write_my_sync_before, can_write_my_sync_after) = if let Some(admin) = admin_opt {
+    let (can_write_my_sync_before, can_write_my_sync_after) = if is_offender {
+        (false, false)
+    } else if let Some(admin) = admin_opt {
         if admin
             .deny
             .iter()

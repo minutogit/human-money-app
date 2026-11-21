@@ -493,7 +493,7 @@ struct OneShotPinGrant {
 /// # Lock Ordering Invariant
 /// Whenever multiple mutexes on `AppState` must be acquired simultaneously,
 /// acquire them strictly in the following total order to prevent deadlocks:
-/// `recovery_op_lock -> backup_op_lock -> post_op_lock -> service -> profile_caches`.
+/// `recovery_op_lock -> backup_op_lock -> post_op_lock -> market_op_lock -> service -> profile_caches`.
 /// `active_profile_lock`, `sync_control`, and `one_shot_pin_grant` are leaf mutexes never held while acquiring `service` or across `.await`.
 ///
 /// Never hold any `std::sync::MutexGuard` across an `.await` point.
@@ -505,6 +505,7 @@ pub struct AppState {
     pub recovery_op_lock: tokio::sync::Mutex<()>,
     pub backup_op_lock: tokio::sync::Mutex<()>,
     pub post_op_lock: tokio::sync::Mutex<()>,
+    pub market_op_lock: tokio::sync::Mutex<()>,
     pub startup_launch_items: Mutex<Vec<String>>,
     pub sync_control: Mutex<SyncCoordinatorControl>,
     pub sync_coordinator_wake: std::sync::Arc<tokio::sync::Notify>,
@@ -887,6 +888,7 @@ impl AppState {
             recovery_op_lock: tokio::sync::Mutex::new(()),
             backup_op_lock: tokio::sync::Mutex::new(()),
             post_op_lock: tokio::sync::Mutex::new(()),
+            market_op_lock: tokio::sync::Mutex::new(()),
             startup_launch_items: Mutex::new(Vec::new()),
             sync_control: Mutex::new(SyncCoordinatorControl::default()),
             sync_coordinator_wake: std::sync::Arc::new(tokio::sync::Notify::new()),
@@ -1433,9 +1435,11 @@ impl AppState {
         field: fn(&mut ActiveProfileCaches) -> &mut Option<T>,
         name: &str,
     ) -> Result<T, AppFacadeError> {
+        let current_gen = self.current_session_generation();
         let mut guard = self.profile_caches.lock().unwrap();
         guard
             .as_mut()
+            .filter(|c| c.generation == current_gen)
             .and_then(|c| field(c).clone())
             .ok_or_else(|| AppFacadeError::Generic(format!("{} not loaded", name)))
     }
@@ -4320,6 +4324,7 @@ pub fn apply_revocation_notice_to_address_book(
             .collect();
         let mut idx_to_replace: Option<(usize, crate::models::FrontendSyncDescriptor)> = None;
         let mut idx_to_append: Option<crate::models::FrontendSyncDescriptor> = None;
+        let mut idx_to_remove: Option<usize> = None;
 
         for (idx, ep) in contact.syncs.iter_mut().enumerate() {
             if crate::services::common::normalize_sync_url(&ep.read_url) != old_norm {
@@ -4369,12 +4374,18 @@ pub fn apply_revocation_notice_to_address_book(
                     } else if syncs_len < 2 {
                         idx_to_append = Some(new_desc);
                     }
+                } else if is_revoked_now && !is_self_redirect && already_present {
+                    // Grace-period appended replacement is already present: prune the expired revoked slot.
+                    idx_to_remove = Some(idx);
                 }
             }
         }
 
         if let Some((idx, new_desc)) = idx_to_replace {
             contact.syncs[idx] = new_desc;
+            updated = true;
+        } else if let Some(rm_idx) = idx_to_remove {
+            contact.syncs.remove(rm_idx);
             updated = true;
         } else if let Some(new_desc) = idx_to_append {
             if contact.syncs.len() < 2 {
@@ -5083,6 +5094,12 @@ mod tests {
         assert_eq!(
             bob_after.syncs[1].read_url,
             "https://keep.example.org/d-keep"
+        );
+        let alice_after = &ab.contacts["did:key:zAlice"];
+        assert_eq!(alice_after.syncs.len(), 1);
+        assert_eq!(
+            alice_after.syncs[0].read_url,
+            "https://new.example.org/d-new"
         );
     }
 

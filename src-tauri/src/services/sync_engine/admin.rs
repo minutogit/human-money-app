@@ -4,16 +4,22 @@ use base64::Engine;
 use human_money_core::app_service::AppService;
 use human_money_core::models::conflict::TrustStatus;
 use sha2::Digest;
+use zeroize::Zeroizing;
 
 use crate::models::{
     FrontendError, FrontendMemberPolicyDto, FrontendSyncAdminStatus,
     FrontendSyncAdminUpdateRequest, FrontendSyncConnectionTestResult, FrontendSyncDescriptor,
-    FrontendSyncSetupDraft,
+    FrontendSyncSetupDraft, StoredOwnMarketProfile,
 };
-use crate::services::common::{get_wallet_master_seed, normalize_sync_url};
-use crate::services::market_service::sync_own_card_drops_on_settings_change;
+use crate::services::common::{canonical_drop_pub_hex, get_wallet_master_seed, normalize_sync_url};
+use crate::services::market_service::{
+    build_card_drops, load_own_market_profile_state, rebuild_and_sign_own_card_with_drops,
+};
 use crate::session::SessionToken;
-use crate::state::{canonicalize_did, AppState, StoredSyncAdmin, MARKET_SYNC_ADMIN_KEY};
+use crate::settings::{SecurityPolicy, INTERNAL_LIFECYCLE_STATE_KEY, SECURITY_POLICY_KEY};
+use crate::state::{
+    canonicalize_did, AppState, StoredSyncAdmin, MARKET_OWN_PROFILE_KEY, MARKET_SYNC_ADMIN_KEY,
+};
 use crate::sync_client::{self, SyncServerAdminStatus};
 
 fn default_policy_for_channel(channel: &str) -> humoco_market::MemberPolicy {
@@ -64,22 +70,14 @@ pub(crate) fn load_stored_sync_admin_opt(
 fn load_admin_with_signing_key(
     state: &AppState,
     password: Option<&str>,
-) -> Result<
-    (
-        StoredSyncAdmin,
-        ed25519_dalek::SigningKey,
-        StoredSyncAdmin,
-        SessionToken,
-    ),
-    FrontendError,
-> {
+) -> Result<(StoredSyncAdmin, ed25519_dalek::SigningKey, SessionToken), FrontendError> {
     let mut service = state.authorize_and_lock(crate::state::RequiredAccess::Full, password)?;
     let session = state.session_token_for_service(&service)?;
     let admin = load_stored_sync_admin_opt(&mut service, password)?
         .ok_or_else(|| FrontendError::from("Sync admin not configured".to_string()))?;
     let master_seed = get_wallet_master_seed(&mut service, password)?;
     let (admin_sk, _, _) = humoco_market::derive_drop_admin_keypair(&master_seed, admin.sync_index);
-    Ok((admin.clone(), admin_sk, admin, session))
+    Ok((admin, admin_sk, session))
 }
 
 fn save_stored_sync_admin(
@@ -98,41 +96,55 @@ fn save_stored_sync_admin(
     Ok(())
 }
 
-fn remove_sync_from_selected_settings(
+pub(crate) fn build_resigned_own_card_profile_for_policy(
+    state: &AppState,
+    service: &mut AppService,
+    policy: &SecurityPolicy,
+    password: Option<&str>,
+) -> Option<StoredOwnMarketProfile> {
+    let mut existing = load_own_market_profile_state(state, service, password).ok()?;
+    if !existing.published {
+        return None;
+    }
+    let my_prefix = service
+        .with_wallet_and_identity(|_w, id| {
+            human_money_core::crypto::get_prefix_from_user_id(&id.user_id).map(|s| s.to_string())
+        })
+        .ok()
+        .flatten();
+    let drops = build_card_drops(
+        &policy.market_selected_syncs,
+        &policy.public_syncs,
+        my_prefix.as_deref(),
+    );
+    let now_unix = sync_client::current_unix_timestamp();
+    rebuild_and_sign_own_card_with_drops(service, &mut existing, now_unix, Some(drops)).ok()?;
+    Some(existing)
+}
+
+fn prepare_policy_without_sync(
     state: &AppState,
     service: &mut AppService,
     read_url: &str,
     password: Option<&str>,
-) {
+) -> Result<Option<(SecurityPolicy, Option<StoredOwnMarketProfile>)>, FrontendError> {
     let norm_target = normalize_sync_url(read_url);
     if norm_target.is_empty() {
-        return;
+        return Ok(None);
     }
-    let mut policy = match state.get_or_load_security_policy(service, password) {
-        Ok(p) => p,
-        Err(e) => {
-            log::warn!(
-                "Failed to load security policy in remove_sync_from_selected_settings: {}",
-                e
-            );
-            return;
-        }
-    };
+    let mut policy = state
+        .get_or_load_security_policy(service, password)
+        .map_err(FrontendError::from)?;
     let initial_len = policy.market_selected_syncs.len();
     policy
         .market_selected_syncs
         .retain(|d| normalize_sync_url(&d.read_url) != norm_target);
-    if policy.market_selected_syncs.len() != initial_len {
-        let selected_clone = policy.market_selected_syncs.clone();
-        if let Err(e) = state.save_security_policy(service, policy, password) {
-            log::warn!(
-                "Failed to save security policy in remove_sync_from_selected_settings: {}",
-                e
-            );
-            return;
-        }
-        sync_own_card_drops_on_settings_change(state, service, &selected_clone, password);
+    if policy.market_selected_syncs.len() == initial_len {
+        return Ok(None);
     }
+    let updated_profile =
+        build_resigned_own_card_profile_for_policy(state, service, &policy, password);
+    Ok(Some((policy, updated_profile)))
 }
 
 fn build_admin_status_dto(
@@ -312,7 +324,8 @@ pub(crate) async fn push_all_channel_members(
                 "Active wallet session changed while pushing channel members".to_string(),
             ));
         }
-        let key = format!("{}::{}", &admin.descriptor.write_url, ch);
+        let norm_write = normalize_sync_url(&admin.descriptor.write_url);
+        let key = format!("{}::{}", norm_write, ch);
         let hash = compute_channel_members_hash(&pks);
         if admin.last_members_hash.get(&key) == Some(&hash) {
             log::debug!("Channel {} members unchanged, skipping upload", ch);
@@ -369,12 +382,12 @@ pub(crate) async fn push_all_channel_members(
     Ok(pushed_count)
 }
 
-pub(crate) async fn refresh_own_admin_members(
+async fn refresh_own_admin_members_inner(
     client: &reqwest::Client,
     state: &AppState,
     session: &SessionToken,
     password: Option<&str>,
-) {
+) -> Option<String> {
     let Ok(Some(admin_opt)) =
         state.with_session(session, |service| {
             match load_stored_sync_admin_opt(service, password) {
@@ -398,13 +411,48 @@ pub(crate) async fn refresh_own_admin_members(
             }
         })
     else {
-        return;
+        return None;
     };
 
     if let Some((mut admin, admin_sk)) = admin_opt {
-        let _ =
-            push_all_channel_members(client, state, session, &mut admin, &admin_sk, password).await;
+        if admin.descriptor.write_url.trim().is_empty() {
+            return None;
+        }
+        if state.is_origin_cooling_down(&admin.descriptor.write_url, std::time::Instant::now()) {
+            return Some(format!(
+                "Member push to {} deferred: server origin cooling down after HTTP 429",
+                admin.descriptor.write_url
+            ));
+        }
+        if let Err(err) =
+            push_all_channel_members(client, state, session, &mut admin, &admin_sk, password).await
+        {
+            return Some(format!(
+                "Failed to push channel members to {}: {}",
+                admin.descriptor.write_url, err.message
+            ));
+        }
     }
+    None
+}
+
+pub(crate) async fn refresh_own_admin_members(
+    client: &reqwest::Client,
+    state: &AppState,
+    session: &SessionToken,
+    password: Option<&str>,
+) -> Option<String> {
+    let _market_guard = state.market_op_lock.lock().await;
+    refresh_own_admin_members_inner(client, state, session, password).await
+}
+
+pub(crate) async fn refresh_own_admin_members_locked(
+    client: &reqwest::Client,
+    state: &AppState,
+    session: &SessionToken,
+    password: Option<&str>,
+) -> Option<String> {
+    refresh_own_admin_members_inner(client, state, session, password).await
 }
 
 #[cfg(test)]
@@ -412,14 +460,16 @@ pub async fn sync_channel_members_impl(
     password: Option<&str>,
     state: &AppState,
 ) -> Result<usize, FrontendError> {
-    let session =
-        state.authorize_and_begin_session(crate::state::RequiredAccess::Unlocked, None)?;
+    let _market_guard = state.market_op_lock.lock().await;
+    let (session, resolved_pw) = state
+        .authorize_and_begin_session_secret(crate::state::RequiredAccess::Unlocked, password)?;
+    let pw = resolved_pw.as_deref().map(String::as_str);
     let Some((mut admin, admin_sk)) =
         state.with_session_required(&session, "Active wallet session changed", |service| {
-            let Some(admin) = load_stored_sync_admin_opt(service, password)? else {
+            let Some(admin) = load_stored_sync_admin_opt(service, pw)? else {
                 return Ok(None);
             };
-            let master_seed = get_wallet_master_seed(service, password)?;
+            let master_seed = get_wallet_master_seed(service, pw)?;
             let (admin_sk, _, _) =
                 humoco_market::derive_drop_admin_keypair(&master_seed, admin.sync_index);
             Ok(Some((admin, admin_sk)))
@@ -433,7 +483,7 @@ pub async fn sync_channel_members_impl(
     }
 
     let client = sync_client::create_sync_http_client();
-    push_all_channel_members(&client, state, &session, &mut admin, &admin_sk, password).await
+    push_all_channel_members(&client, state, &session, &mut admin, &admin_sk, pw).await
 }
 
 pub fn prepare_sync_setup_impl(
@@ -561,8 +611,12 @@ pub async fn finalize_sync_setup_impl(
         .map_err(|e| FrontendError::from(e.to_string()))?;
     sync_client::validate_sync_url(&write_url).map_err(FrontendError::from)?;
 
-    let (mut admin, admin_sk, original_admin, session) =
-        load_admin_with_signing_key(state, password.as_deref())?;
+    let password_z = password.clone().map(Zeroizing::new);
+    let pw = password_z.as_deref().map(String::as_str);
+    let _market_guard = state.market_op_lock.lock().await;
+
+    let (mut admin, admin_sk, session) = load_admin_with_signing_key(state, pw)?;
+    let expected_sync_index = admin.sync_index;
 
     let client = sync_client::create_sync_http_client();
 
@@ -575,7 +629,13 @@ pub async fn finalize_sync_setup_impl(
                 write_url, e
             ))
         })?;
-    if !info.drop_pub.is_empty() && info.drop_pub != admin.descriptor.drop_pub {
+    let info_drop_pub = canonical_drop_pub_hex(&info.drop_pub).map_err(|e| {
+        FrontendError::from(format!(
+            "Sync server at {} returned invalid drop_pub in ?info: {}",
+            write_url, e.message
+        ))
+    })?;
+    if info_drop_pub != admin.descriptor.drop_pub.trim().to_ascii_lowercase() {
         return Err(FrontendError::from(format!(
             "Sync server admin public key mismatch at {}: expected {}, got {}",
             write_url, admin.descriptor.drop_pub, info.drop_pub
@@ -588,7 +648,7 @@ pub async fn finalize_sync_setup_impl(
             write_url
         )));
     }
-    sync_client::validate_sync_url(&server_read_url).map_err(|e| {
+    sync_client::validate_sync_read_url(&server_read_url).map_err(|e| {
         FrontendError::from(format!(
             "Sync server at {} returned an invalid read_url ('{}') in ?info (check public_base_url / HTTPS config): {}",
             write_url, server_read_url, e
@@ -602,6 +662,12 @@ pub async fn finalize_sync_setup_impl(
                 server_read_url, write_url, e
             ))
         })?;
+
+    if !state.is_generation_current(session.generation) {
+        return Err(FrontendError::from(
+            "Active wallet session changed before sync admin verification completed".to_string(),
+        ));
+    }
 
     sync_client::fetch_admin_status(&client, &write_url, &admin_sk)
         .await
@@ -628,13 +694,21 @@ pub async fn finalize_sync_setup_impl(
             });
             let mut ready = delegation_valid;
             if !delegation_valid {
+                let min_next_issued = lock_info
+                    .delegation
+                    .as_ref()
+                    .map(|d| d.issued_at.saturating_add(1))
+                    .unwrap_or(0);
+                let delegation_issued_at = sync_client::current_unix_timestamp()
+                    .max(min_next_issued)
+                    .max(1);
                 match sync_client::push_lock_delegation(
                     &client,
                     &write_url,
                     &server_read_url,
                     &admin_sk,
                     &lock_pub_hex,
-                    sync_client::current_unix_timestamp().max(1),
+                    delegation_issued_at,
                 )
                 .await
                 {
@@ -663,8 +737,13 @@ pub async fn finalize_sync_setup_impl(
     admin.descriptor.write_url = write_url.clone();
     admin.descriptor.read_url = server_read_url;
 
-    // Push configured admin quotas & members; roll back MARKET_SYNC_ADMIN_KEY on failure.
-    let remote_status = match sync_client::put_admin_config(
+    if !state.is_generation_current(session.generation) {
+        return Err(FrontendError::from(
+            "Active wallet session changed before sync admin config could be pushed".to_string(),
+        ));
+    }
+
+    let remote_status = sync_client::put_admin_config(
         &client,
         &write_url,
         &admin_sk,
@@ -673,41 +752,41 @@ pub async fn finalize_sync_setup_impl(
         admin.max_user_storage_mb,
     )
     .await
-    {
-        Ok(st) => st,
-        Err(err) => {
-            let _ = state.with_session(&session, |service| {
-                let _ =
-                    save_stored_sync_admin(state, service, &original_admin, password.as_deref());
-                Ok(())
-            });
-            return Err(FrontendError::from(err));
-        }
-    };
+    .map_err(FrontendError::from)?;
 
-    if let Err(err) = push_all_channel_members(
-        &client,
-        state,
-        &session,
-        &mut admin,
-        &admin_sk,
-        password.as_deref(),
-    )
-    .await
-    {
-        let _ = state.with_session(&session, |service| {
-            let _ = save_stored_sync_admin(state, service, &original_admin, password.as_deref());
-            Ok(())
-        });
-        return Err(err);
+    push_all_channel_members(&client, state, &session, &mut admin, &admin_sk, pw).await?;
+
+    if !state.is_generation_current(session.generation) {
+        return Err(FrontendError::from(
+            "Active wallet session changed before sync admin could be saved".to_string(),
+        ));
     }
 
-    // Add own drop to security_policy.market_selected_syncs if < 3 and cache lock probe if available
-    {
-        let desc_dto: FrontendSyncDescriptor = admin.descriptor.clone().into();
-        let norm_desc_read = normalize_sync_url(&desc_dto.read_url);
-        state.mutate_security_policy_for_session(&session, password.as_deref(), |policy| {
-            if policy.market_selected_syncs.len() < 3
+    // Atomically persist finalized admin descriptor, selected sync policy, re-signed own card
+    // (if published), and verified lock probe cache.
+    let (saved_admin, stats) = state.with_session_required(
+        &session,
+        "Active wallet session changed before sync admin could be saved",
+        |service| {
+            let mut fresh_admin = load_stored_sync_admin_opt(service, pw)?
+                .ok_or_else(|| FrontendError::from("Sync admin not configured".to_string()))?;
+            if fresh_admin.sync_index != expected_sync_index {
+                return Err(FrontendError::from(
+                    "Sync admin configuration changed concurrently".to_string(),
+                ));
+            }
+            fresh_admin.descriptor.write_url = admin.descriptor.write_url.clone();
+            fresh_admin.descriptor.read_url = admin.descriptor.read_url.clone();
+            for (k, v) in &admin.last_members_hash {
+                fresh_admin.last_members_hash.insert(k.clone(), v.clone());
+            }
+
+            let desc_dto: FrontendSyncDescriptor = fresh_admin.descriptor.clone().into();
+            let norm_desc_read = normalize_sync_url(&desc_dto.read_url);
+            let mut policy = state
+                .get_or_load_security_policy(service, pw)
+                .map_err(FrontendError::from)?;
+            let policy_changed = if policy.market_selected_syncs.len() < 3
                 && !policy
                     .market_selected_syncs
                     .iter()
@@ -717,42 +796,106 @@ pub async fn finalize_sync_setup_impl(
                 true
             } else {
                 false
-            }
-        })?;
-        if let Some(probe) = lock_probe_result {
-            if !probe.lock_pub.trim().is_empty() {
-                state.mutate_internal_lifecycle_for_session(
-                    &session,
-                    password.as_deref(),
-                    |lc| {
-                        crate::services::common::upsert_verified_lock_probe(
-                            &mut lc.l2_probe_cache,
-                            probe.clone(),
-                        )
-                    },
-                )?;
-            }
-        }
+            };
 
-        state.with_session_required(
-            &session,
-            "Active wallet session changed before sync admin could be saved",
-            |service| save_stored_sync_admin(state, service, &admin, password.as_deref()),
-        )?;
-    }
+            let updated_profile = if policy_changed {
+                build_resigned_own_card_profile_for_policy(state, service, &policy, pw)
+            } else {
+                None
+            };
 
-    let (stats, _) =
-        state.with_session_required(&session, "Active wallet session changed", |service| {
-            compute_admin_sync_members_with_stats(
-                state,
+            let mut updated_lifecycle = None;
+            if let Some(ref probe) = lock_probe_result {
+                if !probe.lock_pub.trim().is_empty() {
+                    let mut lc = state
+                        .get_or_load_internal_lifecycle(service, pw)
+                        .map_err(FrontendError::from)?;
+                    if crate::services::common::upsert_verified_lock_probe(
+                        &mut lc.l2_probe_cache,
+                        probe.clone(),
+                    ) {
+                        updated_lifecycle = Some(lc);
+                    }
+                }
+            }
+
+            let mut owned_blobs: Vec<(&str, Vec<u8>)> = Vec::with_capacity(4);
+            owned_blobs.push((
+                MARKET_SYNC_ADMIN_KEY,
+                serde_json::to_vec(&fresh_admin).map_err(|e| {
+                    FrontendError::from(format!("Failed to serialize sync admin: {}", e))
+                })?,
+            ));
+            if policy_changed {
+                owned_blobs.push((
+                    SECURITY_POLICY_KEY,
+                    serde_json::to_vec(&policy).map_err(|e| {
+                        FrontendError::from(format!("Failed to serialize policy: {}", e))
+                    })?,
+                ));
+            }
+            if let Some(ref prof) = updated_profile {
+                owned_blobs.push((
+                    MARKET_OWN_PROFILE_KEY,
+                    serde_json::to_vec(prof).map_err(|e| {
+                        FrontendError::from(format!(
+                            "Failed to serialize own market profile: {}",
+                            e
+                        ))
+                    })?,
+                ));
+            }
+            if let Some(ref lc) = updated_lifecycle {
+                owned_blobs.push((
+                    INTERNAL_LIFECYCLE_STATE_KEY,
+                    serde_json::to_vec(lc).map_err(|e| {
+                        FrontendError::from(format!("Failed to serialize lifecycle state: {}", e))
+                    })?,
+                ));
+            }
+
+            let batch_refs: Vec<(&str, &[u8])> = owned_blobs
+                .iter()
+                .map(|(k, v)| (*k, v.as_slice()))
+                .collect();
+            service
+                .save_encrypted_batch(&batch_refs, pw)
+                .map_err(FrontendError::from)?;
+
+            state.write_cache_slot_for_service(
                 service,
-                &admin,
-                "card",
-                password.as_deref(),
-            )
-        })?;
+                |c| &mut c.own_sync_descriptor,
+                Some(Some(fresh_admin.descriptor.clone())),
+            );
+            if policy_changed {
+                state.write_cache_slot_for_service(
+                    service,
+                    |c| &mut c.security_policy,
+                    Some(policy),
+                );
+            }
+            if let Some(prof) = updated_profile {
+                state.set_cached_own_market_profile_for_service(service, Some(prof));
+            }
+            if let Some(lc) = updated_lifecycle {
+                state.write_cache_slot_for_service(
+                    service,
+                    |c| &mut c.internal_lifecycle,
+                    Some(lc),
+                );
+            }
 
-    Ok(build_admin_status_dto(admin, stats, Some(remote_status)))
+            let (stats, _) =
+                compute_admin_sync_members_with_stats(state, service, &fresh_admin, "card", pw)?;
+            Ok((fresh_admin, stats))
+        },
+    )?;
+
+    Ok(build_admin_status_dto(
+        saved_admin,
+        stats,
+        Some(remote_status),
+    ))
 }
 
 pub async fn test_sync_connection_impl(
@@ -760,8 +903,9 @@ pub async fn test_sync_connection_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendSyncConnectionTestResult, FrontendError> {
-    let session = state
-        .authorize_and_begin_session(crate::state::RequiredAccess::Full, password.as_deref())?;
+    let password_z = password.clone().map(Zeroizing::new);
+    let pw = password_z.as_deref().map(String::as_str);
+    let session = state.authorize_and_begin_session(crate::state::RequiredAccess::Full, pw)?;
     let fail_result = |message: String, write_ok: bool| FrontendSyncConnectionTestResult {
         success: false,
         message,
@@ -779,22 +923,17 @@ pub async fn test_sync_connection_impl(
         return Ok(fail_result(e, false));
     }
 
-    let (_admin, admin_sk, stats, member_pubkeys) = match state.with_session_required(
+    let (admin, admin_sk, stats, member_pubkeys) = match state.with_session_required(
         &session,
         "Active wallet session changed before sync connection test",
         |service| {
-            let admin = load_stored_sync_admin_opt(service, password.as_deref())?
+            let admin = load_stored_sync_admin_opt(service, pw)?
                 .ok_or_else(|| FrontendError::from("Not configured".to_string()))?;
-            let master_seed = get_wallet_master_seed(service, password.as_deref())?;
+            let master_seed = get_wallet_master_seed(service, pw)?;
             let (admin_sk, _, _) =
                 humoco_market::derive_drop_admin_keypair(&master_seed, admin.sync_index);
-            let (stats, member_pubkeys) = compute_admin_sync_members_with_stats(
-                state,
-                service,
-                &admin,
-                "card",
-                password.as_deref(),
-            )?;
+            let (stats, member_pubkeys) =
+                compute_admin_sync_members_with_stats(state, service, &admin, "card", pw)?;
             Ok((admin, admin_sk, stats, member_pubkeys))
         },
     ) {
@@ -804,52 +943,77 @@ pub async fn test_sync_connection_impl(
 
     let client = sync_client::create_sync_http_client();
 
+    // Verify server identity (?info + exact non-empty drop_pub match) BEFORE pushing signed members.
+    let info = match sync_client::fetch_sync_info(&client, &write_url).await {
+        Ok(info) => info,
+        Err(e) => return Ok(fail_result(format!("Read/info test failed: {}", e), false)),
+    };
+    let info_drop_pub = match canonical_drop_pub_hex(&info.drop_pub) {
+        Ok(p) => p,
+        Err(e) => {
+            return Ok(fail_result(
+                format!("Server returned invalid drop_pub in ?info: {}", e.message),
+                false,
+            ));
+        }
+    };
+    if info_drop_pub != admin.descriptor.drop_pub.trim().to_ascii_lowercase() {
+        return Ok(fail_result(
+            format!(
+                "Server admin public key mismatch: expected {}, got {}",
+                admin.descriptor.drop_pub, info.drop_pub
+            ),
+            false,
+        ));
+    }
+    if !state.is_generation_current(session.generation) {
+        return Ok(fail_result(
+            "Active wallet session changed before sync connection test completed".to_string(),
+            false,
+        ));
+    }
+
     if let Err(e) =
         sync_client::push_members(&client, &write_url, &admin_sk, "card", &member_pubkeys).await
     {
         return Ok(fail_result(format!("Write test failed: {}", e), false));
     }
 
-    // Test read via fetch_sync_info + live read_url index check
-    match sync_client::fetch_sync_info(&client, &write_url).await {
-        Ok(info) => {
-            let server_read_url = normalize_sync_url(&info.read_url);
-            if server_read_url.is_empty() {
-                return Ok(fail_result(
-                    "Read test failed: server returned empty read_url in ?info".to_string(),
-                    true,
-                ));
-            }
-            if let Err(e) = sync_client::validate_sync_url(&server_read_url) {
-                return Ok(fail_result(
-                    format!(
-                        "Read test failed: invalid read_url '{}' in ?info (check public_base_url / HTTPS config): {}",
-                        server_read_url, e
-                    ),
-                    true,
-                ));
-            }
-            if let Err(e) = sync_client::list_index(&client, &server_read_url, None, None).await {
-                return Ok(fail_result(
-                    format!(
-                        "Read test failed on read_url '{}' (check public_base_url / data_dir in server config): {}",
-                        server_read_url, e
-                    ),
-                    true,
-                ));
-            }
-            Ok(FrontendSyncConnectionTestResult {
-                success: true,
-                message: format!(
-                    "Connection verified successfully ({} active members, channels: {:?}).",
-                    stats.total_count, info.channels
-                ),
-                write_ok: true,
-                read_ok: true,
-            })
-        }
-        Err(e) => Ok(fail_result(format!("Read test failed: {}", e), true)),
+    // Verify public read_url validity and live index reachability.
+    let server_read_url = normalize_sync_url(&info.read_url);
+    if server_read_url.is_empty() {
+        return Ok(fail_result(
+            "Read test failed: server returned empty read_url in ?info".to_string(),
+            true,
+        ));
     }
+    if let Err(e) = sync_client::validate_sync_read_url(&server_read_url) {
+        return Ok(fail_result(
+            format!(
+                "Read test failed: invalid read_url '{}' in ?info (check public_base_url / HTTPS config): {}",
+                server_read_url, e
+            ),
+            true,
+        ));
+    }
+    if let Err(e) = sync_client::list_index(&client, &server_read_url, None, None).await {
+        return Ok(fail_result(
+            format!(
+                "Read test failed on read_url '{}' (check public_base_url / data_dir in server config): {}",
+                server_read_url, e
+            ),
+            true,
+        ));
+    }
+    Ok(FrontendSyncConnectionTestResult {
+        success: true,
+        message: format!(
+            "Connection verified successfully ({} active members, channels: {:?}).",
+            stats.total_count, info.channels
+        ),
+        write_ok: true,
+        read_ok: true,
+    })
 }
 
 pub async fn get_sync_admin_status_impl(
@@ -866,6 +1030,10 @@ pub async fn get_sync_admin_status_impl(
         &session,
         "Active wallet session changed while loading sync admin status",
         |service| {
+            if pw.is_none() && !service.is_session_active() {
+                let _ = state.read_cache_slot_for_service(service, |c| &c.own_sync_descriptor);
+                return Ok(None);
+            }
             let Some(admin) = load_stored_sync_admin_opt(service, pw)? else {
                 return Ok(None);
             };
@@ -887,10 +1055,17 @@ pub async fn get_sync_admin_status_impl(
     };
 
     let client = sync_client::create_sync_http_client();
-    let remote_status = if !admin.descriptor.write_url.is_empty() {
-        sync_client::fetch_admin_status(&client, &admin.descriptor.write_url, &admin_sk)
-            .await
-            .ok()
+    let remote_status = if !admin.descriptor.write_url.is_empty()
+        && !state.is_origin_cooling_down(&admin.descriptor.write_url, std::time::Instant::now())
+    {
+        match sync_client::fetch_admin_status(&client, &admin.descriptor.write_url, &admin_sk).await
+        {
+            Ok(st) => Some(st),
+            Err(err) => {
+                state.record_origin_cooldown_if_429(&admin.descriptor.write_url, &err);
+                None
+            }
+        }
     } else {
         None
     };
@@ -904,22 +1079,32 @@ pub async fn update_sync_admin_config_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendSyncAdminStatus, FrontendError> {
-    let (mut admin, admin_sk, _, session) =
-        load_admin_with_signing_key(state, password.as_deref())?;
+    let password_z = password.clone().map(Zeroizing::new);
+    let pw = password_z.as_deref().map(String::as_str);
+    let _market_guard = state.market_op_lock.lock().await;
 
-    if let Some(cp) = update.card_policy {
-        admin.policies.insert("card".to_string(), cp.into());
+    let (mut admin, admin_sk, session) = load_admin_with_signing_key(state, pw)?;
+    let expected_sync_index = admin.sync_index;
+
+    let next_card_policy: Option<humoco_market::MemberPolicy> = update.card_policy.map(Into::into);
+    let next_allow = update.allow;
+    let next_max_members = update.max_members;
+    let next_max_total_mb = update.max_total_storage_mb;
+    let next_max_user_mb = update.max_user_storage_mb;
+
+    if let Some(ref cp) = next_card_policy {
+        admin.policies.insert("card".to_string(), cp.clone());
     }
-    if let Some(allow) = update.allow {
-        admin.allow = allow;
+    if let Some(ref allow) = next_allow {
+        admin.allow = allow.clone();
     }
-    if let Some(m) = update.max_members {
+    if let Some(m) = next_max_members {
         admin.max_members = m;
     }
-    if let Some(mb) = update.max_total_storage_mb {
+    if let Some(mb) = next_max_total_mb {
         admin.max_total_storage_mb = mb;
     }
-    if let Some(umb) = update.max_user_storage_mb {
+    if let Some(umb) = next_max_user_mb {
         admin.max_user_storage_mb = umb;
     }
     validate_admin_quotas(
@@ -929,6 +1114,11 @@ pub async fn update_sync_admin_config_impl(
     )?;
 
     let pushed_status = if push_now && !admin.descriptor.write_url.is_empty() {
+        if !state.is_generation_current(session.generation) {
+            return Err(FrontendError::from(
+                "Active wallet session changed before admin config could be pushed".to_string(),
+            ));
+        }
         let client = sync_client::create_sync_http_client();
         let st = sync_client::put_admin_config(
             &client,
@@ -940,36 +1130,56 @@ pub async fn update_sync_admin_config_impl(
         )
         .await
         .map_err(FrontendError::from)?;
-        push_all_channel_members(
-            &client,
-            state,
-            &session,
-            &mut admin,
-            &admin_sk,
-            password.as_deref(),
-        )
-        .await?;
+        push_all_channel_members(&client, state, &session, &mut admin, &admin_sk, pw).await?;
         Some(st)
     } else {
         None
     };
 
-    let (stats, _) = state.with_session_required(
+    let (saved_admin, stats) = state.with_session_required(
         &session,
         "Active wallet session changed before admin config could be saved",
         |service| {
-            save_stored_sync_admin(state, service, &admin, password.as_deref())?;
-            compute_admin_sync_members_with_stats(
-                state,
-                service,
-                &admin,
-                "card",
-                password.as_deref(),
-            )
+            let mut fresh_admin = load_stored_sync_admin_opt(service, pw)?.ok_or_else(|| {
+                FrontendError::from("Sync admin configuration was removed concurrently".to_string())
+            })?;
+            if fresh_admin.sync_index != expected_sync_index {
+                return Err(FrontendError::from(
+                    "Sync admin configuration changed concurrently".to_string(),
+                ));
+            }
+            if let Some(cp) = next_card_policy.clone() {
+                fresh_admin.policies.insert("card".to_string(), cp);
+            }
+            if let Some(allow) = next_allow.clone() {
+                fresh_admin.allow = allow;
+            }
+            if let Some(m) = next_max_members {
+                fresh_admin.max_members = m;
+            }
+            if let Some(mb) = next_max_total_mb {
+                fresh_admin.max_total_storage_mb = mb;
+            }
+            if let Some(umb) = next_max_user_mb {
+                fresh_admin.max_user_storage_mb = umb;
+            }
+            validate_admin_quotas(
+                fresh_admin.max_total_storage_mb,
+                fresh_admin.max_members,
+                fresh_admin.max_user_storage_mb,
+            )?;
+            for (k, v) in &admin.last_members_hash {
+                fresh_admin.last_members_hash.insert(k.clone(), v.clone());
+            }
+
+            save_stored_sync_admin(state, service, &fresh_admin, pw)?;
+            let (stats, _) =
+                compute_admin_sync_members_with_stats(state, service, &fresh_admin, "card", pw)?;
+            Ok((fresh_admin, stats))
         },
     )?;
 
-    Ok(build_admin_status_dto(admin, stats, pushed_status))
+    Ok(build_admin_status_dto(saved_admin, stats, pushed_status))
 }
 
 #[cfg(test)]
@@ -978,67 +1188,106 @@ pub(crate) async fn block_sync_slot_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendSyncAdminStatus, FrontendError> {
-    let (mut admin, admin_sk, _, session) =
-        load_admin_with_signing_key(state, password.as_deref())?;
+    let password_z = password.clone().map(Zeroizing::new);
+    let pw = password_z.as_deref().map(String::as_str);
+    let _market_guard = state.market_op_lock.lock().await;
+
+    let (mut admin, admin_sk, session) = load_admin_with_signing_key(state, pw)?;
+    let expected_sync_index = admin.sync_index;
     if !admin.blocked_pubkeys.contains(&pubkey_hex64) {
-        admin.blocked_pubkeys.push(pubkey_hex64);
+        admin.blocked_pubkeys.push(pubkey_hex64.clone());
     }
 
     let client = sync_client::create_sync_http_client();
     if !admin.descriptor.write_url.is_empty() {
-        push_all_channel_members(
-            &client,
-            state,
-            &session,
-            &mut admin,
-            &admin_sk,
-            password.as_deref(),
-        )
-        .await?;
+        push_all_channel_members(&client, state, &session, &mut admin, &admin_sk, pw).await?;
     }
 
-    let (stats, _) = state.with_session_required(
+    let (saved_admin, stats) = state.with_session_required(
         &session,
         "Active wallet session changed before blocked slot could be saved",
         |service| {
-            save_stored_sync_admin(state, service, &admin, password.as_deref())?;
-            compute_admin_sync_members_with_stats(
-                state,
-                service,
-                &admin,
-                "card",
-                password.as_deref(),
-            )
+            let mut fresh_admin = load_stored_sync_admin_opt(service, pw)?.ok_or_else(|| {
+                FrontendError::from("Sync admin configuration was removed concurrently".to_string())
+            })?;
+            if fresh_admin.sync_index != expected_sync_index {
+                return Err(FrontendError::from(
+                    "Sync admin configuration changed concurrently".to_string(),
+                ));
+            }
+            if !fresh_admin.blocked_pubkeys.contains(&pubkey_hex64) {
+                fresh_admin.blocked_pubkeys.push(pubkey_hex64.clone());
+            }
+            for (k, v) in &admin.last_members_hash {
+                fresh_admin.last_members_hash.insert(k.clone(), v.clone());
+            }
+            save_stored_sync_admin(state, service, &fresh_admin, pw)?;
+            let (stats, _) =
+                compute_admin_sync_members_with_stats(state, service, &fresh_admin, "card", pw)?;
+            Ok((fresh_admin, stats))
         },
     )?;
 
-    Ok(build_admin_status_dto(admin, stats, None))
+    Ok(build_admin_status_dto(saved_admin, stats, None))
 }
 
 pub fn delete_sync_admin_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<(), FrontendError> {
-    let mut service =
-        state.authorize_and_lock(crate::state::RequiredAccess::Full, password.as_deref())?;
-    let admin_opt = load_stored_sync_admin_opt(&mut service, password.as_deref())?;
+    let password_z = password.clone().map(Zeroizing::new);
+    let pw = password_z.as_deref().map(String::as_str);
+    let mut service = state.authorize_and_lock(crate::state::RequiredAccess::Full, pw)?;
+    let admin_opt = load_stored_sync_admin_opt(&mut service, pw)?;
 
-    crate::state::save_encrypted_json(
-        &mut service,
+    let policy_update = if let Some(ref admin) = admin_opt {
+        prepare_policy_without_sync(state, &mut service, &admin.descriptor.read_url, pw)?
+    } else {
+        None
+    };
+
+    let (next_policy_opt, next_profile_opt) = match policy_update {
+        Some((pol, prof)) => (Some(pol), prof),
+        None => (None, None),
+    };
+
+    let mut owned_blobs: Vec<(&str, Vec<u8>)> = Vec::with_capacity(3);
+    owned_blobs.push((
         MARKET_SYNC_ADMIN_KEY,
-        &Option::<StoredSyncAdmin>::None,
-        password.as_deref(),
-    )
-    .map_err(FrontendError::from)?;
-    state.write_cache_slot_for_service(&service, |c| &mut c.own_sync_descriptor, Some(None));
+        serde_json::to_vec(&Option::<StoredSyncAdmin>::None).map_err(|e| {
+            FrontendError::from(format!("Failed to serialize cleared sync admin: {}", e))
+        })?,
+    ));
+    if let Some(ref pol) = next_policy_opt {
+        owned_blobs.push((
+            SECURITY_POLICY_KEY,
+            serde_json::to_vec(pol)
+                .map_err(|e| FrontendError::from(format!("Failed to serialize policy: {}", e)))?,
+        ));
+    }
+    if let Some(ref prof) = next_profile_opt {
+        owned_blobs.push((
+            MARKET_OWN_PROFILE_KEY,
+            serde_json::to_vec(prof).map_err(|e| {
+                FrontendError::from(format!("Failed to serialize own market profile: {}", e))
+            })?,
+        ));
+    }
 
-    if let Some(admin) = admin_opt {
-        remove_sync_from_selected_settings(
-            state,
-            &mut service,
-            &admin.descriptor.read_url,
-            password.as_deref(),
-        );
+    let batch_refs: Vec<(&str, &[u8])> = owned_blobs
+        .iter()
+        .map(|(k, v)| (*k, v.as_slice()))
+        .collect();
+    service
+        .save_encrypted_batch(&batch_refs, pw)
+        .map_err(FrontendError::from)?;
+
+    state.write_cache_slot_for_service(&service, |c| &mut c.own_sync_descriptor, Some(None));
+    if let Some(pol) = next_policy_opt {
+        state.write_cache_slot_for_service(&service, |c| &mut c.security_policy, Some(pol));
+    }
+    if let Some(prof) = next_profile_opt {
+        state.set_cached_own_market_profile_for_service(&service, Some(prof));
     }
 
     Ok(())
@@ -1051,8 +1300,18 @@ pub async fn revoke_own_sync_server_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<Option<FrontendSyncAdminStatus>, FrontendError> {
-    let (mut admin, admin_sk, _, session) =
-        load_admin_with_signing_key(state, password.as_deref())?;
+    if effective_at == Some(0) {
+        return Err(FrontendError::from(
+            "Revocation effective_at timestamp must be greater than 0".to_string(),
+        ));
+    }
+
+    let password_z = password.clone().map(Zeroizing::new);
+    let pw = password_z.as_deref().map(String::as_str);
+    let _market_guard = state.market_op_lock.lock().await;
+
+    let (admin, admin_sk, session) = load_admin_with_signing_key(state, pw)?;
+    let expected_sync_index = admin.sync_index;
 
     if admin.descriptor.write_url.trim().is_empty() {
         return Err(FrontendError::from(
@@ -1067,7 +1326,7 @@ pub async fn revoke_own_sync_server_impl(
         .as_ref()
         .map(|r| r.issued_at.saturating_add(1))
         .unwrap_or(0);
-    let issued_at = now_secs.max(min_next_issued);
+    let issued_at = now_secs.max(min_next_issued).max(1);
 
     if let Some(eff) = effective_at {
         let replacement = if let Some(ref rep_raw) = replacement_write_url {
@@ -1088,7 +1347,12 @@ pub async fn revoke_own_sync_server_impl(
                 let info = sync_client::fetch_sync_info(&client, &canonical_rep)
                     .await
                     .map_err(FrontendError::from)?;
-                if normalize_sync_url(&info.read_url)
+                let rep_read_url = normalize_sync_url(&info.read_url);
+                sync_client::validate_sync_read_url(&rep_read_url).map_err(FrontendError::from)?;
+                let rep_drop_pub = canonical_drop_pub_hex(&info.drop_pub).map_err(|e| {
+                    FrontendError::from(format!("Invalid replacement drop_pub: {}", e.message))
+                })?;
+                if rep_read_url
                     .eq_ignore_ascii_case(&normalize_sync_url(&admin.descriptor.read_url))
                 {
                     return Err(FrontendError::from(
@@ -1098,8 +1362,8 @@ pub async fn revoke_own_sync_server_impl(
                 }
                 Some(sync_client::SyncReplacementTarget {
                     write_url: canonical_rep,
-                    read_url: info.read_url,
-                    drop_pub: info.drop_pub,
+                    read_url: rep_read_url,
+                    drop_pub: rep_drop_pub,
                 })
             }
         } else {
@@ -1109,6 +1373,13 @@ pub async fn revoke_own_sync_server_impl(
         let notice =
             sync_client::sign_revocation_notice(&admin_sk, issued_at, eff, reason, replacement)
                 .map_err(FrontendError::from)?;
+
+        if !state.is_generation_current(session.generation) {
+            return Err(FrontendError::from(
+                "Active wallet session changed before revocation notice could be pushed"
+                    .to_string(),
+            ));
+        }
 
         sync_client::push_revocation_notice(
             &client,
@@ -1120,24 +1391,90 @@ pub async fn revoke_own_sync_server_impl(
         .await
         .map_err(FrontendError::from)?;
 
-        admin.revocation = Some(notice);
-
-        // Remove deprecated own server from outgoing SdCard selection so new contacts don't receive it.
+        // Reload fresh admin & atomically remove deprecated server from outgoing SdCard selection.
         state.with_session_required(
             &session,
             "Active wallet session changed before revocation state could be saved",
             |service| {
-                save_stored_sync_admin(state, service, &admin, password.as_deref())?;
-                remove_sync_from_selected_settings(
+                let Some(mut fresh_admin) = load_stored_sync_admin_opt(service, pw)? else {
+                    return Err(FrontendError::from(
+                        "Sync admin configuration was removed concurrently".to_string(),
+                    ));
+                };
+                if fresh_admin.sync_index != expected_sync_index {
+                    return Err(FrontendError::from(
+                        "Sync admin configuration changed concurrently".to_string(),
+                    ));
+                }
+                fresh_admin.revocation = Some(notice);
+
+                let policy_update = prepare_policy_without_sync(
                     state,
                     service,
-                    &admin.descriptor.read_url,
-                    password.as_deref(),
+                    &fresh_admin.descriptor.read_url,
+                    pw,
+                )?;
+
+                let mut owned_blobs: Vec<(&str, Vec<u8>)> = Vec::with_capacity(3);
+                let admin_bytes = serde_json::to_vec(&fresh_admin).map_err(|e| {
+                    FrontendError::from(format!("Failed to serialize sync admin: {}", e))
+                })?;
+                owned_blobs.push((MARKET_SYNC_ADMIN_KEY, admin_bytes));
+
+                let (next_policy_opt, next_profile_opt) = match policy_update {
+                    Some((pol, prof)) => (Some(pol), prof),
+                    None => (None, None),
+                };
+                if let Some(ref pol) = next_policy_opt {
+                    let bytes = serde_json::to_vec(pol).map_err(|e| {
+                        FrontendError::from(format!("Failed to serialize policy: {}", e))
+                    })?;
+                    owned_blobs.push((SECURITY_POLICY_KEY, bytes));
+                }
+                if let Some(ref prof) = next_profile_opt {
+                    let bytes = serde_json::to_vec(prof).map_err(|e| {
+                        FrontendError::from(format!(
+                            "Failed to serialize own market profile: {}",
+                            e
+                        ))
+                    })?;
+                    owned_blobs.push((MARKET_OWN_PROFILE_KEY, bytes));
+                }
+
+                let batch_refs: Vec<(&str, &[u8])> = owned_blobs
+                    .iter()
+                    .map(|(k, v)| (*k, v.as_slice()))
+                    .collect();
+                service
+                    .save_encrypted_batch(&batch_refs, pw)
+                    .map_err(FrontendError::from)?;
+
+                state.write_cache_slot_for_service(
+                    service,
+                    |c| &mut c.own_sync_descriptor,
+                    Some(Some(fresh_admin.descriptor.clone())),
                 );
+                if let Some(pol) = next_policy_opt {
+                    state.write_cache_slot_for_service(
+                        service,
+                        |c| &mut c.security_policy,
+                        Some(pol),
+                    );
+                }
+                if let Some(prof) = next_profile_opt {
+                    state.set_cached_own_market_profile_for_service(service, Some(prof));
+                }
                 Ok(())
             },
         )?;
     } else {
+        if !state.is_generation_current(session.generation) {
+            return Err(FrontendError::from(
+                "Active wallet session changed before revocation notice could be cleared"
+                    .to_string(),
+            ));
+        }
+
         sync_client::push_revocation_notice(
             &client,
             &admin.descriptor.write_url,
@@ -1148,12 +1485,28 @@ pub async fn revoke_own_sync_server_impl(
         .await
         .map_err(FrontendError::from)?;
 
-        admin.revocation = None;
         state.with_session_required(
             &session,
             "Active wallet session changed before revocation clearance could be saved",
-            |service| save_stored_sync_admin(state, service, &admin, password.as_deref()),
+            |service| {
+                let Some(mut fresh_admin) = load_stored_sync_admin_opt(service, pw)? else {
+                    return Err(FrontendError::from(
+                        "Sync admin configuration was removed concurrently".to_string(),
+                    ));
+                };
+                if fresh_admin.sync_index != expected_sync_index {
+                    return Err(FrontendError::from(
+                        "Sync admin configuration changed concurrently".to_string(),
+                    ));
+                }
+                fresh_admin.revocation = None;
+                save_stored_sync_admin(state, service, &fresh_admin, pw)
+            },
         )?;
+    }
+
+    if !state.is_generation_current(session.generation) {
+        return Ok(None);
     }
 
     get_sync_admin_status_impl(password, state).await

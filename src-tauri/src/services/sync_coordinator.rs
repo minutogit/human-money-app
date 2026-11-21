@@ -411,8 +411,12 @@ async fn run_coordinator_loop(app: tauri::AppHandle) {
                 state.authorize_and_begin_session(crate::state::RequiredAccess::Unlocked, None)
             {
                 let client = crate::sync_client::create_sync_http_client();
-                sync_engine::admin::refresh_own_admin_members(&client, &state, &session, None)
-                    .await;
+                if let Some(err_msg) =
+                    sync_engine::admin::refresh_own_admin_members(&client, &state, &session, None)
+                        .await
+                {
+                    log::warn!("Background admin member refresh warning: {}", err_msg);
+                }
             }
         }
 

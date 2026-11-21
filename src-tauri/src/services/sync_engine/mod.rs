@@ -27,7 +27,7 @@ use crate::models::{
     FrontendAppNotice, FrontendError, FrontendMarketSyncResult, FrontendSyncOverviewStatus,
     MarketSyncStatus,
 };
-use crate::services::common::SyncIdentityContext;
+use crate::services::common::{normalize_sync_url, SyncIdentityContext};
 use crate::settings::SYNC_MARKET_POLL_COOLDOWN_SECS;
 use crate::state::{
     sync_endpoint_key, AppState, StoredSyncState, MARKET_CARD_STORE_KEY, MARKET_SYNC_KEY,
@@ -50,22 +50,26 @@ pub async fn sync_market_channels_with_options(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendMarketSyncResult, FrontendError> {
-    let (session, ui_prefs, mut security_policy) = {
-        let mut service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
-        let session = crate::session::SessionToken {
-            generation: state.current_session_generation(),
-            owner_did: service
-                .with_wallet(|w| w.get_user_id().to_string())
-                .map_err(FrontendError::from)?,
-        };
-        let ui_prefs = state
-            .get_or_load_ui_preferences(&mut service, password.as_deref())
-            .map_err(FrontendError::from)?;
-        let security_policy = state
-            .get_or_load_security_policy(&mut service, password.as_deref())
-            .map_err(FrontendError::from)?;
-        (session, ui_prefs, security_policy)
-    };
+    let _market_guard = state.market_op_lock.lock().await;
+    let (session, resolved_pw) = state.authorize_and_begin_session_secret(
+        crate::state::RequiredAccess::Unlocked,
+        password.as_deref(),
+    )?;
+    let pw = resolved_pw.as_deref().map(String::as_str);
+
+    let (ui_prefs, mut security_policy) = state.with_session_required(
+        &session,
+        "Active wallet session changed before market sync could start",
+        |service| {
+            let ui_prefs = state
+                .get_or_load_ui_preferences(service, pw)
+                .map_err(FrontendError::from)?;
+            let security_policy = state
+                .get_or_load_security_policy(service, pw)
+                .map_err(FrontendError::from)?;
+            Ok((ui_prefs, security_policy))
+        },
+    )?;
 
     if ui_prefs.market_poll_wifi_only && is_wifi == Some(false) {
         return Ok(FrontendMarketSyncResult {
@@ -93,17 +97,18 @@ pub async fn sync_market_channels_with_options(
     let now_secs = sync_client::current_unix_timestamp();
 
     // 1. Ensure own DropAdmin channel members are up-to-date on server
-    admin::refresh_own_admin_members(&client, state, &session, password.as_deref()).await;
+    if let Some(err_msg) =
+        admin::refresh_own_admin_members_locked(&client, state, &session, pw).await
+    {
+        errors.push(err_msg);
+    }
 
     // 2. Load identity context and sync state
     let Some((id_ctx, mut sync_state)) = state.with_session(&session, |service| {
-        let id_ctx = SyncIdentityContext::from_service(service, password.as_deref())?;
-        let sync_state: StoredSyncState = crate::state::load_encrypted_json_or_default(
-            service,
-            MARKET_SYNC_KEY,
-            password.as_deref(),
-        )
-        .map_err(FrontendError::from)?;
+        let id_ctx = SyncIdentityContext::from_service(service, pw)?;
+        let sync_state: StoredSyncState =
+            crate::state::load_encrypted_json_or_default(service, MARKET_SYNC_KEY, pw)
+                .map_err(FrontendError::from)?;
         Ok((id_ctx, sync_state))
     })?
     else {
@@ -134,7 +139,7 @@ pub async fn sync_market_channels_with_options(
         &id_ctx,
         force_upload,
         now_secs,
-        password.as_deref(),
+        pw,
         &mut sync_state,
         &mut uploaded_to,
         &mut errors,
@@ -144,18 +149,21 @@ pub async fn sync_market_channels_with_options(
         if state.is_generation_current(session.generation) {
             media_sync::gc_orphaned_media_blobs(
                 &client,
+                state,
+                &session,
                 &id_ctx,
                 &card_upload_targets,
                 &active_media_blob_ids,
                 now_secs,
                 &mut sync_state,
+                &mut errors,
             )
             .await;
         }
     }
 
     // 2b. Upload WoT channel
-    if state.is_generation_current(session.generation) {
+    let wot_upload_outcome = if state.is_generation_current(session.generation) {
         wot_sync::sync_wot_upload_channel(
             &client,
             state,
@@ -165,15 +173,17 @@ pub async fn sync_market_channels_with_options(
             &id_ctx,
             force_upload,
             now_secs,
-            password.as_deref(),
+            pw,
             &mut sync_state,
             &mut uploaded_to,
             &mut errors,
         )
-        .await;
-    }
+        .await
+    } else {
+        wot_sync::WotSyncUploadOutcome::default()
+    };
 
-    // 2c. Check revocation.json across own and contact syncs (max once per 24h per read_url)
+    // 2c. Check revocation.json across own and contact syncs (max once per 24h per (url, drop_pub))
     let revoked_own_syncs = if state.is_generation_current(session.generation) {
         channel_reader::check_revocations(
             &client,
@@ -182,7 +192,7 @@ pub async fn sync_market_channels_with_options(
             &mut security_policy,
             &mut sync_state,
             now_secs,
-            password.as_deref(),
+            pw,
         )
         .await
     } else {
@@ -192,9 +202,9 @@ pub async fn sync_market_channels_with_options(
     // 3. Download poll (strictly read/decrypt/delta-collecting; no cross-.await store writes)
     let skip_poll = respect_cooldown == Some(true)
         && force_upload != Some(true)
-        && sync_state
-            .last_poll_at
-            .is_some_and(|last| now_secs.saturating_sub(last) < SYNC_MARKET_POLL_COOLDOWN_SECS);
+        && sync_state.last_poll_at.is_some_and(|last| {
+            last <= now_secs && now_secs - last < SYNC_MARKET_POLL_COOLDOWN_SECS
+        });
 
     let mut sync_health_updates: Vec<(String, bool)> = Vec::new();
     let mut decoded_card_bundles: Vec<(String, humoco_market::CardBundle)> = Vec::new();
@@ -209,7 +219,7 @@ pub async fn sync_market_channels_with_options(
             &security_policy,
             &id_ctx,
             now_secs,
-            password.as_deref(),
+            pw,
             &mut sync_state,
             &mut errors,
         )
@@ -226,12 +236,9 @@ pub async fn sync_market_channels_with_options(
     //    If the session was logged out / switched / re-logged in, discard everything cleanly.
     let max_stored_cards = ui_prefs.max_stored_cards.clamp(100, 10_000);
     let committed = state.with_session(&session, |service| {
-        let latest_sync_state: StoredSyncState = crate::state::load_encrypted_json_or_default(
-            service,
-            MARKET_SYNC_KEY,
-            password.as_deref(),
-        )
-        .map_err(FrontendError::from)?;
+        let latest_sync_state: StoredSyncState =
+            crate::state::load_encrypted_json_or_default(service, MARKET_SYNC_KEY, pw)
+                .map_err(FrontendError::from)?;
         crate::state::merge_sync_state_3way(
             &baseline_sync_state,
             &mut sync_state,
@@ -252,7 +259,7 @@ pub async fn sync_market_channels_with_options(
                 crate::state::load_encrypted_json_or_default(
                     service,
                     crate::state::CONTACTS_DATA_NAME,
-                    password.as_deref(),
+                    pw,
                 )
                 .map_err(FrontendError::from)?;
             next_address_book = Some(ab);
@@ -260,12 +267,8 @@ pub async fn sync_market_channels_with_options(
 
         if !decoded_card_bundles.is_empty() {
             let mut fresh_store: humoco_market::CardStore =
-                crate::state::load_encrypted_json_or_default(
-                    service,
-                    MARKET_CARD_STORE_KEY,
-                    password.as_deref(),
-                )
-                .map_err(FrontendError::from)?;
+                crate::state::load_encrypted_json_or_default(service, MARKET_CARD_STORE_KEY, pw)
+                    .map_err(FrontendError::from)?;
             let ab_ref = next_address_book
                 .as_mut()
                 .expect("address book preloaded for card bundle commit");
@@ -287,32 +290,50 @@ pub async fn sync_market_channels_with_options(
             next_card_store = Some(fresh_store);
         }
 
-        if !decoded_wot_packages.is_empty() {
+        let need_wot_update = !decoded_wot_packages.is_empty()
+            || !wot_upload_outcome.committed_receipts.is_empty()
+            || !wot_upload_outcome.cleared_drop_urls.is_empty();
+        if need_wot_update {
             let mut reg = state
-                .load_wot_register(service, password.as_deref())
+                .load_wot_register(service, pw)
                 .map_err(FrontendError::from)?;
+            let mut reg_dirty = false;
             for (read_url, pkg) in &decoded_wot_packages {
-                imported_wot_lists += wot_sync::import_decrypted_wot_package(
+                let imported = wot_sync::import_decrypted_wot_package(
                     pkg,
                     read_url,
                     now_secs,
                     &mut reg,
                     &mut errors,
                 );
-            }
-            if imported_wot_lists > 0 || reg.own_list_dirty {
-                if reg.own_list_dirty {
-                    state
-                        .ensure_wot_list_signed(service, &mut reg)
-                        .map_err(FrontendError::from)?;
+                imported_wot_lists += imported;
+                if imported > 0 {
+                    reg_dirty = true;
                 }
+            }
+            for receipt in wot_upload_outcome.committed_receipts {
+                reg.commit_drop_sync_receipt(receipt, now_secs);
+                reg_dirty = true;
+            }
+            for url in wot_upload_outcome.cleared_drop_urls {
+                if reg.drop_sent_log.remove(&url).is_some() {
+                    reg_dirty = true;
+                }
+            }
+            if reg.own_list_dirty {
+                state
+                    .ensure_wot_list_signed(service, &mut reg)
+                    .map_err(FrontendError::from)?;
+                reg_dirty = true;
+            }
+            if reg_dirty {
                 next_wot_reg = Some(reg);
             }
         }
 
         if !sync_health_updates.is_empty() {
             let mut policy = state
-                .get_or_load_security_policy(service, password.as_deref())
+                .get_or_load_security_policy(service, pw)
                 .map_err(FrontendError::from)?;
             let ab_ref = next_address_book
                 .as_mut()
@@ -335,7 +356,7 @@ pub async fn sync_market_channels_with_options(
                 crate::state::load_encrypted_json_or_default(
                     service,
                     crate::state::APP_NOTICES_KEY,
-                    password.as_deref(),
+                    pw,
                 )
                 .map_err(FrontendError::from)?;
             let mut market_notices = Vec::new();
@@ -411,7 +432,7 @@ pub async fn sync_market_channels_with_options(
             .map(|(k, v)| (*k, v.as_slice()))
             .collect();
         service
-            .save_encrypted_batch(&batch_refs, password.as_deref())
+            .save_encrypted_batch(&batch_refs, pw)
             .map_err(FrontendError::from)?;
 
         // Update in-memory caches only after atomic persistence succeeded.
@@ -480,29 +501,55 @@ pub fn get_sync_overview_status_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendSyncOverviewStatus, FrontendError> {
-    let mut service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
-    let security_policy = state
-        .get_or_load_security_policy(&mut service, password.as_deref())
-        .map_err(FrontendError::from)?;
+    let (mut service, resolved_pw) = state
+        .authorize_and_lock_secret(crate::state::RequiredAccess::Unlocked, password.as_deref())?;
+    let pw = resolved_pw.as_deref().map(String::as_str);
 
-    let admin_opt = admin::load_stored_sync_admin_opt(&mut service, password.as_deref())?;
+    let (security_policy, own_desc_opt, contacts, sync_state) =
+        if pw.is_some() || service.is_session_active() {
+            let security_policy = state
+                .get_or_load_security_policy(&mut service, pw)
+                .map_err(FrontendError::from)?;
+            let admin_opt = admin::load_stored_sync_admin_opt(&mut service, pw)?;
+            let own_desc_opt = admin_opt.map(|a| a.descriptor);
+            let contacts = state
+                .load_contacts(&mut service, pw)
+                .map_err(FrontendError::from)?;
+            let sync_state: Option<StoredSyncState> =
+                crate::state::load_encrypted_json_opt(&mut service, MARKET_SYNC_KEY, pw)
+                    .map_err(FrontendError::from)?;
+            (security_policy, own_desc_opt, contacts, sync_state)
+        } else {
+            // timeout == 0 graceful cache fallback
+            let security_policy = state
+                .read_cache_slot_for_service(&service, |c| &c.security_policy)
+                .unwrap_or_default();
+            let own_desc_opt = state
+                .read_cache_slot_for_service(&service, |c| &c.own_sync_descriptor)
+                .flatten();
+            let contacts = state
+                .read_cache_slot_for_service(&service, |c| &c.contacts)
+                .map(|ab| ab.contacts.into_values().collect())
+                .unwrap_or_default();
+            (security_policy, own_desc_opt, contacts, None)
+        };
 
-    let has_own_sync = admin_opt
+    let has_own_sync = own_desc_opt
         .as_ref()
-        .is_some_and(|a| !a.descriptor.write_url.is_empty());
-    let pending_own_sync = admin_opt
+        .is_some_and(|d| !d.write_url.is_empty());
+    let pending_own_sync = own_desc_opt
         .as_ref()
-        .is_some_and(|a| a.descriptor.write_url.is_empty());
-    let own_read_url = admin_opt
+        .is_some_and(|d| d.write_url.is_empty());
+    let norm_own_read_url = own_desc_opt
         .as_ref()
-        .map(|a| a.descriptor.read_url.as_str())
-        .unwrap_or("");
+        .map(|d| normalize_sync_url(&d.read_url))
+        .unwrap_or_default();
 
     let friend_syncs = security_policy
         .market_selected_syncs
         .iter()
         .filter(|d| {
-            d.read_url != own_read_url
+            normalize_sync_url(&d.read_url) != norm_own_read_url
                 && !d.read_url.is_empty()
                 && !d.drop_pub.is_empty()
                 && d.fail_count == 0
@@ -513,18 +560,19 @@ pub fn get_sync_overview_status_impl(
     let public_syncs = security_policy
         .public_syncs
         .iter()
-        .filter(|d| d.enabled && !d.authorized_channels.is_empty())
+        .filter(|d| {
+            d.enabled
+                && !d.status.eq_ignore_ascii_case("revoked")
+                && !d.authorized_channels.is_empty()
+        })
         .count();
 
     let pending_public_syncs = security_policy
         .public_syncs
         .iter()
-        .filter(|d| d.authorized_channels.is_empty())
+        .filter(|d| !d.status.eq_ignore_ascii_case("revoked") && d.authorized_channels.is_empty())
         .count();
 
-    let contacts = state
-        .load_contacts(&mut service, password.as_deref())
-        .map_err(FrontendError::from)?;
     let mut pending_keys = HashSet::new();
     for c in &contacts {
         for ep in &c.syncs {
@@ -554,10 +602,6 @@ pub fn get_sync_overview_status_impl(
 
     let connected_count = (if has_own_sync { 1 } else { 0 }) + friend_syncs + public_syncs;
     let pending_count = (if pending_own_sync { 1 } else { 0 }) + pending_public_syncs;
-
-    let sync_state: Option<StoredSyncState> =
-        crate::state::load_encrypted_json_opt(&mut service, MARKET_SYNC_KEY, password.as_deref())
-            .map_err(FrontendError::from)?;
 
     let last_sync_at =
         sync_state.and_then(|s| s.last_upload_at.into_iter().chain(s.last_poll_at).max());
@@ -4024,6 +4068,359 @@ pub(crate) mod tests {
                 .await
                 .unwrap();
         assert_eq!(res.status, MarketSyncStatus::SkippedWifiOnly);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn s09_f1_probe_pin_mismatch_foreign_slot_and_public_sync_pin() {
+        let dir = temp_test_dir("s09_f1_pins");
+        let pw = "StrongPassword123!";
+        let alice_state = create_test_state(setup_test_app(
+            &dir.join("alice"),
+            "Alice",
+            ALICE_PHRASE,
+            pw,
+        ));
+        let bob_svc = setup_test_app(&dir.join("bob"), "Bob", BOB_PHRASE, pw);
+        let (bob_did, bob_sk) = bob_svc
+            .with_wallet_and_identity(|w, id| (w.get_user_id().to_string(), id.signing_key.clone()))
+            .unwrap();
+
+        let real_pub = hex::encode(
+            ed25519_dalek::SigningKey::from_bytes(&[0x11u8; 32])
+                .verifying_key()
+                .as_bytes(),
+        );
+        let rogue_pub = hex::encode(
+            ed25519_dalek::SigningKey::from_bytes(&[0x22u8; 32])
+                .verifying_key()
+                .as_bytes(),
+        );
+
+        // 1. Rogue server presenting wrong drop_pub must NOT overwrite pinned drop_pub/read_url or clear "revoked".
+        let rogue_srv = MockSyncServer::start("d-rogue".to_string(), rogue_pub.clone()).await;
+        let orig_read = "https://original.example.org/d-real".to_string();
+        let bob_foreign_slot =
+            humoco_market::derive_member_stealth_pubkey(&bob_sk, &real_pub).unwrap();
+        let bob_contact = FrontendContact {
+            did: bob_did.clone(),
+            profile: FrontendUserProfile::default(),
+            tags: vec![],
+            added_at: "2026-01-01T00:00:00Z".to_string(),
+            notes: None,
+            trust_level: Some(2),
+            desired_hops: Some(1),
+            has_peer_list: false,
+            peer_list_updated_at: None,
+            syncs: vec![FrontendSyncDescriptor {
+                write_url: format!("{}/sync.php", rogue_srv.base_url),
+                read_url: orig_read.clone(),
+                slot_id: Some(bob_foreign_slot.clone()),
+                drop_pub: real_pub.clone(),
+                status: "revoked".to_string(),
+                sunset_at: Some(12345),
+                ..Default::default()
+            }],
+        };
+        {
+            let mut s = alice_state.service.lock().unwrap();
+            alice_state
+                .save_contact(&mut s, bob_contact, Some(pw))
+                .unwrap();
+        }
+        let probed = probe_contact_syncs_impl(true, Some(pw.to_string()), &alice_state)
+            .await
+            .unwrap();
+        assert_eq!(probed.len(), 1);
+        assert_eq!(probed[0].drop_pub, real_pub);
+        assert_eq!(probed[0].read_url, orig_read);
+        assert_eq!(probed[0].status, "revoked");
+
+        // 2. Real server where only Bob's foreign slot_id is authorized, NOT Alice:
+        //    Alice must probe her OWN stealth key -> pending_auth, never active;
+        //    once Alice is authorized, auto-activated market_selected_syncs[0].slot_id must be None.
+        let good_srv = MockSyncServer::start("d-good".to_string(), real_pub.clone()).await;
+        good_srv
+            .members
+            .lock()
+            .unwrap()
+            .push(bob_foreign_slot.clone());
+        {
+            let mut s = alice_state.service.lock().unwrap();
+            let mut contacts = alice_state.load_contacts(&mut s, Some(pw)).unwrap();
+            contacts[0].syncs = vec![FrontendSyncDescriptor {
+                write_url: format!("{}/sync.php", good_srv.base_url),
+                read_url: String::new(),
+                slot_id: Some(bob_foreign_slot),
+                drop_pub: real_pub.clone(),
+                status: "unverified".to_string(),
+                ..Default::default()
+            }];
+            alice_state
+                .save_contact(&mut s, contacts.remove(0), Some(pw))
+                .unwrap();
+        }
+        let p2 = probe_contact_syncs_impl(true, Some(pw.to_string()), &alice_state)
+            .await
+            .unwrap();
+        assert_eq!(p2[0].status, "pending_auth");
+
+        let alice_stealth = {
+            let s = alice_state.service.lock().unwrap();
+            let ask = s
+                .with_wallet_and_identity(|_, id| id.signing_key.clone())
+                .unwrap();
+            humoco_market::derive_member_stealth_pubkey(&ask, &real_pub).unwrap()
+        };
+        good_srv.members.lock().unwrap().push(alice_stealth);
+        let p3 = probe_contact_syncs_impl(true, Some(pw.to_string()), &alice_state)
+            .await
+            .unwrap();
+        assert_eq!(p3[0].status, "active");
+        {
+            let mut s = alice_state.service.lock().unwrap();
+            let pol = alice_state
+                .get_or_load_security_policy(&mut s, Some(pw))
+                .unwrap();
+            assert_eq!(pol.market_selected_syncs.len(), 1);
+            assert_eq!(pol.market_selected_syncs[0].slot_id, None);
+        }
+
+        // 3. save_public_sync_impl must fail closed on drop_pub key pin mismatch.
+        let pub_w = format!("{}/sync.php", good_srv.base_url);
+        let pub_r = format!("{}/d-good", good_srv.base_url);
+        save_public_sync_impl(
+            pub_w.clone(),
+            pub_r.clone(),
+            real_pub,
+            None,
+            true,
+            Some(pw.to_string()),
+            &alice_state,
+        )
+        .await
+        .unwrap();
+        let pin_err = save_public_sync_impl(
+            pub_w,
+            pub_r,
+            rogue_pub,
+            None,
+            true,
+            Some(pw.to_string()),
+            &alice_state,
+        )
+        .await
+        .unwrap_err();
+        assert!(pin_err.message.contains("pin mismatch"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn s09_f2_admin_verify_drop_pub_before_push_and_reject_zero_revocation() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let dir = temp_test_dir("s09_f2_admin_checks");
+        let pw = "StrongPassword123!";
+        let state = create_test_state(setup_test_app(&dir, "Alice", ALICE_PHRASE, pw));
+        let _draft =
+            prepare_sync_setup_impl(None, None, None, None, Some(pw.to_string()), &state).unwrap();
+
+        let rev_err =
+            revoke_own_sync_server_impl(Some(0), None, None, Some(pw.to_string()), &state)
+                .await
+                .unwrap_err();
+        assert!(rev_err.message.contains("greater than 0"));
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let push_hits = Arc::new(AtomicUsize::new(0));
+        let push_hits_srv = Arc::clone(&push_hits);
+        let wrong_pub = hex::encode(
+            ed25519_dalek::SigningKey::from_bytes(&[0x77u8; 32])
+                .verifying_key()
+                .as_bytes(),
+        );
+        let read_url = format!("http://127.0.0.1:{}/d-wrong", port);
+
+        let srv = tokio::spawn(async move {
+            for _ in 0..2 {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    break;
+                };
+                let mut buf = vec![0u8; 8192];
+                let n = stream.read(&mut buf).await.unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..n]);
+                if req.contains("members") {
+                    push_hits_srv.fetch_add(1, Ordering::SeqCst);
+                }
+                let body = serde_json::json!({
+                    "drop_pub": wrong_pub,
+                    "read_url": read_url,
+                    "channels": ["card", "wot", "backup", "post"]
+                })
+                .to_string();
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = stream.write_all(resp.as_bytes()).await;
+            }
+        });
+
+        let url = format!("http://127.0.0.1:{}/sync.php", port);
+        let test_res = test_sync_connection_impl(url.clone(), Some(pw.to_string()), &state)
+            .await
+            .unwrap();
+        assert!(!test_res.success);
+        assert!(!test_res.write_ok);
+        assert_eq!(
+            push_hits.load(Ordering::SeqCst),
+            0,
+            "S09-F2: must never push signed members to a server whose ?info drop_pub mismatches"
+        );
+
+        let fin_err = finalize_sync_setup_impl(url, Some(pw.to_string()), &state)
+            .await
+            .unwrap_err();
+        assert!(fin_err.message.contains("mismatch"));
+
+        let _ = srv.await;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn s09_f6_f8_known_offender_timeout_zero_and_stale_cache() {
+        use human_money_core::models::conflict::{
+            ConflictRole, ProofOfDoubleSpend, ProofStoreEntry,
+        };
+
+        let dir = temp_test_dir("s09_f6_f8_offender_t0");
+        let pw = "StrongPassword123!";
+        let wallet_dir = dir.join("alice");
+        let alice_state = create_test_state(setup_test_app(&wallet_dir, "Alice", ALICE_PHRASE, pw));
+        let bob_did = setup_test_app(&dir.join("bob"), "Bob", BOB_PHRASE, pw)
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
+        let alice_did = alice_state
+            .service
+            .lock()
+            .unwrap()
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
+
+        {
+            let mut s = alice_state.service.lock().unwrap();
+            let can_bob = crate::state::canonicalize_did(&bob_did).unwrap();
+            let mut reg = alice_state
+                .get_or_load_wot_register(&mut s, Some(pw))
+                .unwrap();
+            reg.own_contacts.insert(
+                can_bob,
+                humoco_wot::OwnTrustEntry {
+                    level: 3,
+                    desired_hops: 1,
+                    updated_at: 100,
+                },
+            );
+            alice_state
+                .save_wot_register(&mut s, &reg, Some(pw))
+                .unwrap();
+
+            let (wallet, _) = s.get_unlocked_mut_for_test();
+            wallet.proof_store.proofs.insert(
+                "proof-s09-offender".to_string(),
+                ProofStoreEntry {
+                    proof: ProofOfDoubleSpend {
+                        proof_id: "proof-s09-offender".to_string(),
+                        offender_id: bob_did.clone(),
+                        suspected_identity: None,
+                        fork_point_prev_hash: "00".repeat(32),
+                        conflicting_transactions: Vec::new(),
+                        fingerprints: Vec::new(),
+                        victim_witnesses: Vec::new(),
+                        deletable_at: "2099-01-01T00:00:00Z".to_string(),
+                        reporter_id: alice_did,
+                        report_timestamp: "2026-01-01T00:00:00Z".to_string(),
+                        reporter_signature: "sig".to_string(),
+                        affected_voucher_name: None,
+                        voucher_standard_uuid: None,
+                        resolutions: None,
+                        non_redeemable_test_voucher: false,
+                    },
+                    local_override: false,
+                    local_note: None,
+                    conflict_role: ConflictRole::default(),
+                },
+            );
+
+            alice_state
+                .mutate_security_policy(&mut s, Some(pw), |p| {
+                    p.session_timeout_seconds = 0;
+                    p.public_syncs.push(crate::settings::StoredPublicSync {
+                        write_url: "https://revoked-pub.example/sync.php".into(),
+                        read_url: "https://revoked-pub.example/d".into(),
+                        drop_pub: "11".repeat(32),
+                        access_pubkey: "22".repeat(32),
+                        enabled: true,
+                        authorized_channels: vec!["card".into()],
+                        status: "revoked".into(),
+                        ..Default::default()
+                    });
+                })
+                .unwrap();
+        }
+
+        let impact = preview_contact_trust_change_impl(
+            bob_did.clone(),
+            3,
+            Some(pw.to_string()),
+            &alice_state,
+        )
+        .unwrap();
+        assert!(!impact.can_read_my_market_before);
+        assert!(!impact.can_read_my_market_after);
+        assert!(!impact.can_write_my_sync_before);
+        assert!(!impact.can_write_my_sync_after);
+
+        // Reload wallet under timeout == 0 (!is_session_active()) and exercise Unlocked readers without password.
+        let mut reloaded_svc = human_money_core::app_service::AppService::new(&wallet_dir).unwrap();
+        let folder = reloaded_svc.list_profiles().unwrap()[0].folder_name.clone();
+        reloaded_svc
+            .login(&folder, pw, false, "device-drops-test".to_string())
+            .unwrap();
+        let reloaded_state =
+            create_test_state(human_money_core::app_service::AppService::new(&wallet_dir).unwrap());
+        reloaded_state
+            .initialize_profile_session(&mut reloaded_svc, pw)
+            .unwrap();
+        *reloaded_state.service.lock().unwrap() = reloaded_svc;
+        assert!(!reloaded_state.service.lock().unwrap().is_session_active());
+
+        let overview = get_sync_overview_status_impl(None, &reloaded_state).unwrap();
+        assert_eq!(overview.public_syncs, 0);
+        let discovered = discover_available_syncs_impl(None, &reloaded_state)
+            .await
+            .unwrap();
+        assert!(discovered.is_empty());
+        assert!(get_sync_admin_status_impl(None, &reloaded_state)
+            .await
+            .unwrap()
+            .is_none());
+        let impact_t0 =
+            preview_contact_trust_change_impl(bob_did, 3, None, &reloaded_state).unwrap();
+        assert!(!impact_t0.can_read_my_market_after);
+
+        // Advance generation while leaving cached slot intact to prove get_cached_store rejects stale generation.
+        assert!(reloaded_state.get_cached_security_policy().is_ok());
+        reloaded_state
+            .session_generation
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        assert!(reloaded_state.get_cached_security_policy().is_err());
 
         let _ = std::fs::remove_dir_all(&dir);
     }
