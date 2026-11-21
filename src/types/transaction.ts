@@ -1,6 +1,7 @@
 // src/types/transaction.ts
 
 import { TransactionHistoryEntry, L2QuorumInfo } from './voucher';
+import { VoucherTrustDto } from './wot';
 
 export interface AggregatedBalance {
     standardName: string;
@@ -132,15 +133,15 @@ export interface TransactionFingerprint {
 }
 
 export type ConflictRole = "victim" | "witness";
-export type TrustStatus = "clean" | { knownOffender: string } | { resolved: [string, boolean] };
+export type TrustStatus = "clean" | { knownOffender: string } | { resolved: string };
 
 export interface ProofOfDoubleSpendSummary {
     proofId: string;
     offenderId: string;
     forkPointPrevHash: string;
     reportTimestamp: string;
-    isResolved: boolean;
     localOverride: boolean;
+    endorsementCount: number;
     conflictRole: ConflictRole;
     affectedVoucherName?: string;
     displayAffectedVoucherName?: string;
@@ -163,7 +164,6 @@ export interface ProofOfDoubleSpend {
     affectedVoucherName?: string;
     displayAffectedVoucherName?: string;
     voucherStandardUuid?: string;
-    isResolved?: boolean;
     nonRedeemableTestVoucher: boolean;
     isCryptographicallyAttributed?: boolean;
     hasVictimWitness?: boolean;
@@ -174,10 +174,13 @@ export interface ProofOfDoubleSpend {
 export interface ResolutionEndorsement {
     endorsementId: string;
     proofId: string;
-    victimId: string;
+    endorserId: string;
     resolutionTimestamp: string;
     notes?: string;
-    victimSignature: string;
+    endorserSignature: string;
+    endorserName?: string | null;
+    isOwnIdentity?: boolean;
+    wotTrust?: VoucherTrustDto;
 }
 
 export interface FullProofDetails {
@@ -185,6 +188,14 @@ export interface FullProofDetails {
     localOverride: boolean;
     conflictRole: ConflictRole;
     localNote?: string;
+    canEndorse?: boolean;
+    hasOwnEndorsement?: boolean;
+}
+
+export interface ProofImportResult {
+    proofId: string;
+    alreadyKnown: boolean;
+    addedEndorsements: number;
 }
 
 export type WalletEventType =

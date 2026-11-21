@@ -187,7 +187,7 @@ pub fn set_conflict_local_override_impl(
         proof_id, value, note
     );
     let (mut service, resolved_pw) =
-        state.authorize_and_lock_secret(RequiredAccess::DailyPay, password.as_deref())?;
+        state.authorize_and_lock_secret(RequiredAccess::Full, password.as_deref())?;
     let pw = resolved_pw.as_deref().map(String::as_str);
 
     service

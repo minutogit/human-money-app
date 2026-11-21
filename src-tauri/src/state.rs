@@ -3235,6 +3235,80 @@ impl AppState {
         self.evaluate_voucher_trust_internal(wallet, creator_id, &refs)
     }
 
+    pub fn evaluate_did_trust_for_endorsement(
+        &self,
+        wallet: &human_money_core::wallet::Wallet,
+        did: &str,
+    ) -> (
+        Option<String>,
+        bool,
+        crate::models::FrontendVoucherTrustDto,
+    ) {
+        let wot_trust = self.evaluate_voucher_trust_internal(wallet, did, &[]);
+        let own_can = canonicalize_did(wallet.get_user_id()).ok();
+        let target_can = canonicalize_did(did).ok();
+        let is_own_identity = own_can.is_some() && own_can == target_can;
+
+        let endorser_name = if is_own_identity {
+            let first = wallet.profile.first_name.as_deref().unwrap_or("").trim();
+            let last = wallet.profile.last_name.as_deref().unwrap_or("").trim();
+            match (first.is_empty(), last.is_empty()) {
+                (false, false) => Some(format!("{} {}", first, last)),
+                (false, true) => Some(first.to_string()),
+                (true, false) => Some(last.to_string()),
+                (true, true) => None,
+            }
+        } else {
+            let caches_guard = self.profile_caches.lock().unwrap();
+            let contacts_ref = caches_guard.as_ref().and_then(|c| c.contacts.as_ref());
+            lookup_contact_name(contacts_ref, did).or_else(|| {
+                let reg = caches_guard.as_ref().and_then(|c| c.wot.as_ref())?;
+                target_can
+                    .as_ref()
+                    .and_then(|can| reg.provider_filters.get(can))
+                    .map(|pf| pf.payload.name.clone())
+            })
+        };
+
+        (endorser_name, is_own_identity, wot_trust)
+    }
+
+    pub fn collect_trusted_endorser_pks(
+        &self,
+        wallet: &human_money_core::wallet::Wallet,
+        candidate_dids: &[String],
+    ) -> std::collections::HashSet<[u8; 32]> {
+        use human_money_core::models::conflict::TrustStatus;
+
+        let mut trusted = std::collections::HashSet::new();
+        let now_secs = Utc::now().timestamp() as u64;
+        let caches_guard = self.profile_caches.lock().unwrap();
+        let reg_opt = caches_guard.as_ref().and_then(|c| c.wot.as_ref());
+        let Some(reg) = reg_opt else {
+            return trusted;
+        };
+
+        for did in candidate_dids {
+            if matches!(wallet.check_reputation(did), TrustStatus::KnownOffender(_)) {
+                continue;
+            }
+            let Ok(can) = canonicalize_did(did) else {
+                continue;
+            };
+            let is_trusted = reg.own_contacts.get(&can).is_some_and(|e| e.level >= 1)
+                || reg
+                    .evaluate_did(&can, Some(now_secs))
+                    .is_ok_and(|ev| !ev.blocked_by_offender && ev.score > 0.0);
+            if is_trusted {
+                if let Ok(pk) = human_money_core::crypto::get_pubkey_from_user_id(did) {
+                    trusted.insert(pk.to_bytes());
+                }
+            }
+        }
+
+        trusted
+    }
+
     pub fn try_import_piggybacked_wot(
         &self,
         service: &mut AppService,

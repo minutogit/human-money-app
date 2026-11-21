@@ -388,7 +388,13 @@ pub fn get_proof_of_double_spend_impl(
     proof_id: String,
     state: &AppState,
 ) -> Result<crate::models::FullProofDetails, FrontendError> {
-    let service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
+    let mut service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
+    if state.cache_wot().is_none() {
+        let _ = state.get_or_load_wot_register(&mut service, None);
+    }
+    if state.cache_contacts().is_none() {
+        let _ = state.load_contacts(&mut service, None);
+    }
     let summaries = service.list_conflicts().map_err(FrontendError::from)?;
     let summary = summaries
         .into_iter()
@@ -405,14 +411,65 @@ pub fn get_proof_of_double_spend_impl(
         .display_affected_voucher_name
         .or(summary.affected_voucher_name);
     frontend_proof.voucher_standard_uuid = summary.voucher_standard_uuid;
-    frontend_proof.is_resolved = Some(summary.is_resolved);
     frontend_proof.non_redeemable_test_voucher = summary.is_test_voucher;
+
+    let (has_own_endorsement, can_endorse) = service
+        .with_wallet(|wallet| {
+            if let Some(ref mut resolutions) = frontend_proof.resolutions {
+                for res in resolutions.iter_mut() {
+                    let (endorser_name, is_own_identity, wot_trust) =
+                        state.evaluate_did_trust_for_endorsement(wallet, &res.endorser_id);
+                    res.endorser_name = endorser_name;
+                    res.is_own_identity = is_own_identity;
+                    res.wot_trust = wot_trust;
+                }
+                resolutions.sort_by(|a, b| {
+                    b.is_own_identity
+                        .cmp(&a.is_own_identity)
+                        .then_with(|| {
+                            a.wot_trust
+                                .blocked_by_offender
+                                .cmp(&b.wot_trust.blocked_by_offender)
+                        })
+                        .then_with(|| b.wot_trust.trust_percent.cmp(&a.wot_trust.trust_percent))
+                        .then_with(|| {
+                            a.wot_trust
+                                .shortest_hops
+                                .unwrap_or(u8::MAX)
+                                .cmp(&b.wot_trust.shortest_hops.unwrap_or(u8::MAX))
+                        })
+                        .then_with(|| b.resolution_timestamp.cmp(&a.resolution_timestamp))
+                });
+            }
+
+            let has_own = frontend_proof
+                .resolutions
+                .as_ref()
+                .is_some_and(|r| r.iter().any(|item| item.is_own_identity));
+            let own_pk = human_money_core::crypto::get_pubkey_from_user_id(wallet.get_user_id()).ok();
+            let is_own_offender = own_pk.is_some()
+                && (human_money_core::crypto::get_pubkey_from_user_id(&frontend_proof.offender_id)
+                    .ok()
+                    == own_pk
+                    || frontend_proof
+                        .suspected_identity
+                        .as_deref()
+                        .and_then(|s| human_money_core::crypto::get_pubkey_from_user_id(s).ok())
+                        == own_pk);
+            let can_end = frontend_proof.is_cryptographically_attributed
+                && !is_own_offender
+                && !has_own;
+            (has_own, can_end)
+        })
+        .map_err(FrontendError::from)?;
 
     Ok(crate::models::FullProofDetails {
         proof: frontend_proof,
         local_override: summary.local_override,
         local_note: summary.local_note,
         conflict_role: conflict_role.to_string(),
+        can_endorse,
+        has_own_endorsement,
     })
 }
 

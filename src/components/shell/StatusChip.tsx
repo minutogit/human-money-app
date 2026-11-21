@@ -150,7 +150,7 @@ export const StatusChip: React.FC<StatusChipProps> = ({ className = "" }) => {
             const conflicts = await integrityService.getDoubleSpendConflicts();
             const unresolved = Array.isArray(conflicts)
                 ? conflicts.filter(
-                      (c) => !c.isResolved && !c.localOverride && (!c.conflictRole || c.conflictRole === "victim")
+                      (c) => !c.localOverride && (!c.conflictRole || c.conflictRole === "victim")
                   ).length
                 : 0;
             setConflictsCount(unresolved);

@@ -42,12 +42,12 @@ export function ConflictListView({ onBack, onViewConflict }: ConflictListViewPro
             if (!selected || typeof selected !== 'string') return;
 
             const fileBytes = await readFile(selected);
-            const proofId = await protectAction(async (password) => {
+            const importResult = await protectAction(async (password) => {
                 return await integrityService.importDoubleSpendProof(Array.from(fileBytes), password || undefined);
             });
 
-            if (proofId) {
-                onViewConflict(proofId);
+            if (importResult?.proofId) {
+                onViewConflict(importResult.proofId);
             }
         } catch (e) {
             logger.error(`Failed to import double spend proof: ${stringifyError(e)}`);
@@ -109,17 +109,23 @@ export function ConflictListView({ onBack, onViewConflict }: ConflictListViewPro
                             }`}>
                                 {conflict.conflictRole === 'victim' ? t('conflict.actionRequired') : t('conflict.securityInsight')}
                             </span>
-                            {conflict.isResolved ? (
-                                <span className="px-3 py-1 text-xs font-bold rounded-full bg-green-100 text-green-800 border border-green-200">
-                                    {t('conflict.resolvedOfficially')}
-                                </span>
-                            ) : conflict.localOverride ? (
+                            {conflict.localOverride ? (
                                 <span className="px-3 py-1 text-xs font-bold rounded-full bg-blue-100 text-blue-800 border border-blue-200">
                                     {t('conflict.resolvedLocally')}
                                 </span>
                             ) : (
                                 <span className="px-3 py-1 text-xs font-bold rounded-full bg-red-100 text-red-800 border border-red-200">
                                     {t('conflict.unresolved')}
+                                </span>
+                            )}
+                            {(conflict.endorsementCount ?? 0) > 0 && (
+                                <span className="px-3 py-1 text-xs font-semibold rounded-full bg-slate-100 text-slate-700 border border-slate-200">
+                                    {t(
+                                        conflict.endorsementCount === 1
+                                            ? 'conflict.endorsementCountOne'
+                                            : 'conflict.endorsementCountMany',
+                                        { count: conflict.endorsementCount }
+                                    )}
                                 </span>
                             )}
                         </div>
@@ -153,7 +159,7 @@ export function ConflictListView({ onBack, onViewConflict }: ConflictListViewPro
                     </div>
                     <Button
                         onClick={() => onViewConflict(conflict.proofId)}
-                        variant={conflict.conflictRole === 'victim' && !conflict.localOverride && !conflict.isResolved ? 'primary' : 'secondary'}
+                        variant={conflict.conflictRole === 'victim' && !conflict.localOverride ? 'primary' : 'secondary'}
                         size="sm"
                         className="whitespace-nowrap"
                     >

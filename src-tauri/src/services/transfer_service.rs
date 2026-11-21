@@ -479,7 +479,7 @@ pub(crate) fn filter_conflicts_for_received_vouchers(
 
         if is_match {
             matching.push(summary.into());
-        } else if !summary.is_resolved && !summary.local_override {
+        } else if !summary.local_override {
             unrelated_open += 1;
         }
     }
@@ -596,7 +596,7 @@ pub(crate) fn build_receive_success_payload_from_result(
 
     let has_victim_conflict = conflict_summaries
         .iter()
-        .any(|c| c.conflict_role == "victim" && !c.is_resolved && !c.local_override)
+        .any(|c| c.conflict_role == "victim" && !c.local_override)
         || !verifiable_conflicts.is_empty();
     let checkout_verdict = Some(crate::models::FrontendCheckoutReleaseVerdict {
         outcome: if has_victim_conflict {

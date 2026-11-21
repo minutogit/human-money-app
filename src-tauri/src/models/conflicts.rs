@@ -1,4 +1,5 @@
 use super::voucher::FrontendTransaction;
+use super::wot::FrontendVoucherTrustDto;
 use human_money_core::models::conflict::ConflictRole;
 use serde::{Deserialize, Serialize};
 
@@ -9,8 +10,8 @@ pub struct FrontendProofOfDoubleSpendSummary {
     pub offender_id: String,
     pub fork_point_prev_hash: String,
     pub report_timestamp: String,
-    pub is_resolved: bool,
     pub local_override: bool,
+    pub endorsement_count: usize,
     pub local_note: Option<String>,
     pub conflict_role: String,
     pub affected_voucher_name: Option<String>,
@@ -35,8 +36,8 @@ impl From<human_money_core::wallet::types::ProofOfDoubleSpendSummary>
             offender_id: s.offender_id,
             fork_point_prev_hash: s.fork_point_prev_hash,
             report_timestamp: s.report_timestamp,
-            is_resolved: s.is_resolved,
             local_override: s.local_override,
+            endorsement_count: s.endorsement_count,
             local_note: s.local_note,
             conflict_role: role_str.to_string(),
             affected_voucher_name: s.affected_voucher_name,
@@ -61,7 +62,6 @@ pub struct FrontendProofOfDoubleSpend {
     pub resolutions: Option<Vec<FrontendResolutionEndorsement>>,
     pub affected_voucher_name: Option<String>,
     pub voucher_standard_uuid: Option<String>,
-    pub is_resolved: Option<bool>,
     pub non_redeemable_test_voucher: bool,
     pub is_cryptographically_attributed: bool,
     pub has_victim_witness: bool,
@@ -106,7 +106,6 @@ impl From<human_money_core::models::conflict::ProofOfDoubleSpend> for FrontendPr
                 .map(|res| res.into_iter().map(|r| r.into()).collect()),
             affected_voucher_name: None,
             voucher_standard_uuid: None,
-            is_resolved: None,
             non_redeemable_test_voucher: false,
             is_cryptographically_attributed,
             has_victim_witness,
@@ -121,10 +120,13 @@ impl From<human_money_core::models::conflict::ProofOfDoubleSpend> for FrontendPr
 pub struct FrontendResolutionEndorsement {
     pub endorsement_id: String,
     pub proof_id: String,
-    pub victim_id: String,
+    pub endorser_id: String,
     pub resolution_timestamp: String,
     pub notes: Option<String>,
-    pub victim_signature: String,
+    pub endorser_signature: String,
+    pub endorser_name: Option<String>,
+    pub is_own_identity: bool,
+    pub wot_trust: FrontendVoucherTrustDto,
 }
 
 impl From<human_money_core::models::conflict::ResolutionEndorsement>
@@ -134,10 +136,13 @@ impl From<human_money_core::models::conflict::ResolutionEndorsement>
         Self {
             endorsement_id: r.endorsement_id,
             proof_id: r.proof_id,
-            victim_id: r.victim_id,
+            endorser_id: r.endorser_id,
             resolution_timestamp: r.resolution_timestamp,
             notes: r.notes,
-            victim_signature: r.victim_signature,
+            endorser_signature: r.endorser_signature,
+            endorser_name: None,
+            is_own_identity: false,
+            wot_trust: FrontendVoucherTrustDto::default(),
         }
     }
 }
@@ -147,7 +152,7 @@ impl From<human_money_core::models::conflict::ResolutionEndorsement>
 pub enum FrontendTrustStatus {
     Clean,
     KnownOffender(String),
-    Resolved(String, bool),
+    Resolved(String),
 }
 
 impl From<human_money_core::models::conflict::TrustStatus> for FrontendTrustStatus {
@@ -157,20 +162,28 @@ impl From<human_money_core::models::conflict::TrustStatus> for FrontendTrustStat
             human_money_core::models::conflict::TrustStatus::KnownOffender(id) => {
                 Self::KnownOffender(id)
             }
-            human_money_core::models::conflict::TrustStatus::Resolved {
-                proof_id,
-                is_local,
-                ..
-            } => Self::Resolved(proof_id, is_local),
+            human_money_core::models::conflict::TrustStatus::Resolved { proof_id, .. } => {
+                Self::Resolved(proof_id)
+            }
         }
     }
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct FullProofDetails {
     pub proof: FrontendProofOfDoubleSpend,
     pub local_override: bool,
     pub local_note: Option<String>,
     pub conflict_role: String,
+    pub can_endorse: bool,
+    pub has_own_endorsement: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FrontendProofImportResult {
+    pub proof_id: String,
+    pub already_known: bool,
+    pub added_endorsements: usize,
 }

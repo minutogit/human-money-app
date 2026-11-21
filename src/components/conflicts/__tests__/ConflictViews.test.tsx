@@ -32,9 +32,15 @@ vi.mock('../../../utils/log', () => ({
   },
 }));
 
+const { mockProtectAction } = vi.hoisted(() => ({
+  mockProtectAction: vi.fn((callback: (pwd?: string) => unknown, _options?: { requireFullAccess?: boolean }) =>
+    callback('test-password')
+  ),
+}));
+
 vi.mock('../../../context/SessionContext', () => ({
   useSession: () => ({
-    protectAction: vi.fn((callback) => callback('test-password')),
+    protectAction: mockProtectAction,
   }),
   useOptionalSession: () => null,
 }));
@@ -46,6 +52,9 @@ describe('Conflict Views (.hmcproof export and import)', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockProtectAction.mockImplementation((callback: (pwd?: string) => unknown) =>
+      callback('test-password')
+    );
   });
 
   describe('ConflictDetailsView', () => {
@@ -59,11 +68,12 @@ describe('Conflict Views (.hmcproof export and import)', () => {
               reportTimestamp: '2024-01-01T00:00:00Z',
               affectedVoucherName: 'Minuto Test',
               conflictingTransactions: [],
-              isResolved: false,
               isCryptographicallyAttributed: true,
             },
             localOverride: false,
             conflictRole: 'victim',
+            canEndorse: false,
+            hasOwnEndorsement: false,
           });
         }
         if (cmd === 'get_contacts') {
@@ -93,7 +103,7 @@ describe('Conflict Views (.hmcproof export and import)', () => {
       });
     });
 
-    it('renders 3-question guide and hides SST, evidence, proofId, and override in simple mode', async () => {
+    it('renders 3-question guide and endorsements/override while hiding SST, evidence, and proofId in simple mode', async () => {
       (invoke as Mock).mockImplementation((cmd: string) => {
         if (cmd === 'get_proof_of_double_spend') {
           return Promise.resolve({
@@ -106,11 +116,12 @@ describe('Conflict Views (.hmcproof export and import)', () => {
                 { tId: 'tx-1', tTime: '2024-01-01T00:00:00Z', amount: '10', recipientId: 'did:key:r1' },
                 { tId: 'tx-2', tTime: '2024-01-01T00:01:00Z', amount: '10', recipientId: 'did:key:r2' },
               ],
-              isResolved: false,
               isCryptographicallyAttributed: true,
             },
             localOverride: false,
             conflictRole: 'victim',
+            canEndorse: false,
+            hasOwnEndorsement: false,
           });
         }
         if (cmd === 'get_contacts') return Promise.resolve([]);
@@ -130,14 +141,15 @@ describe('Conflict Views (.hmcproof export and import)', () => {
       expect(screen.getByText('What happened?')).toBeInTheDocument();
       expect(screen.getByText('Is my voucher still valid?')).toBeInTheDocument();
       expect(screen.getByText('What should I do?')).toBeInTheDocument();
+      expect(screen.getByTestId('conflict-endorsements-section')).toBeInTheDocument();
+      expect(screen.getByTestId('conflict-local-override-section')).toBeInTheDocument();
       expect(container.textContent).not.toContain('did:key:z6MkvOffender');
       expect(screen.queryByTestId('conflict-evidence-section')).not.toBeInTheDocument();
-      expect(screen.queryByTestId('conflict-local-override-section')).not.toBeInTheDocument();
       expect(screen.queryByText(/SST V4/i)).not.toBeInTheDocument();
       expect(screen.queryByText(mockProofId)).not.toBeInTheDocument();
     });
 
-    it('reveals SST attribution, evidence portfolio, and local override in expert mode', async () => {
+    it('reveals SST attribution, evidence portfolio, and proofId in expert mode', async () => {
       (invoke as Mock).mockImplementation((cmd: string) => {
         if (cmd === 'get_proof_of_double_spend') {
           return Promise.resolve({
@@ -150,11 +162,12 @@ describe('Conflict Views (.hmcproof export and import)', () => {
                 { tId: 'tx-1', tTime: '2024-01-01T00:00:00Z', amount: '10', recipientId: 'did:key:r1' },
                 { tId: 'tx-2', tTime: '2024-01-01T00:01:00Z', amount: '10', recipientId: 'did:key:r2' },
               ],
-              isResolved: false,
               isCryptographicallyAttributed: true,
             },
             localOverride: false,
             conflictRole: 'victim',
+            canEndorse: false,
+            hasOwnEndorsement: false,
           });
         }
         if (cmd === 'get_contacts') return Promise.resolve([]);
@@ -175,6 +188,401 @@ describe('Conflict Views (.hmcproof export and import)', () => {
       expect(screen.getByText(/SST V4 Cryptographically Proven Identity/i)).toBeInTheDocument();
       expect(screen.getByText(mockProofId)).toBeInTheDocument();
     });
+
+    it('renders WoT-enriched endorsements and suppresses 0-trusted warning when trusted contact endorsed', async () => {
+      (invoke as Mock).mockImplementation((cmd: string) => {
+        if (cmd === 'get_proof_of_double_spend') {
+          return Promise.resolve({
+            proof: {
+              proofId: mockProofId,
+              offenderId: 'did:key:offender',
+              reportTimestamp: '2024-01-01T00:00:00Z',
+              affectedVoucherName: 'Minuto Test',
+              conflictingTransactions: [],
+              isCryptographicallyAttributed: true,
+              resolutions: [
+                {
+                  endorsementId: 'end-alice',
+                  proofId: mockProofId,
+                  endorserId: 'did:key:z6MkAliceOwn',
+                  resolutionTimestamp: '2024-01-03T00:00:00Z',
+                  notes: 'Own record',
+                  endorserSignature: 'sig-alice',
+                  endorserName: 'Alice',
+                  isOwnIdentity: true,
+                  wotTrust: {
+                    score: 1,
+                    trustPercent: 100,
+                    isOwnVoucher: true,
+                    blockedByOffender: false,
+                    shortestHops: 0,
+                    primaryBridgeDid: null,
+                    primaryBridgeName: null,
+                    additionalPathsCount: 0,
+                    viaGuarantor: false,
+                    bestPathNames: [],
+                  },
+                },
+                {
+                  endorsementId: 'end-bob',
+                  proofId: mockProofId,
+                  endorserId: 'did:key:z6MkBobTrusted',
+                  resolutionTimestamp: '2024-01-02T00:00:00Z',
+                  notes: 'Settled in cash',
+                  endorserSignature: 'sig-bob',
+                  endorserName: 'Bob',
+                  isOwnIdentity: false,
+                  wotTrust: {
+                    score: 0.85,
+                    trustPercent: 85,
+                    isOwnVoucher: false,
+                    blockedByOffender: false,
+                    shortestHops: 1,
+                    primaryBridgeDid: null,
+                    primaryBridgeName: null,
+                    additionalPathsCount: 0,
+                    viaGuarantor: false,
+                    bestPathNames: ['Bob'],
+                  },
+                },
+                {
+                  endorsementId: 'end-unknown',
+                  proofId: mockProofId,
+                  endorserId: 'did:key:z6MkUnknownSybil',
+                  resolutionTimestamp: '2024-01-01T12:00:00Z',
+                  notes: 'Sybil claim',
+                  endorserSignature: 'sig-unknown',
+                  endorserName: null,
+                  isOwnIdentity: false,
+                  wotTrust: {
+                    score: 0,
+                    trustPercent: 0,
+                    isOwnVoucher: false,
+                    blockedByOffender: false,
+                    shortestHops: null,
+                    primaryBridgeDid: null,
+                    primaryBridgeName: null,
+                    additionalPathsCount: 0,
+                    viaGuarantor: false,
+                    bestPathNames: [],
+                  },
+                },
+              ],
+            },
+            localOverride: false,
+            conflictRole: 'victim',
+            canEndorse: false,
+            hasOwnEndorsement: true,
+          });
+        }
+        if (cmd === 'get_contacts') return Promise.resolve([]);
+        return Promise.resolve(undefined);
+      });
+
+      render(
+        <UiModeProvider>
+          <ConflictDetailsView proofId={mockProofId} onBack={mockOnBack} />
+        </UiModeProvider>
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText('Bob')).toBeInTheDocument();
+      });
+
+      expect(screen.getByText('You (Alice)')).toBeInTheDocument();
+      expect(screen.getByText('Your confirmation')).toBeInTheDocument();
+      expect(screen.getByText(/85%/)).toBeInTheDocument();
+      expect(screen.getByText('Unknown identity (no trust path)')).toBeInTheDocument();
+
+      const warningBanner = screen.getByTestId('conflict-local-override-warning');
+      expect(warningBanner).not.toHaveTextContent(
+        'Warning: None of your trusted Web-of-Trust contacts have signed a resolution note for this conflict yet.'
+      );
+      expect(warningBanner).toHaveTextContent(
+        'This decision applies strictly locally on this device and never reactivates quarantined vouchers.'
+      );
+    });
+
+    it('shows strong 0-trusted warning when only unknown identities have endorsed', async () => {
+      (invoke as Mock).mockImplementation((cmd: string) => {
+        if (cmd === 'get_proof_of_double_spend') {
+          return Promise.resolve({
+            proof: {
+              proofId: mockProofId,
+              offenderId: 'did:key:offender',
+              reportTimestamp: '2024-01-01T00:00:00Z',
+              affectedVoucherName: 'Minuto Test',
+              conflictingTransactions: [],
+              isCryptographicallyAttributed: true,
+              resolutions: [
+                {
+                  endorsementId: 'end-unknown',
+                  proofId: mockProofId,
+                  endorserId: 'did:key:z6MkUnknownSybil',
+                  resolutionTimestamp: '2024-01-01T12:00:00Z',
+                  notes: 'Trust me bro',
+                  endorserSignature: 'sig-unknown',
+                  endorserName: null,
+                  isOwnIdentity: false,
+                  wotTrust: {
+                    score: 0,
+                    trustPercent: 0,
+                    isOwnVoucher: false,
+                    blockedByOffender: false,
+                    shortestHops: null,
+                    primaryBridgeDid: null,
+                    primaryBridgeName: null,
+                    additionalPathsCount: 0,
+                    viaGuarantor: false,
+                    bestPathNames: [],
+                  },
+                },
+              ],
+            },
+            localOverride: false,
+            conflictRole: 'victim',
+            canEndorse: true,
+            hasOwnEndorsement: false,
+          });
+        }
+        if (cmd === 'get_contacts') return Promise.resolve([]);
+        return Promise.resolve(undefined);
+      });
+
+      render(
+        <UiModeProvider>
+          <ConflictDetailsView proofId={mockProofId} onBack={mockOnBack} />
+        </UiModeProvider>
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId('conflict-local-override-warning')).toBeInTheDocument();
+      });
+
+      const warningBanner = screen.getByTestId('conflict-local-override-warning');
+      expect(warningBanner).toHaveTextContent(
+        'Warning: None of your trusted Web-of-Trust contacts have signed a resolution note for this conflict yet.'
+      );
+      expect(screen.getByText('Unknown identity (no trust path)')).toBeInTheDocument();
+    });
+
+    it('signs resolution endorsement with full access and default local override', async () => {
+      const updatedDetails = {
+        proof: {
+          proofId: mockProofId,
+          offenderId: 'did:key:offender',
+          reportTimestamp: '2024-01-01T00:00:00Z',
+          affectedVoucherName: 'Minuto Test',
+          conflictingTransactions: [],
+          isCryptographicallyAttributed: true,
+          resolutions: [
+            {
+              endorsementId: 'end-own-1',
+              proofId: mockProofId,
+              endorserId: 'did:key:z6MkAliceOwn',
+              resolutionTimestamp: '2024-01-02T00:00:00Z',
+              notes: 'Paid back in cash',
+              endorserSignature: 'sig-own',
+              endorserName: 'Alice',
+              isOwnIdentity: true,
+              wotTrust: {
+                score: 1,
+                trustPercent: 100,
+                isOwnVoucher: true,
+                blockedByOffender: false,
+                shortestHops: 0,
+                primaryBridgeDid: null,
+                primaryBridgeName: null,
+                additionalPathsCount: 0,
+                viaGuarantor: false,
+                bestPathNames: [],
+              },
+            },
+          ],
+        },
+        localOverride: true,
+        conflictRole: 'victim',
+        canEndorse: false,
+        hasOwnEndorsement: true,
+      };
+
+      (invoke as Mock).mockImplementation((cmd: string) => {
+        if (cmd === 'get_proof_of_double_spend') {
+          return Promise.resolve({
+            proof: {
+              proofId: mockProofId,
+              offenderId: 'did:key:offender',
+              reportTimestamp: '2024-01-01T00:00:00Z',
+              affectedVoucherName: 'Minuto Test',
+              conflictingTransactions: [],
+              isCryptographicallyAttributed: true,
+              resolutions: [],
+            },
+            localOverride: false,
+            conflictRole: 'victim',
+            canEndorse: true,
+            hasOwnEndorsement: false,
+          });
+        }
+        if (cmd === 'endorse_conflict_resolution') {
+          return Promise.resolve(updatedDetails);
+        }
+        if (cmd === 'get_contacts') return Promise.resolve([]);
+        return Promise.resolve(undefined);
+      });
+
+      render(
+        <UiModeProvider>
+          <ConflictDetailsView proofId={mockProofId} onBack={mockOnBack} />
+        </UiModeProvider>
+      );
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /Confirm & Sign Resolution/i })).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: /Confirm & Sign Resolution/i }));
+
+      const checkbox = screen.getByRole('checkbox');
+      expect(checkbox).toBeChecked();
+
+      const noteInput = screen.getByPlaceholderText(/Optional note/i);
+      fireEvent.change(noteInput, { target: { value: 'Paid back in cash' } });
+
+      fireEvent.click(screen.getByRole('button', { name: /Sign & Attach Confirmation/i }));
+
+      await waitFor(() => {
+        expect(mockProtectAction).toHaveBeenCalledWith(expect.any(Function), { requireFullAccess: true });
+        expect(invoke).toHaveBeenCalledWith('endorse_conflict_resolution', {
+          proofId: mockProofId,
+          notes: 'Paid back in cash',
+          alsoSetLocalOverride: true,
+          password: 'test-password',
+        });
+        expect(screen.getByText('Resolution Confirmation Signed')).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /Save Updated Proof \(\.hmcproof\)/i })).toBeInTheDocument();
+      });
+    });
+
+    it('enables and revokes manual local override with full access protection', async () => {
+      let currentOverride = false;
+      (invoke as Mock).mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+        if (cmd === 'get_proof_of_double_spend') {
+          return Promise.resolve({
+            proof: {
+              proofId: mockProofId,
+              offenderId: 'did:key:offender',
+              reportTimestamp: '2024-01-01T00:00:00Z',
+              affectedVoucherName: 'Minuto Test',
+              conflictingTransactions: [],
+              isCryptographicallyAttributed: true,
+              resolutions: [],
+            },
+            localOverride: currentOverride,
+            conflictRole: 'victim',
+            canEndorse: false,
+            hasOwnEndorsement: false,
+          });
+        }
+        if (cmd === 'set_conflict_local_override') {
+          currentOverride = Boolean(args?.value);
+          return Promise.resolve(undefined);
+        }
+        if (cmd === 'get_contacts') return Promise.resolve([]);
+        return Promise.resolve(undefined);
+      });
+
+      render(
+        <UiModeProvider>
+          <ConflictDetailsView proofId={mockProofId} onBack={mockOnBack} />
+        </UiModeProvider>
+      );
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /Mark Conflict as Settled Locally/i })).toBeInTheDocument();
+      });
+
+      fireEvent.change(screen.getByPlaceholderText(/Describe how this dispute was settled/i), {
+        target: { value: 'Direct settlement' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: /Mark Conflict as Settled Locally/i }));
+
+      await waitFor(() => {
+        expect(mockProtectAction).toHaveBeenCalledWith(expect.any(Function), { requireFullAccess: true });
+        expect(invoke).toHaveBeenCalledWith('set_conflict_local_override', {
+          proofId: mockProofId,
+          value: true,
+          note: 'Direct settlement',
+          password: 'test-password',
+        });
+        expect(screen.getByRole('button', { name: /Revoke Local Unblock/i })).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: /Revoke Local Unblock/i }));
+
+      await waitFor(() => {
+        expect(invoke).toHaveBeenCalledWith('set_conflict_local_override', {
+          proofId: mockProofId,
+          value: false,
+          note: undefined,
+          password: 'test-password',
+        });
+        expect(screen.getByRole('button', { name: /Mark Conflict as Settled Locally/i })).toBeInTheDocument();
+      });
+    });
+
+    it('imports updated .hmcproof directly inside ConflictDetailsView and merges new endorsements', async () => {
+      let fetchCount = 0;
+      (invoke as Mock).mockImplementation((cmd: string) => {
+        if (cmd === 'get_proof_of_double_spend') {
+          fetchCount += 1;
+          return Promise.resolve({
+            proof: {
+              proofId: mockProofId,
+              offenderId: 'did:key:offender',
+              reportTimestamp: '2024-01-01T00:00:00Z',
+              affectedVoucherName: 'Minuto Test',
+              conflictingTransactions: [],
+              isCryptographicallyAttributed: true,
+              resolutions: [],
+            },
+            localOverride: false,
+            conflictRole: 'victim',
+            canEndorse: false,
+            hasOwnEndorsement: false,
+          });
+        }
+        if (cmd === 'import_double_spend_proof') {
+          return Promise.resolve({
+            proofId: mockProofId,
+            alreadyKnown: true,
+            addedEndorsements: 2,
+          });
+        }
+        if (cmd === 'get_contacts') return Promise.resolve([]);
+        return Promise.resolve(undefined);
+      });
+
+      (open as Mock).mockResolvedValue('/tmp/updated.hmcproof');
+      (readFile as Mock).mockResolvedValue(new Uint8Array([9, 8, 7]));
+
+      render(<ConflictDetailsView proofId={mockProofId} onBack={mockOnBack} />);
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /Import Updated Proof \(\.hmcproof\)/i })).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: /Import Updated Proof \(\.hmcproof\)/i }));
+
+      await waitFor(() => {
+        expect(invoke).toHaveBeenCalledWith('import_double_spend_proof', {
+          proofBytes: [9, 8, 7],
+          password: 'test-password',
+        });
+        expect(screen.getByText('2 new resolution note(s) imported into this conflict.')).toBeInTheDocument();
+        expect(fetchCount).toBeGreaterThanOrEqual(2);
+      });
+    });
   });
 
   describe('ConflictListView', () => {
@@ -189,7 +597,7 @@ describe('Conflict Views (.hmcproof export and import)', () => {
               affectedVoucherName: 'Minuto Sample',
               reportTimestamp: '2024-01-01T00:00:00Z',
               conflictRole: 'victim',
-              isResolved: false,
+              endorsementCount: 0,
               localOverride: false,
             },
           ]);
@@ -220,7 +628,11 @@ describe('Conflict Views (.hmcproof export and import)', () => {
           return Promise.resolve([]);
         }
         if (cmd === 'import_double_spend_proof') {
-          return Promise.resolve('imported-proof-999');
+          return Promise.resolve({
+            proofId: 'imported-proof-999',
+            alreadyKnown: false,
+            addedEndorsements: 0,
+          });
         }
         return Promise.resolve(undefined);
       });

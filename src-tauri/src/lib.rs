@@ -461,6 +461,7 @@ pub fn run() {
             repair_wallet_integrity,
             export_double_spend_proof,
             import_double_spend_proof,
+            endorse_conflict_resolution,
             // Wallet Backups
             probe_wallet_backup,
             export_wallet_backup_file,

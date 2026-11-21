@@ -89,7 +89,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ openClaimsCount }) => {
         .then((conflicts) => {
           if (!isMounted) return;
           const unresolved = (conflicts || []).filter(
-            (c) => !c.isResolved && !c.localOverride && (!c.conflictRole || c.conflictRole === 'victim')
+            (c) => !c.localOverride && (!c.conflictRole || c.conflictRole === 'victim')
           ).length;
           setFetchedClaimsCount(unresolved);
         })

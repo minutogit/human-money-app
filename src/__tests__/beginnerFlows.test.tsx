@@ -754,11 +754,12 @@ describe('Beginner User Tasks (Integration Flows)', () => {
                             { tId: 'tx-a', tTime: '2024-06-01T10:00:00Z', amount: '15', recipientId: 'did:key:rec1' },
                             { tId: 'tx-b', tTime: '2024-06-01T10:05:00Z', amount: '15', recipientId: 'did:key:rec2' },
                         ],
-                        isResolved: false,
                         isCryptographicallyAttributed: true,
                     },
                     localOverride: false,
                     conflictRole: 'victim',
+                    canEndorse: false,
+                    hasOwnEndorsement: false,
                 };
             }
             if (cmd === 'get_contacts') return [];
@@ -780,6 +781,7 @@ describe('Beginner User Tasks (Integration Flows)', () => {
         expect(screen.getByText('What should I do?')).toBeInTheDocument();
         expect(conflictContainer.textContent).not.toContain('did:key:z6MkTask8');
         expect(screen.queryByTestId('conflict-evidence-section')).not.toBeInTheDocument();
-        expect(screen.queryByTestId('conflict-local-override-section')).not.toBeInTheDocument();
+        expect(screen.getByTestId('conflict-endorsements-section')).toBeInTheDocument();
+        expect(screen.getByTestId('conflict-local-override-section')).toBeInTheDocument();
     });
 });

@@ -820,7 +820,6 @@ export function getTauriMockInitScript(initialScenario = 'normal') {
         offenderId: MOCK_OFFENDER_DID,
         forkPointPrevHash: "blake3_prev_tx_hash_098234710928347",
         reportTimestamp: "2026-11-09T16:20:00Z",
-        isResolved: false,
         hasL2Verdict: true,
         localOverride: false,
         conflictRole: "victim",
@@ -1250,9 +1249,8 @@ export function getTauriMockInitScript(initialScenario = 'normal') {
                 offenderId: MOCK_OFFENDER_DID,
                 forkPointPrevHash: "blake3_prev_tx_hash_098234710928347",
                 reportTimestamp: "2026-11-09T16:20:00Z",
-                isResolved: false,
-                hasL2Verdict: true,
                 localOverride: false,
+                endorsementCount: 0,
                 conflictRole: "victim",
                 affectedVoucherName: "Minuto Gutschein #892",
                 voucherStandardUuid: "std_minuto_de",
@@ -1263,12 +1261,25 @@ export function getTauriMockInitScript(initialScenario = 'normal') {
         "get_proof_of_double_spend": () => ({
             proof: MOCK_CONFLICT_PROOF,
             localOverride: false,
-            conflictRole: "victim"
+            conflictRole: "victim",
+            canEndorse: true,
+            hasOwnEndorsement: false
         }),
         "set_conflict_local_override": () => null,
+        "endorse_conflict_resolution": () => ({
+            proof: MOCK_CONFLICT_PROOF,
+            localOverride: true,
+            conflictRole: "victim",
+            canEndorse: false,
+            hasOwnEndorsement: true
+        }),
         "repair_wallet_integrity": () => null,
         "export_double_spend_proof": () => [1, 2, 3, 4],
-        "import_double_spend_proof": () => MOCK_PROOF_ID,
+        "import_double_spend_proof": () => ({
+            proofId: MOCK_PROOF_ID,
+            alreadyKnown: false,
+            addedEndorsements: 0
+        }),
 
         // --- Postbox & Messaging ---
         "get_post_inbox_summary": () => ({

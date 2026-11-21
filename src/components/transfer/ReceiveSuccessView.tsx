@@ -210,11 +210,11 @@ export function ReceiveSuccessView({ payload, pendingCommit, launchItem, onFinis
     };
 
     const isVictim = activePayload.conflictSummaries 
-        ? activePayload.conflictSummaries.some(c => c.conflictRole === 'victim' && !c.isResolved && !c.localOverride) 
+        ? activePayload.conflictSummaries.some(c => c.conflictRole === 'victim' && !c.localOverride) 
         : (activePayload.verifiableConflicts && Object.keys(activePayload.verifiableConflicts).length > 0);
     
     const isWitnessOnly = activePayload.conflictSummaries 
-        ? (activePayload.conflictSummaries.some(c => c.conflictRole === 'witness' && !c.isResolved && !c.localOverride) && !isVictim) 
+        ? (activePayload.conflictSummaries.some(c => c.conflictRole === 'witness' && !c.localOverride) && !isVictim) 
         : false;
 
     const checkoutVerdict = activePayload.checkoutVerdict;
@@ -661,7 +661,7 @@ export function ReceiveSuccessView({ payload, pendingCommit, launchItem, onFinis
                             Object.keys(activePayload.verifiableConflicts).length > 0,
                     ) ||
                     (activePayload.conflictSummaries?.some(
-                        (c) => !c.isResolved && !c.localOverride,
+                        (c) => !c.localOverride,
                     ) ??
                         false)
                 }

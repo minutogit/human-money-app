@@ -21,7 +21,7 @@ import type {
 export function emitConflictsUpdatedIfPresent(payload: ReceiveSuccessPayload): void {
     if (
         (payload.verifiableConflicts && Object.keys(payload.verifiableConflicts).length > 0) ||
-        (payload.conflictSummaries?.some((c) => !c.isResolved && !c.localOverride) ?? false)
+        (payload.conflictSummaries?.some((c) => !c.localOverride) ?? false)
     ) {
         emitAppEvent(APP_EVENTS.CONFLICTS_UPDATED);
     }
@@ -173,13 +173,15 @@ export async function executeReceiveImport({
     }
 
     if (type === 'proof') {
-        const proofId = await protectAction(async (walletPassword) => {
+        const importRes = await protectAction(async (walletPassword) => {
             return await integrityService.importDoubleSpendProof(
                 fileData,
                 walletPassword || undefined,
             );
         });
-        return proofId ? { kind: 'proofImported', proofId } : { kind: 'cancelled' };
+        return importRes
+            ? { kind: 'proofImported', proofId: importRes.proofId }
+            : { kind: 'cancelled' };
     }
 
     const text = new TextDecoder().decode(new Uint8Array(fileData));
