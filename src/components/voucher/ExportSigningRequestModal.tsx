@@ -121,7 +121,10 @@ export function ExportSigningRequestModal({
                 requestConfig = { type: "Cleartext" };
             }
 
-            const bundleBytes = await voucherService.createSigningRequest(voucherId, requestConfig);
+            const bundleBytes = await protectAction(async (pwd) => {
+                return await voucherService.createSigningRequest(voucherId, requestConfig, pwd || undefined);
+            });
+            if (!bundleBytes) return;
 
             const filePath = await save({
                 defaultPath: config?.uiPreferences.lastUsedDirectory
@@ -182,7 +185,10 @@ export function ExportSigningRequestModal({
                 type: "TargetDid",
                 value: [normalizedDid, "TrialDecryption"]
             };
-            const bundleBytes = await voucherService.createSigningRequest(voucherId, config);
+            const bundleBytes = await protectAction(async (pwd) => {
+                return await voucherService.createSigningRequest(voucherId, config, pwd || undefined);
+            });
+            if (!bundleBytes) return;
             const res = await protectAction(async (pwd) => {
                 return await postService.sendSigningRequestViaPost(
                     normalizedDid,

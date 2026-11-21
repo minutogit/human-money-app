@@ -57,10 +57,11 @@ export const voucherService = {
         });
     },
 
-    createSigningRequest: async (localInstanceId: string, config: SigningRequestConfig) => {
+    createSigningRequest: async (localInstanceId: string, config: SigningRequestConfig, password?: string) => {
         return await invoke<number[]>("create_signing_request_bundle", { 
             localInstanceId, 
-            config 
+            config,
+            password,
         });
     },
 

@@ -362,10 +362,11 @@ pub(crate) fn create_signing_request_bundle_impl(
     probe_cache_opt: Option<
         &std::collections::BTreeMap<String, crate::sync_client::FrontendLockServerProbeResult>,
     >,
+    password: Option<&str>,
     service: &human_money_core::app_service::AppService,
 ) -> Result<Vec<u8>, FrontendError> {
     let raw = service
-        .create_signing_request_bundle(local_instance_id, config)
+        .create_signing_request_bundle(local_instance_id, config, password)
         .map_err(FrontendError::from)?;
 
     let embedded_manifest = service
@@ -416,18 +417,27 @@ pub(crate) fn create_signing_request_bundle_impl(
 pub fn create_signing_request_bundle(
     local_instance_id: String,
     config: ContainerConfig,
+    password: Option<String>,
     state: tauri::State<AppState>,
 ) -> Result<Vec<u8>, FrontendError> {
     info!(
         "Creating signing request bundle for voucher {} with config {:?}",
         local_instance_id, config
     );
-    let mut service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
+    let (mut service, resolved_pw) = state
+        .authorize_and_lock_secret(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
+    let pw = resolved_pw.as_deref().map(String::as_str);
     let probe_cache = state
-        .get_or_load_internal_lifecycle(&mut service, None)
+        .get_or_load_internal_lifecycle(&mut service, pw)
         .ok()
         .map(|lc| lc.l2_probe_cache);
-    create_signing_request_bundle_impl(&local_instance_id, config, probe_cache.as_ref(), &service)
+    create_signing_request_bundle_impl(
+        &local_instance_id,
+        config,
+        probe_cache.as_ref(),
+        pw,
+        &service,
+    )
 }
 
 pub(crate) fn open_voucher_signing_request_impl(
@@ -1126,6 +1136,7 @@ mod tests {
             &local_id,
             ContainerConfig::TargetDid(guar_id, PrivacyMode::TrialDecryption),
             Some(&creator_probe_cache),
+            Some(pw),
             &svc_creator,
         )
         .unwrap();
@@ -1499,6 +1510,7 @@ mod tests {
             &local_id,
             ContainerConfig::TargetDid(guar_id, PrivacyMode::TrialDecryption),
             None,
+            Some(pw),
             &svc_creator,
         )
         .unwrap();

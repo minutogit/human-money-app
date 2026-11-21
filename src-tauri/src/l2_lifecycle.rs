@@ -4115,6 +4115,7 @@ mod tests {
                     guar_id.clone(),
                     human_money_core::models::secure_container::PrivacyMode::TrialDecryption,
                 ),
+                Some(pw),
             )
             .unwrap();
         let opened_v = svc_guar

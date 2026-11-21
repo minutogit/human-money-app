@@ -893,8 +893,7 @@ pub(crate) async fn checkout_bundle(
     )?;
     let client = sync_client::create_sync_http_client();
     let mut pow_base_bits = opened_bundle
-        .anchor_manifest
-        .as_ref()
+        .anchor_manifest_for(&anchor_id)
         .map(|m| {
             crate::services::common::max_pow_base_bits_for_servers(
                 &active_lifecycle,
@@ -1578,7 +1577,10 @@ fn collect_prefix_qcs_and_build_precommit_batch(
                 first_unconfirmed,
                 &opened_bundle.causal_outputs,
                 if first_unconfirmed == 0 {
-                    opened_bundle.root_mig_sig
+                    voucher
+                        .transactions
+                        .first()
+                        .and_then(|t| opened_bundle.root_mig_sig_for(&t.t_id))
                 } else {
                     None
                 },
@@ -1672,11 +1674,7 @@ pub(crate) async fn verify_bundle_l2_precommit(
             session,
             "Wallet session changed during pre-commit L2 verification",
             |service| {
-                let bundled = opened_bundle
-                    .anchor_manifest
-                    .as_ref()
-                    .filter(|m| m.verify_anchor_id(&anchor_id).is_ok())
-                    .cloned();
+                let bundled = opened_bundle.anchor_manifest_for(&anchor_id).cloned();
                 let stored = service
                     .with_wallet(|w| w.profile.l2_anchor_manifests.get(&anchor_hex).cloned())
                     .map_err(FrontendError::from)?;
@@ -2767,7 +2765,10 @@ mod tests {
             &opened_eve.vouchers[0],
             0,
             &opened_eve.causal_outputs,
-            opened_eve.root_mig_sig,
+            opened_eve.vouchers[0]
+                .transactions
+                .first()
+                .and_then(|t| opened_eve.root_mig_sig_for(&t.t_id)),
             DEFAULT_LOCK_POW_BASE_BITS,
         )
         .unwrap()
@@ -3140,7 +3141,10 @@ mod tests {
             &opened_alt.vouchers[0],
             0,
             &opened_alt.causal_outputs,
-            opened_alt.root_mig_sig,
+            opened_alt.vouchers[0]
+                .transactions
+                .first()
+                .and_then(|t| opened_alt.root_mig_sig_for(&t.t_id)),
             DEFAULT_LOCK_POW_BASE_BITS,
         )
         .unwrap()
@@ -4197,7 +4201,10 @@ mod tests {
             &opened_alt.vouchers[0],
             0,
             &opened_alt.causal_outputs,
-            opened_alt.root_mig_sig,
+            opened_alt.vouchers[0]
+                .transactions
+                .first()
+                .and_then(|t| opened_alt.root_mig_sig_for(&t.t_id)),
             DEFAULT_LOCK_POW_BASE_BITS,
         )
         .unwrap()

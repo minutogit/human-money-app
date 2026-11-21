@@ -956,7 +956,10 @@ mod tests {
             &opened_alt.vouchers[0],
             0,
             &opened_alt.causal_outputs,
-            opened_alt.root_mig_sig,
+            opened_alt.vouchers[0]
+                .transactions
+                .first()
+                .and_then(|t| opened_alt.root_mig_sig_for(&t.t_id)),
             DEFAULT_LOCK_POW_BASE_BITS,
         )
         .unwrap()

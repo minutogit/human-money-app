@@ -913,7 +913,8 @@ async fn test_async_co_signing_voucher_for_signing_to_detached_signature() {
     let signing_req_bytes = {
         let s = alice_state.service.lock().unwrap();
         let config = ContainerConfig::TargetDid(bob_did.clone(), PrivacyMode::HashedRouting);
-        s.create_signing_request_bundle(&local_id, config).unwrap()
+        s.create_signing_request_bundle(&local_id, config, Some(password))
+            .unwrap()
     };
 
     // Alice sends signing request via post
