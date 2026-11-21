@@ -7,6 +7,12 @@ last_updated: "2026-11-21"
 blocks: []
 blocked_by: []
 priority_tasks:
+  - id: "APP-075"
+    title: "Universal Two-Mode Audit & Improvement Loop (prompts/AUDIT_LOOP.md, AUDIT_STATE.md & DESIGN_INTENT_TRIAGE.md)"
+    status: "completed"
+    priority: "medium"
+    depends_on: ["APP-074"]
+    description: "Introduced the self-orchestrating quality and security review loop (`prompts/AUDIT_LOOP.md`, `prompts/AUDIT_STATE.md`, `prompts/README.md`, `prompts/reports/.gitkeep`, and `docs/security/DESIGN_INTENT_TRIAGE.md`) mirroring `human-money-core`'s two-mode (`INTERACTIVE` / `AUTONOMOUS`) closed-loop architecture. Partitions 100% of all 333 app source and security config files (`crates/humoco-market/src/`, `src-tauri/src/`, production `src/`, `src-tauri/tauri.conf.json`, `src-tauri/capabilities/default.json`) across 20 balanced slices (`S01`–`S20`) with a bidirectional Coverage Drift Guard, plus cross-slice E2E & QS-blindspot flow rotation (`S21`: `F1`–`F5`), active false-positive filtering (`DESIGN_INTENT_TRIAGE.md`), Fail-First TDD, and `./run-tests.sh --quiet` verification."
   - id: "APP-074"
     title: "Deep-Audit Remediation (KISS + Zero-Compat), QS Guardrail Hardening & 5-Locale Cleanup (`v0.5.16`)"
     status: "completed"
