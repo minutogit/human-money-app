@@ -803,7 +803,10 @@ pub fn load_known_head_receipts_for_anchor(
                 anchor_hex,
                 human_money_core::hex::encode(receipt.lock_pub)
             );
-            if k != expected_key || !receipt.verify_signature() {
+            let expected_bucket =
+                human_money_core::humoco_proto::derive_bucket(anchor_id, &receipt.lock_pub);
+            if k != expected_key || receipt.bucket != expected_bucket || !receipt.verify_signature()
+            {
                 return Err(crate::models::FrontendError::from(format!(
                     "Corrupt anti-rollback head receipt entry '{}' for anchor {}",
                     k, anchor_hex
@@ -835,7 +838,8 @@ pub fn record_known_head_receipts(
     let anchor_hex = human_money_core::hex::encode(anchor_id);
     let mut changed = false;
     for r in receipts {
-        if !r.verify_signature() {
+        let expected_bucket = human_money_core::humoco_proto::derive_bucket(anchor_id, &r.lock_pub);
+        if r.bucket != expected_bucket || !r.verify_signature() {
             continue;
         }
         let key = format!(
@@ -1159,7 +1163,7 @@ impl AppState {
     pub fn issue_one_shot_pin_grant(
         &self,
         service: &AppService,
-        secret: String,
+        secret: zeroize::Zeroizing<String>,
     ) -> Result<String, crate::models::FrontendError> {
         if !service.is_wallet_unlocked() {
             return Err(crate::models::FrontendError::from(
@@ -1175,7 +1179,7 @@ impl AppState {
         let token = format!("{}{}", ONE_SHOT_PIN_GRANT_PREFIX, hex::encode(rnd));
         let grant = OneShotPinGrant {
             token: token.clone(),
-            secret: zeroize::Zeroizing::new(secret),
+            secret,
             generation,
             owner_did,
             expires_at: std::time::Instant::now() + ONE_SHOT_PIN_GRANT_TTL,
@@ -2324,7 +2328,7 @@ impl AppState {
             contact.desired_hops = None;
         } else if service.with_wallet(|_| ()).is_ok() {
             let mut reg = self.get_or_load_wot_register(service, password)?;
-            let now_secs = Utc::now().timestamp() as u64;
+            let now_secs = Utc::now().timestamp().max(0) as u64;
             let prev_level = reg.own_contacts.get(&can_did).map(|e| e.level).unwrap_or(0);
             if !is_existing && contact.trust_level.is_none() {
                 if let Some(existing_entry) = reg.own_contacts.get(&can_did) {
@@ -2470,6 +2474,44 @@ impl AppState {
             }
         }
 
+        let has_remaining_sibling = can_target.as_ref().is_some_and(|ct| {
+            address_book
+                .contacts
+                .keys()
+                .any(|k| canonicalize_did(k).ok().as_ref() == Some(ct))
+        });
+
+        if !is_own_root && !has_remaining_sibling && service.with_wallet(|_| ()).is_ok() {
+            let mut reg = self.get_or_load_wot_register(service, password)?;
+            let target_key = can_target.as_deref().unwrap_or(did);
+            let prev_level = reg
+                .own_contacts
+                .get(target_key)
+                .map(|e| e.level)
+                .unwrap_or(0);
+            let removed = reg
+                .remove_contact_trust(target_key)
+                .map_err(|e| AppFacadeError::Generic(e.to_string()))?;
+            if removed {
+                self.prune_local_data_on_trust_withdrawal(
+                    service,
+                    &mut reg,
+                    Some(target_key),
+                    password,
+                    preserve_manual_card,
+                );
+                if reg.own_list_dirty {
+                    self.ensure_wot_list_signed(service, &mut reg)?;
+                }
+                self.save_wot_register(service, &reg, password)?;
+                if prev_level >= 1 {
+                    crate::services::market_service::bump_own_card_version_for_eviction(
+                        self, service, password,
+                    );
+                }
+            }
+        }
+
         if changed {
             save_encrypted_json(service, CONTACTS_DATA_NAME, &address_book, password).map_err(
                 |e| AppFacadeError::Generic(format!("Failed to save address book: {}", e)),
@@ -2482,34 +2524,6 @@ impl AppState {
                 &removed_endpoints,
                 password,
             );
-        }
-
-        let has_remaining_sibling = can_target.as_ref().is_some_and(|ct| {
-            address_book
-                .contacts
-                .keys()
-                .any(|k| canonicalize_did(k).ok().as_ref() == Some(ct))
-        });
-
-        if !is_own_root && !has_remaining_sibling && service.with_wallet(|_| ()).is_ok() {
-            if let Ok(mut reg) = self.get_or_load_wot_register(service, password) {
-                let target_key = can_target.as_deref().unwrap_or(did);
-                if let Ok(removed) = reg.remove_contact_trust(target_key) {
-                    if removed {
-                        self.prune_local_data_on_trust_withdrawal(
-                            service,
-                            &mut reg,
-                            Some(target_key),
-                            password,
-                            preserve_manual_card,
-                        );
-                        if reg.own_list_dirty {
-                            self.ensure_wot_list_signed(service, &mut reg)?;
-                        }
-                        self.save_wot_register(service, &reg, password)?;
-                    }
-                }
-            }
         }
 
         Ok(())
@@ -2987,7 +3001,7 @@ impl AppState {
         service: &mut AppService,
         reg: &mut humoco_wot::TrustRegister,
     ) -> Result<bool, AppFacadeError> {
-        let now_secs = Utc::now().timestamp() as u64;
+        let now_secs = Utc::now().timestamp().max(0) as u64;
         service.with_wallet_and_identity(|_wallet, identity| {
             let signer = DidWotSigner::from_identity(identity);
             reg.ensure_own_list_signed(&signer, now_secs).map_err(|e| {
@@ -3126,7 +3140,7 @@ impl AppState {
                 .map(|s| s.as_str())
                 .collect();
 
-            let now_secs = Utc::now().timestamp() as u64;
+            let now_secs = Utc::now().timestamp().max(0) as u64;
             let eval = match reg.evaluate_voucher(
                 creator_canonical,
                 &valid_guarantor_refs,
@@ -3239,11 +3253,7 @@ impl AppState {
         &self,
         wallet: &human_money_core::wallet::Wallet,
         did: &str,
-    ) -> (
-        Option<String>,
-        bool,
-        crate::models::FrontendVoucherTrustDto,
-    ) {
+    ) -> (Option<String>, bool, crate::models::FrontendVoucherTrustDto) {
         let wot_trust = self.evaluate_voucher_trust_internal(wallet, did, &[]);
         let own_can = canonicalize_did(wallet.get_user_id()).ok();
         let target_can = canonicalize_did(did).ok();
@@ -3281,7 +3291,7 @@ impl AppState {
         use human_money_core::models::conflict::TrustStatus;
 
         let mut trusted = std::collections::HashSet::new();
-        let now_secs = Utc::now().timestamp() as u64;
+        let now_secs = Utc::now().timestamp().max(0) as u64;
         let caches_guard = self.profile_caches.lock().unwrap();
         let reg_opt = caches_guard.as_ref().and_then(|c| c.wot.as_ref());
         let Some(reg) = reg_opt else {
@@ -3325,7 +3335,7 @@ impl AppState {
         };
 
         let direct_sender = canonicalize_did(bundle_sender_id).ok();
-        let now_secs = Utc::now().timestamp() as u64;
+        let now_secs = Utc::now().timestamp().max(0) as u64;
 
         let mut reg = match self.get_or_load_wot_register(service, password) {
             Ok(r) => r,
@@ -3361,6 +3371,7 @@ impl AppState {
         &self,
         service: &mut AppService,
         contact_card_json: Option<&str>,
+        bundle_sender_id: Option<&str>,
         password: Option<&str>,
     ) {
         let json = match contact_card_json {
@@ -3411,9 +3422,10 @@ impl AppState {
                 .coordinates
                 .as_deref()
                 .and_then(humoco_market::parse_coordinates_pair);
-            humoco_market::accept_envelope(
+            humoco_market::accept_envelope_with_writer(
                 &mut store,
                 &env,
+                bundle_sender_id,
                 now,
                 max_stored_cards,
                 own_coords,
@@ -3751,8 +3763,11 @@ fn lookup_contact_name(
 }
 
 fn truncate_did(did: &str) -> String {
-    if did.len() > 16 {
-        format!("{}…{}", &did[..8], &did[did.len() - 4..])
+    let char_count = did.chars().count();
+    if char_count > 16 {
+        let prefix: String = did.chars().take(8).collect();
+        let suffix: String = did.chars().skip(char_count - 4).collect();
+        format!("{}…{}", prefix, suffix)
     } else {
         did.to_string()
     }
@@ -5766,7 +5781,7 @@ mod tests {
         let mut receipt = LockReceipt {
             kind: LockReceiptKind::FirstWrite,
             lock_pub,
-            bucket: [0x22u8; 32],
+            bucket: human_money_core::humoco_proto::derive_bucket(&anchor_id, &lock_pub),
             slot: [0x33u8; 32],
             child_lock: [0x44u8; 32],
             entry_hash: [0x55u8; 32],
@@ -6001,5 +6016,257 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir_alice);
         let _ = std::fs::remove_dir_all(&dir_bob);
+    }
+
+    #[test]
+    fn s03_bucket_binding_wot_delete_integrity_and_utf8_truncate() {
+        use ed25519_dalek::{Signer, SigningKey};
+        use human_money_core::models::layer2_api::{LockReceipt, LockReceiptKind};
+
+        // 1. UTF-8 safe truncate_did (multi-byte char boundaries at byte 8 and len - 4)
+        let utf8_did = "äöüäöüäöüäöüäöüäö";
+        assert_eq!(super::truncate_did(utf8_did), "äöüäöüäö…öüäö");
+
+        // 2. Bucket binding on record_known_head_receipts & load_known_head_receipts_for_anchor
+        let dir = crate::test_support::temp_test_dir("s03_state_hardening");
+        let pw = "StrongPw-S03-State!";
+        let alice_svc = crate::test_support::setup_test_app(
+            &dir.join("alice"),
+            "Alice",
+            crate::test_support::ALICE_PHRASE,
+            pw,
+        );
+        let bob_svc = crate::test_support::setup_test_app(
+            &dir.join("bob"),
+            "Bob",
+            crate::test_support::BOB_PHRASE,
+            pw,
+        );
+        let bob_did = bob_svc
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
+
+        let state = crate::test_support::create_test_state(alice_svc);
+        let bob_state = crate::test_support::create_test_state(bob_svc);
+
+        // Publish own market profile for Alice (so we can verify card version bump on delete)
+        crate::services::market_service::save_my_market_profile_impl(
+            crate::models::FrontendSaveMyMarketProfileRequest {
+                profile: crate::models::FrontendUserProfile {
+                    first_name: Some("Alice".to_string()),
+                    ..Default::default()
+                },
+                visibility: Default::default(),
+                skills: vec![],
+                max_hops: 2,
+                validity_years: 2,
+                allow_inquiries: true,
+                published: Some(true),
+            },
+            Some(pw.to_string()),
+            &state,
+        )
+        .unwrap();
+
+        // Publish Bob's market profile and construct a CardEnvelope claiming hops = 2
+        crate::services::market_service::save_my_market_profile_impl(
+            crate::models::FrontendSaveMyMarketProfileRequest {
+                profile: crate::models::FrontendUserProfile {
+                    first_name: Some("Bob".to_string()),
+                    ..Default::default()
+                },
+                visibility: Default::default(),
+                skills: vec![],
+                max_hops: 2,
+                validity_years: 2,
+                allow_inquiries: true,
+                published: Some(true),
+            },
+            Some(pw.to_string()),
+            &bob_state,
+        )
+        .unwrap();
+        let bob_card = {
+            let mut bs = bob_state.service.lock().unwrap();
+            super::load_encrypted_json_opt::<crate::models::StoredOwnMarketProfile>(
+                &mut bs,
+                super::MARKET_OWN_PROFILE_KEY,
+                Some(pw),
+            )
+            .unwrap()
+            .unwrap()
+            .last_card
+            .unwrap()
+        };
+        let bob_wire =
+            humoco_market::render_wire(&bob_card, 2, humoco_market::WireFilter::Full).unwrap();
+        let bob_env_json = serde_json::to_string(&humoco_market::CardEnvelope {
+            card_wire: bob_wire,
+            hops: 2,
+        })
+        .unwrap();
+
+        let mut service = state.service.lock().unwrap();
+
+        let lock_sk = SigningKey::from_bytes(&[0x33u8; 32]);
+        let lock_pub = lock_sk.verifying_key().to_bytes();
+        let anchor_a = [0xAAu8; 32];
+        let anchor_b = [0xBBu8; 32];
+        let wrong_bucket = human_money_core::humoco_proto::derive_bucket(&anchor_b, &lock_pub);
+
+        let mut wrong_receipt = LockReceipt {
+            kind: LockReceiptKind::FirstWrite,
+            lock_pub,
+            bucket: wrong_bucket,
+            slot: [0x12u8; 32],
+            child_lock: [0x34u8; 32],
+            entry_hash: [0x56u8; 32],
+            retain_until_quarter: 20271,
+            write_seq: 1,
+            bucket_head: [0x78u8; 32],
+            recipient_nonce: [0x9Au8; 32],
+            sig: [0u8; 64],
+        };
+        wrong_receipt.sig = lock_sk.sign(&wrong_receipt.digest()).to_bytes();
+
+        super::record_known_head_receipts(
+            &mut service,
+            &anchor_a,
+            std::slice::from_ref(&wrong_receipt),
+            Some(pw),
+        )
+        .unwrap();
+        let loaded =
+            super::load_known_head_receipts_for_anchor(&mut service, &anchor_a, Some(pw)).unwrap();
+        assert!(
+            loaded.is_empty(),
+            "Receipt bound to anchor_b bucket must NOT be recorded under anchor_a"
+        );
+
+        // Persisted wrong-bucket receipt inside sidecar must fail closed on load
+        let mut tampered_heads = super::KnownLockHeadsState::default();
+        tampered_heads.heads.insert(
+            format!(
+                "{}:{}",
+                human_money_core::hex::encode(anchor_a),
+                human_money_core::hex::encode(lock_pub)
+            ),
+            wrong_receipt,
+        );
+        super::save_local_sidecar_json(
+            &mut service,
+            super::KNOWN_LOCK_HEADS_KEY,
+            &tampered_heads,
+            Some(pw),
+        )
+        .unwrap();
+        assert!(
+            super::load_known_head_receipts_for_anchor(&mut service, &anchor_a, Some(pw)).is_err(),
+            "Persisted wrong-bucket receipt must fail closed on load"
+        );
+        // Clean sidecar back to default
+        super::save_local_sidecar_json(
+            &mut service,
+            super::KNOWN_LOCK_HEADS_KEY,
+            &super::KnownLockHeadsState::default(),
+            Some(pw),
+        )
+        .unwrap();
+
+        // 3. try_import_piggybacked_contact_card clamps hops to 1 when bundle_sender_id matches author
+        state.try_import_piggybacked_contact_card(
+            &mut service,
+            Some(&bob_env_json),
+            Some(&bob_did),
+            Some(pw),
+        );
+        let card_store: humoco_market::CardStore =
+            super::load_encrypted_json_opt(&mut service, super::MARKET_CARD_STORE_KEY, Some(pw))
+                .unwrap()
+                .unwrap();
+        assert_eq!(
+            card_store.cards.get(&bob_did).map(|c| c.hops),
+            Some(1),
+            "Direct bundle_sender_id matching card author must clamp stored hops to 1"
+        );
+
+        // 4. delete_contact_with_options fails atomically without deleting address book when wot_register is corrupt
+        let bob_contact = crate::models::FrontendContact {
+            did: bob_did.clone(),
+            profile: crate::models::FrontendUserProfile {
+                first_name: Some("Bob".to_string()),
+                ..Default::default()
+            },
+            tags: vec![],
+            added_at: chrono::Utc::now().to_rfc3339(),
+            notes: None,
+            trust_level: Some(2),
+            desired_hops: Some(2),
+            has_peer_list: false,
+            peer_list_updated_at: None,
+            syncs: vec![],
+        };
+        state
+            .save_contact(&mut service, bob_contact, Some(pw))
+            .unwrap();
+
+        // Snapshot valid WoT state & card version before corruption test
+        let valid_wot = state.load_wot_register(&mut service, Some(pw)).unwrap();
+        let card_v_before =
+            super::load_encrypted_json_opt::<crate::models::StoredOwnMarketProfile>(
+                &mut service,
+                super::MARKET_OWN_PROFILE_KEY,
+                Some(pw),
+            )
+            .unwrap()
+            .unwrap()
+            .last_card
+            .unwrap()
+            .payload
+            .v;
+
+        // Corrupt WOT_DATA_NAME on disk and drop cached wot so reload fails
+        service
+            .save_encrypted_data(super::WOT_DATA_NAME, b"{corrupt-wot-json", Some(pw))
+            .unwrap();
+        state.write_cache_slot_for_service(&service, |c| &mut c.wot, None);
+
+        let del_res = state.delete_contact(&mut service, &bob_did, Some(pw));
+        assert!(
+            del_res.is_err(),
+            "delete_contact must propagate WoT load/save error instead of silently leaving trusted"
+        );
+        let contacts_after = state.load_contacts(&mut service, Some(pw)).unwrap();
+        assert!(
+            contacts_after.iter().any(|c| c.did == bob_did),
+            "Contact must remain in address book when WoT revocation fails"
+        );
+
+        // Restore valid WoT state and delete trusted contact -> must remove contact, revoke WoT, AND bump own card version
+        state
+            .save_wot_register(&mut service, &valid_wot, Some(pw))
+            .unwrap();
+        state
+            .delete_contact(&mut service, &bob_did, Some(pw))
+            .unwrap();
+        let contacts_final = state.load_contacts(&mut service, Some(pw)).unwrap();
+        assert!(!contacts_final.iter().any(|c| c.did == bob_did));
+        let card_v_after = super::load_encrypted_json_opt::<crate::models::StoredOwnMarketProfile>(
+            &mut service,
+            super::MARKET_OWN_PROFILE_KEY,
+            Some(pw),
+        )
+        .unwrap()
+        .unwrap()
+        .last_card
+        .unwrap()
+        .payload
+        .v;
+        assert!(
+            card_v_after > card_v_before,
+            "Deleting a trusted contact must bump own card version (before={card_v_before}, after={card_v_after})"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

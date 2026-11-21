@@ -14,12 +14,12 @@ const PIN_KEYSTORE_FILE: &str = "pin_keystore.json";
 const PIN_KEYSTORE_LOCK_FILE: &str = "pin_keystore.lock";
 pub const MAX_PIN_ATTEMPTS: u8 = 5;
 
-fn with_keystore_lock<T>(
+fn with_keystore_lock<T, E: From<String>>(
     keystore_dir: &Path,
-    f: impl FnOnce() -> Result<T, String>,
-) -> Result<T, String> {
+    f: impl FnOnce() -> Result<T, E>,
+) -> Result<T, E> {
     fs::create_dir_all(keystore_dir)
-        .map_err(|e| format!("Failed to create PIN keystore directory: {}", e))?;
+        .map_err(|e| E::from(format!("Failed to create PIN keystore directory: {}", e)))?;
     let lock_path = keystore_dir.join(PIN_KEYSTORE_LOCK_FILE);
     let lock_file = fs::OpenOptions::new()
         .read(true)
@@ -27,12 +27,41 @@ fn with_keystore_lock<T>(
         .create(true)
         .truncate(false)
         .open(&lock_path)
-        .map_err(|e| format!("Failed to open PIN keystore lock: {}", e))?;
+        .map_err(|e| E::from(format!("Failed to open PIN keystore lock: {}", e)))?;
     lock_file
         .lock()
-        .map_err(|e| format!("Failed to lock PIN keystore: {}", e))?;
+        .map_err(|e| E::from(format!("Failed to lock PIN keystore: {}", e)))?;
     f()
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PinAttemptError {
+    InvalidFormat(String),
+    NotEnabled(String),
+    MaxAttemptsReached,
+    DeviceMismatch(String),
+    Storage(String),
+}
+
+impl From<String> for PinAttemptError {
+    fn from(msg: String) -> Self {
+        Self::Storage(msg)
+    }
+}
+
+impl std::fmt::Display for PinAttemptError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidFormat(msg)
+            | Self::NotEnabled(msg)
+            | Self::DeviceMismatch(msg)
+            | Self::Storage(msg) => f.write_str(msg),
+            Self::MaxAttemptsReached => f.write_str("Maximum PIN attempts already exhausted."),
+        }
+    }
+}
+
+impl std::error::Error for PinAttemptError {}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -113,6 +142,7 @@ fn load_keystore_file(keystore_dir: &Path) -> Result<PinKeystoreFile, String> {
 }
 
 fn save_keystore_file(keystore_dir: &Path, store: &PinKeystoreFile) -> Result<(), String> {
+    use std::io::Write;
     fs::create_dir_all(keystore_dir)
         .map_err(|e| format!("Failed to create PIN keystore directory: {}", e))?;
     let path = keystore_path(keystore_dir);
@@ -123,13 +153,27 @@ fn save_keystore_file(keystore_dir: &Path, store: &PinKeystoreFile) -> Result<()
     ));
     let bytes = serde_json::to_vec_pretty(store)
         .map_err(|e| format!("Failed to serialize PIN keystore: {}", e))?;
-    fs::write(&tmp, &bytes).map_err(|e| format!("Failed to write temp PIN keystore: {}", e))?;
+    let mut opts = fs::OpenOptions::new();
+    opts.write(true).create_new(true);
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600));
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
     }
-    fs::rename(&tmp, &path).map_err(|e| format!("Failed to commit PIN keystore: {}", e))?;
+    let write_res = (|| -> std::io::Result<()> {
+        let mut file = opts.open(&tmp)?;
+        file.write_all(&bytes)?;
+        file.sync_all()?;
+        Ok(())
+    })();
+    if let Err(e) = write_res {
+        let _ = fs::remove_file(&tmp);
+        return Err(format!("Failed to write temp PIN keystore: {}", e));
+    }
+    if let Err(e) = fs::rename(&tmp, &path) {
+        let _ = fs::remove_file(&tmp);
+        return Err(format!("Failed to commit PIN keystore: {}", e));
+    }
     Ok(())
 }
 
@@ -154,7 +198,7 @@ pub fn create_and_store_pepper(
     let encrypted = crypto::encrypt_data(&wrap_key, pepper.as_ref())
         .map_err(|e| format!("Failed to encrypt device pepper: {}", e))?;
 
-    with_keystore_lock(keystore_dir, || {
+    with_keystore_lock::<_, String>(keystore_dir, || {
         let mut store = load_keystore_file(keystore_dir)?;
         store.entries.insert(
             folder_name.to_string(),
@@ -175,14 +219,14 @@ pub fn get_entry(
     keystore_dir: &Path,
     folder_name: &str,
 ) -> Result<Option<PinKeystoreEntry>, String> {
-    with_keystore_lock(keystore_dir, || {
+    with_keystore_lock::<_, String>(keystore_dir, || {
         let store = load_keystore_file(keystore_dir)?;
         Ok(store.entries.get(folder_name).cloned())
     })
 }
 
 pub fn remove_entry(keystore_dir: &Path, folder_name: &str) -> Result<(), String> {
-    with_keystore_lock(keystore_dir, || {
+    with_keystore_lock::<_, String>(keystore_dir, || {
         let mut store = load_keystore_file(keystore_dir)?;
         if store.entries.remove(folder_name).is_some() {
             save_keystore_file(keystore_dir, &store)?;
@@ -196,7 +240,7 @@ pub fn restore_entry(
     folder_name: &str,
     previous: Option<PinKeystoreEntry>,
 ) -> Result<(), String> {
-    with_keystore_lock(keystore_dir, || {
+    with_keystore_lock::<_, String>(keystore_dir, || {
         let mut store = load_keystore_file(keystore_dir)?;
         match previous {
             Some(entry) => {
@@ -217,34 +261,44 @@ pub fn begin_pin_attempt(
     device_binding_id: &str,
     folder_name: &str,
     pin: &str,
-) -> Result<(Zeroizing<String>, u8), String> {
-    validate_pin_format(pin)?;
-    let (current_attempt, enc_b64) = with_keystore_lock(keystore_dir, || {
-        let mut store = load_keystore_file(keystore_dir)?;
-        let entry = store
-            .entries
-            .get_mut(folder_name)
-            .ok_or_else(|| "PIN is not enabled for this profile on this device.".to_string())?;
+) -> Result<(Zeroizing<String>, u8), PinAttemptError> {
+    validate_pin_format(pin).map_err(PinAttemptError::InvalidFormat)?;
+    let (current_attempt, enc_b64) =
+        with_keystore_lock::<_, PinAttemptError>(keystore_dir, || {
+            let mut store = load_keystore_file(keystore_dir).map_err(PinAttemptError::Storage)?;
+            let entry = store.entries.get_mut(folder_name).ok_or_else(|| {
+                PinAttemptError::NotEnabled(
+                    "PIN is not enabled for this profile on this device.".to_string(),
+                )
+            })?;
 
-        entry.failed_attempts = entry.failed_attempts.saturating_add(1);
-        let current_attempt = entry.failed_attempts;
-        let enc_b64 = entry.encrypted_pepper_b64.clone();
-        save_keystore_file(keystore_dir, &store)?;
-        Ok((current_attempt, enc_b64))
-    })?;
+            if entry.failed_attempts >= MAX_PIN_ATTEMPTS {
+                return Err(PinAttemptError::MaxAttemptsReached);
+            }
+
+            entry.failed_attempts = entry.failed_attempts.saturating_add(1);
+            let current_attempt = entry.failed_attempts;
+            let enc_b64 = entry.encrypted_pepper_b64.clone();
+            save_keystore_file(keystore_dir, &store).map_err(PinAttemptError::Storage)?;
+            Ok((current_attempt, enc_b64))
+        })?;
 
     let encrypted = B64
         .decode(&enc_b64)
-        .map_err(|e| format!("Corrupt PIN keystore entry: {}", e))?;
+        .map_err(|e| PinAttemptError::Storage(format!("Corrupt PIN keystore entry: {}", e)))?;
     let wrap_key = derive_keystore_wrap_key(device_binding_id);
-    let plain =
-        Zeroizing::new(crypto::decrypt_data(&wrap_key, &encrypted).map_err(|_| {
-            "Failed to unwrap device pepper (device identity changed).".to_string()
-        })?);
-    let pepper: [u8; 32] = plain
-        .as_slice()
-        .try_into()
-        .map_err(|_| "Invalid unwrapped pepper length.".to_string())?;
+    let plain = Zeroizing::new(crypto::decrypt_data(&wrap_key, &encrypted).map_err(|_| {
+        PinAttemptError::DeviceMismatch(
+            "Failed to unwrap device pepper (device identity changed).".to_string(),
+        )
+    })?);
+    if plain.len() != 32 {
+        return Err(PinAttemptError::Storage(
+            "Invalid unwrapped pepper length.".to_string(),
+        ));
+    }
+    let mut pepper = Zeroizing::new([0u8; 32]);
+    pepper.as_mut().copy_from_slice(plain.as_slice());
 
     Ok((
         derive_pin_secret(&pepper, folder_name, pin),
@@ -253,7 +307,7 @@ pub fn begin_pin_attempt(
 }
 
 pub fn reset_failed_attempts(keystore_dir: &Path, folder_name: &str) -> Result<(), String> {
-    with_keystore_lock(keystore_dir, || {
+    with_keystore_lock::<_, String>(keystore_dir, || {
         let mut store = load_keystore_file(keystore_dir)?;
         if let Some(entry) = store.entries.get_mut(folder_name) {
             entry.failed_attempts = 0;
@@ -307,16 +361,25 @@ mod tests {
         assert_eq!(entry.failed_attempts, 0);
         assert_eq!(entry.scope, SecondaryScope::DailyPay);
 
-        // Strike progression up to MAX_PIN_ATTEMPTS = 5
-        for expected_attempt in 1..=MAX_PIN_ATTEMPTS {
+        // Strike 1
+        let (derived, attempt) = begin_pin_attempt(&dir, dev, folder, pin).unwrap();
+        assert_eq!(attempt, 1);
+        assert_eq!(derived.as_str(), secret.as_str());
+
+        // Strike 2: device mismatch fails unwrapping with PinAttemptError::DeviceMismatch
+        let mismatch = begin_pin_attempt(&dir, "other-device", folder, pin);
+        assert!(matches!(mismatch, Err(PinAttemptError::DeviceMismatch(_))));
+
+        // Remaining strikes up to MAX_PIN_ATTEMPTS = 5
+        for expected_attempt in 3..=MAX_PIN_ATTEMPTS {
             let (derived, attempt) = begin_pin_attempt(&dir, dev, folder, pin).unwrap();
             assert_eq!(attempt, expected_attempt);
             assert_eq!(derived.as_str(), secret.as_str());
         }
 
-        // Device mismatch fails unwrapping even after recording strike
-        let mismatch = begin_pin_attempt(&dir, "other-device", folder, pin);
-        assert!(mismatch.is_err());
+        // Once MAX_PIN_ATTEMPTS is reached, any further attempt refuses before unwrapping pepper
+        let exhausted = begin_pin_attempt(&dir, dev, folder, pin);
+        assert_eq!(exhausted.unwrap_err(), PinAttemptError::MaxAttemptsReached);
 
         // Lockdown / success recovery resets failed_attempts without wiping entry
         reset_failed_attempts(&dir, folder).unwrap();

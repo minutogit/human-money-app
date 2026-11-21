@@ -446,7 +446,8 @@ pub fn get_proof_of_double_spend_impl(
                 .resolutions
                 .as_ref()
                 .is_some_and(|r| r.iter().any(|item| item.is_own_identity));
-            let own_pk = human_money_core::crypto::get_pubkey_from_user_id(wallet.get_user_id()).ok();
+            let own_pk =
+                human_money_core::crypto::get_pubkey_from_user_id(wallet.get_user_id()).ok();
             let is_own_offender = own_pk.is_some()
                 && (human_money_core::crypto::get_pubkey_from_user_id(&frontend_proof.offender_id)
                     .ok()
@@ -456,9 +457,8 @@ pub fn get_proof_of_double_spend_impl(
                         .as_deref()
                         .and_then(|s| human_money_core::crypto::get_pubkey_from_user_id(s).ok())
                         == own_pk);
-            let can_end = frontend_proof.is_cryptographically_attributed
-                && !is_own_offender
-                && !has_own;
+            let can_end =
+                frontend_proof.is_cryptographically_attributed && !is_own_offender && !has_own;
             (has_own, can_end)
         })
         .map_err(FrontendError::from)?;

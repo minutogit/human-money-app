@@ -285,9 +285,15 @@ pub fn login(
                 state.rollback_failed_session(&mut service);
                 return Err(err);
             }
-            let session = state.session_token_for_service(&service)?;
-            drop(service);
+            let session = match state.session_token_for_service(&service) {
+                Ok(s) => s,
+                Err(err) => {
+                    state.rollback_failed_session(&mut service);
+                    return Err(err);
+                }
+            };
             state.commit_profile_lock(pending_lock);
+            drop(service);
 
             crate::services::common::spawn_pending_l2_reconciliation(&app, session, &password);
 
@@ -347,9 +353,15 @@ pub fn recover_wallet_and_set_new_password(
                 state.rollback_failed_session(&mut service);
                 return Err(err);
             }
-            let session = state.session_token_for_service(&service)?;
-            drop(service);
+            let session = match state.session_token_for_service(&service) {
+                Ok(s) => s,
+                Err(err) => {
+                    state.rollback_failed_session(&mut service);
+                    return Err(err);
+                }
+            };
             state.commit_profile_lock(pending_lock);
+            drop(service);
 
             crate::services::common::spawn_pending_l2_reconciliation(&app, session, &new_password);
 
@@ -397,9 +409,15 @@ pub fn handover_to_this_device(
                 state.rollback_failed_session(&mut service);
                 return Err(err);
             }
-            let session = state.session_token_for_service(&service)?;
-            drop(service);
+            let session = match state.session_token_for_service(&service) {
+                Ok(s) => s,
+                Err(err) => {
+                    state.rollback_failed_session(&mut service);
+                    return Err(err);
+                }
+            };
             state.commit_profile_lock(pending_lock);
+            drop(service);
 
             crate::services::common::spawn_pending_l2_reconciliation(&app, session, &password);
 
@@ -682,7 +700,9 @@ pub fn get_profile_pin_status_impl(
         .lock()
         .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
 
-    let core_has = service.has_secondary_auth(folder_name).unwrap_or(false);
+    let core_has = service
+        .has_secondary_auth(folder_name)
+        .map_err(FrontendError::from)?;
     let entry = pin_keystore::get_entry(keystore_dir, folder_name).map_err(FrontendError::from)?;
 
     match (core_has, entry) {
@@ -742,6 +762,56 @@ pub fn get_profile_pin_status(
     get_profile_pin_status_impl(&resolved_folder, &keystore_dir, &state)
 }
 
+fn map_pin_attempt_error(
+    err: pin_keystore::PinAttemptError,
+    service: &mut human_money_core::app_service::AppService,
+    folder_name: &str,
+    keystore_dir: &Path,
+    state: &AppState,
+    lock_active_session: bool,
+) -> FrontendError {
+    match err {
+        pin_keystore::PinAttemptError::InvalidFormat(msg) => {
+            FrontendError::with_code("error.auth.invalidPinFormat", msg)
+        }
+        pin_keystore::PinAttemptError::DeviceMismatch(msg) => {
+            FrontendError::with_code("error.auth.deviceMismatch", msg)
+        }
+        pin_keystore::PinAttemptError::NotEnabled(msg)
+        | pin_keystore::PinAttemptError::Storage(msg) => FrontendError::from(msg),
+        pin_keystore::PinAttemptError::MaxAttemptsReached => {
+            let _ = service.wipe_secondary_auth_slot(folder_name);
+            let _ = pin_keystore::remove_entry(keystore_dir, folder_name);
+            if lock_active_session {
+                service.lock_session();
+                state.clear_one_shot_pin_grant();
+            }
+            FrontendError {
+                code: "error.auth.pinWipedMaxAttempts".to_string(),
+                message: "PIN disabled after 5 failed attempts. Please sign in with your master password.".to_string(),
+                details: HashMap::new(),
+            }
+        }
+    }
+}
+
+fn require_unlocked_active_profile(
+    service: &human_money_core::app_service::AppService,
+    folder_name: &str,
+) -> Result<(), FrontendError> {
+    if !service.is_wallet_unlocked() {
+        return Err(FrontendError::from(
+            human_money_core::app_service::AppFacadeError::WalletLocked,
+        ));
+    }
+    if !service.is_active_profile(folder_name) {
+        return Err(FrontendError::from(
+            "Target profile does not match currently active session.".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 pub fn unlock_session_with_pin_impl(
     folder_name: &str,
     pin: &str,
@@ -749,38 +819,34 @@ pub fn unlock_session_with_pin_impl(
     device_binding_id: &str,
     state: &AppState,
 ) -> Result<SessionStatusDto, FrontendError> {
+    let mut service = state.authorize_and_lock(RequiredAccess::Unlocked, None)?;
+    require_unlocked_active_profile(&service, folder_name)?;
+    if service
+        .get_base_access_mode()
+        .map_err(FrontendError::from)?
+        == human_money_core::AccessMode::Full
     {
-        let service = state.authorize_and_lock(RequiredAccess::Unlocked, None)?;
-        if service
-            .get_base_access_mode()
-            .map_err(FrontendError::from)?
-            == human_money_core::AccessMode::Full
-        {
-            return Err(FrontendError::from(human_money_core::Error::App(
-                human_money_core::error::AppError::InsufficientAccessMode {
-                    required: human_money_core::AccessMode::Full.as_str().to_string(),
-                    current: human_money_core::AccessMode::DailyPay.as_str().to_string(),
-                },
-            )));
-        }
+        return Err(FrontendError::from(human_money_core::Error::App(
+            human_money_core::error::AppError::InsufficientAccessMode {
+                required: human_money_core::AccessMode::Full.as_str().to_string(),
+                current: human_money_core::AccessMode::DailyPay.as_str().to_string(),
+            },
+        )));
     }
+
     let (secret, attempt) =
         pin_keystore::begin_pin_attempt(keystore_dir, device_binding_id, folder_name, pin)
-            .map_err(|msg| FrontendError {
-                code: "error.auth.invalidPinFormat".to_string(),
-                message: msg,
-                details: HashMap::new(),
+            .map_err(|err| {
+                map_pin_attempt_error(err, &mut service, folder_name, keystore_dir, state, true)
             })?;
 
-    let mut service = state.authorize_and_lock(RequiredAccess::Unlocked, None)?;
     let timeout_seconds = resolve_policy_session_timeout(state, &mut service, &secret);
     match service.unlock_secondary_session(&secret, timeout_seconds) {
         Ok(()) => {
             let _ = pin_keystore::reset_failed_attempts(keystore_dir, folder_name);
             let mut status = build_session_status(&service);
             if timeout_seconds == 0 {
-                status.one_shot_grant =
-                    Some(state.issue_one_shot_pin_grant(&service, secret.to_string())?);
+                status.one_shot_grant = Some(state.issue_one_shot_pin_grant(&service, secret)?);
             } else {
                 state.clear_one_shot_pin_grant();
                 state.notify_sync_coordinator();
@@ -789,15 +855,14 @@ pub fn unlock_session_with_pin_impl(
         }
         Err(_) => {
             if attempt >= MAX_PIN_ATTEMPTS {
-                let _ = service.wipe_secondary_auth_slot(folder_name);
-                let _ = pin_keystore::remove_entry(keystore_dir, folder_name);
-                service.lock_session();
-                state.clear_one_shot_pin_grant();
-                return Err(FrontendError {
-                    code: "error.auth.pinWipedMaxAttempts".to_string(),
-                    message: "PIN disabled after 5 failed attempts. Please sign in with your master password.".to_string(),
-                    details: HashMap::new(),
-                });
+                return Err(map_pin_attempt_error(
+                    pin_keystore::PinAttemptError::MaxAttemptsReached,
+                    &mut service,
+                    folder_name,
+                    keystore_dir,
+                    state,
+                    true,
+                ));
             }
 
             let remaining = MAX_PIN_ATTEMPTS.saturating_sub(attempt);
@@ -850,18 +915,11 @@ pub fn enable_profile_pin_impl(
         details: HashMap::new(),
     })?;
 
-    // Verify active profile & master password cleanly BEFORE mutating the device keystore
-    let mut service = state
-        .service
-        .lock()
-        .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
-    if service.is_wallet_unlocked() && !service.is_active_profile(folder_name) {
-        return Err(FrontendError::from(
-            "Target profile does not match currently active session.".to_string(),
-        ));
-    }
+    // Verify active profile, Full access, & master password cleanly BEFORE mutating the device keystore
+    let mut service = state.authorize_and_lock(RequiredAccess::Full, Some(master_password))?;
+    require_unlocked_active_profile(&service, folder_name)?;
     let _ = service
-        .export_mnemonic(master_password)
+        .get_profile_id_with_password(folder_name, master_password)
         .map_err(FrontendError::from)?;
 
     let previous_entry =
@@ -930,11 +988,7 @@ pub fn disable_profile_pin_impl(
         .service
         .lock()
         .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
-    if service.is_wallet_unlocked() && !service.is_active_profile(folder_name) {
-        return Err(FrontendError::from(
-            "Target profile does not match currently active session.".to_string(),
-        ));
-    }
+    require_unlocked_active_profile(&service, folder_name)?;
     service
         .disable_secondary_auth(master_password)
         .map_err(FrontendError::from)?;
@@ -978,18 +1032,12 @@ pub fn login_with_pin_impl(
     app: Option<&tauri::AppHandle>,
 ) -> Result<String, FrontendError> {
     let pending_lock = state.acquire_profile_lock(folder_name)?;
+    let mut service = state.lock_service()?;
     let (secret, attempt) =
         pin_keystore::begin_pin_attempt(keystore_dir, device_binding_id, folder_name, pin)
-            .map_err(|msg| FrontendError {
-                code: "error.auth.invalidPinFormat".to_string(),
-                message: msg,
-                details: HashMap::new(),
+            .map_err(|err| {
+                map_pin_attempt_error(err, &mut service, folder_name, keystore_dir, state, false)
             })?;
-
-    let mut service = state
-        .service
-        .lock()
-        .map_err(|_| FrontendError::from("Wallet service unavailable".to_string()))?;
 
     match service.login_with_secondary(folder_name, &secret, cleanup_on_login, local_instance_id) {
         Ok(mode) => {
@@ -1010,9 +1058,15 @@ pub fn login_with_pin_impl(
                 state.rollback_failed_session(&mut service);
                 return Err(err);
             }
-            let session = state.session_token_for_service(&service)?;
-            drop(service);
+            let session = match state.session_token_for_service(&service) {
+                Ok(s) => s,
+                Err(err) => {
+                    state.rollback_failed_session(&mut service);
+                    return Err(err);
+                }
+            };
             state.commit_profile_lock(pending_lock);
+            drop(service);
 
             if let Some(app_handle) = app {
                 crate::services::common::spawn_pending_l2_reconciliation(
@@ -1039,13 +1093,14 @@ pub fn login_with_pin_impl(
             }
 
             if attempt >= MAX_PIN_ATTEMPTS {
-                let _ = service.wipe_secondary_auth_slot(folder_name);
-                let _ = pin_keystore::remove_entry(keystore_dir, folder_name);
-                return Err(FrontendError {
-                    code: "error.auth.pinWipedMaxAttempts".to_string(),
-                    message: "PIN disabled after 5 failed attempts. Please sign in with your master password.".to_string(),
-                    details: HashMap::new(),
-                });
+                return Err(map_pin_attempt_error(
+                    pin_keystore::PinAttemptError::MaxAttemptsReached,
+                    &mut service,
+                    folder_name,
+                    keystore_dir,
+                    state,
+                    false,
+                ));
             }
 
             let remaining = MAX_PIN_ATTEMPTS.saturating_sub(attempt);
@@ -1772,6 +1827,244 @@ mod tests {
         assert!(
             !state.service.lock().unwrap().is_wallet_unlocked(),
             "H2: Core session must roll back to logged-out state when companion init fails"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn s03_pin_crash_recovery_device_mismatch_cross_profile_and_status_safety() {
+        use human_money_core::app_service::AppService;
+        use human_money_core::services::mnemonic::MnemonicLanguage;
+
+        let dir = crate::test_support::temp_test_dir("s03_pin_hardening");
+        let wallet_dir = dir.join("wallet_data");
+        let keystore_dir = dir.join("keystore");
+        std::fs::create_dir_all(&wallet_dir).unwrap();
+
+        let pw_a = "MasterPass-Alice-2026!";
+        let pw_b = "MasterPass-Bob-2026!";
+        let mut service = AppService::new(&wallet_dir).unwrap();
+        let m_a = AppService::generate_mnemonic(12, MnemonicLanguage::English).unwrap();
+        let m_b = AppService::generate_mnemonic(12, MnemonicLanguage::English).unwrap();
+
+        // Create profile A with retain_mnemonic = false
+        service
+            .create_profile(
+                "AliceNoMnemonic",
+                &m_a,
+                None,
+                Some("al"),
+                pw_a,
+                MnemonicLanguage::English,
+                "dev-s03".into(),
+                false,
+            )
+            .unwrap();
+        let folder_a = service
+            .list_profiles()
+            .unwrap()
+            .into_iter()
+            .find(|p| p.profile_name == "AliceNoMnemonic")
+            .unwrap()
+            .folder_name;
+
+        // Create profile B
+        service.logout();
+        service
+            .create_profile(
+                "BobProfile",
+                &m_b,
+                None,
+                Some("bo"),
+                pw_b,
+                MnemonicLanguage::English,
+                "dev-s03".into(),
+                true,
+            )
+            .unwrap();
+        let folder_b = service
+            .list_profiles()
+            .unwrap()
+            .into_iter()
+            .find(|p| p.profile_name == "BobProfile")
+            .unwrap()
+            .folder_name;
+
+        let state = AppState::new(service);
+
+        // Enable PIN for B while B is active
+        enable_profile_pin_impl(
+            pw_b,
+            "654321",
+            "dailyPay",
+            &folder_b,
+            &keystore_dir,
+            "dev-s03",
+            &state,
+        )
+        .unwrap();
+
+        // Locked state rejects enable_profile_pin_impl cleanly
+        state.service.lock().unwrap().logout();
+        let locked_enable = enable_profile_pin_impl(
+            pw_b,
+            "111222",
+            "dailyPay",
+            &folder_b,
+            &keystore_dir,
+            "dev-s03",
+            &state,
+        )
+        .unwrap_err();
+        assert_eq!(locked_enable.code, "error.wallet.locked");
+
+        // Login as A (retain_mnemonic = false), wrong password leaves keystore untouched
+        state
+            .service
+            .lock()
+            .unwrap()
+            .login(&folder_a, pw_a, false, "dev-s03".into())
+            .unwrap();
+        assert!(enable_profile_pin_impl(
+            "wrong-password",
+            "123456",
+            "dailyPay",
+            &folder_a,
+            &keystore_dir,
+            "dev-s03",
+            &state,
+        )
+        .is_err());
+        assert!(pin_keystore::get_entry(&keystore_dir, &folder_a)
+            .unwrap()
+            .is_none());
+
+        // Enable PIN for A (works with retain_mnemonic = false) and check 0o600 permissions
+        enable_profile_pin_impl(
+            pw_a,
+            "123456",
+            "dailyPay",
+            &folder_a,
+            &keystore_dir,
+            "dev-s03",
+            &state,
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(keystore_dir.join("pin_keystore.json"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o600);
+        }
+
+        // Log in as A via PIN
+        state.service.lock().unwrap().logout();
+        login_with_pin_impl(
+            &folder_a,
+            "123456",
+            false,
+            "dev-s03".into(),
+            &keystore_dir,
+            "dev-s03",
+            &state,
+            None,
+        )
+        .unwrap();
+
+        // 1. Cross-profile isolation in unlock_session_with_pin_impl:
+        // Targeting B while A is active must fail WITHOUT touching B's strikes.
+        let cross_err =
+            unlock_session_with_pin_impl(&folder_b, "000000", &keystore_dir, "dev-s03", &state)
+                .unwrap_err();
+        assert!(
+            cross_err.message.contains("does not match"),
+            "unexpected error: {}",
+            cross_err.message
+        );
+        assert_eq!(
+            pin_keystore::get_entry(&keystore_dir, &folder_b)
+                .unwrap()
+                .unwrap()
+                .failed_attempts,
+            0
+        );
+
+        // 2. Device mismatch returns error.auth.deviceMismatch (not invalidPinFormat)
+        let mismatch_err =
+            unlock_session_with_pin_impl(&folder_a, "123456", &keystore_dir, "other-dev", &state)
+                .unwrap_err();
+        assert_eq!(mismatch_err.code, "error.auth.deviceMismatch");
+
+        // 3. Crash-recovery 5-strike enforcement: simulate crash after strike 5 was persisted
+        let mut entry = pin_keystore::get_entry(&keystore_dir, &folder_a)
+            .unwrap()
+            .unwrap();
+        entry.failed_attempts = MAX_PIN_ATTEMPTS;
+        pin_keystore::restore_entry(&keystore_dir, &folder_a, Some(entry)).unwrap();
+
+        // Even with the CORRECT PIN, unlock_session_with_pin_impl must wipe and lock!
+        let post_crash_unlock =
+            unlock_session_with_pin_impl(&folder_a, "123456", &keystore_dir, "dev-s03", &state)
+                .unwrap_err();
+        assert_eq!(post_crash_unlock.code, "error.auth.pinWipedMaxAttempts");
+        assert!(pin_keystore::get_entry(&keystore_dir, &folder_a)
+            .unwrap()
+            .is_none());
+        assert!(!state
+            .service
+            .lock()
+            .unwrap()
+            .has_secondary_auth(&folder_a)
+            .unwrap());
+
+        // Same crash-recovery check for login_with_pin_impl on B:
+        let mut entry_b = pin_keystore::get_entry(&keystore_dir, &folder_b)
+            .unwrap()
+            .unwrap();
+        entry_b.failed_attempts = MAX_PIN_ATTEMPTS;
+        pin_keystore::restore_entry(&keystore_dir, &folder_b, Some(entry_b)).unwrap();
+        state.service.lock().unwrap().logout();
+        let post_crash_login = login_with_pin_impl(
+            &folder_b,
+            "654321",
+            false,
+            "dev-s03".into(),
+            &keystore_dir,
+            "dev-s03",
+            &state,
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(post_crash_login.code, "error.auth.pinWipedMaxAttempts");
+        assert!(pin_keystore::get_entry(&keystore_dir, &folder_b)
+            .unwrap()
+            .is_none());
+        assert!(!state
+            .service
+            .lock()
+            .unwrap()
+            .has_secondary_auth(&folder_b)
+            .unwrap());
+
+        // 4. get_profile_pin_status_impl on missing/invalid folder returns Err and preserves keystore entry
+        let bogus = "../missing_folder";
+        let dummy_entry = pin_keystore::PinKeystoreEntry {
+            encrypted_pepper_b64: "ZHVtbXk=".to_string(),
+            failed_attempts: 2,
+            scope: human_money_core::SecondaryScope::DailyPay,
+        };
+        pin_keystore::restore_entry(&keystore_dir, bogus, Some(dummy_entry)).unwrap();
+        assert!(get_profile_pin_status_impl(bogus, &keystore_dir, &state).is_err());
+        assert!(
+            pin_keystore::get_entry(&keystore_dir, bogus)
+                .unwrap()
+                .is_some(),
+            "get_profile_pin_status_impl must not wipe keystore entry when Core folder lookup fails"
         );
 
         let _ = std::fs::remove_dir_all(&dir);

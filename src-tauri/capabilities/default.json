@@ -19,10 +19,6 @@
     "fs:default",
     "fs:allow-write-file",
     "fs:allow-read-file",
-    "core:app:allow-version",
-    {
-      "identifier": "fs:scope",
-      "allow": ["**"]
-    }
+    "core:app:allow-version"
   ]
 }

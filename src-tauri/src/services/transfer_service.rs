@@ -504,7 +504,12 @@ pub(crate) fn apply_receive_companion_side_effects(
     };
 
     if let Some(ref card_json) = result.contact_card_json {
-        state.try_import_piggybacked_contact_card(service, Some(card_json), password);
+        state.try_import_piggybacked_contact_card(
+            service,
+            Some(card_json),
+            Some(&result.header.sender_id),
+            password,
+        );
     }
 
     wot_imported_lists

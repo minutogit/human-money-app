@@ -463,7 +463,12 @@ fn build_receive_payload_and_record(
             );
         }
         if let Some(ref card_json) = opened_bundle.contact_card_json {
-            state.try_import_piggybacked_contact_card(service, Some(card_json), password);
+            state.try_import_piggybacked_contact_card(
+                service,
+                Some(card_json),
+                Some(&opened_bundle.sender_id),
+                password,
+            );
         }
     }
 

@@ -73,12 +73,11 @@ pub fn import_double_spend_proof_impl(
             "Proof payload exceeds maximum allowed size (2 MiB)".to_string(),
         ));
     }
-    let proof: human_money_core::models::conflict::ProofOfDoubleSpend =
-        serde_json::from_slice(&proof_bytes).map_err(|e| FrontendError::from(e.to_string()))?;
-
     let (mut service, resolved_pw) =
         state.authorize_and_lock_secret(RequiredAccess::DailyPay, password.as_deref())?;
     let pw = resolved_pw.as_deref().map(String::as_str);
+    let proof: human_money_core::models::conflict::ProofOfDoubleSpend =
+        serde_json::from_slice(&proof_bytes).map_err(|e| FrontendError::from(e.to_string()))?;
 
     if state.cache_wot().is_none() {
         let _ = state.get_or_load_wot_register(&mut service, pw);
@@ -161,13 +160,7 @@ pub fn endorse_conflict_resolution(
     password: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<FullProofDetails, FrontendError> {
-    endorse_conflict_resolution_impl(
-        proof_id,
-        notes,
-        also_set_local_override,
-        password,
-        &state,
-    )
+    endorse_conflict_resolution_impl(proof_id, notes, also_set_local_override, password, &state)
 }
 
 #[cfg(test)]
@@ -261,7 +254,9 @@ mod tests {
         let offender_svc =
             setup_test_app(&dir.join("offender"), "Mallory", READER1_PHRASE, master_pw);
 
-        let bob_id = bob_svc.with_wallet_and_identity(|_, id| id.clone()).unwrap();
+        let bob_id = bob_svc
+            .with_wallet_and_identity(|_, id| id.clone())
+            .unwrap();
         let charlie_id = charlie_svc
             .with_wallet_and_identity(|_, id| id.clone())
             .unwrap();
@@ -341,9 +336,8 @@ mod tests {
         let mut sybil_proof = proof_base.clone();
         let mut sybil_list = Vec::with_capacity(MAX_RESOLUTION_ENDORSEMENTS);
         for idx in 0..MAX_RESOLUTION_ENDORSEMENTS {
-            let (pk, sk) = crypto::generate_ed25519_keypair_for_tests(Some(&format!(
-                "app-sybil-{idx}"
-            )));
+            let (pk, sk) =
+                crypto::generate_ed25519_keypair_for_tests(Some(&format!("app-sybil-{idx}")));
             let uid = crypto::create_user_id(&pk, None).unwrap();
             let id = human_money_core::UserIdentity {
                 signing_key: sk,
@@ -354,18 +348,19 @@ mod tests {
                 has_bip39_passphrase: false,
             };
             sybil_list.push(
-                create_and_sign_resolution_endorsement(&proof_id, &id, Some(format!("sybil {idx}")))
-                    .unwrap(),
+                create_and_sign_resolution_endorsement(
+                    &proof_id,
+                    &id,
+                    Some(format!("sybil {idx}")),
+                )
+                .unwrap(),
             );
         }
         sybil_proof.resolutions = Some(sybil_list);
 
-        let import_res1 = import_double_spend_proof_impl(
-            serde_json::to_vec(&sybil_proof).unwrap(),
-            None,
-            &state,
-        )
-        .unwrap();
+        let import_res1 =
+            import_double_spend_proof_impl(serde_json::to_vec(&sybil_proof).unwrap(), None, &state)
+                .unwrap();
         assert_eq!(import_res1.proof_id, proof_id);
         assert!(!import_res1.already_known);
         assert_eq!(import_res1.added_endorsements, MAX_RESOLUTION_ENDORSEMENTS);
@@ -384,12 +379,9 @@ mod tests {
 
         let mut merge_proof = proof_base.clone();
         merge_proof.resolutions = Some(vec![e_charlie.clone(), e_bob.clone()]);
-        let import_res2 = import_double_spend_proof_impl(
-            serde_json::to_vec(&merge_proof).unwrap(),
-            None,
-            &state,
-        )
-        .unwrap();
+        let import_res2 =
+            import_double_spend_proof_impl(serde_json::to_vec(&merge_proof).unwrap(), None, &state)
+                .unwrap();
         assert!(import_res2.already_known);
         assert_eq!(import_res2.added_endorsements, 1);
 
@@ -432,6 +424,24 @@ mod tests {
             "Trusted contact Bob must carry positive WoT trust percent"
         );
         assert!(!res.iter().any(|r| r.endorser_id == charlie_id.user_id));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn s03_import_double_spend_proof_authorizes_before_parsing_json() {
+        let dir = temp_test_dir("s03_proof_auth_before_parse");
+        let mut alice_svc = setup_test_app(&dir, "Alice", ALICE_PHRASE, "pw123");
+        alice_svc.logout();
+        let state = crate::test_support::create_test_state(alice_svc);
+
+        let err =
+            import_double_spend_proof_impl(b"{not-valid-json".to_vec(), None, &state).unwrap_err();
+        assert_eq!(
+            err.code, "error.wallet.locked",
+            "Locked session must fail auth before JSON deserialization, got: {:?}",
+            err
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
