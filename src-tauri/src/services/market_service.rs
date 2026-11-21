@@ -3311,7 +3311,7 @@ mod tests {
             humoco_market::StoredCard {
                 card,
                 card_wire: wire,
-                hops: 0,
+                hops: 1,
                 received_at: 1_760_000_000,
             },
         );

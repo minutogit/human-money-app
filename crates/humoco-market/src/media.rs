@@ -3,6 +3,7 @@ use base64::Engine;
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
 use human_money_core::crypto::{create_user_id, get_pubkey_from_user_id};
+use zeroize::Zeroizing;
 
 use crate::error::MarketError;
 use crate::model::{
@@ -59,6 +60,61 @@ pub fn extract_media_bytes(data_uri: &str) -> Result<Vec<u8>, MarketError> {
         .map_err(|e| MarketError::Validation(format!("Invalid base64 in media data URI: {}", e)))
 }
 
+fn parse_vp8_payload_dims(payload: &[u8]) -> Result<(u16, u16), MarketError> {
+    if payload.len() < 10 {
+        return Err(MarketError::Validation(format!(
+            "VP8 chunk payload too short: {} < 10",
+            payload.len()
+        )));
+    }
+    // VP8 lossy: keyframe check (bit 0 of byte 0 must be 0)
+    if (payload[0] & 1) != 0 {
+        return Err(MarketError::Validation(
+            "VP8 frame is not a keyframe".to_string(),
+        ));
+    }
+    // Start code check: 0x9d, 0x01, 0x2a
+    if payload[3..6] != [0x9d, 0x01, 0x2a] {
+        return Err(MarketError::Validation(
+            "Invalid VP8 start code in header".to_string(),
+        ));
+    }
+    let w = u16::from_le_bytes([payload[6], payload[7]]) & 0x3fff;
+    let h = u16::from_le_bytes([payload[8], payload[9]]) & 0x3fff;
+    if w == 0 || h == 0 {
+        return Err(MarketError::Validation(format!(
+            "Invalid zero VP8 dimensions: {}x{}",
+            w, h
+        )));
+    }
+    Ok((w, h))
+}
+
+fn parse_vp8l_payload_dims(payload: &[u8]) -> Result<(u16, u16), MarketError> {
+    if payload.len() < 5 {
+        return Err(MarketError::Validation(format!(
+            "VP8L chunk payload too short: {} < 5",
+            payload.len()
+        )));
+    }
+    // VP8L lossless: 1-byte signature must be 0x2f
+    if payload[0] != 0x2f {
+        return Err(MarketError::Validation(
+            "Invalid VP8L signature byte".to_string(),
+        ));
+    }
+    let bits = u32::from_le_bytes([payload[1], payload[2], payload[3], payload[4]]);
+    let w = ((bits & 0x3fff) + 1) as u16;
+    let h = (((bits >> 14) & 0x3fff) + 1) as u16;
+    if w == 0 || h == 0 {
+        return Err(MarketError::Validation(format!(
+            "Invalid zero VP8L dimensions: {}x{}",
+            w, h
+        )));
+    }
+    Ok((w, h))
+}
+
 /// Pure Rust RIFF/WebP header parser without external dependencies.
 /// Supports VP8 (lossy), VP8L (lossless), and VP8X (extended).
 pub fn parse_webp_dimensions(webp_bytes: &[u8]) -> Result<(u16, u16), MarketError> {
@@ -80,42 +136,39 @@ pub fn parse_webp_dimensions(webp_bytes: &[u8]) -> Result<(u16, u16), MarketErro
     }
 
     let fourcc = &webp_bytes[12..16];
+    let chunk_size = u32::from_le_bytes([
+        webp_bytes[16],
+        webp_bytes[17],
+        webp_bytes[18],
+        webp_bytes[19],
+    ]) as usize;
+
     let (w, h) = match fourcc {
         b"VP8 " => {
-            // VP8 lossy: keyframe check (bit 0 of byte 20 must be 0)
-            if (webp_bytes[20] & 1) != 0 {
-                return Err(MarketError::Validation(
-                    "VP8 frame is not a keyframe".to_string(),
-                ));
+            if chunk_size < 10 {
+                return Err(MarketError::Validation(format!(
+                    "Invalid VP8 chunk size: {} < 10",
+                    chunk_size
+                )));
             }
-            // Start code check: 0x9d, 0x01, 0x2a
-            if webp_bytes[23..26] != [0x9d, 0x01, 0x2a] {
-                return Err(MarketError::Validation(
-                    "Invalid VP8 start code in header".to_string(),
-                ));
-            }
-            let w = u16::from_le_bytes([webp_bytes[26], webp_bytes[27]]) & 0x3fff;
-            let h = u16::from_le_bytes([webp_bytes[28], webp_bytes[29]]) & 0x3fff;
-            (w, h)
+            parse_vp8_payload_dims(&webp_bytes[20..])?
         }
         b"VP8L" => {
-            // VP8L lossless: 1-byte signature must be 0x2f
-            if webp_bytes[20] != 0x2f {
-                return Err(MarketError::Validation(
-                    "Invalid VP8L signature byte".to_string(),
-                ));
+            if chunk_size < 5 {
+                return Err(MarketError::Validation(format!(
+                    "Invalid VP8L chunk size: {} < 5",
+                    chunk_size
+                )));
             }
-            let bits = u32::from_le_bytes([
-                webp_bytes[21],
-                webp_bytes[22],
-                webp_bytes[23],
-                webp_bytes[24],
-            ]);
-            let w = ((bits & 0x3fff) + 1) as u16;
-            let h = (((bits >> 14) & 0x3fff) + 1) as u16;
-            (w, h)
+            parse_vp8l_payload_dims(&webp_bytes[20..])?
         }
         b"VP8X" => {
+            if chunk_size != 10 {
+                return Err(MarketError::Validation(format!(
+                    "Invalid VP8X chunk size: {} != 10",
+                    chunk_size
+                )));
+            }
             // VP8X extended:
             // 24-bit canvas width - 1 at bytes 24..27
             // 24-bit canvas height - 1 at bytes 27..30
@@ -129,6 +182,76 @@ pub fn parse_webp_dimensions(webp_bytes: &[u8]) -> Result<(u16, u16), MarketErro
             }
             let w = (w_minus_1 + 1) as u16;
             let h = (h_minus_1 + 1) as u16;
+
+            let mut offset = 30usize;
+            while offset < webp_bytes.len() {
+                if offset + 8 > webp_bytes.len() {
+                    return Err(MarketError::Validation(
+                        "Truncated VP8X sub-chunk header".to_string(),
+                    ));
+                }
+                let sub_fourcc = &webp_bytes[offset..offset + 4];
+                let sub_size = u32::from_le_bytes([
+                    webp_bytes[offset + 4],
+                    webp_bytes[offset + 5],
+                    webp_bytes[offset + 6],
+                    webp_bytes[offset + 7],
+                ]) as usize;
+                let payload_start = offset + 8;
+                let payload_end = payload_start
+                    .checked_add(sub_size)
+                    .filter(|&end| end <= webp_bytes.len())
+                    .ok_or_else(|| {
+                        MarketError::Validation("Truncated VP8X sub-chunk payload".to_string())
+                    })?;
+                let sub_payload = &webp_bytes[payload_start..payload_end];
+                match sub_fourcc {
+                    b"VP8 " => {
+                        let (fw, fh) = parse_vp8_payload_dims(sub_payload)?;
+                        if fw > w || fh > h {
+                            return Err(MarketError::Validation(format!(
+                                "VP8 frame {}x{} exceeds VP8X canvas {}x{}",
+                                fw, fh, w, h
+                            )));
+                        }
+                    }
+                    b"VP8L" => {
+                        let (fw, fh) = parse_vp8l_payload_dims(sub_payload)?;
+                        if fw > w || fh > h {
+                            return Err(MarketError::Validation(format!(
+                                "VP8L frame {}x{} exceeds VP8X canvas {}x{}",
+                                fw, fh, w, h
+                            )));
+                        }
+                    }
+                    b"ANMF" => {
+                        if sub_payload.len() < 16 {
+                            return Err(MarketError::Validation(
+                                "Truncated ANMF chunk in VP8X".to_string(),
+                            ));
+                        }
+                        let fw_m1 =
+                            u32::from_le_bytes([sub_payload[6], sub_payload[7], sub_payload[8], 0]);
+                        let fh_m1 = u32::from_le_bytes([
+                            sub_payload[9],
+                            sub_payload[10],
+                            sub_payload[11],
+                            0,
+                        ]);
+                        if fw_m1 >= u32::from(w) || fh_m1 >= u32::from(h) {
+                            return Err(MarketError::Validation(format!(
+                                "ANMF frame dimensions exceed VP8X canvas {}x{}",
+                                w, h
+                            )));
+                        }
+                    }
+                    _ => {}
+                }
+                offset = payload_end;
+                if sub_size & 1 == 1 && offset < webp_bytes.len() {
+                    offset += 1;
+                }
+            }
             (w, h)
         }
         other => {
@@ -165,11 +288,13 @@ pub fn parse_jpeg_dimensions(jpeg_bytes: &[u8]) -> Result<(u16, u16), MarketErro
         ));
     }
 
-    let mut pos = 2;
-    while pos + 1 < jpeg_bytes.len() {
+    let mut found_dims: Option<(u16, u16)> = None;
+    let mut pos = 2usize;
+    while pos < jpeg_bytes.len() {
         if jpeg_bytes[pos] != 0xFF {
-            pos += 1;
-            continue;
+            return Err(MarketError::Validation(
+                "Invalid non-marker byte in JPEG header".to_string(),
+            ));
         }
         // Skip fill bytes 0xFF
         while pos < jpeg_bytes.len() && jpeg_bytes[pos] == 0xFF {
@@ -181,8 +306,14 @@ pub fn parse_jpeg_dimensions(jpeg_bytes: &[u8]) -> Result<(u16, u16), MarketErro
         let marker = jpeg_bytes[pos];
         pos += 1;
 
-        // Ignore standalone markers without length (RST0..RST7, SOI, TEM)
-        if matches!(marker, 0xD0..=0xD7 | 0xD8 | 0x01) {
+        if marker == 0x00 || marker == 0xD8 {
+            return Err(MarketError::Validation(
+                "Unexpected byte-stuffed or nested SOI marker in JPEG header".to_string(),
+            ));
+        }
+
+        // Ignore standalone markers without length (RST0..RST7, TEM)
+        if matches!(marker, 0xD0..=0xD7 | 0x01) {
             continue;
         }
         // EOI (0xD9) or SOS (0xDA): stop before scan data (scan data may contain raw 0xFF bytes)
@@ -197,9 +328,19 @@ pub fn parse_jpeg_dimensions(jpeg_bytes: &[u8]) -> Result<(u16, u16), MarketErro
             ));
         }
         let length = u16::from_be_bytes([jpeg_bytes[pos], jpeg_bytes[pos + 1]]) as usize;
-        if length < 2 {
+        if length < 2
+            || pos
+                .checked_add(length)
+                .is_none_or(|end| end > jpeg_bytes.len())
+        {
             return Err(MarketError::Validation(
-                "Invalid marker length in JPEG".to_string(),
+                "Invalid or truncated marker length in JPEG".to_string(),
+            ));
+        }
+
+        if marker == 0xDC || marker == 0xDE {
+            return Err(MarketError::Validation(
+                "Unsupported DNL/DHP marker in JPEG".to_string(),
             ));
         }
 
@@ -219,14 +360,20 @@ pub fn parse_jpeg_dimensions(jpeg_bytes: &[u8]) -> Result<(u16, u16), MarketErro
                 | 0xCE
                 | 0xCF
         ) {
-            // SOF segment structure:
-            // length: 2 bytes
-            // precision: 1 byte
-            // height: 2 bytes (big endian)
-            // width: 2 bytes (big endian)
-            if pos + 7 > jpeg_bytes.len() {
+            if found_dims.is_some() {
                 return Err(MarketError::Validation(
-                    "Truncated SOF marker in JPEG header".to_string(),
+                    "Duplicate SOF marker in JPEG stream".to_string(),
+                ));
+            }
+            if length < 8 {
+                return Err(MarketError::Validation(
+                    "SOF marker length too short in JPEG".to_string(),
+                ));
+            }
+            let num_components = jpeg_bytes[pos + 7] as usize;
+            if num_components == 0 || length != 8 + 3 * num_components {
+                return Err(MarketError::Validation(
+                    "SOF marker length does not match component count".to_string(),
                 ));
             }
             let h = u16::from_be_bytes([jpeg_bytes[pos + 3], jpeg_bytes[pos + 4]]);
@@ -237,23 +384,22 @@ pub fn parse_jpeg_dimensions(jpeg_bytes: &[u8]) -> Result<(u16, u16), MarketErro
                     w, h
                 )));
             }
-            return Ok((w, h));
+            found_dims = Some((w, h));
         }
 
         pos += length;
     }
 
-    Err(MarketError::Validation(
-        "No SOF marker found in JPEG stream".to_string(),
-    ))
+    found_dims
+        .ok_or_else(|| MarketError::Validation("No SOF marker found in JPEG stream".to_string()))
 }
 
 /// Pure Rust PNG header parser without external dependencies.
 /// Reads dimensions from the IHDR chunk.
 pub fn parse_png_dimensions(png_bytes: &[u8]) -> Result<(u16, u16), MarketError> {
-    if png_bytes.len() < 24 {
+    if png_bytes.len() < 33 {
         return Err(MarketError::Validation(format!(
-            "PNG bytes too short: {} < 24",
+            "PNG bytes too short: {} < 33",
             png_bytes.len()
         )));
     }
@@ -262,6 +408,13 @@ pub fn parse_png_dimensions(png_bytes: &[u8]) -> Result<(u16, u16), MarketError>
         return Err(MarketError::Validation(
             "Missing PNG signature header".to_string(),
         ));
+    }
+    let ihdr_len = u32::from_be_bytes([png_bytes[8], png_bytes[9], png_bytes[10], png_bytes[11]]);
+    if ihdr_len != 13 {
+        return Err(MarketError::Validation(format!(
+            "Invalid IHDR chunk length in PNG header: {} != 13",
+            ihdr_len
+        )));
     }
     if &png_bytes[12..16] != b"IHDR" {
         return Err(MarketError::Validation(
@@ -305,6 +458,14 @@ pub fn parse_image_dimensions(bytes: &[u8]) -> Result<(u16, u16), MarketError> {
 /// Must be a supported data URI, have total length <= `MAX_AVATAR_DATA_URI_CHARS`,
 /// and decode to a valid image matching its declared format (WebP, JPEG, or PNG) with exact dimensions `(96, 96)`.
 pub fn validate_avatar_data_uri(data_uri: &str) -> Result<(), MarketError> {
+    if data_uri
+        .chars()
+        .any(|c| c.is_whitespace() || c.is_control())
+    {
+        return Err(MarketError::Validation(
+            "Avatar data URI must not contain whitespace or control characters".to_string(),
+        ));
+    }
     if !is_supported_media_data_uri(data_uri) {
         return Err(MarketError::Validation(format!(
             "Avatar data URI must start with '{}', '{}', or '{}'",
@@ -411,7 +572,10 @@ pub fn derive_media_key_and_nonce(image_token: &str) -> Result<([u8; 32], [u8; 2
         )));
     }
     let key = blake3::derive_key("HUMOCO-MEDIA-KEY-V1", image_token.as_bytes());
-    let nonce_32 = blake3::derive_key("HUMOCO-MEDIA-NONCE-V1", image_token.as_bytes());
+    let nonce_32 = Zeroizing::new(blake3::derive_key(
+        "HUMOCO-MEDIA-NONCE-V1",
+        image_token.as_bytes(),
+    ));
     let mut nonce = [0u8; 24];
     nonce.copy_from_slice(&nonce_32[0..24]);
     Ok((key, nonce))
@@ -425,10 +589,11 @@ pub fn seal_media_blob(
 ) -> Result<(String, String, Vec<u8>), MarketError> {
     let image_token = compute_image_token(owner_did, webp_bytes)?;
     let blob_id = derive_media_blob_id(&image_token)?;
-    let (key, nonce) = derive_media_key_and_nonce(&image_token)?;
+    let (raw_key, nonce) = derive_media_key_and_nonce(&image_token)?;
+    let key = Zeroizing::new(raw_key);
 
     let cipher =
-        XChaCha20Poly1305::new_from_slice(&key).map_err(|e| MarketError::Crypto(e.to_string()))?;
+        XChaCha20Poly1305::new_from_slice(&*key).map_err(|e| MarketError::Crypto(e.to_string()))?;
     let xnonce = XNonce::from_slice(&nonce);
     let payload = Payload {
         msg: webp_bytes,
@@ -455,10 +620,11 @@ pub fn open_media_blob(
         )));
     }
     let blob_id = derive_media_blob_id(image_token)?;
-    let (key, nonce) = derive_media_key_and_nonce(image_token)?;
+    let (raw_key, nonce) = derive_media_key_and_nonce(image_token)?;
+    let key = Zeroizing::new(raw_key);
 
     let cipher =
-        XChaCha20Poly1305::new_from_slice(&key).map_err(|e| MarketError::Crypto(e.to_string()))?;
+        XChaCha20Poly1305::new_from_slice(&*key).map_err(|e| MarketError::Crypto(e.to_string()))?;
     let xnonce = XNonce::from_slice(&nonce);
     let payload = Payload {
         msg: ciphertext,

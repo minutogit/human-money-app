@@ -309,7 +309,6 @@ const RS_BLOCKS_L: &[&[(usize, usize)]] = &[
         (145, 115),
         (145, 115),
         (145, 115),
-        (145, 115),
         (146, 116),
         (146, 116),
         (146, 116),
@@ -760,19 +759,7 @@ pub fn encode_qr_svg(data: &[u8]) -> Result<String, MarketError> {
     place_finder(0, dim - 7);
     place_finder(dim - 7, 0);
 
-    // Timing patterns
-    for r in 8..(dim - 8) {
-        if reserved[r][6].is_none() {
-            reserved[r][6] = Some(r % 2 == 0);
-        }
-    }
-    for c in 8..(dim - 8) {
-        if reserved[6][c].is_none() {
-            reserved[6][c] = Some(c % 2 == 0);
-        }
-    }
-
-    // Alignment patterns
+    // Alignment patterns (placed before timing patterns so centers on row/col 6 are not skipped)
     let align_pos = ALIGNMENT_PATTERN_POSITIONS[version - 1];
     for &r in align_pos {
         for &c in align_pos {
@@ -788,6 +775,18 @@ pub fn encode_qr_svg(data: &[u8]) -> Result<String, MarketError> {
                     reserved[ur][uc] = Some(is_dark);
                 }
             }
+        }
+    }
+
+    // Timing patterns
+    for r in 8..(dim - 8) {
+        if reserved[r][6].is_none() {
+            reserved[r][6] = Some(r % 2 == 0);
+        }
+    }
+    for c in 8..(dim - 8) {
+        if reserved[6][c].is_none() {
+            reserved[6][c] = Some(c % 2 == 0);
         }
     }
 

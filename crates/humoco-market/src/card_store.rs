@@ -61,8 +61,21 @@ pub fn haversine_km(a: (f64, f64), b: (f64, f64)) -> f64 {
 
 pub fn derive_effective_hops(env_hops: u8, card_did: &str, slot_writer_did: Option<&str>) -> u8 {
     match slot_writer_did {
-        Some(writer) if writer == card_did => 1,
-        Some(_) => env_hops.max(2),
+        Some(writer) => {
+            let same_author = writer == card_did
+                || matches!(
+                    (
+                        get_pubkey_from_user_id(writer),
+                        get_pubkey_from_user_id(card_did),
+                    ),
+                    (Ok(writer_pk), Ok(card_pk)) if writer_pk == card_pk
+                );
+            if same_author {
+                1
+            } else {
+                env_hops.max(2)
+            }
+        }
         None => env_hops,
     }
 }
@@ -237,7 +250,6 @@ fn accept_envelope_inner(
                     received_at: now,
                 },
             );
-            store.deleted_card_versions.remove(&card_key);
             false
         }
         Some(ext) => {
@@ -251,14 +263,20 @@ fn accept_envelope_inner(
                     hops: effective_hops,
                     received_at: now,
                 };
-                store.deleted_card_versions.remove(&card_key);
                 true
             } else if card.payload.v == ext.card.payload.v && card.jws == ext.card.jws {
-                merge(&mut ext.card, card.clone());
-                ext.hops = ext.hops.min(effective_hops);
+                if !merge(&mut ext.card, card.clone()) {
+                    return AcceptOutcome::Invalid(
+                        "Merged SD card violates card invariants".to_string(),
+                    );
+                }
+                ext.hops = if ext.hops == 0 {
+                    effective_hops
+                } else {
+                    ext.hops.min(effective_hops)
+                };
                 ext.card_wire = crate::sd_card::render_wire(&ext.card, ext.hops, WireFilter::Full)
                     .unwrap_or_else(|| ext.card_wire.clone());
-                store.deleted_card_versions.remove(&card_key);
                 false
             } else {
                 // Either card.payload.v < ext.card.payload.v or
@@ -353,10 +371,15 @@ fn accept_envelope_inner(
 
         if let Some(k) = victim_pk {
             store.cards.remove(&k);
+            if k == card_key {
+                return AcceptOutcome::IgnoredStale;
+            }
         } else {
             break;
         }
     }
+
+    store.deleted_card_versions.remove(&card_key);
 
     AcceptOutcome::Accepted {
         did: card_key,

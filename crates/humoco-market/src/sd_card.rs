@@ -31,12 +31,14 @@ pub fn compute_digest128(raw_b64: &str) -> Digest128 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CardJwsHeader {
     pub alg: String,
     pub typ: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CardPayload {
     pub did: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -61,7 +63,12 @@ impl CardPayload {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "k", content = "v", rename_all = "snake_case")]
+#[serde(
+    tag = "k",
+    content = "v",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum CardItem {
     Name {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -162,23 +169,101 @@ pub fn new_ad_id() -> String {
 }
 
 pub fn is_loopback_http(url: &str) -> bool {
+    if url.is_empty()
+        || url
+            .chars()
+            .any(|c| c.is_control() || c.is_whitespace() || c == '\\')
+    {
+        return false;
+    }
     let lower = url.to_ascii_lowercase();
     let Some(after_scheme) = lower.strip_prefix("http://") else {
         return false;
     };
     let authority = after_scheme.split(['/', '?', '#']).next().unwrap_or("");
+    if authority.contains('@') {
+        return false;
+    }
+    let mut literal_host_ok = false;
     for host in ["127.0.0.1", "localhost", "[::1]"] {
         if authority == host
             || authority.strip_prefix(host).is_some_and(|rest| {
                 rest.starts_with(':')
                     && rest.len() > 1
-                    && rest[1..].chars().all(|c| c.is_ascii_digit())
+                    && rest[1..].bytes().all(|b| b.is_ascii_digit())
             })
         {
-            return true;
+            literal_host_ok = true;
+            break;
         }
     }
-    false
+    if !literal_host_ok {
+        return false;
+    }
+
+    let Ok(parsed) = url::Url::parse(url) else {
+        return false;
+    };
+    if parsed.scheme() != "http"
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.port() == Some(0)
+    {
+        return false;
+    }
+    match parsed.host() {
+        Some(url::Host::Domain(d)) => d.eq_ignore_ascii_case("localhost"),
+        Some(url::Host::Ipv4(ip)) => ip == std::net::Ipv4Addr::LOCALHOST,
+        Some(url::Host::Ipv6(ip)) => ip == std::net::Ipv6Addr::LOCALHOST,
+        None => false,
+    }
+}
+
+fn validate_drop_url(url: &str, idx: usize, field: &str) -> Result<(), MarketError> {
+    if url.is_empty()
+        || url.len() > 512
+        || url
+            .chars()
+            .any(|c| c.is_control() || c.is_whitespace() || c == '\\')
+    {
+        return Err(MarketError::Validation(format!(
+            "drop[{}] {} is empty, too long, or contains invalid characters",
+            idx, field
+        )));
+    }
+
+    if let Some(after_scheme) = url.strip_prefix("https://") {
+        let authority = after_scheme.split(['/', '?', '#']).next().unwrap_or("");
+        if authority.contains('@') {
+            return Err(MarketError::Validation(format!(
+                "drop[{}] {} must not contain userinfo credentials",
+                idx, field
+            )));
+        }
+        let parsed = url::Url::parse(url).map_err(|e| {
+            MarketError::Validation(format!("drop[{}] {} invalid URL: {}", idx, field, e))
+        })?;
+        if parsed.scheme() != "https"
+            || parsed.host().is_none()
+            || !parsed.username().is_empty()
+            || parsed.password().is_some()
+            || parsed.port() == Some(0)
+        {
+            return Err(MarketError::Validation(format!(
+                "drop[{}] {} must be a valid https:// URL without userinfo or port 0",
+                idx, field
+            )));
+        }
+        return Ok(());
+    }
+
+    if !is_loopback_http(url) {
+        return Err(MarketError::Validation(format!(
+            "drop[{}] {} must start with https:// (or valid loopback http://), got {}",
+            idx, field, url
+        )));
+    }
+    Ok(())
 }
 
 fn validate_drops(drops: &[DropDescriptor]) -> Result<(), MarketError> {
@@ -190,18 +275,8 @@ fn validate_drops(drops: &[DropDescriptor]) -> Result<(), MarketError> {
         )));
     }
     for (i, drop) in drops.iter().enumerate() {
-        if !drop.write_url.starts_with("https://") && !is_loopback_http(&drop.write_url) {
-            return Err(MarketError::Validation(format!(
-                "drop[{}] write_url must start with https://, got {}",
-                i, drop.write_url
-            )));
-        }
-        if !drop.read_url.starts_with("https://") && !is_loopback_http(&drop.read_url) {
-            return Err(MarketError::Validation(format!(
-                "drop[{}] read_url must start with https://, got {}",
-                i, drop.read_url
-            )));
-        }
+        validate_drop_url(&drop.write_url, i, "write_url")?;
+        validate_drop_url(&drop.read_url, i, "read_url")?;
         crate::sync_access::parse_ed25519_pubkey_hex64(&drop.drop_pub)
             .map_err(|e| MarketError::Validation(format!("drop[{}] drop_pub error: {}", i, e)))?;
 
@@ -210,6 +285,66 @@ fn validate_drops(drops: &[DropDescriptor]) -> Result<(), MarketError> {
                 MarketError::Validation(format!("drop[{}] slot_id error: {}", i, e))
             })?;
         }
+    }
+    Ok(())
+}
+
+fn validate_profile_url(raw: &str) -> Result<(), MarketError> {
+    if raw.is_empty() || raw.chars().count() > 200 {
+        return Err(MarketError::Validation(
+            "Url must be 1..=200 characters".to_string(),
+        ));
+    }
+    if raw
+        .chars()
+        .any(|c| c.is_control() || c.is_whitespace() || c == '\\')
+    {
+        return Err(MarketError::Validation(
+            "Url contains invalid control, whitespace, or backslash characters".to_string(),
+        ));
+    }
+    let lower = raw.to_ascii_lowercase();
+    let parsed = if raw.contains("://") {
+        if !lower.starts_with("https://") && !lower.starts_with("http://") {
+            return Err(MarketError::Validation(
+                "Url scheme must be http:// or https://".to_string(),
+            ));
+        }
+        let after_scheme = raw.split_once("://").map(|(_, rest)| rest).unwrap_or("");
+        let authority = after_scheme.split(['/', '?', '#']).next().unwrap_or("");
+        if authority.contains('@') {
+            return Err(MarketError::Validation(
+                "Url must not contain userinfo credentials".to_string(),
+            ));
+        }
+        url::Url::parse(raw)
+            .map_err(|e| MarketError::Validation(format!("Invalid profile Url: {}", e)))?
+    } else {
+        let authority = raw.split(['/', '?', '#']).next().unwrap_or("");
+        if authority.contains('@') {
+            return Err(MarketError::Validation(
+                "Url must not contain userinfo credentials".to_string(),
+            ));
+        }
+        if let Some((_, port_str)) = authority.split_once(':') {
+            if port_str.is_empty() || !port_str.bytes().all(|b| b.is_ascii_digit()) {
+                return Err(MarketError::Validation(
+                    "Url without http(s):// must not specify a non-http scheme".to_string(),
+                ));
+            }
+        }
+        url::Url::parse(&format!("https://{}", raw))
+            .map_err(|e| MarketError::Validation(format!("Invalid profile Url: {}", e)))?
+    };
+
+    if parsed.host().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.port() == Some(0)
+    {
+        return Err(MarketError::Validation(
+            "Url must have a valid host without userinfo or port 0".to_string(),
+        ));
     }
     Ok(())
 }
@@ -249,16 +384,14 @@ fn validate_card_item_fields(item: &CardItem, valid_until: u64) -> Result<(), Ma
             }
         }
         CardItem::Organization(s) => {
-            let trimmed = s.trim();
-            if trimmed.is_empty() || trimmed.chars().count() > 100 {
+            if s.trim().is_empty() || s.chars().count() > 100 {
                 return Err(MarketError::Validation(
                     "Organization must be 1..=100 characters".to_string(),
                 ));
             }
         }
         CardItem::Community(s) => {
-            let trimmed = s.trim();
-            if trimmed.is_empty() || trimmed.chars().count() > 100 {
+            if s.trim().is_empty() || s.chars().count() > 100 {
                 return Err(MarketError::Validation(
                     "Community must be 1..=100 characters".to_string(),
                 ));
@@ -303,8 +436,7 @@ fn validate_card_item_fields(item: &CardItem, valid_until: u64) -> Result<(), Ma
             street,
             house_number,
         } => {
-            let trimmed_st = street.trim();
-            if trimmed_st.is_empty() || trimmed_st.chars().count() > 100 {
+            if street.trim().is_empty() || street.chars().count() > 100 {
                 return Err(MarketError::Validation(
                     "street must be 1..=100 characters".to_string(),
                 ));
@@ -318,55 +450,45 @@ fn validate_card_item_fields(item: &CardItem, valid_until: u64) -> Result<(), Ma
             }
         }
         CardItem::Coordinates(s) => {
-            let trimmed = s.trim();
-            if trimmed.is_empty() || trimmed.chars().count() > 60 {
+            if s.trim().is_empty() || s.chars().count() > 60 {
                 return Err(MarketError::Validation(
                     "Coordinates must be 1..=60 characters".to_string(),
                 ));
             }
         }
         CardItem::Email(s) => {
-            let trimmed = s.trim();
-            if trimmed.is_empty() || trimmed.chars().count() > 100 {
+            if s.trim().is_empty() || s.chars().count() > 100 {
                 return Err(MarketError::Validation(
                     "Email must be 1..=100 characters".to_string(),
                 ));
             }
         }
         CardItem::Phone(s) => {
-            let trimmed = s.trim();
-            if trimmed.is_empty() || trimmed.chars().count() > 40 {
+            if s.trim().is_empty() || s.chars().count() > 40 {
                 return Err(MarketError::Validation(
                     "Phone must be 1..=40 characters".to_string(),
                 ));
             }
         }
         CardItem::Url(s) => {
-            let trimmed = s.trim();
-            if trimmed.is_empty() || trimmed.chars().count() > 200 {
-                return Err(MarketError::Validation(
-                    "Url must be 1..=200 characters".to_string(),
-                ));
-            }
+            validate_profile_url(s)?;
         }
         CardItem::Picture(s) => {
             crate::media::validate_avatar_data_uri(s)?;
         }
         CardItem::Gender(s) => {
-            let trimmed = s.trim();
-            if trimmed.is_empty() || trimmed.chars().count() > 20 {
+            if s.trim().is_empty() || s.chars().count() > 20 {
                 return Err(MarketError::Validation(
                     "Gender must be 1..=20 characters".to_string(),
                 ));
             }
         }
         CardItem::Skill(s) => {
-            let title_trimmed = s.title.trim();
-            let title_count = title_trimmed.chars().count();
-            if title_count == 0 || title_count > MAX_SKILL_TITLE_CHARS {
+            let raw_title_count = s.title.chars().count();
+            if s.title.trim().is_empty() || raw_title_count > MAX_SKILL_TITLE_CHARS {
                 return Err(MarketError::Validation(format!(
                     "Skill title length {} must be between 1 and {}",
-                    title_count, MAX_SKILL_TITLE_CHARS
+                    raw_title_count, MAX_SKILL_TITLE_CHARS
                 )));
             }
             if let Some(ref text) = s.text {
@@ -395,12 +517,11 @@ fn validate_card_item_fields(item: &CardItem, valid_until: u64) -> Result<(), Ma
                     ad.id
                 )));
             }
-            let title_trimmed = ad.title.trim();
-            let title_count = title_trimmed.chars().count();
-            if title_count == 0 || title_count > MAX_AD_TITLE_CHARS {
+            let raw_title_count = ad.title.chars().count();
+            if ad.title.trim().is_empty() || raw_title_count > MAX_AD_TITLE_CHARS {
                 return Err(MarketError::Validation(format!(
                     "Ad title length {} must be between 1 and {}",
-                    title_count, MAX_AD_TITLE_CHARS
+                    raw_title_count, MAX_AD_TITLE_CHARS
                 )));
             }
             if let Some(ref text) = ad.text {
@@ -482,9 +603,20 @@ pub fn validate_sd_card(card: &SdCard, wire_len: usize) -> Result<(), MarketErro
         )));
     }
 
-    // Verify _sd digests are strictly sorted ascending and unique
+    // Verify _sd digests are strictly sorted ascending, unique, and valid 128-bit Base64URL digests
     let mut seen_sd = HashSet::with_capacity(CARD_SD_PADDED_LEN);
     for (i, d) in card.payload._sd.iter().enumerate() {
+        if !check_strict_base64url(d)
+            || d.len() != 22
+            || URL_SAFE_NO_PAD
+                .decode(d)
+                .map_or(true, |bytes| bytes.len() != 16)
+        {
+            return Err(MarketError::Validation(format!(
+                "Invalid 128-bit digest in _sd: {}",
+                d
+            )));
+        }
         if !seen_sd.insert(d.clone()) {
             return Err(MarketError::Validation(format!(
                 "Duplicate digest in _sd: {}",
@@ -742,8 +874,13 @@ pub fn verify_sd_card(wire: &str) -> Result<SdCard, MarketError> {
         )));
     }
 
-    let parts: Vec<&str> = wire.split('~').collect();
-    if parts.is_empty() {
+    let Some(body) = wire.strip_suffix('~') else {
+        return Err(MarketError::InvalidJws(
+            "SD-card wire must end with '~'".to_string(),
+        ));
+    };
+    let parts: Vec<&str> = body.split('~').collect();
+    if parts.is_empty() || parts[0].is_empty() {
         return Err(MarketError::InvalidJws("Empty card wire".to_string()));
     }
 
@@ -838,7 +975,9 @@ pub fn verify_sd_card(wire: &str) -> Result<SdCard, MarketError> {
 
     for raw_disc in &parts[1..] {
         if raw_disc.is_empty() {
-            continue;
+            return Err(MarketError::InvalidJws(
+                "Empty disclosure token in SD-card wire".to_string(),
+            ));
         }
         if !check_strict_base64url(raw_disc) {
             return Err(MarketError::Validation(
@@ -1066,12 +1205,20 @@ pub fn render_wire(card: &SdCard, target_distance: u8, filter: WireFilter) -> Op
 }
 
 pub fn merge(stored: &mut SdCard, incoming: SdCard) -> bool {
-    if stored.jws != incoming.jws {
+    if stored.jws != incoming.jws || stored.payload != incoming.payload {
         return false;
     }
+    let mut candidate = stored.clone();
     for (digest, raw_b64) in incoming.disclosures {
-        stored.disclosures.entry(digest).or_insert(raw_b64);
+        candidate.disclosures.entry(digest).or_insert(raw_b64);
     }
+    let Some(wire) = render_wire(&candidate, 1, WireFilter::Full) else {
+        return false;
+    };
+    if validate_sd_card(&candidate, wire.len()).is_err() {
+        return false;
+    }
+    stored.disclosures = candidate.disclosures;
     true
 }
 

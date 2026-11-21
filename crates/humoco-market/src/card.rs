@@ -10,7 +10,10 @@ pub fn own_envelope(card_wire: String) -> CardEnvelope {
 }
 
 pub fn forward_envelope(stored: &StoredCard) -> Option<CardEnvelope> {
-    let next_hops = stored.hops + 1;
+    if stored.hops == 0 {
+        return None;
+    }
+    let next_hops = stored.hops.checked_add(1)?;
     if next_hops > stored.card.payload.max_hops {
         return None;
     }

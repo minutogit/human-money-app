@@ -212,8 +212,7 @@ pub fn build_market_view<'a>(
 
     // 2. Process stored cards
     for stored in cards {
-        // Ignore empty `<jws>~` redacted/tombstone cards for UI rendering while keeping them in CardStore.
-        if stored.card.disclosures.is_empty() {
+        if stored.card.payload.valid_until <= now {
             continue;
         }
         let card_pk = match get_pubkey_from_user_id(&stored.card.payload.did) {
@@ -236,7 +235,11 @@ pub fn build_market_view<'a>(
 
         if let Some(entry) = merged.get_mut(&account_key) {
             if let Some(ref existing_card) = entry.card_data {
-                if stored.card.payload.v > existing_card.card.payload.v {
+                if stored.card.payload.v > existing_card.card.payload.v
+                    || (stored.card.payload.v == existing_card.card.payload.v
+                        && existing_card.card.disclosures.is_empty()
+                        && !stored.card.disclosures.is_empty())
+                {
                     entry.card_data = Some(stored.clone());
                 }
             } else {
@@ -269,6 +272,13 @@ pub fn build_market_view<'a>(
             continue;
         }
 
+        // Ignore empty `<jws>~` redacted/tombstone cards for UI rendering while still letting
+        // a higher-version tombstone supersede any stale active card in the input slice.
+        let active_card = entry
+            .card_data
+            .as_ref()
+            .filter(|c| !c.card.disclosures.is_empty());
+
         let mut skills = Vec::new();
         let mut sources = Vec::new();
         let mut standards = Vec::new();
@@ -279,7 +289,7 @@ pub fn build_market_view<'a>(
         let mut allow_inquiries = false;
 
         // Card skills appear first
-        if let Some(ref stored) = entry.card_data {
+        if let Some(stored) = active_card {
             for s in extract_skills(&stored.card) {
                 skills.push(MarketSkill {
                     title: s.title,
@@ -325,7 +335,7 @@ pub fn build_market_view<'a>(
         // Profile selection:
         // Card profile wins if card.payload.v >= voucher_as_of.
         // Maintainer decision 7: Preserve voucher `needs` on `profile.needs`.
-        let (profile, as_of) = match (&entry.card_data, &entry.voucher_data) {
+        let (profile, as_of) = match (active_card, &entry.voucher_data) {
             (Some(c), Some(v)) => {
                 let max_as_of = c.card.payload.v.max(v.newest_as_of);
                 let mut prof = if c.card.payload.v >= v.newest_as_of {
@@ -343,7 +353,7 @@ pub fn build_market_view<'a>(
             (None, None) => continue,
         };
 
-        let recipient_did = if let Some(ref c) = entry.card_data {
+        let recipient_did = if let Some(c) = active_card {
             c.card.payload.recipient_id().to_string()
         } else if let Some(ref v) = entry.voucher_data {
             v.newest_profile
