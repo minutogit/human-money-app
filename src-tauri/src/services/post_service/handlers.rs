@@ -556,7 +556,7 @@ fn handle_voucher_for_signing(
             sender_did: ctx.sender_did.to_string(),
             sender_name,
             created_at: super::clamp_post_ts(ctx.envelope.created_at, ctx.now_secs),
-            reply_syncs: super::sanitize_sync_descriptors(
+            reply_syncs: crate::services::sync_endpoints::sanitize_untrusted_sync_descriptors(
                 &ctx.envelope.reply_drops,
                 humoco_market::MAX_CARD_DROPS,
             ),
@@ -1088,7 +1088,7 @@ fn handle_market_inquiry(
         created_at: ts,
         updated_at: ts,
         unread: true,
-        reply_syncs: super::sanitize_sync_descriptors(
+        reply_syncs: crate::services::sync_endpoints::sanitize_untrusted_sync_descriptors(
             &ctx.envelope.reply_drops,
             humoco_market::MAX_CARD_DROPS,
         ),
@@ -1208,10 +1208,11 @@ fn handle_market_inquiry_message(
         }
 
         if !ctx.envelope.reply_drops.is_empty() {
-            let sanitized_reply = super::sanitize_sync_descriptors(
-                &ctx.envelope.reply_drops,
-                humoco_market::MAX_CARD_DROPS,
-            );
+            let sanitized_reply =
+                crate::services::sync_endpoints::sanitize_untrusted_sync_descriptors(
+                    &ctx.envelope.reply_drops,
+                    humoco_market::MAX_CARD_DROPS,
+                );
             if !sanitized_reply.is_empty() {
                 item.reply_syncs = sanitized_reply;
             }

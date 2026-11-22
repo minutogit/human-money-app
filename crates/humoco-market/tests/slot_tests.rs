@@ -1,12 +1,13 @@
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use human_money_core::crypto::{create_user_id, ed25519_sk_to_x25519_sk};
 use humoco_market::{
-    build_card_bundle, derive_delta_prefix, open_multi_class_slot_blob, open_slot_blob,
-    open_slot_payload, pad_backup_slot_bytes, seal_multi_class_slot_blob, seal_slot_blob,
-    seal_slot_payload, sign_sd_card, unpad_backup_slot_bytes, validate_sync_prefix, CardBundle,
-    CardEnvelope, CardItem, CardPayload, CardPayloadInput, CardStore, MarketError, SdCard, Skill,
-    StoredCard, BACKUP_PAD_BLOCK_BYTES, BACKUP_SLOT_MAGIC, CARD_SD_PADDED_LEN,
-    DROP_BACKUP_MAX_BYTES, MAX_DECOMPRESSED_SLOT_BYTES, SLOT_MAGIC, SLOT_MULTI_MAGIC,
+    accept_envelope_with_writer, build_card_bundle, derive_delta_prefix,
+    open_multi_class_slot_blob, open_slot_blob, open_slot_payload, pad_backup_slot_bytes,
+    seal_multi_class_slot_blob, seal_slot_blob, seal_slot_payload, sign_card_bundle, sign_sd_card,
+    unpad_backup_slot_bytes, validate_sync_prefix, AcceptOutcome, CardEnvelope, CardItem,
+    CardPayload, CardPayloadInput, CardStore, MarketError, SdCard, Skill, StoredCard,
+    BACKUP_PAD_BLOCK_BYTES, BACKUP_SLOT_MAGIC, CARD_SD_PADDED_LEN, DROP_BACKUP_MAX_BYTES,
+    MAX_DECOMPRESSED_SLOT_BYTES, SLOT_MAGIC, SLOT_MULTI_MAGIC,
 };
 use proptest::prelude::*;
 
@@ -32,6 +33,9 @@ fn dummy_sd_card(did: &str, v: u64) -> SdCard {
 
 #[test]
 fn test_slot_blob_seal_open_and_unauthorized() {
+    let writer_sk = SigningKey::from_bytes(&[9u8; 32]);
+    let writer_did = create_user_id(&writer_sk.verifying_key(), None).unwrap();
+
     let reader_sk = SigningKey::from_bytes(&[1u8; 32]);
     let reader_vk = reader_sk.verifying_key();
     let reader_x_sk = ed25519_sk_to_x25519_sk(&reader_sk);
@@ -39,12 +43,15 @@ fn test_slot_blob_seal_open_and_unauthorized() {
     let stranger_sk = SigningKey::from_bytes(&[2u8; 32]);
     let stranger_x_sk = ed25519_sk_to_x25519_sk(&stranger_sk);
 
-    let bundle = CardBundle {
-        envelopes: vec![CardEnvelope {
+    let bundle = sign_card_bundle(
+        vec![CardEnvelope {
             card_wire: "header.payload.signature~".to_string(),
             hops: 1,
         }],
-    };
+        &writer_did,
+        &writer_sk,
+    )
+    .unwrap();
 
     let blob = seal_slot_blob(&bundle, &[reader_vk], 65536).unwrap();
     assert_eq!(&blob[0..8], SLOT_MAGIC);
@@ -60,7 +67,9 @@ fn test_slot_blob_seal_open_and_unauthorized() {
 
 #[test]
 fn test_recipient_padding_bucket_sizes() {
-    let bundle = CardBundle { envelopes: vec![] };
+    let writer_sk = SigningKey::from_bytes(&[10u8; 32]);
+    let writer_did = create_user_id(&writer_sk.verifying_key(), None).unwrap();
+    let bundle = sign_card_bundle(vec![], &writer_did, &writer_sk).unwrap();
 
     let generate_readers = |n: usize| -> Vec<VerifyingKey> {
         (0..n)
@@ -111,12 +120,15 @@ fn test_slot_blob_contains_no_plaintext_dids() {
     let author_vk = author_sk.verifying_key();
     let author_did = create_user_id(&author_vk, None).unwrap();
 
-    let bundle = CardBundle {
-        envelopes: vec![CardEnvelope {
+    let bundle = sign_card_bundle(
+        vec![CardEnvelope {
             card_wire: format!("header.{}.signature~", author_did),
             hops: 1,
         }],
-    };
+        &author_did,
+        &author_sk,
+    )
+    .unwrap();
 
     let blob = seal_slot_blob(&bundle, &[reader_vk], 65536).unwrap();
 
@@ -158,6 +170,9 @@ fn test_build_card_bundle_sorting_and_trimming() {
         }
     };
 
+    let writer_sk = SigningKey::from_bytes(&[77u8; 32]);
+    let writer_did = create_user_id(&writer_sk.verifying_key(), None).unwrap();
+
     let now = 1_700_000_000;
     let card_refs: Vec<&StoredCard> = store.cards.values().collect();
     let bundle = build_card_bundle(
@@ -168,7 +183,10 @@ fn test_build_card_bundle_sorting_and_trimming() {
         &trust_level,
         16,
         524_288,
-    );
+        &writer_did,
+        &writer_sk,
+    )
+    .unwrap();
     // Own card is first
     assert_eq!(bundle.envelopes[0].card_wire, "own-wire~");
     assert_eq!(bundle.envelopes[0].hops, 1);
@@ -176,12 +194,26 @@ fn test_build_card_bundle_sorting_and_trimming() {
     assert_eq!(bundle.envelopes.len(), 31);
 
     // Quiet friend (own_card_wire == None) still forwards stored cards
-    let quiet_bundle = build_card_bundle(None, &card_refs, None, now, &trust_level, 16, 524_288);
+    let quiet_bundle = build_card_bundle(
+        None,
+        &card_refs,
+        None,
+        now,
+        &trust_level,
+        16,
+        524_288,
+        &writer_did,
+        &writer_sk,
+    )
+    .unwrap();
     assert_eq!(quiet_bundle.envelopes.len(), 30);
 }
 
 #[test]
 fn test_slot_deflate_compression_and_zip_bomb_cap() {
+    let writer_sk = SigningKey::from_bytes(&[30u8; 32]);
+    let writer_did = create_user_id(&writer_sk.verifying_key(), None).unwrap();
+
     let reader_sk = SigningKey::from_bytes(&[31u8; 32]);
     let reader_vk = reader_sk.verifying_key();
     let reader_x_sk = ed25519_sk_to_x25519_sk(&reader_sk);
@@ -196,7 +228,7 @@ fn test_slot_deflate_compression_and_zip_bomb_cap() {
             hops: (i % 2 + 1) as u8,
         })
         .collect();
-    let bundle = CardBundle { envelopes };
+    let bundle = sign_card_bundle(envelopes, &writer_did, &writer_sk).unwrap();
     let raw_json = serde_json::to_vec(&bundle).unwrap();
     let sealed = seal_slot_blob(&bundle, &[reader_vk], 65_536).unwrap();
 
@@ -271,6 +303,8 @@ fn test_build_card_bundle_fair_hop_interleave_and_geo_remote_priority() {
     let h2_remote_did = h2_remote.card.payload.did.clone();
     let h2_far_did = h2_far.card.payload.did.clone();
 
+    let writer_sk = SigningKey::from_bytes(&[78u8; 32]);
+    let writer_did = create_user_id(&writer_sk.verifying_key(), None).unwrap();
     let refs = vec![&h1_far, &h1_near, &h2_far, &h2_remote];
     let trust_level = |_did: &str| -> u8 { 2 };
     let berlin = Some((52.52, 13.405));
@@ -282,7 +316,10 @@ fn test_build_card_bundle_fair_hop_interleave_and_geo_remote_priority() {
         &trust_level,
         16,
         524_288,
-    );
+        &writer_did,
+        &writer_sk,
+    )
+    .unwrap();
 
     // Expect fair 50/50 interleave with geo/remote priority:
     // [own, H1_near, H2_remote, H1_far, H2_far]
@@ -576,7 +613,7 @@ fn test_open_slot_blob_supports_multi_class_tombstone_separation() {
     let author_did = create_user_id(&author_sk.verifying_key(), None).unwrap();
     let card = sign_sd_card(
         CardPayloadInput {
-            did: author_did,
+            did: author_did.clone(),
             v: 200,
             valid_until: 1_900_000_000,
             max_hops: 2,
@@ -595,19 +632,25 @@ fn test_open_slot_blob_supports_multi_class_tombstone_separation() {
     )
     .unwrap();
 
-    let full_bundle = CardBundle {
-        envelopes: vec![CardEnvelope {
+    let full_bundle = sign_card_bundle(
+        vec![CardEnvelope {
             hops: 1,
             card_wire: humoco_market::render_wire(&card, 1, humoco_market::WireFilter::Full)
                 .unwrap(),
         }],
-    };
-    let tomb_bundle = CardBundle {
-        envelopes: vec![CardEnvelope {
+        &author_did,
+        &author_sk,
+    )
+    .unwrap();
+    let tomb_bundle = sign_card_bundle(
+        vec![CardEnvelope {
             hops: 1,
             card_wire: format!("{}~", card.jws),
         }],
-    };
+        &author_did,
+        &author_sk,
+    )
+    .unwrap();
     let full_bytes = serde_json::to_vec(&full_bundle).unwrap();
     let tomb_bytes = serde_json::to_vec(&tomb_bundle).unwrap();
 
@@ -625,4 +668,273 @@ fn test_open_slot_blob_supports_multi_class_tombstone_separation() {
 
     let evicted_opened = open_slot_blob(&blob, &evicted_x_sk).unwrap().unwrap();
     assert_eq!(evicted_opened, tomb_bundle);
+}
+
+#[test]
+fn s02_x1_card_bundle_writer_attestation_rejects_tampered_and_mismatched_signers() {
+    let writer_sk = SigningKey::from_bytes(&[41u8; 32]);
+    let writer_did = create_user_id(&writer_sk.verifying_key(), Some("shop")).unwrap();
+    let other_sk = SigningKey::from_bytes(&[42u8; 32]);
+    let other_did = create_user_id(&other_sk.verifying_key(), None).unwrap();
+
+    let reader_sk = SigningKey::from_bytes(&[43u8; 32]);
+    let reader_vk = reader_sk.verifying_key();
+    let reader_x_sk = ed25519_sk_to_x25519_sk(&reader_sk);
+
+    // 1. Mismatched signing key vs writer_did rejected at sign & build time
+    assert!(sign_card_bundle(vec![], &writer_did, &other_sk).is_err());
+    assert!(build_card_bundle(
+        None,
+        &[],
+        None,
+        1_700_000_000,
+        &|_| 1,
+        16,
+        65_536,
+        &writer_did,
+        &other_sk
+    )
+    .is_err());
+    assert!(sign_card_bundle(vec![], &format!(" {}", writer_did), &writer_sk).is_err());
+
+    let valid_bundle = sign_card_bundle(
+        vec![CardEnvelope {
+            card_wire: "hdr.pay.sig~".to_string(),
+            hops: 1,
+        }],
+        &writer_did,
+        &writer_sk,
+    )
+    .unwrap();
+
+    // 2. Tampered writer_did (after signing) fails seal & open
+    let mut tampered_did = valid_bundle.clone();
+    tampered_did.writer_did = other_did.clone();
+    assert!(seal_slot_blob(&tampered_did, &[reader_vk], 65_536).is_err());
+    let tampered_did_blob = seal_slot_payload(
+        &serde_json::to_vec(&tampered_did).unwrap(),
+        &[reader_vk],
+        65_536,
+    )
+    .unwrap();
+    assert!(open_slot_blob(&tampered_did_blob, &reader_x_sk).is_err());
+
+    // 3. Tampered writer_sig (flipped nibble & uppercase hex) fails open
+    let mut tampered_sig = valid_bundle.clone();
+    let flipped_char = if tampered_sig.writer_sig.starts_with('a') {
+        "b"
+    } else {
+        "a"
+    };
+    tampered_sig.writer_sig = format!("{}{}", flipped_char, &tampered_sig.writer_sig[1..]);
+    let tampered_sig_blob = seal_slot_payload(
+        &serde_json::to_vec(&tampered_sig).unwrap(),
+        &[reader_vk],
+        65_536,
+    )
+    .unwrap();
+    assert!(open_slot_blob(&tampered_sig_blob, &reader_x_sk).is_err());
+
+    let mut upper_sig = valid_bundle.clone();
+    upper_sig.writer_sig = upper_sig.writer_sig.to_ascii_uppercase();
+    let upper_sig_blob = seal_slot_payload(
+        &serde_json::to_vec(&upper_sig).unwrap(),
+        &[reader_vk],
+        65_536,
+    )
+    .unwrap();
+    assert!(open_slot_blob(&upper_sig_blob, &reader_x_sk).is_err());
+
+    // 4. Tampered envelope hops or card_wire fails open
+    let mut tampered_hops = valid_bundle.clone();
+    tampered_hops.envelopes[0].hops = 2;
+    let tampered_hops_blob = seal_slot_payload(
+        &serde_json::to_vec(&tampered_hops).unwrap(),
+        &[reader_vk],
+        65_536,
+    )
+    .unwrap();
+    assert!(open_slot_blob(&tampered_hops_blob, &reader_x_sk).is_err());
+
+    // 5. Legacy unsigned JSON & unknown JSON fields rejected by #[serde(deny_unknown_fields)]
+    let legacy_json = br#"{"envelopes":[{"card_wire":"hdr.pay.sig~","hops":1}]}"#;
+    let legacy_blob = seal_slot_payload(legacy_json, &[reader_vk], 65_536).unwrap();
+    assert!(open_slot_blob(&legacy_blob, &reader_x_sk).is_err());
+
+    let unknown_field_json = format!(
+        r#"{{"writer_did":"{}","writer_sig":"{}","envelopes":[],"extra":1}}"#,
+        valid_bundle.writer_did, valid_bundle.writer_sig
+    );
+    let unknown_blob =
+        seal_slot_payload(unknown_field_json.as_bytes(), &[reader_vk], 65_536).unwrap();
+    assert!(open_slot_blob(&unknown_blob, &reader_x_sk).is_err());
+}
+
+#[test]
+fn s02_x1_forwarded_card_claiming_hops_1_clamped_by_writer_did() {
+    let now = 1_700_000_000u64;
+    let valid_until = now + 30 * 86_400;
+
+    let bob_sk = SigningKey::from_bytes(&[51u8; 32]);
+    let bob_did = create_user_id(&bob_sk.verifying_key(), Some("bob")).unwrap();
+
+    let carol_sk = SigningKey::from_bytes(&[52u8; 32]);
+    let carol_did = create_user_id(&carol_sk.verifying_key(), None).unwrap();
+
+    let dave_sk = SigningKey::from_bytes(&[53u8; 32]);
+    let dave_did = create_user_id(&dave_sk.verifying_key(), None).unwrap();
+
+    let alice_sk = SigningKey::from_bytes(&[54u8; 32]);
+    let alice_vk = alice_sk.verifying_key();
+    let alice_x_sk = ed25519_sk_to_x25519_sk(&alice_sk);
+
+    // Carol allows max_hops = 2, with a hop-1-only phone and hop-2 name
+    let carol_card = sign_sd_card(
+        CardPayloadInput {
+            did: carol_did.clone(),
+            v: 10,
+            valid_until,
+            max_hops: 2,
+            ad_count: 0,
+            allow_inquiries: false,
+            drops: vec![],
+        },
+        vec![
+            (
+                CardItem::Name {
+                    first_name: Some("Carol".to_string()),
+                    last_name: None,
+                },
+                2,
+            ),
+            (CardItem::Phone("+49-123".to_string()), 1),
+        ],
+        &carol_sk,
+    )
+    .unwrap();
+    let carol_wire =
+        humoco_market::render_wire(&carol_card, 1, humoco_market::WireFilter::Full).unwrap();
+
+    // Dave sets max_hops = 1 (must NEVER propagate via forwarder)
+    let dave_card = sign_sd_card(
+        CardPayloadInput {
+            did: dave_did.clone(),
+            v: 10,
+            valid_until,
+            max_hops: 1,
+            ad_count: 0,
+            allow_inquiries: false,
+            drops: vec![],
+        },
+        vec![(
+            CardItem::Name {
+                first_name: Some("Dave".to_string()),
+                last_name: None,
+            },
+            1,
+        )],
+        &dave_sk,
+    )
+    .unwrap();
+    let dave_wire =
+        humoco_market::render_wire(&dave_card, 1, humoco_market::WireFilter::Full).unwrap();
+
+    // Bob's own card (with different subaccount prefix than writer_did, same root key!)
+    let bob_card_did = create_user_id(&bob_sk.verifying_key(), Some("shop")).unwrap();
+    let bob_card = sign_sd_card(
+        CardPayloadInput {
+            did: bob_card_did.clone(),
+            v: 10,
+            valid_until,
+            max_hops: 2,
+            ad_count: 0,
+            allow_inquiries: false,
+            drops: vec![],
+        },
+        vec![(
+            CardItem::Name {
+                first_name: Some("Bob".to_string()),
+                last_name: None,
+            },
+            1,
+        )],
+        &bob_sk,
+    )
+    .unwrap();
+    let bob_wire =
+        humoco_market::render_wire(&bob_card, 1, humoco_market::WireFilter::Full).unwrap();
+
+    // Malicious Bob wraps all three cards in HIS signed CardBundle claiming hops: 1 for everyone
+    let bundle = sign_card_bundle(
+        vec![
+            CardEnvelope {
+                card_wire: bob_wire,
+                hops: 1,
+            },
+            CardEnvelope {
+                card_wire: carol_wire,
+                hops: 1,
+            },
+            CardEnvelope {
+                card_wire: dave_wire,
+                hops: 1,
+            },
+        ],
+        &bob_did,
+        &bob_sk,
+    )
+    .unwrap();
+
+    let blob = seal_slot_blob(&bundle, &[alice_vk], 65_536).unwrap();
+    let opened = open_slot_blob(&blob, &alice_x_sk).unwrap().unwrap();
+    assert_eq!(opened.writer_did, bob_did);
+
+    let mut store = CardStore::default();
+
+    // 1. Bob's own card accepted at hops = 1 (same root key as writer_did)
+    let res_bob = accept_envelope_with_writer(
+        &mut store,
+        &opened.envelopes[0],
+        Some(opened.writer_did.as_str()),
+        now,
+        100,
+        None,
+        &|_| false,
+    );
+    assert!(matches!(res_bob, AcceptOutcome::Accepted { .. }));
+    assert_eq!(store.cards.get(&bob_card_did).unwrap().hops, 1);
+
+    // 2. Carol's card claiming hops: 1 is clamped to effective_hops = 2, and hop-1 phone is stripped!
+    let res_carol = accept_envelope_with_writer(
+        &mut store,
+        &opened.envelopes[1],
+        Some(opened.writer_did.as_str()),
+        now,
+        100,
+        None,
+        &|_| false,
+    );
+    assert!(matches!(res_carol, AcceptOutcome::Accepted { .. }));
+    let stored_carol = store.cards.get(&carol_did).unwrap();
+    assert_eq!(stored_carol.hops, 2);
+    let carol_items = humoco_market::decoded_items(&stored_carol.card);
+    assert!(
+        !carol_items
+            .iter()
+            .any(|(item, _)| matches!(item, CardItem::Phone(_))),
+        "Hop-1-only Phone disclosure must be stripped when clamped to hops = 2"
+    );
+
+    // 3. Dave's max_hops=1 card claiming hops: 1 is rejected with RejectedHops!
+    let res_dave = accept_envelope_with_writer(
+        &mut store,
+        &opened.envelopes[2],
+        Some(opened.writer_did.as_str()),
+        now,
+        100,
+        None,
+        &|_| false,
+    );
+    assert_eq!(res_dave, AcceptOutcome::RejectedHops);
+    assert!(!store.cards.contains_key(&dave_did));
 }

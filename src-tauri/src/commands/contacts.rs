@@ -10,51 +10,6 @@ pub fn get_contacts(state: tauri::State<AppState>) -> Result<Vec<FrontendContact
     state.get_cached_contacts().map_err(FrontendError::from)
 }
 
-pub(crate) fn validate_contact_sync_descriptors(
-    syncs: &[crate::models::FrontendSyncDescriptor],
-) -> Result<(), FrontendError> {
-    for d in syncs {
-        let write = d.write_url.trim();
-        let read = d.read_url.trim();
-        let drop_pub = d.drop_pub.trim();
-        if write.is_empty() && read.is_empty() {
-            return Err(FrontendError::from(
-                "Sync endpoint must specify writeUrl or readUrl".to_string(),
-            ));
-        }
-        if !write.is_empty() {
-            crate::sync_client::validate_sync_url(write).map_err(FrontendError::from)?;
-        }
-        if !read.is_empty() {
-            crate::sync_client::validate_sync_read_url(read).map_err(FrontendError::from)?;
-        }
-        if !drop_pub.is_empty() {
-            humoco_market::parse_ed25519_pubkey_hex64(drop_pub).map_err(|e| {
-                FrontendError::from(format!("Invalid sync dropPub '{}': {}", d.drop_pub, e))
-            })?;
-        }
-        if let Some(ref sid) = d.slot_id {
-            if !sid.trim().is_empty() {
-                humoco_market::parse_slot_id(sid.trim()).map_err(|e| {
-                    FrontendError::from(format!("Invalid sync slotId '{}': {}", sid, e))
-                })?;
-            }
-        }
-        if let Some(ref rep) = d.replacement {
-            crate::sync_client::validate_sync_url(&rep.write_url).map_err(FrontendError::from)?;
-            crate::sync_client::validate_sync_read_url(&rep.read_url)
-                .map_err(FrontendError::from)?;
-            humoco_market::parse_ed25519_pubkey_hex64(&rep.drop_pub).map_err(|e| {
-                FrontendError::from(format!(
-                    "Invalid replacement dropPub '{}': {}",
-                    rep.drop_pub, e
-                ))
-            })?;
-        }
-    }
-    Ok(())
-}
-
 #[tauri::command]
 pub async fn save_contact(
     contact: FrontendContact,
@@ -66,7 +21,7 @@ pub async fn save_contact(
     let validated_did =
         human_money_core::ValidatedUserId::parse(&contact.did).map_err(FrontendError::from)?;
     contact.did = validated_did.into_string();
-    validate_contact_sync_descriptors(&contact.syncs)?;
+    crate::services::sync_endpoints::validate_contact_sync_descriptors(&contact.syncs)?;
     let contact_did = contact.did.clone();
     let trust_level = contact.trust_level;
     let needs_sync_probe = contact
@@ -352,7 +307,7 @@ mod tests {
         let sync1 = FrontendSyncDescriptor {
             read_url: "https://alice-drop.com/sync.php".to_string(),
             write_url: "https://alice-drop.com/sync.php".to_string(),
-            drop_pub: "pubkey12345".to_string(),
+            drop_pub: crate::test_support::test_ed25519_pub_hex(0x11),
             slot_id: None,
             last_seen_at: None,
             last_error_at: None,
@@ -429,6 +384,8 @@ mod tests {
     #[test]
     fn s11_f2_validate_contact_sync_descriptors_rules() {
         use crate::models::{FrontendSyncDescriptor, FrontendSyncReplacementTarget};
+        use crate::services::sync_endpoints::validate_contact_sync_descriptors;
+        use crate::test_support::test_ed25519_pub_hex;
 
         let unprobed = FrontendSyncDescriptor {
             write_url: "https://sync.example.com/sync.php".to_string(),
@@ -462,6 +419,13 @@ mod tests {
         };
         assert!(validate_contact_sync_descriptors(&[bad_pub]).is_err());
 
+        let weak_pub = FrontendSyncDescriptor {
+            write_url: "https://sync.example.com/sync.php".to_string(),
+            drop_pub: "00".repeat(32),
+            ..Default::default()
+        };
+        assert!(validate_contact_sync_descriptors(&[weak_pub]).is_err());
+
         let bad_slot = FrontendSyncDescriptor {
             write_url: "https://sync.example.com/sync.php".to_string(),
             slot_id: Some("bad slot with spaces".to_string()),
@@ -474,7 +438,7 @@ mod tests {
             replacement: Some(FrontendSyncReplacementTarget {
                 write_url: "ftp://bad.example.com/sync.php".to_string(),
                 read_url: "https://new.example.com/data".to_string(),
-                drop_pub: "11".repeat(32),
+                drop_pub: test_ed25519_pub_hex(0x11),
             }),
             ..Default::default()
         };

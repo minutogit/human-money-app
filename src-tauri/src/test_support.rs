@@ -17,6 +17,14 @@ pub(crate) const READER1_PHRASE: &str =
 pub(crate) const READER2_PHRASE: &str =
     "vessel ladder alter error federal sibling chat ability sun glass valve picture";
 
+pub(crate) fn test_ed25519_pub_hex(seed: u8) -> String {
+    hex::encode(
+        ed25519_dalek::SigningKey::from_bytes(&[seed; 32])
+            .verifying_key()
+            .as_bytes(),
+    )
+}
+
 pub(crate) fn temp_test_dir(name: &str) -> PathBuf {
     let p = std::env::temp_dir().join(format!(
         "humoco_sync_test_{}_{}",

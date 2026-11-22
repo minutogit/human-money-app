@@ -60,45 +60,83 @@ pub(crate) fn build_card_drops(
     public_syncs: &[StoredPublicSync],
     my_prefix: Option<&str>,
 ) -> Vec<humoco_market::DropDescriptor> {
+    use crate::services::sync_endpoints::{
+        canonical_drop_pub_hex, is_endpoint_revoked, normalize_sync_url,
+    };
+
     let mut seen_urls = std::collections::HashSet::new();
     let mut drops: Vec<humoco_market::DropDescriptor> = Vec::new();
 
     for d in selected_syncs {
-        if d.status.trim().eq_ignore_ascii_case("revoked")
-            || d.write_url.trim().is_empty()
-            || d.read_url.trim().is_empty()
-            || d.drop_pub.trim().is_empty()
+        if is_endpoint_revoked(&d.status) {
+            continue;
+        }
+        let write_trimmed = d.write_url.trim();
+        let read_trimmed = d.read_url.trim();
+        if sync_client::validate_sync_url(write_trimmed).is_err()
+            || sync_client::validate_sync_read_url(read_trimmed).is_err()
         {
             continue;
         }
-        let norm = crate::services::common::normalize_sync_url(&d.write_url);
+        let Ok(clean_drop_pub) = canonical_drop_pub_hex(&d.drop_pub) else {
+            continue;
+        };
+        let slot_id = match d
+            .slot_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            Some(sid) => {
+                if humoco_market::parse_slot_id(sid).is_err() {
+                    continue;
+                }
+                Some(sid.to_string())
+            }
+            None => None,
+        };
+        let norm = normalize_sync_url(write_trimmed);
         if norm.is_empty() || !seen_urls.insert(norm) {
             continue;
         }
-        drops.push(d.clone().into());
+        drops.push(humoco_market::DropDescriptor {
+            write_url: write_trimmed.to_string(),
+            read_url: read_trimmed.to_string(),
+            slot_id,
+            drop_pub: clean_drop_pub,
+        });
     }
 
     for pd in public_syncs {
-        if pd.enabled
-            && !pd.status.trim().eq_ignore_ascii_case("revoked")
-            && !pd.write_url.trim().is_empty()
-            && !pd.read_url.trim().is_empty()
-            && !pd.drop_pub.trim().is_empty()
-        {
-            let norm = crate::services::common::normalize_sync_url(&pd.write_url);
-            if norm.is_empty() || !seen_urls.insert(norm) {
-                continue;
-            }
-            let Ok(slot_id) = humoco_market::format_slot_id(&pd.access_pubkey, my_prefix) else {
-                continue;
-            };
-            drops.push(humoco_market::DropDescriptor {
-                write_url: pd.write_url.clone(),
-                read_url: pd.read_url.clone(),
-                slot_id: Some(slot_id),
-                drop_pub: pd.drop_pub.clone(),
-            });
+        if !pd.enabled || is_endpoint_revoked(&pd.status) {
+            continue;
         }
+        let write_trimmed = pd.write_url.trim();
+        let read_trimmed = pd.read_url.trim();
+        if sync_client::validate_sync_url(write_trimmed).is_err()
+            || sync_client::validate_sync_read_url(read_trimmed).is_err()
+        {
+            continue;
+        }
+        let Ok(clean_drop_pub) = canonical_drop_pub_hex(&pd.drop_pub) else {
+            continue;
+        };
+        let Ok(clean_access_pk) = canonical_drop_pub_hex(&pd.access_pubkey) else {
+            continue;
+        };
+        let Ok(slot_id) = humoco_market::format_slot_id(&clean_access_pk, my_prefix) else {
+            continue;
+        };
+        let norm = normalize_sync_url(write_trimmed);
+        if norm.is_empty() || !seen_urls.insert(norm) {
+            continue;
+        }
+        drops.push(humoco_market::DropDescriptor {
+            write_url: write_trimmed.to_string(),
+            read_url: read_trimmed.to_string(),
+            slot_id: Some(slot_id),
+            drop_pub: clean_drop_pub,
+        });
     }
 
     drops.truncate(humoco_market::MAX_CARD_DROPS);
@@ -1800,14 +1838,11 @@ pub fn import_contact_card_impl(
             let mut updated_address_book: Option<crate::models::FrontendAddressBook> = None;
 
             if let Some(stored) = store.cards.get(&did) {
-                let card_syncs: Vec<FrontendSyncDescriptor> = stored
-                    .card
-                    .payload
-                    .drops
-                    .iter()
-                    .cloned()
-                    .map(Into::into)
-                    .collect();
+                let card_syncs =
+                    crate::services::sync_endpoints::sanitize_untrusted_sync_descriptors(
+                        &stored.card.payload.drops,
+                        humoco_market::MAX_CARD_DROPS,
+                    );
 
                 let is_exact_own_profile = service
                     .with_wallet(|w| w.get_user_id().trim() == did.trim())
@@ -3506,19 +3541,34 @@ mod tests {
         use crate::models::{
             CardFieldVisibility, FrontendSaveMyMarketProfileRequest, FrontendUserProfile,
         };
+        use crate::test_support::test_ed25519_pub_hex;
         use base64::{engine::general_purpose::STANDARD, Engine};
+
+        let pub1 = test_ed25519_pub_hex(0x11);
+        let pub2 = test_ed25519_pub_hex(0x22);
+        let pub3 = test_ed25519_pub_hex(0x33);
+        let pub4 = test_ed25519_pub_hex(0x44);
+        let pub5 = test_ed25519_pub_hex(0x55);
+        let pub6 = test_ed25519_pub_hex(0x66);
 
         let revoked_selected = FrontendSyncDescriptor {
             write_url: "https://revoked.example/sync.php".to_string(),
             read_url: "https://revoked.example/data".to_string(),
-            drop_pub: "11".repeat(32),
+            drop_pub: pub1,
             status: "revoked".to_string(),
             ..Default::default()
         };
         let active_selected = FrontendSyncDescriptor {
             write_url: "https://s1.example/sync.php/".to_string(),
             read_url: "https://s1.example/data".to_string(),
-            drop_pub: "22".repeat(32),
+            drop_pub: pub2.clone(),
+            status: "active".to_string(),
+            ..Default::default()
+        };
+        let bad_drop_pub_selected = FrontendSyncDescriptor {
+            write_url: "https://weak.example/sync.php".to_string(),
+            read_url: "https://weak.example/data".to_string(),
+            drop_pub: "00".repeat(32),
             status: "active".to_string(),
             ..Default::default()
         };
@@ -3526,8 +3576,8 @@ mod tests {
             crate::settings::StoredPublicSync {
                 write_url: "https://s1.example/sync.php".to_string(),
                 read_url: "https://s1.example/data".to_string(),
-                drop_pub: "22".repeat(32),
-                access_pubkey: "33".repeat(32),
+                drop_pub: pub2,
+                access_pubkey: pub3,
                 enabled: true,
                 status: "active".to_string(),
                 ..Default::default()
@@ -3535,7 +3585,7 @@ mod tests {
             crate::settings::StoredPublicSync {
                 write_url: "https://badpk.example/sync.php".to_string(),
                 read_url: "https://badpk.example/data".to_string(),
-                drop_pub: "44".repeat(32),
+                drop_pub: pub4,
                 access_pubkey: "invalid-pubkey".to_string(),
                 enabled: true,
                 status: "active".to_string(),
@@ -3544,15 +3594,15 @@ mod tests {
             crate::settings::StoredPublicSync {
                 write_url: "https://goodpub.example/sync.php".to_string(),
                 read_url: "https://goodpub.example/data".to_string(),
-                drop_pub: "55".repeat(32),
-                access_pubkey: "66".repeat(32),
+                drop_pub: pub5,
+                access_pubkey: pub6,
                 enabled: true,
                 status: "active".to_string(),
                 ..Default::default()
             },
         ];
         let drops = build_card_drops(
-            &[revoked_selected, active_selected],
+            &[revoked_selected, bad_drop_pub_selected, active_selected],
             &public_syncs,
             Some("laden"),
         );

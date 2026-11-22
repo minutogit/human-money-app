@@ -8,8 +8,9 @@ use humoco_market::{seal_post_box, PostDeliveryReceipt, PostEnvelope, PAYLOAD_PO
 use log::warn;
 
 use crate::models::{FrontendError, FrontendSyncDescriptor};
-use crate::services::common::{
-    are_dids_equal, canonical_drop_pub_hex, normalize_sync_url, SyncIdentityContext,
+use crate::services::common::{are_dids_equal, SyncIdentityContext};
+use crate::services::sync_endpoints::{
+    canonical_drop_pub_hex, is_endpoint_revoked, sanitize_untrusted_sync_descriptors,
 };
 use crate::session::SessionToken;
 use crate::settings::SecurityPolicy;
@@ -97,117 +98,6 @@ pub(crate) fn push_pruned_outbox_tag16(
         }
     }
     set.insert(tag16_hex);
-}
-
-/// Filters and normalizes untrusted `DropDescriptor` lists before storage or polling.
-pub(crate) fn sanitize_sync_descriptors(
-    raw: &[humoco_market::DropDescriptor],
-    max_len: usize,
-) -> Vec<FrontendSyncDescriptor> {
-    let mut out = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    for d in raw {
-        if out.len() >= max_len {
-            break;
-        }
-        let write_url = d.write_url.trim().to_string();
-        let read_url = d.read_url.trim().to_string();
-        if sync_client::validate_sync_url(&write_url).is_err()
-            || sync_client::validate_sync_read_url(&read_url).is_err()
-        {
-            continue;
-        }
-        let Ok(drop_pub) = canonical_drop_pub_hex(&d.drop_pub) else {
-            continue;
-        };
-        let slot_id = match d
-            .slot_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-        {
-            Some(sid) => {
-                if humoco_market::parse_slot_id(sid).is_err() {
-                    continue;
-                }
-                Some(sid.to_string())
-            }
-            None => None,
-        };
-        let dedup_key = format!(
-            "{}\x00{}",
-            normalize_sync_url(&write_url),
-            slot_id.as_deref().unwrap_or("")
-        );
-        if !seen.insert(dedup_key) {
-            continue;
-        }
-        out.push(FrontendSyncDescriptor {
-            write_url,
-            read_url,
-            slot_id,
-            drop_pub,
-            status: "active".to_string(),
-            ..Default::default()
-        });
-    }
-    out
-}
-
-/// Filters and validates `FrontendSyncDescriptor` lists (excluding revoked/malformed endpoints).
-pub(crate) fn sanitize_frontend_sync_descriptors(
-    raw: &[FrontendSyncDescriptor],
-    max_len: usize,
-) -> Vec<FrontendSyncDescriptor> {
-    let mut out = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    for d in raw {
-        if out.len() >= max_len {
-            break;
-        }
-        if d.status.eq_ignore_ascii_case("revoked") {
-            continue;
-        }
-        let write_url = d.write_url.trim().to_string();
-        let read_url = d.read_url.trim().to_string();
-        if sync_client::validate_sync_url(&write_url).is_err()
-            || sync_client::validate_sync_read_url(&read_url).is_err()
-        {
-            continue;
-        }
-        let Ok(drop_pub) = canonical_drop_pub_hex(&d.drop_pub) else {
-            continue;
-        };
-        let slot_id = match d
-            .slot_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-        {
-            Some(sid) => {
-                if humoco_market::parse_slot_id(sid).is_err() {
-                    continue;
-                }
-                Some(sid.to_string())
-            }
-            None => None,
-        };
-        let dedup_key = format!(
-            "{}\x00{}",
-            normalize_sync_url(&write_url),
-            slot_id.as_deref().unwrap_or("")
-        );
-        if !seen.insert(dedup_key) {
-            continue;
-        }
-        let mut sanitized = d.clone();
-        sanitized.write_url = write_url;
-        sanitized.read_url = read_url;
-        sanitized.slot_id = slot_id;
-        sanitized.drop_pub = drop_pub;
-        out.push(sanitized);
-    }
-    out
 }
 
 /// Extracted identity and reply-sync configuration required to seal and queue Post messages.
@@ -557,23 +447,37 @@ pub(crate) fn collect_own_reply_syncs(
 ) -> Vec<FrontendSyncDescriptor> {
     let mut reply_syncs = Vec::new();
     for d in &security_policy.market_selected_syncs {
-        if !d.status.eq_ignore_ascii_case("revoked") && !d.read_url.is_empty() {
+        if !is_endpoint_revoked(&d.status) && !d.read_url.is_empty() {
             reply_syncs.push(d.clone());
         }
     }
     for pd in &security_policy.public_syncs {
         if pd.enabled
-            && !pd.status.eq_ignore_ascii_case("revoked")
+            && !is_endpoint_revoked(&pd.status)
             && !pd.read_url.is_empty()
             && pd.authorized_channels.iter().any(|c| c == "post")
         {
-            let slot_id = humoco_market::format_slot_id(&pd.access_pubkey, my_prefix)
-                .unwrap_or_else(|_| pd.access_pubkey.clone());
+            let Ok(clean_access_pk) = canonical_drop_pub_hex(&pd.access_pubkey) else {
+                continue;
+            };
+            let Ok(slot_id) = humoco_market::format_slot_id(&clean_access_pk, my_prefix) else {
+                continue;
+            };
+            let Ok(clean_drop_pub) = canonical_drop_pub_hex(&pd.drop_pub) else {
+                continue;
+            };
+            let write_url = pd.write_url.trim().to_string();
+            let read_url = pd.read_url.trim().to_string();
+            if sync_client::validate_sync_url(&write_url).is_err()
+                || sync_client::validate_sync_read_url(&read_url).is_err()
+            {
+                continue;
+            }
             reply_syncs.push(FrontendSyncDescriptor {
-                write_url: pd.write_url.clone(),
-                read_url: pd.read_url.clone(),
+                write_url,
+                read_url,
                 slot_id: Some(slot_id),
-                drop_pub: pd.drop_pub.clone(),
+                drop_pub: clean_drop_pub,
                 last_seen_at: None,
                 last_error_at: None,
                 fail_count: 0,
@@ -592,13 +496,13 @@ pub(crate) fn collect_post_upload_targets(
 ) -> Vec<humoco_market::DropDescriptor> {
     let mut targets = Vec::new();
     for d in &security_policy.market_selected_syncs {
-        if !d.status.eq_ignore_ascii_case("revoked") && !d.write_url.is_empty() {
+        if !is_endpoint_revoked(&d.status) && !d.write_url.is_empty() {
             targets.push(d.clone().into());
         }
     }
     for pd in &security_policy.public_syncs {
         if pd.enabled
-            && !pd.status.eq_ignore_ascii_case("revoked")
+            && !is_endpoint_revoked(&pd.status)
             && !pd.write_url.is_empty()
             && (pd.authorized_channels.is_empty()
                 || pd.authorized_channels.iter().any(|c| c == "post"))
@@ -909,7 +813,7 @@ pub(crate) fn lookup_counterparty_syncs(
                     result.extend(
                         c.syncs
                             .iter()
-                            .filter(|d| !d.status.eq_ignore_ascii_case("revoked"))
+                            .filter(|d| !is_endpoint_revoked(&d.status))
                             .cloned(),
                     );
                 }
@@ -922,7 +826,7 @@ pub(crate) fn lookup_counterparty_syncs(
                 ) {
                     Ok(Some(card_store)) => {
                         if let Some(stored) = find_card_in_store(&card_store, did) {
-                            result.extend(sanitize_sync_descriptors(
+                            result.extend(sanitize_untrusted_sync_descriptors(
                                 &stored.card.payload.drops,
                                 humoco_market::MAX_CARD_DROPS,
                             ));

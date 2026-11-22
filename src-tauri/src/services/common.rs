@@ -58,13 +58,9 @@ pub(crate) fn get_wallet_master_seed(
     Ok(zeroize::Zeroizing::new(signing_key.to_bytes()))
 }
 
-/// Validates and normalizes an Ed25519 drop public key to lowercase 64-char hex.
-pub(crate) fn canonical_drop_pub_hex(raw: &str) -> Result<String, FrontendError> {
-    let clean = raw.trim().to_ascii_lowercase();
-    humoco_market::parse_ed25519_pubkey_hex64(&clean)
-        .map(|_| clean)
-        .map_err(|e| FrontendError::from(e.to_string()))
-}
+pub(crate) use crate::services::sync_endpoints::{
+    canonical_drop_pub_hex, is_endpoint_revoked, normalize_sync_url,
+};
 
 /// Unifies direct public-sync and stealth drop-channel signing across `sync`, `post`, and `backup`.
 pub(crate) struct DropChannelSigner<'a> {
@@ -177,17 +173,6 @@ pub(crate) fn load_all_standard_tomls(
     map
 }
 
-/// Canonical URL normalization for sync endpoints and probe cache lookups.
-/// Lowercases scheme and host (via `url::Url`) while preserving path case and stripping trailing slashes.
-pub(crate) fn normalize_sync_url(raw: &str) -> String {
-    let trimmed = raw.trim();
-    if let Ok(parsed) = url::Url::parse(trimmed) {
-        parsed.as_str().trim_end_matches('/').to_string()
-    } else {
-        trimmed.trim_end_matches('/').to_string()
-    }
-}
-
 /// Collects active, non-revoked, URL-validated backup sync descriptors in deterministic priority
 /// order (`own` -> `market_selected_syncs` -> `public_syncs`), deduplicated by normalized `write_url`.
 pub(crate) fn collect_backup_sync_targets(
@@ -199,7 +184,7 @@ pub(crate) fn collect_backup_sync_targets(
     let mut targets = Vec::new();
     let mut seen_write_urls = std::collections::HashSet::new();
 
-    let mut try_push = |desc: humoco_market::DropDescriptor| {
+    let mut try_push = |mut desc: humoco_market::DropDescriptor| {
         if let Some(cap) = max_count {
             if targets.len() >= cap {
                 return;
@@ -207,18 +192,36 @@ pub(crate) fn collect_backup_sync_targets(
         }
         let write_trimmed = desc.write_url.trim();
         let read_trimmed = desc.read_url.trim();
-        if write_trimmed.is_empty()
-            || read_trimmed.is_empty()
-            || desc.drop_pub.trim().is_empty()
-            || crate::sync_client::validate_sync_url(write_trimmed).is_err()
+        if crate::sync_client::validate_sync_url(write_trimmed).is_err()
             || crate::sync_client::validate_sync_read_url(read_trimmed).is_err()
         {
             return;
         }
+        let Ok(clean_drop_pub) = canonical_drop_pub_hex(&desc.drop_pub) else {
+            return;
+        };
+        let slot_id = match desc
+            .slot_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            Some(sid) => {
+                if humoco_market::parse_slot_id(sid).is_err() {
+                    return;
+                }
+                Some(sid.to_string())
+            }
+            None => None,
+        };
         let norm_write = normalize_sync_url(write_trimmed);
         if norm_write.is_empty() || !seen_write_urls.insert(norm_write) {
             return;
         }
+        desc.write_url = write_trimmed.to_string();
+        desc.read_url = read_trimmed.to_string();
+        desc.drop_pub = clean_drop_pub;
+        desc.slot_id = slot_id;
         targets.push(desc);
     };
 
@@ -227,18 +230,22 @@ pub(crate) fn collect_backup_sync_targets(
     }
 
     for sd in &security_policy.market_selected_syncs {
-        if sd.status.eq_ignore_ascii_case("revoked") {
+        if is_endpoint_revoked(&sd.status) {
             continue;
         }
         try_push(sd.clone().into());
     }
 
     for pd in &security_policy.public_syncs {
-        if !pd.enabled || pd.status.eq_ignore_ascii_case("revoked") {
+        if !pd.enabled || is_endpoint_revoked(&pd.status) {
             continue;
         }
-        let slot_id = humoco_market::format_slot_id(&pd.access_pubkey, user_prefix)
-            .unwrap_or_else(|_| pd.access_pubkey.clone());
+        let Ok(clean_access_pk) = canonical_drop_pub_hex(&pd.access_pubkey) else {
+            continue;
+        };
+        let Ok(slot_id) = humoco_market::format_slot_id(&clean_access_pk, user_prefix) else {
+            continue;
+        };
         try_push(humoco_market::DropDescriptor {
             write_url: pd.write_url.clone(),
             read_url: pd.read_url.clone(),
@@ -878,38 +885,49 @@ mod tests {
 
     #[test]
     fn s07_f12_collect_backup_sync_targets_prioritizes_dedups_filters_revoked_and_caps() {
+        use crate::test_support::test_ed25519_pub_hex;
+
+        let pub1 = test_ed25519_pub_hex(0x11);
+        let pub2 = test_ed25519_pub_hex(0x22);
+        let pub3 = test_ed25519_pub_hex(0x23);
+        let pub4 = test_ed25519_pub_hex(0x33);
+        let pub5 = test_ed25519_pub_hex(0x44);
+        let pub6 = test_ed25519_pub_hex(0x55);
+        let acc1 = test_ed25519_pub_hex(0xaa);
+        let acc2 = test_ed25519_pub_hex(0xbb);
+
         let mut policy = crate::settings::SecurityPolicy::default();
         let own = humoco_market::DropDescriptor {
             write_url: "https://OWN.example.org/sync.php/".to_string(),
             read_url: "https://own.example.org/data".to_string(),
             slot_id: None,
-            drop_pub: "11".repeat(32),
+            drop_pub: pub1.clone(),
         };
         // Duplicate of own with different casing/slash + revoked friend + valid friends
         policy.market_selected_syncs = vec![
             crate::models::FrontendSyncDescriptor {
                 write_url: "https://own.example.org/sync.php".to_string(),
                 read_url: "https://own.example.org/data".to_string(),
-                drop_pub: "11".repeat(32),
+                drop_pub: pub1,
                 ..Default::default()
             },
             crate::models::FrontendSyncDescriptor {
                 write_url: "https://revoked-friend.example.org/sync.php".to_string(),
                 read_url: "https://revoked-friend.example.org/data".to_string(),
-                drop_pub: "22".repeat(32),
+                drop_pub: pub2,
                 status: "revoked".to_string(),
                 ..Default::default()
             },
             crate::models::FrontendSyncDescriptor {
                 write_url: "http://evil-non-https.example.org/sync.php".to_string(),
                 read_url: "http://evil-non-https.example.org/data".to_string(),
-                drop_pub: "23".repeat(32),
+                drop_pub: pub3,
                 ..Default::default()
             },
             crate::models::FrontendSyncDescriptor {
                 write_url: "https://friend1.example.org/sync.php".to_string(),
                 read_url: "https://friend1.example.org/data".to_string(),
-                drop_pub: "33".repeat(32),
+                drop_pub: pub4,
                 ..Default::default()
             },
         ];
@@ -917,9 +935,9 @@ mod tests {
         policy.public_syncs.push(crate::settings::StoredPublicSync {
             write_url: "https://revoked-pub.example.org/sync.php".to_string(),
             read_url: "https://revoked-pub.example.org/data".to_string(),
-            drop_pub: "44".repeat(32),
+            drop_pub: pub5,
             register_url: None,
-            access_pubkey: "aa".repeat(32),
+            access_pubkey: acc1,
             enabled: true,
             authorized_channels: vec![],
             status: "revoked".to_string(),
@@ -931,9 +949,9 @@ mod tests {
             policy.public_syncs.push(crate::settings::StoredPublicSync {
                 write_url: format!("https://pub{}.example.org/sync.php", i),
                 read_url: format!("https://pub{}.example.org/data", i),
-                drop_pub: "55".repeat(32),
+                drop_pub: pub6.clone(),
                 register_url: None,
-                access_pubkey: "bb".repeat(32),
+                access_pubkey: acc2.clone(),
                 enabled: i > 0, // pub0 disabled
                 authorized_channels: vec![],
                 status: "active".to_string(),
@@ -967,5 +985,65 @@ mod tests {
             .slot_id
             .as_deref()
             .is_some_and(|s| s.ends_with("_pc")));
+    }
+
+    #[test]
+    fn s11_x3_collect_backup_sync_targets_skips_invalid_own_drop_pub_and_public_slot_id() {
+        use crate::test_support::test_ed25519_pub_hex;
+
+        let valid_pub = test_ed25519_pub_hex(0x61);
+        let valid_acc = test_ed25519_pub_hex(0x62);
+
+        let bad_own = humoco_market::DropDescriptor {
+            write_url: "https://own.example.org/sync.php".to_string(),
+            read_url: "https://own.example.org/data".to_string(),
+            slot_id: None,
+            drop_pub: "00".repeat(32), // weak small-order key
+        };
+
+        let policy = crate::settings::SecurityPolicy {
+            public_syncs: vec![
+                crate::settings::StoredPublicSync {
+                    write_url: "https://bad-acc.example.org/sync.php".to_string(),
+                    read_url: "https://bad-acc.example.org/data".to_string(),
+                    drop_pub: valid_pub.clone(),
+                    access_pubkey: "not-a-valid-key".to_string(),
+                    enabled: true,
+                    status: "active".to_string(),
+                    ..Default::default()
+                },
+                crate::settings::StoredPublicSync {
+                    write_url: "https://bad-drop-pub.example.org/sync.php".to_string(),
+                    read_url: "https://bad-drop-pub.example.org/data".to_string(),
+                    drop_pub: "not-hex".to_string(),
+                    access_pubkey: valid_acc.clone(),
+                    enabled: true,
+                    status: "active".to_string(),
+                    ..Default::default()
+                },
+                crate::settings::StoredPublicSync {
+                    write_url: "https://good.example.org/sync.php".to_string(),
+                    read_url: "https://good.example.org/data".to_string(),
+                    drop_pub: valid_pub.clone(),
+                    access_pubkey: valid_acc.clone(),
+                    enabled: true,
+                    status: "active".to_string(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        // Even with an invalid prefix (which makes format_slot_id fail), public_syncs must NOT fall back to raw access_pubkey!
+        let bad_prefix_targets =
+            collect_backup_sync_targets(&policy, Some(&bad_own), Some("BAD--PREFIX"), None);
+        assert!(bad_prefix_targets.is_empty());
+
+        // With valid prefix, invalid own/public targets are skipped and only good.example.org remains
+        let targets = collect_backup_sync_targets(&policy, Some(&bad_own), Some("pc"), None);
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].write_url, "https://good.example.org/sync.php");
+        assert_eq!(targets[0].slot_id, Some(format!("{}_pc", valid_acc)));
+        assert_eq!(targets[0].drop_pub, valid_pub);
     }
 }

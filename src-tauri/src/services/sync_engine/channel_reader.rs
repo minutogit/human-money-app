@@ -7,6 +7,9 @@ use crate::services::common::{
     canonical_drop_pub_hex, normalize_sync_url, DropChannelSigner, SyncIdentityContext,
 };
 use crate::services::recovery_service::enqueue_guardian_locator_updates_if_configured;
+use crate::services::sync_endpoints::{
+    drop_pub_matches, is_endpoint_revoked, sanitize_untrusted_sync_descriptors,
+};
 use crate::session::SessionToken;
 use crate::settings::{SecurityPolicy, StoredPublicSync, UiPreferences, MAX_POLLED_SYNCS};
 use crate::state::{
@@ -84,22 +87,26 @@ pub(crate) fn collect_upload_targets_for_channel(
     let mut targets: Vec<humoco_market::DropDescriptor> = security_policy
         .market_selected_syncs
         .iter()
-        .filter(|d| !d.status.eq_ignore_ascii_case("revoked"))
+        .filter(|d| !is_endpoint_revoked(&d.status) && canonical_drop_pub_hex(&d.drop_pub).is_ok())
         .cloned()
         .map(Into::into)
         .collect();
 
     for pd in &security_policy.public_syncs {
         if pd.enabled
-            && !pd.status.eq_ignore_ascii_case("revoked")
+            && !is_endpoint_revoked(&pd.status)
             && !pd.write_url.is_empty()
+            && canonical_drop_pub_hex(&pd.drop_pub).is_ok()
             && (pd.authorized_channels.is_empty()
                 || pd.authorized_channels.iter().any(|c| c == channel))
         {
+            let Ok(clean_access_pk) = canonical_drop_pub_hex(&pd.access_pubkey) else {
+                continue;
+            };
             targets.push(humoco_market::DropDescriptor {
                 write_url: pd.write_url.clone(),
                 read_url: pd.read_url.clone(),
-                slot_id: Some(pd.access_pubkey.clone()),
+                slot_id: Some(clean_access_pk),
                 drop_pub: pd.drop_pub.clone(),
             });
         }
@@ -242,7 +249,7 @@ pub(crate) async fn check_revocations(
                         let mut policy_changed = false;
                         for d in &mut fresh_policy.market_selected_syncs {
                             if normalize_sync_url(&d.read_url) == norm_target
-                                && d.drop_pub.trim().eq_ignore_ascii_case(&notice.drop_pub)
+                                && drop_pub_matches(&d.drop_pub, &notice.drop_pub)
                             {
                                 apply_revocation_notice(d, &notice, now_secs);
                                 revoked_own_syncs.push(d.clone());
@@ -251,7 +258,7 @@ pub(crate) async fn check_revocations(
                         }
                         for ps in &mut fresh_policy.public_syncs {
                             if normalize_sync_url(&ps.read_url) == norm_target
-                                && ps.drop_pub.trim().eq_ignore_ascii_case(&notice.drop_pub)
+                                && drop_pub_matches(&ps.drop_pub, &notice.drop_pub)
                             {
                                 apply_revocation_notice(ps, &notice, now_secs);
                                 revoked_own_syncs.push(FrontendSyncDescriptor {
@@ -324,7 +331,7 @@ pub(crate) async fn check_revocations(
                         let mut policy_changed = false;
                         for d in &mut fresh_policy.market_selected_syncs {
                             if normalize_sync_url(&d.read_url) == norm_target
-                                && d.drop_pub.trim().eq_ignore_ascii_case(&rev_drop_pub)
+                                && drop_pub_matches(&d.drop_pub, &rev_drop_pub)
                                 && clear_revocation(d, "active", now_secs)
                             {
                                 policy_changed = true;
@@ -332,7 +339,7 @@ pub(crate) async fn check_revocations(
                         }
                         for ps in &mut fresh_policy.public_syncs {
                             if normalize_sync_url(&ps.read_url) == norm_target
-                                && ps.drop_pub.trim().eq_ignore_ascii_case(&rev_drop_pub)
+                                && drop_pub_matches(&ps.drop_pub, &rev_drop_pub)
                             {
                                 let fallback = if ps.authorized_channels.is_empty() {
                                     "pending_auth"
@@ -360,7 +367,7 @@ pub(crate) async fn check_revocations(
                             for contact in ab.contacts.values_mut() {
                                 for ep in &mut contact.syncs {
                                     if normalize_sync_url(&ep.read_url) == norm_target
-                                        && ep.drop_pub.trim().eq_ignore_ascii_case(&rev_drop_pub)
+                                        && drop_pub_matches(&ep.drop_pub, &rev_drop_pub)
                                         && clear_revocation(ep, "unverified", now_secs)
                                     {
                                         ab_changed = true;
@@ -451,19 +458,26 @@ fn collect_poll_targets(
             if lvl >= ui_prefs.share_min_level {
                 let c_prefix = human_money_core::crypto::get_prefix_from_user_id(&c.did);
                 for d in c.syncs {
-                    if !d.read_url.is_empty() {
+                    if !is_endpoint_revoked(&d.status)
+                        && crate::sync_client::validate_sync_read_url(&d.read_url).is_ok()
+                    {
                         if let Some(ref sid) = d.slot_id {
-                            direct_fetches.push((
-                                d.read_url.clone(),
-                                sid.clone(),
-                                c_prefix.map(str::to_string),
-                            ));
+                            let sid_trimmed = sid.trim();
+                            if humoco_market::parse_slot_id(sid_trimmed).is_ok() {
+                                direct_fetches.push((
+                                    d.read_url.clone(),
+                                    sid_trimmed.to_string(),
+                                    c_prefix.map(str::to_string),
+                                ));
+                            }
                         } else {
                             index_urls.push(d.read_url.clone());
                         }
                     }
                     if let Some(ref rep) = d.replacement {
-                        if !rep.read_url.is_empty() && rep.read_url != d.read_url {
+                        if crate::sync_client::validate_sync_read_url(&rep.read_url).is_ok()
+                            && normalize_sync_url(&rep.read_url) != normalize_sync_url(&d.read_url)
+                        {
                             index_urls.push(rep.read_url.clone());
                         }
                     }
@@ -488,17 +502,14 @@ fn collect_poll_targets(
                 let sc_prefix =
                     human_money_core::crypto::get_prefix_from_user_id(&sc.card.payload.did)
                         .map(str::to_string);
-                for d in &sc.card.payload.drops {
-                    if !d.read_url.is_empty() {
-                        if let Some(ref sid) = d.slot_id {
-                            direct_fetches.push((
-                                d.read_url.clone(),
-                                sid.clone(),
-                                sc_prefix.clone(),
-                            ));
-                        } else {
-                            index_urls.push(d.read_url.clone());
-                        }
+                for d in sanitize_untrusted_sync_descriptors(
+                    &sc.card.payload.drops,
+                    humoco_market::MAX_CARD_DROPS,
+                ) {
+                    if let Some(sid) = d.slot_id {
+                        direct_fetches.push((d.read_url, sid, sc_prefix.clone()));
+                    } else {
+                        index_urls.push(d.read_url);
                     }
                 }
             }
@@ -1297,7 +1308,7 @@ pub async fn save_public_sync_impl(
                 .find(|d| normalize_sync_url(&d.write_url) == canonical_url)
             {
                 let pinned = existing.drop_pub.trim();
-                if !pinned.is_empty() && !pinned.eq_ignore_ascii_case(&clean_drop_pub) {
+                if !pinned.is_empty() && !drop_pub_matches(pinned, &clean_drop_pub) {
                     return Err(FrontendError::from(format!(
                         "Public sync key pin mismatch for {}: existing {}, got {}",
                         canonical_url, pinned, clean_drop_pub
@@ -1393,7 +1404,7 @@ pub async fn save_public_sync_impl(
                     .position(|d| normalize_sync_url(&d.write_url) == canonical_url)
                 {
                     let pinned = policy.public_syncs[pos].drop_pub.trim();
-                    if !pinned.is_empty() && !pinned.eq_ignore_ascii_case(&clean_drop_pub) {
+                    if !pinned.is_empty() && !drop_pub_matches(pinned, &clean_drop_pub) {
                         return Err(FrontendError::from(format!(
                             "Public sync key pin mismatch for {}: existing {}, got {}",
                             canonical_url, pinned, clean_drop_pub
@@ -1703,9 +1714,9 @@ mod tests {
                     p.public_syncs.push(crate::settings::StoredPublicSync {
                         write_url: write_url.clone(),
                         read_url: format!("http://127.0.0.1:{}/d", port),
-                        drop_pub: "11".repeat(32),
+                        drop_pub: crate::test_support::test_ed25519_pub_hex(0x11),
                         register_url: None,
-                        access_pubkey: "22".repeat(32),
+                        access_pubkey: crate::test_support::test_ed25519_pub_hex(0x22),
                         enabled: true,
                         authorized_channels: vec!["card".into()],
                         status: "active".into(),
@@ -1760,11 +1771,19 @@ mod tests {
             .channel_max_bytes_by_write_url
             .insert(channel_max_bytes_key(other_write, "card"), 2048);
         sync_state.last_revocation_check_at.insert(
-            format!("{}::{}", normalize_sync_url(target_read), "11".repeat(32)),
+            format!(
+                "{}::{}",
+                normalize_sync_url(target_read),
+                crate::test_support::test_ed25519_pub_hex(0x11)
+            ),
             1000,
         );
         sync_state.last_revocation_check_at.insert(
-            format!("{}::{}", normalize_sync_url(other_read), "22".repeat(32)),
+            format!(
+                "{}::{}",
+                normalize_sync_url(other_read),
+                crate::test_support::test_ed25519_pub_hex(0x22)
+            ),
             2000,
         );
         sync_state
@@ -1806,14 +1825,14 @@ mod tests {
                 FrontendSyncDescriptor {
                     write_url: target_write.to_string(),
                     read_url: target_read.to_string(),
-                    drop_pub: "11".repeat(32),
+                    drop_pub: crate::test_support::test_ed25519_pub_hex(0x11),
                     status: "active".to_string(),
                     ..Default::default()
                 },
                 FrontendSyncDescriptor {
                     write_url: "https://revoked.example/sync.php".to_string(),
                     read_url: "https://revoked.example/d".to_string(),
-                    drop_pub: "22".repeat(32),
+                    drop_pub: crate::test_support::test_ed25519_pub_hex(0x22),
                     status: "revoked".to_string(),
                     ..Default::default()
                 },
@@ -1822,8 +1841,8 @@ mod tests {
                 StoredPublicSync {
                     write_url: other_write.to_string(),
                     read_url: other_read.to_string(),
-                    drop_pub: "33".repeat(32),
-                    access_pubkey: "44".repeat(32),
+                    drop_pub: crate::test_support::test_ed25519_pub_hex(0x33),
+                    access_pubkey: crate::test_support::test_ed25519_pub_hex(0x44),
                     enabled: true,
                     authorized_channels: vec!["card".to_string()],
                     status: "active".to_string(),
@@ -1832,8 +1851,8 @@ mod tests {
                 StoredPublicSync {
                     write_url: "https://pub-rev.example/sync.php".to_string(),
                     read_url: "https://pub-rev.example/d".to_string(),
-                    drop_pub: "55".repeat(32),
-                    access_pubkey: "66".repeat(32),
+                    drop_pub: crate::test_support::test_ed25519_pub_hex(0x55),
+                    access_pubkey: crate::test_support::test_ed25519_pub_hex(0x66),
                     enabled: true,
                     authorized_channels: vec!["card".to_string()],
                     status: "revoked".to_string(),

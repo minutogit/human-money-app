@@ -3,12 +3,13 @@ use std::io::{Read, Write};
 
 use chacha20poly1305::aead::{Aead, KeyInit};
 use chacha20poly1305::{ChaCha20Poly1305, Nonce, XChaCha20Poly1305, XNonce};
-use ed25519_dalek::VerifyingKey;
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use flate2::read::DeflateDecoder;
 use flate2::write::DeflateEncoder;
 use flate2::Compression;
 use hkdf::Hkdf;
-use human_money_core::crypto::ed25519_pub_to_x25519;
+use human_money_core::crypto::{ed25519_pub_to_x25519, get_pubkey_from_user_id};
+use human_money_core::ValidatedUserId;
 use rand::seq::SliceRandom;
 use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
@@ -29,12 +30,140 @@ pub const BACKUP_PAD_BLOCK_BYTES: usize = 65_536; // 64 KB
 pub const DROP_BACKUP_MAX_BYTES: usize = 5 * 1024 * 1024; // 5 MB, §2
 pub const MAX_DECOMPRESSED_SLOT_BYTES: usize = 8 * 1024 * 1024; // 8 MiB zip-bomb cap
 pub const MAX_DECOMPRESSED_BACKUP_BYTES: usize = 16 * 1024 * 1024; // 16 MiB zip-bomb cap
+pub const CARD_BUNDLE_WRITER_SIG_DOMAIN: &[u8] = b"HUMOCO-CARD-BUNDLE-WRITER-V1\n";
 const RECIPIENT_ENTRY_SIZE: usize = 92; // 32 (eph_pk) + 12 (nonce) + 48 (ct)
 const MAX_RECIPIENT_OVERHEAD: usize = 8 + 2 + 256 * RECIPIENT_ENTRY_SIZE + 24 + 16; // 23602 bytes
+const PLACEHOLDER_WRITER_SIG_HEX: &str = "a3f8c291e04b7d659281f4a0c3e7b6d2194857a0f3c6e2b8d194a7c5e3f082619d4b7a2c5e8f1036b9c4d7a2e5f801394c7b2a5e8d1f03692a5c8e1b4d7f0368";
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct CardBundle {
+    pub writer_did: String,
+    pub writer_sig: String,
     pub envelopes: Vec<CardEnvelope>,
+}
+
+/// Computes canonical, domain-separated signing bytes for a `CardBundle`:
+/// `b"HUMOCO-CARD-BUNDLE-WRITER-V1\n"`
+/// `|| (writer_did.len() as u64).to_be_bytes() || writer_did.as_bytes()`
+/// `|| (envelopes.len() as u64).to_be_bytes()`
+/// `|| for each env in envelopes: env.hops || (env.card_wire.len() as u64).to_be_bytes() || env.card_wire.as_bytes()`.
+pub fn card_bundle_signing_bytes(writer_did: &str, envelopes: &[CardEnvelope]) -> Vec<u8> {
+    let extra_bytes: usize = envelopes
+        .iter()
+        .map(|e| 1usize + 8 + e.card_wire.len())
+        .sum();
+    let mut buf = Vec::with_capacity(
+        CARD_BUNDLE_WRITER_SIG_DOMAIN.len() + 8 + writer_did.len() + 8 + extra_bytes,
+    );
+    buf.extend_from_slice(CARD_BUNDLE_WRITER_SIG_DOMAIN);
+    buf.extend_from_slice(&(writer_did.len() as u64).to_be_bytes());
+    buf.extend_from_slice(writer_did.as_bytes());
+    buf.extend_from_slice(&(envelopes.len() as u64).to_be_bytes());
+    for env in envelopes {
+        buf.push(env.hops);
+        buf.extend_from_slice(&(env.card_wire.len() as u64).to_be_bytes());
+        buf.extend_from_slice(env.card_wire.as_bytes());
+    }
+    buf
+}
+
+fn validate_writer_identity(
+    writer_did: &str,
+    signing_key: &SigningKey,
+) -> Result<String, MarketError> {
+    let validated = ValidatedUserId::parse(writer_did)
+        .map_err(|e| MarketError::Identity(format!("Invalid CardBundle writer_did: {}", e)))?;
+    if writer_did != validated.as_str() {
+        return Err(MarketError::Identity(
+            "CardBundle writer_did must be canonical without outer whitespace".to_string(),
+        ));
+    }
+    let vk = get_pubkey_from_user_id(validated.as_str()).map_err(|e| {
+        MarketError::Identity(format!("Invalid CardBundle writer_did pubkey: {}", e))
+    })?;
+    if vk.is_weak() {
+        return Err(MarketError::Crypto(
+            "CardBundle writer_did public key is weak".to_string(),
+        ));
+    }
+    if vk != signing_key.verifying_key() {
+        return Err(MarketError::Identity(
+            "CardBundle signing_key does not match writer_did public key".to_string(),
+        ));
+    }
+    Ok(validated.into_string())
+}
+
+/// Signs `envelopes` with the uploader's Ed25519 `signing_key` bound to canonical `writer_did`.
+pub fn sign_card_bundle(
+    envelopes: Vec<CardEnvelope>,
+    writer_did: &str,
+    signing_key: &SigningKey,
+) -> Result<CardBundle, MarketError> {
+    let canonical_did = validate_writer_identity(writer_did, signing_key)?;
+    let msg = card_bundle_signing_bytes(&canonical_did, &envelopes);
+    let sig = signing_key.sign(&msg);
+    Ok(CardBundle {
+        writer_did: canonical_did,
+        writer_sig: hex::encode(sig.to_bytes()),
+        envelopes,
+    })
+}
+
+/// Verifies fail-closed that a `CardBundle` carries a canonical `writer_did`, non-weak Ed25519 key,
+/// 128-lowercase-hex `writer_sig`, and valid strict Ed25519 signature over `(writer_did, envelopes)`.
+pub fn verify_card_bundle(bundle: &CardBundle) -> Result<(), MarketError> {
+    let validated = ValidatedUserId::parse(&bundle.writer_did)
+        .map_err(|e| MarketError::Identity(format!("Invalid CardBundle writer_did: {}", e)))?;
+    if bundle.writer_did != validated.as_str() {
+        return Err(MarketError::Identity(
+            "CardBundle writer_did must be canonical without outer whitespace".to_string(),
+        ));
+    }
+    let vk = get_pubkey_from_user_id(&bundle.writer_did).map_err(|e| {
+        MarketError::Identity(format!("Invalid CardBundle writer_did pubkey: {}", e))
+    })?;
+    if vk.is_weak() {
+        return Err(MarketError::Crypto(
+            "CardBundle writer_did public key is weak".to_string(),
+        ));
+    }
+    if bundle.writer_sig.len() != 128
+        || !bundle
+            .writer_sig
+            .bytes()
+            .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+    {
+        return Err(MarketError::Crypto(
+            "CardBundle writer_sig must be a 128-character lowercase hex string".to_string(),
+        ));
+    }
+    let mut sig_bytes = [0u8; 64];
+    hex::decode_to_slice(&bundle.writer_sig, &mut sig_bytes)
+        .map_err(|e| MarketError::Crypto(format!("Invalid CardBundle writer_sig hex: {}", e)))?;
+    let sig = Signature::from_bytes(&sig_bytes);
+    let msg = card_bundle_signing_bytes(&bundle.writer_did, &bundle.envelopes);
+    vk.verify_strict(&msg, &sig).map_err(|e| {
+        MarketError::Crypto(format!(
+            "CardBundle writer signature verification failed: {}",
+            e
+        ))
+    })
+}
+
+/// Verifies a signed `CardBundle` and encodes it to canonical JSON bytes for slot sealing.
+pub fn encode_signed_card_bundle(bundle: &CardBundle) -> Result<Vec<u8>, MarketError> {
+    verify_card_bundle(bundle)?;
+    serde_json::to_vec(bundle).map_err(|e| MarketError::Serialization(e.to_string()))
+}
+
+/// Decodes JSON bytes into a `CardBundle` (`#[serde(deny_unknown_fields)]`) and verifies its writer signature fail-closed.
+pub fn decode_and_verify_card_bundle(bytes: &[u8]) -> Result<CardBundle, MarketError> {
+    let bundle: CardBundle =
+        serde_json::from_slice(bytes).map_err(|e| MarketError::Serialization(e.to_string()))?;
+    verify_card_bundle(&bundle)?;
+    Ok(bundle)
 }
 
 /// Computes exact cryptographic envelope overhead for `recipient_count` padded into `{16, 32, 64, 128, 256}`.
@@ -109,18 +238,26 @@ fn card_relevance_rank(stored: &StoredCard, own_coords: Option<(f64, f64)>, now_
     }
 }
 
-fn compressed_bundle_len(envelopes: &[CardEnvelope]) -> usize {
+fn compressed_bundle_len(writer_did: &str, envelopes: &[CardEnvelope]) -> usize {
     #[derive(Serialize)]
     struct BundleRef<'a> {
+        writer_did: &'a str,
+        writer_sig: &'a str,
         envelopes: &'a [CardEnvelope],
     }
-    let json = serde_json::to_vec(&BundleRef { envelopes }).unwrap_or_default();
+    let json = serde_json::to_vec(&BundleRef {
+        writer_did,
+        writer_sig: PLACEHOLDER_WRITER_SIG_HEX,
+        envelopes,
+    })
+    .unwrap_or_default();
     deflate_compress(&json)
         .map(|v| v.len())
         .unwrap_or(json.len())
 }
 
-/// Builds a prioritized, Deflate-budget-trimmed card bundle without hard card count limits.
+/// Builds a prioritized, Deflate-budget-trimmed, writer-signed card bundle without hard card count limits.
+#[allow(clippy::too_many_arguments)]
 pub fn build_card_bundle(
     own_card_wire: Option<&str>,
     cards: &[&StoredCard],
@@ -129,7 +266,10 @@ pub fn build_card_bundle(
     trust_level_of: &dyn Fn(&str) -> u8,
     recipient_count: usize,
     max_bytes: usize,
-) -> CardBundle {
+    writer_did: &str,
+    writer_signing_key: &SigningKey,
+) -> Result<CardBundle, MarketError> {
+    let canonical_writer_did = validate_writer_identity(writer_did, writer_signing_key)?;
     let mut envelopes = Vec::new();
 
     if let Some(wire) = own_card_wire {
@@ -193,14 +333,16 @@ pub fn build_card_bundle(
 
     let overhead = slot_overhead_bytes(recipient_count).unwrap_or(MAX_RECIPIENT_OVERHEAD);
     let payload_budget = max_bytes.saturating_sub(overhead);
+    let min_keep = usize::from(own_card_wire.is_some());
 
-    if !envelopes.is_empty() && compressed_bundle_len(&envelopes) > payload_budget {
-        let min_keep = usize::from(own_card_wire.is_some());
+    if !envelopes.is_empty()
+        && compressed_bundle_len(&canonical_writer_did, &envelopes) > payload_budget
+    {
         let mut low = min_keep;
         let mut high = envelopes.len();
         while low < high {
             let mid = (low + high).div_ceil(2);
-            if compressed_bundle_len(&envelopes[..mid]) <= payload_budget {
+            if compressed_bundle_len(&canonical_writer_did, &envelopes[..mid]) <= payload_budget {
                 low = mid;
             } else {
                 high = mid - 1;
@@ -209,7 +351,21 @@ pub fn build_card_bundle(
         envelopes.truncate(low);
     }
 
-    CardBundle { envelopes }
+    let mut bundle = sign_card_bundle(envelopes, &canonical_writer_did, writer_signing_key)?;
+    while bundle.envelopes.len() > min_keep {
+        let json =
+            serde_json::to_vec(&bundle).map_err(|e| MarketError::Serialization(e.to_string()))?;
+        let compressed_len = deflate_compress(&json)
+            .map(|v| v.len())
+            .unwrap_or(json.len());
+        if compressed_len <= payload_budget {
+            break;
+        }
+        bundle.envelopes.pop();
+        bundle = sign_card_bundle(bundle.envelopes, &canonical_writer_did, writer_signing_key)?;
+    }
+
+    Ok(bundle)
 }
 
 fn target_recipient_bucket(count: usize) -> Result<usize, MarketError> {
@@ -353,8 +509,7 @@ pub fn seal_slot_blob(
     readers: &[VerifyingKey],
     max_bytes: usize,
 ) -> Result<Vec<u8>, MarketError> {
-    let payload_bytes =
-        serde_json::to_vec(bundle).map_err(|e| MarketError::Serialization(e.to_string()))?;
+    let payload_bytes = encode_signed_card_bundle(bundle)?;
     seal_slot_payload(&payload_bytes, readers, max_bytes)
 }
 
@@ -465,11 +620,7 @@ pub fn open_slot_blob(
     my_x25519_secret: &StaticSecret,
 ) -> Result<Option<CardBundle>, MarketError> {
     match open_slot_payload(blob, my_x25519_secret)? {
-        Some(bytes) => {
-            let bundle: CardBundle = serde_json::from_slice(&bytes)
-                .map_err(|e| MarketError::Serialization(e.to_string()))?;
-            Ok(Some(bundle))
-        }
+        Some(bytes) => Ok(Some(decode_and_verify_card_bundle(&bytes)?)),
         None => Ok(None),
     }
 }

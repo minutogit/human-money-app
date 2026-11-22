@@ -24,10 +24,11 @@ use super::handlers::{
 };
 use super::{
     clamp_post_ts, load_post_state_read_only_for_session, merge_and_save_post_state,
-    push_pruned_outbox_tag16, resolve_counterparty_info_for_session, sanitize_sync_descriptors,
-    save_post_state_with_service, scoped_processed_msg_key, CounterpartyInfoResolver,
+    push_pruned_outbox_tag16, resolve_counterparty_info_for_session, save_post_state_with_service,
+    scoped_processed_msg_key, CounterpartyInfoResolver,
 };
 use crate::services::post_service::outbox::flush_post_slots_impl;
+use crate::services::sync_endpoints::{is_endpoint_revoked, sanitize_untrusted_sync_descriptors};
 
 const MAX_POST_SLOTS_PER_SERVER: usize = 64;
 const MAX_POST_SLOTS_TOTAL: usize = 256;
@@ -398,7 +399,7 @@ fn push_sync_slot_targets(
     prefix: Option<&str>,
 ) {
     for d in descriptors {
-        if d.status.eq_ignore_ascii_case("revoked")
+        if is_endpoint_revoked(&d.status)
             || sync_client::validate_sync_read_url(&d.read_url).is_err()
         {
             continue;
@@ -488,7 +489,7 @@ fn collect_candidate_slot_sources(
 
             for pd in &security_policy.public_syncs {
                 if pd.enabled
-                    && !pd.status.eq_ignore_ascii_case("revoked")
+                    && !is_endpoint_revoked(&pd.status)
                     && !pd.read_url.is_empty()
                     && (pd.authorized_channels.is_empty()
                         || pd.authorized_channels.iter().any(|c| c == "post"))
@@ -511,7 +512,7 @@ fn collect_candidate_slot_sources(
                         // Also poll sibling own-subaccount compartments on configured O(1) public syncs.
                         for pd in &security_policy.public_syncs {
                             if pd.enabled
-                                && !pd.status.eq_ignore_ascii_case("revoked")
+                                && !is_endpoint_revoked(&pd.status)
                                 && !pd.read_url.is_empty()
                                 && (pd.authorized_channels.is_empty()
                                     || pd.authorized_channels.iter().any(|c| c == "post"))
@@ -543,7 +544,7 @@ fn collect_candidate_slot_sources(
                             {
                                 continue;
                             }
-                            let card_drops = sanitize_sync_descriptors(
+                            let card_drops = sanitize_untrusted_sync_descriptors(
                                 &sc.card.payload.drops,
                                 humoco_market::MAX_CARD_DROPS,
                             );
@@ -1281,7 +1282,7 @@ pub async fn sync_post_channels_impl(
             PostDispatchOutcome::Handled => {
                 post_state.processed_msg_ids.insert(scoped_key, now_secs);
                 if !item.envelope.reply_drops.is_empty() {
-                    let reply_dtos = sanitize_sync_descriptors(
+                    let reply_dtos = sanitize_untrusted_sync_descriptors(
                         &item.envelope.reply_drops,
                         humoco_market::MAX_CARD_DROPS,
                     );

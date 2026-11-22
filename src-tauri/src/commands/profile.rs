@@ -70,16 +70,16 @@ pub fn get_my_quick_contact_impl(state: &AppState) -> Result<FrontendQuickContac
         .get_or_load_security_policy(&mut service, None)
         .map_err(FrontendError::from)?;
     let mut sync_urls = Vec::new();
+    let mut seen_norm_urls = std::collections::HashSet::new();
     for s in policy.market_selected_syncs {
-        if s.status.trim().eq_ignore_ascii_case("revoked") {
+        if crate::services::sync_endpoints::is_endpoint_revoked(&s.status) {
             continue;
         }
-        let lower = s.write_url.trim().to_ascii_lowercase();
-        if !s.write_url.is_empty()
-            && (lower.starts_with("https://") || lower.starts_with("http://"))
-        {
-            let compact = compact_sync_url_for_contact_uri(&s.write_url);
-            if !compact.is_empty() && !sync_urls.contains(&compact) {
+        let trimmed = s.write_url.trim();
+        if crate::sync_client::validate_sync_url(trimmed).is_ok() {
+            let norm = crate::services::sync_endpoints::normalize_sync_url(trimmed);
+            let compact = compact_sync_url_for_contact_uri(trimmed);
+            if !norm.is_empty() && !compact.is_empty() && seen_norm_urls.insert(norm) {
                 sync_urls.push(compact);
                 if sync_urls.len() >= 2 {
                     break;
@@ -89,14 +89,14 @@ pub fn get_my_quick_contact_impl(state: &AppState) -> Result<FrontendQuickContac
     }
     if sync_urls.len() < 2 {
         for ps in policy.public_syncs {
-            let lower = ps.write_url.trim().to_ascii_lowercase();
+            let trimmed = ps.write_url.trim();
             if ps.enabled
-                && !ps.status.trim().eq_ignore_ascii_case("revoked")
-                && !ps.write_url.is_empty()
-                && (lower.starts_with("https://") || lower.starts_with("http://"))
+                && !crate::services::sync_endpoints::is_endpoint_revoked(&ps.status)
+                && crate::sync_client::validate_sync_url(trimmed).is_ok()
             {
-                let compact = compact_sync_url_for_contact_uri(&ps.write_url);
-                if !compact.is_empty() && !sync_urls.contains(&compact) {
+                let norm = crate::services::sync_endpoints::normalize_sync_url(trimmed);
+                let compact = compact_sync_url_for_contact_uri(trimmed);
+                if !norm.is_empty() && !compact.is_empty() && seen_norm_urls.insert(norm) {
                     sync_urls.push(compact);
                     if sync_urls.len() >= 2 {
                         break;
@@ -183,15 +183,15 @@ mod tests {
             market_selected_syncs: vec![crate::models::FrontendSyncDescriptor {
                 write_url: "https://own.example.com/sync.php".to_string(),
                 read_url: "https://own.example.com/d-own12345".to_string(),
-                drop_pub: "11".repeat(32),
+                drop_pub: crate::test_support::test_ed25519_pub_hex(0x11),
                 status: "active".to_string(),
                 ..Default::default()
             }],
             public_syncs: vec![crate::settings::StoredPublicSync {
                 write_url: "https://sync.example.com/sync.php".to_string(),
                 read_url: "https://sync.example.com/d-pub67890".to_string(),
-                access_pubkey: "abc".to_string(),
-                drop_pub: "def".to_string(),
+                access_pubkey: crate::test_support::test_ed25519_pub_hex(0x22),
+                drop_pub: crate::test_support::test_ed25519_pub_hex(0x33),
                 enabled: true,
                 authorized_channels: vec!["card".to_string()],
                 register_url: None,
@@ -333,14 +333,14 @@ mod tests {
                     crate::models::FrontendSyncDescriptor {
                         write_url: "https://revoked-selected.example/sync.php".to_string(),
                         read_url: "https://revoked-selected.example/data".to_string(),
-                        drop_pub: "11".repeat(32),
+                        drop_pub: crate::test_support::test_ed25519_pub_hex(0x11),
                         status: "revoked".to_string(),
                         ..Default::default()
                     },
                     crate::models::FrontendSyncDescriptor {
                         write_url: "HTTPS://UPPER.EXAMPLE/sync.php".to_string(),
                         read_url: "https://upper.example/data".to_string(),
-                        drop_pub: "22".repeat(32),
+                        drop_pub: crate::test_support::test_ed25519_pub_hex(0x22),
                         status: "active".to_string(),
                         ..Default::default()
                     },
@@ -349,7 +349,7 @@ mod tests {
                     crate::settings::StoredPublicSync {
                         write_url: "https://revoked-public.example/sync.php".to_string(),
                         read_url: "https://revoked-public.example/data".to_string(),
-                        drop_pub: "33".repeat(32),
+                        drop_pub: crate::test_support::test_ed25519_pub_hex(0x33),
                         enabled: true,
                         status: "revoked".to_string(),
                         ..Default::default()
@@ -357,7 +357,7 @@ mod tests {
                     crate::settings::StoredPublicSync {
                         write_url: "https://active-public.example/sync.php".to_string(),
                         read_url: "https://active-public.example/data".to_string(),
-                        drop_pub: "44".repeat(32),
+                        drop_pub: crate::test_support::test_ed25519_pub_hex(0x44),
                         enabled: true,
                         status: "active".to_string(),
                         ..Default::default()

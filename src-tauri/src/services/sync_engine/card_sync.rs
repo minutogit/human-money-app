@@ -13,6 +13,10 @@ use crate::services::common::{
 };
 use crate::services::market_service::sync_own_card_drops_on_settings_change;
 use crate::services::recovery_service::enqueue_guardian_locator_updates_if_configured;
+use crate::services::sync_endpoints::{
+    descriptors_compatible_for_policy, descriptors_overlap, is_endpoint_revoked,
+    sanitize_untrusted_sync_descriptors, validate_upload_sync_descriptor,
+};
 use crate::session::SessionToken;
 use crate::settings::{
     SecurityPolicy, UiPreferences, SYNC_BASE_MAX_AGE_SECS, SYNC_CARD_MAX_BYTES, SYNC_HEARTBEAT_SECS,
@@ -47,26 +51,6 @@ fn is_known_offender(service: &AppService, did: &str) -> bool {
     service
         .with_wallet(|wallet| matches!(wallet.check_reputation(did), TrustStatus::KnownOffender(_)))
         .unwrap_or(false)
-}
-
-fn descriptors_overlap(a: &FrontendSyncDescriptor, b: &FrontendSyncDescriptor) -> bool {
-    let ar = normalize_sync_url(&a.read_url);
-    let aw = normalize_sync_url(&a.write_url);
-    let br = normalize_sync_url(&b.read_url);
-    let bw = normalize_sync_url(&b.write_url);
-    (!ar.is_empty() && (br == ar || bw == ar)) || (!aw.is_empty() && (br == aw || bw == aw))
-}
-
-fn descriptors_compatible_for_policy(
-    sel: &FrontendSyncDescriptor,
-    ep: &FrontendSyncDescriptor,
-) -> bool {
-    if !descriptors_overlap(sel, ep) {
-        return false;
-    }
-    let s_dp = sel.drop_pub.trim();
-    let e_dp = ep.drop_pub.trim();
-    s_dp.is_empty() || e_dp.is_empty() || s_dp.eq_ignore_ascii_case(e_dp)
 }
 
 fn contact_display_label(c: &crate::models::FrontendContact) -> String {
@@ -644,7 +628,7 @@ pub(crate) async fn probe_contact_syncs_with_session(
     });
     let has_healthy_public_sync = initial_policy.public_syncs.iter().any(|pd| {
         pd.enabled
-            && !pd.status.eq_ignore_ascii_case("revoked")
+            && !is_endpoint_revoked(&pd.status)
             && !pd.authorized_channels.is_empty()
             && !pd.read_url.is_empty()
     });
@@ -738,7 +722,7 @@ pub(crate) async fn probe_contact_syncs_with_session(
                     })
                     || policy.public_syncs.iter().any(|pd| {
                         pd.enabled
-                            && !pd.status.eq_ignore_ascii_case("revoked")
+                            && !is_endpoint_revoked(&pd.status)
                             && !pd.authorized_channels.is_empty()
                             && !pd.read_url.is_empty()
                     });
@@ -817,14 +801,7 @@ pub async fn set_selected_upload_syncs_impl(
     }
 
     for d in &syncs {
-        sync_client::validate_sync_url(&d.write_url).map_err(FrontendError::from)?;
-        sync_client::validate_sync_read_url(&d.read_url).map_err(FrontendError::from)?;
-        humoco_market::parse_ed25519_pubkey_hex64(&d.drop_pub)
-            .map_err(|e| FrontendError::from(format!("Invalid drop_pub: {}", e)))?;
-        if let Some(ref sid) = d.slot_id {
-            humoco_market::parse_slot_id(sid)
-                .map_err(|e| FrontendError::from(format!("Invalid slot_id: {}", e)))?;
-        }
+        validate_upload_sync_descriptor(d)?;
     }
 
     {
@@ -890,6 +867,15 @@ pub(crate) fn import_decrypted_card_bundle(
     address_book: &mut FrontendAddressBook,
     contacts_changed: &mut bool,
 ) -> (usize, usize) {
+    if let Err(e) = humoco_market::verify_card_bundle(&bundle) {
+        log::warn!(
+            "Rejected decrypted CardBundle from {} with invalid writer signature: {}",
+            read_url,
+            e
+        );
+        return (0, 0);
+    }
+
     let mut count = 0;
     let mut new_ads = 0;
     let mut before_ads_by_did: HashMap<String, HashSet<String>> = HashMap::new();
@@ -901,7 +887,7 @@ pub(crate) fn import_decrypted_card_bundle(
         before_ads_by_did.insert(sc.card.payload.recipient_id().to_string(), ids);
     }
 
-    for env in bundle.envelopes {
+    for env in &bundle.envelopes {
         let outcome = service.with_wallet(|wallet| {
             let is_offender =
                 |did: &str| matches!(wallet.check_reputation(did), TrustStatus::KnownOffender(_));
@@ -910,9 +896,10 @@ pub(crate) fn import_decrypted_card_bundle(
                 .coordinates
                 .as_deref()
                 .and_then(humoco_market::parse_coordinates_pair);
-            humoco_market::accept_envelope(
+            humoco_market::accept_envelope_with_writer(
                 store,
-                &env,
+                env,
+                Some(bundle.writer_did.as_str()),
                 now_secs,
                 max_stored_cards,
                 own_coords,
@@ -933,14 +920,10 @@ pub(crate) fn import_decrypted_card_bundle(
                         new_ads += 1;
                     }
                 }
-                let card_syncs: Vec<FrontendSyncDescriptor> = stored
-                    .card
-                    .payload
-                    .drops
-                    .iter()
-                    .cloned()
-                    .map(Into::into)
-                    .collect();
+                let card_syncs = sanitize_untrusted_sync_descriptors(
+                    &stored.card.payload.drops,
+                    humoco_market::MAX_CARD_DROPS,
+                );
                 let card_profile = humoco_market::extract_public_profile(&stored.card);
                 if crate::state::apply_contact_update_from_card(
                     address_book,
@@ -1065,6 +1048,8 @@ fn build_delta_card_blob(
     trust_level_of: &dyn Fn(&str) -> u8,
     readers: &[ed25519_dalek::VerifyingKey],
     effective_card_max_bytes: usize,
+    writer_did: &str,
+    writer_signing_key: &ed25519_dalek::SigningKey,
 ) -> Option<Vec<u8>> {
     let base_vers = prev_base_versions?;
     let any_removed = base_vers
@@ -1094,7 +1079,10 @@ fn build_delta_card_blob(
         trust_level_of,
         readers.len(),
         effective_card_max_bytes,
-    );
+        writer_did,
+        writer_signing_key,
+    )
+    .ok()?;
     let base_sz = prev_base_size.unwrap_or(0);
     humoco_market::seal_slot_blob(&delta_bundle, readers, effective_card_max_bytes)
         .ok()
@@ -1118,8 +1106,7 @@ fn seal_base_card_blob(
             humoco_market::seal_slot_payload(tb, evicted_reader_keys, effective_card_max_bytes)
         }
         (false, Some(tb)) if !full_bundle.envelopes.is_empty() => {
-            let fb = serde_json::to_vec(full_bundle)
-                .map_err(|e| humoco_market::MarketError::Serialization(e.to_string()))?;
+            let fb = humoco_market::encode_signed_card_bundle(full_bundle)?;
             humoco_market::seal_multi_class_slot_blob(
                 &[
                     (fb.as_slice(), readers),
@@ -1276,11 +1263,16 @@ pub(crate) async fn sync_card_upload_channel(
                 .map(|wire| (own_key, wire, own_card.payload.v))
         });
         let own_tombstone_bundle: Option<humoco_market::CardBundle> =
-            active_own_card.map(|own_card| humoco_market::CardBundle {
-                envelopes: vec![humoco_market::CardEnvelope {
-                    hops: 1,
-                    card_wire: format!("{}~", own_card.jws),
-                }],
+            active_own_card.and_then(|own_card| {
+                humoco_market::sign_card_bundle(
+                    vec![humoco_market::CardEnvelope {
+                        hops: 1,
+                        card_wire: format!("{}~", own_card.jws),
+                    }],
+                    &id_ctx.my_did,
+                    &id_ctx.my_ed_sk,
+                )
+                .ok()
             });
 
         let load_res = state.with_session_required(
@@ -1425,20 +1417,28 @@ pub(crate) async fn sync_card_upload_channel(
                 let tomb_bytes_opt: Option<Vec<u8>> = if !ctx.evicted_reader_keys.is_empty() {
                     own_tombstone_bundle
                         .as_ref()
-                        .and_then(|tb| serde_json::to_vec(tb).ok())
+                        .and_then(|tb| humoco_market::encode_signed_card_bundle(tb).ok())
                 } else {
                     None
                 };
 
                 let (full_bundle, use_tomb_only) = if ctx.readers.is_empty() {
-                    (
-                        own_tombstone_bundle
-                            .clone()
-                            .unwrap_or(humoco_market::CardBundle {
-                                envelopes: Vec::new(),
-                            }),
-                        true,
-                    )
+                    let tb = match own_tombstone_bundle.clone() {
+                        Some(tb) => tb,
+                        None => match humoco_market::sign_card_bundle(
+                            Vec::new(),
+                            &id_ctx.my_did,
+                            &id_ctx.my_ed_sk,
+                        ) {
+                            Ok(b) => b,
+                            Err(e) => {
+                                any_card_failed = true;
+                                errors.push(format!("Card bundle signing failed: {}", e));
+                                continue;
+                            }
+                        },
+                    };
+                    (tb, true)
                 } else {
                     let tomb_overhead = if let Some(ref tb) = tomb_bytes_opt {
                         humoco_market::slot_overhead_bytes(ctx.evicted_reader_keys.len())
@@ -1449,18 +1449,25 @@ pub(crate) async fn sync_card_upload_channel(
                         0
                     };
                     let active_budget = effective_card_max_bytes.saturating_sub(tomb_overhead);
-                    (
-                        humoco_market::build_card_bundle(
-                            own_wire_info.as_ref().map(|(_, w, _)| w.as_str()),
-                            &forward_candidates,
-                            own_coords,
-                            now_secs,
-                            &trust_level_of,
-                            ctx.readers.len(),
-                            active_budget,
-                        ),
-                        false,
-                    )
+                    let built = match humoco_market::build_card_bundle(
+                        own_wire_info.as_ref().map(|(_, w, _)| w.as_str()),
+                        &forward_candidates,
+                        own_coords,
+                        now_secs,
+                        &trust_level_of,
+                        ctx.readers.len(),
+                        active_budget,
+                        &id_ctx.my_did,
+                        &id_ctx.my_ed_sk,
+                    ) {
+                        Ok(b) => b,
+                        Err(e) => {
+                            any_card_failed = true;
+                            errors.push(format!("Card bundle signing failed: {}", e));
+                            continue;
+                        }
+                    };
+                    (built, false)
                 };
 
                 if !full_bundle.envelopes.is_empty() || tomb_bytes_opt.is_some() {
@@ -1541,6 +1548,8 @@ pub(crate) async fn sync_card_upload_channel(
                                 &trust_level_of,
                                 &ctx.readers,
                                 effective_card_max_bytes,
+                                &id_ctx.my_did,
+                                &id_ctx.my_ed_sk,
                             )
                         } else {
                             None
@@ -2017,7 +2026,7 @@ mod tests {
             write_url: "https://sync-a.example.org/sync.php".to_string(),
             read_url: "https://sync-a.example.org/d".to_string(),
             slot_id: None,
-            drop_pub: "11".repeat(32),
+            drop_pub: crate::test_support::test_ed25519_pub_hex(0x11),
             status: "active".to_string(),
             ..Default::default()
         };

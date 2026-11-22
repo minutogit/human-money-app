@@ -519,7 +519,7 @@ pub fn get_sync_overview_status_impl(
         .iter()
         .filter(|d| {
             d.enabled
-                && !d.status.eq_ignore_ascii_case("revoked")
+                && !crate::services::sync_endpoints::is_endpoint_revoked(&d.status)
                 && !d.authorized_channels.is_empty()
         })
         .count();
@@ -527,7 +527,10 @@ pub fn get_sync_overview_status_impl(
     let pending_public_syncs = security_policy
         .public_syncs
         .iter()
-        .filter(|d| !d.status.eq_ignore_ascii_case("revoked") && d.authorized_channels.is_empty())
+        .filter(|d| {
+            !crate::services::sync_endpoints::is_endpoint_revoked(&d.status)
+                && d.authorized_channels.is_empty()
+        })
         .count();
 
     let mut pending_keys = HashSet::new();
@@ -1153,7 +1156,7 @@ pub(crate) mod tests {
         let bob_service = setup_test_app(&base_dir.join("bob"), "Bob", BOB_PHRASE, password);
         let bob_state = create_test_state(bob_service);
 
-        let server_admin_pub = "11".repeat(32);
+        let server_admin_pub = crate::test_support::test_ed25519_pub_hex(0x11);
         let server =
             MockSyncServer::start("alice_data".to_string(), server_admin_pub.clone()).await;
 
@@ -1314,7 +1317,7 @@ pub(crate) mod tests {
         let bob_service = setup_test_app(&base_dir.join("bob"), "Bob", BOB_PHRASE, password);
         let bob_state = create_test_state(bob_service);
 
-        let server_admin_pub = "22".repeat(32);
+        let server_admin_pub = crate::test_support::test_ed25519_pub_hex(0x22);
         let server =
             MockSyncServer::start("server_data".to_string(), server_admin_pub.clone()).await;
 
@@ -1323,7 +1326,7 @@ pub(crate) mod tests {
             write_url: "https://healthy.example.com/sync.php".to_string(),
             read_url: "https://healthy.example.com/read".to_string(),
             slot_id: None,
-            drop_pub: "healthy_drop_pub".to_string(),
+            drop_pub: crate::test_support::test_ed25519_pub_hex(0x23),
             last_seen_at: Some(chrono::Utc::now().timestamp() as u64),
             last_error_at: None,
             fail_count: 0,
@@ -1346,7 +1349,7 @@ pub(crate) mod tests {
             write_url: "http://127.0.0.1:9/pending.php".to_string(),
             read_url: "http://127.0.0.1:9/pending_read".to_string(),
             slot_id: None,
-            drop_pub: "pending_drop_pub".to_string(),
+            drop_pub: crate::test_support::test_ed25519_pub_hex(0x24),
             last_seen_at: None,
             last_error_at: None,
             fail_count: 0,
@@ -2734,7 +2737,7 @@ pub(crate) mod tests {
                     policy.market_selected_syncs.push(FrontendSyncDescriptor {
                         write_url: "https://healthy.example.org/sync.php".to_string(),
                         read_url: "https://healthy.example.org/d-ok".to_string(),
-                        drop_pub: "33".repeat(32),
+                        drop_pub: crate::test_support::test_ed25519_pub_hex(0x33),
                         status: "active".to_string(),
                         ..Default::default()
                     });
@@ -3605,9 +3608,8 @@ pub(crate) mod tests {
                 .unwrap();
         }
         let carol_env = make_signed_card(&carol_did, &carol_sk, 2, 1);
-        let bundle = humoco_market::CardBundle {
-            envelopes: vec![carol_env],
-        };
+        let bundle =
+            humoco_market::sign_card_bundle(vec![carol_env], &carol_did, &carol_sk).unwrap();
         let sealed =
             humoco_market::seal_slot_blob(&bundle, &[alice_vk, carol_vk], 512 * 1024).unwrap();
         let stealth_carol =
@@ -3751,14 +3753,10 @@ pub(crate) mod tests {
         };
 
         let carol_env = make_signed_card(&carol_did, &carol_sk, 2, 1);
-        let sealed = humoco_market::seal_slot_blob(
-            &humoco_market::CardBundle {
-                envelopes: vec![carol_env],
-            },
-            &[alice_vk, carol_vk],
-            512 * 1024,
-        )
-        .unwrap();
+        let bundle =
+            humoco_market::sign_card_bundle(vec![carol_env], &carol_did, &carol_sk).unwrap();
+        let sealed =
+            humoco_market::seal_slot_blob(&bundle, &[alice_vk, carol_vk], 512 * 1024).unwrap();
         let stealth_carol =
             humoco_market::derive_member_stealth_pubkey(&carol_sk, &fin.descriptor.drop_pub)
                 .unwrap();
@@ -3926,14 +3924,10 @@ pub(crate) mod tests {
 
         // Put Carol's v=1 card onto the server so the poll downloads it
         let carol_env_srv = make_signed_card(&carol_did, &carol_sk, 1, 1);
-        let sealed = humoco_market::seal_slot_blob(
-            &humoco_market::CardBundle {
-                envelopes: vec![carol_env_srv],
-            },
-            &[bob_vk, carol_vk],
-            512 * 1024,
-        )
-        .unwrap();
+        let srv_bundle =
+            humoco_market::sign_card_bundle(vec![carol_env_srv], &carol_did, &carol_sk).unwrap();
+        let sealed =
+            humoco_market::seal_slot_blob(&srv_bundle, &[bob_vk, carol_vk], 512 * 1024).unwrap();
         let stealth_carol =
             humoco_market::derive_member_stealth_pubkey(&carol_sk, &fin.descriptor.drop_pub)
                 .unwrap();
@@ -4304,8 +4298,8 @@ pub(crate) mod tests {
                     p.public_syncs.push(crate::settings::StoredPublicSync {
                         write_url: "https://revoked-pub.example/sync.php".into(),
                         read_url: "https://revoked-pub.example/d".into(),
-                        drop_pub: "11".repeat(32),
-                        access_pubkey: "22".repeat(32),
+                        drop_pub: crate::test_support::test_ed25519_pub_hex(0x11),
+                        access_pubkey: crate::test_support::test_ed25519_pub_hex(0x22),
                         enabled: true,
                         authorized_channels: vec!["card".into()],
                         status: "revoked".into(),
@@ -4363,5 +4357,145 @@ pub(crate) mod tests {
         assert!(reloaded_state.get_cached_security_policy().is_err());
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn s02_x1_sync_bundle_import_clamps_forwarded_hops_and_rejects_tampered_writers() {
+        let base_dir = temp_test_dir("s02_x1_writer_binding");
+        let password = "TestPassword123!";
+        let alice_svc = setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
+        let bob_svc = setup_test_app(&base_dir.join("bob"), "Bob", BOB_PHRASE, password);
+        let carol_svc = setup_test_app(&base_dir.join("carol"), "Carol", CHARLIE_PHRASE, password);
+
+        let (alice_did, alice_sk, alice_vk) = alice_svc
+            .with_wallet_and_identity(|_, id| {
+                (id.user_id.clone(), id.signing_key.clone(), id.public_key)
+            })
+            .unwrap();
+        let (bob_did, bob_sk) = bob_svc
+            .with_wallet_and_identity(|_, id| (id.user_id.clone(), id.signing_key.clone()))
+            .unwrap();
+        let (carol_did, carol_sk) = carol_svc
+            .with_wallet_and_identity(|_, id| (id.user_id.clone(), id.signing_key.clone()))
+            .unwrap();
+        let alice_x_sk = human_money_core::services::crypto::dh::ed25519_sk_to_x25519_sk(&alice_sk);
+
+        let now = sync_client::current_unix_timestamp();
+
+        // 1. Bob forwards Carol's card (max_hops=3) claiming hops=1 inside Bob's signed CardBundle.
+        //    open_slot_blob verifies Bob's writer attestation, and import_decrypted_card_bundle
+        //    passes Some(bob_did) into accept_envelope_with_writer -> clamped to effective_hops = 2.
+        let carol_env_hop3 = make_signed_card(&carol_did, &carol_sk, 1, 1);
+        let forwarded_bundle =
+            humoco_market::sign_card_bundle(vec![carol_env_hop3.clone()], &bob_did, &bob_sk)
+                .unwrap();
+        let sealed_forwarded =
+            humoco_market::seal_slot_blob(&forwarded_bundle, &[alice_vk], 512 * 1024).unwrap();
+        let opened_forwarded = humoco_market::open_slot_blob(&sealed_forwarded, &alice_x_sk)
+            .unwrap()
+            .expect("Alice must decrypt Bob's valid signed SlotBlob");
+        assert_eq!(opened_forwarded.writer_did, bob_did);
+
+        let mut store = humoco_market::CardStore::default();
+        let mut sync_state = StoredSyncState::default();
+        let mut address_book = crate::models::FrontendAddressBook::default();
+        let mut contacts_changed = false;
+        let (accepted_cnt, _) = super::card_sync::import_decrypted_card_bundle(
+            opened_forwarded,
+            "https://bob.example/d",
+            now,
+            100,
+            &alice_svc,
+            &mut store,
+            &mut sync_state,
+            &mut address_book,
+            &mut contacts_changed,
+        );
+        assert_eq!(accepted_cnt, 1);
+        assert_eq!(
+            store.cards.get(&carol_did).map(|s| s.hops),
+            Some(2),
+            "Forwarded third-party card claiming hops=1 inside Bob's CardBundle must clamp to 2"
+        );
+
+        // 2. Carol's card with max_hops=1 forwarded by Bob claiming hops=1 MUST be rejected when clamped to 2.
+        let carol_hop1_card = humoco_market::sign_sd_card(
+            humoco_market::CardPayloadInput {
+                did: carol_did.clone(),
+                v: 2,
+                valid_until: now + 86_400,
+                max_hops: 1,
+                ad_count: 0,
+                allow_inquiries: false,
+                drops: vec![],
+            },
+            vec![(
+                humoco_market::CardItem::Name {
+                    first_name: Some("CarolDirectOnly".to_string()),
+                    last_name: None,
+                },
+                1,
+            )],
+            &carol_sk,
+        )
+        .unwrap();
+        let carol_hop1_env = humoco_market::CardEnvelope {
+            hops: 1,
+            card_wire: humoco_market::render_wire(
+                &carol_hop1_card,
+                1,
+                humoco_market::WireFilter::Full,
+            )
+            .unwrap(),
+        };
+        let bob_hop1_forward_bundle =
+            humoco_market::sign_card_bundle(vec![carol_hop1_env], &bob_did, &bob_sk).unwrap();
+        let sealed_hop1 =
+            humoco_market::seal_slot_blob(&bob_hop1_forward_bundle, &[alice_vk], 512 * 1024)
+                .unwrap();
+        let opened_hop1 = humoco_market::open_slot_blob(&sealed_hop1, &alice_x_sk)
+            .unwrap()
+            .unwrap();
+        let mut store_hop1 = humoco_market::CardStore::default();
+        let (rejected_cnt, _) = super::card_sync::import_decrypted_card_bundle(
+            opened_hop1,
+            "https://bob.example/d",
+            now,
+            100,
+            &alice_svc,
+            &mut store_hop1,
+            &mut StoredSyncState::default(),
+            &mut crate::models::FrontendAddressBook::default(),
+            &mut false,
+        );
+        assert_eq!(rejected_cnt, 0);
+        assert!(!store_hop1.cards.contains_key(&carol_did));
+
+        // 3. Tampered CardBundle inside raw SlotPayload MUST fail closed in open_slot_blob AND direct import.
+        let mut tampered_spoof_did = forwarded_bundle.clone();
+        tampered_spoof_did.writer_did = alice_did.clone();
+        let tampered_payload = serde_json::to_vec(&tampered_spoof_did).unwrap();
+        let tampered_sealed =
+            humoco_market::seal_slot_payload(&tampered_payload, &[alice_vk], 512 * 1024).unwrap();
+        assert!(
+            humoco_market::open_slot_blob(&tampered_sealed, &alice_x_sk).is_err(),
+            "open_slot_blob must reject CardBundle with spoofed writer_did"
+        );
+        let mut store_tampered = humoco_market::CardStore::default();
+        let (tampered_cnt, _) = super::card_sync::import_decrypted_card_bundle(
+            tampered_spoof_did,
+            "https://evil.example/d",
+            now,
+            100,
+            &alice_svc,
+            &mut store_tampered,
+            &mut StoredSyncState::default(),
+            &mut crate::models::FrontendAddressBook::default(),
+            &mut false,
+        );
+        assert_eq!(tampered_cnt, 0);
+        assert!(store_tampered.cards.is_empty());
+
+        let _ = std::fs::remove_dir_all(&base_dir);
     }
 }

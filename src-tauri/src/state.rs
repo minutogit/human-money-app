@@ -1,5 +1,11 @@
 // src-tauri/src/state.rs
 use crate::models::{FrontendAddressBook, FrontendContact, TransactionRecord};
+pub use crate::services::sync_endpoints::sync_endpoint_key;
+use crate::services::sync_endpoints::{
+    drop_pub_matches, endpoints_overlap, is_endpoint_revoked, normalize_sync_url,
+    sanitize_untrusted_frontend_sync_descriptors, sanitize_untrusted_sync_descriptors,
+    validate_contact_sync_descriptors,
+};
 use crate::session::{ActiveProfileCaches, AuthorizedSession, SessionToken};
 use crate::settings::{
     AppConfigDto, InternalLifecycleState, SecurityPolicy, UiPreferences,
@@ -862,14 +868,6 @@ pub fn record_known_head_receipts(
             .map_err(crate::models::FrontendError::from)?;
     }
     Ok(())
-}
-
-fn endpoints_overlap(a_read: &str, a_write: &str, b_read: &str, b_write: &str) -> bool {
-    let ar = crate::services::common::normalize_sync_url(a_read);
-    let aw = crate::services::common::normalize_sync_url(a_write);
-    let br = crate::services::common::normalize_sync_url(b_read);
-    let bw = crate::services::common::normalize_sync_url(b_write);
-    (!ar.is_empty() && (ar == br || ar == bw)) || (!aw.is_empty() && (aw == br || aw == bw))
 }
 
 /// Typed atomic persistence builder for encrypted profile stores (`generic_<name>.enc`).
@@ -2687,6 +2685,8 @@ impl AppState {
         let validated_did = human_money_core::ValidatedUserId::parse(&contact.did)
             .map_err(|e| AppFacadeError::ValidationFailed(format!("Invalid contact DID: {}", e)))?;
         contact.did = validated_did.into_string();
+        validate_contact_sync_descriptors(&contact.syncs)
+            .map_err(|e| AppFacadeError::ValidationFailed(e.message))?;
         let mut address_book: FrontendAddressBook =
             load_encrypted_json_or_default(service, CONTACTS_DATA_NAME, password)?;
 
@@ -2827,13 +2827,10 @@ impl AppState {
                         .cards
                         .get(&contact.did)
                         .map(|sc| {
-                            sc.card
-                                .payload
-                                .drops
-                                .iter()
-                                .cloned()
-                                .map(Into::into)
-                                .collect()
+                            sanitize_untrusted_sync_descriptors(
+                                &sc.card.payload.drops,
+                                humoco_market::MAX_CARD_DROPS,
+                            )
                         })
                         .unwrap_or_default(),
                     Err(e) => {
@@ -4036,14 +4033,10 @@ impl AppState {
                     );
                 }
                 if let Some(stored) = store.cards.get(&did) {
-                    let card_syncs: Vec<crate::models::FrontendSyncDescriptor> = stored
-                        .card
-                        .payload
-                        .drops
-                        .iter()
-                        .cloned()
-                        .map(Into::into)
-                        .collect();
+                    let card_syncs = sanitize_untrusted_sync_descriptors(
+                        &stored.card.payload.drops,
+                        humoco_market::MAX_CARD_DROPS,
+                    );
                     let card_profile = humoco_market::extract_public_profile(&stored.card);
                     if let Err(e) = self.update_contact_from_card(
                         service,
@@ -4081,7 +4074,9 @@ impl AppState {
         password: Option<&str>,
     ) -> Result<bool, crate::models::FrontendError> {
         let trimmed_card_did = card_did.trim();
-        if (card_syncs.is_empty() && card_profile.is_none()) || trimmed_card_did.is_empty() {
+        let sanitized_syncs =
+            sanitize_untrusted_frontend_sync_descriptors(card_syncs, humoco_market::MAX_CARD_DROPS);
+        if (sanitized_syncs.is_empty() && card_profile.is_none()) || trimmed_card_did.is_empty() {
             return Ok(false);
         }
 
@@ -4092,7 +4087,7 @@ impl AppState {
         if apply_contact_update_from_card(
             &mut address_book,
             trimmed_card_did,
-            card_syncs,
+            &sanitized_syncs,
             card_profile,
         ) {
             save_encrypted_json(service, CONTACTS_DATA_NAME, &address_book, password)
@@ -4193,8 +4188,8 @@ impl AppState {
 
         let initial_count = policy.market_selected_syncs.len();
         policy.market_selected_syncs.retain(|sel| {
-            let sr = crate::services::common::normalize_sync_url(&sel.read_url);
-            let sw = crate::services::common::normalize_sync_url(&sel.write_url);
+            let sr = normalize_sync_url(&sel.read_url);
+            let sw = normalize_sync_url(&sel.write_url);
             if sr.is_empty() && sw.is_empty() {
                 return false;
             }
@@ -4364,15 +4359,6 @@ fn truncate_did(did: &str) -> String {
     }
 }
 
-pub fn sync_endpoint_key(d: &crate::models::FrontendSyncDescriptor) -> String {
-    let w = crate::services::common::normalize_sync_url(&d.write_url);
-    if !w.is_empty() {
-        w
-    } else {
-        crate::services::common::normalize_sync_url(&d.read_url)
-    }
-}
-
 /// Applies disclosed business card profile fields to an existing address-book contact.
 /// Always updates `picture_url` when present on the card, and populates missing names
 /// without overwriting custom names already set by the user.
@@ -4533,14 +4519,16 @@ pub(crate) fn apply_contact_update_from_card(
     card_profile: Option<&human_money_core::models::profile::PublicProfile>,
 ) -> bool {
     let trimmed_card_did = card_did.trim();
-    if (card_syncs.is_empty() && card_profile.is_none()) || trimmed_card_did.is_empty() {
+    let sanitized_syncs =
+        sanitize_untrusted_frontend_sync_descriptors(card_syncs, humoco_market::MAX_CARD_DROPS);
+    if (sanitized_syncs.is_empty() && card_profile.is_none()) || trimmed_card_did.is_empty() {
         return false;
     }
     let mut updated = false;
     for (k, contact) in address_book.contacts.iter_mut() {
         if k.trim() == trimmed_card_did {
-            if !card_syncs.is_empty() {
-                let merged = merge_contact_syncs(&contact.syncs, card_syncs);
+            if !sanitized_syncs.is_empty() {
+                let merged = merge_contact_syncs(&contact.syncs, &sanitized_syncs);
                 if contact.syncs != merged {
                     contact.syncs = merged;
                     updated = true;
@@ -4740,7 +4728,7 @@ pub fn apply_revocation_notice<T: SyncRevocationFields>(
 
 /// Returns `true` if `ep` has already transitioned into an effective (irreversible) revocation.
 pub fn is_revocation_effective<T: SyncRevocationFields>(ep: &mut T, now_secs: u64) -> bool {
-    ep.status_mut().eq_ignore_ascii_case("revoked")
+    is_endpoint_revoked(ep.status_mut())
         || ep.sunset_at_mut().is_some_and(|sunset| now_secs >= sunset)
 }
 
@@ -4800,10 +4788,10 @@ pub fn apply_revocation_notice_to_address_book(
         let mut idx_to_remove: Option<usize> = None;
 
         for (idx, ep) in contact.syncs.iter_mut().enumerate() {
-            if crate::services::common::normalize_sync_url(&ep.read_url) != old_norm {
+            if normalize_sync_url(&ep.read_url) != old_norm {
                 continue;
             }
-            if !ep.drop_pub.trim().eq_ignore_ascii_case(&notice_pub) {
+            if !drop_pub_matches(&ep.drop_pub, &notice_pub) {
                 continue;
             }
 
@@ -4903,7 +4891,7 @@ mod tests {
         let sync1 = FrontendSyncDescriptor {
             read_url: "https://sync1.example.org/sync.php".to_string(),
             write_url: "https://sync1.example.org/sync.php".to_string(),
-            drop_pub: "pubkey1".to_string(),
+            drop_pub: crate::test_support::test_ed25519_pub_hex(0x01),
             slot_id: None,
             last_seen_at: None,
             last_error_at: None,
@@ -4915,7 +4903,7 @@ mod tests {
         let sync2 = FrontendSyncDescriptor {
             read_url: "https://sync2.example.org/sync.php".to_string(),
             write_url: "https://sync2.example.org/sync.php".to_string(),
-            drop_pub: "pubkey2".to_string(),
+            drop_pub: crate::test_support::test_ed25519_pub_hex(0x02),
             slot_id: None,
             last_seen_at: None,
             last_error_at: None,
@@ -5099,7 +5087,7 @@ mod tests {
         let sync_desc = FrontendSyncDescriptor {
             read_url: "https://sync-endpoint.org/sync.php".to_string(),
             write_url: "https://sync-endpoint.org/sync.php".to_string(),
-            drop_pub: "pub123".to_string(),
+            drop_pub: crate::test_support::test_ed25519_pub_hex(0x03),
             slot_id: None,
             last_seen_at: None,
             last_error_at: None,
@@ -5230,7 +5218,7 @@ mod tests {
                 policy.market_selected_syncs = vec![FrontendSyncDescriptor {
                     read_url: "https://sync-endpoint.org/sync.php".to_string(),
                     write_url: "https://sync-endpoint.org/sync.php".to_string(),
-                    drop_pub: "pub123".to_string(),
+                    drop_pub: crate::test_support::test_ed25519_pub_hex(0x03),
                     slot_id: None,
                     last_seen_at: None,
                     last_error_at: None,
@@ -5296,7 +5284,7 @@ mod tests {
         let bob_sync = FrontendSyncDescriptor {
             read_url: "https://bob-sync.org/sync.php".to_string(),
             write_url: "https://bob-sync.org/sync.php".to_string(),
-            drop_pub: "pub_bob".to_string(),
+            drop_pub: crate::test_support::test_ed25519_pub_hex(0x04),
             slot_id: None,
             last_seen_at: None,
             last_error_at: None,
@@ -5361,7 +5349,7 @@ mod tests {
         policy2.market_selected_syncs = vec![FrontendSyncDescriptor {
             read_url: "https://bob-sync.org/sync.php".to_string(),
             write_url: "https://bob-sync.org/sync.php".to_string(),
-            drop_pub: "pub_bob".to_string(),
+            drop_pub: crate::test_support::test_ed25519_pub_hex(0x04),
             slot_id: None,
             last_seen_at: None,
             last_error_at: None,
@@ -5603,7 +5591,7 @@ mod tests {
         let dep_ep = FrontendSyncDescriptor {
             write_url: "https://dep.example.org/sync.php".to_string(),
             read_url: "https://dep.example.org/d-dep".to_string(),
-            drop_pub: "aa".repeat(32),
+            drop_pub: crate::test_support::test_ed25519_pub_hex(0xaa),
             status: "deprecating".to_string(),
             sunset_at: Some(2000),
             revocation_reason: Some("Umzug".to_string()),
@@ -5612,7 +5600,7 @@ mod tests {
         let rev_ep = FrontendSyncDescriptor {
             write_url: "https://rev.example.org/sync.php".to_string(),
             read_url: "https://rev.example.org/d-rev".to_string(),
-            drop_pub: "bb".repeat(32),
+            drop_pub: crate::test_support::test_ed25519_pub_hex(0xbb),
             status: "revoked".to_string(),
             sunset_at: Some(1500),
             ..Default::default()
@@ -6166,7 +6154,7 @@ mod tests {
                         write_url: url.to_string(),
                         read_url: url.to_string(),
                         slot_id: None,
-                        drop_pub: "a".repeat(64),
+                        drop_pub: crate::test_support::test_ed25519_pub_hex(0x0a),
                     }],
                 },
                 vec![(
@@ -6204,7 +6192,7 @@ mod tests {
         let mk_sync = |url: &str| FrontendSyncDescriptor {
             write_url: url.to_string(),
             read_url: format!("{}/read", url),
-            drop_pub: "b".repeat(64),
+            drop_pub: crate::test_support::test_ed25519_pub_hex(0x0b),
             status: "active".to_string(),
             ..Default::default()
         };
@@ -7220,5 +7208,267 @@ mod tests {
         assert!(!format!("{auth:?}").contains(pw));
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn s11_x3_save_contact_rejects_invalid_sync_descriptors_and_allows_unprobed_qr() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("humoco_s11_x3_save_{}", uuid::Uuid::new_v4()));
+        let password = "test-password-123";
+        let alice_service = crate::test_support::setup_test_app(
+            &temp_dir.join("alice"),
+            "Alice",
+            crate::test_support::ALICE_PHRASE,
+            password,
+        );
+        let bob_service = crate::test_support::setup_test_app(
+            &temp_dir.join("bob"),
+            "Bob",
+            crate::test_support::BOB_PHRASE,
+            password,
+        );
+        let bob_did = bob_service
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
+        let state = crate::test_support::create_test_state(alice_service);
+        let mut service = state.service.lock().unwrap();
+
+        let mk_contact = |syncs: Vec<FrontendSyncDescriptor>| FrontendContact {
+            did: bob_did.clone(),
+            profile: FrontendUserProfile {
+                id: Some(bob_did.clone()),
+                first_name: Some("Bob".to_string()),
+                ..Default::default()
+            },
+            tags: vec![],
+            added_at: Utc::now().to_rfc3339(),
+            notes: None,
+            trust_level: Some(2),
+            desired_hops: Some(1),
+            has_peer_list: false,
+            peer_list_updated_at: None,
+            syncs,
+        };
+
+        let valid_pub = crate::test_support::test_ed25519_pub_hex(0x41);
+
+        // 1. Reject weak small-order Ed25519 drop_pub
+        let err_weak = state
+            .save_contact_with_options(
+                &mut service,
+                mk_contact(vec![FrontendSyncDescriptor {
+                    write_url: "https://peer.example.org/sync.php".to_string(),
+                    read_url: "https://peer.example.org/d".to_string(),
+                    drop_pub: "00".repeat(32),
+                    status: "active".to_string(),
+                    ..Default::default()
+                }]),
+                Some(password),
+                false,
+            )
+            .unwrap_err();
+        assert!(matches!(
+            err_weak,
+            super::AppFacadeError::ValidationFailed(_)
+        ));
+
+        // 2. Reject SSRF private/link-local IP URL
+        let err_ssrf = state
+            .save_contact_with_options(
+                &mut service,
+                mk_contact(vec![FrontendSyncDescriptor {
+                    write_url: "https://169.254.169.254/sync.php".to_string(),
+                    read_url: "https://169.254.169.254/d".to_string(),
+                    drop_pub: valid_pub.clone(),
+                    status: "active".to_string(),
+                    ..Default::default()
+                }]),
+                Some(password),
+                false,
+            )
+            .unwrap_err();
+        assert!(matches!(
+            err_ssrf,
+            super::AppFacadeError::ValidationFailed(_)
+        ));
+
+        // 3. Reject malformed slot_id
+        let err_slot = state
+            .save_contact_with_options(
+                &mut service,
+                mk_contact(vec![FrontendSyncDescriptor {
+                    write_url: "https://peer.example.org/sync.php".to_string(),
+                    read_url: "https://peer.example.org/d".to_string(),
+                    slot_id: Some("not-a-valid-slot".to_string()),
+                    drop_pub: valid_pub.clone(),
+                    status: "active".to_string(),
+                    ..Default::default()
+                }]),
+                Some(password),
+                false,
+            )
+            .unwrap_err();
+        assert!(matches!(
+            err_slot,
+            super::AppFacadeError::ValidationFailed(_)
+        ));
+
+        // 4. Reject incomplete replacement target
+        let err_rep = state
+            .save_contact_with_options(
+                &mut service,
+                mk_contact(vec![FrontendSyncDescriptor {
+                    write_url: "https://peer.example.org/sync.php".to_string(),
+                    read_url: "https://peer.example.org/d".to_string(),
+                    drop_pub: valid_pub,
+                    status: "deprecating".to_string(),
+                    replacement: Some(crate::models::FrontendSyncReplacementTarget {
+                        write_url: "https://new.example.org/sync.php".to_string(),
+                        read_url: "https://new.example.org/d".to_string(),
+                        drop_pub: String::new(),
+                    }),
+                    ..Default::default()
+                }]),
+                Some(password),
+                false,
+            )
+            .unwrap_err();
+        assert!(matches!(
+            err_rep,
+            super::AppFacadeError::ValidationFailed(_)
+        ));
+
+        // 5. Preserve unprobed QR write_url-only import (read_url, drop_pub, slot_id empty, replacement None)
+        state
+            .save_contact_with_options(
+                &mut service,
+                mk_contact(vec![FrontendSyncDescriptor {
+                    write_url: "https://qr-peer.example.org/sync.php".to_string(),
+                    read_url: String::new(),
+                    slot_id: None,
+                    drop_pub: String::new(),
+                    status: "unverified".to_string(),
+                    ..Default::default()
+                }]),
+                Some(password),
+                false,
+            )
+            .expect("unprobed write_url-only QR import must remain allowed");
+
+        let saved = state.load_contacts(&mut service, Some(password)).unwrap();
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].syncs.len(), 1);
+        assert_eq!(
+            saved[0].syncs[0].write_url,
+            "https://qr-peer.example.org/sync.php"
+        );
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn s11_x3_card_sync_update_sanitizes_bad_and_revoked_drops_without_aborting_valid_ones() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("humoco_s11_x3_card_{}", uuid::Uuid::new_v4()));
+        let password = "test-password-123";
+        let alice_service = crate::test_support::setup_test_app(
+            &temp_dir.join("alice"),
+            "Alice",
+            crate::test_support::ALICE_PHRASE,
+            password,
+        );
+        let bob_service = crate::test_support::setup_test_app(
+            &temp_dir.join("bob"),
+            "Bob",
+            crate::test_support::BOB_PHRASE,
+            password,
+        );
+        let bob_did = bob_service
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
+        let state = crate::test_support::create_test_state(alice_service);
+        let mut service = state.service.lock().unwrap();
+
+        state
+            .save_contact(
+                &mut service,
+                FrontendContact {
+                    did: bob_did.clone(),
+                    profile: FrontendUserProfile {
+                        id: Some(bob_did.clone()),
+                        ..Default::default()
+                    },
+                    tags: vec![],
+                    added_at: Utc::now().to_rfc3339(),
+                    notes: None,
+                    trust_level: Some(2),
+                    desired_hops: Some(1),
+                    has_peer_list: false,
+                    peer_list_updated_at: None,
+                    syncs: vec![],
+                },
+                Some(password),
+            )
+            .unwrap();
+
+        let valid_pub_lower = crate::test_support::test_ed25519_pub_hex(0x42);
+        let mixed_card_syncs = vec![
+            FrontendSyncDescriptor {
+                write_url: "https://revoked.example.org/sync.php".to_string(),
+                read_url: "https://revoked.example.org/d".to_string(),
+                drop_pub: crate::test_support::test_ed25519_pub_hex(0x43),
+                status: "revoked".to_string(),
+                ..Default::default()
+            },
+            FrontendSyncDescriptor {
+                write_url: "https://169.254.169.254/sync.php".to_string(),
+                read_url: "https://169.254.169.254/d".to_string(),
+                drop_pub: valid_pub_lower.clone(),
+                status: "active".to_string(),
+                ..Default::default()
+            },
+            FrontendSyncDescriptor {
+                write_url: "https://weak.example.org/sync.php".to_string(),
+                read_url: "https://weak.example.org/d".to_string(),
+                drop_pub: "00".repeat(32),
+                status: "active".to_string(),
+                ..Default::default()
+            },
+            FrontendSyncDescriptor {
+                write_url: "https://valid.example.org/sync.php".to_string(),
+                read_url: "https://valid.example.org/d".to_string(),
+                drop_pub: valid_pub_lower.to_ascii_uppercase(),
+                status: "active".to_string(),
+                ..Default::default()
+            },
+        ];
+
+        let card_profile = human_money_core::models::profile::PublicProfile {
+            first_name: Some("Robert".to_string()),
+            ..Default::default()
+        };
+
+        let updated = state
+            .update_contact_from_card(
+                &mut service,
+                &bob_did,
+                &mixed_card_syncs,
+                Some(&card_profile),
+                Some(password),
+            )
+            .unwrap();
+        assert!(updated);
+
+        let saved = state.load_contacts(&mut service, Some(password)).unwrap();
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].profile.first_name.as_deref(), Some("Robert"));
+        assert_eq!(saved[0].syncs.len(), 1);
+        assert_eq!(
+            saved[0].syncs[0].write_url,
+            "https://valid.example.org/sync.php"
+        );
+        assert_eq!(saved[0].syncs[0].drop_pub, valid_pub_lower);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

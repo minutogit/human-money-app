@@ -26,9 +26,12 @@ use super::{
     inquiry_rate_limit_key, load_post_signing_context_for_service,
     load_post_signing_context_for_session, load_post_state_for_session,
     load_post_state_with_service, lookup_counterparty_syncs, merge_and_save_post_state,
-    merge_post_state_with_service, resolve_counterparty_info_for_session,
-    sanitize_frontend_sync_descriptors, sanitize_sync_descriptors, scoped_processed_msg_key,
+    merge_post_state_with_service, resolve_counterparty_info_for_session, scoped_processed_msg_key,
     seal_post_container_bytes,
+};
+use crate::services::sync_endpoints::{
+    canonical_drop_pub_hex, is_endpoint_revoked, sanitize_untrusted_frontend_sync_descriptors,
+    sanitize_untrusted_sync_descriptors,
 };
 
 struct FlushContext {
@@ -94,7 +97,7 @@ fn record_recipient_target(
 ) {
     if sync_client::validate_sync_url(&descriptor.write_url).is_err()
         || sync_client::validate_sync_read_url(&descriptor.read_url).is_err()
-        || crate::services::common::canonical_drop_pub_hex(&descriptor.drop_pub).is_err()
+        || canonical_drop_pub_hex(&descriptor.drop_pub).is_err()
     {
         return;
     }
@@ -254,7 +257,7 @@ fn collect_flush_context(
 
                 if !extra_recipient_syncs.is_empty() {
                     for d in extra_recipient_syncs {
-                        if d.status.eq_ignore_ascii_case("revoked") {
+                        if is_endpoint_revoked(&d.status) {
                             continue;
                         }
                         if let Some(rcpt) = extra_trimmed {
@@ -268,7 +271,7 @@ fn collect_flush_context(
                             );
                         } else if sync_client::validate_sync_url(&d.write_url).is_ok()
                             && sync_client::validate_sync_read_url(&d.read_url).is_ok()
-                            && crate::services::common::canonical_drop_pub_hex(&d.drop_pub).is_ok()
+                            && canonical_drop_pub_hex(&d.drop_pub).is_ok()
                         {
                             let norm = normalize_sync_url(&d.write_url);
                             if !norm.is_empty() {
@@ -304,7 +307,7 @@ fn collect_flush_context(
                     for c in &contacts {
                         if c.did.trim() == rcpt {
                             for d in &c.syncs {
-                                if d.status.eq_ignore_ascii_case("revoked") {
+                                if is_endpoint_revoked(&d.status) {
                                     continue;
                                 }
                                 found_exact = true;
@@ -321,7 +324,7 @@ fn collect_flush_context(
                     for inq in &post_state.inquiries {
                         if inq.counterparty_did.trim() == rcpt {
                             for d in &inq.reply_syncs {
-                                if d.status.eq_ignore_ascii_case("revoked") {
+                                if is_endpoint_revoked(&d.status) {
                                     continue;
                                 }
                                 found_exact = true;
@@ -338,7 +341,7 @@ fn collect_flush_context(
                     for req in &post_state.pending_sign_requests {
                         if req.sender_did.trim() == rcpt {
                             for d in &req.reply_syncs {
-                                if d.status.eq_ignore_ascii_case("revoked") {
+                                if is_endpoint_revoked(&d.status) {
                                     continue;
                                 }
                                 found_exact = true;
@@ -354,7 +357,7 @@ fn collect_flush_context(
                     }
                     if let Some(ref store) = card_store {
                         if let Some(sc) = store.cards.get(rcpt.as_str()) {
-                            for d in sanitize_sync_descriptors(
+                            for d in sanitize_untrusted_sync_descriptors(
                                 &sc.card.payload.drops,
                                 humoco_market::MAX_CARD_DROPS,
                             ) {
@@ -385,7 +388,7 @@ fn collect_flush_context(
                             .unwrap_or_else(|_| c.did.clone());
                         if can_c == can_rcpt {
                             for d in &c.syncs {
-                                if d.status.eq_ignore_ascii_case("revoked") {
+                                if is_endpoint_revoked(&d.status) {
                                     continue;
                                 }
                                 record_recipient_target(
@@ -403,7 +406,7 @@ fn collect_flush_context(
                             .unwrap_or_else(|_| inq.counterparty_did.clone());
                         if can_inq == can_rcpt {
                             for d in &inq.reply_syncs {
-                                if d.status.eq_ignore_ascii_case("revoked") {
+                                if is_endpoint_revoked(&d.status) {
                                     continue;
                                 }
                                 record_recipient_target(
@@ -421,7 +424,7 @@ fn collect_flush_context(
                             .unwrap_or_else(|_| req.sender_did.clone());
                         if can_req == can_rcpt {
                             for d in &req.reply_syncs {
-                                if d.status.eq_ignore_ascii_case("revoked") {
+                                if is_endpoint_revoked(&d.status) {
                                     continue;
                                 }
                                 record_recipient_target(
@@ -439,7 +442,7 @@ fn collect_flush_context(
                             let can_card = crate::state::canonicalize_did(&sc.card.payload.did)
                                 .unwrap_or_else(|_| sc.card.payload.did.clone());
                             if can_card == can_rcpt {
-                                for d in sanitize_sync_descriptors(
+                                for d in sanitize_untrusted_sync_descriptors(
                                     &sc.card.payload.drops,
                                     humoco_market::MAX_CARD_DROPS,
                                 ) {
@@ -1279,7 +1282,7 @@ pub async fn reply_detached_signature_via_post_impl(
                 })
             {
                 let req = post_state.pending_sign_requests.remove(idx);
-                let sanitized_replies = sanitize_frontend_sync_descriptors(
+                let sanitized_replies = sanitize_untrusted_frontend_sync_descriptors(
                     &req.reply_syncs,
                     humoco_market::MAX_CARD_DROPS,
                 );
@@ -1630,8 +1633,10 @@ pub async fn send_market_inquiry_via_post_impl(
         created_at: now_secs,
     };
     validate_market_inquiry(&inquiry).map_err(FrontendError::from)?;
-    let recipient_syncs =
-        sanitize_frontend_sync_descriptors(&recipient_syncs, humoco_market::MAX_CARD_DROPS);
+    let recipient_syncs = sanitize_untrusted_frontend_sync_descriptors(
+        &recipient_syncs,
+        humoco_market::MAX_CARD_DROPS,
+    );
 
     let signing_ctx = load_post_signing_context_for_session(state, &session, pw)?;
 
