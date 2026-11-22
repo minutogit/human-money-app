@@ -3,10 +3,16 @@ project: human-money-app
 version: "0.5.16"
 phase: "beta"
 health: "green"
-last_updated: "2026-11-21"
+last_updated: "2026-11-22"
 blocks: []
 blocked_by: []
 priority_tasks:
+  - id: "APP-076"
+    title: "Universal Audit Loop Consolidation (Phases 1–6) & 21/21 Clean Verification (`S01`–`S21` + `F1`–`F5`)"
+    status: "completed"
+    priority: "critical"
+    depends_on: ["APP-075"]
+    description: "Completed the multi-phase architectural consolidation, ReCheck remediation, and full cross-slice audit verification across `crates/humoco-market`, `src-tauri`, React/TS frontend, and `scripts/tour-catalog.mjs`: 1) Session & Batch Atomicity (`Knot 3`): introduced `AuthorizedSession` and atomic `EncryptedBatchCommit` multi-store/cache persistence with generation-pinned RAM caches and revoked own-sync exclusion (`active_own_sync_descriptor` / `get_or_load_own_sync_descriptor` also enforced in `card_sync::probe_contact_syncs_with_session` and `compute_backup_status_dto`); 2) Central Sync Validation & Card Integrity (`Knot 2`): consolidated SSRF/URL validation into `src-tauri/src/services/sync_endpoints.rs` and added signed `CardBundle` writer authentication (`writer_did`/`writer_sig`, `S02-X1`) plus precomputed DH `PreparedPostSender` (`S10-X2`); 3) Typed Network Errors & Bounded Fetches (`Knot 5`): introduced `SyncClientError` with bounded media/provider fetches and consistent HTTP 429 cooldown propagation; 4) State Modularization (`Knot 1`): split monolithic `state.rs` into focused `src-tauri/src/state/{mod,storage,session_auth,profile_cache,contacts_repo,wot_repo,tests}.rs` submodules (zero-drift 340 production files mapped 1:1 across `S01`–`S20`); 5) Cross-Slice & UX Hardening: applied `FrontendInquiryTarget` camelCase clean break (`S10-X1`), surfaced `importedWotLists` in PoST results (`S10-X4`), persisted verified `entry_hash`-only `EquivocationProof` records locally in `l2_lifecycle.rs` with error logging in `checkout.rs`/`intent_reconciliation.rs`, aligned `QuickContactModal` load/publish `translateError` handling, and updated `scripts/tour-catalog.mjs` mock `FrontendPostSyncResult` payloads; 6) Audit Closure: closed all `S01`–`S21` slices (`21/21 🟢 Clean`) and verified cross-slice flows `F1`–`F5` under `cargo fmt --check`, strict `cargo clippy --all-targets --offline -- -D warnings`, `npm run i18n:check`, `./run-tests.sh --quiet`, and `npm run build`."
   - id: "APP-075"
     title: "Universal Two-Mode Audit & Improvement Loop (prompts/AUDIT_LOOP.md, AUDIT_STATE.md & DESIGN_INTENT_TRIAGE.md)"
     status: "completed"
