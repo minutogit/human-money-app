@@ -61,7 +61,9 @@ export const QuickContactModal: React.FC<QuickContactModalProps> = ({
             })
             .catch(err => {
                 if (active) {
-                    setError(typeof err === 'string' ? err : err?.message || t('contacts.quickContactLoadError', 'Fehler beim Laden des Schnellkontakts'));
+                    setError(
+                        translateError(err, t) || t('contacts.quickContactLoadError', 'Fehler beim Laden des Schnellkontakts')
+                    );
                 }
             })
             .finally(() => {

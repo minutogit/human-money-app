@@ -603,9 +603,9 @@ pub(crate) async fn probe_contact_syncs_with_session(
             let s = state
                 .get_or_load_security_policy(service, password)
                 .map_err(FrontendError::from)?;
-            let own = load_stored_sync_admin_opt(service, password)?.is_some_and(|a| {
-                !a.descriptor.write_url.is_empty() && !a.descriptor.read_url.is_empty()
-            });
+            let own = state
+                .get_or_load_own_sync_descriptor(service, password)?
+                .is_some_and(|d| !d.write_url.is_empty() && !d.read_url.is_empty());
             let ab: FrontendAddressBook =
                 crate::state::load_encrypted_json_or_default(service, CONTACTS_DATA_NAME, password)
                     .map_err(FrontendError::from)?;
@@ -2090,6 +2090,134 @@ mod tests {
         let drops = own_prof.last_card.unwrap().payload.drops;
         assert_eq!(drops.len(), 1);
         assert_eq!(drops[0].write_url, "https://sync-a.example.org/sync.php");
+
+        let _ = std::fs::remove_dir_all(&base_dir);
+    }
+
+    #[tokio::test]
+    async fn test_revoked_own_sync_allows_contact_probe_and_friend_auto_activation() {
+        use crate::models::{FrontendContact, FrontendUserProfile};
+        use crate::test_support::{MockSyncServer, ALICE_PHRASE, BOB_PHRASE};
+
+        let base_dir = temp_test_dir("revoked_own_sync_friend_activation");
+        let password = "TestPassword123!";
+        let bob_state = create_test_state(setup_test_app(
+            &base_dir.join("bob"),
+            "Bob",
+            BOB_PHRASE,
+            password,
+        ));
+        let alice_did = setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password)
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
+
+        let server_admin_pub = crate::test_support::test_ed25519_pub_hex(0x21);
+        let server = MockSyncServer::start("d-friend".to_string(), server_admin_pub.clone()).await;
+
+        let bob_signing_key = {
+            let s = bob_state.service.lock().unwrap();
+            s.with_wallet_and_identity(|_w, id| id.signing_key.clone())
+                .unwrap()
+        };
+        let stealth_pk =
+            humoco_market::derive_member_stealth_pubkey(&bob_signing_key, &server_admin_pub)
+                .unwrap();
+        server.members.lock().unwrap().push(stealth_pk);
+
+        let own_drop_pub = crate::test_support::test_ed25519_pub_hex(0x31);
+        let revoked_admin = crate::state::StoredSyncAdmin {
+            descriptor: humoco_market::DropDescriptor {
+                write_url: "https://revoked-own.example.org/sync.php".to_string(),
+                read_url: "https://revoked-own.example.org/d-own".to_string(),
+                slot_id: None,
+                drop_pub: own_drop_pub.clone(),
+            },
+            sync_index: 0,
+            data_dir: "d-own".to_string(),
+            max_members: 50,
+            max_total_storage_mb: 100,
+            max_user_storage_mb: 10,
+            policies: Default::default(),
+            allow: vec![],
+            last_members_hash: Default::default(),
+            revocation: Some(SyncRevocationNotice {
+                drop_pub: own_drop_pub,
+                issued_at: 1_760_000_000,
+                effective_at: 1_760_000_000,
+                reason: Some("Decommissioned".to_string()),
+                replacement: None,
+                signature: "00".repeat(64),
+            }),
+        };
+
+        let now = sync_client::current_unix_timestamp();
+        {
+            let mut s = bob_state.service.lock().unwrap();
+            let mut batch = crate::state::EncryptedBatchCommit::new();
+            batch.sync_admin(revoked_admin);
+            batch.commit(&bob_state, &mut s, Some(password)).unwrap();
+
+            bob_state
+                .save_contact(
+                    &mut s,
+                    FrontendContact {
+                        did: alice_did,
+                        profile: FrontendUserProfile {
+                            first_name: Some("Alice".to_string()),
+                            ..Default::default()
+                        },
+                        tags: vec![],
+                        added_at: "2026-01-01T00:00:00Z".to_string(),
+                        notes: None,
+                        trust_level: Some(2),
+                        desired_hops: Some(3),
+                        has_peer_list: false,
+                        peer_list_updated_at: None,
+                        syncs: vec![FrontendSyncDescriptor {
+                            write_url: format!("{}/sync.php", server.base_url),
+                            read_url: format!("{}/d-friend", server.base_url),
+                            slot_id: None,
+                            drop_pub: server_admin_pub.clone(),
+                            last_seen_at: None,
+                            last_error_at: None,
+                            fail_count: 0,
+                            status: "pending_auth".to_string(),
+                            last_probed_at: Some(now.saturating_sub(120)),
+                            ..Default::default()
+                        }],
+                    },
+                    Some(password),
+                )
+                .unwrap();
+        }
+
+        let auth = bob_state
+            .authorize_session(crate::state::RequiredAccess::Unlocked, Some(password))
+            .unwrap();
+        let probed = probe_contact_syncs_with_session(&auth.token, false, auth.pw(), &bob_state)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            probed.len(),
+            1,
+            "Revoked own sync must not suppress contact sync re-probing (force=false)"
+        );
+        assert_eq!(probed[0].status, "active");
+
+        let policy = {
+            let mut s = bob_state.service.lock().unwrap();
+            bob_state
+                .get_or_load_security_policy(&mut s, Some(password))
+                .unwrap()
+        };
+        assert_eq!(
+            policy.market_selected_syncs.len(),
+            1,
+            "Revoked own sync must not block auto-activating a healthy friend sync"
+        );
+        assert_eq!(policy.market_selected_syncs[0].drop_pub, server_admin_pub);
+        assert_eq!(policy.market_selected_syncs[0].status, "active");
 
         let _ = std::fs::remove_dir_all(&base_dir);
     }

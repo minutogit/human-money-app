@@ -203,4 +203,25 @@ describe('QuickContactModal Component', () => {
             expect(writeFile).toHaveBeenCalledWith('/tmp/charlie.hmcard', expect.anything());
         });
     });
+
+    it('translates structured BackendError codes when loading quick contact fails', async () => {
+        vi.mocked(profileService.getMyQuickContact).mockRejectedValueOnce({
+            code: 'error.auth.sessionTimeout',
+            message: 'raw session timeout backend text',
+        });
+
+        render(
+            <QuickContactModal
+                isOpen={true}
+                onClose={vi.fn()}
+            />
+        );
+
+        await waitFor(() => {
+            expect(
+                screen.getByText('Session timed out. Please provide your password.')
+            ).toBeInTheDocument();
+        });
+        expect(screen.queryByText('raw session timeout backend text')).not.toBeInTheDocument();
+    });
 });
