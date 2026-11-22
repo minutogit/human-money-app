@@ -25,7 +25,7 @@ export interface Skill {
     isRemote?: boolean;
 }
 
-export type AdKind = 'offer' | 'request';
+export type AdKind = 'offer' | 'request' | 'event';
 
 export interface Ad {
     id: string;
@@ -39,6 +39,8 @@ export interface Ad {
     allowInquiries: boolean;
     isRemote?: boolean;
     imageToken?: string | null;
+    eventAt?: number | null;
+    eventAllDay?: boolean;
 }
 
 export interface FrontendMyAd extends Ad {
@@ -84,6 +86,8 @@ export interface FrontendAdInput {
     allowInquiries: boolean;
     isRemote?: boolean;
     imageWebpDataUri?: string | null;
+    eventAt?: number | null;
+    eventAllDay?: boolean;
 }
 
 export type FrontendTrustTier = 'trusted' | 'unknown' | 'hidden';

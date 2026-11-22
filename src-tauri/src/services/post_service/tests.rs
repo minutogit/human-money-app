@@ -1207,6 +1207,8 @@ async fn test_async_wot_handshake_and_1_step_marketplace_inquiry_cycle() {
         allow_inquiries: true,
         is_remote: false,
         image_webp_data_uri: None,
+        event_at: None,
+        event_all_day: false,
     };
     let updated_bob_profile =
         upsert_ad_impl(ad_input, Some(password.to_string()), &bob_state).unwrap();
@@ -4332,6 +4334,8 @@ async fn s10_f3_canonical_inquiry_rate_limit_and_no_phantom_own_upload() {
             allow_inquiries: true,
             is_remote: false,
             image_webp_data_uri: None,
+            event_at: None,
+            event_all_day: false,
         },
         Some(password.to_string()),
         &bob_state,

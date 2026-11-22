@@ -26,7 +26,7 @@ export interface BoardTabProps {
     wifiOnly?: boolean;
 }
 
-export type BoardFilter = 'all' | 'offer' | 'request';
+export type BoardFilter = 'all' | 'offer' | 'request' | 'event';
 
 export const BoardTab: React.FC<BoardTabProps> = ({
     items,
@@ -69,7 +69,7 @@ export const BoardTab: React.FC<BoardTabProps> = ({
     }, [people]);
 
     const filteredItems = useMemo(() => {
-        return items.filter((item) => {
+        const result = items.filter((item) => {
             // Kind filter
             if (filterKind !== 'all' && item.ad.kind !== filterKind) {
                 return false;
@@ -106,6 +106,16 @@ export const BoardTab: React.FC<BoardTabProps> = ({
             }
             return true;
         });
+
+        if (filterKind === 'event') {
+            return [...result].sort((a, b) => {
+                const timeA = a.ad.eventAt ?? a.ad.expiresAt;
+                const timeB = b.ad.eventAt ?? b.ad.expiresAt;
+                return timeA !== timeB ? timeA - timeB : a.ad.id.localeCompare(b.ad.id);
+            });
+        }
+
+        return result;
     }, [items, people, filterKind, searchQuery, effectiveMaxDistance, myCoordinates]);
 
     const isBoardEmptyOverall = items.length === 0;
@@ -171,8 +181,8 @@ export const BoardTab: React.FC<BoardTabProps> = ({
                         </select>
                     </div>
 
-                    {/* Filter chips: Alle / Angebote / Gesuche */}
-                    <div className="inline-flex rounded-xl p-1 bg-bg-app border border-theme-subtle self-start sm:self-auto">
+                    {/* Filter chips: Alle / Angebote / Gesuche / Termine */}
+                    <div className="inline-flex flex-wrap rounded-xl p-1 bg-bg-app border border-theme-subtle self-start sm:self-auto">
                         <button
                             type="button"
                             onClick={() => setFilterKind('all')}
@@ -208,6 +218,18 @@ export const BoardTab: React.FC<BoardTabProps> = ({
                             data-testid="filter-chip-requests"
                         >
                             {t('marketplace.filterRequests', 'Gesuche')}
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setFilterKind('event')}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                                filterKind === 'event'
+                                    ? 'bg-white text-violet-700 shadow-xs'
+                                    : 'text-theme-light hover:text-theme-secondary'
+                            }`}
+                            data-testid="filter-chip-events"
+                        >
+                            {t('marketplace.filterEvents', 'Termine')}
                         </button>
                     </div>
                 </div>

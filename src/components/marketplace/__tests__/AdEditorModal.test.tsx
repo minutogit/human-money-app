@@ -481,4 +481,48 @@ describe('AdEditorModal Component', () => {
     }));
     expect(onSave.mock.calls[0][0]).not.toHaveProperty('imageWebpDataUri');
   });
+
+  it('supports creating an Event ad with date, optional time, and 500-char text', async () => {
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    const futureDate = new Date();
+    futureDate.setDate(futureDate.getDate() + 10);
+    const yyyy = futureDate.getFullYear();
+    const mm = String(futureDate.getMonth() + 1).padStart(2, '0');
+    const dd = String(futureDate.getDate()).padStart(2, '0');
+    const dateStr = `${yyyy}-${mm}-${dd}`;
+
+    render(
+      <UiModeProvider initialMode="expert">
+        <AdEditorModal
+          isOpen={true}
+          onClose={vi.fn()}
+          onSave={onSave}
+        />
+      </UiModeProvider>
+    );
+
+    fireEvent.click(screen.getByTestId('ad-kind-event-btn'));
+    expect(screen.getByTestId('ad-event-date-input')).toBeInTheDocument();
+    expect(screen.getByTestId('ad-event-time-input')).toBeInTheDocument();
+    // Duration segmented tabs must be hidden for events
+    expect(screen.queryByText(/30 Tage|30 days/i)).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByTestId('ad-event-date-input'), { target: { value: dateStr } });
+    fireEvent.change(screen.getByTestId('ad-event-time-input'), { target: { value: '18:30' } });
+    fireEvent.change(screen.getByTestId('ad-title-input'), { target: { value: 'Minuto-Stammtisch' } });
+    const longText = 'A'.repeat(420);
+    fireEvent.change(screen.getByTestId('ad-text-input'), { target: { value: longText } });
+    expect(screen.getByText('420 / 500')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('ad-submit-button'));
+    await waitFor(() => {
+      expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'event',
+        title: 'Minuto-Stammtisch',
+        text: longText,
+        eventAllDay: false,
+        eventAt: expect.any(Number),
+      }));
+    });
+  });
 });

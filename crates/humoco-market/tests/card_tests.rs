@@ -74,6 +74,8 @@ fn sample_items() -> Vec<(CardItem, u8)> {
                 allow_inquiries: true,
                 is_remote: false,
                 image_token: None,
+                event_at: None,
+                event_all_day: false,
             }),
             2,
         ),
@@ -261,6 +263,8 @@ fn test_no_ads_wire_filter_fits_7168_with_8_skills() {
             allow_inquiries: false,
             is_remote: false,
             image_token: None,
+            event_at: None,
+            event_all_day: false,
         }),
         2,
     ));
@@ -446,8 +450,8 @@ fn test_limits_skills_and_ads() {
     ));
     assert!(sign_sd_card(payload.clone(), items, &sk).is_err());
 
-    // 5 ads ok
-    let mut ad_items: Vec<(CardItem, u8)> = (0..5)
+    // 10 ads ok
+    let mut ad_items: Vec<(CardItem, u8)> = (0..10)
         .map(|i| {
             (
                 CardItem::Ad(Ad {
@@ -462,6 +466,8 @@ fn test_limits_skills_and_ads() {
                     allow_inquiries: false,
                     is_remote: false,
                     image_token: None,
+                    event_at: None,
+                    event_all_day: false,
                 }),
                 2,
             )
@@ -469,12 +475,12 @@ fn test_limits_skills_and_ads() {
         .collect();
     assert!(sign_sd_card(payload.clone(), ad_items.clone(), &sk).is_ok());
 
-    // 6 ads err
+    // 11 ads err
     ad_items.push((
         CardItem::Ad(Ad {
-            id: format!("{:016x}", 6),
+            id: format!("{:016x}", 11),
             kind: AdKind::Offer,
-            title: "Ad 6".to_string(),
+            title: "Ad 11".to_string(),
             text: None,
             pricing: None,
             published_at: 1700000000,
@@ -483,10 +489,103 @@ fn test_limits_skills_and_ads() {
             allow_inquiries: false,
             is_remote: false,
             image_token: None,
+            event_at: None,
+            event_all_day: false,
         }),
         2,
     ));
     assert!(sign_sd_card(payload, ad_items, &sk).is_err());
+}
+
+#[test]
+fn test_event_ad_validation_and_500_char_text() {
+    let sk = make_key(12);
+    let mut payload = valid_payload_input(&sk);
+    payload.ad_count = 1;
+
+    // Valid timed event with 500 char text
+    let valid_event = (
+        CardItem::Ad(Ad {
+            id: new_ad_id(),
+            kind: AdKind::Event,
+            title: "Minuto Stammtisch".to_string(),
+            text: Some("E".repeat(500)),
+            pricing: Some("Kostenlos".to_string()),
+            published_at: 1700000000,
+            renewed_at: None,
+            expires_at: 1700000000 + 10 * 86_400,
+            allow_inquiries: true,
+            is_remote: false,
+            image_token: None,
+            event_at: Some(1700000000 + 9 * 86_400),
+            event_all_day: false,
+        }),
+        2,
+    );
+    assert!(sign_sd_card(payload.clone(), vec![valid_event], &sk).is_ok());
+
+    // Event without event_at must fail
+    let missing_event_at = (
+        CardItem::Ad(Ad {
+            id: new_ad_id(),
+            kind: AdKind::Event,
+            title: "Missing date".to_string(),
+            text: None,
+            pricing: None,
+            published_at: 1700000000,
+            renewed_at: None,
+            expires_at: 1700000000 + 10 * 86_400,
+            allow_inquiries: false,
+            is_remote: false,
+            image_token: None,
+            event_at: None,
+            event_all_day: false,
+        }),
+        2,
+    );
+    assert!(sign_sd_card(payload.clone(), vec![missing_event_at], &sk).is_err());
+
+    // Event with event_at > expires_at must fail
+    let event_after_expiry = (
+        CardItem::Ad(Ad {
+            id: new_ad_id(),
+            kind: AdKind::Event,
+            title: "Late event".to_string(),
+            text: None,
+            pricing: None,
+            published_at: 1700000000,
+            renewed_at: None,
+            expires_at: 1700000000 + 5 * 86_400,
+            allow_inquiries: false,
+            is_remote: false,
+            image_token: None,
+            event_at: Some(1700000000 + 6 * 86_400),
+            event_all_day: false,
+        }),
+        2,
+    );
+    assert!(sign_sd_card(payload.clone(), vec![event_after_expiry], &sk).is_err());
+
+    // Offer with event_at or event_all_day must fail
+    let offer_with_event_at = (
+        CardItem::Ad(Ad {
+            id: new_ad_id(),
+            kind: AdKind::Offer,
+            title: "Bad offer".to_string(),
+            text: None,
+            pricing: None,
+            published_at: 1700000000,
+            renewed_at: None,
+            expires_at: 1700000000 + 5 * 86_400,
+            allow_inquiries: false,
+            is_remote: false,
+            image_token: None,
+            event_at: Some(1700000000 + 86_400),
+            event_all_day: false,
+        }),
+        2,
+    );
+    assert!(sign_sd_card(payload, vec![offer_with_event_at], &sk).is_err());
 }
 
 #[test]
@@ -509,6 +608,8 @@ fn test_ad_duration_and_validity_invariants() {
             allow_inquiries: false,
             is_remote: false,
             image_token: None,
+            event_at: None,
+            event_all_day: false,
         }),
         2,
     );
@@ -528,6 +629,8 @@ fn test_ad_duration_and_validity_invariants() {
             allow_inquiries: false,
             is_remote: false,
             image_token: None,
+            event_at: None,
+            event_all_day: false,
         }),
         2,
     );
@@ -548,6 +651,8 @@ fn test_ad_duration_and_validity_invariants() {
             allow_inquiries: false,
             is_remote: false,
             image_token: None,
+            event_at: None,
+            event_all_day: false,
         }),
         2,
     );
@@ -564,6 +669,8 @@ fn test_ad_duration_and_validity_invariants() {
             allow_inquiries: false,
             is_remote: false,
             image_token: None,
+            event_at: None,
+            event_all_day: false,
         }),
         2,
     );
@@ -583,6 +690,8 @@ fn test_ad_duration_and_validity_invariants() {
             allow_inquiries: false,
             is_remote: false,
             image_token: None,
+            event_at: None,
+            event_all_day: false,
         }),
         2,
     );

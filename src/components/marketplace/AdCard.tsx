@@ -1,12 +1,13 @@
 // src/components/marketplace/AdCard.tsx
 import React, { useState, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { MessageSquare, ArrowRight, Clock, Tag, ChevronDown, ChevronUp, User, Globe, ImageOff, Image as ImageIcon, Edit3 } from 'lucide-react';
+import { MessageSquare, ArrowRight, Clock, Calendar, Tag, ChevronDown, ChevronUp, User, Globe, ImageOff, Image as ImageIcon, Edit3 } from 'lucide-react';
 import { Ad, FrontendEntrySource, FrontendTrustTier } from '../../types';
 import { Button } from '../ui/Button';
 import { TrustBadge } from '../ui/TrustBadge';
 import { truncateUserId } from '../../utils/userIdHelper';
 import { isMeteredOrCellularConnection } from '../../utils/networkStatus';
+import { formatEventDateTime, getAdKindBadgeClass } from '../../utils/adEventFormat';
 import { marketService } from '../../services/marketService';
 
 const MAX_AD_IMAGE_CACHE_ENTRIES = 128;
@@ -68,7 +69,7 @@ export const AdCard: React.FC<AdCardProps> = ({
     onPay,
     onOwnerClick,
 }) => {
-    const { t } = useTranslation();
+    const { t, i18n } = useTranslation();
     const [isExpanded, setIsExpanded] = useState(false);
 
     const imageToken = ad.imageToken;
@@ -151,8 +152,14 @@ export const AdCard: React.FC<AdCardProps> = ({
             ? Math.ceil((ad.expiresAt - nowSecs) / 86400)
             : 0;
 
-    const isOffer = ad.kind === 'offer';
-    const isExpiringSoon = effectiveDaysLeft <= 14;
+    const isEvent = ad.kind === 'event';
+    const isExpiringSoon = !isEvent && effectiveDaysLeft <= 14;
+    const kindLabel =
+        ad.kind === 'offer'
+            ? t('marketplace.adKindOffer', 'Angebot')
+            : ad.kind === 'request'
+                ? t('marketplace.adKindRequest', 'Gesuch')
+                : t('marketplace.adKindEvent', 'Termin');
 
     const trimmedName = ownerName.trim();
     const displayName = trimmedName.startsWith('did:key:')
@@ -182,14 +189,10 @@ export const AdCard: React.FC<AdCardProps> = ({
                 <div className="flex items-center justify-between gap-2 flex-wrap">
                     <div className="flex items-center gap-1.5 flex-wrap">
                         <span
-                            className={`inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider ${
-                                isOffer
-                                    ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                                    : 'bg-sky-50 text-sky-700 border border-sky-200'
-                            }`}
+                            className={`inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider ${getAdKindBadgeClass(ad.kind)}`}
                             data-testid="ad-kind-badge"
                         >
-                            {isOffer ? t('marketplace.adKindOffer', 'Angebot') : t('marketplace.adKindRequest', 'Gesuch')}
+                            {kindLabel}
                         </span>
                         {isOwn && (
                             <span
@@ -210,24 +213,34 @@ export const AdCard: React.FC<AdCardProps> = ({
                         )}
                     </div>
 
-                    <span
-                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold ${
-                            isExpiringSoon
-                                ? 'bg-amber-50 text-amber-800 border border-amber-200'
-                                : 'bg-bg-app text-theme-light border border-theme-subtle'
-                        }`}
-                        title={t('marketplace.daysLeftTooltip', 'Gültig bis {{date}} (noch {{days}} Tage)', {
-                            date: new Date(ad.expiresAt * 1000).toLocaleDateString(),
-                            days: effectiveDaysLeft,
-                        })}
-                    >
-                        <Clock size={12} className={isExpiringSoon ? 'text-amber-600' : 'text-theme-light'} />
-                        <span>
-                            {effectiveDaysLeft === 1
-                                ? t('marketplace.oneDayLeft', 'noch 1 Tag')
-                                : t('marketplace.daysLeft', 'noch {{count}} Tage', { count: effectiveDaysLeft })}
+                    {isEvent && ad.eventAt ? (
+                        <span
+                            className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-violet-50 text-violet-800 border border-violet-200"
+                            data-testid="ad-event-date-badge"
+                        >
+                            <Calendar size={12} className="text-violet-600 shrink-0" />
+                            <span>{formatEventDateTime(ad.eventAt, ad.eventAllDay, i18n.language)}</span>
                         </span>
-                    </span>
+                    ) : (
+                        <span
+                            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold ${
+                                isExpiringSoon
+                                    ? 'bg-amber-50 text-amber-800 border border-amber-200'
+                                    : 'bg-bg-app text-theme-light border border-theme-subtle'
+                            }`}
+                            title={t('marketplace.daysLeftTooltip', 'Gültig bis {{date}} (noch {{days}} Tage)', {
+                                date: new Date(ad.expiresAt * 1000).toLocaleDateString(),
+                                days: effectiveDaysLeft,
+                            })}
+                        >
+                            <Clock size={12} className={isExpiringSoon ? 'text-amber-600' : 'text-theme-light'} />
+                            <span>
+                                {effectiveDaysLeft === 1
+                                    ? t('marketplace.oneDayLeft', 'noch 1 Tag')
+                                    : t('marketplace.daysLeft', 'noch {{count}} Tage', { count: effectiveDaysLeft })}
+                            </span>
+                        </span>
+                    )}
                 </div>
 
                 {/* Ad Image / Deferred Placeholder / Graceful Degradation */}

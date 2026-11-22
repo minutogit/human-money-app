@@ -156,6 +156,10 @@ pub struct FrontendMyAd {
     pub days_left: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image_token: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_at: Option<u64>,
+    #[serde(default)]
+    pub event_all_day: bool,
 }
 
 impl FrontendMyAd {
@@ -182,6 +186,8 @@ impl FrontendMyAd {
             status,
             days_left,
             image_token: ad.image_token.clone(),
+            event_at: ad.event_at,
+            event_all_day: ad.event_all_day,
         }
     }
 }
@@ -263,6 +269,10 @@ pub struct FrontendAdInput {
         deserialize_with = "deserialize_double_option"
     )]
     pub image_webp_data_uri: Option<Option<String>>,
+    #[serde(default)]
+    pub event_at: Option<u64>,
+    #[serde(default)]
+    pub event_all_day: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]

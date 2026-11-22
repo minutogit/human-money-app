@@ -991,12 +991,52 @@ pub async fn set_card_published_impl(
     build_my_market_profile_dto(&service, stored, now)
 }
 
+fn compute_event_expiry(
+    event_at: u64,
+    event_all_day: bool,
+    now: u64,
+    allow_ongoing_start: bool,
+) -> Result<u64, FrontendError> {
+    if event_at == 0 {
+        return Err(FrontendError::from(
+            "Event date must be a valid positive timestamp".to_string(),
+        ));
+    }
+    let max_expiry = now.saturating_add(humoco_market::AD_MAX_DURATION_SECS);
+    if event_at > max_expiry {
+        return Err(FrontendError::from(
+            "Event date cannot be more than 180 days in the future".to_string(),
+        ));
+    }
+    if !event_all_day && !allow_ongoing_start && event_at < now {
+        return Err(FrontendError::from(
+            "Event start time must be in the future".to_string(),
+        ));
+    }
+    let raw_expiry = if event_all_day {
+        // All-day events store noon UTC of the selected calendar date;
+        // +18h (06:00 UTC next day) keeps the event active until end-of-day across timezones.
+        event_at.saturating_add(64_800)
+    } else {
+        event_at.saturating_add(6 * 3_600)
+    };
+    let expires_at = raw_expiry.min(max_expiry);
+    if expires_at <= now || event_at > expires_at {
+        return Err(FrontendError::from(
+            "Event date must not already be in the past".to_string(),
+        ));
+    }
+    Ok(expires_at)
+}
+
 pub fn upsert_ad_impl(
     ad_input: FrontendAdInput,
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendMyMarketProfile, FrontendError> {
-    if !humoco_market::AD_DURATION_CHOICES_DAYS.contains(&ad_input.duration_days) {
+    if ad_input.kind != humoco_market::AdKind::Event
+        && !humoco_market::AD_DURATION_CHOICES_DAYS.contains(&ad_input.duration_days)
+    {
         return Err(FrontendError::from(
             "duration_days must be 30, 90, or 180".to_string(),
         ));
@@ -1044,6 +1084,36 @@ pub fn upsert_ad_impl(
         .id
         .as_ref()
         .and_then(|id| stored.ads.iter().position(|a| &a.id == id));
+
+    let computed_event_expiry = match ad_input.kind {
+        humoco_market::AdKind::Event => {
+            let ev_at = ad_input.event_at.ok_or_else(|| {
+                FrontendError::from("Event ads require an event date".to_string())
+            })?;
+            let allow_ongoing_start = existing_idx
+                .map(|idx| {
+                    let existing = &stored.ads[idx];
+                    existing.kind == humoco_market::AdKind::Event
+                        && existing.event_at == Some(ev_at)
+                        && existing.event_all_day == ad_input.event_all_day
+                })
+                .unwrap_or(false);
+            Some(compute_event_expiry(
+                ev_at,
+                ad_input.event_all_day,
+                now,
+                allow_ongoing_start,
+            )?)
+        }
+        humoco_market::AdKind::Offer | humoco_market::AdKind::Request => {
+            if ad_input.event_at.is_some() || ad_input.event_all_day {
+                return Err(FrontendError::from(
+                    "Offer/Request ads must not specify an event date".to_string(),
+                ));
+            }
+            None
+        }
+    };
 
     let new_media: Option<(String, Vec<u8>)> = match ad_input.image_webp_data_uri {
         Some(None) => None,
@@ -1097,8 +1167,30 @@ pub fn upsert_ad_impl(
 
     let mut old_token_to_clean: Option<String> = None;
     if let Some(idx) = existing_idx {
-        // Edit existing ad: MUST keep published_at, renewed_at, and expires_at unchanged!
+        let was_expired = stored.ads[idx].expires_at <= now;
+        let existing_id = stored.ads[idx].id.clone();
+        let will_be_active = match computed_event_expiry {
+            Some(exp) => exp > now,
+            None => !was_expired || stored.ads[idx].kind == humoco_market::AdKind::Event,
+        };
+        if was_expired && will_be_active {
+            let other_active = stored
+                .ads
+                .iter()
+                .filter(|a| a.id != existing_id && a.expires_at > now)
+                .count();
+            if other_active >= humoco_market::MAX_ADS_PER_CARD {
+                return Err(FrontendError::with_code(
+                    "error.market.adLimitReached",
+                    "Maximum number of active ads reached.",
+                ));
+            }
+        }
+
+        // Edit existing Offer/Request: preserve published_at, renewed_at, and expires_at.
+        // For Events (or kind transitions involving Event), sync expires_at with event_at.
         let existing = &mut stored.ads[idx];
+        let old_kind = existing.kind;
         let old_token = existing.image_token.clone();
         existing.kind = ad_input.kind;
         existing.title = title_trimmed.to_string();
@@ -1108,13 +1200,30 @@ pub fn upsert_ad_impl(
         existing.is_remote = ad_input.is_remote;
         existing.image_token = new_image_token.clone();
 
+        if let Some(new_event_expiry) = computed_event_expiry {
+            existing.event_at = ad_input.event_at;
+            existing.event_all_day = ad_input.event_all_day;
+            if existing.expires_at != new_event_expiry || old_kind != humoco_market::AdKind::Event {
+                existing.expires_at = new_event_expiry;
+                existing.renewed_at = Some(now.max(existing.published_at));
+            }
+        } else {
+            existing.event_at = None;
+            existing.event_all_day = false;
+            if old_kind == humoco_market::AdKind::Event {
+                existing.renewed_at = Some(now.max(existing.published_at));
+                existing.expires_at =
+                    now.saturating_add(ad_input.duration_days.saturating_mul(86_400));
+            }
+        }
+
         if let Some(ref old_t) = old_token {
             if Some(old_t) != new_image_token.as_ref() {
                 old_token_to_clean = Some(old_t.clone());
             }
         }
     } else {
-        // Create new ad: enforce active ads limit (max 5)
+        // Create new ad: enforce active ads limit
         let active_count = stored.ads.iter().filter(|a| a.expires_at > now).count();
         if active_count >= humoco_market::MAX_ADS_PER_CARD {
             return Err(FrontendError::with_code(
@@ -1128,7 +1237,8 @@ pub fn upsert_ad_impl(
         }
         let id = humoco_market::new_ad_id();
         let published_at = now;
-        let expires_at = now.saturating_add(ad_input.duration_days.saturating_mul(86_400));
+        let expires_at = computed_event_expiry
+            .unwrap_or_else(|| now.saturating_add(ad_input.duration_days.saturating_mul(86_400)));
         stored.ads.push(humoco_market::Ad {
             id,
             kind: ad_input.kind,
@@ -1141,6 +1251,8 @@ pub fn upsert_ad_impl(
             allow_inquiries: ad_input.allow_inquiries,
             is_remote: ad_input.is_remote,
             image_token: new_image_token,
+            event_at: ad_input.event_at,
+            event_all_day: ad_input.event_all_day,
         });
     }
 
@@ -1188,7 +1300,13 @@ pub fn renew_ad_impl(
         .position(|a| a.id == id)
         .ok_or_else(|| FrontendError::from("Ad not found".to_string()))?;
 
-    // If the ad was expired, renewing it will make it active -> enforce limit of 5 active ads
+    if stored.ads[ad_idx].kind == humoco_market::AdKind::Event {
+        return Err(FrontendError::from(
+            "Event ads cannot be renewed by duration; edit the event date instead.".to_string(),
+        ));
+    }
+
+    // If the ad was expired, renewing it will make it active -> enforce active ads limit
     if stored.ads[ad_idx].expires_at <= now {
         let other_active = stored
             .ads
@@ -2098,6 +2216,8 @@ mod tests {
             allow_inquiries: true,
             is_remote: false,
             image_webp_data_uri: None,
+            event_at: None,
+            event_all_day: false,
         };
         assert!(upsert_ad_impl(bad_ad, Some(password.to_string()), &alice_state).is_err());
 
@@ -2112,6 +2232,8 @@ mod tests {
             allow_inquiries: true,
             is_remote: false,
             image_webp_data_uri: None,
+            event_at: None,
+            event_all_day: false,
         };
         let p1 = upsert_ad_impl(ad_30, Some(password.to_string()), &alice_state).unwrap();
         assert_eq!(p1.ads.len(), 1);
@@ -2149,9 +2271,9 @@ mod tests {
             setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
         let alice_state = create_test_state(alice_service);
 
-        // Create 5 active ads
+        // Create 10 active ads
         let mut ad_ids = Vec::new();
-        for i in 1..=5 {
+        for i in 1..=10 {
             let ad_input = FrontendAdInput {
                 id: None,
                 kind: humoco_market::AdKind::Offer,
@@ -2162,27 +2284,31 @@ mod tests {
                 allow_inquiries: true,
                 is_remote: false,
                 image_webp_data_uri: None,
+                event_at: None,
+                event_all_day: false,
             };
             let p = upsert_ad_impl(ad_input, Some(password.to_string()), &alice_state).unwrap();
             ad_ids.push(p.ads.last().unwrap().id.clone());
         }
 
-        // 6th active ad fails with market.adLimitReached
-        let ad_6 = FrontendAdInput {
+        // 11th active ad fails with market.adLimitReached
+        let ad_11 = FrontendAdInput {
             id: None,
             kind: humoco_market::AdKind::Offer,
-            title: "Service 6".to_string(),
+            title: "Service 11".to_string(),
             text: None,
             pricing: None,
             duration_days: 90,
             allow_inquiries: true,
             is_remote: false,
             image_webp_data_uri: None,
+            event_at: None,
+            event_all_day: false,
         };
-        let err = upsert_ad_impl(ad_6, Some(password.to_string()), &alice_state).unwrap_err();
+        let err = upsert_ad_impl(ad_11, Some(password.to_string()), &alice_state).unwrap_err();
         assert_eq!(err.code, "error.market.adLimitReached");
 
-        // Editing an existing ad succeeds even when 5 ads are active
+        // Editing an existing ad succeeds even when 10 ads are active
         let target_id = ad_ids[0].clone();
         let p_before =
             get_my_market_profile_impl(Some(password.to_string()), &alice_state).unwrap();
@@ -2203,6 +2329,8 @@ mod tests {
             allow_inquiries: false,
             is_remote: false,
             image_webp_data_uri: None,
+            event_at: None,
+            event_all_day: false,
         };
         let p_after = upsert_ad_impl(edit_input, Some(password.to_string()), &alice_state).unwrap();
         let ad_after = p_after.ads.iter().find(|a| a.id == target_id).unwrap();
@@ -2220,7 +2348,7 @@ mod tests {
 
         // Deleting 1 ad allows creating another
         let p_del = delete_ad_impl(target_id, Some(password.to_string()), &alice_state).unwrap();
-        assert_eq!(p_del.ads.len(), 4);
+        assert_eq!(p_del.ads.len(), 9);
 
         let ad_new = FrontendAdInput {
             id: None,
@@ -2232,9 +2360,115 @@ mod tests {
             allow_inquiries: true,
             is_remote: false,
             image_webp_data_uri: None,
+            event_at: None,
+            event_all_day: false,
         };
         let p_new = upsert_ad_impl(ad_new, Some(password.to_string()), &alice_state).unwrap();
-        assert_eq!(p_new.ads.len(), 5);
+        assert_eq!(p_new.ads.len(), 10);
+    }
+
+    #[test]
+    fn test_event_ad_lifecycle_and_validation() {
+        let base_dir = temp_test_dir("event_ad_lifecycle");
+        let password = "TestPassword123!";
+        let alice_service =
+            setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
+        let alice_state = create_test_state(alice_service);
+        let now = chrono::Utc::now().timestamp().max(0) as u64;
+
+        // 1. Event without event_at rejected
+        let missing_date = FrontendAdInput {
+            id: None,
+            kind: humoco_market::AdKind::Event,
+            title: "Stammtisch".to_string(),
+            text: None,
+            pricing: None,
+            duration_days: 90,
+            allow_inquiries: true,
+            is_remote: false,
+            image_webp_data_uri: None,
+            event_at: None,
+            event_all_day: false,
+        };
+        assert!(upsert_ad_impl(missing_date, Some(password.to_string()), &alice_state).is_err());
+
+        // 2. Offer with event_at rejected
+        let offer_with_date = FrontendAdInput {
+            id: None,
+            kind: humoco_market::AdKind::Offer,
+            title: "Honig".to_string(),
+            text: None,
+            pricing: None,
+            duration_days: 90,
+            allow_inquiries: true,
+            is_remote: false,
+            image_webp_data_uri: None,
+            event_at: Some(now + 86_400),
+            event_all_day: false,
+        };
+        assert!(upsert_ad_impl(offer_with_date, Some(password.to_string()), &alice_state).is_err());
+
+        // 3. Timed event > 180 days in future rejected
+        let too_far = FrontendAdInput {
+            id: None,
+            kind: humoco_market::AdKind::Event,
+            title: "Far future".to_string(),
+            text: None,
+            pricing: None,
+            duration_days: 90,
+            allow_inquiries: true,
+            is_remote: false,
+            image_webp_data_uri: None,
+            event_at: Some(now + 185 * 86_400),
+            event_all_day: false,
+        };
+        assert!(upsert_ad_impl(too_far, Some(password.to_string()), &alice_state).is_err());
+
+        // 4. Valid timed event with 500 chars text succeeds and sets expires_at = event_at + 6h
+        let ev_ts = now + 7 * 86_400;
+        let valid_event = FrontendAdInput {
+            id: None,
+            kind: humoco_market::AdKind::Event,
+            title: "Minuto Stammtisch".to_string(),
+            text: Some("T".repeat(500)),
+            pricing: Some("Kostenlos".to_string()),
+            duration_days: 90,
+            allow_inquiries: true,
+            is_remote: false,
+            image_webp_data_uri: None,
+            event_at: Some(ev_ts),
+            event_all_day: false,
+        };
+        let p1 = upsert_ad_impl(valid_event, Some(password.to_string()), &alice_state).unwrap();
+        assert_eq!(p1.ads.len(), 1);
+        assert_eq!(p1.ads[0].kind, humoco_market::AdKind::Event);
+        assert_eq!(p1.ads[0].event_at, Some(ev_ts));
+        assert!(!p1.ads[0].event_all_day);
+        assert_eq!(p1.ads[0].expires_at, ev_ts + 6 * 3_600);
+
+        // 5. Renewing an Event ad by duration is rejected
+        let ev_id = p1.ads[0].id.clone();
+        assert!(renew_ad_impl(ev_id.clone(), 90, Some(password.to_string()), &alice_state).is_err());
+
+        // 6. Editing the event date updates event_at & expires_at
+        let new_ev_ts = now + 14 * 86_400;
+        let edit_event = FrontendAdInput {
+            id: Some(ev_id.clone()),
+            kind: humoco_market::AdKind::Event,
+            title: "Minuto Stammtisch (Verschoben)".to_string(),
+            text: None,
+            pricing: None,
+            duration_days: 90,
+            allow_inquiries: true,
+            is_remote: false,
+            image_webp_data_uri: None,
+            event_at: Some(new_ev_ts),
+            event_all_day: true,
+        };
+        let p2 = upsert_ad_impl(edit_event, Some(password.to_string()), &alice_state).unwrap();
+        assert_eq!(p2.ads[0].event_at, Some(new_ev_ts));
+        assert!(p2.ads[0].event_all_day);
+        assert_eq!(p2.ads[0].expires_at, new_ev_ts + 64_800);
     }
 
     #[tokio::test]
@@ -2437,6 +2671,8 @@ mod tests {
             allow_inquiries: true,
             is_remote: false,
             image_webp_data_uri: None,
+            event_at: None,
+            event_all_day: false,
         };
         upsert_ad_impl(ad_req, Some(password.to_string()), &alice_state).unwrap();
         let alice_profile = set_card_published_impl(true, Some(password.to_string()), &alice_state)
@@ -2653,6 +2889,8 @@ mod tests {
             allow_inquiries: true,
             is_remote: false,
             image_webp_data_uri: Some(Some(ad_data_uri.clone())),
+            event_at: None,
+            event_all_day: false,
         };
         let p_after_ad =
             upsert_ad_impl(ad_with_img, Some(password.to_string()), &alice_state).unwrap();
@@ -2690,6 +2928,8 @@ mod tests {
             allow_inquiries: true,
             is_remote: false,
             image_webp_data_uri: None,
+            event_at: None,
+            event_all_day: false,
         };
         let p_edit =
             upsert_ad_impl(edit_no_img_change, Some(password.to_string()), &alice_state).unwrap();
@@ -2727,6 +2967,8 @@ mod tests {
             allow_inquiries: true,
             is_remote: true,
             image_webp_data_uri: Some(Some(jpeg_ad_data_uri.clone())),
+            event_at: None,
+            event_all_day: false,
         };
         let p_after_jpeg_ad =
             upsert_ad_impl(ad_with_jpeg, Some(password.to_string()), &alice_state).unwrap();
@@ -2859,6 +3101,8 @@ mod tests {
             allow_inquiries: true,
             is_remote: false,
             image_webp_data_uri: None,
+            event_at: None,
+            event_all_day: false,
         };
         let p_with_ad = upsert_ad_impl(ad_input, Some(password.to_string()), &alice_state).unwrap();
         assert_eq!(p_with_ad.ads.len(), 1);
@@ -3014,6 +3258,8 @@ mod tests {
                 allow_inquiries: true,
                 is_remote: false,
                 image_webp_data_uri: None,
+                event_at: None,
+                event_all_day: false,
             },
             Some(password.to_string()),
             &alice_state,
@@ -3081,6 +3327,8 @@ mod tests {
                 allow_inquiries: true,
                 is_remote: false,
                 image_webp_data_uri: None,
+                event_at: None,
+                event_all_day: false,
             },
             None,
             &alice_state,
@@ -3697,6 +3945,8 @@ mod tests {
                 allow_inquiries: true,
                 is_remote: false,
                 image_webp_data_uri: Some(Some(oversized_uri)),
+                event_at: None,
+                event_all_day: false,
             },
             Some(pw.to_string()),
             &state,
@@ -3714,6 +3964,8 @@ mod tests {
                 allow_inquiries: true,
                 is_remote: false,
                 image_webp_data_uri: None,
+                event_at: None,
+                event_all_day: false,
             },
             Some(pw.to_string()),
             &state,
@@ -3735,6 +3987,8 @@ mod tests {
                 allow_inquiries: true,
                 is_remote: false,
                 image_webp_data_uri: Some(Some(valid_webp.clone())),
+                event_at: None,
+                event_all_day: false,
             },
             Some(pw.to_string()),
             &state,
@@ -3824,6 +4078,8 @@ mod tests {
                     "data:image/webp;base64,{}",
                     STANDARD.encode(&valid_webp)
                 ))),
+                event_at: None,
+                event_all_day: false,
             },
             Some(pw.to_string()),
             &master_state,
@@ -4207,6 +4463,8 @@ mod tests {
                     allow_inquiries: true,
                     is_remote: false,
                     image_token: Some(image_token.clone()),
+                    event_at: None,
+                    event_all_day: false,
                 }),
                 1,
             )],

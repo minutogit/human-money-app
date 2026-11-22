@@ -16,8 +16,8 @@ use humoco_market::{
     accept_envelope, build_market_view, derive_effective_hops, encode_qr_svg, forward_envelope,
     mark_card_deleted, render_wire, sign_sd_card, AcceptOutcome, Ad, AdKind, CardEnvelope,
     CardPayloadInput, CardStore, DropDescriptor, EntrySource, MarketError, Skill, StoredCard,
-    TrustTier, WireFilter, CARD_SD_PADDED_LEN, MAX_AD_TITLE_CHARS, MAX_SKILL_TEXT_CHARS,
-    MAX_SKILL_TITLE_CHARS,
+    TrustTier, WireFilter, CARD_SD_PADDED_LEN, MAX_AD_TEXT_CHARS, MAX_AD_TITLE_CHARS,
+    MAX_SKILL_TEXT_CHARS, MAX_SKILL_TITLE_CHARS,
 };
 
 fn make_key(seed: u8) -> SigningKey {
@@ -379,6 +379,8 @@ fn s02_f7_sd_card_schema_digests_url_lengths_and_wire_framing() {
             allow_inquiries: false,
             is_remote: false,
             image_token: None,
+            event_at: None,
+            event_all_day: false,
         }),
     ];
     for item in padded_items {
@@ -480,6 +482,8 @@ fn test_ad(id: &str, title: &str, now: u64) -> Ad {
         allow_inquiries: false,
         is_remote: false,
         image_token: None,
+        event_at: None,
+        event_all_day: false,
     }
 }
 
@@ -489,8 +493,8 @@ fn s02_f3_merge_enforces_card_invariants_and_wire_cap() {
     let valid_until = now + 30 * 86_400;
     let sk = make_key(81);
 
-    // Case (a): 6 distinct Ads split 3 + 3 across two valid partial wires
-    let ads_a: Vec<(CardItem, u8)> = (0..3)
+    // Case (a): 11 distinct Ads split 6 + 5 across two valid partial wires
+    let ads_a: Vec<(CardItem, u8)> = (0..6)
         .map(|i| {
             (
                 CardItem::Ad(test_ad(&format!("{:016x}", i + 1), "AdA", now)),
@@ -498,7 +502,7 @@ fn s02_f3_merge_enforces_card_invariants_and_wire_cap() {
             )
         })
         .collect();
-    let ads_b: Vec<(CardItem, u8)> = (3..6)
+    let ads_b: Vec<(CardItem, u8)> = (6..11)
         .map(|i| {
             (
                 CardItem::Ad(test_ad(&format!("{:016x}", i + 1), "AdB", now)),
@@ -555,7 +559,7 @@ fn s02_f3_merge_enforces_card_invariants_and_wire_cap() {
     let dup_ad_a = vec![(CardItem::Ad(test_ad("aaaaaaaaaaaaaaaa", "First", now)), 2)];
     let dup_ad_b = vec![(CardItem::Ad(test_ad("aaaaaaaaaaaaaaaa", "Second", now)), 2)];
 
-    // Case (e): > MAX_CARD_WIRE_BYTES (10,240) combined wire across 2 wires <= 10,240 B each
+    // Case (e): > MAX_CARD_WIRE_BYTES (16,384) combined wire across 2 wires <= 16,384 B each
     let mut big_webp = vec![
         b'R', b'I', b'F', b'F', 22, 0, 0, 0, b'W', b'E', b'B', b'P', b'V', b'P', b'8', b' ', 10, 0,
         0, 0, 0x00, 0x00, 0x00, 0x9d, 0x01, 0x2a, 96, 0, 96, 0,
@@ -604,6 +608,16 @@ fn s02_f3_merge_enforces_card_invariants_and_wire_cap() {
             2,
         ));
     }
+    for i in 0..5 {
+        let mut ad = test_ad(
+            &format!("{:016x}", i + 10),
+            &"A".repeat(MAX_AD_TITLE_CHARS),
+            now,
+        );
+        ad.text = Some("D".repeat(MAX_AD_TEXT_CHARS));
+        ad.pricing = Some("P".repeat(40));
+        big_group_1.push((CardItem::Ad(ad), 2));
+    }
     let mut big_group_2 = vec![
         (CardItem::Email("E".repeat(100)), 2),
         (
@@ -622,19 +636,19 @@ fn s02_f3_merge_enforces_card_invariants_and_wire_cap() {
             2,
         ));
     }
-    for i in 0..5 {
+    for i in 5..10 {
         let mut ad = test_ad(
             &format!("{:016x}", i + 10),
             &"A".repeat(MAX_AD_TITLE_CHARS),
             now,
         );
-        ad.text = Some("D".repeat(280));
+        ad.text = Some("D".repeat(MAX_AD_TEXT_CHARS));
         ad.pricing = Some("P".repeat(40));
         big_group_2.push((CardItem::Ad(ad), 2));
     }
 
     for (label, g1, g2) in [
-        ("6-ads", ads_a, ads_b),
+        ("11-ads", ads_a, ads_b),
         ("9-skills", skills_a, skills_b),
         ("dup-name", name_a, name_b),
         ("dup-ad-id", dup_ad_a, dup_ad_b),

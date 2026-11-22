@@ -14,10 +14,10 @@ use sha2::{Digest, Sha256};
 
 use crate::error::MarketError;
 use crate::model::{
-    is_false, Ad, CardPayloadInput, DropDescriptor, Skill, WireFilter, AD_MAX_DURATION_SECS,
-    CARD_SD_PADDED_LEN, MAX_ADS_PER_CARD, MAX_AD_TEXT_CHARS, MAX_AD_TITLE_CHARS, MAX_CARD_DROPS,
-    MAX_CARD_WIRE_BYTES, MAX_PRICING_CHARS, MAX_SKILLS_PER_CARD, MAX_SKILL_TEXT_CHARS,
-    MAX_SKILL_TITLE_CHARS,
+    is_false, Ad, AdKind, CardPayloadInput, DropDescriptor, Skill, WireFilter,
+    AD_MAX_DURATION_SECS, CARD_SD_PADDED_LEN, MAX_ADS_PER_CARD, MAX_AD_TEXT_CHARS,
+    MAX_AD_TITLE_CHARS, MAX_CARD_DROPS, MAX_CARD_WIRE_BYTES, MAX_PRICING_CHARS,
+    MAX_SKILLS_PER_CARD, MAX_SKILL_TEXT_CHARS, MAX_SKILL_TITLE_CHARS,
 };
 
 pub const SD_CARD_TYP: &str = "humoco-card+sd-jwt";
@@ -573,6 +573,34 @@ fn validate_card_item_fields(item: &CardItem, valid_until: u64) -> Result<(), Ma
                         "Invalid ad image_token '{}': expected 32 lowercase hex chars",
                         token
                     )));
+                }
+            }
+            match ad.kind {
+                AdKind::Event => {
+                    let Some(event_at) = ad.event_at else {
+                        return Err(MarketError::Validation(
+                            "Event ad must specify event_at".to_string(),
+                        ));
+                    };
+                    if event_at == 0 {
+                        return Err(MarketError::Validation(
+                            "Event ad event_at must be positive".to_string(),
+                        ));
+                    }
+                    if event_at > ad.expires_at {
+                        return Err(MarketError::Validation(format!(
+                            "Event ad event_at {} cannot exceed expires_at {}",
+                            event_at, ad.expires_at
+                        )));
+                    }
+                }
+                AdKind::Offer | AdKind::Request => {
+                    if ad.event_at.is_some() || ad.event_all_day {
+                        return Err(MarketError::Validation(
+                            "Offer/Request ad must not specify event_at or event_all_day"
+                                .to_string(),
+                        ));
+                    }
                 }
             }
         }

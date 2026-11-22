@@ -11,9 +11,9 @@ pub const AVATAR_IMAGE_DIM: u16 = 96;
 pub const MAX_SKILLS_PER_CARD: usize = 8;
 pub const MAX_SKILL_TITLE_CHARS: usize = 60;
 pub const MAX_SKILL_TEXT_CHARS: usize = 160;
-pub const MAX_ADS_PER_CARD: usize = 5;
+pub const MAX_ADS_PER_CARD: usize = 10;
 pub const MAX_AD_TITLE_CHARS: usize = 80;
-pub const MAX_AD_TEXT_CHARS: usize = 280;
+pub const MAX_AD_TEXT_CHARS: usize = 500;
 pub const MAX_PRICING_CHARS: usize = 40;
 
 pub const AD_DURATION_CHOICES_DAYS: [u64; 3] = [30, 90, 180];
@@ -22,7 +22,7 @@ pub const AD_MAX_DURATION_SECS: u64 = 180 * 86_400;
 pub const CARD_AUTO_RENEW_THRESHOLD_SECS: u64 = 30 * 86_400;
 pub const CARD_SD_PADDED_LEN: usize = 32;
 
-pub const MAX_CARD_WIRE_BYTES: usize = 10_240;
+pub const MAX_CARD_WIRE_BYTES: usize = 16_384;
 pub const MAX_BUNDLE_CARD_WIRE_BYTES: usize = 7_168;
 pub const MAX_QR_SHARE_BYTES: usize = 2900;
 
@@ -52,6 +52,7 @@ pub struct Skill {
 pub enum AdKind {
     Offer,
     Request,
+    Event,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -74,6 +75,10 @@ pub struct Ad {
     pub is_remote: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image_token: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_at: Option<u64>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub event_all_day: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

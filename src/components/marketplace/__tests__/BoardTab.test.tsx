@@ -253,4 +253,60 @@ describe('BoardTab Component', () => {
     expect(screen.getByTestId('board-radius-select')).toBeDisabled();
     expect(screen.getByTestId('missing-coordinates-hint')).toBeInTheDocument();
   });
+
+  it('filters by Events chip and sorts events chronologically ascending by eventAt', () => {
+    const laterEvent: FrontendBoardItem = {
+      ownerDid: 'did:key:z6MkuAlice',
+      ownerName: 'Alice',
+      trust: 'trusted',
+      ad: {
+        id: 'ev-later',
+        kind: 'event',
+        title: 'Späterer Workshop',
+        publishedAt: nowSecs,
+        expiresAt: nowSecs + 86400 * 21,
+        allowInquiries: true,
+        eventAt: nowSecs + 86400 * 20,
+        eventAllDay: true,
+      },
+      daysLeft: 21,
+    };
+    const soonerEvent: FrontendBoardItem = {
+      ownerDid: 'did:key:z6MkuBob',
+      ownerName: 'Bob',
+      trust: 'trusted',
+      ad: {
+        id: 'ev-sooner',
+        kind: 'event',
+        title: 'Morgiger Stammtisch',
+        publishedAt: nowSecs - 1000,
+        expiresAt: nowSecs + 86400 * 2,
+        allowInquiries: true,
+        eventAt: nowSecs + 86400 * 1,
+        eventAllDay: false,
+      },
+      daysLeft: 2,
+    };
+
+    render(
+      <BoardTab
+        items={[...mockItems, laterEvent, soonerEvent]}
+        hasSyncService={true}
+        onCreateAd={vi.fn()}
+        onImportCard={vi.fn()}
+        onNavigateToSyncSettings={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByTestId('filter-chip-events'));
+
+    expect(screen.queryByText('Bio-Honig 500g')).not.toBeInTheDocument();
+    expect(screen.queryByText('Suche Balken')).not.toBeInTheDocument();
+
+    const cards = screen.getAllByTestId(/^ad-card-ev-/);
+    expect(cards.map((el) => el.getAttribute('data-testid'))).toEqual([
+      'ad-card-ev-sooner',
+      'ad-card-ev-later',
+    ]);
+  });
 });

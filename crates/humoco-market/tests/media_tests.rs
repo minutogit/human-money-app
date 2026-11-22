@@ -459,6 +459,8 @@ fn test_resigning_card_preserves_image_token_and_decryptability() {
         allow_inquiries: true,
         is_remote: false,
         image_token: Some(token.clone()),
+        event_at: None,
+        event_all_day: false,
     };
 
     let payload1 = CardPayloadInput {
@@ -532,6 +534,8 @@ fn test_fit_bytes_wire_filter_excludes_picture_and_ad() {
         allow_inquiries: false,
         is_remote: false,
         image_token: None,
+        event_at: None,
+        event_all_day: false,
     };
 
     let payload = CardPayloadInput {

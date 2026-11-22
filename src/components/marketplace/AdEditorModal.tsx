@@ -12,6 +12,14 @@ import { AdvancedDisclosure } from '../ui/AdvancedDisclosure';
 import { marketService } from '../../services/marketService';
 import { compressAdImageToWebpDataUri } from '../../utils/imageCompression';
 import { translateError } from '../../utils/errorHelper';
+import {
+    MAX_ADS_PER_CARD,
+    MAX_AD_TEXT_CHARS,
+    offsetDaysDateInputValue,
+    parseEventInputsToTimestamp,
+    toEventDateInputValue,
+    toEventTimeInputValue,
+} from '../../utils/adEventFormat';
 
 type PriceMode = 'none' | 'free' | 'negotiable' | 'minuto' | 'freetaler' | 'freetext';
 
@@ -61,7 +69,7 @@ export const AdEditorModal: React.FC<AdEditorModalProps> = ({
     onClose,
     editingAd,
     activeAdsCount,
-    maxAds = 5,
+    maxAds = MAX_ADS_PER_CARD,
     allowInquiries: allowInquiriesProp,
     onSave,
     ownerDid,
@@ -82,6 +90,8 @@ export const AdEditorModal: React.FC<AdEditorModalProps> = ({
     const [priceMode, setPriceMode] = useState<PriceMode>('none');
     const [priceAmount, setPriceAmount] = useState('');
     const [durationDays, setDurationDays] = useState<number>(90);
+    const [eventDate, setEventDate] = useState('');
+    const [eventTime, setEventTime] = useState('');
     const [isRemote, setIsRemote] = useState<boolean>(false);
     const [isSaving, setIsSaving] = useState(false);
     const [isCompressingImage, setIsCompressingImage] = useState(false);
@@ -121,6 +131,13 @@ export const AdEditorModal: React.FC<AdEditorModalProps> = ({
             setPriceMode(parsed.mode);
             setPriceAmount(parsed.amount);
             setDurationDays(90);
+            if (targetAd.kind === 'event' && targetAd.eventAt) {
+                setEventDate(toEventDateInputValue(targetAd.eventAt, targetAd.eventAllDay));
+                setEventTime(toEventTimeInputValue(targetAd.eventAt, targetAd.eventAllDay));
+            } else {
+                setEventDate('');
+                setEventTime('');
+            }
             setIsRemote(targetAd.isRemote ?? false);
 
             if (targetAd.imageToken) {
@@ -145,6 +162,8 @@ export const AdEditorModal: React.FC<AdEditorModalProps> = ({
             setPriceMode('none');
             setPriceAmount('');
             setDurationDays(90);
+            setEventDate('');
+            setEventTime('');
             setIsRemote(false);
         }
     }, [sessionKey, isOpen, targetAd, ownerDid]);
@@ -198,13 +217,50 @@ export const AdEditorModal: React.FC<AdEditorModalProps> = ({
             setError(t('marketplace.errorTitleTooLong', 'Maximal {{max}} Zeichen erlaubt', { max: 80 }));
             return;
         }
-        if (text.trim().length > 280) {
-            setError(t('marketplace.errorTextTooLong', 'Maximal {{max}} Zeichen erlaubt', { max: 280 }));
+        if (text.trim().length > MAX_AD_TEXT_CHARS) {
+            setError(
+                t('marketplace.errorTextTooLong', 'Maximal {{max}} Zeichen erlaubt', {
+                    max: MAX_AD_TEXT_CHARS,
+                }),
+            );
             return;
         }
         if (pricing.trim().length > 40) {
             setError(t('marketplace.errorPricingTooLong', 'Maximal {{max}} Zeichen erlaubt', { max: 40 }));
             return;
+        }
+
+        let eventFields: { eventAt?: number; eventAllDay?: boolean } | undefined;
+        if (kind === 'event') {
+            const parsedEvent = parseEventInputsToTimestamp(eventDate, eventTime);
+            if (!parsedEvent) {
+                setError(t('marketplace.errorEventDateRequired', 'Bitte wähle ein gültiges Termindatum.'));
+                return;
+            }
+            const nowSecs = Math.floor(Date.now() / 1000);
+            const maxEventSecs = nowSecs + 180 * 86_400;
+            if (parsedEvent.eventAt > maxEventSecs) {
+                setError(t('marketplace.errorEventDateTooFar', 'Der Termin darf maximal 180 Tage in der Zukunft liegen.'));
+                return;
+            }
+            const isUnchangedEventTimestamp =
+                isEditMode &&
+                targetAd?.kind === 'event' &&
+                targetAd.eventAt === parsedEvent.eventAt &&
+                Boolean(targetAd.eventAllDay) === parsedEvent.eventAllDay;
+            const effectiveExpiry = parsedEvent.eventAllDay
+                ? parsedEvent.eventAt + 64_800
+                : isUnchangedEventTimestamp
+                    ? parsedEvent.eventAt + 6 * 3_600
+                    : parsedEvent.eventAt;
+            if (effectiveExpiry <= nowSecs) {
+                setError(t('marketplace.errorEventDatePast', 'Der Termin muss in der Zukunft liegen.'));
+                return;
+            }
+            eventFields = {
+                eventAt: parsedEvent.eventAt,
+                eventAllDay: parsedEvent.eventAllDay,
+            };
         }
 
         const submitSession = sessionSeqRef.current;
@@ -219,6 +275,7 @@ export const AdEditorModal: React.FC<AdEditorModalProps> = ({
                 durationDays,
                 allowInquiries: targetAd ? (allowInquiriesProp ?? targetAd.allowInquiries) : (allowInquiriesProp ?? true),
                 isRemote,
+                ...(eventFields ?? {}),
                 ...(imageWebpDataUri !== undefined ? { imageWebpDataUri } : {}),
             });
             if (sessionSeqRef.current === submitSession) {
@@ -274,16 +331,16 @@ export const AdEditorModal: React.FC<AdEditorModalProps> = ({
                     </div>
                 )}
 
-                {/* 1. Kind selection: two large tiles */}
+                {/* 1. Kind selection: three tiles */}
                 <div className="space-y-1.5">
                     <label className="text-[11px] font-black text-theme-light uppercase tracking-wider block">
                         {t('marketplace.adKindLabel', 'Art des Inserats')}
                     </label>
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
                         <button
                             type="button"
                             onClick={() => setKind('offer')}
-                            className={`p-3.5 rounded-2xl border text-left transition-all flex items-start gap-3 ${
+                            className={`p-3 rounded-2xl border text-left transition-all flex items-start gap-2.5 ${
                                 kind === 'offer'
                                     ? 'bg-emerald-50/70 border-emerald-400 text-emerald-950 ring-2 ring-emerald-500/20'
                                     : 'bg-white border-theme-subtle text-theme-secondary hover:border-theme-primary/30'
@@ -291,7 +348,7 @@ export const AdEditorModal: React.FC<AdEditorModalProps> = ({
                             data-testid="ad-kind-offer-btn"
                         >
                             <div className={`p-2 rounded-xl shrink-0 ${kind === 'offer' ? 'bg-emerald-200/60 text-emerald-800' : 'bg-bg-app text-theme-light'}`}>
-                                <HandHeart size={18} />
+                                <HandHeart size={17} />
                             </div>
                             <div className="min-w-0">
                                 <div className="text-xs font-bold">{t('marketplace.adKindOffer', 'Angebot')}</div>
@@ -304,7 +361,7 @@ export const AdEditorModal: React.FC<AdEditorModalProps> = ({
                         <button
                             type="button"
                             onClick={() => setKind('request')}
-                            className={`p-3.5 rounded-2xl border text-left transition-all flex items-start gap-3 ${
+                            className={`p-3 rounded-2xl border text-left transition-all flex items-start gap-2.5 ${
                                 kind === 'request'
                                     ? 'bg-sky-50/70 border-sky-400 text-sky-950 ring-2 ring-sky-500/20'
                                     : 'bg-white border-theme-subtle text-theme-secondary hover:border-theme-primary/30'
@@ -312,7 +369,7 @@ export const AdEditorModal: React.FC<AdEditorModalProps> = ({
                             data-testid="ad-kind-request-btn"
                         >
                             <div className={`p-2 rounded-xl shrink-0 ${kind === 'request' ? 'bg-sky-200/60 text-sky-800' : 'bg-bg-app text-theme-light'}`}>
-                                <Search size={18} />
+                                <Search size={17} />
                             </div>
                             <div className="min-w-0">
                                 <div className="text-xs font-bold">{t('marketplace.adKindRequest', 'Gesuch')}</div>
@@ -321,8 +378,73 @@ export const AdEditorModal: React.FC<AdEditorModalProps> = ({
                                 </div>
                             </div>
                         </button>
+
+                        <button
+                            type="button"
+                            onClick={() => setKind('event')}
+                            className={`p-3 rounded-2xl border text-left transition-all flex items-start gap-2.5 ${
+                                kind === 'event'
+                                    ? 'bg-violet-50/70 border-violet-400 text-violet-950 ring-2 ring-violet-500/20'
+                                    : 'bg-white border-theme-subtle text-theme-secondary hover:border-theme-primary/30'
+                            }`}
+                            data-testid="ad-kind-event-btn"
+                        >
+                            <div className={`p-2 rounded-xl shrink-0 ${kind === 'event' ? 'bg-violet-200/60 text-violet-800' : 'bg-bg-app text-theme-light'}`}>
+                                <Calendar size={17} />
+                            </div>
+                            <div className="min-w-0">
+                                <div className="text-xs font-bold">{t('marketplace.adKindEvent', 'Termin')}</div>
+                                <div className="text-[10px] text-theme-light mt-0.5 leading-snug">
+                                    {t('marketplace.adKindEventDesc', 'Treffen, Markt oder Veranstaltung')}
+                                </div>
+                            </div>
+                        </button>
                     </div>
                 </div>
+
+                {/* 1b. Event date & optional time */}
+                {kind === 'event' && (
+                    <div className="p-3.5 rounded-2xl bg-violet-50/40 border border-violet-200/80 space-y-2.5">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <div className="space-y-1">
+                                <label
+                                    htmlFor="ad-event-date"
+                                    className="text-[11px] font-black text-theme-light uppercase tracking-wider block"
+                                >
+                                    {t('marketplace.adEventDateLabel', 'Datum')}
+                                </label>
+                                <Input
+                                    id="ad-event-date"
+                                    type="date"
+                                    value={eventDate}
+                                    min={offsetDaysDateInputValue(0)}
+                                    max={offsetDaysDateInputValue(180)}
+                                    onChange={(e) => setEventDate(e.target.value)}
+                                    required
+                                    data-testid="ad-event-date-input"
+                                />
+                            </div>
+                            <div className="space-y-1">
+                                <label
+                                    htmlFor="ad-event-time"
+                                    className="text-[11px] font-black text-theme-light uppercase tracking-wider block"
+                                >
+                                    {t('marketplace.adEventTimeLabel', 'Uhrzeit (optional)')}
+                                </label>
+                                <Input
+                                    id="ad-event-time"
+                                    type="time"
+                                    value={eventTime}
+                                    onChange={(e) => setEventTime(e.target.value)}
+                                    data-testid="ad-event-time-input"
+                                />
+                            </div>
+                        </div>
+                        <p className="text-[11px] text-theme-light leading-snug">
+                            {t('marketplace.adEventAutoExpiryHint', 'Der Termin wird nach dem Veranstaltungstag automatisch von der Pinnwand entfernt.')}
+                        </p>
+                    </div>
+                )}
 
                 {/* 2. Title with counter */}
                 <div className="space-y-1.5">
@@ -339,7 +461,9 @@ export const AdEditorModal: React.FC<AdEditorModalProps> = ({
                         onChange={(e) => setTitle(e.target.value)}
                         placeholder={kind === 'offer'
                             ? t('marketplace.adTitlePlaceholderOffer', 'z. B. Frischer Honig aus eigenem Garten')
-                            : t('marketplace.adTitlePlaceholderRequest', 'z. B. Suche Leiter für Samstag')}
+                            : kind === 'request'
+                                ? t('marketplace.adTitlePlaceholderRequest', 'z. B. Suche Leiter für Samstag')
+                                : t('marketplace.adTitlePlaceholderEvent', 'z. B. Minuto-Stammtisch im Café')}
                         maxLength={80}
                         required
                         data-testid="ad-title-input"
@@ -352,8 +476,8 @@ export const AdEditorModal: React.FC<AdEditorModalProps> = ({
                         <label className="text-[11px] font-black text-theme-light uppercase tracking-wider block">
                             {t('marketplace.adTextLabel', 'Beschreibung (optional)')}
                         </label>
-                        <span className={`text-[10px] ${textCharCount > 280 ? 'text-rose-600 font-bold' : 'text-theme-light'}`}>
-                            {textCharCount} / 280
+                        <span className={`text-[10px] ${textCharCount > MAX_AD_TEXT_CHARS ? 'text-rose-600 font-bold' : 'text-theme-light'}`}>
+                            {textCharCount} / {MAX_AD_TEXT_CHARS}
                         </span>
                     </div>
                     <textarea
@@ -361,7 +485,7 @@ export const AdEditorModal: React.FC<AdEditorModalProps> = ({
                         onChange={(e) => setText(e.target.value)}
                         placeholder={t('marketplace.adTextPlaceholder', 'Beschreibe kurz und verständlich, worum es geht...')}
                         className="w-full bg-white border border-theme-subtle rounded-2xl px-4 py-3 text-xs font-medium text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft transition-all min-h-[90px] resize-y"
-                        maxLength={280}
+                        maxLength={MAX_AD_TEXT_CHARS}
                         data-testid="ad-text-input"
                     />
                 </div>
@@ -535,8 +659,9 @@ export const AdEditorModal: React.FC<AdEditorModalProps> = ({
                     </Advanced>
                 </div>
 
-                {/* 5. Duration: Expert mode only (Simple defaults cleanly to 90 days) */}
-                <Advanced>
+                {/* 5. Duration: Expert mode only for Offer/Request (Events expire automatically after event date) */}
+                {kind !== 'event' && (
+                    <Advanced>
                     <div className="space-y-1.5">
                         <label className="text-[11px] font-black text-theme-light uppercase tracking-wider block">
                             {t('marketplace.adDurationLabel', 'Laufzeit')}
@@ -579,7 +704,8 @@ export const AdEditorModal: React.FC<AdEditorModalProps> = ({
                             </div>
                         )}
                     </div>
-                </Advanced>
+                    </Advanced>
+                )}
 
                 {/* 6. More details (Image Upload + Is Remote) */}
                 <AdvancedDisclosure
@@ -598,7 +724,7 @@ export const AdEditorModal: React.FC<AdEditorModalProps> = ({
                                 <span className="text-[10px] font-semibold text-theme-light" data-testid="media-quota-badge">
                                     {t('marketplace.mediaQuotaStatus', '{{used}} von {{max}} Bildern belegt', {
                                         used: mediaUsedCount ?? 0,
-                                        max: mediaMaxCount ?? 5,
+                                        max: mediaMaxCount ?? MAX_ADS_PER_CARD,
                                     })}
                                 </span>
                             </div>

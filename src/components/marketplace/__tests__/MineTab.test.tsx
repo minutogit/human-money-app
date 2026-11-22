@@ -293,4 +293,64 @@ describe('MineTab Component', () => {
     fireEvent.click(payBtn);
     expect(onPayInquiry).toHaveBeenCalledWith('did:key:z6MkuSeller', undefined);
   });
+
+  it('hides renew buttons on active Event ads and offers reschedule button on expired Event ads', () => {
+    const onEditAd = vi.fn();
+    const profileWithEvents: FrontendMyMarketProfile = {
+      ...mockMyProfile,
+      ads: [
+        {
+          id: 'ev-active-1',
+          kind: 'event',
+          title: 'Aktiver Stammtisch',
+          publishedAt: nowSecs - 3600,
+          expiresAt: nowSecs + 86400 * 5,
+          allowInquiries: true,
+          status: 'active',
+          daysLeft: 5,
+          eventAt: nowSecs + 86400 * 5,
+          eventAllDay: false,
+        },
+        {
+          id: 'ev-expired-1',
+          kind: 'event',
+          title: 'Alter Flohmarkt',
+          publishedAt: nowSecs - 86400 * 10,
+          expiresAt: nowSecs - 86400,
+          allowInquiries: true,
+          status: 'expired',
+          daysLeft: 0,
+          eventAt: nowSecs - 86400 * 2,
+          eventAllDay: true,
+        },
+      ],
+    };
+
+    render(
+      <UiModeProvider initialMode="expert">
+        <MineTab
+          myProfile={profileWithEvents}
+          inbox={mockInbox}
+          onOpenProfileEditor={vi.fn()}
+          onOpenShareCard={vi.fn()}
+          onTogglePublished={vi.fn()}
+          onCreateAd={vi.fn()}
+          onEditAd={onEditAd}
+          onQuickRenewAd={vi.fn()}
+          onRenewAd={vi.fn()}
+          onDeleteAd={vi.fn()}
+        />
+      </UiModeProvider>
+    );
+
+    expect(screen.queryByTestId('quick-renew-ad-ev-active-1')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('custom-renew-ad-ev-active-1')).not.toBeInTheDocument();
+
+    // Expand expired section
+    fireEvent.click(screen.getByText(/Abgelaufene Inserate \(1\)|Expired ads \(1\)/i));
+    expect(screen.queryByTestId('quick-renew-ad-ev-expired-1')).not.toBeInTheDocument();
+    const rescheduleBtn = screen.getByTestId('edit-expired-ad-ev-expired-1');
+    fireEvent.click(rescheduleBtn);
+    expect(onEditAd).toHaveBeenCalledWith(expect.objectContaining({ id: 'ev-expired-1' }));
+  });
 });

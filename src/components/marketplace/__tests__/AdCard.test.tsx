@@ -298,4 +298,30 @@ describe('AdCard Component', () => {
     await screen.findByTestId('ad-card-image');
     expect(getAdImageSpy).toHaveBeenCalledTimes(130);
   });
+
+  it('renders Event badge and formatted event date instead of daysLeft', () => {
+    const eventAd: Ad = {
+      id: 'ad-event-1',
+      kind: 'event',
+      title: 'Tauschmarkt am Rathaus',
+      text: 'Mit Kaffee und Kuchen',
+      publishedAt: nowSecs - 100,
+      expiresAt: nowSecs + 86400 * 10,
+      allowInquiries: true,
+      eventAt: Date.UTC(2026, 11, 15, 12, 0, 0) / 1000,
+      eventAllDay: true,
+    };
+
+    render(
+      <AdCard
+        ad={eventAd}
+        ownerDid="did:key:z6MkuAlice"
+        ownerName="Alice"
+      />
+    );
+
+    expect(screen.getByTestId('ad-kind-badge')).toHaveTextContent(/Termin|Event/i);
+    expect(screen.getByTestId('ad-event-date-badge')).toBeInTheDocument();
+    expect(screen.queryByText(/noch \d+ Tage|days left/i)).not.toBeInTheDocument();
+  });
 });

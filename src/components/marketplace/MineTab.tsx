@@ -6,6 +6,7 @@ import {
     Edit3,
     Plus,
     Clock,
+    Calendar,
     Tag,
     Trash2,
     RefreshCw,
@@ -25,6 +26,7 @@ import { ConfirmationModal } from '../ui/ConfirmationModal';
 import { Advanced } from '../ui/Advanced';
 import { MyProfileCard } from '../profile/MyProfileCard';
 import { InquiryThreadCard } from './InquiryThreadCard';
+import { formatEventDateTime, getAdKindBadgeClass } from '../../utils/adEventFormat';
 
 export interface MineTabProps {
     myProfile: FrontendMyMarketProfile;
@@ -68,7 +70,7 @@ export const MineTab: React.FC<MineTabProps> = ({
     onAddContact,
     onViewCard,
 }) => {
-    const { t } = useTranslation();
+    const { t, i18n } = useTranslation();
     const [isExpiredOpen, setIsExpiredOpen] = useState(false);
     const [confirmDeleteAdId, setConfirmDeleteAdId] = useState<string | null>(null);
     const [isDeletingAd, setIsDeletingAd] = useState(false);
@@ -134,8 +136,14 @@ export const MineTab: React.FC<MineTabProps> = ({
                 {activeAds.length > 0 ? (
                     <div className="space-y-3">
                         {activeAds.map((ad) => {
-                            const isOffer = ad.kind === 'offer';
-                            const isExpiringSoon = ad.daysLeft <= 14;
+                            const isEvent = ad.kind === 'event';
+                            const isExpiringSoon = !isEvent && ad.daysLeft <= 14;
+                            const kindLabel =
+                                ad.kind === 'offer'
+                                    ? t('marketplace.adKindOffer', 'Angebot')
+                                    : ad.kind === 'request'
+                                        ? t('marketplace.adKindRequest', 'Gesuch')
+                                        : t('marketplace.adKindEvent', 'Termin');
 
                             return (
                                 <div
@@ -144,35 +152,36 @@ export const MineTab: React.FC<MineTabProps> = ({
                                     data-testid={`my-active-ad-${ad.id}`}
                                 >
                                     <div className="space-y-1.5 min-w-0">
-                                        <div className="flex items-center gap-2">
+                                        <div className="flex items-center gap-2 flex-wrap">
                                             <span
-                                                className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
-                                                    isOffer
-                                                        ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                                                        : 'bg-sky-50 text-sky-700 border border-sky-200'
-                                                }`}
+                                                className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${getAdKindBadgeClass(ad.kind)}`}
                                             >
-                                                {isOffer
-                                                    ? t('marketplace.adKindOffer', 'Angebot')
-                                                    : t('marketplace.adKindRequest', 'Gesuch')}
+                                                {kindLabel}
                                             </span>
 
-                                            <span
-                                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold ${
-                                                    isExpiringSoon
-                                                        ? 'bg-amber-50 text-amber-800 border border-amber-200'
-                                                        : 'bg-bg-app text-theme-light border border-theme-subtle'
-                                                }`}
-                                            >
-                                                <Clock size={11} className={isExpiringSoon ? 'text-amber-600' : 'text-theme-light'} />
-                                                <span>
-                                                    {ad.daysLeft === 1
-                                                        ? t('marketplace.oneDayLeft', 'noch 1 Tag')
-                                                        : t('marketplace.daysLeft', 'noch {{count}} Tage', {
-                                                              count: ad.daysLeft,
-                                                          })}
+                                            {isEvent && ad.eventAt ? (
+                                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-violet-50 text-violet-800 border border-violet-200">
+                                                    <Calendar size={11} className="text-violet-600" />
+                                                    <span>{formatEventDateTime(ad.eventAt, ad.eventAllDay, i18n.language)}</span>
                                                 </span>
-                                            </span>
+                                            ) : (
+                                                <span
+                                                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold ${
+                                                        isExpiringSoon
+                                                            ? 'bg-amber-50 text-amber-800 border border-amber-200'
+                                                            : 'bg-bg-app text-theme-light border border-theme-subtle'
+                                                    }`}
+                                                >
+                                                    <Clock size={11} className={isExpiringSoon ? 'text-amber-600' : 'text-theme-light'} />
+                                                    <span>
+                                                        {ad.daysLeft === 1
+                                                            ? t('marketplace.oneDayLeft', 'noch 1 Tag')
+                                                            : t('marketplace.daysLeft', 'noch {{count}} Tage', {
+                                                                  count: ad.daysLeft,
+                                                              })}
+                                                    </span>
+                                                </span>
+                                            )}
 
                                             {ad.pricing && (
                                                 <span className="text-xs text-theme-primary font-semibold">
@@ -202,28 +211,32 @@ export const MineTab: React.FC<MineTabProps> = ({
                                             <Edit3 size={13} />
                                             <span>{t('marketplace.editBtn', 'Bearbeiten')}</span>
                                         </Button>
-                                        <Button
-                                            size="xs"
-                                            variant="outline"
-                                            onClick={() => (onQuickRenewAd ? onQuickRenewAd(ad) : onRenewAd(ad))}
-                                            className="flex items-center gap-1"
-                                            data-testid={`quick-renew-ad-${ad.id}`}
-                                        >
-                                            <RefreshCw size={13} />
-                                            <span>{t('marketplace.quickRenew90Btn', '+90 Tage')}</span>
-                                        </Button>
-                                        <Advanced>
-                                            <Button
-                                                size="xs"
-                                                variant="outline"
-                                                onClick={() => onRenewAd(ad)}
-                                                className="flex items-center gap-1"
-                                                data-testid={`custom-renew-ad-${ad.id}`}
-                                            >
-                                                <Clock size={13} />
-                                                <span>{t('marketplace.renewBtn', 'Verlängern')}</span>
-                                            </Button>
-                                        </Advanced>
+                                        {!isEvent && (
+                                            <>
+                                                <Button
+                                                    size="xs"
+                                                    variant="outline"
+                                                    onClick={() => (onQuickRenewAd ? onQuickRenewAd(ad) : onRenewAd(ad))}
+                                                    className="flex items-center gap-1"
+                                                    data-testid={`quick-renew-ad-${ad.id}`}
+                                                >
+                                                    <RefreshCw size={13} />
+                                                    <span>{t('marketplace.quickRenew90Btn', '+90 Tage')}</span>
+                                                </Button>
+                                                <Advanced>
+                                                    <Button
+                                                        size="xs"
+                                                        variant="outline"
+                                                        onClick={() => onRenewAd(ad)}
+                                                        className="flex items-center gap-1"
+                                                        data-testid={`custom-renew-ad-${ad.id}`}
+                                                    >
+                                                        <Clock size={13} />
+                                                        <span>{t('marketplace.renewBtn', 'Verlängern')}</span>
+                                                    </Button>
+                                                </Advanced>
+                                            </>
+                                        )}
                                         <Button
                                             size="xs"
                                             variant="outline"
@@ -273,7 +286,9 @@ export const MineTab: React.FC<MineTabProps> = ({
                                                 <span className="text-[10px] font-bold uppercase text-slate-500">
                                                     {ad.kind === 'offer'
                                                         ? t('marketplace.adKindOffer', 'Angebot')
-                                                        : t('marketplace.adKindRequest', 'Gesuch')}
+                                                        : ad.kind === 'request'
+                                                            ? t('marketplace.adKindRequest', 'Gesuch')
+                                                            : t('marketplace.adKindEvent', 'Termin')}
                                                 </span>
                                                 <h5 className="font-bold text-theme-secondary truncate max-w-sm">
                                                     {ad.title}
@@ -281,28 +296,43 @@ export const MineTab: React.FC<MineTabProps> = ({
                                             </div>
                                         </div>
                                         <div className="flex items-center gap-2 self-end sm:self-auto shrink-0">
-                                            <Button
-                                                size="xs"
-                                                variant="outline"
-                                                onClick={() => (onQuickRenewAd ? onQuickRenewAd(ad) : onRenewAd(ad))}
-                                                className="flex items-center gap-1"
-                                                data-testid={`quick-renew-ad-${ad.id}`}
-                                            >
-                                                <RefreshCw size={12} />
-                                                <span>{t('marketplace.quickRenew90Btn', '+90 Tage')}</span>
-                                            </Button>
-                                            <Advanced>
+                                            {ad.kind === 'event' ? (
                                                 <Button
                                                     size="xs"
                                                     variant="outline"
-                                                    onClick={() => onRenewAd(ad)}
+                                                    onClick={() => onEditAd(ad)}
                                                     className="flex items-center gap-1"
-                                                    data-testid={`custom-renew-ad-${ad.id}`}
+                                                    data-testid={`edit-expired-ad-${ad.id}`}
                                                 >
-                                                    <Clock size={12} />
-                                                    <span>{t('marketplace.republishBtn', 'Erneut veröffentlichen')}</span>
+                                                    <Edit3 size={12} />
+                                                    <span>{t('marketplace.rescheduleBtn', 'Neu ansetzen')}</span>
                                                 </Button>
-                                            </Advanced>
+                                            ) : (
+                                                <>
+                                                    <Button
+                                                        size="xs"
+                                                        variant="outline"
+                                                        onClick={() => (onQuickRenewAd ? onQuickRenewAd(ad) : onRenewAd(ad))}
+                                                        className="flex items-center gap-1"
+                                                        data-testid={`quick-renew-ad-${ad.id}`}
+                                                    >
+                                                        <RefreshCw size={12} />
+                                                        <span>{t('marketplace.quickRenew90Btn', '+90 Tage')}</span>
+                                                    </Button>
+                                                    <Advanced>
+                                                        <Button
+                                                            size="xs"
+                                                            variant="outline"
+                                                            onClick={() => onRenewAd(ad)}
+                                                            className="flex items-center gap-1"
+                                                            data-testid={`custom-renew-ad-${ad.id}`}
+                                                        >
+                                                            <Clock size={12} />
+                                                            <span>{t('marketplace.republishBtn', 'Erneut veröffentlichen')}</span>
+                                                        </Button>
+                                                    </Advanced>
+                                                </>
+                                            )}
                                             <Button
                                                 size="xs"
                                                 variant="outline"

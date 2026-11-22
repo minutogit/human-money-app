@@ -162,6 +162,8 @@ fn test_h21_card_store_future_bounds_and_inquiry_message_validation() {
         allow_inquiries: false,
         is_remote: false,
         image_token: None,
+        event_at: None,
+        event_all_day: false,
     };
     let card_future_ad = sign_sd_card(
         CardPayloadInput {

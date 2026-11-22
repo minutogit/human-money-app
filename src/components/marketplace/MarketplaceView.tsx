@@ -890,6 +890,7 @@ export function MarketplaceView({
                 onSave={handleSaveAd}
                 editingAd={editingAd}
                 activeAdsCount={activeMyAdsCount}
+                maxAds={currentProfile?.mediaMaxCount ?? 10}
                 allowInquiries={currentProfile.allowInquiries}
                 ownerDid={currentProfile?.profile?.id}
                 mediaMaxBytes={currentProfile?.mediaMaxBytes}
