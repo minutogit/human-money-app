@@ -1340,26 +1340,22 @@ pub(crate) fn reset_local_password_via_backup_impl(
             )
             .map_err(FrontendError::from)?;
 
-            let mut recent_seal_hashes = existing_seal
+            let mut recent_seals = existing_seal
                 .as_ref()
-                .map(|r| r.recent_seal_hashes.clone())
+                .map(|r| r.recent_seals.clone())
                 .unwrap_or_default();
             let preserved_lock_reason = existing_seal.as_ref().and_then(|r| r.lock_reason.clone());
             let mut new_record = LocalSealRecord {
                 seal: recovered_seal.clone(),
                 sync_status: SyncStatus::PendingUpload,
                 lock_reason: preserved_lock_reason.clone(),
-                recent_seal_hashes: Vec::new(),
+                recent_seals: Vec::new(),
             };
-            new_record.recent_seal_hashes = std::mem::take(&mut recent_seal_hashes);
+            new_record.recent_seals = std::mem::take(&mut recent_seals);
             if let Some(prev) = existing_seal.as_ref() {
-                if let Ok(prev_h) = prev.seal.compute_hash() {
-                    new_record.push_seal_hash(prev_h);
-                }
+                new_record.push_seal(prev.seal.clone());
             }
-            if let Ok(new_h) = recovered_seal.compute_hash() {
-                new_record.push_seal_hash(new_h);
-            }
+            new_record.push_seal(recovered_seal.clone());
             let auth_new_pw = AuthMethod::Password(new_password);
             local_storage
                 .save_seal(&auth_new_pw, &new_record)

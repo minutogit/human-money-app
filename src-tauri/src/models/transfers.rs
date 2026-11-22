@@ -9,7 +9,6 @@ use serde::{Deserialize, Serialize};
 pub struct FrontendScoreBreakdown {
     pub s_boomerang: i64,
     pub s_eigen: i64,
-    pub s_corridor: i64,
     pub s_age: i64,
     pub s_chain: i64,
     pub s_fit: i64,
@@ -22,7 +21,6 @@ impl From<ScoreBreakdown> for FrontendScoreBreakdown {
         Self {
             s_boomerang: b.s_boomerang,
             s_eigen: b.s_eigen,
-            s_corridor: b.s_corridor,
             s_age: b.s_age,
             s_chain: b.s_chain,
             s_fit: b.s_fit,

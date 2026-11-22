@@ -45,7 +45,6 @@ export interface CreateBundleResult {
 export interface ScoreBreakdown {
     sBoomerang: number;
     sEigen: number;
-    sCorridor: number;
     sAge: number;
     sChain: number;
     sFit: number;
