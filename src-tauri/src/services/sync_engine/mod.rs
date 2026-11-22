@@ -5,7 +5,7 @@ pub mod media_sync;
 pub mod wot_sync;
 
 #[cfg(test)]
-pub(crate) use admin::{block_sync_slot_impl, sync_channel_members_impl};
+pub(crate) use admin::sync_channel_members_impl;
 pub use admin::{
     compute_admin_sync_members_with_stats, compute_channel_members_hash, delete_sync_admin_impl,
     finalize_sync_setup_impl, get_rust_sync_config_impl, get_sync_admin_status_impl,
@@ -16,8 +16,6 @@ pub(crate) use card_sync::probe_contact_syncs_with_session;
 pub use card_sync::{
     discover_available_syncs_impl, probe_contact_syncs_impl, set_selected_upload_syncs_impl,
 };
-#[cfg(test)]
-pub(crate) use channel_reader::delete_own_sync_slots_impl;
 pub use channel_reader::{probe_public_sync_impl, remove_public_sync_impl, save_public_sync_impl};
 pub use wot_sync::preview_contact_trust_change_impl;
 
@@ -436,6 +434,10 @@ pub async fn sync_market_channels_with_options(
             .map_err(FrontendError::from)?;
 
         // Update in-memory caches only after atomic persistence succeeded.
+        if let Some(store) = next_card_store {
+            state.set_cached_card_store_for_service(service, Some(store));
+        }
+        state.set_cached_sync_state_for_service(service, Some(sync_state));
         if let Some(reg) = next_wot_reg {
             state.write_cache_slot_for_service(service, |c| &mut c.wot, Some(reg));
         }
@@ -515,10 +517,10 @@ pub fn get_sync_overview_status_impl(
             let contacts = state
                 .load_contacts(&mut service, pw)
                 .map_err(FrontendError::from)?;
-            let sync_state: Option<StoredSyncState> =
-                crate::state::load_encrypted_json_opt(&mut service, MARKET_SYNC_KEY, pw)
-                    .map_err(FrontendError::from)?;
-            (security_policy, own_desc_opt, contacts, sync_state)
+            let sync_state = state
+                .load_sync_state_or_cached(&mut service, pw)
+                .map_err(FrontendError::from)?;
+            (security_policy, own_desc_opt, contacts, Some(sync_state))
         } else {
             // timeout == 0 graceful cache fallback
             let security_policy = state
@@ -531,7 +533,8 @@ pub fn get_sync_overview_status_impl(
                 .read_cache_slot_for_service(&service, |c| &c.contacts)
                 .map(|ab| ab.contacts.into_values().collect())
                 .unwrap_or_default();
-            (security_policy, own_desc_opt, contacts, None)
+            let sync_state = state.read_cache_slot_for_service(&service, |c| &c.sync_state);
+            (security_policy, own_desc_opt, contacts, sync_state)
         };
 
     let has_own_sync = own_desc_opt
@@ -1033,7 +1036,7 @@ pub(crate) mod tests {
             "Unauthorized reader L2 should import 0 cards"
         );
 
-        // 8. Admin revoking Bob or blocking Bob's stealth pubkey removes Bob from members and purges slot
+        // 8. Withdrawing trust from Bob and pushing removes Bob's stealth pubkey from members and purges slots
         let bob_stealth_pk_a = {
             let mut s = alice_state.service.lock().unwrap();
             let seed = get_wallet_master_seed(&mut s, Some(password)).unwrap();
@@ -1042,8 +1045,33 @@ pub(crate) mod tests {
             humoco_market::derive_member_stealth_pubkey_admin(&admin_sk, &bob_vk).unwrap()
         };
 
-        let _block_status = block_sync_slot_impl(
-            bob_stealth_pk_a.clone(),
+        {
+            let mut s = alice_state.service.lock().unwrap();
+            alice_state
+                .save_contact(
+                    &mut s,
+                    FrontendContact {
+                        did: bob_did.clone(),
+                        profile: FrontendUserProfile {
+                            first_name: Some("Bob".to_string()),
+                            ..Default::default()
+                        },
+                        tags: vec![],
+                        added_at: "2026-01-01T00:00:00Z".to_string(),
+                        notes: None,
+                        trust_level: Some(0),
+                        desired_hops: Some(3),
+                        has_peer_list: false,
+                        peer_list_updated_at: None,
+                        syncs: vec![],
+                    },
+                    Some(password),
+                )
+                .unwrap();
+        }
+        let _revoked_push_status = update_sync_admin_config_impl(
+            FrontendSyncAdminUpdateRequest::default(),
+            true,
             Some(password.to_string()),
             &alice_state,
         )
@@ -1055,7 +1083,6 @@ pub(crate) mod tests {
             let admin_after = admin::load_stored_sync_admin_opt(&mut s, Some(password))
                 .unwrap()
                 .unwrap();
-            assert!(admin_after.blocked_pubkeys.contains(&bob_stealth_pk_a));
             let (_, active_pks) = admin::compute_admin_sync_members_with_stats(
                 &alice_state,
                 &mut s,
@@ -1931,47 +1958,6 @@ pub(crate) mod tests {
             assert_eq!(
                 decrypted, None,
                 "Outsider cannot decrypt any subpackage in multi-class slot blob"
-            );
-        }
-
-        // 9. Slot Deletion
-        let deleted = delete_own_sync_slots_impl(Some(password.to_string()), &alice_state)
-            .await
-            .unwrap();
-        assert!(deleted >= 1, "Must delete slots");
-
-        let alice_sk = {
-            let s = alice_state.service.lock().unwrap();
-            s.with_wallet_and_identity(|_w, id| id.signing_key.clone())
-                .unwrap()
-        };
-        let alice_stealth = humoco_market::derive_member_stealth_pubkey(
-            &alice_sk,
-            &finalize_status.descriptor.drop_pub,
-        )
-        .unwrap();
-
-        let remaining_slots = server.slots.lock().unwrap().clone();
-        assert!(
-            !remaining_slots.contains_key(&format!("{}.wot", alice_stealth))
-                && !remaining_slots.contains_key(&format!("{}_pc.wot", alice_stealth)),
-            "Alice's WOT slot must be deleted from server"
-        );
-        assert!(
-            !remaining_slots.contains_key(&format!("{}.card", alice_stealth))
-                && !remaining_slots.contains_key(&format!("{}_pc.card", alice_stealth)),
-            "Alice's card slot must be deleted from server"
-        );
-
-        // Verify sync_sent_log is cleared in Alice's register
-        {
-            let mut alice_s = alice_state.service.lock().unwrap();
-            let alice_reg = alice_state
-                .get_or_load_wot_register(&mut alice_s, Some(password))
-                .unwrap();
-            assert!(
-                alice_reg.drop_sent_log.is_empty(),
-                "Alice sync_sent_log must be cleared"
             );
         }
     }

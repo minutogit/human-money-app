@@ -1222,6 +1222,9 @@ enum AdImageLookup {
     RemoteUrls(Vec<String>),
 }
 
+const MEDIA_NEG_CACHE_PERMANENT_TTL_SECS: u64 = 86_400;
+const MEDIA_NEG_CACHE_TRANSIENT_TTL_SECS: u64 = 60;
+
 pub async fn get_ad_image_impl(
     owner_did: String,
     image_token: String,
@@ -1243,6 +1246,9 @@ pub async fn get_ad_image_impl(
     };
 
     let own_hit = state.with_session(&session, |service| {
+        if !(service.is_session_active() || pw.is_some()) {
+            return Ok(None);
+        }
         let own_key = crate::state::own_media_storage_key(&image_token);
         try_load_cached_media_bytes(service, &own_key, false, pw)
             .map(|opt| opt.map(|bytes| encode_media_data_uri(&bytes)))
@@ -1256,22 +1262,25 @@ pub async fn get_ad_image_impl(
     let canonical_owner = validated_owner.into_string();
 
     let lookup = match state.with_session(&session, |service| {
-        let cache_key = crate::state::cached_media_storage_key(&blob_id);
-        if let Some(bytes) = try_load_cached_media_bytes(service, &cache_key, true, pw)? {
-            if humoco_market::compute_image_token(&canonical_owner, &bytes)
-                .ok()
-                .as_deref()
-                == Some(image_token.as_str())
-            {
-                return Ok(AdImageLookup::Cached(encode_media_data_uri(&bytes)));
+        let can_decrypt_storage = service.is_session_active() || pw.is_some();
+        if can_decrypt_storage {
+            let cache_key = crate::state::cached_media_storage_key(&blob_id);
+            if let Some(bytes) = try_load_cached_media_bytes(service, &cache_key, true, pw)? {
+                if humoco_market::compute_image_token(&canonical_owner, &bytes)
+                    .ok()
+                    .as_deref()
+                    == Some(image_token.as_str())
+                {
+                    return Ok(AdImageLookup::Cached(encode_media_data_uri(&bytes)));
+                }
             }
         }
 
         let mut candidate_urls = Vec::new();
 
-        let card_store: humoco_market::CardStore =
-            crate::state::load_encrypted_json_or_default(service, MARKET_CARD_STORE_KEY, pw)
-                .map_err(FrontendError::from)?;
+        let card_store = state
+            .load_card_store_or_cached(service, pw)
+            .map_err(FrontendError::from)?;
         if let Some(stored_card) = card_store.cards.get(canonical_owner.as_str()) {
             for d in &stored_card.card.payload.drops {
                 if !d.read_url.trim().is_empty() {
@@ -1329,33 +1338,45 @@ pub async fn get_ad_image_impl(
     let now = chrono::Utc::now().timestamp().max(0) as u64;
     let client = sync_client::create_sync_http_client();
     for read_url in &read_urls {
-        if state.is_media_negatively_cached(&session, &blob_id, read_url, now, 86_400) {
+        if state.is_media_negatively_cached(&session, &blob_id, read_url, now) {
             continue;
         }
-        if let Ok(Some(ciphertext)) = sync_client::get_media_blob(&client, read_url, &blob_id).await
-        {
-            if let Ok(media_bytes) =
-                humoco_market::open_media_blob(&canonical_owner, &image_token, &ciphertext)
-            {
-                let cache_key = crate::state::cached_media_storage_key(&blob_id);
-                let cached_for_session = state
-                    .with_session(&session, |service| {
-                        let _ = crate::state::save_local_sidecar_bytes(
-                            service,
-                            &cache_key,
-                            &media_bytes,
-                            pw,
-                        );
-                        Ok(())
-                    })?
-                    .is_some();
-                if !cached_for_session {
-                    return Ok(None);
+        let ttl_secs = match sync_client::get_media_blob(&client, read_url, &blob_id).await {
+            Ok(Some(ciphertext)) => {
+                if let Ok(media_bytes) =
+                    humoco_market::open_media_blob(&canonical_owner, &image_token, &ciphertext)
+                {
+                    let cache_key = crate::state::cached_media_storage_key(&blob_id);
+                    let session_valid = state
+                        .with_session(&session, |service| {
+                            if service.is_session_active() || pw.is_some() {
+                                let _ = crate::state::save_local_sidecar_bytes(
+                                    service,
+                                    &cache_key,
+                                    &media_bytes,
+                                    pw,
+                                );
+                            }
+                            Ok(())
+                        })?
+                        .is_some();
+                    if !session_valid {
+                        return Ok(None);
+                    }
+                    return Ok(Some(encode_media_data_uri(&media_bytes)));
                 }
-                return Ok(Some(encode_media_data_uri(&media_bytes)));
+                MEDIA_NEG_CACHE_PERMANENT_TTL_SECS
             }
-        }
-        state.record_media_negative_cache(&session, blob_id.clone(), read_url.clone(), now);
+            Ok(None) => MEDIA_NEG_CACHE_PERMANENT_TTL_SECS,
+            Err(_) => MEDIA_NEG_CACHE_TRANSIENT_TTL_SECS,
+        };
+        state.record_media_negative_cache(
+            &session,
+            blob_id.clone(),
+            read_url.clone(),
+            now,
+            ttl_secs,
+        );
     }
 
     Ok(None)
@@ -1409,28 +1430,23 @@ pub fn get_market_view_impl(
 
     let reg = state.get_or_load_wot_register(&mut service, pw).ok();
 
-    let mut store: humoco_market::CardStore =
-        crate::state::load_encrypted_json_or_default(&mut service, MARKET_CARD_STORE_KEY, pw)
-            .map_err(FrontendError::from)?;
+    let mut store = state
+        .load_card_store_or_cached(&mut service, pw)
+        .map_err(FrontendError::from)?;
 
     let before_count = store.cards.len();
     store.cards.retain(|_, c| c.card.payload.valid_until > now);
     if store.cards.len() != before_count && can_persist {
-        if let Err(e) =
-            crate::state::save_encrypted_json(&mut service, MARKET_CARD_STORE_KEY, &store, pw)
-        {
+        if let Err(e) = state.save_card_store(&mut service, &store, pw) {
             log::warn!("Failed to persist pruned expired market cards: {}", e);
         }
     }
 
     let cards_vec: Vec<humoco_market::StoredCard> = store.cards.values().cloned().collect();
 
-    let sync_state: crate::state::StoredSyncState = crate::state::load_encrypted_json_or_default(
-        &mut service,
-        crate::state::MARKET_SYNC_KEY,
-        pw,
-    )
-    .map_err(FrontendError::from)?;
+    let sync_state = state
+        .load_sync_state_or_cached(&mut service, pw)
+        .map_err(FrontendError::from)?;
 
     let known_contact_dids: std::collections::HashSet<String> = {
         let cached = state.cache_contacts();
@@ -1846,6 +1862,7 @@ pub fn import_contact_card_impl(
                 .save_encrypted_batch(&batch, pw)
                 .map_err(FrontendError::from)?;
 
+            state.set_cached_card_store_for_service(&service, Some(store));
             if let Some(address_book) = updated_address_book {
                 state.set_cached_contacts_for_service(&service, Some(address_book));
             }
@@ -1894,9 +1911,9 @@ pub fn delete_foreign_contact_card_impl(
         .authorize_and_lock_secret(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
     let pw = resolved_pw.as_deref().map(String::as_str);
 
-    let mut store: humoco_market::CardStore =
-        crate::state::load_encrypted_json_or_default(&mut service, MARKET_CARD_STORE_KEY, pw)
-            .map_err(FrontendError::from)?;
+    let mut store = state
+        .load_card_store_or_cached(&mut service, pw)
+        .map_err(FrontendError::from)?;
 
     let validated_did = human_money_core::ValidatedUserId::parse(&did)
         .map_err(|e| FrontendError::from(format!("Invalid DID: {}", e)))?;
@@ -1930,7 +1947,8 @@ pub fn delete_foreign_contact_card_impl(
         for (card_key, version) in removed_tombstones {
             humoco_market::mark_card_deleted(&mut store, &card_key, version);
         }
-        crate::state::save_encrypted_json(&mut service, MARKET_CARD_STORE_KEY, &store, pw)
+        state
+            .save_card_store(&mut service, &store, pw)
             .map_err(FrontendError::from)?;
     }
 
@@ -3149,8 +3167,14 @@ mod tests {
         // H3: Negative cache entry lives inside ActiveProfileCaches and is evicted on clear_all_caches()
         let blob_id = "ab".repeat(32);
         let url = "http://127.0.0.1:9999/sync.php".to_string();
-        state.record_media_negative_cache(&session, blob_id.clone(), url.clone(), 1_760_000_000);
-        assert!(state.is_media_negatively_cached(&session, &blob_id, &url, 1_760_000_010, 86_400));
+        state.record_media_negative_cache(
+            &session,
+            blob_id.clone(),
+            url.clone(),
+            1_760_000_000,
+            86_400,
+        );
+        assert!(state.is_media_negatively_cached(&session, &blob_id, &url, 1_760_000_010));
 
         state.clear_all_caches();
         assert!(state.profile_caches.lock().unwrap().is_none());
@@ -3962,6 +3986,276 @@ mod tests {
         .await
         .unwrap()
         .is_some());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn s11_q1_media_negative_cache_differentiated_ttls() {
+        let dir = crate::test_support::temp_test_dir("s11_q1_neg_cache");
+        let pw = "MasterPass-S11-Q1!";
+        let alice_svc = crate::test_support::setup_test_app(&dir, "Alice Q1", ALICE_PHRASE, pw);
+        let state = crate::test_support::create_test_state(alice_svc);
+        let alice_did = state
+            .service
+            .lock()
+            .unwrap()
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
+        let session = {
+            let s = state.service.lock().unwrap();
+            state.session_token_for_service(&s).unwrap()
+        };
+
+        let server =
+            crate::test_support::MockSyncServer::start("d-q1".to_string(), "a1".repeat(32)).await;
+        let read_url_404 = format!("{}/d-q1", server.base_url);
+        let read_url_corrupt = format!("{}/d-q1", server.base_url);
+
+        // Start a one-shot closed port for deterministic transient error without touching real network
+        let dead_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let dead_port = dead_listener.local_addr().unwrap().port();
+        drop(dead_listener);
+        let dead_url = format!("http://127.0.0.1:{}/d-dead", dead_port);
+
+        // 1. Transient failure -> ~60s expiry (cached at +30s, expired at +60s)
+        let webp_transient = make_test_vp8_webp(64, 64);
+        let (tok_transient, blob_transient, _) =
+            humoco_market::seal_media_blob(&alice_did, &webp_transient).unwrap();
+        state.set_cached_security_policy(Some(crate::settings::SecurityPolicy {
+            market_selected_syncs: vec![crate::models::FrontendSyncDescriptor {
+                write_url: format!("{}/sync.php", dead_url),
+                read_url: dead_url.clone(),
+                slot_id: None,
+                drop_pub: "11".repeat(32),
+                status: "active".to_string(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }));
+        let before = chrono::Utc::now().timestamp().max(0) as u64;
+        assert_eq!(
+            get_ad_image_impl(
+                alice_did.clone(),
+                tok_transient,
+                Some(pw.to_string()),
+                &state
+            )
+            .await
+            .unwrap(),
+            None
+        );
+        assert!(state.is_media_negatively_cached(
+            &session,
+            &blob_transient,
+            &dead_url,
+            before + 30
+        ));
+        assert!(!state.is_media_negatively_cached(
+            &session,
+            &blob_transient,
+            &dead_url,
+            before + MEDIA_NEG_CACHE_TRANSIENT_TTL_SECS + 5
+        ));
+
+        // 2. Permanent 404 -> 24h expiry (still cached at +3600s, expired after 24h)
+        let tok_404 = "fedcba9876543210fedcba9876543210".to_string();
+        let blob_404 = humoco_market::derive_media_blob_id(&tok_404).unwrap();
+        state.set_cached_security_policy(Some(crate::settings::SecurityPolicy {
+            market_selected_syncs: vec![crate::models::FrontendSyncDescriptor {
+                write_url: format!("{}/sync.php", server.base_url),
+                read_url: read_url_404.clone(),
+                slot_id: None,
+                drop_pub: "22".repeat(32),
+                status: "active".to_string(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }));
+        let before_perm = chrono::Utc::now().timestamp().max(0) as u64;
+        assert_eq!(
+            get_ad_image_impl(alice_did.clone(), tok_404, Some(pw.to_string()), &state)
+                .await
+                .unwrap(),
+            None
+        );
+        assert!(state.is_media_negatively_cached(
+            &session,
+            &blob_404,
+            &read_url_404,
+            before_perm + 3600
+        ));
+        assert!(!state.is_media_negatively_cached(
+            &session,
+            &blob_404,
+            &read_url_404,
+            before_perm + MEDIA_NEG_CACHE_PERMANENT_TTL_SECS + 5
+        ));
+
+        // 3. Corrupt ciphertext -> 24h expiry
+        let tok_corrupt = "11223344556677889900aabbccddeeff".to_string();
+        let blob_corrupt = humoco_market::derive_media_blob_id(&tok_corrupt).unwrap();
+        server.slots.lock().unwrap().insert(
+            format!("{}.media", blob_corrupt),
+            b"not-valid-aead".to_vec(),
+        );
+        let before_corrupt = chrono::Utc::now().timestamp().max(0) as u64;
+        assert_eq!(
+            get_ad_image_impl(alice_did, tok_corrupt, Some(pw.to_string()), &state)
+                .await
+                .unwrap(),
+            None
+        );
+        assert!(state.is_media_negatively_cached(
+            &session,
+            &blob_corrupt,
+            &read_url_corrupt,
+            before_corrupt + 3600
+        ));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn s11_q2_timeout_zero_marketplace_view_and_ad_image_from_caches() {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+
+        let dir = crate::test_support::temp_test_dir("s11_q2_timeout_zero");
+        let pw = "MasterPass-S11-Q2!";
+        let wallet_dir = dir.join("alice");
+
+        let server =
+            crate::test_support::MockSyncServer::start("d-q2".to_string(), "a1".repeat(32)).await;
+        let read_url = format!("{}/d-q2", server.base_url);
+
+        let alice_svc =
+            crate::test_support::setup_test_app(&wallet_dir, "Alice Q2", ALICE_PHRASE, pw);
+        let folder_name = alice_svc.list_profiles().unwrap()[0].folder_name.clone();
+        let alice_state = crate::test_support::create_test_state(alice_svc);
+
+        let bob_svc =
+            crate::test_support::setup_test_app(&dir.join("bob"), "Bob Q2", BOB_PHRASE, pw);
+        let (bob_did, bob_sk) = bob_svc
+            .with_wallet_and_identity(|w, id| (w.get_user_id().to_string(), id.signing_key.clone()))
+            .unwrap();
+        drop(bob_svc);
+
+        let ad_bytes = make_test_vp8_webp(128, 96);
+        let ad_data_uri = format!("data:image/webp;base64,{}", STANDARD.encode(&ad_bytes));
+        let (image_token, blob_id, sealed_media) =
+            humoco_market::seal_media_blob(&bob_did, &ad_bytes).unwrap();
+        server
+            .slots
+            .lock()
+            .unwrap()
+            .insert(format!("{}.media", blob_id), sealed_media);
+
+        let now = chrono::Utc::now().timestamp().max(0) as u64;
+        let bob_card = humoco_market::sign_sd_card(
+            humoco_market::CardPayloadInput {
+                did: bob_did.clone(),
+                v: 1,
+                valid_until: now + 86_400 * 60,
+                max_hops: 2,
+                ad_count: 1,
+                allow_inquiries: true,
+                drops: vec![humoco_market::DropDescriptor {
+                    write_url: format!("{}/sync.php", server.base_url),
+                    read_url: read_url.clone(),
+                    slot_id: None,
+                    drop_pub: "11".repeat(32),
+                }],
+            },
+            vec![(
+                humoco_market::CardItem::Ad(humoco_market::Ad {
+                    id: "ad01020304050607".to_string(),
+                    kind: humoco_market::AdKind::Offer,
+                    title: "Cached Pottery".to_string(),
+                    text: None,
+                    pricing: None,
+                    published_at: now.saturating_sub(60),
+                    renewed_at: None,
+                    expires_at: now + 86_400 * 30,
+                    allow_inquiries: true,
+                    is_remote: false,
+                    image_token: Some(image_token.clone()),
+                }),
+                1,
+            )],
+            &bob_sk,
+        )
+        .unwrap();
+        let bob_wire =
+            humoco_market::render_wire(&bob_card, 1, humoco_market::WireFilter::Full).unwrap();
+        let mut card_store = humoco_market::CardStore::default();
+        card_store.cards.insert(
+            bob_did.clone(),
+            humoco_market::StoredCard {
+                card: bob_card,
+                card_wire: bob_wire,
+                hops: 1,
+                received_at: now,
+            },
+        );
+
+        let sync_state = crate::state::StoredSyncState {
+            last_upload_at: Some(now.saturating_sub(120)),
+            ..Default::default()
+        };
+
+        {
+            let mut s = alice_state.service.lock().unwrap();
+            alice_state
+                .save_card_store(&mut s, &card_store, Some(pw))
+                .unwrap();
+            alice_state
+                .save_sync_state(&mut s, &sync_state, Some(pw))
+                .unwrap();
+            alice_state
+                .mutate_security_policy(&mut s, Some(pw), |p| {
+                    p.session_timeout_seconds = 0;
+                })
+                .unwrap();
+        }
+        drop(alice_state);
+
+        // Reload fresh AppService under session_timeout_seconds == 0 (!is_session_active())
+        let mut reloaded_svc = human_money_core::app_service::AppService::new(&wallet_dir).unwrap();
+        reloaded_svc
+            .login(&folder_name, pw, false, "device-drops-test".to_string())
+            .unwrap();
+        let reloaded_state = crate::test_support::create_test_state(
+            human_money_core::app_service::AppService::new(&wallet_dir).unwrap(),
+        );
+        reloaded_state
+            .initialize_profile_session(&mut reloaded_svc, pw)
+            .unwrap();
+        *reloaded_state.service.lock().unwrap() = reloaded_svc;
+        assert!(!reloaded_state.service.lock().unwrap().is_session_active());
+
+        // 1. Marketplace snapshot + sync state work without password via pre-cached CardStore + StoredSyncState
+        let snap = get_market_view_impl(None, &reloaded_state)
+            .expect("get_market_view_impl must succeed under timeout == 0 using pre-caches");
+        assert_eq!(snap.stored_card_count, 1);
+        assert_eq!(snap.board.len(), 1);
+        assert_eq!(snap.board[0].ad.title, "Cached Pottery");
+        {
+            let mut s = reloaded_state.service.lock().unwrap();
+            let cached_sync = reloaded_state
+                .load_sync_state_or_cached(&mut s, None)
+                .unwrap();
+            assert_eq!(cached_sync.last_upload_at, Some(now.saturating_sub(120)));
+        }
+        assert!(
+            crate::services::sync_engine::get_sync_overview_status_impl(None, &reloaded_state)
+                .is_ok()
+        );
+
+        // 2. Remote ad image fetch & AEAD open works without password under timeout == 0
+        let loaded_img = get_ad_image_impl(bob_did, image_token, None, &reloaded_state)
+            .await
+            .expect("get_ad_image_impl must succeed under timeout == 0");
+        assert_eq!(loaded_img, Some(ad_data_uri));
 
         let _ = std::fs::remove_dir_all(&dir);
     }

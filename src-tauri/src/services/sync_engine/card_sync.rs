@@ -19,7 +19,8 @@ use crate::settings::{
 };
 use crate::state::{
     apply_revocation_notice, apply_revocation_notice_to_address_book, canonicalize_did,
-    clear_revocation, AppState, StoredSyncState, CONTACTS_DATA_NAME, MARKET_CARD_STORE_KEY,
+    clear_revocation, is_revocation_effective, AppState, StoredSyncState, CONTACTS_DATA_NAME,
+    MARKET_CARD_STORE_KEY,
 };
 use crate::sync_client::{self, PutSlotOutcome, SyncRevocationNotice};
 
@@ -306,7 +307,12 @@ async fn probe_single_contact_endpoint(
             {
                 ep.drop_pub = c_drop.clone();
             }
-            ep.status = c_status.clone();
+            let sticky_revoked = is_revocation_effective(ep, now);
+            if !sticky_revoked {
+                ep.status = c_status.clone();
+            } else if !ep.status.eq_ignore_ascii_case("revoked") {
+                ep.status = "revoked".to_string();
+            }
             ep.fail_count = 0;
             ep.last_seen_at = Some(now);
             ep.last_probed_at = Some(now);
@@ -314,7 +320,7 @@ async fn probe_single_contact_endpoint(
                 apply_revocation_notice(ep, rev, now);
                 verified_revocations.push((c_read.clone(), rev.clone()));
             } else {
-                clear_revocation(ep, c_status);
+                clear_revocation(ep, c_status, now);
             }
         } else {
             if ep.status != "revoked" && ep.status != "deprecating" {
@@ -439,8 +445,9 @@ async fn probe_single_contact_endpoint(
             }
             ep.last_seen_at = Some(now);
 
+            let sticky_revoked = is_revocation_effective(ep, now);
             if verified_rev.is_none() {
-                clear_revocation(ep, "unverified");
+                clear_revocation(ep, "unverified", now);
             }
 
             // Always derive OUR OWN stealth pubkey + prefix rather than probing a contact's foreign slot_id.
@@ -463,7 +470,11 @@ async fn probe_single_contact_endpoint(
                     );
                     // Server responded to ?info (reachable), so report pending_auth rather than offline/unreachable.
                     probe_status = "pending_auth".to_string();
-                    ep.status = "pending_auth".to_string();
+                    if sticky_revoked && verified_rev.is_none() {
+                        ep.status = "revoked".to_string();
+                    } else {
+                        ep.status = "pending_auth".to_string();
+                    }
                     ep.fail_count = 0;
                     ep.last_probed_at = Some(now);
                 }
@@ -522,11 +533,19 @@ async fn probe_single_contact_endpoint(
 
                     if is_authorized && read_url_valid {
                         probe_status = "active".to_string();
-                        ep.status = "active".to_string();
+                        if sticky_revoked && verified_rev.is_none() {
+                            ep.status = "revoked".to_string();
+                        } else {
+                            ep.status = "active".to_string();
+                        }
                     } else {
                         // Server answered ?info (reachable), so never classify as offline/unreachable.
                         probe_status = "pending_auth".to_string();
-                        ep.status = "pending_auth".to_string();
+                        if sticky_revoked && verified_rev.is_none() {
+                            ep.status = "revoked".to_string();
+                        } else {
+                            ep.status = "pending_auth".to_string();
+                        }
                     }
                     ep.fail_count = 0;
                     ep.last_probed_at = Some(now);

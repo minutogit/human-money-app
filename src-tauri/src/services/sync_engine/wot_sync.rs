@@ -950,12 +950,6 @@ pub fn preview_contact_trust_change_impl(
         (false, false)
     } else if let Some(admin) = admin_opt {
         if admin
-            .deny
-            .iter()
-            .any(|d| canonicalize_did(d).ok().as_deref() == Some(&can_target))
-        {
-            (false, false)
-        } else if admin
             .allow
             .iter()
             .any(|d| canonicalize_did(d).ok().as_deref() == Some(&can_target))

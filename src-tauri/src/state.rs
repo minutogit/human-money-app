@@ -102,7 +102,7 @@ pub struct StoredPostState {
     #[serde(default)]
     pub slot_etags_by_write_url: std::collections::BTreeMap<String, String>,
     #[serde(default)]
-    pub processed_msg_ids: std::collections::BTreeSet<String>,
+    pub processed_msg_ids: std::collections::BTreeMap<String, u64>,
     #[serde(default)]
     pub pending_sign_requests: Vec<crate::models::FrontendPendingSignRequest>,
     #[serde(default)]
@@ -136,8 +136,6 @@ pub struct StoredSyncAdmin {
     pub max_user_storage_mb: usize,
     pub policies: std::collections::BTreeMap<String, humoco_market::MemberPolicy>,
     pub allow: Vec<String>,
-    pub deny: Vec<String>,
-    pub blocked_pubkeys: Vec<String>,
     pub last_members_hash: std::collections::BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revocation: Option<crate::sync_client::SyncRevocationNotice>,
@@ -1093,7 +1091,6 @@ impl AppState {
         blob_id: &str,
         read_url: &str,
         now_secs: u64,
-        ttl_secs: u64,
     ) -> bool {
         if self.current_session_generation() != session.generation {
             return false;
@@ -1112,7 +1109,7 @@ impl AppState {
         caches
             .media_negative_cache
             .get(&key)
-            .is_some_and(|&ts| now_secs.saturating_sub(ts) < ttl_secs)
+            .is_some_and(|&expires_at| now_secs < expires_at)
     }
 
     pub fn record_media_negative_cache(
@@ -1121,6 +1118,7 @@ impl AppState {
         blob_id: String,
         read_url: String,
         now_secs: u64,
+        ttl_secs: u64,
     ) {
         if self.current_session_generation() != session.generation {
             return;
@@ -1138,9 +1136,16 @@ impl AppState {
         }
         if let Some(ref mut caches) = *guard {
             if caches.media_negative_cache.len() >= 1024 {
-                caches.media_negative_cache.clear();
+                caches
+                    .media_negative_cache
+                    .retain(|_, &mut expires_at| expires_at > now_secs);
+                if caches.media_negative_cache.len() >= 1024 {
+                    caches.media_negative_cache.clear();
+                }
             }
-            caches.media_negative_cache.insert(key, now_secs);
+            caches
+                .media_negative_cache
+                .insert(key, now_secs.saturating_add(ttl_secs));
         }
     }
 
@@ -1694,6 +1699,117 @@ impl AppState {
             .unwrap()
             .as_ref()
             .and_then(|c| c.app_notices.clone())
+    }
+
+    pub fn set_cached_card_store_for_service(
+        &self,
+        service: &AppService,
+        value: Option<humoco_market::CardStore>,
+    ) {
+        self.write_cache_slot_for_service(service, |c| &mut c.card_store, value);
+    }
+
+    pub fn load_card_store_or_cached(
+        &self,
+        service: &mut AppService,
+        password: Option<&str>,
+    ) -> Result<humoco_market::CardStore, AppFacadeError> {
+        self.load_encrypted_json_or_cached(
+            service,
+            |c| &c.card_store,
+            |c| &mut c.card_store,
+            MARKET_CARD_STORE_KEY,
+            password,
+        )
+    }
+
+    pub fn save_card_store(
+        &self,
+        service: &mut AppService,
+        store: &humoco_market::CardStore,
+        password: Option<&str>,
+    ) -> Result<(), AppFacadeError> {
+        self.save_store(
+            service,
+            |c| &mut c.card_store,
+            MARKET_CARD_STORE_KEY,
+            store.clone(),
+            password,
+        )
+    }
+
+    pub fn set_cached_sync_state_for_service(
+        &self,
+        service: &AppService,
+        value: Option<StoredSyncState>,
+    ) {
+        self.write_cache_slot_for_service(service, |c| &mut c.sync_state, value);
+    }
+
+    pub fn load_sync_state_or_cached(
+        &self,
+        service: &mut AppService,
+        password: Option<&str>,
+    ) -> Result<StoredSyncState, AppFacadeError> {
+        self.load_encrypted_json_or_cached(
+            service,
+            |c| &c.sync_state,
+            |c| &mut c.sync_state,
+            MARKET_SYNC_KEY,
+            password,
+        )
+    }
+
+    pub fn save_sync_state(
+        &self,
+        service: &mut AppService,
+        sync_state: &StoredSyncState,
+        password: Option<&str>,
+    ) -> Result<(), AppFacadeError> {
+        self.save_store(
+            service,
+            |c| &mut c.sync_state,
+            MARKET_SYNC_KEY,
+            sync_state.clone(),
+            password,
+        )
+    }
+
+    fn load_encrypted_json_or_cached<T>(
+        &self,
+        service: &mut AppService,
+        read_field: fn(&ActiveProfileCaches) -> &Option<T>,
+        write_field: fn(&mut ActiveProfileCaches) -> &mut Option<T>,
+        key: &str,
+        password: Option<&str>,
+    ) -> Result<T, AppFacadeError>
+    where
+        T: serde::de::DeserializeOwned + Default + Clone,
+    {
+        match load_encrypted_json_or_default::<T>(service, key, password) {
+            Ok(loaded) => {
+                self.write_cache_slot_for_service(service, write_field, Some(loaded.clone()));
+                Ok(loaded)
+            }
+            Err(
+                AppFacadeError::SessionNotActive(_)
+                | AppFacadeError::SessionExpired(_)
+                | AppFacadeError::App(
+                    human_money_core::error::AppError::SessionNotActive { .. }
+                    | human_money_core::error::AppError::SessionExpired { .. },
+                ),
+            ) if password.is_none() => {
+                if let Some(cached) = self.read_cache_slot_for_service(service, read_field) {
+                    return Ok(cached);
+                }
+                Err(AppFacadeError::App(
+                    human_money_core::error::AppError::SessionNotActive {
+                        reason: "Password required. Please use 'unlock_session'.".to_string(),
+                    },
+                ))
+            }
+            Err(e) => Err(e),
+        }
     }
 
     fn set_cache_slot_direct<T>(
@@ -2426,11 +2542,7 @@ impl AppState {
             contact.syncs.truncate(2);
         } else {
             let card_syncs: Vec<crate::models::FrontendSyncDescriptor> =
-                match load_encrypted_json_or_default::<humoco_market::CardStore>(
-                    service,
-                    MARKET_CARD_STORE_KEY,
-                    password,
-                ) {
+                match self.load_card_store_or_cached(service, password) {
                     Ok(store) => store
                         .cards
                         .get(&contact.did)
@@ -3143,6 +3255,34 @@ impl AppState {
             }
         }
 
+        // 13. Pre-cache received market CardStore (supports timeout = 0)
+        match load_encrypted_json_or_default::<humoco_market::CardStore>(
+            service,
+            MARKET_CARD_STORE_KEY,
+            Some(credential),
+        ) {
+            Ok(card_store) => {
+                self.set_cached_card_store_for_service(service, Some(card_store));
+            }
+            Err(e) => {
+                log::warn!("Failed to pre-load market CardStore: {}", e);
+            }
+        }
+
+        // 14. Pre-cache sync state (supports timeout = 0)
+        match load_encrypted_json_or_default::<StoredSyncState>(
+            service,
+            MARKET_SYNC_KEY,
+            Some(credential),
+        ) {
+            Ok(sync_state) => {
+                self.set_cached_sync_state_for_service(service, Some(sync_state));
+            }
+            Err(e) => {
+                log::warn!("Failed to pre-load sync state: {}", e);
+            }
+        }
+
         Ok(())
     }
 
@@ -3163,11 +3303,7 @@ impl AppState {
         reg.prune_unreachable_lists();
         reg.clear_drop_sent_log(None);
 
-        match load_encrypted_json_or_default::<humoco_market::CardStore>(
-            service,
-            MARKET_CARD_STORE_KEY,
-            password,
-        ) {
+        match self.load_card_store_or_cached(service, password) {
             Ok(mut store) => {
                 let before = store.cards.len();
                 if !preserve_manual_card {
@@ -3193,7 +3329,7 @@ impl AppState {
                         .is_ok_and(|ev| ev.shortest_hops.is_some())
                 });
                 if store.cards.len() != before {
-                    let _ = save_encrypted_json(service, MARKET_CARD_STORE_KEY, &store, password);
+                    let _ = self.save_card_store(service, &store, password);
                 }
             }
             Err(e) => {
@@ -3610,7 +3746,7 @@ impl AppState {
         let now = Utc::now().timestamp().max(0) as u64;
 
         let mut store: humoco_market::CardStore =
-            match load_encrypted_json_or_default(service, MARKET_CARD_STORE_KEY, password) {
+            match self.load_card_store_or_cached(service, password) {
                 Ok(s) => s,
                 Err(e) => {
                     log::warn!(
@@ -3645,9 +3781,7 @@ impl AppState {
         match outcome {
             Ok(humoco_market::AcceptOutcome::Accepted { did, replaced }) => {
                 log::info!("Accepted piggybacked contact card (replaced={})", replaced);
-                if let Err(e) =
-                    save_encrypted_json(service, MARKET_CARD_STORE_KEY, &store, password)
-                {
+                if let Err(e) = self.save_card_store(service, &store, password) {
                     log::warn!(
                         "Failed to save CardStore after accepting piggybacked card: {}",
                         e
@@ -4356,17 +4490,29 @@ pub fn apply_revocation_notice<T: SyncRevocationFields>(
     *ep.replacement_mut() = notice.replacement.clone().map(Into::into);
 }
 
-pub fn clear_revocation<T: SyncRevocationFields>(ep: &mut T, fallback_status: &str) -> bool {
-    let is_rev_status = {
-        let s = ep.status_mut().as_str();
-        s == "deprecating" || s == "revoked"
-    };
+/// Returns `true` if `ep` has already transitioned into an effective (irreversible) revocation.
+pub fn is_revocation_effective<T: SyncRevocationFields>(ep: &mut T, now_secs: u64) -> bool {
+    ep.status_mut().eq_ignore_ascii_case("revoked")
+        || ep.sunset_at_mut().is_some_and(|sunset| now_secs >= sunset)
+}
+
+pub fn clear_revocation<T: SyncRevocationFields>(
+    ep: &mut T,
+    fallback_status: &str,
+    now_secs: u64,
+) -> bool {
+    // Once a revocation has taken effect (status == "revoked" or now_secs >= sunset_at),
+    // it remains permanently sticky so a compromised server cannot un-revoke via HTTP 404.
+    if is_revocation_effective(ep, now_secs) {
+        return false;
+    }
+    let is_deprecating = ep.status_mut().eq_ignore_ascii_case("deprecating");
     if ep.sunset_at_mut().is_some()
         || ep.revocation_reason_mut().is_some()
         || ep.replacement_mut().is_some()
-        || is_rev_status
+        || is_deprecating
     {
-        if is_rev_status {
+        if is_deprecating {
             *ep.status_mut() = fallback_status.to_string();
         }
         *ep.sunset_at_mut() = None;
@@ -5561,26 +5707,40 @@ mod tests {
             signature: "00".repeat(64),
         };
 
+        // 1. Grace-period ("deprecating", before sunset_at) can still be cancelled on HTTP 404
         let mut desc = FrontendSyncDescriptor::default();
         super::apply_revocation_notice(&mut desc, &notice, 1500);
         assert_eq!(desc.status, "deprecating");
         assert_eq!(desc.sunset_at, Some(2000));
         assert_eq!(desc.revocation_reason.as_deref(), Some("Umzug"));
         assert!(desc.replacement.is_some());
-        assert!(super::clear_revocation(&mut desc, "active"));
+        assert!(super::clear_revocation(&mut desc, "active", 1600));
         assert_eq!(desc.status, "active");
         assert!(desc.sunset_at.is_none());
         assert!(desc.revocation_reason.is_none());
         assert!(desc.replacement.is_none());
-        assert!(!super::clear_revocation(&mut desc, "active"));
+        assert!(!super::clear_revocation(&mut desc, "active", 1600));
 
+        // 2. Once now_secs >= sunset_at, even a still-"deprecating" entry becomes sticky and cannot clear
+        super::apply_revocation_notice(&mut desc, &notice, 1500);
+        assert_eq!(desc.status, "deprecating");
+        assert!(!super::clear_revocation(&mut desc, "active", 2000));
+        assert_eq!(desc.status, "deprecating");
+        assert_eq!(desc.sunset_at, Some(2000));
+        assert_eq!(desc.revocation_reason.as_deref(), Some("Umzug"));
+        assert!(desc.replacement.is_some());
+
+        // 3. An already-"revoked" endpoint stays permanently sticky regardless of timestamp
         let mut pub_sync = crate::settings::StoredPublicSync::default();
         super::apply_revocation_notice(&mut pub_sync, &notice, 2500);
         assert_eq!(pub_sync.status, "revoked");
         assert_eq!(pub_sync.sunset_at, Some(2000));
-        assert!(super::clear_revocation(&mut pub_sync, "active"));
-        assert_eq!(pub_sync.status, "active");
-        assert!(pub_sync.sunset_at.is_none());
+        assert!(!super::clear_revocation(&mut pub_sync, "active", 2500));
+        assert!(!super::clear_revocation(&mut pub_sync, "active", 1000));
+        assert_eq!(pub_sync.status, "revoked");
+        assert_eq!(pub_sync.sunset_at, Some(2000));
+        assert_eq!(pub_sync.revocation_reason.as_deref(), Some("Umzug"));
+        assert!(pub_sync.replacement.is_some());
     }
 
     #[test]

@@ -308,19 +308,10 @@ pub async fn create_transfer_bundle_impl(
         }
 
         if let Some((peer_pk_bytes, own_v)) = pending_card_sent {
-            match crate::state::load_encrypted_json_or_default::<humoco_market::CardStore>(
-                service,
-                crate::state::MARKET_CARD_STORE_KEY,
-                pw,
-            ) {
+            match state.load_card_store_or_cached(service, pw) {
                 Ok(mut store) => {
                     humoco_market::mark_sent(&mut store, peer_pk_bytes, own_v);
-                    if let Err(e) = crate::state::save_encrypted_json(
-                        service,
-                        crate::state::MARKET_CARD_STORE_KEY,
-                        &store,
-                        pw,
-                    ) {
+                    if let Err(e) = state.save_card_store(service, &store, pw) {
                         log::warn!("Failed to save CardStore after sending card: {}", e);
                     }
                 }

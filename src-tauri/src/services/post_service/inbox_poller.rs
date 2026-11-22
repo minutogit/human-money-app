@@ -164,8 +164,10 @@ pub async fn confirm_pending_post_payment_impl(
                     ps.pending_tolerance_payments.retain(|p| {
                         p.msg_id != item.msg_id || !are_dids_equal(&p.sender_did, &item.sender_did)
                     });
-                    ps.processed_msg_ids
-                        .insert(scoped_processed_msg_key(&item.sender_did, &item.msg_id));
+                    ps.processed_msg_ids.insert(
+                        scoped_processed_msg_key(&item.sender_did, &item.msg_id),
+                        now_secs,
+                    );
                     if queue_confirm_ack(ps, Some(&result.header.bundle_id)) {
                         queued_ack = true;
                     }
@@ -198,9 +200,10 @@ pub async fn confirm_pending_post_payment_impl(
                             p.msg_id != item.msg_id
                                 || !are_dids_equal(&p.sender_did, &item.sender_did)
                         });
-                        post_state
-                            .processed_msg_ids
-                            .insert(scoped_processed_msg_key(&item.sender_did, &item.msg_id));
+                        post_state.processed_msg_ids.insert(
+                            scoped_processed_msg_key(&item.sender_did, &item.msg_id),
+                            now_secs,
+                        );
                         if is_duplicate && queue_confirm_ack(&mut post_state, None) {
                             queued_ack = true;
                         }
@@ -315,19 +318,6 @@ pub fn dismiss_pending_post_item_impl(
             post_state
                 .pending_tolerance_payments
                 .retain(|p| p.msg_id != id);
-        }
-        "outbox" => {
-            post_state.outbox_entries.retain(|e| {
-                if e.msg_id == id {
-                    push_pruned_outbox_tag16(
-                        &mut post_state.pruned_outbox_tag16s,
-                        e.tag16_hex.clone(),
-                    );
-                    false
-                } else {
-                    true
-                }
-            });
         }
         other => {
             return Err(FrontendError::from(format!(
@@ -1183,7 +1173,7 @@ pub async fn sync_post_channels_impl(
             };
 
             let scoped_key = scoped_processed_msg_key(&sender_did, &envelope.msg_id);
-            if post_state.processed_msg_ids.contains(&scoped_key) {
+            if post_state.processed_msg_ids.contains_key(&scoped_key) {
                 continue;
             }
 
@@ -1260,7 +1250,7 @@ pub async fn sync_post_channels_impl(
 
     for item in decrypted_items {
         let scoped_key = scoped_processed_msg_key(&item.sender_did, &item.envelope.msg_id);
-        if post_state.processed_msg_ids.contains(&scoped_key) {
+        if post_state.processed_msg_ids.contains_key(&scoped_key) {
             continue;
         }
 
@@ -1289,7 +1279,7 @@ pub async fn sync_post_channels_impl(
         .await
         {
             PostDispatchOutcome::Handled => {
-                post_state.processed_msg_ids.insert(scoped_key);
+                post_state.processed_msg_ids.insert(scoped_key, now_secs);
                 if !item.envelope.reply_drops.is_empty() {
                     let reply_dtos = sanitize_sync_descriptors(
                         &item.envelope.reply_drops,
@@ -1337,7 +1327,7 @@ pub async fn sync_post_channels_impl(
                         },
                     );
                 }
-                post_state.processed_msg_ids.insert(scoped_key);
+                post_state.processed_msg_ids.insert(scoped_key, now_secs);
             }
             PostDispatchOutcome::RetryLater => {}
         }
@@ -1347,6 +1337,7 @@ pub async fn sync_post_channels_impl(
     if !state.is_generation_current(session.generation) {
         return Ok(FrontendPostSyncResult::default());
     }
+    super::prune_expired_processed_msg_ids(&mut post_state.processed_msg_ids, now_secs);
     merge_and_save_post_state(state, &session, &baseline_post_state, &mut post_state, pw)?;
     baseline_post_state = post_state.clone();
 

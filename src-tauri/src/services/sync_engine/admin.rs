@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 
 use base64::Engine;
 use human_money_core::app_service::AppService;
@@ -245,14 +245,13 @@ pub fn compute_admin_sync_members_with_stats(
 
     let mut allow_list: Vec<String> = admin.allow.clone();
     allow_list.push(admin_own_can_did);
-    let deny_list: Vec<String> = admin.deny.clone();
 
     let stats = humoco_market::compute_drop_members_with_stats(
         &direct,
         &bridges,
         &policy,
         &allow_list,
-        &deny_list,
+        &[],
         admin.max_members,
     );
 
@@ -260,17 +259,13 @@ pub fn compute_admin_sync_members_with_stats(
     let (admin_sk, _admin_vk, _admin_pub) =
         humoco_market::derive_drop_admin_keypair(&master_seed, admin.sync_index);
 
-    let blocked_set: HashSet<&str> = admin.blocked_pubkeys.iter().map(|s| s.as_str()).collect();
-
     let mut member_pubkeys = Vec::new();
     for did in &stats.member_dids {
         if let Ok(member_vk) = human_money_core::crypto::get_pubkey_from_user_id(did) {
             if let Ok(stealth_pk) =
                 humoco_market::derive_member_stealth_pubkey_admin(&admin_sk, &member_vk)
             {
-                if !blocked_set.contains(stealth_pk.as_str()) {
-                    member_pubkeys.push(stealth_pk);
-                }
+                member_pubkeys.push(stealth_pk);
             }
         }
     }
@@ -529,8 +524,6 @@ pub fn prepare_sync_setup_impl(
         max_user_storage_mb: max_user_mb,
         policies,
         allow: Vec::new(),
-        deny: Vec::new(),
-        blocked_pubkeys: Vec::new(),
         last_members_hash: BTreeMap::new(),
         revocation: None,
     };
@@ -1180,55 +1173,6 @@ pub async fn update_sync_admin_config_impl(
     )?;
 
     Ok(build_admin_status_dto(saved_admin, stats, pushed_status))
-}
-
-#[cfg(test)]
-pub(crate) async fn block_sync_slot_impl(
-    pubkey_hex64: String,
-    password: Option<String>,
-    state: &AppState,
-) -> Result<FrontendSyncAdminStatus, FrontendError> {
-    let password_z = password.clone().map(Zeroizing::new);
-    let pw = password_z.as_deref().map(String::as_str);
-    let _market_guard = state.market_op_lock.lock().await;
-
-    let (mut admin, admin_sk, session) = load_admin_with_signing_key(state, pw)?;
-    let expected_sync_index = admin.sync_index;
-    if !admin.blocked_pubkeys.contains(&pubkey_hex64) {
-        admin.blocked_pubkeys.push(pubkey_hex64.clone());
-    }
-
-    let client = sync_client::create_sync_http_client();
-    if !admin.descriptor.write_url.is_empty() {
-        push_all_channel_members(&client, state, &session, &mut admin, &admin_sk, pw).await?;
-    }
-
-    let (saved_admin, stats) = state.with_session_required(
-        &session,
-        "Active wallet session changed before blocked slot could be saved",
-        |service| {
-            let mut fresh_admin = load_stored_sync_admin_opt(service, pw)?.ok_or_else(|| {
-                FrontendError::from("Sync admin configuration was removed concurrently".to_string())
-            })?;
-            if fresh_admin.sync_index != expected_sync_index {
-                return Err(FrontendError::from(
-                    "Sync admin configuration changed concurrently".to_string(),
-                ));
-            }
-            if !fresh_admin.blocked_pubkeys.contains(&pubkey_hex64) {
-                fresh_admin.blocked_pubkeys.push(pubkey_hex64.clone());
-            }
-            for (k, v) in &admin.last_members_hash {
-                fresh_admin.last_members_hash.insert(k.clone(), v.clone());
-            }
-            save_stored_sync_admin(state, service, &fresh_admin, pw)?;
-            let (stats, _) =
-                compute_admin_sync_members_with_stats(state, service, &fresh_admin, "card", pw)?;
-            Ok((fresh_admin, stats))
-        },
-    )?;
-
-    Ok(build_admin_status_dto(saved_admin, stats, None))
 }
 
 pub fn delete_sync_admin_impl(

@@ -5303,8 +5303,6 @@ mod tests {
                 max_user_storage_mb: 10,
                 policies: Default::default(),
                 allow: vec![],
-                deny: vec![],
-                blocked_pubkeys: vec![],
                 last_members_hash: Default::default(),
                 revocation: None,
             };

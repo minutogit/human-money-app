@@ -712,6 +712,7 @@ pub fn validate_sync_url_strict(url: &str, allow_loopback: bool) -> Result<(), S
 
 pub fn create_sync_http_client() -> reqwest::Client {
     reqwest::Client::builder()
+        .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
         .dns_resolver(std::sync::Arc::new(SsrfSafeDnsResolver::new(
             loopback_sync_allowed(),
@@ -724,6 +725,7 @@ pub fn create_sync_http_client() -> reqwest::Client {
 
 pub fn create_sync_probe_client() -> reqwest::Client {
     reqwest::Client::builder()
+        .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
         .dns_resolver(std::sync::Arc::new(SsrfSafeDnsResolver::new(
             loopback_sync_allowed(),
@@ -4078,5 +4080,53 @@ mod tests {
             Some("http://127.0.0.1:8080".to_string())
         );
         assert_eq!(sync_origin_key("ftp://sync.example.org/sync.php"), None);
+    }
+
+    #[tokio::test]
+    async fn s08_q1_sync_clients_disable_proxies_and_block_ssrf_targets() {
+        let http_client = create_sync_http_client();
+        let probe_client = create_sync_probe_client();
+
+        for client in [&http_client, &probe_client] {
+            let err_rfc1918 = fetch_sync_info(client, "http://10.255.255.1/sync.php")
+                .await
+                .unwrap_err();
+            assert!(
+                err_rfc1918.contains("blocked internal/private address"),
+                "Expected SSRF rejection for private IP, got: {}",
+                err_rfc1918
+            );
+
+            let err_metadata = fetch_sync_info(client, "https://169.254.169.254/latest/meta-data")
+                .await
+                .unwrap_err();
+            assert!(
+                err_metadata.contains("blocked internal/private address"),
+                "Expected SSRF rejection for link-local metadata IP, got: {}",
+                err_metadata
+            );
+        }
+
+        // Strict SsrfSafeDnsResolver (allow_loopback = false) blocks resolved loopback and RFC1918 IPs
+        let err_loopback = reqwest::dns::Resolve::resolve(
+            &SsrfSafeDnsResolver::new(false),
+            "localhost".parse().unwrap(),
+        )
+        .await
+        .err()
+        .expect("loopback host must be blocked when allow_loopback=false");
+        assert!(
+            err_loopback.to_string().contains("SSRF guard blocked"),
+            "Unexpected DNS resolver error: {}",
+            err_loopback
+        );
+
+        let err_private = filter_resolved_addrs(
+            vec!["10.255.255.1:443".parse().unwrap()],
+            "evil.example.org",
+            false,
+        )
+        .unwrap_err();
+        assert_eq!(err_private.kind(), std::io::ErrorKind::PermissionDenied);
     }
 }

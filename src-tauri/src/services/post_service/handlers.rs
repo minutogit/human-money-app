@@ -381,10 +381,10 @@ async fn handle_transaction_bundle(
                 baseline_post_state,
                 post_state,
                 |ps, result| {
-                    ps.processed_msg_ids.insert(super::scoped_processed_msg_key(
-                        ctx.sender_did,
-                        &ctx.envelope.msg_id,
-                    ));
+                    ps.processed_msg_ids.insert(
+                        super::scoped_processed_msg_key(ctx.sender_did, &ctx.envelope.msg_id),
+                        ctx.now_secs,
+                    );
                     queue_ack_receipt(ctx, ps, Some(&result.header.bundle_id));
                 },
             )? {
@@ -613,12 +613,10 @@ fn handle_detached_signature(
             ctx.password,
         )?;
         queue_ack_receipt(ctx, &mut candidate_ps, None);
-        candidate_ps
-            .processed_msg_ids
-            .insert(super::scoped_processed_msg_key(
-                ctx.sender_did,
-                &ctx.envelope.msg_id,
-            ));
+        candidate_ps.processed_msg_ids.insert(
+            super::scoped_processed_msg_key(ctx.sender_did, &ctx.envelope.msg_id),
+            ctx.now_secs,
+        );
 
         let companion_ps = std::cell::RefCell::new(Some(candidate_ps));
         match service.process_and_attach_signature_with_companions(

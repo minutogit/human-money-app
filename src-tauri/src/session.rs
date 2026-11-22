@@ -37,6 +37,9 @@ pub struct ActiveProfileCaches {
     pub server_offenders: Option<humoco_wot::ServerOffenderList>,
     pub own_sync_descriptor: Option<Option<humoco_market::DropDescriptor>>,
     pub post_state: Option<crate::state::StoredPostState>,
+    pub card_store: Option<humoco_market::CardStore>,
+    pub sync_state: Option<crate::state::StoredSyncState>,
+    /// Keyed by `(blob_id, normalized_read_url)` storing unix expiration timestamp (`expires_at_secs`).
     pub media_negative_cache: std::collections::HashMap<(String, String), u64>,
 }
 

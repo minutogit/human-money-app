@@ -44,6 +44,16 @@ pub(crate) use outbox::{
 pub(crate) const MAX_PRUNED_OUTBOX_TAG16S: usize = 512;
 pub(crate) const MAX_POST_FUTURE_SKEW_SECS: u64 = 300;
 pub(crate) const POST_DEFERRED_RETRY_WINDOW_SECS: u64 = 86_400;
+/// Retain processed message IDs slightly longer than `POST_TTL_SECS` (30d vs 21d) to prevent replay after eviction.
+pub(crate) const PROCESSED_MSG_RETENTION_SECS: u64 = humoco_market::POST_TTL_SECS + 9 * 86_400;
+
+/// Prunes expired `processed_msg_ids` entries older than `PROCESSED_MSG_RETENTION_SECS`.
+pub(crate) fn prune_expired_processed_msg_ids(
+    map: &mut std::collections::BTreeMap<String, u64>,
+    now_secs: u64,
+) {
+    map.retain(|_, ts| ts.saturating_add(PROCESSED_MSG_RETENTION_SECS) > now_secs);
+}
 
 /// Clamps an untrusted peer timestamp to at most `now_secs + MAX_POST_FUTURE_SKEW_SECS`.
 pub(crate) fn clamp_post_ts(ts: u64, now_secs: u64) -> u64 {
@@ -423,9 +433,14 @@ pub(crate) fn merge_post_state_with_service(
             &mut working.slot_etags_by_write_url,
             &latest.slot_etags_by_write_url,
         );
-        for id in &latest.processed_msg_ids {
-            working.processed_msg_ids.insert(id.clone());
-        }
+        let now_secs = chrono::Utc::now().timestamp().max(0) as u64;
+        prune_expired_processed_msg_ids(&mut working.processed_msg_ids, now_secs);
+        merge_btree_map_3way(
+            &baseline.processed_msg_ids,
+            &mut working.processed_msg_ids,
+            &latest.processed_msg_ids,
+        );
+        prune_expired_processed_msg_ids(&mut working.processed_msg_ids, now_secs);
         merge_vec_by_id(
             &baseline.pending_sign_requests,
             &mut working.pending_sign_requests,
@@ -783,8 +798,7 @@ impl CounterpartyInfoResolver {
 }
 
 /// Resolves `(display_name, picture_url, is_contact)` for a DID across the
-/// address book and the local marketplace business-card store.
-/// Resolves `(display_name, picture_url, is_contact)` for a DID using an already-locked `AppService`.
+/// address book and local marketplace card store using an already-locked `AppService`.
 pub(crate) fn resolve_counterparty_info_with_service(
     state: &AppState,
     service: &mut human_money_core::app_service::AppService,

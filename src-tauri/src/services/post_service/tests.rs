@@ -1918,17 +1918,18 @@ async fn test_merge_and_save_post_state_preserves_concurrent_outbox_and_auto_imp
         .unwrap();
 
     // Finding 2: merge_and_save_post_state preserves concurrent outbox entries written while poll ran
+    let now_ts = chrono::Utc::now().timestamp().max(0) as u64;
     let baseline = load_post_state(&alice_state, Some(password)).unwrap();
     let mut stale_poll_state = baseline.clone();
     stale_poll_state
         .processed_msg_ids
-        .insert("polled-msg-1".to_string());
+        .insert("polled-msg-1".to_string(), now_ts);
 
     {
         let mut concurrent_state = load_post_state(&alice_state, Some(password)).unwrap();
         concurrent_state
             .processed_msg_ids
-            .insert("concurrent-outbox-1".to_string());
+            .insert("concurrent-outbox-1".to_string(), now_ts);
         let dummy_box = humoco_market::PostBoxEntry {
             msg_nonce: [8u8; 24],
             tag16: [9u8; 16],
@@ -1958,8 +1959,8 @@ async fn test_merge_and_save_post_state_preserves_concurrent_outbox_and_auto_imp
     )
     .unwrap();
     let merged = load_post_state(&alice_state, Some(password)).unwrap();
-    assert!(merged.processed_msg_ids.contains("concurrent-outbox-1"));
-    assert!(merged.processed_msg_ids.contains("polled-msg-1"));
+    assert!(merged.processed_msg_ids.contains_key("concurrent-outbox-1"));
+    assert!(merged.processed_msg_ids.contains_key("polled-msg-1"));
     assert_eq!(merged.outbox_entries.len(), 1);
     assert_eq!(merged.outbox_entries[0].msg_id, "concurrent-outbox-1");
     save_post_state(&alice_state, &StoredPostState::default(), Some(password)).unwrap();
@@ -4771,6 +4772,73 @@ async fn s10_f7_f8_locator_ordering_retry_and_accept_wot_preserves_contact() {
     );
     assert_eq!(ps.outbox_entries.len(), outbox_before);
     let _ = alice_did;
+
+    let _ = std::fs::remove_dir_all(&base_dir);
+}
+
+#[test]
+fn s10_q2_processed_msg_ids_30d_retention_and_no_resurrection_on_merge() {
+    let base_dir = temp_test_dir("s10_q2_retention");
+    let password = "TestPassword123!";
+    let alice_state = create_test_state(setup_test_app(
+        &base_dir.join("alice"),
+        "Alice",
+        ALICE_PHRASE,
+        password,
+    ));
+
+    let now_secs = chrono::Utc::now().timestamp().max(0) as u64;
+    let exact_expiry = now_secs.saturating_sub(super::PROCESSED_MSG_RETENTION_SECS);
+    let fresh_ts = now_secs.saturating_sub(humoco_market::POST_TTL_SECS);
+
+    let mut map = std::collections::BTreeMap::new();
+    map.insert("expired-exact".to_string(), exact_expiry);
+    map.insert(
+        "expired-older".to_string(),
+        exact_expiry.saturating_sub(100),
+    );
+    map.insert("fresh-within-ttl".to_string(), fresh_ts);
+    map.insert("fresh-recent".to_string(), now_secs);
+    super::prune_expired_processed_msg_ids(&mut map, now_secs);
+    assert!(!map.contains_key("expired-exact"));
+    assert!(!map.contains_key("expired-older"));
+    assert!(map.contains_key("fresh-within-ttl"));
+    assert!(map.contains_key("fresh-recent"));
+
+    // 3-way merge must NOT resurrect pruned expired IDs from `latest`, while keeping concurrent inserts
+    let mut baseline = StoredPostState::default();
+    baseline
+        .processed_msg_ids
+        .insert("old-key".to_string(), exact_expiry.saturating_sub(50));
+    baseline
+        .processed_msg_ids
+        .insert("keep-key".to_string(), now_secs);
+
+    let mut latest = baseline.clone();
+    latest
+        .processed_msg_ids
+        .insert("concurrent-new".to_string(), now_secs);
+
+    let mut working = baseline.clone();
+    super::prune_expired_processed_msg_ids(&mut working.processed_msg_ids, now_secs);
+    working
+        .processed_msg_ids
+        .insert("worker-new".to_string(), now_secs);
+
+    {
+        let mut s = alice_state.service.lock().unwrap();
+        super::save_post_state_with_service(&alice_state, &mut s, &latest, Some(password)).unwrap();
+        super::merge_post_state_with_service(&mut s, &baseline, &mut working, Some(password))
+            .unwrap();
+    }
+
+    assert!(
+        !working.processed_msg_ids.contains_key("old-key"),
+        "Pruned expired processed_msg_id must NOT be resurrected during 3-way merge"
+    );
+    assert!(working.processed_msg_ids.contains_key("keep-key"));
+    assert!(working.processed_msg_ids.contains_key("concurrent-new"));
+    assert!(working.processed_msg_ids.contains_key("worker-new"));
 
     let _ = std::fs::remove_dir_all(&base_dir);
 }

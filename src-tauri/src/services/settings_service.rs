@@ -197,13 +197,17 @@ pub fn patch_security_policy_impl(
 ) -> Result<SecurityPolicy, FrontendError> {
     info!("Patching SecurityPolicy...");
     patch.validate().map_err(FrontendError::from)?;
-    let mut service = state.authorize_and_lock(RequiredAccess::Full, password.as_deref())?;
+    let password_z = password.map(zeroize::Zeroizing::new);
+    let pw = password_z.as_deref().map(String::as_str);
+    let mut service = state.authorize_and_lock(RequiredAccess::Full, pw)?;
     let mut wake = crate::state::SyncWakeRequest::default();
+    let mut prev_timeout = 0u64;
     let updated = state
-        .mutate_security_policy(&mut service, password.as_deref(), |policy| {
+        .mutate_security_policy(&mut service, pw, |policy| {
             let was_sync_backup = policy.sync_backup_enabled;
             let was_auto_backup = policy.auto_backup_enabled;
             let prev_folder = policy.backup_sync_folder.clone();
+            prev_timeout = policy.session_timeout_seconds;
             patch.apply_to(policy);
             wake = crate::state::SyncWakeRequest {
                 sync_backup: !was_sync_backup && policy.sync_backup_enabled,
@@ -218,7 +222,18 @@ pub fn patch_security_policy_impl(
     if updated.session_timeout_seconds == 0 {
         service.lock_session();
         state.clear_one_shot_pin_grant();
-    } else if !wake.is_empty() {
+    } else if updated.session_timeout_seconds < prev_timeout && service.is_session_active() {
+        let re_unlocked = pw.is_some_and(|secret| {
+            service
+                .unlock_session(secret, updated.session_timeout_seconds)
+                .is_ok()
+        });
+        if !re_unlocked {
+            service.lock_session();
+            state.clear_one_shot_pin_grant();
+        }
+    }
+    if service.is_session_active() && !wake.is_empty() {
         state.wake_sync_coordinator(wake);
     }
     Ok(updated)
@@ -621,6 +636,73 @@ mod tests {
         )
         .unwrap();
         assert!(state.sync_control_snapshot().pending_wake.local_backup);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn s11_q3_shortening_nonzero_session_timeout_takes_effect_immediately() {
+        let dir = crate::test_support::temp_test_dir("s11_q3_shorten_timeout");
+        let pw = "MasterPass-Timeout-2026!";
+        let state = AppState::new(crate::test_support::setup_test_app(
+            &dir.join("wallet"),
+            "Timeout Tester",
+            crate::test_support::ALICE_PHRASE,
+            pw,
+        ));
+
+        {
+            let mut svc = state.service.lock().unwrap();
+            let mut sec = state
+                .get_or_load_security_policy(&mut svc, Some(pw))
+                .unwrap();
+            sec.session_timeout_seconds = 3600;
+            state.save_security_policy(&mut svc, sec, Some(pw)).unwrap();
+            svc.unlock_session(pw, 3600).unwrap();
+            assert!(svc.is_session_active());
+        }
+
+        // 1. Lengthening timeout without password leaves active session untouched
+        let longer = patch_security_policy_impl(
+            SecurityPolicyPatch {
+                session_timeout_seconds: Some(7200),
+                ..Default::default()
+            },
+            None,
+            &state,
+        )
+        .unwrap();
+        assert_eq!(longer.session_timeout_seconds, 7200);
+        assert!(state.service.lock().unwrap().is_session_active());
+
+        // 2. Shortening timeout WITH master password re-unlocks under shorter duration (stays active)
+        let shorter_with_pw = patch_security_policy_impl(
+            SecurityPolicyPatch {
+                session_timeout_seconds: Some(1800),
+                ..Default::default()
+            },
+            Some(pw.to_string()),
+            &state,
+        )
+        .unwrap();
+        assert_eq!(shorter_with_pw.session_timeout_seconds, 1800);
+        assert!(state.service.lock().unwrap().is_session_active());
+
+        // 3. Shortening timeout WITHOUT password immediately locks the active session
+        let shorter_without_pw = patch_security_policy_impl(
+            SecurityPolicyPatch {
+                session_timeout_seconds: Some(60),
+                ..Default::default()
+            },
+            None,
+            &state,
+        )
+        .unwrap();
+        assert_eq!(shorter_without_pw.session_timeout_seconds, 60);
+        assert!(
+            !state.service.lock().unwrap().is_session_active(),
+            "Shortening timeout without password must lock session immediately"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
