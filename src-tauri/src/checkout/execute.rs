@@ -11,107 +11,172 @@ use human_money_core::services::{bundle_processor, l2_gateway};
 
 use crate::{models::FrontendError, settings::InternalLifecycleState, sync_client, AppState};
 
-/// Sync-Lock committee checkout orchestration.
-///
-/// - `N = 0` (`layer2_anchor == None`): Returns `OfflineOnly` verdict requiring manual trust approval.
-/// - `N >= 1`: Prepares Leap-Lock `m..=k` `SyncLockBatchRequest` payloads, fans them out in parallel
-///   across the voucher's `AnchorManifest` committee, records any returned `ConflictSeen` evidence,
-///   and evaluates Green / Yellow / Red via `l2_gateway::evaluate_bundle_checkout`.
+struct PreparedCheckoutContext {
+    opened_bundle: human_money_core::models::profile::TransactionBundle,
+    voucher: human_money_core::Voucher,
+    anchor_id: [u8; 32],
+    merchant_id: String,
+    guarantor_dids: Vec<String>,
+    security_policy: crate::settings::SecurityPolicy,
+    active_lifecycle: InternalLifecycleState,
+    client: reqwest::Client,
+    pow_base_bits: u32,
+    context: human_money_core::app_service::checkout::CheckoutChallengeContext,
+    requests: Vec<(
+        human_money_core::humoco_proto::ServerEntry,
+        human_money_core::models::layer2_api::SyncLockBatchRequest,
+    )>,
+}
+
+enum PreDispatchCheckoutOutcome {
+    Early(Box<PurchaseCompletion>),
+    Prepared(Box<PreparedCheckoutContext>),
+}
+
+struct CommitteeCheckoutDispatch {
+    context: human_money_core::app_service::checkout::CheckoutChallengeContext,
+    active_lifecycle: InternalLifecycleState,
+    dispatch: crate::gateway_resolver::CommitteeDispatchResult,
+    base_trusted_keys: Vec<LockPubKey>,
+    independently_pinned_creator_keys: Vec<LockPubKey>,
+    all_competing_entries: Vec<human_money_core::models::layer2_api::LockEntry>,
+    all_receipts_for_equiv: Vec<human_money_core::humoco_proto::types::LockReceipt>,
+}
+
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn checkout_bundle(
+fn build_uncommitted_receive_completion(
+    state: &AppState,
+    service: &mut human_money_core::app_service::AppService,
+    purchase_id: &str,
+    bundle: &[u8],
+    standards: &HashMap<String, String>,
+    is_replay: bool,
+    verdict_fe: crate::models::FrontendCheckoutReleaseVerdict,
+    password: Option<&str>,
+) -> PurchaseCompletion {
+    let receive_payload = build_receive_payload_and_record(
+        state,
+        service,
+        purchase_id,
+        bundle,
+        standards,
+        false,
+        is_replay,
+        verdict_fe.clone(),
+        None,
+        password,
+    )
+    .map(|(p, _)| p)
+    .ok();
+    PurchaseCompletion {
+        purchase_id: purchase_id.to_string(),
+        newly_committed: false,
+        is_replay,
+        verdict: verdict_fe,
+        receive_payload,
+    }
+}
+
+fn try_replay_completed_purchase(
     state: &AppState,
     session: &crate::session::SessionToken,
     purchase_id: &str,
     bundle: &[u8],
     standards: &HashMap<String, String>,
-    force_accept_tolerance_bundle: bool,
     password: Option<&str>,
-) -> Result<PurchaseCompletion, FrontendError> {
-    // 1. Idempotent replay check before any network I/O
+) -> Result<Option<PurchaseCompletion>, FrontendError> {
+    let mut service = state.lock_service()?;
+    if !state.is_session_current(session, &service) {
+        return Err(fail("Wallet session changed before checkout"));
+    }
+    let Some(completion) = service
+        .replay_checkout_purchase(purchase_id, bundle)
+        .map_err(FrontendError::from)?
+    else {
+        return Ok(None);
+    };
+
+    let mut verdict_fe: crate::models::FrontendCheckoutReleaseVerdict = completion.verdict.into();
+    if let Ok(Ok(b)) = service
+        .with_wallet_and_identity(|_, id| bundle_processor::open_and_verify_bundle(id, bundle))
     {
-        let mut service = state.lock_service()?;
-        if !state.is_session_current(session, &service) {
-            return Err(fail("Wallet session changed before checkout"));
-        }
-        if let Some(completion) = service
-            .replay_checkout_purchase(purchase_id, bundle)
-            .map_err(FrontendError::from)?
-        {
-            let mut verdict_fe: crate::models::FrontendCheckoutReleaseVerdict =
-                completion.verdict.into();
-            if let Ok(Ok(b)) = service.with_wallet_and_identity(|_, id| {
-                bundle_processor::open_and_verify_bundle(id, bundle)
-            }) {
-                if let Some(aid) = b.vouchers.first().and_then(|v| v.layer2_anchor) {
-                    let ahex = hex::encode(aid);
-                    let _ = service.with_wallet(|w| {
-                        if let Some(m) = w.profile.l2_anchor_manifests.get(&ahex) {
-                            verdict_fe.reduced_guarantor_protection =
-                                m.has_reduced_guarantor_protection().unwrap_or(false);
-                            verdict_fe.manifest_revision = Some(m.revision);
-                        }
-                    });
+        if let Some(aid) = b.vouchers.first().and_then(|v| v.layer2_anchor) {
+            let ahex = hex::encode(aid);
+            let _ = service.with_wallet(|w| {
+                if let Some(m) = w.profile.l2_anchor_manifests.get(&ahex) {
+                    verdict_fe.reduced_guarantor_protection =
+                        m.has_reduced_guarantor_protection().unwrap_or(false);
+                    verdict_fe.manifest_revision = Some(m.revision);
                 }
-            }
-
-            let replay_l2_quorum = if verdict_fe.outcome == "Confirmed" {
-                service
-                    .with_wallet_and_identity(|w, id| {
-                        let b = bundle_processor::open_and_verify_bundle(id, bundle).ok()?;
-                        let aid = b.vouchers.first()?.layer2_anchor?;
-                        let manifest = w.profile.l2_anchor_manifests.get(&hex::encode(aid))?;
-                        Some(crate::models::FrontendL2QuorumDto {
-                            status: "final".to_string(),
-                            signer_count: Some(manifest.threshold as usize),
-                            active_nodes_count: Some(manifest.servers.len()),
-                            details: None,
-                        })
-                    })
-                    .ok()
-                    .flatten()
-            } else {
-                None
-            };
-
-            let (receive_payload, replay_record_opt) = build_receive_payload_and_record(
-                state,
-                &mut service,
-                purchase_id,
-                bundle,
-                standards,
-                false,
-                true,
-                verdict_fe.clone(),
-                replay_l2_quorum,
-                password,
-            )
-            .map(|(payload, rec)| (Some(payload), rec))
-            .unwrap_or((None, None));
-            if let Some(rec) = replay_record_opt {
-                let history = state
-                    .load_history_from_disk(&mut service, password)
-                    .map_err(FrontendError::from)?;
-                let already_recorded = !rec.bundle_id.is_empty()
-                    && history
-                        .iter()
-                        .any(|r| r.bundle_id == rec.bundle_id && r.direction == rec.direction);
-                if !already_recorded {
-                    state
-                        .append_to_history(&mut service, rec, password)
-                        .map_err(FrontendError::from)?;
-                }
-            }
-
-            return Ok(PurchaseCompletion {
-                purchase_id: completion.purchase_id,
-                newly_committed: completion.newly_committed,
-                is_replay: true,
-                verdict: verdict_fe,
-                receive_payload,
             });
         }
     }
 
+    let replay_l2_quorum = if verdict_fe.outcome == "Confirmed" {
+        service
+            .with_wallet_and_identity(|w, id| {
+                let b = bundle_processor::open_and_verify_bundle(id, bundle).ok()?;
+                let aid = b.vouchers.first()?.layer2_anchor?;
+                let manifest = w.profile.l2_anchor_manifests.get(&hex::encode(aid))?;
+                Some(crate::models::FrontendL2QuorumDto {
+                    status: "final".to_string(),
+                    signer_count: Some(manifest.threshold as usize),
+                    active_nodes_count: Some(manifest.servers.len()),
+                    details: None,
+                })
+            })
+            .ok()
+            .flatten()
+    } else {
+        None
+    };
+
+    let (receive_payload, replay_record_opt) = build_receive_payload_and_record(
+        state,
+        &mut service,
+        purchase_id,
+        bundle,
+        standards,
+        false,
+        true,
+        verdict_fe.clone(),
+        replay_l2_quorum,
+        password,
+    )
+    .map(|(payload, rec)| (Some(payload), rec))
+    .unwrap_or((None, None));
+    if let Some(rec) = replay_record_opt {
+        let history = state
+            .load_history_from_disk(&mut service, password)
+            .map_err(FrontendError::from)?;
+        let already_recorded = !rec.bundle_id.is_empty()
+            && history
+                .iter()
+                .any(|r| r.bundle_id == rec.bundle_id && r.direction == rec.direction);
+        if !already_recorded {
+            state
+                .append_to_history(&mut service, rec, password)
+                .map_err(FrontendError::from)?;
+        }
+    }
+
+    Ok(Some(PurchaseCompletion {
+        purchase_id: completion.purchase_id,
+        newly_committed: completion.newly_committed,
+        is_replay: true,
+        verdict: verdict_fe,
+        receive_payload,
+    }))
+}
+
+async fn prepare_checkout_bundle_requests(
+    state: &AppState,
+    session: &crate::session::SessionToken,
+    purchase_id: &str,
+    bundle: &[u8],
+    standards: &HashMap<String, String>,
+    password: Option<&str>,
+) -> Result<PreDispatchCheckoutOutcome, FrontendError> {
     // 2. Decrypt & inspect bundle to check replay history and N = 0 offline-only vs anchored vouchers
     let (opened_bundle, merchant_id, already_in_history) = state.with_session_required(
         session,
@@ -136,7 +201,7 @@ pub(crate) async fn checkout_bundle(
     )?;
 
     if already_in_history {
-        let (verdict_fe, receive_payload) = state.with_session_required(
+        let completion = state.with_session_required(
             session,
             "Wallet session changed during checkout",
             |service| {
@@ -180,30 +245,19 @@ pub(crate) async fn checkout_bundle(
                 };
                 let verdict_fe: crate::models::FrontendCheckoutReleaseVerdict =
                     CheckoutReleaseVerdict::new(replay_outcome, false).into();
-                let receive_payload = build_receive_payload_and_record(
+                Ok(build_uncommitted_receive_completion(
                     state,
                     service,
                     purchase_id,
                     bundle,
                     standards,
-                    false,
                     true,
-                    verdict_fe.clone(),
-                    None,
+                    verdict_fe,
                     password,
-                )
-                .map(|(p, _)| p)
-                .ok();
-                Ok((verdict_fe, receive_payload))
+                ))
             },
         )?;
-        return Ok(PurchaseCompletion {
-            purchase_id: purchase_id.to_string(),
-            newly_committed: false,
-            is_replay: true,
-            verdict: verdict_fe,
-            receive_payload,
-        });
+        return Ok(PreDispatchCheckoutOutcome::Early(Box::new(completion)));
     }
 
     if opened_bundle.vouchers.is_empty() {
@@ -214,73 +268,55 @@ pub(crate) async fn checkout_bundle(
         .iter()
         .all(|v| v.layer2_anchor.is_none())
     {
-        let verdict_core = CheckoutReleaseVerdict::new(L2ProcessingOutcome::OfflineOnly, false);
-        let verdict_fe: crate::models::FrontendCheckoutReleaseVerdict = verdict_core.into();
-        let receive_payload = state.with_session_required(
+        let verdict_fe: crate::models::FrontendCheckoutReleaseVerdict =
+            CheckoutReleaseVerdict::new(L2ProcessingOutcome::OfflineOnly, false).into();
+        let completion = state.with_session_required(
             session,
             "Wallet session changed during checkout",
             |service| {
-                Ok(build_receive_payload_and_record(
+                Ok(build_uncommitted_receive_completion(
                     state,
                     service,
                     purchase_id,
                     bundle,
                     standards,
                     false,
-                    false,
-                    verdict_fe.clone(),
-                    None,
+                    verdict_fe,
                     password,
-                )
-                .map(|(p, _)| p)
-                .ok())
+                ))
             },
         )?;
-        return Ok(PurchaseCompletion {
-            purchase_id: purchase_id.to_string(),
-            newly_committed: false,
-            is_replay: false,
-            verdict: verdict_fe,
-            receive_payload,
-        });
+        return Ok(PreDispatchCheckoutOutcome::Early(Box::new(completion)));
     }
 
     if opened_bundle.vouchers.len() != 1 {
-        let verdict_core = CheckoutReleaseVerdict::new(
-            L2ProcessingOutcome::Yellow {
-                reason: "MultiVoucherManualApproval".to_string(),
-            },
-            false,
-        );
-        let verdict_fe: crate::models::FrontendCheckoutReleaseVerdict = verdict_core.into();
-        let receive_payload = state.with_session_required(
+        let verdict_fe: crate::models::FrontendCheckoutReleaseVerdict =
+            CheckoutReleaseVerdict::new(
+                L2ProcessingOutcome::Yellow {
+                    reason: "MultiVoucherManualApproval".to_string(),
+                },
+                false,
+            )
+            .into();
+        let completion = state.with_session_required(
             session,
             "Wallet session changed during checkout",
             |service| {
-                Ok(build_receive_payload_and_record(
+                Ok(build_uncommitted_receive_completion(
                     state,
                     service,
                     purchase_id,
                     bundle,
                     standards,
                     false,
-                    false,
-                    verdict_fe.clone(),
-                    None,
+                    verdict_fe,
                     password,
-                )
-                .map(|(p, _)| p)
-                .ok())
+                ))
             },
         )?;
-        return Ok(PurchaseCompletion {
-            purchase_id: purchase_id.to_string(),
-            newly_committed: false,
-            is_replay: false,
-            verdict: verdict_fe,
-            receive_payload,
-        });
+        return Ok(PreDispatchCheckoutOutcome::Early(Box::new(completion)));
     }
+
     let voucher = opened_bundle.vouchers[0].clone();
     let anchor_id = voucher
         .layer2_anchor
@@ -291,7 +327,7 @@ pub(crate) async fn checkout_bundle(
         .filter(|s| s.role.eq_ignore_ascii_case("guarantor"))
         .map(|s| s.signer_id.clone())
         .collect();
-    let (security_policy, mut active_lifecycle) = state.with_session_required(
+    let (security_policy, active_lifecycle) = state.with_session_required(
         session,
         "Wallet session changed during checkout",
         |service| {
@@ -333,7 +369,7 @@ pub(crate) async fn checkout_bundle(
             ))
         },
     )?;
-    let (mut context, mut requests) = match first_prepare {
+    let (context, requests) = match first_prepare {
         Ok(pair) => pair,
         Err(_) => {
             let discovered = crate::l2_lifecycle::discover_anchor_manifest(
@@ -386,45 +422,74 @@ pub(crate) async fn checkout_bundle(
                         "Checkout manifest unavailable after discovery (offline/unreachable): {}",
                         prep_err
                     );
-                    let verdict_core = CheckoutReleaseVerdict::new(
-                        L2ProcessingOutcome::Yellow {
-                            reason: "Protection committee manifest unavailable (offline/unreachable); manual trust approval required".to_string(),
-                        },
-                        false,
-                    );
                     let verdict_fe: crate::models::FrontendCheckoutReleaseVerdict =
-                        verdict_core.into();
-                    let receive_payload = state.with_session_required(
+                        CheckoutReleaseVerdict::new(
+                            L2ProcessingOutcome::Yellow {
+                                reason: "Protection committee manifest unavailable (offline/unreachable); manual trust approval required".to_string(),
+                            },
+                            false,
+                        )
+                        .into();
+                    let completion = state.with_session_required(
                         session,
                         "Wallet session changed during checkout",
                         |service| {
-                            Ok(build_receive_payload_and_record(
+                            Ok(build_uncommitted_receive_completion(
                                 state,
                                 service,
                                 purchase_id,
                                 bundle,
                                 standards,
                                 false,
-                                false,
-                                verdict_fe.clone(),
-                                None,
+                                verdict_fe,
                                 password,
-                            )
-                            .map(|(p, _)| p)
-                            .ok())
+                            ))
                         },
                     )?;
-                    return Ok(PurchaseCompletion {
-                        purchase_id: purchase_id.to_string(),
-                        newly_committed: false,
-                        is_replay: false,
-                        verdict: verdict_fe,
-                        receive_payload,
-                    });
+                    return Ok(PreDispatchCheckoutOutcome::Early(Box::new(completion)));
                 }
             }
         }
     };
+
+    Ok(PreDispatchCheckoutOutcome::Prepared(Box::new(
+        PreparedCheckoutContext {
+            opened_bundle,
+            voucher,
+            anchor_id,
+            merchant_id,
+            guarantor_dids,
+            security_policy,
+            active_lifecycle,
+            client,
+            pow_base_bits,
+            context,
+            requests,
+        },
+    )))
+}
+
+async fn dispatch_checkout_with_upgrade_and_equivocation(
+    state: &AppState,
+    session: &crate::session::SessionToken,
+    purchase_id: &str,
+    bundle: &[u8],
+    prep: PreparedCheckoutContext,
+    password: Option<&str>,
+) -> Result<CommitteeCheckoutDispatch, FrontendError> {
+    let PreparedCheckoutContext {
+        opened_bundle,
+        voucher,
+        anchor_id,
+        guarantor_dids,
+        security_policy,
+        mut active_lifecycle,
+        client,
+        mut pow_base_bits,
+        mut context,
+        mut requests,
+        ..
+    } = prep;
 
     // 4. Resolve trusted LockPubKeys & fan out committee batches in parallel
     let (mut base_trusted_keys, mut independently_pinned_creator_keys) = resolve_trusted_lock_keys(
@@ -599,31 +664,241 @@ pub(crate) async fn checkout_bundle(
         independently_pinned_creator_keys.retain(keep_key);
     }
 
+    Ok(CommitteeCheckoutDispatch {
+        context,
+        active_lifecycle,
+        dispatch,
+        base_trusted_keys,
+        independently_pinned_creator_keys,
+        all_competing_entries,
+        all_receipts_for_equiv,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn commit_confirmed_checkout(
+    state: &AppState,
+    mut service: std::sync::MutexGuard<'_, human_money_core::app_service::AppService>,
+    purchase_id: &str,
+    bundle: &[u8],
+    standards: &HashMap<String, String>,
+    force_accept_tolerance_bundle: bool,
+    client: &reqwest::Client,
+    commit_ctx: CommitteeCheckoutDispatch,
+    quorum_certificates: &[human_money_core::humoco_proto::types::QuorumCertificate],
+    reduced_guarantor_protection: bool,
+    manifest_revision: Option<u64>,
+    password: Option<&str>,
+) -> Result<PurchaseCompletion, FrontendError> {
+    let signer_count = quorum_certificates
+        .last()
+        .map(|qc| qc.receipts.len())
+        .or(Some(commit_ctx.context.manifest.threshold as usize));
+    let active_nodes_count = Some(commit_ctx.context.manifest.servers.len());
+    let l2_quorum = Some(crate::models::FrontendL2QuorumDto {
+        status: "final".to_string(),
+        signer_count,
+        active_nodes_count,
+        details: None,
+    });
+
+    let baseline_history = state
+        .load_history_from_disk(&mut service, password)
+        .map_err(FrontendError::from)?;
+    let next_history_cell = std::cell::RefCell::new(None::<Vec<crate::models::TransactionRecord>>);
+    let completion = service
+        .complete_checkout_purchase_with_companions(
+            purchase_id,
+            bundle,
+            &commit_ctx.dispatch.receipts,
+            &commit_ctx.base_trusted_keys,
+            &commit_ctx.independently_pinned_creator_keys,
+            standards,
+            now()?,
+            force_accept_tolerance_bundle,
+            password,
+            |res, wallet| {
+                let involved_vouchers_ids: Vec<String> = res
+                    .involved_vouchers_details
+                    .iter()
+                    .map(|d| d.local_instance_id.clone())
+                    .collect();
+                let record = crate::models::TransactionRecord {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    direction: "received".to_string(),
+                    recipient_id: wallet.get_user_id().to_string(),
+                    sender_id: res.header.sender_id.clone(),
+                    timestamp: chrono::Utc::now().to_rfc3339(),
+                    summable_amounts: res.transfer_summary.summable_amounts.clone(),
+                    countable_items: res.transfer_summary.countable_items.clone(),
+                    involved_vouchers: if involved_vouchers_ids.is_empty() {
+                        res.involved_vouchers.clone()
+                    } else {
+                        involved_vouchers_ids
+                    },
+                    involved_sources_details: Some(
+                        res.involved_vouchers_details
+                            .iter()
+                            .cloned()
+                            .map(Into::into)
+                            .collect(),
+                    ),
+                    bundle_data: Vec::new(),
+                    bundle_id: res.header.bundle_id.clone(),
+                    notes: res
+                        .header
+                        .notes
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string),
+                    sender_profile_name: res.header.sender_profile_name.clone(),
+                };
+                let (blobs, next_hist) =
+                    crate::state::prepare_receive_history_companion(&baseline_history, record)
+                        .map_err(|e| {
+                            human_money_core::Error::Storage(
+                                human_money_core::StorageError::InvalidFormat(e.message),
+                            )
+                        })?;
+                *next_history_cell.borrow_mut() = Some(next_hist);
+                Ok(blobs)
+            },
+        )
+        .map_err(FrontendError::from)?;
+
+    if let Some(next_hist) = next_history_cell.into_inner() {
+        state.write_cache_slot_for_service(&service, |c| &mut c.history, Some(next_hist));
+    }
+    if let Err(error) = state.refresh_events_cache(&mut service, password) {
+        log::warn!("Checkout committed; event cache refresh failed: {}", error);
+    }
+
+    let mut verdict_fe: crate::models::FrontendCheckoutReleaseVerdict = completion.verdict.into();
+    verdict_fe.reduced_guarantor_protection = reduced_guarantor_protection;
+    verdict_fe.manifest_revision = manifest_revision;
+
+    let is_replay = !completion.newly_committed;
+    let (receive_payload, _) = build_receive_payload_and_record(
+        state,
+        &mut service,
+        purchase_id,
+        bundle,
+        standards,
+        completion.newly_committed,
+        is_replay,
+        verdict_fe.clone(),
+        l2_quorum,
+        password,
+    )?;
+
+    // Catch-up background completion for any committee servers that timed out during Green checkout
+    if !commit_ctx.dispatch.pending_retries.is_empty() {
+        let retries = commit_ctx.dispatch.pending_retries;
+        let retry_client = client.clone();
+        let retry_probe_cache = commit_ctx.active_lifecycle.l2_probe_cache;
+        tokio::spawn(async move {
+            let _ = crate::gateway_resolver::dispatch_lock_committee_batches(
+                &retry_client,
+                &retries,
+                Duration::from_secs(4),
+                &retry_probe_cache,
+            )
+            .await;
+        });
+    }
+
+    drop(service);
+
+    Ok(PurchaseCompletion {
+        purchase_id: completion.purchase_id,
+        newly_committed: completion.newly_committed,
+        is_replay,
+        verdict: verdict_fe,
+        receive_payload: Some(receive_payload),
+    })
+}
+
+/// Sync-Lock committee checkout orchestration.
+///
+/// - `N = 0` (`layer2_anchor == None`): Returns `OfflineOnly` verdict requiring manual trust approval.
+/// - `N >= 1`: Prepares Leap-Lock `m..=k` `SyncLockBatchRequest` payloads, fans them out in parallel
+///   across the voucher's `AnchorManifest` committee, records any returned `ConflictSeen` evidence,
+///   and evaluates Green / Yellow / Red via `l2_gateway::evaluate_bundle_checkout`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn checkout_bundle(
+    state: &AppState,
+    session: &crate::session::SessionToken,
+    purchase_id: &str,
+    bundle: &[u8],
+    standards: &HashMap<String, String>,
+    force_accept_tolerance_bundle: bool,
+    password: Option<&str>,
+) -> Result<PurchaseCompletion, FrontendError> {
+    // 1. Idempotent replay check before any network I/O
+    if let Some(completion) =
+        try_replay_completed_purchase(state, session, purchase_id, bundle, standards, password)?
+    {
+        return Ok(completion);
+    }
+
+    // 2 & 3. Decrypt bundle, handle N = 0 / replay / multi-voucher gates, and prepare requests
+    let prep = match prepare_checkout_bundle_requests(
+        state,
+        session,
+        purchase_id,
+        bundle,
+        standards,
+        password,
+    )
+    .await?
+    {
+        PreDispatchCheckoutOutcome::Early(completion) => return Ok(*completion),
+        PreDispatchCheckoutOutcome::Prepared(boxed) => *boxed,
+    };
+
+    let voucher = prep.voucher.clone();
+    let anchor_id = prep.anchor_id;
+    let merchant_id = prep.merchant_id.clone();
+    let client = prep.client.clone();
+
+    // 4. Resolve trusted LockPubKeys, dispatch committee batches, handle 409/410 & equivocation
+    let commit_ctx = dispatch_checkout_with_upgrade_and_equivocation(
+        state,
+        session,
+        purchase_id,
+        bundle,
+        prep,
+        password,
+    )
+    .await?;
+
     // 5. Evaluate outcome under Green-Rule & LÜCKE-03 isolation
     let outcome = l2_gateway::evaluate_bundle_checkout(
         &voucher,
-        &context.manifest,
-        &context.target_slot,
-        &context.target_child_lock,
-        &context.recipient_nonce,
-        &dispatch.receipts,
+        &commit_ctx.context.manifest,
+        &commit_ctx.context.target_slot,
+        &commit_ctx.context.target_child_lock,
+        &commit_ctx.context.recipient_nonce,
+        &commit_ctx.dispatch.receipts,
         &merchant_id,
-        &base_trusted_keys,
-        &independently_pinned_creator_keys,
+        &commit_ctx.base_trusted_keys,
+        &commit_ctx.independently_pinned_creator_keys,
     );
 
-    let reduced_guarantor_protection = context
+    let reduced_guarantor_protection = commit_ctx
+        .context
         .manifest
         .has_reduced_guarantor_protection()
         .unwrap_or(false);
-    let manifest_revision = Some(context.manifest.revision);
+    let manifest_revision = Some(commit_ctx.context.manifest.revision);
 
     let mut service = state.lock_service()?;
     if !state.is_session_current(session, &service) {
         return Err(fail("Wallet changed during checkout"));
     }
 
-    for competing_entry in &all_competing_entries {
+    for competing_entry in &commit_ctx.all_competing_entries {
         if let Err(err) = service.record_checkout_upstream_conflict(
             bundle,
             competing_entry,
@@ -637,172 +912,42 @@ pub(crate) async fn checkout_bundle(
     crate::state::record_known_head_receipts(
         &mut service,
         &anchor_id,
-        &all_receipts_for_equiv,
+        &commit_ctx.all_receipts_for_equiv,
         password,
     )?;
 
     match outcome {
         L2ProcessingOutcome::Confirmed {
             ref quorum_certificates,
-        } => {
-            let signer_count = quorum_certificates
-                .last()
-                .map(|qc| qc.receipts.len())
-                .or(Some(context.manifest.threshold as usize));
-            let active_nodes_count = Some(context.manifest.servers.len());
-            let l2_quorum = Some(crate::models::FrontendL2QuorumDto {
-                status: "final".to_string(),
-                signer_count,
-                active_nodes_count,
-                details: None,
-            });
-
-            let baseline_history = state
-                .load_history_from_disk(&mut service, password)
-                .map_err(FrontendError::from)?;
-            let next_history_cell =
-                std::cell::RefCell::new(None::<Vec<crate::models::TransactionRecord>>);
-            let completion = service
-                .complete_checkout_purchase_with_companions(
-                    purchase_id,
-                    bundle,
-                    &dispatch.receipts,
-                    &base_trusted_keys,
-                    &independently_pinned_creator_keys,
-                    standards,
-                    now()?,
-                    force_accept_tolerance_bundle,
-                    password,
-                    |res, wallet| {
-                        let involved_vouchers_ids: Vec<String> = res
-                            .involved_vouchers_details
-                            .iter()
-                            .map(|d| d.local_instance_id.clone())
-                            .collect();
-                        let record = crate::models::TransactionRecord {
-                            id: uuid::Uuid::new_v4().to_string(),
-                            direction: "received".to_string(),
-                            recipient_id: wallet.get_user_id().to_string(),
-                            sender_id: res.header.sender_id.clone(),
-                            timestamp: chrono::Utc::now().to_rfc3339(),
-                            summable_amounts: res.transfer_summary.summable_amounts.clone(),
-                            countable_items: res.transfer_summary.countable_items.clone(),
-                            involved_vouchers: if involved_vouchers_ids.is_empty() {
-                                res.involved_vouchers.clone()
-                            } else {
-                                involved_vouchers_ids
-                            },
-                            involved_sources_details: Some(
-                                res.involved_vouchers_details
-                                    .iter()
-                                    .cloned()
-                                    .map(Into::into)
-                                    .collect(),
-                            ),
-                            bundle_data: Vec::new(),
-                            bundle_id: res.header.bundle_id.clone(),
-                            notes: res
-                                .header
-                                .notes
-                                .as_deref()
-                                .map(str::trim)
-                                .filter(|s| !s.is_empty())
-                                .map(str::to_string),
-                            sender_profile_name: res.header.sender_profile_name.clone(),
-                        };
-                        let (blobs, next_hist) = crate::state::prepare_receive_history_companion(
-                            &baseline_history,
-                            record,
-                        )
-                        .map_err(|e| {
-                            human_money_core::Error::Storage(
-                                human_money_core::StorageError::InvalidFormat(e.message),
-                            )
-                        })?;
-                        *next_history_cell.borrow_mut() = Some(next_hist);
-                        Ok(blobs)
-                    },
-                )
-                .map_err(FrontendError::from)?;
-
-            if let Some(next_hist) = next_history_cell.into_inner() {
-                state.write_cache_slot_for_service(&service, |c| &mut c.history, Some(next_hist));
-            }
-            if let Err(error) = state.refresh_events_cache(&mut service, password) {
-                log::warn!("Checkout committed; event cache refresh failed: {}", error);
-            }
-
-            let mut verdict_fe: crate::models::FrontendCheckoutReleaseVerdict =
-                completion.verdict.into();
-            verdict_fe.reduced_guarantor_protection = reduced_guarantor_protection;
-            verdict_fe.manifest_revision = manifest_revision;
-
-            let is_replay = !completion.newly_committed;
-            let (receive_payload, _) = build_receive_payload_and_record(
-                state,
-                &mut service,
-                purchase_id,
-                bundle,
-                standards,
-                completion.newly_committed,
-                is_replay,
-                verdict_fe.clone(),
-                l2_quorum,
-                password,
-            )?;
-
-            // Catch-up background completion for any committee servers that timed out during Green checkout
-            if !dispatch.pending_retries.is_empty() {
-                let retries = dispatch.pending_retries;
-                let retry_client = client.clone();
-                let retry_probe_cache = active_lifecycle.l2_probe_cache.clone();
-                tokio::spawn(async move {
-                    let _ = crate::gateway_resolver::dispatch_lock_committee_batches(
-                        &retry_client,
-                        &retries,
-                        Duration::from_secs(4),
-                        &retry_probe_cache,
-                    )
-                    .await;
-                });
-            }
-
-            drop(service);
-
-            Ok(PurchaseCompletion {
-                purchase_id: completion.purchase_id,
-                newly_committed: completion.newly_committed,
-                is_replay,
-                verdict: verdict_fe,
-                receive_payload: Some(receive_payload),
-            })
-        }
+        } => commit_confirmed_checkout(
+            state,
+            service,
+            purchase_id,
+            bundle,
+            standards,
+            force_accept_tolerance_bundle,
+            &client,
+            commit_ctx,
+            quorum_certificates,
+            reduced_guarantor_protection,
+            manifest_revision,
+            password,
+        ),
         L2ProcessingOutcome::Yellow { reason } => {
             let mut verdict_fe: crate::models::FrontendCheckoutReleaseVerdict =
                 CheckoutReleaseVerdict::new(L2ProcessingOutcome::Yellow { reason }, false).into();
             verdict_fe.reduced_guarantor_protection = reduced_guarantor_protection;
             verdict_fe.manifest_revision = manifest_revision;
-            let receive_payload = build_receive_payload_and_record(
+            Ok(build_uncommitted_receive_completion(
                 state,
                 &mut service,
                 purchase_id,
                 bundle,
                 standards,
                 false,
-                false,
-                verdict_fe.clone(),
-                None,
+                verdict_fe,
                 password,
-            )
-            .map(|(p, _)| p)
-            .ok();
-            Ok(PurchaseCompletion {
-                purchase_id: purchase_id.to_string(),
-                newly_committed: false,
-                is_replay: false,
-                verdict: verdict_fe,
-                receive_payload,
-            })
+            ))
         }
         L2ProcessingOutcome::Quarantined { reason } => {
             let mut verdict_fe: crate::models::FrontendCheckoutReleaseVerdict =
@@ -810,27 +955,16 @@ pub(crate) async fn checkout_bundle(
                     .into();
             verdict_fe.reduced_guarantor_protection = reduced_guarantor_protection;
             verdict_fe.manifest_revision = manifest_revision;
-            let receive_payload = build_receive_payload_and_record(
+            Ok(build_uncommitted_receive_completion(
                 state,
                 &mut service,
                 purchase_id,
                 bundle,
                 standards,
                 false,
-                false,
-                verdict_fe.clone(),
-                None,
+                verdict_fe,
                 password,
-            )
-            .map(|(p, _)| p)
-            .ok();
-            Ok(PurchaseCompletion {
-                purchase_id: purchase_id.to_string(),
-                newly_committed: false,
-                is_replay: false,
-                verdict: verdict_fe,
-                receive_payload,
-            })
+            ))
         }
         L2ProcessingOutcome::OfflineOnly => unreachable!("handled prior to anchored prepare"),
     }
