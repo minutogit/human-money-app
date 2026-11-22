@@ -147,6 +147,14 @@ export function GlobalFileDropZone({ children }: GlobalFileDropZoneProps) {
     if (!files || files.length === 0) return;
 
     const file = files[0];
+    const MAX_DROP_FILE_BYTES = 64 * 1024 * 1024;
+    if (file.size > MAX_DROP_FILE_BYTES) {
+      setDropFeedback({
+        status: 'error',
+        message: t('common.error', { defaultValue: 'File exceeds maximum supported size (64 MiB).' }),
+      });
+      return;
+    }
     let bytes: number[];
     try {
       const buf = await file.arrayBuffer();

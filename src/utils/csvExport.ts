@@ -29,7 +29,11 @@ export function escapeCsvField(value: unknown, delimiter = ';'): string {
     if (value === undefined || value === null) {
         return '';
     }
-    const str = String(value);
+    let str = String(value);
+    const isNumericLiteral = /^-?\d+(?:\.\d+)?$/.test(str);
+    if (!isNumericLiteral && (/^[\t\r ]*[=+\-@]/.test(str) || /^[\t\r]/.test(str))) {
+        str = `'${str}`;
+    }
     if (str.includes(delimiter) || str.includes('"') || str.includes('\n') || str.includes('\r')) {
         return `"${str.replace(/"/g, '""')}"`;
     }
@@ -117,14 +121,17 @@ export function buildStatementCsv(
 
         if (summableEntries.length > 0) {
             for (const [unit, amountStr] of summableEntries) {
-                const num = parseFloat(amountStr);
-                const signedNum = isNaN(num) 
-                    ? amountStr 
-                    : (isSent ? -Math.abs(num) : Math.abs(num));
-                
-                const formattedAmount = typeof signedNum === 'number' 
-                    ? signedNum.toFixed(2) 
-                    : (isSent ? `-${signedNum}` : signedNum);
+                const trimmedAmt = amountStr.trim();
+                let formattedAmount: string;
+                if (/^[+-]?\d+(?:\.\d+)?$/.test(trimmedAmt)) {
+                    const unsigned = trimmedAmt.replace(/^[+-]/, '');
+                    const [intPart, fracPart = ''] = unsigned.split('.');
+                    const paddedFrac = fracPart.length >= 2 ? fracPart : fracPart.padEnd(2, '0');
+                    const normalized = `${intPart}.${paddedFrac}`;
+                    formattedAmount = isSent ? `-${normalized}` : normalized;
+                } else {
+                    formattedAmount = isSent && !trimmedAmt.startsWith('-') ? `-${trimmedAmt}` : trimmedAmt;
+                }
 
                 const line = [
                     dateStr,

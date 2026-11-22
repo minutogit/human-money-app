@@ -81,8 +81,8 @@ export function useLoginFlow({ onLoginSuccess, onSwitchToCreate }: UseLoginFlowP
                 const availableProfiles = await authService.listProfiles();
                 if (!active) return;
                 setProfiles(availableProfiles);
-                if (availableProfiles.length > 0 && !selectedProfile) {
-                    setSelectedProfile(availableProfiles[0].folderName);
+                if (availableProfiles.length > 0) {
+                    setSelectedProfile((prev) => prev || availableProfiles[0].folderName);
                 }
             } catch (e) {
                 if (!active) return;
@@ -94,7 +94,8 @@ export function useLoginFlow({ onLoginSuccess, onSwitchToCreate }: UseLoginFlowP
         return () => {
             active = false;
         };
-    }, [selectedProfile, setFeedback, t]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     useEffect(() => {
         let active = true;
@@ -184,17 +185,18 @@ export function useLoginFlow({ onLoginSuccess, onSwitchToCreate }: UseLoginFlowP
 
         setIsLoggingIn(true);
         setFeedback('', null);
+        const profileToLogin = selectedProfile;
 
         setTimeout(async () => {
             try {
                 const localInstanceId = await authService.getLocalInstanceId();
                 await authService.loginWithPin({
-                    folderName: selectedProfile,
+                    folderName: profileToLogin,
                     pin,
                     cleanupOnLogin: true,
                     localInstanceId,
                 });
-                const loggedInProfile = profiles.find((p) => p.folderName === selectedProfile);
+                const loggedInProfile = profiles.find((p) => p.folderName === profileToLogin);
                 if (loggedInProfile) {
                     onLoginSuccess(loggedInProfile.profileName, loggedInProfile.folderName);
                 }
@@ -254,17 +256,18 @@ export function useLoginFlow({ onLoginSuccess, onSwitchToCreate }: UseLoginFlowP
 
         setIsLoggingIn(true);
         setFeedback('', null);
+        const profileToLogin = selectedProfile;
 
         setTimeout(async () => {
             try {
                 const localInstanceId = await authService.getLocalInstanceId();
                 await authService.login({
-                    folderName: selectedProfile,
+                    folderName: profileToLogin,
                     password,
                     cleanupOnLogin: true,
                     localInstanceId,
                 });
-                const loggedInProfile = profiles.find((p) => p.folderName === selectedProfile);
+                const loggedInProfile = profiles.find((p) => p.folderName === profileToLogin);
                 if (loggedInProfile) {
                     onLoginSuccess(loggedInProfile.profileName, loggedInProfile.folderName);
                 }

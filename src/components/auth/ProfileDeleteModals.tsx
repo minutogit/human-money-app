@@ -280,6 +280,7 @@ export const LoginDeleteModals: React.FC<LoginDeleteModalsProps> = ({
                             type="button"
                             variant="secondary"
                             onClick={onCancelConfirm}
+                            disabled={isDeleting}
                             className="flex-1 rounded-2xl"
                         >
                             {t('common.abort')}

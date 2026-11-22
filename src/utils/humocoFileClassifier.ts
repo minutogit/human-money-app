@@ -148,6 +148,7 @@ function classifyJsonObject(obj: Record<string, unknown>): HumocoFileClassificat
 
     if (
         Array.isArray(obj.lists) &&
+        obj.lists.length > 0 &&
         obj.lists.every((item) => typeof item === 'string')
     ) {
         return { kind: 'wot', source: 'magic', containerType: 'WotSyncPackage' };

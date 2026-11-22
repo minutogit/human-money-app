@@ -117,7 +117,8 @@ export function CreateNewProfile({
         return () => {
             active = false;
         };
-    }, [wordCount, selectedLanguage, t]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [wordCount, selectedLanguage]);
 
     useEffect(() => {
         if (!isBulkMode) return;

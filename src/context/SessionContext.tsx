@@ -76,6 +76,7 @@ interface PendingModalRequest {
     resolve: (value: unknown) => void;
     reject: (reason: unknown) => void;
     action: (password: string | null) => Promise<unknown>;
+    retriedExpired?: boolean;
 }
 
 const SessionContext = createContext<SessionContextType | null>(null);
@@ -582,10 +583,18 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         options?: ProtectActionOptions,
     ): Promise<T | void> => {
         try {
+            const expectedGen = sessionGenRef.current;
             const config = await settingsService.getConfig();
+            if (sessionGenRef.current !== expectedGen) {
+                throw new Error('Session changed');
+            }
             const timeout = config.securityPolicy.sessionTimeoutSeconds;
             setSessionTimeoutSeconds(timeout);
-            const needsStepUp = Boolean(options?.requireFullAccess && accessModeRef.current !== 'full');
+            const needsStepUp = Boolean(
+                options?.requireFullAccess &&
+                (accessModeRef.current !== 'full' ||
+                    (timeout === 0 && baseAccessModeRef.current !== 'full')),
+            );
             const sessionCredentialKind: 'password' | 'pin' =
                 baseAccessModeRef.current === 'dailyPay' ? 'pin' : 'password';
 
@@ -640,6 +649,19 @@ export function SessionProvider({ children }: { children: ReactNode }) {
             ) {
                 enqueuePendingRequest('stepUp', 'password', entry.action)
                     .then(entry.resolve, entry.reject);
+                return;
+            }
+            if (
+                entry.mode === 'session' &&
+                !entry.retriedExpired &&
+                actionErr instanceof Error &&
+                actionErr.message === 'SESSION_EXPIRED_RETRY'
+            ) {
+                enqueuePendingRequest(
+                    'session',
+                    baseAccessModeRef.current === 'dailyPay' ? 'pin' : 'password',
+                    entry.action,
+                ).then(entry.resolve, entry.reject);
                 return;
             }
             entry.reject(actionErr);

@@ -578,10 +578,13 @@ export function normalizeSyncUrlInput(raw: string): string {
     s = 'https://' + s;
   } else if (s.toLowerCase().startsWith('http://')) {
     const after = s.slice(7);
-    const host = after.split(/[/:]/)[0].toLowerCase();
+    const ipv6Match = after.match(/^(\[[^\]]+\])/);
+    const host = (ipv6Match ? ipv6Match[1] : after.split(/[/:]/)[0]).toLowerCase();
     if (host !== 'localhost' && host !== '127.0.0.1' && host !== '[::1]') {
       s = 'https://' + after;
     }
+  } else if (!s.toLowerCase().startsWith('https://')) {
+    return '';
   }
 
   s = s.replace(/[#?].*$/, '');

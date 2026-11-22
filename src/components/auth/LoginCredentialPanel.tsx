@@ -158,7 +158,8 @@ export const LoginCredentialPanel: React.FC<LoginCredentialPanelProps> = ({
                             id="profile-select"
                             value={selectedProfile}
                             onChange={(e) => onSelectProfile(e.target.value)}
-                            className="w-full bg-white border border-theme-subtle rounded-2xl px-5 py-4 text-sm font-bold text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft appearance-none transition-all group-hover:border-theme-primary/30"
+                            disabled={isLoggingIn}
+                            className="w-full bg-white border border-theme-subtle rounded-2xl px-5 py-4 text-sm font-bold text-theme-secondary focus:ring-2 focus:ring-theme-primary/10 outline-none shadow-inner-soft appearance-none transition-all group-hover:border-theme-primary/30 disabled:opacity-60"
                         >
                             {profiles.map((profile) => (
                                 <option key={profile.folderName} value={profile.folderName}>
