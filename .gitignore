@@ -23,8 +23,6 @@ dist-ssr
 *.sln
 *.sw?
 /src-tauri/wallet_data/
-/AGENTS.md
-/.windsurfrules
 
 # Local Cargo config
 /src-tauri/.cargo/

@@ -1,32 +1,20 @@
-# Human Money App - Testing Strategie
+# Human Money App — Testing Strategy
 
-Diese Dokumentation hält die 3 fundamentalen Test-Typen fest, die notwendig sind, um manuelle Tests nach Code-Änderungen auf ein Minimum zu reduzieren. Sie bilden das Fundament der Qualitätssicherung für diese Tauri-App.
+This document summarizes the automated testing and verification layers that guard `human-money-app` across Rust, TypeScript, i18n, and visual UI flows.
 
-## 1. Frontend-Komponententests (Vitest + React Testing Library + `mockIPC`)
-- **Fokus:** Testet das Verhalten der Benutzeroberfläche (UI) isoliert.
+## 1. Frontend Component, Service & Policy Tests (Vitest + React Testing Library)
 - **Tools:** Vitest, React Testing Library, `@tauri-apps/api/mocks`.
-- **Zweck:** Stellt sicher, dass das UI korrekt auf Nutzerinteraktionen (Klicks, Eingaben) reagiert und die richtigen Daten zur Verarbeitung an das Backend senden *würde*.
-- **Vorteil:** Extrem schnell. Schützt vor kaputten Formularen, fehlerhaftem Rendering und React-State-Fehlern.
+- **Coverage:** Component behavior, `BigInt` split formatting, i18n/glossary linting (`glossaryLint.test.ts`, `uiModeLint.test.ts`), and static TypeScript-to-Rust IPC contract checks (`tauriCommands.test.ts`, `commandAccessParity.test.ts`, `eventParity.test.ts`, `serviceReachability.test.ts`).
 
-## 2. Backend Tauri-Command Integrationstests (`assert_ipc_response`)
-- **Fokus:** Testet die Schnittstelle (Bridge) zwischen Frontend und Backend.
-- **Tools:** Rusts nativer Test-Runner (`cargo test`), `tauri::test::mock_builder`.
-- **Zweck:** Simuliert eingehende JSON-Anfragen vom Frontend und verifiziert, dass die Rust-Schicht die Datenstrukturen exakt so versteht, korrekt verarbeitet und das erwartete Resultat (oder den Fehler) zurückgibt.
-- **Vorteil:** Verhindert "Silent Failures" (stille Fehler), bei denen Mismatches in den JSON-Typen zwischen TypeScript und Rust dazu führen, dass Befehle ignoriert werden oder abstürzen.
+## 2. Backend & Crypto Tests (Cargo / `src-tauri` + `crates/humoco-market`)
+- **Tools:** `cargo test`, `cargo clippy --all-targets -- -D warnings`, `cargo fmt --all -- --check`.
+- **Coverage:**
+  - `crates/humoco-market`: SD-Card signing/redaction, Shamir social recovery, `HMSLOT02` compression/AEAD, PoST envelopes, and QR SVG encoding.
+  - `src-tauri`: Sync-Lock lifecycle & green-rule checkout (`checkout.rs`, `l2_lifecycle.rs`), SSRF-hardened `sync_client.rs`, `AccessMode` enforcement, backup/recovery flows, and Tauri IPC DTO parity.
 
-## 3. End-to-End (E2E) "Happy Path" Tests (Playwright)
-- **Fokus:** Testet das reibungslose Zusammenspiel aller echten Systemkomponenten (UI + Rust Backend + echte Cryptography im Core).
-- **Tools:** Playwright + `tauri-plugin-playwright`.
-- **Zweck:** Ein automatisierter Durchlauf aus Nutzersicht (App starten -> Einloggen -> Gutschein erstellen/senden -> Kontostand prüfen).
-- **Vorteil:** Höchste Zuversicht. Wenn dieser Test besteht, ist die Applikation als Ganzes funktionsfähig.
+## 3. UI Tour & Visual Regression Check (`npm run tour` / `npm run tour:auto`)
+- **Catalog:** 31 mock-backed screens (`1.1`–`5.6`) defined in [`scripts/tour-catalog.mjs`](scripts/tour-catalog.mjs).
+- **Headless Audit (`npm run tour:auto`):** Captures Desktop & Mobile screenshots, flags horizontal overflows, and catches console errors or unmocked IPC calls into `test-results/tour/audit-report.md`.
 
----
-
-## Best Practices & Erweiterungen
-
-Dieser 3-Schichten-Ansatz (häufig als "Testing Trophy" bezeichnet) ist branchenweiter **Best Practice** für Tauri/Electron-Apps. 
-
-**Weitere sinnvolle, aber optionale Testarten (für später):**
-1. **Property-Based Testing (Fuzzing):** Im Rust-Core Tausende zufällige Inputs generieren, um sicherzustellen, dass das Backend niemals abstürzt (Panic), sondern fehlerhafte Eingaben immer sauber abfängt.
-2. **Visuelle Regressionstests:** Playwright kann Screenshots des UI machen und bei Änderungen vergleichen. Warnt dich, wenn eine globale Tailwind-CSS-Änderung aus Versehen das Layout von Buttons zerschossen hat.
-3. **Accessibility (A11y) Tests:** Automatische Prüfungen, ob Formulare auch für Screenreader verständlich bleiben.
+## 4. Single Verification Gate (`./run-tests.sh --quiet`)
+- Run `./run-tests.sh --quiet` (`--frontend-only`/`-f` or `--backend-only`/`-b` for focused runs) to execute Tauri version sync, TypeScript, ESLint, `npm run i18n:check` (5 locales), Vitest, Cargo fmt/Clippy, and Rust tests in one pass.

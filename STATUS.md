@@ -577,19 +577,17 @@ priority_tasks:
 
 ## Current Focus
 
-Tauri v2 desktop/mobile wallet (`v0.5.1` Beta). Core voucher workflows, switchable Spendable/Net balance views, silent mount-safe auto-backups, `humoco://` contact & payment request sharing, global drag-and-drop, bank-grade Account Statement with CSV export, guided guarantor/redemption/proof workflows, unified navigation history & shared UI primitives (`APP-051`), global 1–4 hops reach selector, passwordless multi-contact `.wot` sharing & progressive-disclosure `BinaryFuse64` provider seals (`APP-052`), L2 PoS checkout, full Offline-First Web of Trust (`humoco-wot`), multi-purpose 4-channel sync infrastructure (`APP-054`–`APP-062`), and full Sync Service & Address Book overhaul (`APP-063`, `APP-064`: 4-tab settings, z-index/opacity fixes, per-contact sync URLs, live probing, health pills, rate-limit cooldown, and debounced member auto-push) are fully integrated across 5 locales.
+Tauri v2 Desktop/Mobile wallet (`v0.5.16` Beta). Launch Sync-Lock double-spend protection (`APP-070`–`APP-072`), 4-channel `humoco-sync` comfort sync (`card`, `wot`, `backup`, `post` + `media` + revocation), GF(256) Shamir Social Recovery + Quick-PIN/Cashier `AccessMode` (`APP-065`–`APP-069`), Simple/Expert `uiMode` + `UX_GLOSSARY.md` (`APP-UX-01`–`APP-UX-11`), Offline-First `humoco-wot` (`BinaryFuse64` seals, Drop-Sync subpackages, `ServerOffenderList`), and full Universal Audit Loop consolidation (`APP-076`, `21/21` slices `🟢 Clean`) are completed across all 5 locales (`en`, `de`, `es`, `fr`, `it`).
 
 ## Architecture
 
-- **Frontend**: React 19 + TypeScript + Tailwind CSS v4
-- **Backend**: Rust (Tauri v2), thin bridge to `human_money_core` and `humoco_wot` via Tauri commands
-- **Core & WoT dependencies**: `human_money_core` and `humoco-wot` via git in `Cargo.toml`. Local development uses git-ignored `src-tauri/.cargo/config.toml` for `[patch]` to ensure CI compatibility.
-- **UI components**: Dashboard, CreateVoucher, SendView, ReceiveView, VoucherDetailsView, AddressBook, SignRequestView, ConflictDetailsView, TransactionHistory, Settings, Login, etc.
-- **Tauri command modules**: auth, backups, contacts, profile, queries, settings, standards, transfers, vouchers, wallet, wot
+- **Frontend (`src/`)**: React 19 + TypeScript + Tailwind CSS v4 (`@tailwindcss/vite`), 3 contexts (`SessionContext`, `NavigationContext`, `UiModeContext`), typed `src/services/` + `commandPolicy.ts`, 15 component subdirectories, and 5 locales (`2501` keys).
+- **Host Bridge (`src-tauri/src/`)**: Thin Tauri v2 adapter across 17 command modules (`auth`, `backup`, `contacts`, `integrity`, `l2`, `market`, `post`, `profile`, `queries`, `recovery`, `settings_cmd`, `standards`, `sync`, `transfers`, `utils`, `vouchers`, `wot`), 14 `camelCase` DTO modules in `models/`, `services/` (incl. `sync_engine/`, `post_service/`), modular `state/`, `l2_lifecycle.rs`, `sync_client.rs`, and `sync_zip.rs`.
+- **Rust Libraries**: `human_money_core` (L1 vouchers, SST V4, `FileStorage`), `humoco-wot` (subjective WoT), and local `#![forbid(unsafe_code)]` crate `crates/humoco-market` (SD-Cards, QR SVG, Shamir Social Recovery, `HMSLOT02`, PoST). Sibling `path` / `[patch]` overrides in `Cargo.toml` support local multi-repo development and must be converted to release tags/versions before tagged GitHub builds.
 
 ## Known Issues
 
-- Optional BLE/NFC face-to-face stranger discovery (`APP-003`) remains Post-MVP (standalone `.wot` files and transaction piggybacking cover offline/online MVP exchange).
+- Optional BLE/NFC face-to-face stranger discovery (`APP-003`) and production-scale L2 hardening (`APP-004`) remain Post-MVP (standalone `.wot` files, QR, and transaction piggybacking cover MVP offline/online exchange).
 
 ## Recent Milestones
 
@@ -700,65 +698,10 @@ Tauri v2 desktop/mobile wallet (`v0.5.1` Beta). Core voucher workflows, switchab
 - [x] Decoupled On-Demand Voucher Standard Management (.standard): Implemented container inspection, import preview with metadata, cleartext/password export, standard deletion with in-use safeguards, ReceiveView drag-and-drop integration, and a dedicated Standards Manager UI in Settings (APP-032).
 ## Next Milestones
 
-- [x] Core v0.3+ Breaking Changes & Archive Migration (`FileVoucherArchive::new_secure`) (APP-033)
-- [ ] Internationalization (i18n) - German/English (MVP)
-- [x] Improve Session Timeout UX (Activity Log visibility etc.) (APP-017)
-- [ ] L2 sync hardening (Post-MVP)
-- [ ] Trust level badges for contacts (Post-MVP)
-- [ ] BLE/NFC stranger discovery (Post-MVP)
+- [ ] **Real-World Everyday Testing (v1.0 Readiness):** Desktop + Mobile field testing across real PHP shared hosters (`humoco-sync`), offline payments, backups, and social recovery.
+- [ ] **Post-MVP (`APP-003`, `APP-004`):** Optional BLE/NFC stranger discovery and extended production-scale L2 sync hardening.
 
-### Core-Notes & Breaking Changes (human_money_core v0.3+)
-- **Breaking Changes in Core ab v0.3:** Bei auftretenden Fehlern oder Core-Synchronisationen muss `human_money_core` analysiert werden.
-- **Archive-Erstellung (Tauri Host):** Archive müssen künftig mit `FileVoucherArchive::new_secure(path, wallet_passwort)` gebaut werden.
-- **Offene Punkte Core (report-only, ohne deterministischen Test):** Fehlendes `fsync` in `save_wallet` und TOCTOU-Race im PID-Locking.
-
-
-### 2026-10-23 — Configured regional mesh verification
-
-Registered authenticated recipient source-policy configuration and required bounded
-signed regional views for live-checkout verification through Core. Missing views
-fail closed. Preserved the Z01 goods-release gate: caller-supplied context and a
-valid current quorum do not create a durable purchase authorization. Automatic
-view refresh/UI and the durable purchase producer remain open.
-Validation: `./run-tests.sh --backend-only --quiet` passed using locally resolved
-Core/Proto siblings. No frontend or published Git dependency claim is made.
-
-### 2026-10-23 — Exact-byte dispatch and backend purchase APIs
-
-Registered durable intent submission, retained-choice observation and transactional
-purchase/challenge commands. Gateway retries preserve signed bytes, isolate f2f
-credentials by exact origin, disable redirects and share one 800 ms budget.
-Login starts bounded public cold discovery; cached routing avoids ping probes in
-the new intent send command. Public discovery conveys URLs, never committee
-authority. Regional policy remains recipient configured and authenticated.
-Validation: backend test script and TypeScript type check passed. Complete
-productive UI orchestration, signed roster refresh, terminal resolution and full
-App/Core/Node/QUIC-to-PoS acceptance remain open.
-
-### 2026-10-24 — Fail-closed regional cache expiry and renewal (F05/R05)
-
-Regional mesh view caches now expire at the earliest signed-source validity
-boundary and reject expired entries before checkout use. Checkout and a
-host-owned 30-second renewal worker refresh missing or near-expiry caches while
-the wallet is unlocked; settings changes invalidate the old authority and
-trigger a proactive refresh. Two unit tests cover expired-cache rejection and
-impending-expiry detection.
-
-Validation: `./run-tests.sh --backend-only --quiet` and
-`cargo test checkout::tests -- --nocapture` passed.
-
-### 2026-10-24 — Host-owned L2 intent reconciliation supervisor
-
-Added a 15-second host supervisor that reconciles unresolved L2 send intents
-while the wallet is unlocked. Overdue intents are expired, intents younger than
-30 seconds are skipped, per-intent overlap is prevented by an in-flight set,
-retained originals are observed best-effort, and live quorum reconciliation is
-completed only after verifying that the wallet owner and cached regional views
-still match. Terminal intents are cleaned up after resolution, and the manual
-`submit_l2_send_intent` early-return paths now perform the same cleanup.
-
-Validation: `cargo test` in `src-tauri` passed (23 tests, including the three
-new intent reconciliation tests).
+*(Historical MVP milestones `APP-041`–`APP-076` are tracked in YAML `priority_tasks` above and summarized in `../MASTER_OVERVIEW.md`.)*
 
 ### 2026-10-30 — v0.3.0: Encrypted Backups, Serverless-Ready L2 UX & Session Stabilization
 
