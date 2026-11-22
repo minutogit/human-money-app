@@ -169,38 +169,24 @@ fn phase_proposal_revs(phase: &StoredRotationPhase) -> (u64, u64) {
     }
 }
 
-async fn drive_active_rotation(
+enum ProposedStepResult {
+    EarlyOutcome(RotationStepOutcome),
+    ReadyToCommit(Box<MigrationProposal>, ImportedStatePair),
+}
+
+async fn resolve_rotation_precheck_outcome(
     env: RotationEnv<'_>,
     anchor_id: [u8; 32],
-    manifest: AnchorManifest,
-    phase: StoredRotationPhase,
-) -> Result<RotationStepOutcome, FrontendError> {
+    proposal_from_rev: u64,
+    proposal_to_rev: u64,
+) -> Result<Option<RotationStepOutcome>, FrontendError> {
     let RotationEnv {
         state,
         session,
-        security_policy,
-        lifecycle,
         client,
-        now_secs,
         password,
+        ..
     } = env;
-    let anchor_hex = hex::encode(anchor_id);
-    let (proposal_from_rev, proposal_to_rev) = phase_proposal_revs(&phase);
-
-    if manifest.revision >= proposal_to_rev {
-        return Ok(RotationStepOutcome::Completed {
-            new_revision: manifest.revision,
-        });
-    }
-    if manifest.revision != proposal_from_rev {
-        return Ok(RotationStepOutcome::Aborted {
-            reason: format!(
-                "Stored rotation proposal from_rev {} mismatches active manifest revision {}",
-                proposal_from_rev, manifest.revision
-            ),
-        });
-    }
-
     let (creator_did, guarantor_dids): (Option<String>, Vec<String>) = state
         .with_session_required(
             session,
@@ -242,232 +228,245 @@ async fn drive_active_rotation(
     .await
     {
         if discovered.revision >= proposal_to_rev {
-            return Ok(RotationStepOutcome::Completed {
+            return Ok(Some(RotationStepOutcome::Completed {
                 new_revision: discovered.revision,
-            });
+            }));
         }
         if discovered.revision != proposal_from_rev {
-            return Ok(RotationStepOutcome::Aborted {
+            return Ok(Some(RotationStepOutcome::Aborted {
                 reason: format!(
                     "Discovered manifest revision {} superseded proposal from_rev {}",
                     discovered.revision, proposal_from_rev
                 ),
-            });
+            }));
         }
     }
 
-    let (proposal, maybe_imported): (MigrationProposal, Option<ImportedStatePair>) = match phase {
-        StoredRotationPhase::Proposed {
-            proposal,
-            effective_at_secs,
-        } => {
-            if !is_proposal_timelock_elapsed(effective_at_secs, now_secs) {
-                return Ok(RotationStepOutcome::InProgress(Box::new(
-                    StoredRotationPhase::Proposed {
-                        proposal,
-                        effective_at_secs,
-                    },
-                )));
-            }
+    Ok(None)
+}
 
-            let prop_hash = proposal
-                .core_digest()
-                .map_err(|e| lifecycle_err(format!("Invalid migration proposal: {}", e)))?;
-            let abort_threshold = manifest
-                .servers
-                .len()
-                .saturating_sub(usize::from(manifest.threshold))
-                .saturating_add(1);
+async fn drive_proposed_rotation_phase(
+    env: RotationEnv<'_>,
+    anchor_id: [u8; 32],
+    anchor_hex: &str,
+    manifest: &AnchorManifest,
+    proposal: MigrationProposal,
+    effective_at_secs: u64,
+) -> Result<ProposedStepResult, FrontendError> {
+    let RotationEnv {
+        state,
+        session,
+        lifecycle,
+        client,
+        now_secs,
+        password,
+        ..
+    } = env;
 
-            // Ensure permanent freeze & collect >= Q_old FreezeSnapshots
-            let mut candidate_exports: Vec<SnapshotExport> = Vec::new();
-            let mut aborted_votes: HashSet<LockPubKey> = HashSet::new();
-            for srv in &manifest.servers {
-                let (write_url, _) = resolve_server_locator(srv, &lifecycle.l2_probe_cache);
-                let mut got_export = false;
-                if let Ok(Some(st)) =
-                    sync_client::get_lock_freeze_status(client, &write_url, &anchor_hex).await
-                {
-                    if let Some(m) = st.active_manifest {
-                        if m.revision > manifest.revision && m.verify_anchor_id(&anchor_id).is_ok()
-                        {
-                            let new_rev = m.revision;
-                            state.with_session_required(
-                                session,
-                                "Wallet session changed before committing discovered active manifest",
-                                |service| {
-                                    service
-                                        .update_l2_anchor_manifest(m.clone(), password)
-                                        .map_err(FrontendError::from)?;
-                                    let mut lc = load_lifecycle_state(service, password)?;
-                                    let entry = lc
-                                        .anchors
-                                        .entry(anchor_hex.clone())
-                                        .or_insert_with(|| StoredAnchorHealth::new(anchor_hex.clone()));
-                                    apply_rotation_step_outcome(
-                                        entry,
-                                        Ok(&RotationStepOutcome::Completed {
-                                            new_revision: new_rev,
-                                        }),
-                                        now_secs,
-                                    );
-                                    save_lifecycle_state(service, &lc, password)
-                                },
-                            )?;
-                            return Ok(RotationStepOutcome::Completed {
-                                new_revision: new_rev,
-                            });
-                        }
-                    }
-
-                    let mut export_matches = false;
-                    if let Some(exp) = st.snapshot_export {
-                        if exp.snapshot.lock_pub == srv.lock_pub {
-                            export_matches = exp.snapshot.permanent
-                                && exp.snapshot.proposal_hash == Some(prop_hash);
-                            candidate_exports.push(exp);
-                            got_export = true;
-                        }
-                    }
-
-                    let voted_matches = st
-                        .voted_proposal
-                        .as_ref()
-                        .and_then(|p| p.core_digest().ok())
-                        .is_some_and(|h| h == prop_hash);
-                    let voted_different = st
-                        .voted_proposal
-                        .as_ref()
-                        .and_then(|p| p.core_digest().ok())
-                        .is_some_and(|h| h != prop_hash);
-                    let reported_active_without_proposal = st
-                        .bucket_freeze_state
-                        .as_str()
-                        .is_some_and(|s| s.eq_ignore_ascii_case("active"))
-                        && !voted_matches
-                        && !export_matches;
-                    if voted_different || reported_active_without_proposal {
-                        aborted_votes.insert(srv.lock_pub);
-                    }
-                }
-                if !got_export && !aborted_votes.contains(&srv.lock_pub) {
-                    let fetch_body = serde_json::json!({
-                        "action": "fetch_snapshot",
-                        "anchor_id": anchor_hex,
-                    });
-                    if let Ok(val) =
-                        sync_client::post_lock_freeze_action(client, &write_url, &fetch_body).await
-                    {
-                        if let Some(exp_val) = val.get("snapshot_export").cloned() {
-                            if let Ok(exp) = serde_json::from_value::<SnapshotExport>(exp_val) {
-                                if exp.snapshot.lock_pub == srv.lock_pub {
-                                    candidate_exports.push(exp);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            if aborted_votes.len() >= abort_threshold {
-                return Ok(RotationStepOutcome::Aborted {
-                    reason: "Rotation proposal was vetoed or cleared on committee".to_string(),
-                });
-            }
-
-            let qcs: Vec<QuorumCertificate> = state.with_session_required(
-                session,
-                "Wallet session changed while driving L2 rotation",
-                |service| {
-                    service
-                        .with_wallet(|w| {
-                            w.profile
-                                .l2_quorum_certificates
-                                .iter()
-                                .filter(|(t_id, _)| {
-                                    w.voucher_store.vouchers.values().any(|inst| {
-                                        inst.voucher.layer2_anchor == Some(anchor_id)
-                                            && inst
-                                                .voucher
-                                                .transactions
-                                                .iter()
-                                                .any(|t| &t.t_id == *t_id)
-                                    })
-                                })
-                                .flat_map(|(_, qcs)| qcs.iter().cloned())
-                                .collect::<Vec<_>>()
-                        })
-                        .map_err(FrontendError::from)
-                },
-            )?;
-
-            let (proposal, exports, expected_state_hash) = match evaluate_proposed_phase_transition(
-                anchor_id,
-                &manifest,
+    if !is_proposal_timelock_elapsed(effective_at_secs, now_secs) {
+        return Ok(ProposedStepResult::EarlyOutcome(
+            RotationStepOutcome::InProgress(Box::new(StoredRotationPhase::Proposed {
                 proposal,
                 effective_at_secs,
-                candidate_exports,
-                &qcs,
-                DEFAULT_LOCK_POW_BASE_BITS,
-                now_secs,
-            )? {
-                ProposedPhaseDecision::WaitTimelock(p)
-                | ProposedPhaseDecision::AwaitSnapshots(p) => {
-                    return Ok(RotationStepOutcome::InProgress(Box::new(p)))
+            })),
+        ));
+    }
+
+    let prop_hash = proposal
+        .core_digest()
+        .map_err(|e| lifecycle_err(format!("Invalid migration proposal: {}", e)))?;
+    let abort_threshold = manifest
+        .servers
+        .len()
+        .saturating_sub(usize::from(manifest.threshold))
+        .saturating_add(1);
+
+    // Ensure permanent freeze & collect >= Q_old FreezeSnapshots
+    let mut candidate_exports: Vec<SnapshotExport> = Vec::new();
+    let mut aborted_votes: HashSet<LockPubKey> = HashSet::new();
+    for srv in &manifest.servers {
+        let (write_url, _) = resolve_server_locator(srv, &lifecycle.l2_probe_cache);
+        let mut got_export = false;
+        if let Ok(Some(st)) =
+            sync_client::get_lock_freeze_status(client, &write_url, anchor_hex).await
+        {
+            if let Some(m) = st.active_manifest {
+                if m.revision > manifest.revision && m.verify_anchor_id(&anchor_id).is_ok() {
+                    let new_rev = m.revision;
+                    state.with_session_required(
+                        session,
+                        "Wallet session changed before committing discovered active manifest",
+                        |service| {
+                            service
+                                .update_l2_anchor_manifest(m.clone(), password)
+                                .map_err(FrontendError::from)?;
+                            let mut lc = load_lifecycle_state(service, password)?;
+                            let entry = lc
+                                .anchors
+                                .entry(anchor_hex.to_string())
+                                .or_insert_with(|| StoredAnchorHealth::new(anchor_hex.to_string()));
+                            apply_rotation_step_outcome(
+                                entry,
+                                Ok(&RotationStepOutcome::Completed {
+                                    new_revision: new_rev,
+                                }),
+                                now_secs,
+                            );
+                            save_lifecycle_state(service, &lc, password)
+                        },
+                    )?;
+                    return Ok(ProposedStepResult::EarlyOutcome(
+                        RotationStepOutcome::Completed {
+                            new_revision: new_rev,
+                        },
+                    ));
                 }
-                ProposedPhaseDecision::ReadyToImport {
-                    proposal,
-                    verified_exports,
-                    expected_state_hash,
-                } => (proposal, verified_exports, expected_state_hash),
-            };
-
-            let mut import_acks: Vec<ImportAck> = Vec::with_capacity(proposal.new_servers.len());
-            for new_srv in &proposal.new_servers {
-                let (write_url, _) = resolve_server_locator(new_srv, &lifecycle.l2_probe_cache);
-                let ack = sync_client::post_lock_import(
-                    client, &write_url, &anchor_id, &manifest, &proposal, &exports, &qcs,
-                )
-                .await
-                .map_err(|e| lifecycle_err(e.to_string()))?;
-                verify_single_import_ack(
-                    &ack,
-                    &new_srv.lock_pub,
-                    &anchor_id,
-                    &proposal,
-                    &expected_state_hash,
-                )?;
-                import_acks.push(ack);
             }
-            verify_collected_import_acks(
-                &import_acks,
-                &anchor_id,
-                &proposal,
-                &expected_state_hash,
-            )?;
 
-            (proposal, Some((expected_state_hash, import_acks)))
+            let mut export_matches = false;
+            if let Some(exp) = st.snapshot_export {
+                if exp.snapshot.lock_pub == srv.lock_pub {
+                    export_matches =
+                        exp.snapshot.permanent && exp.snapshot.proposal_hash == Some(prop_hash);
+                    candidate_exports.push(exp);
+                    got_export = true;
+                }
+            }
+
+            let voted_matches = st
+                .voted_proposal
+                .as_ref()
+                .and_then(|p| p.core_digest().ok())
+                .is_some_and(|h| h == prop_hash);
+            let voted_different = st
+                .voted_proposal
+                .as_ref()
+                .and_then(|p| p.core_digest().ok())
+                .is_some_and(|h| h != prop_hash);
+            let reported_active_without_proposal = st
+                .bucket_freeze_state
+                .as_str()
+                .is_some_and(|s| s.eq_ignore_ascii_case("active"))
+                && !voted_matches
+                && !export_matches;
+            if voted_different || reported_active_without_proposal {
+                aborted_votes.insert(srv.lock_pub);
+            }
         }
-        StoredRotationPhase::Imported {
+        if !got_export && !aborted_votes.contains(&srv.lock_pub) {
+            let fetch_body = serde_json::json!({
+                "action": "fetch_snapshot",
+                "anchor_id": anchor_hex,
+            });
+            if let Ok(val) =
+                sync_client::post_lock_freeze_action(client, &write_url, &fetch_body).await
+            {
+                if let Some(exp_val) = val.get("snapshot_export").cloned() {
+                    if let Ok(exp) = serde_json::from_value::<SnapshotExport>(exp_val) {
+                        if exp.snapshot.lock_pub == srv.lock_pub {
+                            candidate_exports.push(exp);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if aborted_votes.len() >= abort_threshold {
+        return Ok(ProposedStepResult::EarlyOutcome(
+            RotationStepOutcome::Aborted {
+                reason: "Rotation proposal was vetoed or cleared on committee".to_string(),
+            },
+        ));
+    }
+
+    let qcs: Vec<QuorumCertificate> = state.with_session_required(
+        session,
+        "Wallet session changed while driving L2 rotation",
+        |service| {
+            service
+                .with_wallet(|w| {
+                    w.profile
+                        .l2_quorum_certificates
+                        .iter()
+                        .filter(|(t_id, _)| {
+                            w.voucher_store.vouchers.values().any(|inst| {
+                                inst.voucher.layer2_anchor == Some(anchor_id)
+                                    && inst.voucher.transactions.iter().any(|t| &t.t_id == *t_id)
+                            })
+                        })
+                        .flat_map(|(_, qcs)| qcs.iter().cloned())
+                        .collect::<Vec<_>>()
+                })
+                .map_err(FrontendError::from)
+        },
+    )?;
+
+    let (proposal, exports, expected_state_hash) = match evaluate_proposed_phase_transition(
+        anchor_id,
+        manifest,
+        proposal,
+        effective_at_secs,
+        candidate_exports,
+        &qcs,
+        DEFAULT_LOCK_POW_BASE_BITS,
+        now_secs,
+    )? {
+        ProposedPhaseDecision::WaitTimelock(p) | ProposedPhaseDecision::AwaitSnapshots(p) => {
+            return Ok(ProposedStepResult::EarlyOutcome(
+                RotationStepOutcome::InProgress(Box::new(p)),
+            ))
+        }
+        ProposedPhaseDecision::ReadyToImport {
             proposal,
-            imported_state_hash_hex,
-            import_acks,
-        } => {
-            let imported_state_hash =
-                decode_hex_fixed::<32>(&imported_state_hash_hex).map_err(lifecycle_err)?;
-            verify_collected_import_acks(
-                &import_acks,
-                &anchor_id,
-                &proposal,
-                &imported_state_hash,
-            )?;
-            (proposal, Some((imported_state_hash, import_acks)))
-        }
+            verified_exports,
+            expected_state_hash,
+        } => (proposal, verified_exports, expected_state_hash),
     };
 
-    let Some((imported_state_hash, import_acks)) = maybe_imported else {
-        unreachable!("handled in Proposed guard");
-    };
+    let mut import_acks: Vec<ImportAck> = Vec::with_capacity(proposal.new_servers.len());
+    for new_srv in &proposal.new_servers {
+        let (write_url, _) = resolve_server_locator(new_srv, &lifecycle.l2_probe_cache);
+        let ack = sync_client::post_lock_import(
+            client, &write_url, &anchor_id, manifest, &proposal, &exports, &qcs,
+        )
+        .await
+        .map_err(|e| lifecycle_err(e.to_string()))?;
+        verify_single_import_ack(
+            &ack,
+            &new_srv.lock_pub,
+            &anchor_id,
+            &proposal,
+            &expected_state_hash,
+        )?;
+        import_acks.push(ack);
+    }
+    verify_collected_import_acks(&import_acks, &anchor_id, &proposal, &expected_state_hash)?;
+
+    Ok(ProposedStepResult::ReadyToCommit(
+        Box::new(proposal),
+        (expected_state_hash, import_acks),
+    ))
+}
+
+async fn drive_imported_rotation_phase(
+    env: RotationEnv<'_>,
+    anchor_id: [u8; 32],
+    anchor_hex: &str,
+    manifest: AnchorManifest,
+    proposal: MigrationProposal,
+    imported_state_hash: [u8; 32],
+    import_acks: Vec<ImportAck>,
+) -> Result<RotationStepOutcome, FrontendError> {
+    let RotationEnv {
+        state,
+        session,
+        security_policy,
+        lifecycle,
+        client,
+        now_secs,
+        password,
+    } = env;
 
     // Phase 3: Collect >= Q_old verified commit signatures
     let prop_hash = proposal
@@ -542,8 +541,8 @@ async fn drive_active_rotation(
             let mut lc = load_lifecycle_state(service, password)?;
             let entry = lc
                 .anchors
-                .entry(anchor_hex.clone())
-                .or_insert_with(|| StoredAnchorHealth::new(anchor_hex.clone()));
+                .entry(anchor_hex.to_string())
+                .or_insert_with(|| StoredAnchorHealth::new(anchor_hex.to_string()));
             apply_rotation_step_outcome(
                 entry,
                 Ok(&RotationStepOutcome::Completed {
@@ -559,6 +558,84 @@ async fn drive_active_rotation(
     Ok(RotationStepOutcome::Completed {
         new_revision: new_rev,
     })
+}
+
+async fn drive_active_rotation(
+    env: RotationEnv<'_>,
+    anchor_id: [u8; 32],
+    manifest: AnchorManifest,
+    phase: StoredRotationPhase,
+) -> Result<RotationStepOutcome, FrontendError> {
+    let anchor_hex = hex::encode(anchor_id);
+    let (proposal_from_rev, proposal_to_rev) = phase_proposal_revs(&phase);
+
+    if manifest.revision >= proposal_to_rev {
+        return Ok(RotationStepOutcome::Completed {
+            new_revision: manifest.revision,
+        });
+    }
+    if manifest.revision != proposal_from_rev {
+        return Ok(RotationStepOutcome::Aborted {
+            reason: format!(
+                "Stored rotation proposal from_rev {} mismatches active manifest revision {}",
+                proposal_from_rev, manifest.revision
+            ),
+        });
+    }
+
+    if let Some(outcome) =
+        resolve_rotation_precheck_outcome(env, anchor_id, proposal_from_rev, proposal_to_rev)
+            .await?
+    {
+        return Ok(outcome);
+    }
+
+    let (proposal, (imported_state_hash, import_acks)) = match phase {
+        StoredRotationPhase::Proposed {
+            proposal,
+            effective_at_secs,
+        } => {
+            match drive_proposed_rotation_phase(
+                env,
+                anchor_id,
+                &anchor_hex,
+                &manifest,
+                proposal,
+                effective_at_secs,
+            )
+            .await?
+            {
+                ProposedStepResult::EarlyOutcome(outcome) => return Ok(outcome),
+                ProposedStepResult::ReadyToCommit(proposal, imported) => (*proposal, imported),
+            }
+        }
+        StoredRotationPhase::Imported {
+            proposal,
+            imported_state_hash_hex,
+            import_acks,
+        } => {
+            let imported_state_hash =
+                decode_hex_fixed::<32>(&imported_state_hash_hex).map_err(lifecycle_err)?;
+            verify_collected_import_acks(
+                &import_acks,
+                &anchor_id,
+                &proposal,
+                &imported_state_hash,
+            )?;
+            (proposal, (imported_state_hash, import_acks))
+        }
+    };
+
+    drive_imported_rotation_phase(
+        env,
+        anchor_id,
+        &anchor_hex,
+        manifest,
+        proposal,
+        imported_state_hash,
+        import_acks,
+    )
+    .await
 }
 
 async fn initiate_rotation_proposal(
@@ -646,57 +723,40 @@ async fn initiate_rotation_proposal(
     Ok(())
 }
 
-/// Executes one health check, guarantor-veto scan, and crash-resumable rotation step using `now_secs`
-/// without building a frontend status DTO (used by background ticks).
-pub(crate) async fn run_lifecycle_tick_core(
+struct TickScanContext {
+    anchors_to_check: Vec<(String, AnchorManifest, Option<StoredGuarantorRole>, bool)>,
+    offenders: ServerOffenderList,
+    known_source_prio_by_url: BTreeMap<String, u8>,
+    own_write_url_norm: Option<String>,
+    outflow_allowed: bool,
+}
+
+enum TickCollectOutcome {
+    Early,
+    Ready(TickScanContext),
+}
+
+struct AnchorHealthProbeReport {
+    unhealthy_now: HashSet<String>,
+    revoked_now: HashSet<String>,
+    last_creator_activity_secs: u64,
+}
+
+fn collect_lifecycle_tick_anchors(
     state: &AppState,
     session: &crate::session::SessionToken,
-    client: &reqwest::Client,
+    security_policy: &SecurityPolicy,
     now_secs: u64,
     force: bool,
     password: Option<&str>,
-) -> Result<(), FrontendError> {
-    let (security_policy, mut internal_lc) = state.with_session_required(
-        session,
-        "Wallet session changed before starting L2 lifecycle tick",
-        |service| {
-            let sp = state
-                .get_or_load_security_policy(service, password)
-                .map_err(FrontendError::from)?;
-            let lc = state
-                .get_or_load_internal_lifecycle(service, password)
-                .map_err(FrontendError::from)?;
-            Ok((sp, lc))
-        },
-    )?;
-
-    // 1. Online Guarantor Automatic Veto check (§5.4)
-    check_guarantor_vetoes(state, session, client, now_secs, password).await?;
-
-    // 2. Collect tracked anchors
-    enum CollectOutcome {
-        Early,
-        Ready(
-            Vec<(String, AnchorManifest, Option<StoredGuarantorRole>, bool)>,
-            ServerOffenderList,
-            BTreeMap<String, u8>,
-            Option<String>,
-            bool,
-        ),
-    }
-    let (
-        anchors_to_check,
-        offenders,
-        known_source_prio_by_url,
-        own_write_url_norm,
-        outflow_allowed,
-    ) = match state.with_session_required(
+) -> Result<Option<TickScanContext>, FrontendError> {
+    match state.with_session_required(
         session,
         "Wallet session changed during L2 lifecycle tick",
         |service| {
             let mut lc = load_lifecycle_state(service, password)?;
             if !force && now_secs.saturating_sub(lc.last_tick_secs) < HEALTH_CHECK_INTERVAL_SECS {
-                return Ok(CollectOutcome::Early);
+                return Ok(TickCollectOutcome::Early);
             }
             lc.last_tick_secs = now_secs;
             let anchors: Vec<(String, AnchorManifest, Option<StoredGuarantorRole>, bool)> = service
@@ -717,7 +777,7 @@ pub(crate) async fn run_lifecycle_tick_core(
             let known_sources = crate::services::l2_anchor_service::collect_known_sync_sources(
                 state,
                 service,
-                &security_policy,
+                security_policy,
                 password,
             );
             let mut known_source_prio_by_url: BTreeMap<String, u8> = BTreeMap::new();
@@ -758,23 +818,341 @@ pub(crate) async fn run_lifecycle_tick_core(
             )
             .is_ok()
                 && matches!(service.get_seal_lock_reason(password), Ok(None));
-            Ok(CollectOutcome::Ready(
-                anchors,
+            Ok(TickCollectOutcome::Ready(TickScanContext {
+                anchors_to_check: anchors,
                 offenders,
                 known_source_prio_by_url,
                 own_write_url_norm,
                 outflow_allowed,
-            ))
+            }))
         },
     )? {
-        CollectOutcome::Early => return Ok(()),
-        CollectOutcome::Ready(anchors, offenders, known_prio, own_w, outflow_ok) => {
-            (anchors, offenders, known_prio, own_w, outflow_ok)
+        TickCollectOutcome::Early => Ok(None),
+        TickCollectOutcome::Ready(ctx) => Ok(Some(ctx)),
+    }
+}
+
+async fn resume_anchor_active_rotation(
+    env: RotationEnv<'_>,
+    anchor_id: [u8; 32],
+    anchor_hex: &str,
+    manifest: AnchorManifest,
+    phase: StoredRotationPhase,
+) -> Result<(), FrontendError> {
+    let step_result = drive_active_rotation(env, anchor_id, manifest, phase).await;
+    env.state.with_session_required(
+        env.session,
+        "Wallet session changed after driving active L2 rotation",
+        |service| {
+            let mut lc = load_lifecycle_state(service, env.password)?;
+            let entry = lc
+                .anchors
+                .entry(anchor_hex.to_string())
+                .or_insert_with(|| StoredAnchorHealth::new(anchor_hex.to_string()));
+            match &step_result {
+                Ok(outcome) => {
+                    apply_rotation_step_outcome(entry, Ok(outcome), env.now_secs);
+                }
+                Err(err) => {
+                    apply_rotation_step_outcome(entry, Err(err.message.as_str()), env.now_secs);
+                }
+            }
+            save_lifecycle_state(service, &lc, env.password)
+        },
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn probe_anchor_committee_health(
+    state: &AppState,
+    session: &crate::session::SessionToken,
+    client: &reqwest::Client,
+    internal_lc: &mut InternalLifecycleState,
+    offenders: &ServerOffenderList,
+    manifest: &AnchorManifest,
+    anchor_hex: &str,
+    is_guarantor: bool,
+    now_secs: u64,
+    password: Option<&str>,
+) -> AnchorHealthProbeReport {
+    let mut unhealthy_now: HashSet<String> = HashSet::new();
+    let mut revoked_now: HashSet<String> = HashSet::new();
+    let mut probe_cache_deltas: Vec<FrontendLockServerProbeResult> = Vec::new();
+    let mut reported_creator_activities: Vec<u64> = Vec::new();
+
+    for srv in &manifest.servers {
+        let lock_hex = hex::encode(srv.lock_pub);
+        if is_server_key_revoked(offenders, &srv.lock_pub, Some(&srv.admin_pub)) {
+            revoked_now.insert(lock_hex);
+            continue;
         }
+        let (mut active_write_url, _) = resolve_server_locator(srv, &internal_lc.l2_probe_cache);
+        let admin_hex = hex::encode(srv.admin_pub);
+        let mut is_healthy_now = false;
+        match sync_client::fetch_sync_info(client, &active_write_url).await {
+            Ok(info) => {
+                if let Some(ref rev) = info.revocation {
+                    if let Some(relocated_probe) = try_follow_relocation_notice(
+                        client,
+                        &mut internal_lc.l2_probe_cache,
+                        srv,
+                        rev,
+                    )
+                    .await
+                    {
+                        probe_cache_deltas.push(relocated_probe);
+                        active_write_url =
+                            resolve_server_locator(srv, &internal_lc.l2_probe_cache).0;
+                        is_healthy_now = true;
+                    } else {
+                        match classify_server_probe_info(&info, &lock_hex, &admin_hex, now_secs) {
+                            ServerProbeOutcome::Healthy => {
+                                is_healthy_now = true;
+                            }
+                            ServerProbeOutcome::Unhealthy => {
+                                unhealthy_now.insert(lock_hex.clone());
+                            }
+                            ServerProbeOutcome::Revoked => {
+                                revoked_now.insert(lock_hex.clone());
+                            }
+                        }
+                    }
+                } else {
+                    match classify_server_probe_info(&info, &lock_hex, &admin_hex, now_secs) {
+                        ServerProbeOutcome::Healthy => {
+                            is_healthy_now = true;
+                            if let Some(ref lock_info) = info.lock {
+                                if let Some(ref del) = lock_info.delegation {
+                                    if sync_client::verify_lock_delegation(
+                                        &lock_hex,
+                                        del,
+                                        Some(&admin_hex),
+                                    ) {
+                                        let target_url = del.write_url.trim();
+                                        let cur_cached = internal_lc
+                                            .l2_probe_cache
+                                            .get(&lock_hex)
+                                            .and_then(|p| p.delegation.as_ref())
+                                            .map(|d| d.issued_at)
+                                            .unwrap_or(0);
+                                        if del.issued_at > cur_cached
+                                            && sync_client::validate_sync_url(target_url).is_ok()
+                                            && sync_client::validate_sync_read_url(
+                                                del.read_url.trim(),
+                                            )
+                                            .is_ok()
+                                        {
+                                            let updated_probe = sync_client::probe_lock_server(
+                                                client,
+                                                target_url,
+                                                Some(&admin_hex),
+                                            )
+                                            .await;
+                                            if validate_in_place_delegation_refresh(
+                                                srv,
+                                                del,
+                                                &updated_probe,
+                                                offenders,
+                                            ) && upsert_verified_lock_probe(
+                                                &mut internal_lc.l2_probe_cache,
+                                                updated_probe.clone(),
+                                            ) {
+                                                probe_cache_deltas.push(updated_probe);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        ServerProbeOutcome::Unhealthy => {
+                            unhealthy_now.insert(lock_hex.clone());
+                        }
+                        ServerProbeOutcome::Revoked => {
+                            revoked_now.insert(lock_hex.clone());
+                        }
+                    }
+                }
+            }
+            Err(_) => {
+                unhealthy_now.insert(lock_hex);
+            }
+        }
+
+        if is_guarantor && is_healthy_now {
+            if let Ok(Some(st)) =
+                sync_client::get_lock_freeze_status(client, &active_write_url, anchor_hex).await
+            {
+                if let Some(act) = st.last_creator_activity_secs {
+                    reported_creator_activities.push(act);
+                }
+            }
+        }
+    }
+
+    let last_creator_activity_secs = compute_quorum_creator_activity_secs(
+        manifest.issued_at_ms / 1_000,
+        &reported_creator_activities,
+        manifest.threshold,
+        now_secs,
+    );
+
+    if !probe_cache_deltas.is_empty() {
+        let _ = state.mutate_internal_lifecycle_for_session(session, password, |lc| {
+            let mut changed = false;
+            for probe in probe_cache_deltas {
+                changed |= upsert_verified_lock_probe(&mut lc.l2_probe_cache, probe);
+            }
+            changed
+        });
+    }
+
+    AnchorHealthProbeReport {
+        unhealthy_now,
+        revoked_now,
+        last_creator_activity_secs,
+    }
+}
+
+type AnchorAuthorityKeys = (Option<SigningKey>, Option<(u8, SigningKey)>);
+
+fn derive_anchor_authority_keys(
+    state: &AppState,
+    session: &crate::session::SessionToken,
+    anchor_hex: &str,
+    has_creator: bool,
+    g_role_opt: Option<&StoredGuarantorRole>,
+    password: Option<&str>,
+) -> Result<AnchorAuthorityKeys, FrontendError> {
+    state.with_session_required(
+        session,
+        "Wallet session changed before deriving L2 rotation authority keys",
+        |service| {
+            service
+                .with_authorized_identity(
+                    human_money_core::AccessMode::DailyPay,
+                    password,
+                    |w, id| {
+                        let c_sk = if has_creator {
+                            w.profile
+                                .l2_anchor_nonces
+                                .get(anchor_hex)
+                                .and_then(|h| hex::decode(h).ok())
+                                .and_then(|b| {
+                                    l2_gateway::derive_anchor_mig_signing_key(id, &b).ok()
+                                })
+                        } else {
+                            None
+                        };
+                        let g_sk = g_role_opt.and_then(|r| {
+                            let nb = hex::decode(&r.context_nonce_hex).ok()?;
+                            let sk = l2_rotation::derive_guarantor_mig_signing_key(id, &nb).ok()?;
+                            Some((r.guarantor_index, sk))
+                        });
+                        (c_sk, g_sk)
+                    },
+                )
+                .map_err(FrontendError::from)
+        },
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn evaluate_and_initiate_anchor_rotation(
+    env: RotationEnv<'_>,
+    anchor_id: [u8; 32],
+    anchor_hex: &str,
+    manifest: &AnchorManifest,
+    failed_lock_pubs: &HashSet<LockPubKey>,
+    creator_sk_opt: Option<SigningKey>,
+    guarantor_sk_opt: Option<(u8, SigningKey)>,
+    last_creator_activity_secs: u64,
+    ctx: &TickScanContext,
+) -> Result<(), FrontendError> {
+    if failed_lock_pubs.is_empty() {
+        if manifest.authority.guarantor_mig_pubs.is_empty() && manifest.servers.len() < 3 {
+            if let Some(ref c_sk) = creator_sk_opt {
+                if let Some(growth_prop) = select_auto_growth_proposal(
+                    anchor_id,
+                    manifest,
+                    c_sk,
+                    env.security_policy,
+                    env.lifecycle,
+                    &ctx.offenders,
+                    &ctx.known_source_prio_by_url,
+                    ctx.own_write_url_norm.as_deref(),
+                    env.now_secs,
+                ) {
+                    initiate_rotation_proposal(env, anchor_id, anchor_hex, manifest, growth_prop)
+                        .await?;
+                }
+            }
+        }
+        return Ok(());
+    }
+
+    let guarantor_tuple = guarantor_sk_opt
+        .as_ref()
+        .map(|(idx, sk)| (*idx, sk, last_creator_activity_secs));
+
+    if let Some(proposal) = select_rotation_proposal(
+        anchor_id,
+        manifest,
+        failed_lock_pubs,
+        creator_sk_opt.as_ref(),
+        guarantor_tuple,
+        env.security_policy,
+        env.lifecycle,
+        &ctx.offenders,
+        env.now_secs,
+    ) {
+        initiate_rotation_proposal(env, anchor_id, anchor_hex, manifest, proposal).await?;
+    }
+
+    Ok(())
+}
+
+/// Executes one health check, guarantor-veto scan, and crash-resumable rotation step using `now_secs`
+/// without building a frontend status DTO (used by background ticks).
+pub(crate) async fn run_lifecycle_tick_core(
+    state: &AppState,
+    session: &crate::session::SessionToken,
+    client: &reqwest::Client,
+    now_secs: u64,
+    force: bool,
+    password: Option<&str>,
+) -> Result<(), FrontendError> {
+    let (security_policy, mut internal_lc) = state.with_session_required(
+        session,
+        "Wallet session changed before starting L2 lifecycle tick",
+        |service| {
+            let sp = state
+                .get_or_load_security_policy(service, password)
+                .map_err(FrontendError::from)?;
+            let lc = state
+                .get_or_load_internal_lifecycle(service, password)
+                .map_err(FrontendError::from)?;
+            Ok((sp, lc))
+        },
+    )?;
+
+    // 1. Online Guarantor Automatic Veto check (§5.4)
+    check_guarantor_vetoes(state, session, client, now_secs, password).await?;
+
+    // 2. Collect tracked anchors
+    let Some(ctx) = collect_lifecycle_tick_anchors(
+        state,
+        session,
+        &security_policy,
+        now_secs,
+        force,
+        password,
+    )?
+    else {
+        return Ok(());
     };
 
-    for (anchor_hex, manifest, g_role_opt, has_creator) in anchors_to_check {
-        let Ok(anchor_id) = decode_hex_fixed::<32>(&anchor_hex) else {
+    for (anchor_hex, manifest, g_role_opt, has_creator) in &ctx.anchors_to_check {
+        let Ok(anchor_id) = decode_hex_fixed::<32>(anchor_hex) else {
             continue;
         };
 
@@ -785,14 +1163,14 @@ pub(crate) async fn run_lifecycle_tick_core(
                 let lc = load_lifecycle_state(service, password)?;
                 Ok(lc
                     .anchors
-                    .get(&anchor_hex)
+                    .get(anchor_hex)
                     .and_then(|h| h.active_rotation.clone()))
             },
         )?;
 
         // Resume active crash-safe rotation phase if any
         if let Some(phase) = existing_phase {
-            let step_result = drive_active_rotation(
+            resume_anchor_active_rotation(
                 RotationEnv {
                     state,
                     session,
@@ -803,168 +1181,28 @@ pub(crate) async fn run_lifecycle_tick_core(
                     password,
                 },
                 anchor_id,
+                anchor_hex,
                 manifest.clone(),
                 phase,
             )
-            .await;
-            state.with_session_required(
-                session,
-                "Wallet session changed after driving active L2 rotation",
-                |service| {
-                    let mut lc = load_lifecycle_state(service, password)?;
-                    let entry = lc
-                        .anchors
-                        .entry(anchor_hex.clone())
-                        .or_insert_with(|| StoredAnchorHealth::new(anchor_hex.clone()));
-                    match &step_result {
-                        Ok(outcome) => {
-                            apply_rotation_step_outcome(entry, Ok(outcome), now_secs);
-                        }
-                        Err(err) => {
-                            apply_rotation_step_outcome(entry, Err(err.message.as_str()), now_secs);
-                        }
-                    }
-                    save_lifecycle_state(service, &lc, password)
-                },
-            )?;
+            .await?;
             continue;
         }
 
         // Probe health of every server in manifest.servers (relocation-aware)
-        let mut unhealthy_now: HashSet<String> = HashSet::new();
-        let mut revoked_now: HashSet<String> = HashSet::new();
-        let mut probe_cache_deltas: Vec<FrontendLockServerProbeResult> = Vec::new();
-        let mut reported_creator_activities: Vec<u64> = Vec::new();
-
-        for srv in &manifest.servers {
-            let lock_hex = hex::encode(srv.lock_pub);
-            if is_server_key_revoked(&offenders, &srv.lock_pub, Some(&srv.admin_pub)) {
-                revoked_now.insert(lock_hex);
-                continue;
-            }
-            let (mut active_write_url, _) =
-                resolve_server_locator(srv, &internal_lc.l2_probe_cache);
-            let admin_hex = hex::encode(srv.admin_pub);
-            let mut is_healthy_now = false;
-            match sync_client::fetch_sync_info(client, &active_write_url).await {
-                Ok(info) => {
-                    if let Some(ref rev) = info.revocation {
-                        if let Some(relocated_probe) = try_follow_relocation_notice(
-                            client,
-                            &mut internal_lc.l2_probe_cache,
-                            srv,
-                            rev,
-                        )
-                        .await
-                        {
-                            probe_cache_deltas.push(relocated_probe);
-                            active_write_url =
-                                resolve_server_locator(srv, &internal_lc.l2_probe_cache).0;
-                            is_healthy_now = true;
-                        } else {
-                            match classify_server_probe_info(&info, &lock_hex, &admin_hex, now_secs)
-                            {
-                                ServerProbeOutcome::Healthy => {
-                                    is_healthy_now = true;
-                                }
-                                ServerProbeOutcome::Unhealthy => {
-                                    unhealthy_now.insert(lock_hex.clone());
-                                }
-                                ServerProbeOutcome::Revoked => {
-                                    revoked_now.insert(lock_hex.clone());
-                                }
-                            }
-                        }
-                    } else {
-                        match classify_server_probe_info(&info, &lock_hex, &admin_hex, now_secs) {
-                            ServerProbeOutcome::Healthy => {
-                                is_healthy_now = true;
-                                if let Some(ref lock_info) = info.lock {
-                                    if let Some(ref del) = lock_info.delegation {
-                                        if sync_client::verify_lock_delegation(
-                                            &lock_hex,
-                                            del,
-                                            Some(&admin_hex),
-                                        ) {
-                                            let target_url = del.write_url.trim();
-                                            let cur_cached = internal_lc
-                                                .l2_probe_cache
-                                                .get(&lock_hex)
-                                                .and_then(|p| p.delegation.as_ref())
-                                                .map(|d| d.issued_at)
-                                                .unwrap_or(0);
-                                            if del.issued_at > cur_cached
-                                                && sync_client::validate_sync_url(target_url)
-                                                    .is_ok()
-                                                && sync_client::validate_sync_read_url(
-                                                    del.read_url.trim(),
-                                                )
-                                                .is_ok()
-                                            {
-                                                let updated_probe = sync_client::probe_lock_server(
-                                                    client,
-                                                    target_url,
-                                                    Some(&admin_hex),
-                                                )
-                                                .await;
-                                                if validate_in_place_delegation_refresh(
-                                                    srv,
-                                                    del,
-                                                    &updated_probe,
-                                                    &offenders,
-                                                ) && upsert_verified_lock_probe(
-                                                    &mut internal_lc.l2_probe_cache,
-                                                    updated_probe.clone(),
-                                                ) {
-                                                    probe_cache_deltas.push(updated_probe);
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            ServerProbeOutcome::Unhealthy => {
-                                unhealthy_now.insert(lock_hex.clone());
-                            }
-                            ServerProbeOutcome::Revoked => {
-                                revoked_now.insert(lock_hex.clone());
-                            }
-                        }
-                    }
-                }
-                Err(_) => {
-                    unhealthy_now.insert(lock_hex);
-                }
-            }
-
-            if g_role_opt.is_some() && is_healthy_now {
-                if let Ok(Some(st)) =
-                    sync_client::get_lock_freeze_status(client, &active_write_url, &anchor_hex)
-                        .await
-                {
-                    if let Some(act) = st.last_creator_activity_secs {
-                        reported_creator_activities.push(act);
-                    }
-                }
-            }
-        }
-
-        let last_creator_activity_secs = compute_quorum_creator_activity_secs(
-            manifest.issued_at_ms / 1_000,
-            &reported_creator_activities,
-            manifest.threshold,
+        let probe_report = probe_anchor_committee_health(
+            state,
+            session,
+            client,
+            &mut internal_lc,
+            &ctx.offenders,
+            manifest,
+            anchor_hex,
+            g_role_opt.is_some(),
             now_secs,
-        );
-
-        if !probe_cache_deltas.is_empty() {
-            let _ = state.mutate_internal_lifecycle_for_session(session, password, |lc| {
-                let mut changed = false;
-                for probe in probe_cache_deltas {
-                    changed |= upsert_verified_lock_probe(&mut lc.l2_probe_cache, probe);
-                }
-                changed
-            });
-        }
+            password,
+        )
+        .await;
 
         // Update hysteresis state and collect servers triggering rotation
         let failed_lock_pubs: HashSet<LockPubKey> = state.with_session_required(
@@ -978,8 +1216,8 @@ pub(crate) async fn run_lifecycle_tick_core(
                     .or_insert_with(|| StoredAnchorHealth::new(anchor_hex.clone()));
                 let failed = apply_health_observations_and_collect_demotions(
                     health,
-                    &unhealthy_now,
-                    &revoked_now,
+                    &probe_report.unhealthy_now,
+                    &probe_report.revoked_now,
                     now_secs,
                 );
                 save_lifecycle_state(service, &lc, password)?;
@@ -988,99 +1226,20 @@ pub(crate) async fn run_lifecycle_tick_core(
         )?;
 
         // Derive signing authority keys if present in wallet (strictly gated on DailyPay)
-        let (creator_sk_opt, guarantor_sk_opt): (Option<SigningKey>, Option<(u8, SigningKey)>) =
-            state.with_session_required(
-                session,
-                "Wallet session changed before deriving L2 rotation authority keys",
-                |service| {
-                    service
-                        .with_authorized_identity(
-                            human_money_core::AccessMode::DailyPay,
-                            password,
-                            |w, id| {
-                                let c_sk = if has_creator {
-                                    w.profile
-                                        .l2_anchor_nonces
-                                        .get(&anchor_hex)
-                                        .and_then(|h| hex::decode(h).ok())
-                                        .and_then(|b| {
-                                            l2_gateway::derive_anchor_mig_signing_key(id, &b).ok()
-                                        })
-                                } else {
-                                    None
-                                };
-                                let g_sk = g_role_opt.as_ref().and_then(|r| {
-                                    let nb = hex::decode(&r.context_nonce_hex).ok()?;
-                                    let sk = l2_rotation::derive_guarantor_mig_signing_key(id, &nb)
-                                        .ok()?;
-                                    Some((r.guarantor_index, sk))
-                                });
-                                (c_sk, g_sk)
-                            },
-                        )
-                        .map_err(FrontendError::from)
-                },
-            )?;
+        let (creator_sk_opt, guarantor_sk_opt) = derive_anchor_authority_keys(
+            state,
+            session,
+            anchor_hex,
+            *has_creator,
+            g_role_opt.as_ref(),
+            password,
+        )?;
 
-        if !outflow_allowed {
+        if !ctx.outflow_allowed {
             continue;
         }
 
-        if failed_lock_pubs.is_empty() {
-            if manifest.authority.guarantor_mig_pubs.is_empty() && manifest.servers.len() < 3 {
-                if let Some(ref c_sk) = creator_sk_opt {
-                    if let Some(growth_prop) = select_auto_growth_proposal(
-                        anchor_id,
-                        &manifest,
-                        c_sk,
-                        &security_policy,
-                        &internal_lc,
-                        &offenders,
-                        &known_source_prio_by_url,
-                        own_write_url_norm.as_deref(),
-                        now_secs,
-                    ) {
-                        initiate_rotation_proposal(
-                            RotationEnv {
-                                state,
-                                session,
-                                security_policy: &security_policy,
-                                lifecycle: &internal_lc,
-                                client,
-                                now_secs,
-                                password,
-                            },
-                            anchor_id,
-                            &anchor_hex,
-                            &manifest,
-                            growth_prop,
-                        )
-                        .await?;
-                    }
-                }
-            }
-            continue;
-        }
-
-        let guarantor_tuple = guarantor_sk_opt
-            .as_ref()
-            .map(|(idx, sk)| (*idx, sk, last_creator_activity_secs));
-
-        let Some(proposal) = select_rotation_proposal(
-            anchor_id,
-            &manifest,
-            &failed_lock_pubs,
-            creator_sk_opt.as_ref(),
-            guarantor_tuple,
-            &security_policy,
-            &internal_lc,
-            &offenders,
-            now_secs,
-        ) else {
-            continue;
-        };
-
-        initiate_rotation_proposal(
+        evaluate_and_initiate_anchor_rotation(
             RotationEnv {
                 state,
                 session,
@@ -1091,9 +1250,13 @@ pub(crate) async fn run_lifecycle_tick_core(
                 password,
             },
             anchor_id,
-            &anchor_hex,
-            &manifest,
-            proposal,
+            anchor_hex,
+            manifest,
+            &failed_lock_pubs,
+            creator_sk_opt,
+            guarantor_sk_opt,
+            probe_report.last_creator_activity_secs,
+            &ctx,
         )
         .await?;
     }
