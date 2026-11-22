@@ -24,11 +24,11 @@ pub(crate) fn seal_active_ad_media_blobs(
     }
 
     let mut blobs = Vec::new();
-    for ad in &prof.ads {
-        if ad.expires_at <= now_secs {
+    for entry in &prof.ads {
+        if !entry.is_published_active(now_secs) {
             continue;
         }
-        let Some(ref token) = ad.image_token else {
+        let Some(ref token) = entry.ad.image_token else {
             continue;
         };
         let storage_key = own_media_storage_key(token);

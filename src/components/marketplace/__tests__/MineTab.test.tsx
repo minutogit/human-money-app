@@ -50,6 +50,7 @@ describe('MineTab Component', () => {
         allowInquiries: true,
         status: 'active',
         daysLeft: 25,
+        published: true,
       },
       {
         id: 'ad-expired-1',
@@ -60,6 +61,7 @@ describe('MineTab Component', () => {
         allowInquiries: true,
         status: 'expired',
         daysLeft: 0,
+        published: true,
       },
     ],
     maxHops: 2,
@@ -120,7 +122,7 @@ describe('MineTab Component', () => {
     expect(screen.getByText('Software-Entwicklung')).toBeInTheDocument();
 
     // Published badge
-    expect(screen.getByText(/Veröffentlicht|Published/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/Veröffentlicht|Published/i).length).toBeGreaterThanOrEqual(1);
 
     // Edit card button
     const editBtn = screen.getByRole('button', { name: /Visitenkarte bearbeiten|Edit business card/i });
@@ -308,6 +310,7 @@ describe('MineTab Component', () => {
           allowInquiries: true,
           status: 'active',
           daysLeft: 5,
+          published: true,
           eventAt: nowSecs + 86400 * 5,
           eventAllDay: false,
         },
@@ -320,6 +323,7 @@ describe('MineTab Component', () => {
           allowInquiries: true,
           status: 'expired',
           daysLeft: 0,
+          published: true,
           eventAt: nowSecs - 86400 * 2,
           eventAllDay: true,
         },
@@ -352,5 +356,69 @@ describe('MineTab Component', () => {
     const rescheduleBtn = screen.getByTestId('edit-expired-ad-ev-expired-1');
     fireEvent.click(rescheduleBtn);
     expect(onEditAd).toHaveBeenCalledWith(expect.objectContaining({ id: 'ev-expired-1' }));
+  });
+
+  it('separates drafts and published ads clearly, shows unpublished card hint, and triggers toggle callbacks', () => {
+    const onToggleAdPublished = vi.fn();
+    const profileMixed: FrontendMyMarketProfile = {
+      ...mockMyProfile,
+      published: false,
+      ads: [
+        {
+          id: 'ad-pub-1',
+          kind: 'offer',
+          title: 'Bereits aktiviertes Inserat',
+          publishedAt: nowSecs - 1000,
+          expiresAt: nowSecs + 86400 * 30,
+          allowInquiries: true,
+          status: 'active',
+          daysLeft: 30,
+          published: true,
+        },
+        {
+          id: 'ad-draft-1',
+          kind: 'request',
+          title: 'Mein Entwurf',
+          publishedAt: nowSecs - 500,
+          expiresAt: nowSecs + 86400 * 90,
+          allowInquiries: true,
+          status: 'active',
+          daysLeft: 90,
+          published: false,
+        },
+      ],
+    };
+
+    render(
+      <MineTab
+        myProfile={profileMixed}
+        inbox={mockInbox}
+        onOpenProfileEditor={vi.fn()}
+        onOpenShareCard={vi.fn()}
+        onTogglePublished={vi.fn()}
+        onCreateAd={vi.fn()}
+        onEditAd={vi.fn()}
+        onToggleAdPublished={onToggleAdPublished}
+        onRenewAd={vi.fn()}
+        onDeleteAd={vi.fn()}
+      />
+    );
+
+    expect(screen.getByTestId('ads-hidden-card-unpublished-hint')).toBeInTheDocument();
+    expect(screen.getByTestId('published-ads-section')).toBeInTheDocument();
+    expect(screen.getByTestId('draft-ads-section')).toBeInTheDocument();
+    expect(screen.getByTestId('ad-draft-badge-ad-draft-1')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('publish-ad-ad-draft-1'));
+    expect(onToggleAdPublished).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'ad-draft-1' }),
+      true,
+    );
+
+    fireEvent.click(screen.getByTestId('unpublish-ad-ad-pub-1'));
+    expect(onToggleAdPublished).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'ad-pub-1' }),
+      false,
+    );
   });
 });

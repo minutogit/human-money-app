@@ -9,8 +9,8 @@ use crate::services::market_service::{
     clear_app_notices_impl, delete_ad_impl, export_forward_card_impl, get_ad_image_impl,
     get_app_notices_impl, get_market_view_impl, get_my_market_profile_impl,
     import_contact_card_impl, mark_app_notices_read_impl, renew_ad_impl,
-    resolve_card_recipient_impl, save_my_market_profile_impl, set_card_published_impl,
-    upsert_ad_impl,
+    resolve_card_recipient_impl, save_my_market_profile_impl, set_ad_published_impl,
+    set_card_published_impl, upsert_ad_impl,
 };
 use crate::state::AppState;
 
@@ -47,6 +47,17 @@ pub fn upsert_ad(
     state: State<'_, AppState>,
 ) -> Result<FrontendMyMarketProfile, FrontendError> {
     upsert_ad_impl(ad, password, &state)
+}
+
+#[tauri::command]
+pub fn set_ad_published(
+    id: String,
+    published: bool,
+    also_publish_card: Option<bool>,
+    password: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<FrontendMyMarketProfile, FrontendError> {
+    set_ad_published_impl(id, published, also_publish_card, password, &state)
 }
 
 #[tauri::command]

@@ -695,6 +695,7 @@ pub fn run() {
             save_my_market_profile,
             set_card_published,
             upsert_ad,
+            set_ad_published,
             renew_ad,
             delete_ad,
             get_ad_image,

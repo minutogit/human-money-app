@@ -72,6 +72,7 @@ vi.mock('../services/marketService', () => ({
         saveMyMarketProfile: vi.fn(),
         setCardPublished: vi.fn(),
         upsertAd: vi.fn(),
+        setAdPublished: vi.fn(),
         renewAd: vi.fn(),
         deleteAd: vi.fn(),
         getMarketView: vi.fn(),

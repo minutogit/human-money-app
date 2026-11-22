@@ -101,6 +101,7 @@ export function MarketplaceView({
     const [isShareModalOpen, setIsShareModalOpen] = useState(false);
     const [isImportModalOpen, setIsImportModalOpen] = useState(false);
     const [isPublishPromptOpen, setIsPublishPromptOpen] = useState(false);
+    const [pendingPublishAdId, setPendingPublishAdId] = useState<string | null>(null);
     const [isOptionsOpen, setIsOptionsOpen] = useState(false);
     const [maxDistanceKm, setMaxDistanceKm] = useState<number | null>(null);
 
@@ -264,30 +265,41 @@ export function MarketplaceView({
         };
     }, [refreshInbox, refreshSyncStatus, refreshData]);
 
-    // Handle "Inserat aufgeben" click
+    // Handle "Inserat aufgeben" click: drafts can always be created locally
     const handleCreateAdClick = useCallback(() => {
         if (!myProfile) return;
-        if (!myProfile.published) {
-            setIsPublishPromptOpen(true);
-        } else {
-            setEditingAd(null);
-            setIsCreateAdOpen(true);
-        }
+        setEditingAd(null);
+        setIsCreateAdOpen(true);
     }, [myProfile]);
 
-    const handleConfirmPublishAndCreateAd = async () => {
+    const handleToggleAdPublished = async (ad: FrontendMyAd, published: boolean) => {
+        if (published && !myProfile?.published) {
+            setPendingPublishAdId(ad.id);
+            setIsPublishPromptOpen(true);
+            return;
+        }
         try {
-            const updated = await protectAction(async (pwd) => {
-                return await marketService.setCardPublished(true, pwd || undefined);
+            await protectAction(async (pwd) => {
+                await marketService.setAdPublished(ad.id, published, pwd || undefined);
             });
-            if (updated) {
-                setMyProfile(updated);
-                setIsPublishPromptOpen(false);
-                setEditingAd(null);
-                setIsCreateAdOpen(true);
-            }
+            await refreshData(false);
         } catch (err) {
-            logger.error('Failed to publish business card: ' + stringifyError(err));
+            logger.error('Failed to toggle ad published status: ' + stringifyError(err));
+            setError(translateError(err, t));
+        }
+    };
+
+    const handleConfirmPublishAndAd = async () => {
+        if (!pendingPublishAdId) return;
+        try {
+            await protectAction(async (pwd) => {
+                await marketService.setAdPublished(pendingPublishAdId, true, pwd || undefined, true);
+            });
+            setIsPublishPromptOpen(false);
+            setPendingPublishAdId(null);
+            await refreshData(false);
+        } catch (err) {
+            logger.error('Failed to publish business card and ad: ' + stringifyError(err));
             setError(translateError(err, t));
         }
     };
@@ -313,6 +325,9 @@ export function MarketplaceView({
             });
             setIsCreateAdOpen(false);
             setEditingAd(null);
+            if (!input.id && !input.published) {
+                setActiveTab('mine');
+            }
             await refreshData(false);
         } catch (err) {
             logger.error('Failed to save ad: ' + stringifyError(err));
@@ -614,7 +629,12 @@ export function MarketplaceView({
 
     const currentProfile = myProfile || defaultEmptyProfile;
 
-    const activeMyAdsCount = currentProfile.ads.filter((a) => a.status === 'active').length;
+    const activePublishedMyAdsCount = currentProfile.ads.filter(
+        (a) => a.published && a.status === 'active',
+    ).length;
+    const totalMineAdsCount = currentProfile.ads.filter(
+        (a) => !a.published || a.status === 'active',
+    ).length;
     const unreadInquiriesCount = (inboxSummary?.inquiries || []).filter((i) => i.unread).length;
 
     return (
@@ -778,7 +798,7 @@ export function MarketplaceView({
                                     {unreadInquiriesCount}
                                 </span>
                             )}
-                            {unreadInquiriesCount === 0 && activeMyAdsCount > 0 && (
+                            {unreadInquiriesCount === 0 && totalMineAdsCount > 0 && (
                                 <span
                                     className={`px-1.5 py-0.2 rounded-full text-[10px] ${
                                         activeTab === 'mine'
@@ -786,7 +806,7 @@ export function MarketplaceView({
                                             : 'bg-theme-subtle/50 text-theme-light'
                                     }`}
                                 >
-                                    {activeMyAdsCount}
+                                    {totalMineAdsCount}
                                 </span>
                             )}
                         </button>
@@ -857,6 +877,7 @@ export function MarketplaceView({
                                 setEditingAd(ad);
                                 setIsCreateAdOpen(true);
                             }}
+                            onToggleAdPublished={handleToggleAdPublished}
                             onRenewAd={(ad) => setRenewingAd(ad)}
                             onQuickRenewAd={(ad) => handleRenewAd(ad.id, 90)}
                             onDeleteAd={handleDeleteAd}
@@ -889,8 +910,9 @@ export function MarketplaceView({
                 }}
                 onSave={handleSaveAd}
                 editingAd={editingAd}
-                activeAdsCount={activeMyAdsCount}
+                activeAdsCount={activePublishedMyAdsCount}
                 maxAds={currentProfile?.mediaMaxCount ?? 10}
+                cardPublished={currentProfile.published}
                 allowInquiries={currentProfile.allowInquiries}
                 ownerDid={currentProfile?.profile?.id}
                 mediaMaxBytes={currentProfile?.mediaMaxBytes}
@@ -941,17 +963,20 @@ export function MarketplaceView({
                 }}
             />
 
-            {/* Prompt to publish card before creating ad */}
+            {/* Prompt to publish card before publishing a draft ad */}
             <ConfirmationModal
                 isOpen={isPublishPromptOpen}
-                onCancel={() => setIsPublishPromptOpen(false)}
-                onConfirm={handleConfirmPublishAndCreateAd}
+                onCancel={() => {
+                    setIsPublishPromptOpen(false);
+                    setPendingPublishAdId(null);
+                }}
+                onConfirm={handleConfirmPublishAndAd}
                 title={t('marketplace.publishCardBeforeAdTitle', 'Visitenkarte veröffentlichen?')}
                 description={t(
-                    'marketplace.publishCardBeforeAdDesc',
-                    'Um ein Inserat aufzugeben, muss deine Visitenkarte veröffentlicht sein, damit Interessenten dich erreichen können. Möchtest du sie jetzt veröffentlichen?'
+                    'marketplace.publishCardAndAdDesc',
+                    'Um dieses Inserat für andere sichtbar zu machen, muss auch deine Visitenkarte veröffentlicht sein. Möchtest du Visitenkarte und Inserat jetzt veröffentlichen?'
                 )}
-                confirmText={t('marketplace.publishAndCreateAdBtn', 'Veröffentlichen & Inserat aufgeben')}
+                confirmText={t('marketplace.publishCardAndAdBtn', 'Beides veröffentlichen')}
                 cancelText={t('common.cancel', 'Abbrechen')}
             />
 

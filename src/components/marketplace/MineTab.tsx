@@ -37,6 +37,7 @@ export interface MineTabProps {
     onTogglePublished: (published: boolean) => Promise<void>;
     onCreateAd: () => void;
     onEditAd: (ad: FrontendMyAd) => void;
+    onToggleAdPublished?: (ad: FrontendMyAd, published: boolean) => Promise<void> | void;
     onRenewAd: (ad: FrontendMyAd) => void;
     onQuickRenewAd?: (ad: FrontendMyAd) => Promise<void> | void;
     onDeleteAd: (id: string) => Promise<void>;
@@ -60,6 +61,7 @@ export const MineTab: React.FC<MineTabProps> = ({
     onTogglePublished,
     onCreateAd,
     onEditAd,
+    onToggleAdPublished,
     onRenewAd,
     onQuickRenewAd,
     onDeleteAd,
@@ -75,9 +77,57 @@ export const MineTab: React.FC<MineTabProps> = ({
     const [confirmDeleteAdId, setConfirmDeleteAdId] = useState<string | null>(null);
     const [isDeletingAd, setIsDeletingAd] = useState(false);
 
-    // Separate active and expired ads
-    const activeAds = myProfile.ads.filter((a) => a.status === 'active');
-    const expiredAds = myProfile.ads.filter((a) => a.status === 'expired');
+    // Separate draft, published active, and expired ads
+    const draftAds = myProfile.ads.filter((a) => !a.published);
+    const publishedAds = myProfile.ads.filter((a) => a.published && a.status === 'active');
+    const expiredAds = myProfile.ads.filter((a) => a.published && a.status === 'expired');
+
+    const renderKindBadge = (ad: FrontendMyAd) => {
+        const kindLabel =
+            ad.kind === 'offer'
+                ? t('marketplace.adKindOffer', 'Angebot')
+                : ad.kind === 'request'
+                    ? t('marketplace.adKindRequest', 'Gesuch')
+                    : t('marketplace.adKindEvent', 'Termin');
+        return (
+            <span
+                className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${getAdKindBadgeClass(ad.kind)}`}
+            >
+                {kindLabel}
+            </span>
+        );
+    };
+
+    const renderTimingBadge = (ad: FrontendMyAd) => {
+        const isEvent = ad.kind === 'event';
+        if (isEvent && ad.eventAt) {
+            return (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-violet-50 text-violet-800 border border-violet-200">
+                    <Calendar size={11} className="text-violet-600" />
+                    <span>{formatEventDateTime(ad.eventAt, ad.eventAllDay, i18n.language)}</span>
+                </span>
+            );
+        }
+        const isExpiringSoon = !isEvent && ad.daysLeft <= 14;
+        return (
+            <span
+                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold ${
+                    isExpiringSoon
+                        ? 'bg-amber-50 text-amber-800 border border-amber-200'
+                        : 'bg-bg-app text-theme-light border border-theme-subtle'
+                }`}
+            >
+                <Clock size={11} className={isExpiringSoon ? 'text-amber-600' : 'text-theme-light'} />
+                <span>
+                    {ad.daysLeft === 1
+                        ? t('marketplace.oneDayLeft', 'noch 1 Tag')
+                        : t('marketplace.daysLeft', 'noch {{count}} Tage', {
+                              count: ad.daysLeft,
+                          })}
+                </span>
+            </span>
+        );
+    };
 
     const inquiries = inbox.inquiries || [];
     const totalInquiriesCount = inquiries.length;
@@ -118,7 +168,7 @@ export const MineTab: React.FC<MineTabProps> = ({
                         <h3 className="text-xs font-black uppercase tracking-wider text-theme-secondary flex items-center gap-2">
                             <Tag size={14} className="text-theme-primary" />
                             <span>{t('marketplace.myAdsTitle', 'Meine Inserate')}</span>
-                            <span className="text-theme-light font-normal">({activeAds.length})</span>
+                            <span className="text-theme-light font-normal">({publishedAds.length + draftAds.length})</span>
                         </h3>
                     </div>
                     <Button
@@ -133,18 +183,40 @@ export const MineTab: React.FC<MineTabProps> = ({
                     </Button>
                 </div>
 
-                {activeAds.length > 0 ? (
-                    <div className="space-y-3">
-                        {activeAds.map((ad) => {
-                            const isEvent = ad.kind === 'event';
-                            const isExpiringSoon = !isEvent && ad.daysLeft <= 14;
-                            const kindLabel =
-                                ad.kind === 'offer'
-                                    ? t('marketplace.adKindOffer', 'Angebot')
-                                    : ad.kind === 'request'
-                                        ? t('marketplace.adKindRequest', 'Gesuch')
-                                        : t('marketplace.adKindEvent', 'Termin');
+                {!myProfile.published && publishedAds.length > 0 && (
+                    <div
+                        className="p-3.5 rounded-2xl bg-amber-50 border border-amber-200 text-xs text-amber-900 flex items-start gap-2.5"
+                        data-testid="ads-hidden-card-unpublished-hint"
+                    >
+                        <AlertCircle size={15} className="text-amber-600 shrink-0 mt-0.5" />
+                        <span className="leading-relaxed">
+                            {t(
+                                'marketplace.adsHiddenBecauseCardUnpublishedHint',
+                                'Deine Visitenkarte ist aktuell auf „Nur lokal“ gestellt. Deine Inserate sind für andere erst sichtbar, wenn du deine Visitenkarte veröffentlichst.',
+                            )}
+                        </span>
+                    </div>
+                )}
 
+                {publishedAds.length === 0 && draftAds.length === 0 && (
+                    <div className="p-6 rounded-2xl bg-bg-app border border-theme-subtle text-center space-y-2">
+                        <p className="text-xs text-theme-light">
+                            {t('marketplace.noOwnActiveAds', 'Aktuell hast du keine aktiven Inserate auf der Pinnwand.')}
+                        </p>
+                    </div>
+                )}
+
+                {publishedAds.length > 0 && (
+                    <div className="space-y-3" data-testid="published-ads-section">
+                        {draftAds.length > 0 && (
+                            <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-emerald-800">
+                                <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                                <span>{t('marketplace.publishedAdsSection', 'Veröffentlicht')}</span>
+                                <span className="text-theme-light font-normal">({publishedAds.length})</span>
+                            </div>
+                        )}
+                        {publishedAds.map((ad) => {
+                            const isEvent = ad.kind === 'event';
                             return (
                                 <div
                                     key={ad.id}
@@ -153,36 +225,12 @@ export const MineTab: React.FC<MineTabProps> = ({
                                 >
                                     <div className="space-y-1.5 min-w-0">
                                         <div className="flex items-center gap-2 flex-wrap">
-                                            <span
-                                                className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${getAdKindBadgeClass(ad.kind)}`}
-                                            >
-                                                {kindLabel}
+                                            {renderKindBadge(ad)}
+                                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                                                <span>{t('marketplace.publishedBadge', 'Veröffentlicht')}</span>
                                             </span>
-
-                                            {isEvent && ad.eventAt ? (
-                                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-violet-50 text-violet-800 border border-violet-200">
-                                                    <Calendar size={11} className="text-violet-600" />
-                                                    <span>{formatEventDateTime(ad.eventAt, ad.eventAllDay, i18n.language)}</span>
-                                                </span>
-                                            ) : (
-                                                <span
-                                                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold ${
-                                                        isExpiringSoon
-                                                            ? 'bg-amber-50 text-amber-800 border border-amber-200'
-                                                            : 'bg-bg-app text-theme-light border border-theme-subtle'
-                                                    }`}
-                                                >
-                                                    <Clock size={11} className={isExpiringSoon ? 'text-amber-600' : 'text-theme-light'} />
-                                                    <span>
-                                                        {ad.daysLeft === 1
-                                                            ? t('marketplace.oneDayLeft', 'noch 1 Tag')
-                                                            : t('marketplace.daysLeft', 'noch {{count}} Tage', {
-                                                                  count: ad.daysLeft,
-                                                              })}
-                                                    </span>
-                                                </span>
-                                            )}
-
+                                            {renderTimingBadge(ad)}
                                             {ad.pricing && (
                                                 <span className="text-xs text-theme-primary font-semibold">
                                                     · {ad.pricing}
@@ -201,7 +249,18 @@ export const MineTab: React.FC<MineTabProps> = ({
                                     </div>
 
                                     {/* Action buttons */}
-                                    <div className="flex items-center gap-2 self-end sm:self-auto shrink-0">
+                                    <div className="flex items-center gap-2 flex-wrap self-end sm:self-auto shrink-0">
+                                        {onToggleAdPublished && (
+                                            <Button
+                                                size="xs"
+                                                variant="outline"
+                                                onClick={() => onToggleAdPublished(ad, false)}
+                                                className="flex items-center gap-1"
+                                                data-testid={`unpublish-ad-${ad.id}`}
+                                            >
+                                                <span>{t('marketplace.pauseAdBtn', 'Pausieren')}</span>
+                                            </Button>
+                                        )}
                                         <Button
                                             size="xs"
                                             variant="outline"
@@ -251,11 +310,99 @@ export const MineTab: React.FC<MineTabProps> = ({
                             );
                         })}
                     </div>
-                ) : (
-                    <div className="p-6 rounded-2xl bg-bg-app border border-theme-subtle text-center space-y-2">
-                        <p className="text-xs text-theme-light">
-                            {t('marketplace.noOwnActiveAds', 'Aktuell hast du keine aktiven Inserate auf der Pinnwand.')}
-                        </p>
+                )}
+
+                {draftAds.length > 0 && (
+                    <div className="space-y-3" data-testid="draft-ads-section">
+                        <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-600">
+                            <span className="w-2 h-2 rounded-full bg-slate-400" />
+                            <span>{t('marketplace.draftAdsSection', 'Entwürfe (nur lokal)')}</span>
+                            <span className="text-theme-light font-normal">({draftAds.length})</span>
+                        </div>
+                        {draftAds.map((ad) => {
+                            const isExpiredEventDraft = ad.kind === 'event' && ad.status === 'expired';
+                            return (
+                                <div
+                                    key={ad.id}
+                                    className="p-4 sm:p-5 rounded-2xl bg-slate-50/80 border border-dashed border-slate-300 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4"
+                                    data-testid={`my-draft-ad-${ad.id}`}
+                                >
+                                    <div className="space-y-1.5 min-w-0">
+                                        <div className="flex items-center gap-2 flex-wrap">
+                                            {renderKindBadge(ad)}
+                                            <span
+                                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-200/80 text-slate-700 border border-slate-300"
+                                                data-testid={`ad-draft-badge-${ad.id}`}
+                                            >
+                                                <span className="w-1.5 h-1.5 rounded-full bg-slate-500" />
+                                                <span>{t('marketplace.adDraftBadge', 'Entwurf · Nur lokal')}</span>
+                                            </span>
+                                            {renderTimingBadge(ad)}
+                                            {ad.pricing && (
+                                                <span className="text-xs text-theme-primary font-semibold">
+                                                    · {ad.pricing}
+                                                </span>
+                                            )}
+                                        </div>
+
+                                        <h4 className="text-sm font-bold text-theme-secondary truncate max-w-lg">
+                                            {ad.title}
+                                        </h4>
+                                        {ad.text && (
+                                            <p className="text-xs text-theme-light line-clamp-1 max-w-lg">
+                                                {ad.text}
+                                            </p>
+                                        )}
+                                    </div>
+
+                                    {/* Draft actions */}
+                                    <div className="flex items-center gap-2 flex-wrap self-end sm:self-auto shrink-0">
+                                        {isExpiredEventDraft ? (
+                                            <Button
+                                                size="xs"
+                                                variant="primary"
+                                                onClick={() => onEditAd(ad)}
+                                                className="flex items-center gap-1"
+                                                data-testid={`publish-ad-${ad.id}`}
+                                            >
+                                                <Edit3 size={13} />
+                                                <span>{t('marketplace.rescheduleBtn', 'Neu ansetzen')}</span>
+                                            </Button>
+                                        ) : (
+                                            onToggleAdPublished && (
+                                                <Button
+                                                    size="xs"
+                                                    variant="primary"
+                                                    onClick={() => onToggleAdPublished(ad, true)}
+                                                    className="flex items-center gap-1"
+                                                    data-testid={`publish-ad-${ad.id}`}
+                                                >
+                                                    <span>{t('marketplace.publishAdBtn', 'Veröffentlichen')}</span>
+                                                </Button>
+                                            )
+                                        )}
+                                        <Button
+                                            size="xs"
+                                            variant="outline"
+                                            onClick={() => onEditAd(ad)}
+                                            className="flex items-center gap-1"
+                                        >
+                                            <Edit3 size={13} />
+                                            <span>{t('marketplace.editBtn', 'Bearbeiten')}</span>
+                                        </Button>
+                                        <Button
+                                            size="xs"
+                                            variant="outline"
+                                            onClick={() => setConfirmDeleteAdId(ad.id)}
+                                            className="text-rose-600 hover:bg-rose-50 border-rose-200"
+                                            title={t('marketplace.deleteBtn', 'Löschen')}
+                                        >
+                                            <Trash2 size={13} />
+                                        </Button>
+                                    </div>
+                                </div>
+                            );
+                        })}
                     </div>
                 )}
 

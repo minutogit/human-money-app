@@ -257,6 +257,7 @@ describe('StatusChip Component', () => {
                     allowInquiries: true,
                     status: 'active',
                     daysLeft: 7,
+                    published: true,
                 },
             ],
             maxHops: 2,

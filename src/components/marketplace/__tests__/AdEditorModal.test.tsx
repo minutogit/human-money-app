@@ -52,8 +52,8 @@ describe('AdEditorModal Component', () => {
     fireEvent.click(screen.getByTestId('ad-more-details-toggle'));
     fireEvent.click(screen.getByTestId('ad-is-remote-checkbox'));
 
-    // Submit
-    fireEvent.click(screen.getByRole('button', { name: /^Speichern$|^Save$/i }));
+    // Submit (defaults to saving as local draft)
+    fireEvent.click(screen.getByTestId('ad-submit-button'));
 
     expect(onSave).toHaveBeenCalledWith({
       kind: 'request',
@@ -63,10 +63,11 @@ describe('AdEditorModal Component', () => {
       durationDays: 90,
       allowInquiries: false,
       isRemote: true,
+      published: false,
     });
   });
 
-  it('allows custom pricing text and duration selection in Expert mode', () => {
+  it('allows custom pricing text, publishNow toggle, and duration selection in Expert mode', () => {
     const onSave = vi.fn();
 
     render(
@@ -90,7 +91,8 @@ describe('AdEditorModal Component', () => {
     fireEvent.click(duration30Tab);
 
     fireEvent.click(screen.getByTestId('ad-is-remote-checkbox'));
-    fireEvent.click(screen.getByRole('button', { name: /^Speichern$|^Save$/i }));
+    fireEvent.click(screen.getByTestId('ad-publish-now-checkbox'));
+    fireEvent.click(screen.getByTestId('ad-submit-button'));
 
     expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
       kind: 'offer',
@@ -100,6 +102,7 @@ describe('AdEditorModal Component', () => {
       durationDays: 30,
       allowInquiries: true,
       isRemote: true,
+      published: true,
     }));
   });
 
@@ -115,6 +118,7 @@ describe('AdEditorModal Component', () => {
       allowInquiries: false,
       status: 'active',
       daysLeft: 20,
+      published: true,
     };
 
     const onSave = vi.fn();
@@ -150,20 +154,29 @@ describe('AdEditorModal Component', () => {
     });
   });
 
-  it('shows limit warning and disables submit when limit is reached on create', () => {
+  it('disables publish-now checkbox when limit is reached on create while still allowing local draft save', () => {
+    const onSave = vi.fn();
     render(
       <AdEditorModal
         isOpen={true}
         onClose={vi.fn()}
-        onSave={vi.fn()}
+        onSave={onSave}
         activeAdsCount={5}
         maxAds={5}
       />
     );
 
     expect(screen.getByText(/Du hast das Limit von 5 aktiven Inseraten erreicht|limit of 5 active ads/i)).toBeInTheDocument();
-    const saveBtn = screen.getByRole('button', { name: /^Speichern$|^Save$/i });
-    expect(saveBtn).toBeDisabled();
+    expect(screen.getByTestId('ad-publish-now-checkbox')).toBeDisabled();
+
+    fireEvent.change(screen.getByTestId('ad-title-input'), { target: { value: 'Entwurf trotz Limit' } });
+    const saveBtn = screen.getByTestId('ad-submit-button');
+    expect(saveBtn).toBeEnabled();
+    fireEvent.click(saveBtn);
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'Entwurf trotz Limit',
+      published: false,
+    }));
   });
 
   it('renders quota status badge and loads ad image when editing ad has imageToken', async () => {
@@ -177,6 +190,7 @@ describe('AdEditorModal Component', () => {
       allowInquiries: true,
       status: 'active',
       daysLeft: 30,
+      published: true,
       imageToken: 'token-abc-123',
     };
 
@@ -239,6 +253,7 @@ describe('AdEditorModal Component', () => {
       allowInquiries: true,
       status: 'active',
       daysLeft: 30,
+      published: true,
     };
     const onSave = vi.fn();
 
@@ -326,6 +341,7 @@ describe('AdEditorModal Component', () => {
       allowInquiries: true,
       status: 'active',
       daysLeft: 90,
+      published: true,
     };
     const onSave = vi.fn();
 
@@ -385,6 +401,7 @@ describe('AdEditorModal Component', () => {
       allowInquiries: true,
       status: 'active',
       daysLeft: 30,
+      published: true,
       imageToken: 'tok-stale',
     };
 
@@ -429,6 +446,7 @@ describe('AdEditorModal Component', () => {
       allowInquiries: true,
       status: 'active',
       daysLeft: 30,
+      published: true,
     };
     const ad2: FrontendMyAd = {
       id: 'ad-2',
@@ -439,6 +457,7 @@ describe('AdEditorModal Component', () => {
       allowInquiries: true,
       status: 'active',
       daysLeft: 30,
+      published: true,
     };
     const onSave = vi.fn();
 

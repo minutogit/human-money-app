@@ -3228,6 +3228,7 @@ pub(crate) mod tests {
                 image_webp_data_uri: Some(Some(webp_uri)),
                 event_at: None,
                 event_all_day: false,
+                published: Some(true),
             },
             Some(password.to_string()),
             &alice_state,

@@ -188,6 +188,7 @@ describe('MarketplaceView Component', () => {
         status: 'active',
         daysLeft: 25,
         allowInquiries: true,
+        published: true,
       },
     ],
     maxHops: 2,
@@ -275,6 +276,8 @@ describe('MarketplaceView Component', () => {
           });
         case 'upsert_ad':
           return Promise.resolve('ad-new-id');
+        case 'set_ad_published':
+          return Promise.resolve(mockMyProfile);
         case 'renew_ad':
           return Promise.resolve();
         case 'delete_ad':
@@ -432,8 +435,7 @@ describe('MarketplaceView Component', () => {
     fireEvent.change(textInput, { target: { value: 'Bio-Äpfel aus dem eigenen Garten' } });
 
     // Save button
-    const saveBtn = screen.getByRole('button', { name: /^Speichern$|^Save$/i });
-    fireEvent.click(saveBtn);
+    fireEvent.click(screen.getByTestId('ad-submit-button'));
 
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith('upsert_ad', expect.objectContaining({
@@ -441,47 +443,74 @@ describe('MarketplaceView Component', () => {
           kind: 'offer',
           title: 'Frische Äpfel abzugeben',
           text: 'Bio-Äpfel aus dem eigenen Garten',
+          published: false,
         }),
       }));
     });
   });
 
-  it('prompts to publish business card before creating ad if unpublished', async () => {
-    const unpublishedProfile: FrontendMyMarketProfile = {
+  it('allows creating a local draft while card is unpublished and prompts to publish card when publishing the draft', async () => {
+    const unpublishedProfileWithDraft: FrontendMyMarketProfile = {
       ...mockMyProfile,
       published: false,
+      ads: [
+        {
+          id: 'draft-1',
+          kind: 'offer',
+          title: 'Lokaler Entwurf',
+          publishedAt: nowSecs - 60,
+          expiresAt: nowSecs + 86400 * 90,
+          status: 'active',
+          daysLeft: 90,
+          allowInquiries: true,
+          published: false,
+        },
+      ],
     };
 
     (invoke as Mock).mockImplementation((cmd: string) => {
       if (cmd === 'get_market_view') return Promise.resolve(mockSnapshot);
-      if (cmd === 'get_my_market_profile') return Promise.resolve(unpublishedProfile);
+      if (cmd === 'get_my_market_profile') return Promise.resolve(unpublishedProfileWithDraft);
       if (cmd === 'set_card_published') {
-        return Promise.resolve({ ...unpublishedProfile, published: true });
+        return Promise.resolve({ ...unpublishedProfileWithDraft, published: true });
+      }
+      if (cmd === 'set_ad_published') {
+        return Promise.resolve({
+          ...unpublishedProfileWithDraft,
+          published: true,
+          ads: [{ ...unpublishedProfileWithDraft.ads[0], published: true }],
+        });
       }
       return Promise.resolve({});
     });
 
-    render(<MarketplaceView />);
+    render(<MarketplaceView initialTab="mine" />);
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /Inserat aufgeben|Post ad/i })).toBeInTheDocument();
+      expect(screen.getByTestId('publish-ad-draft-1')).toBeInTheDocument();
     });
 
-    const createAdBtn = screen.getByRole('button', { name: /Inserat aufgeben|Post ad/i });
-    fireEvent.click(createAdBtn);
+    // Clicking "Inserat aufgeben" opens editor directly without forcing card publish
+    fireEvent.click(screen.getByTestId('create-ad-btn'));
+    await waitFor(() => {
+      expect(screen.getByTestId('ad-publish-now-checkbox')).toBeDisabled();
+    });
+    fireEvent.click(screen.getByRole('button', { name: /^Abbrechen$|^Cancel$/i }));
 
-    // Shows prompt to publish
+    // Clicking "Veröffentlichen" on the draft prompts to publish business card + ad
+    fireEvent.click(screen.getByTestId('publish-ad-draft-1'));
+
     await waitFor(() => {
       expect(screen.getByText(/Visitenkarte veröffentlichen\?|Publish business card\?/i)).toBeInTheDocument();
     });
 
-    // Confirm publish
-    const confirmBtn = screen.getByRole('button', { name: /Veröffentlichen & Inserat aufgeben|Publish & Post Ad/i });
-    fireEvent.click(confirmBtn);
+    fireEvent.click(screen.getByRole('button', { name: /Beides veröffentlichen|Publish both/i }));
 
     await waitFor(() => {
-      expect(invoke).toHaveBeenCalledWith('set_card_published', expect.objectContaining({
+      expect(invoke).toHaveBeenCalledWith('set_ad_published', expect.objectContaining({
+        id: 'draft-1',
         published: true,
+        alsoPublishCard: true,
       }));
     });
   });

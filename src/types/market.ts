@@ -46,6 +46,7 @@ export interface Ad {
 export interface FrontendMyAd extends Ad {
     status: 'active' | 'expired' | string;
     daysLeft: number;
+    published: boolean;
 }
 
 export interface FrontendMyMarketProfile {
@@ -88,6 +89,7 @@ export interface FrontendAdInput {
     imageWebpDataUri?: string | null;
     eventAt?: number | null;
     eventAllDay?: boolean;
+    published?: boolean;
 }
 
 export type FrontendTrustTier = 'trusted' | 'unknown' | 'hidden';

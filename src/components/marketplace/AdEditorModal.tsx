@@ -62,6 +62,7 @@ export interface AdEditorModalProps {
     mediaMaxBytes?: number;
     mediaMaxCount?: number;
     mediaUsedCount?: number;
+    cardPublished?: boolean;
 }
 
 export const AdEditorModal: React.FC<AdEditorModalProps> = ({
@@ -76,6 +77,7 @@ export const AdEditorModal: React.FC<AdEditorModalProps> = ({
     mediaMaxBytes,
     mediaMaxCount,
     mediaUsedCount,
+    cardPublished = true,
 }) => {
     const { t } = useTranslation();
 
@@ -93,6 +95,7 @@ export const AdEditorModal: React.FC<AdEditorModalProps> = ({
     const [eventDate, setEventDate] = useState('');
     const [eventTime, setEventTime] = useState('');
     const [isRemote, setIsRemote] = useState<boolean>(false);
+    const [publishNow, setPublishNow] = useState<boolean>(false);
     const [isSaving, setIsSaving] = useState(false);
     const [isCompressingImage, setIsCompressingImage] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -166,6 +169,7 @@ export const AdEditorModal: React.FC<AdEditorModalProps> = ({
             setEventTime('');
             setIsRemote(false);
         }
+        setPublishNow(false);
     }, [sessionKey, isOpen, targetAd, ownerDid]);
 
     const handleImageFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -264,6 +268,7 @@ export const AdEditorModal: React.FC<AdEditorModalProps> = ({
         }
 
         const submitSession = sessionSeqRef.current;
+        const shouldPublishOnCreate = !isEditMode && publishNow && cardPublished && !isLimitReached;
         setIsSaving(true);
         try {
             await onSave({
@@ -275,6 +280,7 @@ export const AdEditorModal: React.FC<AdEditorModalProps> = ({
                 durationDays,
                 allowInquiries: targetAd ? (allowInquiriesProp ?? targetAd.allowInquiries) : (allowInquiriesProp ?? true),
                 isRemote,
+                ...(!isEditMode ? { published: shouldPublishOnCreate } : {}),
                 ...(eventFields ?? {}),
                 ...(imageWebpDataUri !== undefined ? { imageWebpDataUri } : {}),
             });
@@ -815,13 +821,73 @@ export const AdEditorModal: React.FC<AdEditorModalProps> = ({
                     </div>
                 </AdvancedDisclosure>
 
+                {/* 7. Publish immediately toggle (on create only; defaults to local draft) */}
+                {!isEditMode && (
+                    <label
+                        className={`flex items-start gap-3 p-3.5 rounded-2xl border transition-colors ${
+                            !cardPublished || isLimitReached
+                                ? 'bg-slate-50/80 border-slate-200 cursor-not-allowed opacity-80'
+                                : publishNow
+                                    ? 'bg-emerald-50/60 border-emerald-300 cursor-pointer'
+                                    : 'bg-slate-50/80 border-theme-subtle cursor-pointer hover:bg-bg-app'
+                        }`}
+                    >
+                        <input
+                            type="checkbox"
+                            checked={publishNow && cardPublished && !isLimitReached}
+                            disabled={!cardPublished || isLimitReached}
+                            onChange={(e) => setPublishNow(e.target.checked)}
+                            className="mt-0.5 rounded accent-theme-primary"
+                            data-testid="ad-publish-now-checkbox"
+                        />
+                        <div className="min-w-0">
+                            <span className="text-xs font-bold text-theme-secondary block">
+                                {t('marketplace.adPublishNowLabel', 'Direkt veröffentlichen')}
+                            </span>
+                            <span className="text-[11px] text-theme-light block mt-0.5 leading-snug">
+                                {!cardPublished
+                                    ? t(
+                                          'marketplace.adPublishNowCardUnpublishedHint',
+                                          'Wird zunächst lokal als Entwurf gespeichert. Anschließend kannst du es zusammen mit deiner Visitenkarte veröffentlichen.',
+                                      )
+                                    : isLimitReached
+                                        ? t(
+                                              'marketplace.adPublishNowLimitHint',
+                                              'Das Limit von {{limit}} veröffentlichten Inseraten ist erreicht. Du kannst dieses Inserat aber als Entwurf speichern.',
+                                              { limit: maxAds },
+                                          )
+                                        : publishNow
+                                            ? t(
+                                                  'marketplace.adPublishNowActiveHint',
+                                                  'Das Inserat wird direkt auf der Pinnwand veröffentlicht.',
+                                              )
+                                            : t(
+                                                  'marketplace.adPublishNowHint',
+                                                  'Standardmäßig wird das Inserat erst einmal lokal als Entwurf gespeichert.',
+                                              )}
+                            </span>
+                        </div>
+                    </label>
+                )}
+
                 {/* Footer buttons */}
                 <div className="flex items-center justify-end gap-2 pt-3 border-t border-theme-subtle/50">
                     <Button variant="secondary" type="button" onClick={onClose} disabled={isSaving}>
                         {t('common.cancel', 'Abbrechen')}
                     </Button>
-                    <Button variant="primary" type="submit" data-testid="ad-submit-button" disabled={isSaving || isCompressingImage || !title.trim() || isLimitReached}>
-                        {isSaving ? t('common.saving', 'Speichern...') : t('common.save', 'Speichern')}
+                    <Button
+                        variant="primary"
+                        type="submit"
+                        data-testid="ad-submit-button"
+                        disabled={isSaving || isCompressingImage || !title.trim() || (publishNow && isLimitReached)}
+                    >
+                        {isSaving
+                            ? t('common.saving', 'Speichern...')
+                            : isEditMode
+                                ? t('common.save', 'Speichern')
+                                : publishNow && cardPublished && !isLimitReached
+                                    ? t('marketplace.saveAndPublishBtn', 'Speichern & Veröffentlichen')
+                                    : t('marketplace.saveAsDraftBtn', 'Als Entwurf speichern')}
                     </Button>
                 </div>
             </form>

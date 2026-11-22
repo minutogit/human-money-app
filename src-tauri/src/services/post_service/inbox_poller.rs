@@ -445,7 +445,7 @@ fn has_active_inquiry_listing(
                     || stored
                         .ads
                         .iter()
-                        .any(|a| a.expires_at > now_secs && a.allow_inquiries))
+                        .any(|a| a.is_published_active(now_secs) && a.ad.allow_inquiries))
         })
         .unwrap_or(false)
 }

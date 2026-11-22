@@ -17,6 +17,7 @@ describe('RenewAdModal Component', () => {
     allowInquiries: true,
     status: 'active',
     daysLeft: 10,
+    published: true,
   };
 
   const mockExpiredAd: FrontendMyAd = {
@@ -29,6 +30,7 @@ describe('RenewAdModal Component', () => {
     allowInquiries: true,
     status: 'expired',
     daysLeft: 0,
+    published: true,
   };
 
   it('renders renew modal for active ad with duration options and confirms renewal', async () => {

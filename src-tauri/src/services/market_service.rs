@@ -229,13 +229,13 @@ fn save_own_market_profile_state(
 
 fn cleanup_unused_own_media(
     service: &mut AppService,
-    ads: &[humoco_market::Ad],
+    ads: &[crate::models::StoredOwnAd],
     old_token: &str,
     password: Option<&str>,
 ) {
     let is_used = ads
         .iter()
-        .any(|a| a.image_token.as_deref() == Some(old_token));
+        .any(|a| a.ad.image_token.as_deref() == Some(old_token));
     if !is_used {
         let _ = crate::state::save_encrypted_bytes(
             service,
@@ -656,11 +656,11 @@ pub(crate) fn rebuild_and_sign_own_card_with_drops_and_profile(
         items.push((humoco_market::CardItem::Skill(skill.clone()), max_hops));
     }
 
-    // Active Ads
+    // Active published Ads (local drafts remain excluded from signed card)
     let mut active_ad_count = 0u8;
-    for ad in &stored.ads {
-        if ad.expires_at > now {
-            items.push((humoco_market::CardItem::Ad(ad.clone()), max_hops));
+    for entry in &stored.ads {
+        if entry.is_published_active(now) {
+            items.push((humoco_market::CardItem::Ad(entry.ad.clone()), max_hops));
             active_ad_count += 1;
         }
     }
@@ -707,13 +707,13 @@ fn build_my_market_profile_dto(
     let media_used_count = stored
         .ads
         .iter()
-        .filter(|a| a.expires_at > now && a.image_token.is_some())
+        .filter(|a| a.is_published_active(now) && a.ad.image_token.is_some())
         .count();
 
     let ads = stored
         .ads
         .iter()
-        .map(|a| crate::models::FrontendMyAd::from_ad(a, now))
+        .map(|a| crate::models::FrontendMyAd::from_own_ad(a, now))
         .collect();
 
     let (share_uri, file_wire, qr_svg, qr_is_partial) = if stored.published {
@@ -923,14 +923,14 @@ pub fn save_my_market_profile_impl(
     stored.max_hops = new_max_hops;
     stored.validity_years = request.validity_years.clamp(1, 3);
     stored.allow_inquiries = request.allow_inquiries;
-    for ad in &mut stored.ads {
-        ad.allow_inquiries = request.allow_inquiries;
+    for entry in &mut stored.ads {
+        entry.ad.allow_inquiries = request.allow_inquiries;
     }
 
     if let Some(pub_flag) = request.published {
         if pub_flag {
             stored.published = true;
-        } else {
+        } else if stored.published {
             stored.published = false;
             sign_unpublish_tombstone_card(&mut service, &mut stored, now)?;
         }
@@ -982,7 +982,7 @@ pub async fn set_card_published_impl(
         stored.published = true;
         let drops = load_drops_from_settings(state, &mut service, None, pw)?;
         rebuild_and_sign_own_card_with_drops(&mut service, &mut stored, now, Some(drops))?;
-    } else {
+    } else if stored.published {
         stored.published = false;
         sign_unpublish_tombstone_card(&mut service, &mut stored, now)?;
     }
@@ -990,6 +990,8 @@ pub async fn set_card_published_impl(
     save_own_market_profile_state(state, &mut service, &stored, pw)?;
     build_my_market_profile_dto(&service, stored, now)
 }
+
+const MAX_LOCAL_DRAFT_ADS: usize = 30;
 
 fn compute_event_expiry(
     event_at: u64,
@@ -1083,7 +1085,7 @@ pub fn upsert_ad_impl(
     let existing_idx = ad_input
         .id
         .as_ref()
-        .and_then(|id| stored.ads.iter().position(|a| &a.id == id));
+        .and_then(|id| stored.ads.iter().position(|a| &a.ad.id == id));
 
     let computed_event_expiry = match ad_input.kind {
         humoco_market::AdKind::Event => {
@@ -1092,7 +1094,7 @@ pub fn upsert_ad_impl(
             })?;
             let allow_ongoing_start = existing_idx
                 .map(|idx| {
-                    let existing = &stored.ads[idx];
+                    let existing = &stored.ads[idx].ad;
                     existing.kind == humoco_market::AdKind::Event
                         && existing.event_at == Some(ev_at)
                         && existing.event_all_day == ad_input.event_all_day
@@ -1154,7 +1156,11 @@ pub fn upsert_ad_impl(
         }
         None => {
             if let Some(idx) = existing_idx {
-                stored.ads[idx].image_token.clone().map(|t| (t, Vec::new()))
+                stored.ads[idx]
+                    .ad
+                    .image_token
+                    .clone()
+                    .map(|t| (t, Vec::new()))
             } else {
                 None
             }
@@ -1166,18 +1172,22 @@ pub fn upsert_ad_impl(
         .map(|(t, bytes)| (crate::state::own_media_storage_key(&t), bytes));
 
     let mut old_token_to_clean: Option<String> = None;
+    let needs_card_rebuild: bool;
     if let Some(idx) = existing_idx {
-        let was_expired = stored.ads[idx].expires_at <= now;
-        let existing_id = stored.ads[idx].id.clone();
+        let was_expired = stored.ads[idx].ad.expires_at <= now;
+        let was_published_active = stored.ads[idx].is_published_active(now);
+        let existing_id = stored.ads[idx].ad.id.clone();
+        let was_draft = !stored.ads[idx].published;
+        let target_published = ad_input.published.unwrap_or(!was_draft);
         let will_be_active = match computed_event_expiry {
             Some(exp) => exp > now,
-            None => !was_expired || stored.ads[idx].kind == humoco_market::AdKind::Event,
+            None => !was_expired || stored.ads[idx].ad.kind == humoco_market::AdKind::Event,
         };
-        if was_expired && will_be_active {
+        if target_published && will_be_active && !was_published_active {
             let other_active = stored
                 .ads
                 .iter()
-                .filter(|a| a.id != existing_id && a.expires_at > now)
+                .filter(|a| a.ad.id != existing_id && a.is_published_active(now))
                 .count();
             if other_active >= humoco_market::MAX_ADS_PER_CARD {
                 return Err(FrontendError::with_code(
@@ -1186,10 +1196,19 @@ pub fn upsert_ad_impl(
                 ));
             }
         }
+        let draft_count = stored.ads.iter().filter(|a| !a.published).count();
+        if !target_published && !was_draft && draft_count >= MAX_LOCAL_DRAFT_ADS {
+            return Err(FrontendError::from(format!(
+                "Maximum number of {} local draft ads reached.",
+                MAX_LOCAL_DRAFT_ADS
+            )));
+        }
 
         // Edit existing Offer/Request: preserve published_at, renewed_at, and expires_at.
         // For Events (or kind transitions involving Event), sync expires_at with event_at.
-        let existing = &mut stored.ads[idx];
+        let entry = &mut stored.ads[idx];
+        entry.published = target_published;
+        let existing = &mut entry.ad;
         let old_kind = existing.kind;
         let old_token = existing.image_token.clone();
         existing.kind = ad_input.kind;
@@ -1217,19 +1236,33 @@ pub fn upsert_ad_impl(
             }
         }
 
+        let now_published_active = entry.is_published_active(now);
+        needs_card_rebuild = was_published_active || now_published_active;
+
         if let Some(ref old_t) = old_token {
             if Some(old_t) != new_image_token.as_ref() {
                 old_token_to_clean = Some(old_t.clone());
             }
         }
     } else {
-        // Create new ad: enforce active ads limit
-        let active_count = stored.ads.iter().filter(|a| a.expires_at > now).count();
-        if active_count >= humoco_market::MAX_ADS_PER_CARD {
-            return Err(FrontendError::with_code(
-                "error.market.adLimitReached",
-                "Maximum number of active ads reached.",
-            ));
+        let publish = ad_input.published.unwrap_or(false);
+        if publish {
+            let active_count = stored
+                .ads
+                .iter()
+                .filter(|a| a.is_published_active(now))
+                .count();
+            if active_count >= humoco_market::MAX_ADS_PER_CARD {
+                return Err(FrontendError::with_code(
+                    "error.market.adLimitReached",
+                    "Maximum number of active ads reached.",
+                ));
+            }
+        } else if stored.ads.iter().filter(|a| !a.published).count() >= MAX_LOCAL_DRAFT_ADS {
+            return Err(FrontendError::from(format!(
+                "Maximum number of {} local draft ads reached.",
+                MAX_LOCAL_DRAFT_ADS
+            )));
         }
 
         if ad_input.id.is_some() {
@@ -1239,24 +1272,28 @@ pub fn upsert_ad_impl(
         let published_at = now;
         let expires_at = computed_event_expiry
             .unwrap_or_else(|| now.saturating_add(ad_input.duration_days.saturating_mul(86_400)));
-        stored.ads.push(humoco_market::Ad {
-            id,
-            kind: ad_input.kind,
-            title: title_trimmed.to_string(),
-            text: ad_input.text,
-            pricing: ad_input.pricing,
-            published_at,
-            renewed_at: None,
-            expires_at,
-            allow_inquiries: ad_input.allow_inquiries,
-            is_remote: ad_input.is_remote,
-            image_token: new_image_token,
-            event_at: ad_input.event_at,
-            event_all_day: ad_input.event_all_day,
+        stored.ads.push(crate::models::StoredOwnAd {
+            ad: humoco_market::Ad {
+                id,
+                kind: ad_input.kind,
+                title: title_trimmed.to_string(),
+                text: ad_input.text,
+                pricing: ad_input.pricing,
+                published_at,
+                renewed_at: None,
+                expires_at,
+                allow_inquiries: ad_input.allow_inquiries,
+                is_remote: ad_input.is_remote,
+                image_token: new_image_token,
+                event_at: ad_input.event_at,
+                event_all_day: ad_input.event_all_day,
+            },
+            published: publish,
         });
+        needs_card_rebuild = publish;
     }
 
-    if stored.published {
+    if stored.published && needs_card_rebuild {
         rebuild_and_sign_own_card(&mut service, &mut stored, now)?;
     }
 
@@ -1273,6 +1310,97 @@ pub fn upsert_ad_impl(
         cleanup_unused_own_media(&mut service, &stored.ads, old_t, pw);
     }
 
+    build_my_market_profile_dto(&service, stored, now)
+}
+
+pub fn set_ad_published_impl(
+    id: String,
+    published: bool,
+    also_publish_card: Option<bool>,
+    password: Option<String>,
+    state: &AppState,
+) -> Result<FrontendMyMarketProfile, FrontendError> {
+    let now = chrono::Utc::now().timestamp().max(0) as u64;
+    let (mut service, resolved_pw) = state
+        .authorize_and_lock_secret(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
+    let pw = resolved_pw.as_deref().map(String::as_str);
+    let mut stored = load_own_market_profile_for_write(&mut service, pw)?;
+
+    let ad_idx = stored
+        .ads
+        .iter()
+        .position(|a| a.ad.id == id)
+        .ok_or_else(|| FrontendError::from("Ad not found".to_string()))?;
+
+    let was_published_active = stored.ads[ad_idx].is_published_active(now);
+    let was_draft = !stored.ads[ad_idx].published;
+    let needs_card_rebuild;
+    let mut card_just_published = false;
+
+    if published {
+        if !was_published_active {
+            let other_active = stored
+                .ads
+                .iter()
+                .filter(|a| a.ad.id != id && a.is_published_active(now))
+                .count();
+            if other_active >= humoco_market::MAX_ADS_PER_CARD {
+                return Err(FrontendError::with_code(
+                    "error.market.adLimitReached",
+                    "Maximum number of active ads reached.",
+                ));
+            }
+        }
+
+        let entry = &mut stored.ads[ad_idx];
+        let ad = &mut entry.ad;
+        if ad.kind == humoco_market::AdKind::Event {
+            if ad.expires_at <= now {
+                return Err(FrontendError::with_code(
+                    "error.market.eventDatePast",
+                    "Event date is in the past; edit the event date before publishing.",
+                ));
+            }
+        } else if ad.expires_at <= now {
+            ad.renewed_at = Some(now.max(ad.published_at));
+            ad.expires_at = now.saturating_add(90 * 86_400);
+        } else if was_draft && ad.renewed_at.is_none() {
+            let dur = ad
+                .expires_at
+                .saturating_sub(ad.published_at)
+                .clamp(30 * 86_400, humoco_market::AD_MAX_DURATION_SECS);
+            ad.published_at = now;
+            ad.expires_at = now.saturating_add(dur);
+        }
+
+        entry.published = true;
+        if also_publish_card.unwrap_or(false) && !stored.published {
+            stored.published = true;
+            card_just_published = true;
+        }
+        needs_card_rebuild = !was_published_active || card_just_published;
+    } else {
+        let draft_count = stored.ads.iter().filter(|a| !a.published).count();
+        if !was_draft && draft_count >= MAX_LOCAL_DRAFT_ADS {
+            return Err(FrontendError::from(format!(
+                "Maximum number of {} local draft ads reached.",
+                MAX_LOCAL_DRAFT_ADS
+            )));
+        }
+        stored.ads[ad_idx].published = false;
+        needs_card_rebuild = was_published_active;
+    }
+
+    if stored.published && needs_card_rebuild {
+        if card_just_published {
+            let drops = load_drops_from_settings(state, &mut service, None, pw)?;
+            rebuild_and_sign_own_card_with_drops(&mut service, &mut stored, now, Some(drops))?;
+        } else {
+            rebuild_and_sign_own_card(&mut service, &mut stored, now)?;
+        }
+    }
+
+    save_own_market_profile_state(state, &mut service, &stored, pw)?;
     build_my_market_profile_dto(&service, stored, now)
 }
 
@@ -1297,21 +1425,27 @@ pub fn renew_ad_impl(
     let ad_idx = stored
         .ads
         .iter()
-        .position(|a| a.id == id)
+        .position(|a| a.ad.id == id)
         .ok_or_else(|| FrontendError::from("Ad not found".to_string()))?;
 
-    if stored.ads[ad_idx].kind == humoco_market::AdKind::Event {
+    if !stored.ads[ad_idx].published {
+        return Err(FrontendError::from(
+            "Draft ads cannot be renewed; publish the draft instead.".to_string(),
+        ));
+    }
+
+    if stored.ads[ad_idx].ad.kind == humoco_market::AdKind::Event {
         return Err(FrontendError::from(
             "Event ads cannot be renewed by duration; edit the event date instead.".to_string(),
         ));
     }
 
     // If the ad was expired, renewing it will make it active -> enforce active ads limit
-    if stored.ads[ad_idx].expires_at <= now {
+    if stored.ads[ad_idx].ad.expires_at <= now {
         let other_active = stored
             .ads
             .iter()
-            .filter(|a| a.id != id && a.expires_at > now)
+            .filter(|a| a.ad.id != id && a.is_published_active(now))
             .count();
         if other_active >= humoco_market::MAX_ADS_PER_CARD {
             return Err(FrontendError::with_code(
@@ -1321,7 +1455,7 @@ pub fn renew_ad_impl(
         }
     }
 
-    let ad = &mut stored.ads[ad_idx];
+    let ad = &mut stored.ads[ad_idx].ad;
     ad.renewed_at = Some(now);
     ad.expires_at = now.saturating_add(duration_days.saturating_mul(86_400));
 
@@ -1348,12 +1482,13 @@ pub fn delete_ad_impl(
     let ad_idx = stored
         .ads
         .iter()
-        .position(|a| a.id == id)
+        .position(|a| a.ad.id == id)
         .ok_or_else(|| FrontendError::from("Ad not found".to_string()))?;
-    let old_token_opt = stored.ads[ad_idx].image_token.clone();
+    let was_published_active = stored.ads[ad_idx].is_published_active(now);
+    let old_token_opt = stored.ads[ad_idx].ad.image_token.clone();
     stored.ads.remove(ad_idx);
 
-    if stored.published {
+    if stored.published && was_published_active {
         rebuild_and_sign_own_card(&mut service, &mut stored, now)?;
     }
 
@@ -1555,8 +1690,11 @@ pub fn get_market_view_impl(
                     .ok()
                     .unwrap_or_default();
                 if let Some(ref last_card) = stored.last_card {
-                    let active_ads_count =
-                        stored.ads.iter().filter(|a| a.expires_at > now).count() as u8;
+                    let active_ads_count = stored
+                        .ads
+                        .iter()
+                        .filter(|a| a.is_published_active(now))
+                        .count() as u8;
                     let time_left = last_card.payload.valid_until.saturating_sub(now);
                     let recipient_changed = !active_user_id.trim().is_empty()
                         && last_card.payload.recipient_id() != active_user_id.trim();
@@ -1679,15 +1817,15 @@ pub fn get_market_view_impl(
 
     if let Some(ref stored) = stored_opt {
         if stored.published {
-            for ad in &stored.ads {
-                if ad.expires_at > now {
-                    let days_left = ad.expires_at.saturating_sub(now).div_ceil(86_400);
+            for entry in &stored.ads {
+                if entry.is_published_active(now) {
+                    let days_left = entry.ad.expires_at.saturating_sub(now).div_ceil(86_400);
                     board.push(FrontendBoardItem {
                         owner_did: canonical_own_did.clone(),
                         recipient_did: own_did.clone(),
                         owner_name: wallet_owner_name.clone(),
                         trust: FrontendTrustTier::Trusted,
-                        ad: ad.clone(),
+                        ad: entry.ad.clone(),
                         days_left,
                         is_own: true,
                     });
@@ -2218,6 +2356,7 @@ mod tests {
             image_webp_data_uri: None,
             event_at: None,
             event_all_day: false,
+            published: Some(true),
         };
         assert!(upsert_ad_impl(bad_ad, Some(password.to_string()), &alice_state).is_err());
 
@@ -2234,6 +2373,7 @@ mod tests {
             image_webp_data_uri: None,
             event_at: None,
             event_all_day: false,
+            published: Some(true),
         };
         let p1 = upsert_ad_impl(ad_30, Some(password.to_string()), &alice_state).unwrap();
         assert_eq!(p1.ads.len(), 1);
@@ -2286,6 +2426,7 @@ mod tests {
                 image_webp_data_uri: None,
                 event_at: None,
                 event_all_day: false,
+                published: Some(true),
             };
             let p = upsert_ad_impl(ad_input, Some(password.to_string()), &alice_state).unwrap();
             ad_ids.push(p.ads.last().unwrap().id.clone());
@@ -2304,6 +2445,7 @@ mod tests {
             image_webp_data_uri: None,
             event_at: None,
             event_all_day: false,
+            published: Some(true),
         };
         let err = upsert_ad_impl(ad_11, Some(password.to_string()), &alice_state).unwrap_err();
         assert_eq!(err.code, "error.market.adLimitReached");
@@ -2331,6 +2473,7 @@ mod tests {
             image_webp_data_uri: None,
             event_at: None,
             event_all_day: false,
+            published: Some(true),
         };
         let p_after = upsert_ad_impl(edit_input, Some(password.to_string()), &alice_state).unwrap();
         let ad_after = p_after.ads.iter().find(|a| a.id == target_id).unwrap();
@@ -2362,6 +2505,7 @@ mod tests {
             image_webp_data_uri: None,
             event_at: None,
             event_all_day: false,
+            published: Some(true),
         };
         let p_new = upsert_ad_impl(ad_new, Some(password.to_string()), &alice_state).unwrap();
         assert_eq!(p_new.ads.len(), 10);
@@ -2389,6 +2533,7 @@ mod tests {
             image_webp_data_uri: None,
             event_at: None,
             event_all_day: false,
+            published: Some(true),
         };
         assert!(upsert_ad_impl(missing_date, Some(password.to_string()), &alice_state).is_err());
 
@@ -2405,6 +2550,7 @@ mod tests {
             image_webp_data_uri: None,
             event_at: Some(now + 86_400),
             event_all_day: false,
+            published: Some(true),
         };
         assert!(upsert_ad_impl(offer_with_date, Some(password.to_string()), &alice_state).is_err());
 
@@ -2421,6 +2567,7 @@ mod tests {
             image_webp_data_uri: None,
             event_at: Some(now + 185 * 86_400),
             event_all_day: false,
+            published: Some(true),
         };
         assert!(upsert_ad_impl(too_far, Some(password.to_string()), &alice_state).is_err());
 
@@ -2438,6 +2585,7 @@ mod tests {
             image_webp_data_uri: None,
             event_at: Some(ev_ts),
             event_all_day: false,
+            published: Some(true),
         };
         let p1 = upsert_ad_impl(valid_event, Some(password.to_string()), &alice_state).unwrap();
         assert_eq!(p1.ads.len(), 1);
@@ -2464,11 +2612,310 @@ mod tests {
             image_webp_data_uri: None,
             event_at: Some(new_ev_ts),
             event_all_day: true,
+            published: None,
         };
         let p2 = upsert_ad_impl(edit_event, Some(password.to_string()), &alice_state).unwrap();
         assert_eq!(p2.ads[0].event_at, Some(new_ev_ts));
         assert!(p2.ads[0].event_all_day);
         assert_eq!(p2.ads[0].expires_at, new_ev_ts + 64_800);
+    }
+
+    #[tokio::test]
+    async fn test_ad_draft_lifecycle_no_card_sign_publish_pause_and_delete() {
+        let base_dir = temp_test_dir("ad_draft_lifecycle");
+        let password = "TestPassword123!";
+        let alice_service =
+            setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
+        let alice_state = create_test_state(alice_service);
+
+        // 1. Create a draft ad while card is unpublished -> saved locally as draft
+        let draft_input = FrontendAdInput {
+            id: None,
+            kind: humoco_market::AdKind::Offer,
+            title: "Draft Bread".to_string(),
+            text: Some("Testing draft".to_string()),
+            pricing: None,
+            duration_days: 90,
+            allow_inquiries: true,
+            is_remote: false,
+            image_webp_data_uri: None,
+            event_at: None,
+            event_all_day: false,
+            published: None,
+        };
+        let p1 = upsert_ad_impl(draft_input, Some(password.to_string()), &alice_state).unwrap();
+        assert!(!p1.published);
+        assert_eq!(p1.ads.len(), 1);
+        assert!(!p1.ads[0].published);
+        let draft_id = p1.ads[0].id.clone();
+
+        // Publish card -> signed card has ad_count == 0 (draft is excluded!)
+        let p_pub_card =
+            set_card_published_impl(true, Some(password.to_string()), &alice_state)
+                .await
+                .unwrap();
+        assert!(p_pub_card.published);
+        let stored_after_pub_card = alice_state.cache_own_market_profile().unwrap();
+        let v_before_draft_edit = stored_after_pub_card.last_card.as_ref().unwrap().payload.v;
+        assert_eq!(
+            stored_after_pub_card.last_card.as_ref().unwrap().payload.ad_count,
+            0
+        );
+
+        // Board must NOT contain the draft
+        let snap1 = get_market_view_impl(Some(password.to_string()), &alice_state).unwrap();
+        assert!(snap1.board.is_empty());
+
+        // 2. Editing a draft must NOT bump card version v
+        let edit_draft = FrontendAdInput {
+            id: Some(draft_id.clone()),
+            kind: humoco_market::AdKind::Offer,
+            title: "Draft Bread Updated".to_string(),
+            text: None,
+            pricing: None,
+            duration_days: 90,
+            allow_inquiries: true,
+            is_remote: false,
+            image_webp_data_uri: None,
+            event_at: None,
+            event_all_day: false,
+            published: None,
+        };
+        let p_edit = upsert_ad_impl(edit_draft, Some(password.to_string()), &alice_state).unwrap();
+        assert!(!p_edit.ads[0].published);
+        let stored_after_edit = alice_state.cache_own_market_profile().unwrap();
+        assert_eq!(
+            stored_after_edit.last_card.as_ref().unwrap().payload.v,
+            v_before_draft_edit
+        );
+
+        // 3. Publish draft via set_ad_published_impl(true) -> bumps v & appears on board
+        let p_pub_ad = set_ad_published_impl(
+            draft_id.clone(),
+            true,
+            None,
+            Some(password.to_string()),
+            &alice_state,
+        )
+        .unwrap();
+        assert!(p_pub_ad.ads[0].published);
+        let stored_after_pub_ad = alice_state.cache_own_market_profile().unwrap();
+        let v_after_pub_ad = stored_after_pub_ad.last_card.as_ref().unwrap().payload.v;
+        assert!(v_after_pub_ad > v_before_draft_edit);
+        assert_eq!(
+            stored_after_pub_ad.last_card.as_ref().unwrap().payload.ad_count,
+            1
+        );
+        let snap2 = get_market_view_impl(Some(password.to_string()), &alice_state).unwrap();
+        assert_eq!(snap2.board.len(), 1);
+        assert_eq!(snap2.board[0].ad.title, "Draft Bread Updated");
+
+        // 4. Pausing ad via set_ad_published_impl(false) -> bumps v, removes from card & board
+        let p_paused = set_ad_published_impl(
+            draft_id.clone(),
+            false,
+            None,
+            Some(password.to_string()),
+            &alice_state,
+        )
+        .unwrap();
+        assert!(!p_paused.ads[0].published);
+        let stored_after_pause = alice_state.cache_own_market_profile().unwrap();
+        let v_after_pause = stored_after_pause.last_card.as_ref().unwrap().payload.v;
+        assert!(v_after_pause > v_after_pub_ad);
+        assert_eq!(
+            stored_after_pause.last_card.as_ref().unwrap().payload.ad_count,
+            0
+        );
+        let snap3 = get_market_view_impl(Some(password.to_string()), &alice_state).unwrap();
+        assert!(snap3.board.is_empty());
+
+        // 5. Deleting a draft does NOT bump card version v
+        let p_del =
+            delete_ad_impl(draft_id, Some(password.to_string()), &alice_state).unwrap();
+        assert!(p_del.ads.is_empty());
+        let stored_after_del = alice_state.cache_own_market_profile().unwrap();
+        assert_eq!(
+            stored_after_del.last_card.as_ref().unwrap().payload.v,
+            v_after_pause
+        );
+
+        // 6. Publishing 10 active ads succeeds, 11th published fails with adLimitReached,
+        //    yet saving an 11th ad as a draft succeeds!
+        for i in 1..=10 {
+            let input = FrontendAdInput {
+                id: None,
+                kind: humoco_market::AdKind::Offer,
+                title: format!("Pub {}", i),
+                text: None,
+                pricing: None,
+                duration_days: 90,
+                allow_inquiries: true,
+                is_remote: false,
+                image_webp_data_uri: None,
+                event_at: None,
+                event_all_day: false,
+                published: Some(true),
+            };
+            upsert_ad_impl(input, Some(password.to_string()), &alice_state).unwrap();
+        }
+        let extra_draft = FrontendAdInput {
+            id: None,
+            kind: humoco_market::AdKind::Offer,
+            title: "Extra Draft 11".to_string(),
+            text: None,
+            pricing: None,
+            duration_days: 90,
+            allow_inquiries: true,
+            is_remote: false,
+            image_webp_data_uri: None,
+            event_at: None,
+            event_all_day: false,
+            published: Some(false),
+        };
+        let p_extra = upsert_ad_impl(extra_draft, Some(password.to_string()), &alice_state).unwrap();
+        assert_eq!(p_extra.ads.len(), 11);
+        let extra_id = p_extra.ads.last().unwrap().id.clone();
+        let err = set_ad_published_impl(
+            extra_id,
+            true,
+            None,
+            Some(password.to_string()),
+            &alice_state,
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "error.market.adLimitReached");
+    }
+
+    #[test]
+    fn test_atomic_also_publish_card_publishes_card_and_draft_together() {
+        let base_dir = temp_test_dir("atomic_also_publish_card");
+        let password = "TestPassword123!";
+        let alice_service =
+            setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
+        let alice_state = create_test_state(alice_service);
+
+        let draft = upsert_ad_impl(
+            FrontendAdInput {
+                id: None,
+                kind: humoco_market::AdKind::Offer,
+                title: "Atomic Draft".to_string(),
+                text: None,
+                pricing: None,
+                duration_days: 90,
+                allow_inquiries: true,
+                is_remote: false,
+                image_webp_data_uri: None,
+                event_at: None,
+                event_all_day: false,
+                published: Some(false),
+            },
+            Some(password.to_string()),
+            &alice_state,
+        )
+        .unwrap();
+        assert!(!draft.published);
+        assert!(!draft.ads[0].published);
+
+        let res = set_ad_published_impl(
+            draft.ads[0].id.clone(),
+            true,
+            Some(true),
+            Some(password.to_string()),
+            &alice_state,
+        )
+        .unwrap();
+        assert!(res.published);
+        assert!(res.ads[0].published);
+        let stored = alice_state.cache_own_market_profile().unwrap();
+        assert_eq!(stored.last_card.unwrap().payload.ad_count, 1);
+    }
+
+    #[tokio::test]
+    async fn test_unpublish_tombstone_only_signed_on_true_to_false_transition() {
+        let base_dir = temp_test_dir("unpublish_tombstone_guard");
+        let password = "TestPassword123!";
+        let alice_service =
+            setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
+        let alice_state = create_test_state(alice_service);
+
+        // Never published -> unpublishing leaves last_card == None
+        let p0 = set_card_published_impl(false, Some(password.to_string()), &alice_state)
+            .await
+            .unwrap();
+        assert!(!p0.published);
+        assert!(alice_state
+            .cache_own_market_profile()
+            .unwrap()
+            .last_card
+            .is_none());
+
+        // Publish -> signs card (v1)
+        set_card_published_impl(true, Some(password.to_string()), &alice_state)
+            .await
+            .unwrap();
+        let v1 = alice_state
+            .cache_own_market_profile()
+            .unwrap()
+            .last_card
+            .unwrap()
+            .payload
+            .v;
+
+        // Unpublish (true -> false) -> signs tombstone (v2 > v1)
+        set_card_published_impl(false, Some(password.to_string()), &alice_state)
+            .await
+            .unwrap();
+        let v2 = alice_state
+            .cache_own_market_profile()
+            .unwrap()
+            .last_card
+            .unwrap()
+            .payload
+            .v;
+        assert!(v2 > v1);
+
+        // Repeated unpublish (false -> false) or local save with published: Some(false) must NOT re-sign tombstone
+        set_card_published_impl(false, Some(password.to_string()), &alice_state)
+            .await
+            .unwrap();
+        assert_eq!(
+            alice_state
+                .cache_own_market_profile()
+                .unwrap()
+                .last_card
+                .unwrap()
+                .payload
+                .v,
+            v2
+        );
+        save_my_market_profile_impl(
+            FrontendSaveMyMarketProfileRequest {
+                profile: FrontendUserProfile {
+                    first_name: Some("Alice".to_string()),
+                    ..Default::default()
+                },
+                visibility: CardFieldVisibility::default(),
+                skills: Vec::new(),
+                max_hops: 2,
+                validity_years: 2,
+                allow_inquiries: true,
+                published: Some(false),
+            },
+            Some(password.to_string()),
+            &alice_state,
+        )
+        .unwrap();
+        assert_eq!(
+            alice_state
+                .cache_own_market_profile()
+                .unwrap()
+                .last_card
+                .unwrap()
+                .payload
+                .v,
+            v2
+        );
     }
 
     #[tokio::test]
@@ -2673,6 +3120,7 @@ mod tests {
             image_webp_data_uri: None,
             event_at: None,
             event_all_day: false,
+            published: Some(true),
         };
         upsert_ad_impl(ad_req, Some(password.to_string()), &alice_state).unwrap();
         let alice_profile = set_card_published_impl(true, Some(password.to_string()), &alice_state)
@@ -2891,6 +3339,7 @@ mod tests {
             image_webp_data_uri: Some(Some(ad_data_uri.clone())),
             event_at: None,
             event_all_day: false,
+            published: Some(true),
         };
         let p_after_ad =
             upsert_ad_impl(ad_with_img, Some(password.to_string()), &alice_state).unwrap();
@@ -2930,6 +3379,7 @@ mod tests {
             image_webp_data_uri: None,
             event_at: None,
             event_all_day: false,
+            published: Some(true),
         };
         let p_edit =
             upsert_ad_impl(edit_no_img_change, Some(password.to_string()), &alice_state).unwrap();
@@ -2969,6 +3419,7 @@ mod tests {
             image_webp_data_uri: Some(Some(jpeg_ad_data_uri.clone())),
             event_at: None,
             event_all_day: false,
+            published: Some(true),
         };
         let p_after_jpeg_ad =
             upsert_ad_impl(ad_with_jpeg, Some(password.to_string()), &alice_state).unwrap();
@@ -3103,6 +3554,7 @@ mod tests {
             image_webp_data_uri: None,
             event_at: None,
             event_all_day: false,
+            published: Some(true),
         };
         let p_with_ad = upsert_ad_impl(ad_input, Some(password.to_string()), &alice_state).unwrap();
         assert_eq!(p_with_ad.ads.len(), 1);
@@ -3260,6 +3712,7 @@ mod tests {
                 image_webp_data_uri: None,
                 event_at: None,
                 event_all_day: false,
+                published: Some(true),
             },
             Some(password.to_string()),
             &alice_state,
@@ -3329,6 +3782,7 @@ mod tests {
                 image_webp_data_uri: None,
                 event_at: None,
                 event_all_day: false,
+                published: Some(true),
             },
             None,
             &alice_state,
@@ -3947,6 +4401,7 @@ mod tests {
                 image_webp_data_uri: Some(Some(oversized_uri)),
                 event_at: None,
                 event_all_day: false,
+                published: Some(true),
             },
             Some(pw.to_string()),
             &state,
@@ -3966,6 +4421,7 @@ mod tests {
                 image_webp_data_uri: None,
                 event_at: None,
                 event_all_day: false,
+                published: Some(true),
             },
             Some(pw.to_string()),
             &state,
@@ -3989,6 +4445,7 @@ mod tests {
                 image_webp_data_uri: Some(Some(valid_webp.clone())),
                 event_at: None,
                 event_all_day: false,
+                published: Some(true),
             },
             Some(pw.to_string()),
             &state,
@@ -4080,6 +4537,7 @@ mod tests {
                 ))),
                 event_at: None,
                 event_all_day: false,
+                published: Some(true),
             },
             Some(pw.to_string()),
             &master_state,

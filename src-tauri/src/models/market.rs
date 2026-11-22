@@ -54,6 +54,19 @@ fn default_true() -> bool {
     true
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoredOwnAd {
+    pub ad: humoco_market::Ad,
+    pub published: bool,
+}
+
+impl StoredOwnAd {
+    pub fn is_published_active(&self, now: u64) -> bool {
+        self.published && self.ad.expires_at > now
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StoredOwnMarketProfile {
@@ -62,7 +75,7 @@ pub struct StoredOwnMarketProfile {
     #[serde(default)]
     pub skills: Vec<humoco_market::Skill>,
     #[serde(default)]
-    pub ads: Vec<humoco_market::Ad>,
+    pub ads: Vec<StoredOwnAd>,
     #[serde(default = "default_max_hops")]
     pub max_hops: u8,
     pub shrink_hops: u8,
@@ -160,10 +173,12 @@ pub struct FrontendMyAd {
     pub event_at: Option<u64>,
     #[serde(default)]
     pub event_all_day: bool,
+    pub published: bool,
 }
 
 impl FrontendMyAd {
-    pub fn from_ad(ad: &humoco_market::Ad, now: u64) -> Self {
+    pub fn from_own_ad(entry: &StoredOwnAd, now: u64) -> Self {
+        let ad = &entry.ad;
         let (status, days_left) = if ad.expires_at > now {
             let diff = ad.expires_at - now;
             let days = diff.div_ceil(86_400);
@@ -188,6 +203,7 @@ impl FrontendMyAd {
             image_token: ad.image_token.clone(),
             event_at: ad.event_at,
             event_all_day: ad.event_all_day,
+            published: entry.published,
         }
     }
 }
@@ -273,6 +289,8 @@ pub struct FrontendAdInput {
     pub event_at: Option<u64>,
     #[serde(default)]
     pub event_all_day: bool,
+    #[serde(default)]
+    pub published: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]

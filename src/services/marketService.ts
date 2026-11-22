@@ -66,6 +66,23 @@ export const marketService = {
         return res;
     },
 
+    setAdPublished: async (
+        id: string,
+        published: boolean,
+        password?: string,
+        alsoPublishCard?: boolean
+    ): Promise<FrontendMyMarketProfile> => {
+        const res = await invoke<FrontendMyMarketProfile>("set_ad_published", {
+            id,
+            published,
+            password: password || undefined,
+            ...(alsoPublishCard !== undefined ? { alsoPublishCard } : {}),
+        });
+        notifyMyProfileUpdated(res);
+        emitAppEvent(APP_EVENTS.MARKET_CARD_UPDATED);
+        return res;
+    },
+
     renewAd: async (id: string, durationDays: number, password?: string): Promise<FrontendMyMarketProfile> => {
         const res = await invoke<FrontendMyMarketProfile>("renew_ad", {
             id,

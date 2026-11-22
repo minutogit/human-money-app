@@ -864,12 +864,15 @@ pub(crate) fn check_inquiry_target(
             ) {
                 match target {
                     humoco_market::InquiryTarget::Ad { ad_id, .. } => {
-                        if let Some(ad) = stored.ads.iter().find(|a| &a.id == ad_id) {
-                            if stored.published && ad.expires_at > now_secs && ad.allow_inquiries {
+                        if let Some(entry) = stored.ads.iter().find(|a| &a.ad.id == ad_id) {
+                            if stored.published
+                                && entry.is_published_active(now_secs)
+                                && entry.ad.allow_inquiries
+                            {
                                 return Ok((
                                     Some(humoco_market::InquiryTarget::Ad {
-                                        ad_id: ad.id.clone(),
-                                        ad_title: ad.title.clone(),
+                                        ad_id: entry.ad.id.clone(),
+                                        ad_title: entry.ad.title.clone(),
                                     }),
                                     true,
                                 ));

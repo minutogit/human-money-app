@@ -129,6 +129,7 @@ export const COMMAND_ACCESS_POLICY = {
     refresh_wot_provider_url: "dailyPay",
     set_card_published: "dailyPay",
     upsert_ad: "dailyPay",
+    set_ad_published: "dailyPay",
     renew_ad: "dailyPay",
     delete_ad: "dailyPay",
     import_contact_card: "dailyPay",
