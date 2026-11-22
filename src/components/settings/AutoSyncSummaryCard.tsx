@@ -16,7 +16,7 @@ import { useOptionalSession } from '../../context/SessionContext';
 import { notifySyncStatusUpdated, SYNC_STATUS_UPDATED_EVENT } from '../../utils/syncEvents';
 import { copyToClipboard } from '../../utils/clipboard';
 import { translateError } from '../../utils/errorHelper';
-import { collectRevokedNotices } from './sync/syncHelpers';
+import { collectRevokedNotices, isSafeExternalSyncUrl } from './sync/syncHelpers';
 import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
 
@@ -230,7 +230,7 @@ export const AutoSyncSummaryCard: React.FC<AutoSyncSummaryCardProps> = ({
     };
 
     const handleOpenPendingRegister = async (drop: StoredPublicSync) => {
-        if (!drop.registerUrl || (!drop.registerUrl.startsWith('https://') && !drop.registerUrl.startsWith('http://'))) {
+        if (!isSafeExternalSyncUrl(drop.registerUrl) || !drop.registerUrl) {
             return;
         }
         const sep = drop.registerUrl.includes('?') ? '&' : '?';
@@ -256,26 +256,26 @@ export const AutoSyncSummaryCard: React.FC<AutoSyncSummaryCardProps> = ({
         setIsConnecting(true);
         setFeedback(null);
         try {
-            const info = await marketService.probePublicSync(drop.writeUrl);
-            if (info) {
+            const action = async (pwd: string | null) => {
+                const info = await marketService.probePublicSync(drop.writeUrl, pwd || undefined);
+                if (!info) return null;
                 const hasAuth = (info.authorizedChannels || []).length > 0;
-                const saveAction = async (pwd: string | null) => {
-                    await marketService.savePublicSync(
-                        {
-                            writeUrl: info.writeUrl,
-                            readUrl: info.readUrl,
-                            dropPub: info.dropPub,
-                            registerUrl: info.registerUrl,
-                            enabled: hasAuth,
-                        },
-                        pwd || undefined,
-                    );
-                };
-                if (session?.protectAction) {
-                    await session.protectAction(saveAction, protectCommandOptions('save_public_sync'));
-                } else {
-                    await saveAction(null);
-                }
+                await marketService.savePublicSync(
+                    {
+                        writeUrl: info.writeUrl,
+                        readUrl: info.readUrl,
+                        dropPub: info.dropPub,
+                        registerUrl: info.registerUrl,
+                        enabled: hasAuth,
+                    },
+                    pwd || undefined,
+                );
+                return { info, hasAuth };
+            };
+            const res = session?.protectAction
+                ? await session.protectAction(action, protectCommandOptions('save_public_sync'))
+                : await action(null);
+            if (res) {
                 const fresh = await settingsService.getConfig().catch(() => null);
                 if (fresh) {
                     onConfigUpdated?.(fresh);
@@ -283,8 +283,8 @@ export const AutoSyncSummaryCard: React.FC<AutoSyncSummaryCardProps> = ({
                 await loadDiscovered();
                 notifySyncStatusUpdated();
                 setFeedback({
-                    type: hasAuth ? 'success' : 'info',
-                    message: hasAuth ? t('settings.syncProbeSuccess') : t('settings.syncProbeUnauthorized'),
+                    type: res.hasAuth ? 'success' : 'info',
+                    message: res.hasAuth ? t('settings.syncProbeSuccess') : t('settings.syncProbeUnauthorized'),
                 });
             }
         } catch (err) {
@@ -299,26 +299,26 @@ export const AutoSyncSummaryCard: React.FC<AutoSyncSummaryCardProps> = ({
         setIsConnecting(true);
         setFeedback(null);
         try {
-            const info = await marketService.probePublicSync(COMMUNITY_SYNC_PRESET_URL);
-            if (info) {
+            const action = async (pwd: string | null) => {
+                const info = await marketService.probePublicSync(COMMUNITY_SYNC_PRESET_URL, pwd || undefined);
+                if (!info) return null;
                 const hasAuth = info.authorizedChannels.length > 0;
-                const saveAction = async (pwd: string | null) => {
-                    await marketService.savePublicSync(
-                        {
-                            writeUrl: info.writeUrl,
-                            readUrl: info.readUrl,
-                            dropPub: info.dropPub,
-                            registerUrl: info.registerUrl,
-                            enabled: hasAuth,
-                        },
-                        pwd || undefined,
-                    );
-                };
-                if (session?.protectAction) {
-                    await session.protectAction(saveAction, protectCommandOptions('save_public_sync'));
-                } else {
-                    await saveAction(null);
-                }
+                await marketService.savePublicSync(
+                    {
+                        writeUrl: info.writeUrl,
+                        readUrl: info.readUrl,
+                        dropPub: info.dropPub,
+                        registerUrl: info.registerUrl,
+                        enabled: hasAuth,
+                    },
+                    pwd || undefined,
+                );
+                return { info, hasAuth };
+            };
+            const res = session?.protectAction
+                ? await session.protectAction(action, protectCommandOptions('save_public_sync'))
+                : await action(null);
+            if (res) {
                 const fresh = await settingsService.getConfig().catch(() => null);
                 if (fresh) {
                     onConfigUpdated?.(fresh);
@@ -467,7 +467,7 @@ export const AutoSyncSummaryCard: React.FC<AutoSyncSummaryCardProps> = ({
                                     {t('settings.syncProbeUnauthorized')}
                                 </p>
                                 <div className="flex flex-wrap gap-2">
-                                    {drop.registerUrl && (
+                                    {isSafeExternalSyncUrl(drop.registerUrl) && (
                                         <Button
                                             type="button"
                                             size="xs"

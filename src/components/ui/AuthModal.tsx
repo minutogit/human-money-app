@@ -33,9 +33,9 @@ export function AuthModal({
     const [password, setPassword] = useState('');
     const isPin = credentialKind === 'pin';
 
-    // Reset credential field when modal opens or switches between PIN and password
+    // Reset credential field when modal opens/closes or switches between PIN and password
     useEffect(() => {
-        if (isOpen) setPassword('');
+        setPassword('');
     }, [isOpen, credentialKind]);
 
     const handleSubmit = (e: React.FormEvent) => {

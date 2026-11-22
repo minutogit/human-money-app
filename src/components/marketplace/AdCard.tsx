@@ -98,6 +98,8 @@ export const AdCard: React.FC<AdCardProps> = ({
         }
 
         if (!shouldAutoLoad && !manualLoadRequested) {
+            setImageUri(null);
+            setImageFailed(false);
             return;
         }
 

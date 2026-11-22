@@ -40,6 +40,13 @@ export const QrScannerModal: React.FC<QrScannerModalProps> = ({
 
     const hasBarcodeDetector = typeof window !== 'undefined' && 'BarcodeDetector' in window;
 
+    const onScanRef = useRef(onScan);
+    const onCloseRef = useRef(onClose);
+    useEffect(() => {
+        onScanRef.current = onScan;
+        onCloseRef.current = onClose;
+    }, [onScan, onClose]);
+
     const stopCamera = useCallback(() => {
         if (scanTimerRef.current) {
             clearTimeout(scanTimerRef.current);
@@ -107,8 +114,8 @@ export const QrScannerModal: React.FC<QrScannerModalProps> = ({
                             if (raw) {
                                 active = false;
                                 stopCamera();
-                                onScan(raw);
-                                onClose();
+                                onScanRef.current(raw);
+                                onCloseRef.current();
                                 return;
                             }
                         } catch {
@@ -133,7 +140,7 @@ export const QrScannerModal: React.FC<QrScannerModalProps> = ({
             active = false;
             stopCamera();
         };
-    }, [isOpen, hasBarcodeDetector, stopCamera, onScan, onClose, t]);
+    }, [isOpen, hasBarcodeDetector, stopCamera, t]);
 
     const handleImageFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];

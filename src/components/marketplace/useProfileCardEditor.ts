@@ -16,6 +16,7 @@ import {
     roundCoordinates,
 } from '../../utils/geoUtils';
 import { compressAvatarToWebpDataUri } from '../../utils/imageCompression';
+import { translateError } from '../../utils/errorHelper';
 
 export type CardPresetId = 'private' | 'local' | 'business';
 
@@ -221,7 +222,7 @@ export function useProfileCardEditor({
                 setCoordPrecision(2);
             }
         } catch (err) {
-            setGeoError(err instanceof Error ? err.message : String(err));
+            setGeoError(translateError(err, t));
         } finally {
             setIsLocating(false);
         }
@@ -237,7 +238,7 @@ export function useProfileCardEditor({
             const webpDataUri = await compressAvatarToWebpDataUri(file);
             setProfile((prev) => ({ ...prev, pictureUrl: webpDataUri }));
         } catch (err) {
-            setError(err instanceof Error ? err.message : String(err));
+            setError(translateError(err, t));
         }
     };
 
@@ -322,7 +323,7 @@ export function useProfileCardEditor({
             });
             onClose();
         } catch (err) {
-            setError(err instanceof Error ? err.message : String(err));
+            setError(translateError(err, t));
         } finally {
             setIsSaving(false);
         }

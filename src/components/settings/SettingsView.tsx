@@ -449,7 +449,10 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                     title={
                         isDevUnlocked
                             ? t('settings.devModeUnlockedToast')
-                            : `Klick ${7 - devClickCount} bis Entwicklermodus`
+                            : t('settings.devModeClicksRemaining', {
+                                  count: Math.max(0, 7 - devClickCount),
+                                  defaultValue: `Klick ${Math.max(0, 7 - devClickCount)} bis Entwicklermodus`,
+                              })
                     }
                     role="button"
                     tabIndex={0}

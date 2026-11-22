@@ -122,6 +122,11 @@ export function useSyncServiceAdmin({ config, onConfigUpdated }: UseSyncServiceA
         }
     }, [config]);
 
+    const hasPublicSyncsRef = useRef(Boolean(config?.securityPolicy.publicSyncs?.length));
+    useEffect(() => {
+        hasPublicSyncsRef.current = Boolean(config?.securityPolicy.publicSyncs?.length);
+    }, [config]);
+
     const loadData = useCallback(async () => {
         const seq = ++loadSeqRef.current;
         setIsLoading(true);
@@ -145,7 +150,7 @@ export function useSyncServiceAdmin({ config, onConfigUpdated }: UseSyncServiceA
             }
             if (Array.isArray(freshConfig?.securityPolicy.publicSyncs)) {
                 setConfiguredPublicDrops(freshConfig.securityPolicy.publicSyncs);
-            } else if (!config?.securityPolicy.publicSyncs) {
+            } else if (!hasPublicSyncsRef.current) {
                 setConfiguredPublicDrops([]);
             }
 
@@ -165,7 +170,7 @@ export function useSyncServiceAdmin({ config, onConfigUpdated }: UseSyncServiceA
                 setIsLoading(false);
             }
         }
-    }, [config]);
+    }, []);
 
     useEffect(() => {
         loadData();

@@ -84,7 +84,7 @@ export const NetworkProtectionCard: React.FC<NetworkProtectionCardProps> = ({
             if (freshCfg) onConfigUpdated?.(freshCfg);
         } catch (e) {
             if (!mountedRef.current || seq !== overviewSeqRef.current) return;
-            setActionError(stringifyError(e));
+            setActionError(translateError(e, t));
         } finally {
             if (mountedRef.current && seq === overviewSeqRef.current) {
                 setIsRefreshing(false);
@@ -120,7 +120,7 @@ export const NetworkProtectionCard: React.FC<NetworkProtectionCardProps> = ({
                 }
             } catch (e) {
                 if (!mountedRef.current || seq !== overviewSeqRef.current) return;
-                setActionError(stringifyError(e));
+                setActionError(translateError(e, t));
             } finally {
                 if (mountedRef.current) {
                     setUpdatingAdminPub(null);

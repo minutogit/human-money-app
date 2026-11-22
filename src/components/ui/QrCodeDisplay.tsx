@@ -30,9 +30,46 @@ export interface QrCodeDisplayProps {
     qrTestId?: string;
 }
 
+const ALLOWED_QR_SVG_TAGS = new Set([
+    'svg',
+    'rect',
+    'path',
+    'circle',
+    'g',
+    'defs',
+    'title',
+    'desc',
+]);
+
 function isRenderableSvg(svg: string | null | undefined): svg is string {
     if (typeof svg !== 'string') return false;
-    return /<svg[\s>]/i.test(svg) && !/<script/i.test(svg) && !/\son\w+\s*=/i.test(svg);
+    const trimmed = svg.trim();
+    if (!trimmed.toLowerCase().includes('<svg')) return false;
+    if (typeof DOMParser === 'undefined') {
+        return /<svg[\s>]/i.test(trimmed) && !/<script/i.test(trimmed) && !/on\w+\s*=/i.test(trimmed);
+    }
+    try {
+        const doc = new DOMParser().parseFromString(trimmed, 'image/svg+xml');
+        if (doc.querySelector('parsererror')) return false;
+        const root = doc.documentElement;
+        if (!root || root.tagName.toLowerCase() !== 'svg') return false;
+        const all = [root, ...Array.from(root.querySelectorAll('*'))];
+        for (const el of all) {
+            if (!ALLOWED_QR_SVG_TAGS.has(el.tagName.toLowerCase())) return false;
+            for (const attr of Array.from(el.attributes)) {
+                const name = attr.name.toLowerCase();
+                const val = attr.value.trim().toLowerCase();
+                if (name.startsWith('on')) return false;
+                if ((name === 'href' || name === 'xlink:href' || name === 'src') &&
+                    (val.startsWith('javascript:') || val.startsWith('data:'))) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    } catch {
+        return false;
+    }
 }
 
 /**

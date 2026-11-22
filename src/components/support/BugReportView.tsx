@@ -10,7 +10,7 @@ import { AlertBanner } from '../ui/AlertBanner';
 import { Terminal, Copy, ExternalLink, Check, Loader2 } from 'lucide-react';
 import { logger } from '../../utils/log';
 import { translateError, stringifyError } from '../../utils/errorHelper';
-import { copyToClipboard } from '../../utils/clipboard';
+import { useCopyFeedback } from '../../hooks/useCopyFeedback';
 
 interface BugReportViewProps {
     onBack: () => void;
@@ -22,7 +22,7 @@ export const BugReportView: React.FC<BugReportViewProps> = ({ onBack }) => {
     const [isLoading, setIsLoading] = useState<boolean>(true);
     const [error, setError] = useState<string>('');
     const [actionError, setActionError] = useState<string>('');
-    const [copied, setCopied] = useState<boolean>(false);
+    const { isCopied: copied, copy } = useCopyFeedback();
 
     useEffect(() => {
         let active = true;
@@ -47,19 +47,12 @@ export const BugReportView: React.FC<BugReportViewProps> = ({ onBack }) => {
     }, [t]);
 
     const handleCopy = async () => {
-        try {
-            const success = await copyToClipboard(logs);
-            if (!success) {
-                setActionError(t('common.copyError'));
-                return;
-            }
-            setActionError('');
-            setCopied(true);
-            setTimeout(() => setCopied(false), 2000);
-        } catch (err) {
-            logger.error(`Failed to copy logs to clipboard: ${stringifyError(err)}`);
+        const success = await copy(logs);
+        if (!success) {
             setActionError(t('common.copyError'));
+            return;
         }
+        setActionError('');
     };
 
     const handleOpenGithub = async () => {

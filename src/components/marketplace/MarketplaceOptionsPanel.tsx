@@ -75,6 +75,7 @@ export function MarketplaceOptionsPanel({
     };
 
     const handleToggleShowUnknown = async (value: boolean) => {
+        const prev = marketShowUnknown;
         setMarketShowUnknown(value);
         try {
             setIsSaving(true);
@@ -87,6 +88,7 @@ export function MarketplaceOptionsPanel({
             });
             onSettingsChanged?.();
         } catch (err) {
+            setMarketShowUnknown(prev);
             logger.error('Failed to save marketShowUnknown: ' + stringifyError(err));
             setErrorMsg(translateError(err, t));
         } finally {
@@ -95,6 +97,7 @@ export function MarketplaceOptionsPanel({
     };
 
     const handleSelectMaxStoredCards = async (count: number) => {
+        const prev = maxStoredCards;
         setMaxStoredCards(count);
         try {
             setIsSaving(true);
@@ -107,6 +110,7 @@ export function MarketplaceOptionsPanel({
             });
             onSettingsChanged?.();
         } catch (err) {
+            setMaxStoredCards(prev);
             logger.error('Failed to save maxStoredCards: ' + stringifyError(err));
             setErrorMsg(translateError(err, t));
         } finally {
