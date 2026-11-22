@@ -14,6 +14,41 @@ pub struct SessionToken {
     pub owner_did: String,
 }
 
+/// Authorized session bundle pairing a generation-pinned [`SessionToken`] with an optional
+/// zeroizing credential resolved at the Tauri IPC boundary (including consumed one-shot PIN grants).
+#[derive(Clone)]
+pub struct AuthorizedSession {
+    pub token: SessionToken,
+    password: Option<zeroize::Zeroizing<String>>,
+}
+
+impl std::fmt::Debug for AuthorizedSession {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AuthorizedSession")
+            .field("token", &self.token)
+            .field("has_password", &self.password.is_some())
+            .finish()
+    }
+}
+
+impl AuthorizedSession {
+    pub fn new(token: SessionToken, password: Option<zeroize::Zeroizing<String>>) -> Self {
+        Self { token, password }
+    }
+
+    pub fn pw(&self) -> Option<&str> {
+        self.password.as_deref().map(String::as_str)
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.token.generation
+    }
+
+    pub fn owner_did(&self) -> &str {
+        &self.token.owner_did
+    }
+}
+
 /// Consolidated profile-scoped caches bound to a specific session generation and owner DID.
 ///
 /// Bundling all profile caches under one mutex guarantees atomic clearing on logout/switch and

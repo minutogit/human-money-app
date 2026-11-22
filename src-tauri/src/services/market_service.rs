@@ -1110,21 +1110,14 @@ pub fn upsert_ad_impl(
         rebuild_and_sign_own_card(&mut service, &mut stored, now)?;
     }
 
-    let stored_bytes = serde_json::to_vec(&stored).map_err(|e| {
-        FrontendError::from(format!("Failed to serialize own market profile: {}", e))
-    })?;
-    let mut batch: Vec<(&str, &[u8])> = Vec::with_capacity(2);
-    if let Some((ref media_key, ref media_bytes)) = pending_media_blob {
-        batch.push((media_key.as_str(), media_bytes.as_slice()));
+    let mut batch = crate::state::EncryptedBatchCommit::new();
+    if let Some((media_key, media_bytes)) = pending_media_blob {
+        batch.own_media_blob(media_key, media_bytes);
     }
-    batch.push((
-        crate::state::MARKET_OWN_PROFILE_KEY,
-        stored_bytes.as_slice(),
-    ));
-    service
-        .save_encrypted_batch(&batch, pw)
+    batch.own_market_profile(stored.clone());
+    batch
+        .commit(state, &mut service, pw)
         .map_err(FrontendError::from)?;
-    state.set_cached_own_market_profile_for_service(&service, Some(stored.clone()));
 
     if let Some(ref old_t) = old_token_to_clean {
         cleanup_unused_own_media(&mut service, &stored.ads, old_t, pw);
@@ -1805,7 +1798,6 @@ pub fn import_contact_card_impl(
     match outcome {
         humoco_market::AcceptOutcome::Accepted { did, replaced } => {
             let mut updated_address_book: Option<crate::models::FrontendAddressBook> = None;
-            let mut updated_address_book_bytes: Option<Vec<u8>> = None;
 
             if let Some(stored) = store.cards.get(&did) {
                 let card_syncs: Vec<FrontendSyncDescriptor> = stored
@@ -1838,34 +1830,20 @@ pub fn import_contact_card_impl(
                             &card_syncs,
                             Some(&card_profile),
                         ) {
-                            let bytes = serde_json::to_vec(&address_book).map_err(|e| {
-                                FrontendError::from(format!(
-                                    "Failed to serialize updated contacts: {}",
-                                    e
-                                ))
-                            })?;
                             updated_address_book = Some(address_book);
-                            updated_address_book_bytes = Some(bytes);
                         }
                     }
                 }
             }
 
-            let card_store_bytes = serde_json::to_vec(&store).map_err(|e| {
-                FrontendError::from(format!("Failed to serialize CardStore: {}", e))
-            })?;
-            let mut batch: Vec<(&str, &[u8])> = vec![(MARKET_CARD_STORE_KEY, &card_store_bytes)];
-            if let Some(ref ab_bytes) = updated_address_book_bytes {
-                batch.push((CONTACTS_DATA_NAME, ab_bytes));
+            let mut batch = crate::state::EncryptedBatchCommit::new();
+            batch.card_store(store);
+            if let Some(ab) = updated_address_book {
+                batch.contacts(ab);
             }
-            service
-                .save_encrypted_batch(&batch, pw)
+            batch
+                .commit(state, &mut service, pw)
                 .map_err(FrontendError::from)?;
-
-            state.set_cached_card_store_for_service(&service, Some(store));
-            if let Some(address_book) = updated_address_book {
-                state.set_cached_contacts_for_service(&service, Some(address_book));
-            }
 
             Ok(FrontendImportCardResult {
                 status: "accepted".to_string(),

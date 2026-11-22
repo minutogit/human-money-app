@@ -15,10 +15,10 @@ use crate::services::common::{canonical_drop_pub_hex, get_wallet_master_seed, no
 use crate::services::market_service::{
     build_card_drops, load_own_market_profile_state, rebuild_and_sign_own_card_with_drops,
 };
-use crate::session::SessionToken;
-use crate::settings::{SecurityPolicy, INTERNAL_LIFECYCLE_STATE_KEY, SECURITY_POLICY_KEY};
+use crate::session::{AuthorizedSession, SessionToken};
+use crate::settings::SecurityPolicy;
 use crate::state::{
-    canonicalize_did, AppState, StoredSyncAdmin, MARKET_OWN_PROFILE_KEY, MARKET_SYNC_ADMIN_KEY,
+    canonicalize_did, AppState, EncryptedBatchCommit, StoredSyncAdmin, MARKET_SYNC_ADMIN_KEY,
 };
 use crate::sync_client::{self, SyncServerAdminStatus};
 
@@ -70,14 +70,25 @@ pub(crate) fn load_stored_sync_admin_opt(
 fn load_admin_with_signing_key(
     state: &AppState,
     password: Option<&str>,
-) -> Result<(StoredSyncAdmin, ed25519_dalek::SigningKey, SessionToken), FrontendError> {
-    let mut service = state.authorize_and_lock(crate::state::RequiredAccess::Full, password)?;
-    let session = state.session_token_for_service(&service)?;
-    let admin = load_stored_sync_admin_opt(&mut service, password)?
-        .ok_or_else(|| FrontendError::from("Sync admin not configured".to_string()))?;
-    let master_seed = get_wallet_master_seed(&mut service, password)?;
-    let (admin_sk, _, _) = humoco_market::derive_drop_admin_keypair(&master_seed, admin.sync_index);
-    Ok((admin, admin_sk, session))
+) -> Result<
+    (
+        StoredSyncAdmin,
+        ed25519_dalek::SigningKey,
+        AuthorizedSession,
+    ),
+    FrontendError,
+> {
+    let auth = state.authorize_session(crate::state::RequiredAccess::Full, password)?;
+    let (admin, admin_sk) =
+        state.with_session_required(&auth.token, "Active wallet session changed", |service| {
+            let admin = load_stored_sync_admin_opt(service, auth.pw())?
+                .ok_or_else(|| FrontendError::from("Sync admin not configured".to_string()))?;
+            let master_seed = get_wallet_master_seed(service, auth.pw())?;
+            let (admin_sk, _, _) =
+                humoco_market::derive_drop_admin_keypair(&master_seed, admin.sync_index);
+            Ok((admin, admin_sk))
+        })?;
+    Ok((admin, admin_sk, auth))
 }
 
 fn save_stored_sync_admin(
@@ -456,11 +467,11 @@ pub async fn sync_channel_members_impl(
     state: &AppState,
 ) -> Result<usize, FrontendError> {
     let _market_guard = state.market_op_lock.lock().await;
-    let (session, resolved_pw) = state
-        .authorize_and_begin_session_secret(crate::state::RequiredAccess::Unlocked, password)?;
-    let pw = resolved_pw.as_deref().map(String::as_str);
+    let auth = state.authorize_session(crate::state::RequiredAccess::Unlocked, password)?;
+    let session = &auth.token;
+    let pw = auth.pw();
     let Some((mut admin, admin_sk)) =
-        state.with_session_required(&session, "Active wallet session changed", |service| {
+        state.with_session_required(session, "Active wallet session changed", |service| {
             let Some(admin) = load_stored_sync_admin_opt(service, pw)? else {
                 return Ok(None);
             };
@@ -478,7 +489,7 @@ pub async fn sync_channel_members_impl(
     }
 
     let client = sync_client::create_sync_http_client();
-    push_all_channel_members(&client, state, &session, &mut admin, &admin_sk, pw).await
+    push_all_channel_members(&client, state, session, &mut admin, &admin_sk, pw).await
 }
 
 pub fn prepare_sync_setup_impl(
@@ -604,11 +615,11 @@ pub async fn finalize_sync_setup_impl(
         .map_err(|e| FrontendError::from(e.to_string()))?;
     sync_client::validate_sync_url(&write_url).map_err(FrontendError::from)?;
 
-    let password_z = password.clone().map(Zeroizing::new);
-    let pw = password_z.as_deref().map(String::as_str);
     let _market_guard = state.market_op_lock.lock().await;
 
-    let (mut admin, admin_sk, session) = load_admin_with_signing_key(state, pw)?;
+    let (mut admin, admin_sk, auth) = load_admin_with_signing_key(state, password.as_deref())?;
+    let session = &auth.token;
+    let pw = auth.pw();
     let expected_sync_index = admin.sync_index;
 
     let client = sync_client::create_sync_http_client();
@@ -747,7 +758,7 @@ pub async fn finalize_sync_setup_impl(
     .await
     .map_err(FrontendError::from)?;
 
-    push_all_channel_members(&client, state, &session, &mut admin, &admin_sk, pw).await?;
+    push_all_channel_members(&client, state, session, &mut admin, &admin_sk, pw).await?;
 
     if !state.is_generation_current(session.generation) {
         return Err(FrontendError::from(
@@ -758,7 +769,7 @@ pub async fn finalize_sync_setup_impl(
     // Atomically persist finalized admin descriptor, selected sync policy, re-signed own card
     // (if published), and verified lock probe cache.
     let (saved_admin, stats) = state.with_session_required(
-        &session,
+        session,
         "Active wallet session changed before sync admin could be saved",
         |service| {
             let mut fresh_admin = load_stored_sync_admin_opt(service, pw)?
@@ -812,70 +823,22 @@ pub async fn finalize_sync_setup_impl(
                 }
             }
 
-            let mut owned_blobs: Vec<(&str, Vec<u8>)> = Vec::with_capacity(4);
-            owned_blobs.push((
-                MARKET_SYNC_ADMIN_KEY,
-                serde_json::to_vec(&fresh_admin).map_err(|e| {
-                    FrontendError::from(format!("Failed to serialize sync admin: {}", e))
-                })?,
-            ));
+            let mut batch = EncryptedBatchCommit::new();
+            batch.sync_admin(fresh_admin.clone());
             if policy_changed {
-                owned_blobs.push((
-                    SECURITY_POLICY_KEY,
-                    serde_json::to_vec(&policy).map_err(|e| {
-                        FrontendError::from(format!("Failed to serialize policy: {}", e))
-                    })?,
-                ));
-            }
-            if let Some(ref prof) = updated_profile {
-                owned_blobs.push((
-                    MARKET_OWN_PROFILE_KEY,
-                    serde_json::to_vec(prof).map_err(|e| {
-                        FrontendError::from(format!(
-                            "Failed to serialize own market profile: {}",
-                            e
-                        ))
-                    })?,
-                ));
-            }
-            if let Some(ref lc) = updated_lifecycle {
-                owned_blobs.push((
-                    INTERNAL_LIFECYCLE_STATE_KEY,
-                    serde_json::to_vec(lc).map_err(|e| {
-                        FrontendError::from(format!("Failed to serialize lifecycle state: {}", e))
-                    })?,
-                ));
-            }
-
-            let batch_refs: Vec<(&str, &[u8])> = owned_blobs
-                .iter()
-                .map(|(k, v)| (*k, v.as_slice()))
-                .collect();
-            service
-                .save_encrypted_batch(&batch_refs, pw)
-                .map_err(FrontendError::from)?;
-
-            state.write_cache_slot_for_service(
-                service,
-                |c| &mut c.own_sync_descriptor,
-                Some(Some(fresh_admin.descriptor.clone())),
-            );
-            if policy_changed {
-                state.write_cache_slot_for_service(
-                    service,
-                    |c| &mut c.security_policy,
-                    Some(policy),
-                );
+                batch.security_policy(policy);
             }
             if let Some(prof) = updated_profile {
-                state.set_cached_own_market_profile_for_service(service, Some(prof));
+                batch.own_market_profile(prof);
             }
+            batch
+                .commit(state, service, pw)
+                .map_err(FrontendError::from)?;
+
             if let Some(lc) = updated_lifecycle {
-                state.write_cache_slot_for_service(
-                    service,
-                    |c| &mut c.internal_lifecycle,
-                    Some(lc),
-                );
+                state
+                    .save_internal_lifecycle(service, lc, pw)
+                    .map_err(FrontendError::from)?;
             }
 
             let (stats, _) =
@@ -896,9 +859,9 @@ pub async fn test_sync_connection_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendSyncConnectionTestResult, FrontendError> {
-    let password_z = password.clone().map(Zeroizing::new);
-    let pw = password_z.as_deref().map(String::as_str);
-    let session = state.authorize_and_begin_session(crate::state::RequiredAccess::Full, pw)?;
+    let auth = state.authorize_session(crate::state::RequiredAccess::Full, password.as_deref())?;
+    let session = &auth.token;
+    let pw = auth.pw();
     let fail_result = |message: String, write_ok: bool| FrontendSyncConnectionTestResult {
         success: false,
         message,
@@ -917,7 +880,7 @@ pub async fn test_sync_connection_impl(
     }
 
     let (admin, admin_sk, stats, member_pubkeys) = match state.with_session_required(
-        &session,
+        session,
         "Active wallet session changed before sync connection test",
         |service| {
             let admin = load_stored_sync_admin_opt(service, pw)?
@@ -1013,14 +976,12 @@ pub async fn get_sync_admin_status_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<Option<FrontendSyncAdminStatus>, FrontendError> {
-    let (session, resolved_pw) = state.authorize_and_begin_session_secret(
-        crate::state::RequiredAccess::Unlocked,
-        password.as_deref(),
-    )?;
-    let pw = resolved_pw.as_deref().map(String::as_str);
+    let auth =
+        state.authorize_session(crate::state::RequiredAccess::Unlocked, password.as_deref())?;
+    let pw = auth.pw();
 
     let Some((admin, admin_sk, stats)) = state.with_session_required(
-        &session,
+        &auth.token,
         "Active wallet session changed while loading sync admin status",
         |service| {
             if pw.is_none() && !service.is_session_active() {
@@ -1072,11 +1033,11 @@ pub async fn update_sync_admin_config_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendSyncAdminStatus, FrontendError> {
-    let password_z = password.clone().map(Zeroizing::new);
-    let pw = password_z.as_deref().map(String::as_str);
     let _market_guard = state.market_op_lock.lock().await;
 
-    let (mut admin, admin_sk, session) = load_admin_with_signing_key(state, pw)?;
+    let (mut admin, admin_sk, auth) = load_admin_with_signing_key(state, password.as_deref())?;
+    let session = &auth.token;
+    let pw = auth.pw();
     let expected_sync_index = admin.sync_index;
 
     let next_card_policy: Option<humoco_market::MemberPolicy> = update.card_policy.map(Into::into);
@@ -1123,14 +1084,14 @@ pub async fn update_sync_admin_config_impl(
         )
         .await
         .map_err(FrontendError::from)?;
-        push_all_channel_members(&client, state, &session, &mut admin, &admin_sk, pw).await?;
+        push_all_channel_members(&client, state, session, &mut admin, &admin_sk, pw).await?;
         Some(st)
     } else {
         None
     };
 
     let (saved_admin, stats) = state.with_session_required(
-        &session,
+        session,
         "Active wallet session changed before admin config could be saved",
         |service| {
             let mut fresh_admin = load_stored_sync_admin_opt(service, pw)?.ok_or_else(|| {
@@ -1195,44 +1156,17 @@ pub fn delete_sync_admin_impl(
         None => (None, None),
     };
 
-    let mut owned_blobs: Vec<(&str, Vec<u8>)> = Vec::with_capacity(3);
-    owned_blobs.push((
-        MARKET_SYNC_ADMIN_KEY,
-        serde_json::to_vec(&Option::<StoredSyncAdmin>::None).map_err(|e| {
-            FrontendError::from(format!("Failed to serialize cleared sync admin: {}", e))
-        })?,
-    ));
-    if let Some(ref pol) = next_policy_opt {
-        owned_blobs.push((
-            SECURITY_POLICY_KEY,
-            serde_json::to_vec(pol)
-                .map_err(|e| FrontendError::from(format!("Failed to serialize policy: {}", e)))?,
-        ));
-    }
-    if let Some(ref prof) = next_profile_opt {
-        owned_blobs.push((
-            MARKET_OWN_PROFILE_KEY,
-            serde_json::to_vec(prof).map_err(|e| {
-                FrontendError::from(format!("Failed to serialize own market profile: {}", e))
-            })?,
-        ));
-    }
-
-    let batch_refs: Vec<(&str, &[u8])> = owned_blobs
-        .iter()
-        .map(|(k, v)| (*k, v.as_slice()))
-        .collect();
-    service
-        .save_encrypted_batch(&batch_refs, pw)
-        .map_err(FrontendError::from)?;
-
-    state.write_cache_slot_for_service(&service, |c| &mut c.own_sync_descriptor, Some(None));
+    let mut batch = EncryptedBatchCommit::new();
+    batch.clear_sync_admin();
     if let Some(pol) = next_policy_opt {
-        state.write_cache_slot_for_service(&service, |c| &mut c.security_policy, Some(pol));
+        batch.security_policy(pol);
     }
     if let Some(prof) = next_profile_opt {
-        state.set_cached_own_market_profile_for_service(&service, Some(prof));
+        batch.own_market_profile(prof);
     }
+    batch
+        .commit(state, &mut service, pw)
+        .map_err(FrontendError::from)?;
 
     Ok(())
 }
@@ -1250,11 +1184,11 @@ pub async fn revoke_own_sync_server_impl(
         ));
     }
 
-    let password_z = password.clone().map(Zeroizing::new);
-    let pw = password_z.as_deref().map(String::as_str);
     let _market_guard = state.market_op_lock.lock().await;
 
-    let (admin, admin_sk, session) = load_admin_with_signing_key(state, pw)?;
+    let (admin, admin_sk, auth) = load_admin_with_signing_key(state, password.as_deref())?;
+    let session = &auth.token;
+    let pw = auth.pw();
     let expected_sync_index = admin.sync_index;
 
     if admin.descriptor.write_url.trim().is_empty() {
@@ -1337,7 +1271,7 @@ pub async fn revoke_own_sync_server_impl(
 
         // Reload fresh admin & atomically remove deprecated server from outgoing SdCard selection.
         state.with_session_required(
-            &session,
+            session,
             "Active wallet session changed before revocation state could be saved",
             |service| {
                 let Some(mut fresh_admin) = load_stored_sync_admin_opt(service, pw)? else {
@@ -1359,56 +1293,17 @@ pub async fn revoke_own_sync_server_impl(
                     pw,
                 )?;
 
-                let mut owned_blobs: Vec<(&str, Vec<u8>)> = Vec::with_capacity(3);
-                let admin_bytes = serde_json::to_vec(&fresh_admin).map_err(|e| {
-                    FrontendError::from(format!("Failed to serialize sync admin: {}", e))
-                })?;
-                owned_blobs.push((MARKET_SYNC_ADMIN_KEY, admin_bytes));
-
-                let (next_policy_opt, next_profile_opt) = match policy_update {
-                    Some((pol, prof)) => (Some(pol), prof),
-                    None => (None, None),
-                };
-                if let Some(ref pol) = next_policy_opt {
-                    let bytes = serde_json::to_vec(pol).map_err(|e| {
-                        FrontendError::from(format!("Failed to serialize policy: {}", e))
-                    })?;
-                    owned_blobs.push((SECURITY_POLICY_KEY, bytes));
+                let mut batch = EncryptedBatchCommit::new();
+                batch.sync_admin(fresh_admin);
+                if let Some((pol, prof_opt)) = policy_update {
+                    batch.security_policy(pol);
+                    if let Some(prof) = prof_opt {
+                        batch.own_market_profile(prof);
+                    }
                 }
-                if let Some(ref prof) = next_profile_opt {
-                    let bytes = serde_json::to_vec(prof).map_err(|e| {
-                        FrontendError::from(format!(
-                            "Failed to serialize own market profile: {}",
-                            e
-                        ))
-                    })?;
-                    owned_blobs.push((MARKET_OWN_PROFILE_KEY, bytes));
-                }
-
-                let batch_refs: Vec<(&str, &[u8])> = owned_blobs
-                    .iter()
-                    .map(|(k, v)| (*k, v.as_slice()))
-                    .collect();
-                service
-                    .save_encrypted_batch(&batch_refs, pw)
-                    .map_err(FrontendError::from)?;
-
-                state.write_cache_slot_for_service(
-                    service,
-                    |c| &mut c.own_sync_descriptor,
-                    Some(Some(fresh_admin.descriptor.clone())),
-                );
-                if let Some(pol) = next_policy_opt {
-                    state.write_cache_slot_for_service(
-                        service,
-                        |c| &mut c.security_policy,
-                        Some(pol),
-                    );
-                }
-                if let Some(prof) = next_profile_opt {
-                    state.set_cached_own_market_profile_for_service(service, Some(prof));
-                }
-                Ok(())
+                batch
+                    .commit(state, service, pw)
+                    .map_err(FrontendError::from)
             },
         )?;
     } else {
@@ -1430,7 +1325,7 @@ pub async fn revoke_own_sync_server_impl(
         .map_err(FrontendError::from)?;
 
         state.with_session_required(
-            &session,
+            session,
             "Active wallet session changed before revocation clearance could be saved",
             |service| {
                 let Some(mut fresh_admin) = load_stored_sync_admin_opt(service, pw)? else {
@@ -1453,5 +1348,5 @@ pub async fn revoke_own_sync_server_impl(
         return Ok(None);
     }
 
-    get_sync_admin_status_impl(password, state).await
+    get_sync_admin_status_impl(pw.map(str::to_string), state).await
 }

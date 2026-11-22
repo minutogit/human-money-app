@@ -40,8 +40,8 @@ use crate::services::{
         write_file_atomic,
     },
     post_service::{
-        collect_own_reply_syncs, flush_post_slots_impl, merge_and_save_post_state,
-        sync_post_channels_impl,
+        collect_own_reply_syncs, flush_post_slots_impl, merge_post_state_with_service,
+        save_post_state_with_service, sync_post_channels_impl,
     },
     sync_engine::save_public_sync_impl,
 };
@@ -175,32 +175,14 @@ fn save_post_and_recovery_owner_atomic(
     conflict_context: &str,
 ) -> Result<(), FrontendError> {
     state.with_session_required(session, conflict_context, |service| {
-        crate::services::post_service::merge_post_state_with_service(
-            service,
-            baseline_post,
-            working_post,
-            password,
-        )?;
-        let post_bytes =
-            serde_json::to_vec(working_post).map_err(|e| FrontendError::from(e.to_string()))?;
-        let owner_bytes =
-            serde_json::to_vec(owner_state).map_err(|e| FrontendError::from(e.to_string()))?;
-        service
-            .save_encrypted_batch(
-                &[
-                    (crate::state::MARKET_POST_STATE_KEY, &post_bytes),
-                    (RECOVERY_OWNER_STATE_KEY, &owner_bytes),
-                ],
-                password,
-            )
-            .map_err(FrontendError::from)?;
-        state.set_cached_recovery_owner_for_service(service, Some(Some(owner_state.clone())));
-        state.write_cache_slot_for_service(
-            service,
-            |c| &mut c.post_state,
-            Some(working_post.clone()),
-        );
-        Ok(())
+        merge_post_state_with_service(service, baseline_post, working_post, password)?;
+        let mut batch = crate::state::EncryptedBatchCommit::new();
+        batch
+            .post_state(working_post.clone())
+            .recovery_owner(owner_state.clone());
+        batch
+            .commit(state, service, password)
+            .map_err(FrontendError::from)
     })
 }
 
@@ -304,41 +286,46 @@ fn enqueue_guardian_revocations(
 
 pub async fn enqueue_guardian_locator_updates_if_configured(
     state: &AppState,
-    password: Option<String>,
+    session: &crate::session::SessionToken,
+    password: Option<&str>,
 ) -> Result<usize, FrontendError> {
+    if !state.is_generation_current(session.generation) {
+        return Ok(0);
+    }
     let _recovery_guard = state.recovery_op_lock.lock().await;
-    let (session, my_identity, guardians, epoch) = {
-        let mut service = state.lock_service()?;
-        let session = state.session_token_for_service(&service)?;
-        let owner_state = load_recovery_owner_state(&mut service, password.as_deref())?;
+    let Some(Some((my_identity, guardians, epoch))) = state.with_session(session, |service| {
+        let owner_state = load_recovery_owner_state(service, password)?;
         let Some(owner) = owner_state else {
-            return Ok(0);
+            return Ok(None);
         };
         if owner.guardians.is_empty() {
-            return Ok(0);
+            return Ok(None);
         }
         let id = service
             .with_wallet_and_identity(|_w, i| i.clone())
             .map_err(FrontendError::from)?;
-        (session, id, owner.guardians, owner.rotation_epoch)
+        Ok(Some((id, owner.guardians, owner.rotation_epoch)))
+    })?
+    else {
+        return Ok(0);
     };
 
-    let (candidate_descriptors, security_policy) = state.with_session_required(
-        &session,
-        "Active wallet session changed during guardian locator update",
-        |service| {
+    let Some((candidate_descriptors, security_policy)) =
+        state.with_session(session, |service| {
             let descriptors = collect_backup_sync_targets_with_service(
                 state,
                 service,
-                password.as_deref(),
+                password,
                 Some(MAX_RECOVERY_SYNC_DESCRIPTORS),
             )?;
             let policy = state
-                .get_or_load_security_policy(service, password.as_deref())
+                .get_or_load_security_policy(service, password)
                 .map_err(FrontendError::from)?;
             Ok((descriptors, policy))
-        },
-    )?;
+        })?
+    else {
+        return Ok(0);
+    };
     let reply_drops: Vec<DropDescriptor> = collect_own_reply_syncs(
         &security_policy,
         human_money_core::crypto::get_prefix_from_user_id(&my_identity.user_id),
@@ -352,16 +339,12 @@ pub async fn enqueue_guardian_locator_updates_if_configured(
 
     let _post_guard = state.post_op_lock.lock().await;
     let now_secs = crate::sync_client::current_unix_timestamp();
-    let mut post_state = state.with_session_required(
-        &session,
-        "Active wallet session changed before loading post state for locator update",
-        |service| {
-            crate::services::post_service::load_post_state_with_service(
-                service,
-                password.as_deref(),
-            )
-        },
-    )?;
+    let Some(mut post_state) = state.with_session(session, |service| {
+        crate::services::post_service::load_post_state_with_service(service, password)
+    })?
+    else {
+        return Ok(0);
+    };
     let mut baseline = post_state.clone();
     let mut enqueued = 0;
 
@@ -397,36 +380,22 @@ pub async fn enqueue_guardian_locator_updates_if_configured(
     }
 
     if enqueued > 0 {
-        if !state.is_generation_current(session.generation) {
+        let saved_before_flush = state.with_session(session, |service| {
+            merge_post_state_with_service(service, &baseline, &mut post_state, password)?;
+            save_post_state_with_service(state, service, &post_state, password)
+        })?;
+        if saved_before_flush.is_none() {
             return Ok(0);
         }
-        merge_and_save_post_state(
-            state,
-            &session,
-            &baseline,
-            &mut post_state,
-            password.as_deref(),
-        )?;
         baseline = post_state.clone();
-        let _ = flush_post_slots_impl(
-            state,
-            &session,
-            &mut post_state,
-            None,
-            &[],
-            password.as_deref(),
-        )
-        .await;
-        if !state.is_generation_current(session.generation) {
+        let _ = flush_post_slots_impl(state, session, &mut post_state, None, &[], password).await;
+        let saved_after_flush = state.with_session(session, |service| {
+            merge_post_state_with_service(service, &baseline, &mut post_state, password)?;
+            save_post_state_with_service(state, service, &post_state, password)
+        })?;
+        if saved_after_flush.is_none() {
             return Ok(0);
         }
-        merge_and_save_post_state(
-            state,
-            &session,
-            &baseline,
-            &mut post_state,
-            password.as_deref(),
-        )?;
     }
 
     Ok(enqueued)
@@ -933,9 +902,9 @@ pub async fn verify_recovery_rehearsal_with_password_impl(
     password: Option<&str>,
     state: &AppState,
 ) -> Result<RehearsalCheckResultDto, FrontendError> {
-    let (session, resolved_pw) = state
-        .authorize_and_begin_session_secret(crate::state::RequiredAccess::DailyPay, password)?;
-    let pw = resolved_pw.as_deref().map(String::as_str);
+    let auth = state.authorize_session(crate::state::RequiredAccess::DailyPay, password)?;
+    let session = &auth.token;
+    let pw = auth.pw();
 
     let (
         owner_account_id,
@@ -946,7 +915,7 @@ pub async fn verify_recovery_rehearsal_with_password_impl(
         current_stage,
         current_next_at,
     ) = state.with_session_required(
-        &session,
+        session,
         "Active wallet session changed before starting recovery rehearsal verification",
         |service| {
             let owner_state = load_recovery_owner_state(service, pw)?.ok_or_else(|| {
@@ -1011,7 +980,7 @@ pub async fn verify_recovery_rehearsal_with_password_impl(
     let all_correct = question_matches.iter().all(|&m| m);
     if all_correct {
         let (next_stage, next_at) = state.with_session_required(
-            &session,
+            session,
             "Active wallet session changed during recovery rehearsal verification",
             |service| {
                 let mut owner_state = load_recovery_owner_state(service, pw)?.ok_or_else(|| {
@@ -4408,6 +4377,98 @@ mod tests {
         assert_ne!(
             tamper_err.code, "error.recovery.wrongAnswers",
             "S07-F19: share commitment tampering must NOT be misreported as wrongAnswers"
+        );
+
+        let _ = fs::remove_dir_all(base_dir);
+    }
+
+    #[tokio::test]
+    async fn s09_x1_enqueue_guardian_locator_updates_aborts_when_session_superseded() {
+        let base_dir = temp_test_dir("s09_x1_locator_superseded");
+        let password = "TestPassword123!";
+        let (alice_state, alice_did) =
+            create_wallet_state(&base_dir, "Alice", ALICE_PHRASE, password);
+        let (_, bob_did) = create_wallet_state(&base_dir, "Bob", BOB_PHRASE, password);
+        let alice_state = std::sync::Arc::new(alice_state);
+
+        let session_1 = {
+            let mut svc = alice_state.lock_service().unwrap();
+            alice_state
+                .initialize_profile_session(&mut svc, password)
+                .unwrap();
+            let owner_state = RecoveryOwnerState {
+                rotation_epoch: 1,
+                threshold_m: 2,
+                question_ids: [1, 2, 3],
+                guardians: vec![GuardianAssignmentRecord {
+                    user_id: bob_did,
+                    display_name: "Bob".to_string(),
+                    share_index: 1,
+                    status: GuardianAssignmentStatus::Confirmed { acked_at: 100 },
+                    assigned_at: 90,
+                    sealed_entry: humoco_market::GuardianVaultEntry {
+                        owner_did: alice_did,
+                        owner_display_name: "Alice".to_string(),
+                        rotation_epoch: 1,
+                        threshold_m: 2,
+                        total_n: 2,
+                        share: humoco_market::ShamirShare {
+                            index: 1,
+                            y: [7u8; 32],
+                        },
+                        share_commitments: vec![],
+                        r_enc: vec![],
+                        kdf_params: RecoveryKdfParams::new_fast_test(),
+                        question_ids: [1, 2, 3],
+                        owner_sig: [0u8; 64],
+                        backup_sync_descriptors: vec![],
+                        updated_at: 90,
+                    },
+                }],
+                emergency_sheet_confirmed_at: None,
+                answer_verifiers: None,
+                rehearsal_stage: 0,
+                next_rehearsal_at: None,
+                rehearsal_kdf_m_kib: humoco_market::KDF_M_KIB_PRODUCTION,
+                rehearsal_kdf_t_cost: humoco_market::KDF_T_COST_PRODUCTION,
+            };
+            save_recovery_owner_state(&mut svc, &owner_state, Some(password)).unwrap();
+            alice_state.session_token_for_service(&svc).unwrap()
+        };
+
+        // Hold recovery_op_lock while spawning locator enqueue for session_1, then supersede session.
+        let lock_guard = alice_state.recovery_op_lock.lock().await;
+        let state_for_task = alice_state.clone();
+        let session_for_task = session_1.clone();
+        let pw_for_task = password.to_string();
+        let handle = tokio::spawn(async move {
+            enqueue_guardian_locator_updates_if_configured(
+                &state_for_task,
+                &session_for_task,
+                Some(pw_for_task.as_str()),
+            )
+            .await
+        });
+        tokio::task::yield_now().await;
+
+        {
+            let mut svc = alice_state.lock_service().unwrap();
+            alice_state.clear_all_caches();
+            alice_state
+                .initialize_profile_session(&mut svc, password)
+                .unwrap();
+        }
+        drop(lock_guard);
+
+        let enqueued = handle.await.unwrap().unwrap();
+        assert_eq!(
+            enqueued, 0,
+            "S09-X1: superseded session must abort with Ok(0) without minting a fresh token"
+        );
+        let post_state = load_post_state(&alice_state, Some(password)).unwrap();
+        assert!(
+            post_state.outbox_entries.is_empty(),
+            "S09-X1: superseded locator update must not enqueue into the new session's outbox"
         );
 
         let _ = fs::remove_dir_all(base_dir);

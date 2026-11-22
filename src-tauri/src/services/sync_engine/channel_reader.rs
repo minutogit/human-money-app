@@ -1,7 +1,5 @@
 use std::collections::HashSet;
 
-use zeroize::Zeroizing;
-
 use crate::models::{
     FrontendAddressBook, FrontendError, FrontendPublicSyncInfo, FrontendSyncDescriptor,
 };
@@ -10,14 +8,12 @@ use crate::services::common::{
 };
 use crate::services::recovery_service::enqueue_guardian_locator_updates_if_configured;
 use crate::session::SessionToken;
-use crate::settings::{
-    SecurityPolicy, StoredPublicSync, UiPreferences, MAX_POLLED_SYNCS, SECURITY_POLICY_KEY,
-};
+use crate::settings::{SecurityPolicy, StoredPublicSync, UiPreferences, MAX_POLLED_SYNCS};
 use crate::state::{
     apply_revocation_notice, apply_revocation_notice_to_address_book, canonicalize_did,
-    clear_revocation, AppState, StoredBackupSyncState, StoredPostState, StoredSyncState,
-    BACKUP_SYNC_STATE_KEY, CONTACTS_DATA_NAME, MARKET_CARD_STORE_KEY, MARKET_OWN_PROFILE_KEY,
-    MARKET_POST_STATE_KEY, MARKET_SYNC_KEY, WOT_DATA_NAME,
+    clear_revocation, AppState, EncryptedBatchCommit, StoredBackupSyncState, StoredPostState,
+    StoredSyncState, BACKUP_SYNC_STATE_KEY, CONTACTS_DATA_NAME, MARKET_CARD_STORE_KEY,
+    MARKET_POST_STATE_KEY, MARKET_SYNC_KEY,
 };
 use crate::sync_client::{self, IndexFetchResult, SlotFetchResult};
 
@@ -237,9 +233,8 @@ pub(crate) async fn check_revocations(
                     .last_revocation_check_at
                     .insert(rev_key, now_secs);
                 let committed = state.with_session(session, |service| {
-                    let mut owned_blobs: Vec<(&str, Vec<u8>)> = Vec::with_capacity(2);
-                    let mut saved_policy: Option<SecurityPolicy> = None;
-                    let mut saved_contacts: Option<FrontendAddressBook> = None;
+                    let mut batch = EncryptedBatchCommit::new();
+                    let mut updated_policy_local: Option<SecurityPolicy> = None;
 
                     if let Ok(mut fresh_policy) =
                         state.get_or_load_security_policy(service, password)
@@ -274,10 +269,8 @@ pub(crate) async fn check_revocations(
                             }
                         }
                         if policy_changed {
-                            if let Ok(bytes) = serde_json::to_vec(&fresh_policy) {
-                                owned_blobs.push((SECURITY_POLICY_KEY, bytes));
-                                saved_policy = Some(fresh_policy);
-                            }
+                            updated_policy_local = Some(fresh_policy.clone());
+                            batch.security_policy(fresh_policy);
                         }
                     }
 
@@ -293,10 +286,7 @@ pub(crate) async fn check_revocations(
                                 &notice,
                                 now_secs,
                             ) {
-                                if let Ok(bytes) = serde_json::to_vec(&ab) {
-                                    owned_blobs.push((CONTACTS_DATA_NAME, bytes));
-                                    saved_contacts = Some(ab);
-                                }
+                                batch.contacts(ab);
                             }
                         }
                         Ok(None) => {}
@@ -308,26 +298,10 @@ pub(crate) async fn check_revocations(
                         }
                     }
 
-                    if !owned_blobs.is_empty() {
-                        let batch_refs: Vec<(&str, &[u8])> = owned_blobs
-                            .iter()
-                            .map(|(k, v)| (*k, v.as_slice()))
-                            .collect();
-                        if let Err(e) = service.save_encrypted_batch(&batch_refs, password) {
-                            log::warn!("Failed to persist revocation notice updates: {}", e);
-                        } else {
-                            if let Some(pol) = saved_policy {
-                                state.write_cache_slot_for_service(
-                                    service,
-                                    |c| &mut c.security_policy,
-                                    Some(pol.clone()),
-                                );
-                                *security_policy = pol;
-                            }
-                            if let Some(ab) = saved_contacts {
-                                state.set_cached_contacts_for_service(service, Some(ab));
-                            }
-                        }
+                    if let Err(e) = batch.commit(state, service, password) {
+                        log::warn!("Failed to persist revocation notice updates: {}", e);
+                    } else if let Some(pol) = updated_policy_local {
+                        *security_policy = pol;
                     }
                     Ok(())
                 });
@@ -341,9 +315,8 @@ pub(crate) async fn check_revocations(
                     .last_revocation_check_at
                     .insert(rev_key, now_secs);
                 let committed = state.with_session(session, |service| {
-                    let mut owned_blobs: Vec<(&str, Vec<u8>)> = Vec::with_capacity(2);
-                    let mut saved_policy: Option<SecurityPolicy> = None;
-                    let mut saved_contacts: Option<FrontendAddressBook> = None;
+                    let mut batch = EncryptedBatchCommit::new();
+                    let mut updated_policy_local: Option<SecurityPolicy> = None;
 
                     if let Ok(mut fresh_policy) =
                         state.get_or_load_security_policy(service, password)
@@ -372,10 +345,8 @@ pub(crate) async fn check_revocations(
                             }
                         }
                         if policy_changed {
-                            if let Ok(bytes) = serde_json::to_vec(&fresh_policy) {
-                                owned_blobs.push((SECURITY_POLICY_KEY, bytes));
-                                saved_policy = Some(fresh_policy);
-                            }
+                            updated_policy_local = Some(fresh_policy.clone());
+                            batch.security_policy(fresh_policy);
                         }
                     }
 
@@ -397,10 +368,7 @@ pub(crate) async fn check_revocations(
                                 }
                             }
                             if ab_changed {
-                                if let Ok(bytes) = serde_json::to_vec(&ab) {
-                                    owned_blobs.push((CONTACTS_DATA_NAME, bytes));
-                                    saved_contacts = Some(ab);
-                                }
+                                batch.contacts(ab);
                             }
                         }
                         Ok(None) => {}
@@ -412,26 +380,10 @@ pub(crate) async fn check_revocations(
                         }
                     }
 
-                    if !owned_blobs.is_empty() {
-                        let batch_refs: Vec<(&str, &[u8])> = owned_blobs
-                            .iter()
-                            .map(|(k, v)| (*k, v.as_slice()))
-                            .collect();
-                        if let Err(e) = service.save_encrypted_batch(&batch_refs, password) {
-                            log::warn!("Failed to persist cleared revocation updates: {}", e);
-                        } else {
-                            if let Some(pol) = saved_policy {
-                                state.write_cache_slot_for_service(
-                                    service,
-                                    |c| &mut c.security_policy,
-                                    Some(pol.clone()),
-                                );
-                                *security_policy = pol;
-                            }
-                            if let Some(ab) = saved_contacts {
-                                state.set_cached_contacts_for_service(service, Some(ab));
-                            }
-                        }
+                    if let Err(e) = batch.commit(state, service, password) {
+                        log::warn!("Failed to persist cleared revocation updates: {}", e);
+                    } else if let Some(pol) = updated_policy_local {
+                        *security_policy = pol;
                     }
                     Ok(())
                 });
@@ -1247,11 +1199,9 @@ pub async fn probe_public_sync_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendPublicSyncInfo, FrontendError> {
-    let (session, resolved_pw) = state.authorize_and_begin_session_secret(
-        crate::state::RequiredAccess::Unlocked,
-        password.as_deref(),
-    )?;
-    let pw = resolved_pw.as_deref().map(String::as_str);
+    let auth =
+        state.authorize_session(crate::state::RequiredAccess::Unlocked, password.as_deref())?;
+    let pw = auth.pw();
     let canonical_url = humoco_market::canonicalize_write_url(&url)
         .map_err(|e| FrontendError::from(e.to_string()))?;
     sync_client::validate_sync_url(&canonical_url).map_err(FrontendError::from)?;
@@ -1275,7 +1225,7 @@ pub async fn probe_public_sync_impl(
     })?;
 
     let id_ctx_opt = state.with_session_required(
-        &session,
+        &auth.token,
         "Wallet session changed before public sync probe completed",
         |service| {
             if pw.is_some() || service.is_session_active() {
@@ -1297,7 +1247,7 @@ pub async fn probe_public_sync_impl(
             &access_pubkey,
             id_ctx.my_prefix.as_deref(),
             state,
-            &session,
+            &auth.token,
             pw,
         )
         .await;
@@ -1325,9 +1275,6 @@ pub async fn save_public_sync_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendPublicSyncInfo, FrontendError> {
-    let password_z = password.clone().map(Zeroizing::new);
-    let pw = password_z.as_deref().map(String::as_str);
-
     let canonical_url = humoco_market::canonicalize_write_url(&write_url)
         .map_err(|e| FrontendError::from(e.to_string()))?;
     sync_client::validate_sync_url(&canonical_url).map_err(FrontendError::from)?;
@@ -1335,9 +1282,10 @@ pub async fn save_public_sync_impl(
     sync_client::validate_sync_read_url(&norm_read_url).map_err(FrontendError::from)?;
     let clean_drop_pub = canonical_drop_pub_hex(&drop_pub)?;
 
-    let session = state.authorize_and_begin_session(crate::state::RequiredAccess::Full, pw)?;
+    let auth = state.authorize_session(crate::state::RequiredAccess::Full, password.as_deref())?;
+    let pw = auth.pw();
     let id_ctx = state.with_session_required(
-        &session,
+        &auth.token,
         "Active wallet changed before public sync could be prepared",
         |service| {
             let policy = state
@@ -1395,111 +1343,93 @@ pub async fn save_public_sync_impl(
         &access_pubkey,
         id_ctx.my_prefix.as_deref(),
         state,
-        &session,
+        &auth.token,
         pw,
     )
     .await;
 
-    state.with_session_required(
-        &session,
-        "Active wallet changed before public sync could be saved",
-        |service| {
-            let mut stored = StoredPublicSync {
-                write_url: canonical_url.clone(),
-                read_url: norm_read_url.clone(),
-                drop_pub: clean_drop_pub.clone(),
-                register_url: clean_register_url.clone(),
-                access_pubkey: access_pubkey.clone(),
-                enabled,
-                authorized_channels: authorized_channels.clone(),
-                status: if !authorized_channels.is_empty() {
-                    "active".to_string()
-                } else {
-                    "pending_auth".to_string()
-                },
-                ..Default::default()
-            };
+    {
+        // Serialize SecurityPolicy + OwnMarketProfile RMW under market_op_lock, and drop it before
+        // enqueue_guardian_locator_updates_if_configured (which acquires recovery_op_lock -> post_op_lock).
+        let _market_guard = state.market_op_lock.lock().await;
+        state.with_session_required(
+            &auth.token,
+            "Active wallet changed before public sync could be saved",
+            |service| {
+                let mut stored = StoredPublicSync {
+                    write_url: canonical_url.clone(),
+                    read_url: norm_read_url.clone(),
+                    drop_pub: clean_drop_pub.clone(),
+                    register_url: clean_register_url.clone(),
+                    access_pubkey: access_pubkey.clone(),
+                    enabled,
+                    authorized_channels: authorized_channels.clone(),
+                    status: if !authorized_channels.is_empty() {
+                        "active".to_string()
+                    } else {
+                        "pending_auth".to_string()
+                    },
+                    ..Default::default()
+                };
 
-            if let Some(ref info) = info_opt {
-                if let Some(ref notice) = info.revocation {
-                    if sync_client::verify_revocation_notice(notice, &clean_drop_pub).is_ok() {
-                        apply_revocation_notice(
-                            &mut stored,
-                            notice,
-                            sync_client::current_unix_timestamp(),
-                        );
+                if let Some(ref info) = info_opt {
+                    if let Some(ref notice) = info.revocation {
+                        if sync_client::verify_revocation_notice(notice, &clean_drop_pub).is_ok() {
+                            apply_revocation_notice(
+                                &mut stored,
+                                notice,
+                                sync_client::current_unix_timestamp(),
+                            );
+                        }
                     }
                 }
-            }
 
-            let mut policy = state
-                .get_or_load_security_policy(service, pw)
-                .map_err(FrontendError::from)?;
-            if let Some(pos) = policy
-                .public_syncs
-                .iter()
-                .position(|d| normalize_sync_url(&d.write_url) == canonical_url)
-            {
-                let pinned = policy.public_syncs[pos].drop_pub.trim();
-                if !pinned.is_empty() && !pinned.eq_ignore_ascii_case(&clean_drop_pub) {
-                    return Err(FrontendError::from(format!(
-                        "Public sync key pin mismatch for {}: existing {}, got {}",
-                        canonical_url, pinned, clean_drop_pub
-                    )));
+                let mut policy = state
+                    .get_or_load_security_policy(service, pw)
+                    .map_err(FrontendError::from)?;
+                if let Some(pos) = policy
+                    .public_syncs
+                    .iter()
+                    .position(|d| normalize_sync_url(&d.write_url) == canonical_url)
+                {
+                    let pinned = policy.public_syncs[pos].drop_pub.trim();
+                    if !pinned.is_empty() && !pinned.eq_ignore_ascii_case(&clean_drop_pub) {
+                        return Err(FrontendError::from(format!(
+                            "Public sync key pin mismatch for {}: existing {}, got {}",
+                            canonical_url, pinned, clean_drop_pub
+                        )));
+                    }
+                    policy.public_syncs[pos] = stored;
+                } else {
+                    policy.public_syncs.push(stored);
                 }
-                policy.public_syncs[pos] = stored;
-            } else {
-                policy.public_syncs.push(stored);
-            }
 
-            let updated_profile = super::admin::build_resigned_own_card_profile_for_policy(
-                state, service, &policy, pw,
-            );
+                let updated_profile = super::admin::build_resigned_own_card_profile_for_policy(
+                    state, service, &policy, pw,
+                );
 
-            let mut owned_blobs: Vec<(&str, Vec<u8>)> = Vec::with_capacity(2);
-            owned_blobs.push((
-                SECURITY_POLICY_KEY,
-                serde_json::to_vec(&policy).map_err(|e| {
-                    FrontendError::from(format!("Failed to serialize security policy: {}", e))
-                })?,
-            ));
-            if let Some(ref prof) = updated_profile {
-                owned_blobs.push((
-                    MARKET_OWN_PROFILE_KEY,
-                    serde_json::to_vec(prof).map_err(|e| {
-                        FrontendError::from(format!(
-                            "Failed to serialize own market profile: {}",
-                            e
-                        ))
-                    })?,
-                ));
-            }
-            let batch_refs: Vec<(&str, &[u8])> = owned_blobs
-                .iter()
-                .map(|(k, v)| (*k, v.as_slice()))
-                .collect();
-            service
-                .save_encrypted_batch(&batch_refs, pw)
-                .map_err(FrontendError::from)?;
-
-            state.write_cache_slot_for_service(service, |c| &mut c.security_policy, Some(policy));
-            if let Some(prof) = updated_profile {
-                state.set_cached_own_market_profile_for_service(service, Some(prof));
-            }
-            Ok(())
-        },
-    )?;
+                let mut batch = EncryptedBatchCommit::new();
+                batch.security_policy(policy);
+                if let Some(prof) = updated_profile {
+                    batch.own_market_profile(prof);
+                }
+                batch
+                    .commit(state, service, pw)
+                    .map_err(FrontendError::from)
+            },
+        )?;
+    }
 
     if enabled
         && info_opt.as_ref().is_some_and(|i| i.lock.is_some())
-        && state.is_generation_current(session.generation)
+        && state.is_generation_current(auth.generation())
     {
         let lock_probe =
             sync_client::probe_lock_server(&probe_client, &canonical_url, Some(&clean_drop_pub))
                 .await;
-        if !lock_probe.lock_pub.trim().is_empty() && state.is_generation_current(session.generation)
+        if !lock_probe.lock_pub.trim().is_empty() && state.is_generation_current(auth.generation())
         {
-            let _ = state.mutate_internal_lifecycle_for_session(&session, pw, |lc| {
+            let _ = state.mutate_internal_lifecycle_for_session(&auth.token, pw, |lc| {
                 crate::services::common::upsert_verified_lock_probe(
                     &mut lc.l2_probe_cache,
                     lock_probe.clone(),
@@ -1508,8 +1438,8 @@ pub async fn save_public_sync_impl(
         }
     }
 
-    if state.is_generation_current(session.generation) {
-        let _ = enqueue_guardian_locator_updates_if_configured(state, password.clone()).await;
+    if state.is_generation_current(auth.generation()) {
+        let _ = enqueue_guardian_locator_updates_if_configured(state, &auth.token, pw).await;
     }
 
     Ok(FrontendPublicSyncInfo {
@@ -1528,16 +1458,14 @@ pub async fn remove_public_sync_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<(), FrontendError> {
-    let password_z = password.clone().map(Zeroizing::new);
-    let pw = password_z.as_deref().map(String::as_str);
-
-    let session = state.authorize_and_begin_session(crate::state::RequiredAccess::Full, pw)?;
+    let auth = state.authorize_session(crate::state::RequiredAccess::Full, password.as_deref())?;
+    let pw = auth.pw();
     let canonical_url = humoco_market::canonicalize_write_url(&write_url)
         .map_err(|e| FrontendError::from(e.to_string()))?;
 
     if delete_remote_slots {
         let id_ctx = state.with_session_required(
-            &session,
+            &auth.token,
             "Active wallet changed before public sync deletion could be prepared",
             |service| SyncIdentityContext::from_service(service, pw),
         )?;
@@ -1569,7 +1497,7 @@ pub async fn remove_public_sync_impl(
         let _market_guard = state.market_op_lock.lock().await;
 
         state.with_session_required(
-            &session,
+            &auth.token,
             "Active wallet changed before public sync could be removed",
             |service| {
                 let mut removed_urls = vec![canonical_url.clone(), normalize_sync_url(&write_url)];
@@ -1628,78 +1556,23 @@ pub async fn remove_public_sync_impl(
                     post_state
                 });
 
-                let mut owned_blobs: Vec<(&str, Vec<u8>)> = Vec::with_capacity(5);
-                owned_blobs.push((
-                    SECURITY_POLICY_KEY,
-                    serde_json::to_vec(&policy).map_err(|e| {
-                        FrontendError::from(format!("Failed to serialize policy: {}", e))
-                    })?,
-                ));
-                if let Some(ref prof) = updated_profile {
-                    owned_blobs.push((
-                        MARKET_OWN_PROFILE_KEY,
-                        serde_json::to_vec(prof).map_err(|e| {
-                            FrontendError::from(format!(
-                                "Failed to serialize own market profile: {}",
-                                e
-                            ))
-                        })?,
-                    ));
-                }
-                if let Some(ref reg) = updated_reg {
-                    owned_blobs.push((
-                        WOT_DATA_NAME,
-                        serde_json::to_vec(reg).map_err(|e| {
-                            FrontendError::from(format!("Failed to serialize WoT register: {}", e))
-                        })?,
-                    ));
-                }
-                if let Some(ref sync_state) = updated_sync_state {
-                    owned_blobs.push((
-                        MARKET_SYNC_KEY,
-                        serde_json::to_vec(sync_state).map_err(|e| {
-                            FrontendError::from(format!("Failed to serialize sync state: {}", e))
-                        })?,
-                    ));
-                }
-                if let Some(ref post_state) = updated_post_state {
-                    owned_blobs.push((
-                        MARKET_POST_STATE_KEY,
-                        serde_json::to_vec(post_state).map_err(|e| {
-                            FrontendError::from(format!("Failed to serialize PoST state: {}", e))
-                        })?,
-                    ));
-                }
-
-                let batch_refs: Vec<(&str, &[u8])> = owned_blobs
-                    .iter()
-                    .map(|(k, v)| (*k, v.as_slice()))
-                    .collect();
-                service
-                    .save_encrypted_batch(&batch_refs, pw)
-                    .map_err(FrontendError::from)?;
-
-                state.write_cache_slot_for_service(
-                    service,
-                    |c| &mut c.security_policy,
-                    Some(policy),
-                );
+                let mut batch = EncryptedBatchCommit::new();
+                batch.security_policy(policy);
                 if let Some(prof) = updated_profile {
-                    state.set_cached_own_market_profile_for_service(service, Some(prof));
+                    batch.own_market_profile(prof);
                 }
                 if let Some(reg) = updated_reg {
-                    state.write_cache_slot_for_service(service, |c| &mut c.wot, Some(reg));
+                    batch.wot(reg);
                 }
                 if let Some(sync_state) = updated_sync_state {
-                    state.set_cached_sync_state_for_service(service, Some(sync_state));
+                    batch.sync_state(sync_state);
                 }
                 if let Some(post_state) = updated_post_state {
-                    state.write_cache_slot_for_service(
-                        service,
-                        |c| &mut c.post_state,
-                        Some(post_state),
-                    );
+                    batch.post_state(post_state);
                 }
+                batch
+                    .commit(state, service, pw)
+                    .map_err(FrontendError::from)?;
 
                 if let Some(mut backup_state) = crate::state::load_local_sidecar_json_opt::<
                     StoredBackupSyncState,
@@ -1725,8 +1598,8 @@ pub async fn remove_public_sync_impl(
         )?;
     }
 
-    if state.is_generation_current(session.generation) {
-        let _ = enqueue_guardian_locator_updates_if_configured(state, password.clone()).await;
+    if state.is_generation_current(auth.generation()) {
+        let _ = enqueue_guardian_locator_updates_if_configured(state, &auth.token, pw).await;
     }
 
     Ok(())

@@ -49,14 +49,13 @@ pub async fn sync_market_channels_with_options(
     state: &AppState,
 ) -> Result<FrontendMarketSyncResult, FrontendError> {
     let _market_guard = state.market_op_lock.lock().await;
-    let (session, resolved_pw) = state.authorize_and_begin_session_secret(
-        crate::state::RequiredAccess::Unlocked,
-        password.as_deref(),
-    )?;
-    let pw = resolved_pw.as_deref().map(String::as_str);
+    let auth =
+        state.authorize_session(crate::state::RequiredAccess::Unlocked, password.as_deref())?;
+    let session = &auth.token;
+    let pw = auth.pw();
 
     let (ui_prefs, mut security_policy) = state.with_session_required(
-        &session,
+        session,
         "Active wallet session changed before market sync could start",
         |service| {
             let ui_prefs = state
@@ -96,13 +95,13 @@ pub async fn sync_market_channels_with_options(
 
     // 1. Ensure own DropAdmin channel members are up-to-date on server
     if let Some(err_msg) =
-        admin::refresh_own_admin_members_locked(&client, state, &session, pw).await
+        admin::refresh_own_admin_members_locked(&client, state, session, pw).await
     {
         errors.push(err_msg);
     }
 
     // 2. Load identity context and sync state
-    let Some((id_ctx, mut sync_state)) = state.with_session(&session, |service| {
+    let Some((id_ctx, mut sync_state)) = state.with_session(session, |service| {
         let id_ctx = SyncIdentityContext::from_service(service, pw)?;
         let sync_state: StoredSyncState =
             crate::state::load_encrypted_json_or_default(service, MARKET_SYNC_KEY, pw)
@@ -131,7 +130,7 @@ pub async fn sync_market_channels_with_options(
     if let Some(active_media_blob_ids) = card_sync::sync_card_upload_channel(
         &client,
         state,
-        &session,
+        session,
         &ui_prefs,
         &security_policy,
         &id_ctx,
@@ -148,7 +147,7 @@ pub async fn sync_market_channels_with_options(
             media_sync::gc_orphaned_media_blobs(
                 &client,
                 state,
-                &session,
+                session,
                 &id_ctx,
                 &card_upload_targets,
                 &active_media_blob_ids,
@@ -165,7 +164,7 @@ pub async fn sync_market_channels_with_options(
         wot_sync::sync_wot_upload_channel(
             &client,
             state,
-            &session,
+            session,
             &ui_prefs,
             &security_policy,
             &id_ctx,
@@ -186,7 +185,7 @@ pub async fn sync_market_channels_with_options(
         channel_reader::check_revocations(
             &client,
             state,
-            &session,
+            session,
             &mut security_policy,
             &mut sync_state,
             now_secs,
@@ -212,7 +211,7 @@ pub async fn sync_market_channels_with_options(
         let poll = channel_reader::poll_sync_channels(
             &client,
             state,
-            &session,
+            session,
             &ui_prefs,
             &security_policy,
             &id_ctx,
@@ -230,10 +229,10 @@ pub async fn sync_market_channels_with_options(
     }
 
     // 4. Atomic Delta-Apply strictly gated by SessionToken: reload fresh stores on commit,
-    //    compute all mutations in memory, and commit every modified blob via ONE save_encrypted_batch call.
+    //    compute all mutations in memory, and commit every modified blob via EncryptedBatchCommit.
     //    If the session was logged out / switched / re-logged in, discard everything cleanly.
     let max_stored_cards = ui_prefs.max_stored_cards.clamp(100, 10_000);
-    let committed = state.with_session(&session, |service| {
+    let committed = state.with_session(session, |service| {
         let latest_sync_state: StoredSyncState =
             crate::state::load_encrypted_json_or_default(service, MARKET_SYNC_KEY, pw)
                 .map_err(FrontendError::from)?;
@@ -385,75 +384,30 @@ pub async fn sync_market_channels_with_options(
             next_notices_store = Some(notices_store);
         }
 
-        let mut owned_blobs: Vec<(&str, Vec<u8>)> = Vec::with_capacity(6);
-        let serialize = |key: &'static str, err_res: Result<Vec<u8>, serde_json::Error>| {
-            err_res
-                .map(|bytes| (key, bytes))
-                .map_err(|e| FrontendError::from(format!("Failed to serialize {}: {}", key, e)))
-        };
-
-        if let Some(ref store) = next_card_store {
-            owned_blobs.push(serialize(MARKET_CARD_STORE_KEY, serde_json::to_vec(store))?);
-        }
-        if let Some(ref reg) = next_wot_reg {
-            owned_blobs.push(serialize(
-                crate::state::WOT_DATA_NAME,
-                serde_json::to_vec(reg),
-            )?);
-        }
-        if address_book_changed {
-            if let Some(ref ab) = next_address_book {
-                owned_blobs.push(serialize(
-                    crate::state::CONTACTS_DATA_NAME,
-                    serde_json::to_vec(ab),
-                )?);
-            }
-        }
-        if policy_changed {
-            if let Some(ref pol) = next_security_policy {
-                owned_blobs.push(serialize(
-                    crate::settings::SECURITY_POLICY_KEY,
-                    serde_json::to_vec(pol),
-                )?);
-            }
-        }
-        if let Some(ref notices) = next_notices_store {
-            owned_blobs.push(serialize(
-                crate::state::APP_NOTICES_KEY,
-                serde_json::to_vec(notices),
-            )?);
-        }
-        owned_blobs.push(serialize(MARKET_SYNC_KEY, serde_json::to_vec(&sync_state))?);
-
-        let batch_refs: Vec<(&str, &[u8])> = owned_blobs
-            .iter()
-            .map(|(k, v)| (*k, v.as_slice()))
-            .collect();
-        service
-            .save_encrypted_batch(&batch_refs, pw)
-            .map_err(FrontendError::from)?;
-
-        // Update in-memory caches only after atomic persistence succeeded.
+        let mut batch = crate::state::EncryptedBatchCommit::new();
         if let Some(store) = next_card_store {
-            state.set_cached_card_store_for_service(service, Some(store));
+            batch.card_store(store);
         }
-        state.set_cached_sync_state_for_service(service, Some(sync_state));
         if let Some(reg) = next_wot_reg {
-            state.write_cache_slot_for_service(service, |c| &mut c.wot, Some(reg));
+            batch.wot(reg);
         }
         if address_book_changed {
             if let Some(ab) = next_address_book {
-                state.set_cached_contacts_for_service(service, Some(ab));
+                batch.contacts(ab);
             }
         }
         if policy_changed {
             if let Some(pol) = next_security_policy {
-                state.write_cache_slot_for_service(service, |c| &mut c.security_policy, Some(pol));
+                batch.security_policy(pol);
             }
         }
         if let Some(notices) = next_notices_store {
-            state.write_cache_slot_for_service(service, |c| &mut c.app_notices, Some(notices));
+            batch.app_notices(notices);
         }
+        batch.sync_state(sync_state);
+        batch
+            .commit(state, service, pw)
+            .map_err(FrontendError::from)?;
         Ok(())
     })?;
 

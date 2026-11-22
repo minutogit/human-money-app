@@ -115,28 +115,15 @@ pub fn apply_reach_preset_impl(
         pw,
     )?;
 
-    let wot_bytes = serde_json::to_vec(&reg)
-        .map_err(|e| FrontendError::from(format!("Failed to serialize WoT register: {}", e)))?;
-    let own_bytes = serde_json::to_vec(&stored).map_err(|e| {
-        FrontendError::from(format!("Failed to serialize own market profile: {}", e))
-    })?;
-    let ui_bytes = serde_json::to_vec(&prefs)
-        .map_err(|e| FrontendError::from(format!("Failed to serialize UiPreferences: {}", e)))?;
-
-    service
-        .save_encrypted_batch(
-            &[
-                (crate::state::WOT_DATA_NAME, wot_bytes.as_slice()),
-                (crate::state::MARKET_OWN_PROFILE_KEY, own_bytes.as_slice()),
-                (crate::settings::UI_PREFERENCES_KEY, ui_bytes.as_slice()),
-            ],
-            pw,
-        )
+    let mut batch = crate::state::EncryptedBatchCommit::new();
+    batch
+        .wot(reg.clone())
+        .own_market_profile(stored)
+        .ui_preferences(prefs);
+    batch
+        .commit(state, &mut service, pw)
         .map_err(|e| FrontendError::from(format!("Failed to persist reach preset: {}", e)))?;
 
-    state.set_cached_wot_for_service(&service, Some(reg.clone()));
-    state.set_cached_own_market_profile_for_service(&service, Some(stored));
-    state.set_cached_ui_preferences_for_service(&service, Some(prefs));
     crate::services::wot_service::apply_desired_hops_to_cached_contacts(state, &reg);
 
     Ok(ReachPresetDto {

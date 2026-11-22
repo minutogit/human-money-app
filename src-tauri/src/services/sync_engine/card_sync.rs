@@ -88,14 +88,12 @@ pub async fn discover_available_syncs_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<Vec<FrontendDiscoveredSync>, FrontendError> {
-    let (session, resolved_pw) = state.authorize_and_begin_session_secret(
-        crate::state::RequiredAccess::Unlocked,
-        password.as_deref(),
-    )?;
-    let pw = resolved_pw.as_deref().map(String::as_str);
+    let auth =
+        state.authorize_session(crate::state::RequiredAccess::Unlocked, password.as_deref())?;
+    let pw = auth.pw();
 
     let (mut descriptors, security_policy) = state.with_session_required(
-        &session,
+        &auth.token,
         "Wallet session changed during sync discovery",
         |service| {
             let mut descriptors: Vec<(FrontendSyncDescriptor, String)> = Vec::new();
@@ -599,17 +597,9 @@ pub async fn probe_contact_syncs_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<Vec<FrontendSyncDescriptor>, FrontendError> {
-    let (session, resolved_pw) = state.authorize_and_begin_session_secret(
-        crate::state::RequiredAccess::Unlocked,
-        password.as_deref(),
-    )?;
-    probe_contact_syncs_with_session(
-        &session,
-        force,
-        resolved_pw.as_deref().map(String::as_str),
-        state,
-    )
-    .await
+    let auth =
+        state.authorize_session(crate::state::RequiredAccess::Unlocked, password.as_deref())?;
+    probe_contact_syncs_with_session(&auth.token, force, auth.pw(), state).await
 }
 
 pub(crate) async fn probe_contact_syncs_with_session(
@@ -819,8 +809,7 @@ pub async fn set_selected_upload_syncs_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<Vec<FrontendSyncDescriptor>, FrontendError> {
-    let session = state
-        .authorize_and_begin_session(crate::state::RequiredAccess::Full, password.as_deref())?;
+    let auth = state.authorize_session(crate::state::RequiredAccess::Full, password.as_deref())?;
     if syncs.len() > 3 {
         return Err(FrontendError::from(
             "Maximum 3 upload drops allowed".to_string(),
@@ -838,28 +827,52 @@ pub async fn set_selected_upload_syncs_impl(
         }
     }
 
-    state.with_session_required(
-        &session,
-        "Active wallet session changed before upload syncs could be saved",
-        |service| {
-            state
-                .mutate_security_policy(service, password.as_deref(), |policy| {
-                    policy.market_selected_syncs = syncs.clone();
-                })
-                .map_err(FrontendError::from)?;
+    {
+        // Serialize SecurityPolicy + OwnMarketProfile RMW under market_op_lock, and drop it before
+        // enqueue_guardian_locator_updates_if_configured (which acquires recovery_op_lock -> post_op_lock).
+        let _market_guard = state.market_op_lock.lock().await;
+        state.with_session_required(
+            &auth.token,
+            "Active wallet session changed before upload syncs could be saved",
+            |service| {
+                let mut policy = state
+                    .get_or_load_security_policy(service, auth.pw())
+                    .map_err(FrontendError::from)?;
+                policy.market_selected_syncs = syncs.clone();
 
-            sync_own_card_drops_on_settings_change(state, service, &syncs, password.as_deref());
-            Ok(())
-        },
-    )?;
+                let updated_profile = super::admin::build_resigned_own_card_profile_for_policy(
+                    state,
+                    service,
+                    &policy,
+                    auth.pw(),
+                );
 
-    if state.is_generation_current(session.generation) {
-        let _ = enqueue_guardian_locator_updates_if_configured(state, password.clone()).await;
+                let mut batch = crate::state::EncryptedBatchCommit::new();
+                batch.security_policy(policy);
+                if let Some(prof) = updated_profile {
+                    batch.own_market_profile(prof);
+                }
+                batch
+                    .commit(state, service, auth.pw())
+                    .map_err(FrontendError::from)?;
+                Ok(())
+            },
+        )?;
+    }
+
+    if state.is_generation_current(auth.generation()) {
+        let _ = enqueue_guardian_locator_updates_if_configured(state, &auth.token, auth.pw()).await;
     }
 
     // Trigger upload to selected drops.
-    if state.is_generation_current(session.generation) {
-        let _ = super::sync_market_channels_impl(None, Some(true), password, state).await;
+    if state.is_generation_current(auth.generation()) {
+        let _ = super::sync_market_channels_impl(
+            None,
+            Some(true),
+            auth.pw().map(str::to_string),
+            state,
+        )
+        .await;
     }
 
     Ok(syncs)
@@ -1960,6 +1973,105 @@ mod tests {
         let bob_c = contacts.iter().find(|c| c.did == bob_did).unwrap();
         assert_ne!(bob_c.syncs[0].status, "unverified");
         assert!(bob_c.syncs[0].last_probed_at.is_some());
+
+        let _ = std::fs::remove_dir_all(&base_dir);
+    }
+
+    #[tokio::test]
+    async fn s10_x3_set_selected_upload_syncs_atomic_and_drops_market_lock_before_locator_enqueue()
+    {
+        use crate::models::{FrontendSaveMyMarketProfileRequest, FrontendUserProfile};
+        use crate::services::market_service::save_my_market_profile_impl;
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        let base_dir = crate::test_support::temp_test_dir("s10_x3_selected_syncs_lock_order");
+        let password = "StrongPw-S10-X3!";
+        let alice_svc = crate::test_support::setup_test_app(
+            &base_dir.join("alice"),
+            "Alice",
+            crate::test_support::ALICE_PHRASE,
+            password,
+        );
+        let state = Arc::new(crate::test_support::create_test_state(alice_svc));
+
+        save_my_market_profile_impl(
+            FrontendSaveMyMarketProfileRequest {
+                profile: FrontendUserProfile {
+                    first_name: Some("Alice".to_string()),
+                    ..Default::default()
+                },
+                visibility: Default::default(),
+                skills: vec![],
+                max_hops: 2,
+                validity_years: 2,
+                allow_inquiries: true,
+                published: Some(true),
+            },
+            Some(password.to_string()),
+            &state,
+        )
+        .unwrap();
+
+        let desc = FrontendSyncDescriptor {
+            write_url: "https://sync-a.example.org/sync.php".to_string(),
+            read_url: "https://sync-a.example.org/d".to_string(),
+            slot_id: None,
+            drop_pub: "11".repeat(32),
+            status: "active".to_string(),
+            ..Default::default()
+        };
+
+        // Hold recovery_op_lock while set_selected_upload_syncs_impl runs.
+        // Because market_op_lock MUST be dropped before enqueue_guardian_locator_updates_if_configured,
+        // this task holding recovery_op_lock can acquire market_op_lock without deadlocking.
+        let recovery_guard = state.recovery_op_lock.lock().await;
+        let state_bg = Arc::clone(&state);
+        let desc_bg = desc.clone();
+        let handle = tokio::spawn(async move {
+            set_selected_upload_syncs_impl(vec![desc_bg], Some(password.to_string()), &state_bg)
+                .await
+        });
+
+        // Wait until the atomic SecurityPolicy + OwnMarketProfile commit has completed.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if state
+                    .cache_security_policy()
+                    .is_some_and(|p| p.market_selected_syncs.len() == 1)
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect(
+            "set_selected_upload_syncs_impl must persist policy while recovery_op_lock is held",
+        );
+
+        // market_op_lock MUST already be released before enqueue_guardian_locator_updates_if_configured waits on recovery_op_lock.
+        let market_guard =
+            tokio::time::timeout(Duration::from_secs(5), state.market_op_lock.lock())
+                .await
+                .expect("S10-X3: market_op_lock must be dropped before guardian locator enqueue");
+        drop(market_guard);
+        drop(recovery_guard);
+
+        let saved = handle.await.unwrap().unwrap();
+        assert_eq!(saved.len(), 1);
+        assert_eq!(
+            state
+                .cache_security_policy()
+                .unwrap()
+                .market_selected_syncs
+                .len(),
+            1
+        );
+        let own_prof = state.cache_own_market_profile().unwrap();
+        let drops = own_prof.last_card.unwrap().payload.drops;
+        assert_eq!(drops.len(), 1);
+        assert_eq!(drops[0].write_url, "https://sync-a.example.org/sync.php");
 
         let _ = std::fs::remove_dir_all(&base_dir);
     }

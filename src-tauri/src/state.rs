@@ -1,6 +1,6 @@
 // src-tauri/src/state.rs
 use crate::models::{FrontendAddressBook, FrontendContact, TransactionRecord};
-use crate::session::{ActiveProfileCaches, SessionToken};
+use crate::session::{ActiveProfileCaches, AuthorizedSession, SessionToken};
 use crate::settings::{
     AppConfigDto, InternalLifecycleState, SecurityPolicy, UiPreferences,
     INTERNAL_LIFECYCLE_STATE_KEY, SECURITY_POLICY_KEY, UI_PREFERENCES_KEY,
@@ -872,6 +872,293 @@ fn endpoints_overlap(a_read: &str, a_write: &str, b_read: &str, b_write: &str) -
     (!ar.is_empty() && (ar == br || ar == bw)) || (!aw.is_empty() && (aw == br || aw == bw))
 }
 
+/// Typed atomic persistence builder for encrypted profile stores (`generic_<name>.enc`).
+///
+/// Serializes all staged stores upfront, commits them in a single `AppService::save_encrypted_batch`
+/// transaction, and updates all corresponding [`ActiveProfileCaches`] slots under one mutex
+/// acquisition strictly after disk persistence succeeds.
+#[derive(Default)]
+pub(crate) struct EncryptedBatchCommit {
+    pub security_policy: Option<SecurityPolicy>,
+    pub ui_preferences: Option<UiPreferences>,
+    pub own_market_profile: Option<crate::models::StoredOwnMarketProfile>,
+    pub sync_admin: Option<Option<StoredSyncAdmin>>,
+    pub wot: Option<humoco_wot::TrustRegister>,
+    pub contacts: Option<FrontendAddressBook>,
+    pub card_store: Option<humoco_market::CardStore>,
+    pub sync_state: Option<StoredSyncState>,
+    pub post_state: Option<StoredPostState>,
+    pub app_notices: Option<crate::models::StoredAppNotices>,
+    pub outgoing_bundles: Option<crate::models::StoredOutgoingBundles>,
+    pub history: Option<Vec<TransactionRecord>>,
+    pub recovery_owner: Option<crate::models::recovery::RecoveryOwnerState>,
+    pub guardian_vault: Option<humoco_market::GuardianVaultStore>,
+    pub server_offenders: Option<humoco_wot::ServerOffenderList>,
+    pub own_media_blobs: Vec<(String, Vec<u8>)>,
+}
+
+impl EncryptedBatchCommit {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.security_policy.is_none()
+            && self.ui_preferences.is_none()
+            && self.own_market_profile.is_none()
+            && self.sync_admin.is_none()
+            && self.wot.is_none()
+            && self.contacts.is_none()
+            && self.card_store.is_none()
+            && self.sync_state.is_none()
+            && self.post_state.is_none()
+            && self.app_notices.is_none()
+            && self.outgoing_bundles.is_none()
+            && self.history.is_none()
+            && self.recovery_owner.is_none()
+            && self.guardian_vault.is_none()
+            && self.server_offenders.is_none()
+            && self.own_media_blobs.is_empty()
+    }
+
+    pub fn security_policy(&mut self, value: SecurityPolicy) -> &mut Self {
+        self.security_policy = Some(value);
+        self
+    }
+
+    pub fn ui_preferences(&mut self, value: UiPreferences) -> &mut Self {
+        self.ui_preferences = Some(value);
+        self
+    }
+
+    pub fn own_market_profile(
+        &mut self,
+        value: crate::models::StoredOwnMarketProfile,
+    ) -> &mut Self {
+        self.own_market_profile = Some(value);
+        self
+    }
+
+    pub fn sync_admin(&mut self, value: StoredSyncAdmin) -> &mut Self {
+        self.sync_admin = Some(Some(value));
+        self
+    }
+
+    pub fn clear_sync_admin(&mut self) -> &mut Self {
+        self.sync_admin = Some(None);
+        self
+    }
+
+    pub fn wot(&mut self, value: humoco_wot::TrustRegister) -> &mut Self {
+        self.wot = Some(value);
+        self
+    }
+
+    pub fn contacts(&mut self, value: FrontendAddressBook) -> &mut Self {
+        self.contacts = Some(value);
+        self
+    }
+
+    pub fn card_store(&mut self, value: humoco_market::CardStore) -> &mut Self {
+        self.card_store = Some(value);
+        self
+    }
+
+    pub fn sync_state(&mut self, value: StoredSyncState) -> &mut Self {
+        self.sync_state = Some(value);
+        self
+    }
+
+    pub fn post_state(&mut self, value: StoredPostState) -> &mut Self {
+        self.post_state = Some(value);
+        self
+    }
+
+    pub fn app_notices(&mut self, value: crate::models::StoredAppNotices) -> &mut Self {
+        self.app_notices = Some(value);
+        self
+    }
+
+    pub fn outgoing_bundles(&mut self, value: crate::models::StoredOutgoingBundles) -> &mut Self {
+        self.outgoing_bundles = Some(value);
+        self
+    }
+
+    pub fn history(&mut self, value: Vec<TransactionRecord>) -> &mut Self {
+        self.history = Some(value);
+        self
+    }
+
+    pub fn recovery_owner(
+        &mut self,
+        value: crate::models::recovery::RecoveryOwnerState,
+    ) -> &mut Self {
+        self.recovery_owner = Some(value);
+        self
+    }
+
+    #[allow(dead_code)]
+    pub fn guardian_vault(&mut self, value: humoco_market::GuardianVaultStore) -> &mut Self {
+        self.guardian_vault = Some(value);
+        self
+    }
+
+    #[allow(dead_code)]
+    pub fn server_offenders(&mut self, value: humoco_wot::ServerOffenderList) -> &mut Self {
+        self.server_offenders = Some(value);
+        self
+    }
+
+    pub fn own_media_blob(&mut self, storage_key: String, bytes: Vec<u8>) -> &mut Self {
+        self.own_media_blobs.push((storage_key, bytes));
+        self
+    }
+
+    pub fn commit(
+        self,
+        state: &AppState,
+        service: &mut AppService,
+        password: Option<&str>,
+    ) -> Result<(), AppFacadeError> {
+        use std::borrow::Cow;
+
+        if self.is_empty() {
+            return Ok(());
+        }
+
+        fn serialize_slot<T: serde::Serialize>(
+            key: &'static str,
+            value: &T,
+        ) -> Result<(Cow<'static, str>, Vec<u8>), AppFacadeError> {
+            let bytes = serde_json::to_vec(value)
+                .map_err(|e| AppFacadeError::Json(format!("Failed to serialize {}: {}", key, e)))?;
+            Ok((Cow::Borrowed(key), bytes))
+        }
+
+        let mut owned_blobs: Vec<(Cow<'static, str>, Vec<u8>)> =
+            Vec::with_capacity(15 + self.own_media_blobs.len());
+        if let Some(ref val) = self.security_policy {
+            owned_blobs.push(serialize_slot(SECURITY_POLICY_KEY, val)?);
+        }
+        if let Some(ref val) = self.ui_preferences {
+            owned_blobs.push(serialize_slot(UI_PREFERENCES_KEY, val)?);
+        }
+        if let Some(ref val) = self.own_market_profile {
+            owned_blobs.push(serialize_slot(MARKET_OWN_PROFILE_KEY, val)?);
+        }
+        if let Some(ref val) = self.sync_admin {
+            match val {
+                Some(admin) => owned_blobs.push(serialize_slot(MARKET_SYNC_ADMIN_KEY, admin)?),
+                None => owned_blobs.push(serialize_slot(
+                    MARKET_SYNC_ADMIN_KEY,
+                    &Option::<StoredSyncAdmin>::None,
+                )?),
+            }
+        }
+        if let Some(ref val) = self.wot {
+            owned_blobs.push(serialize_slot(WOT_DATA_NAME, val)?);
+        }
+        if let Some(ref val) = self.contacts {
+            owned_blobs.push(serialize_slot(CONTACTS_DATA_NAME, val)?);
+        }
+        if let Some(ref val) = self.card_store {
+            owned_blobs.push(serialize_slot(MARKET_CARD_STORE_KEY, val)?);
+        }
+        if let Some(ref val) = self.sync_state {
+            owned_blobs.push(serialize_slot(MARKET_SYNC_KEY, val)?);
+        }
+        if let Some(ref val) = self.post_state {
+            owned_blobs.push(serialize_slot(MARKET_POST_STATE_KEY, val)?);
+        }
+        if let Some(ref val) = self.app_notices {
+            owned_blobs.push(serialize_slot(APP_NOTICES_KEY, val)?);
+        }
+        if let Some(ref val) = self.outgoing_bundles {
+            owned_blobs.push(serialize_slot(OUTGOING_BUNDLES_KEY, val)?);
+        }
+        if let Some(ref val) = self.history {
+            owned_blobs.push(serialize_slot(TRANSACTION_HISTORY_KEY, val)?);
+        }
+        if let Some(ref val) = self.recovery_owner {
+            owned_blobs.push(serialize_slot(RECOVERY_OWNER_STATE_KEY, val)?);
+        }
+        if let Some(ref val) = self.guardian_vault {
+            owned_blobs.push(serialize_slot(RECOVERY_GUARDIAN_VAULT_KEY, val)?);
+        }
+        if let Some(ref val) = self.server_offenders {
+            owned_blobs.push(serialize_slot(
+                crate::l2_lifecycle::SERVER_OFFENDER_LIST_KEY,
+                val,
+            )?);
+        }
+        for (key, bytes) in self.own_media_blobs {
+            debug_assert!(
+                key.starts_with("market_own_media_"),
+                "own_media_blobs must only carry market_own_media_* keys"
+            );
+            owned_blobs.push((Cow::Owned(key), bytes));
+        }
+
+        let batch_refs: Vec<(&str, &[u8])> = owned_blobs
+            .iter()
+            .map(|(k, v)| (k.as_ref(), v.as_slice()))
+            .collect();
+        if let Err(err) = service.save_encrypted_batch(&batch_refs, password) {
+            state.sync_if_core_locked(service);
+            return Err(err);
+        }
+
+        state.write_caches_for_service(service, |caches| {
+            if let Some(val) = self.security_policy {
+                caches.security_policy = Some(val);
+            }
+            if let Some(val) = self.ui_preferences {
+                caches.ui_preferences = Some(val);
+            }
+            if let Some(val) = self.own_market_profile {
+                caches.own_market_profile = Some(val);
+            }
+            if let Some(val) = self.sync_admin {
+                caches.own_sync_descriptor = Some(val.map(|a| a.descriptor));
+            }
+            if let Some(val) = self.wot {
+                caches.wot = Some(val);
+            }
+            if let Some(val) = self.contacts {
+                caches.contacts = Some(val);
+            }
+            if let Some(val) = self.card_store {
+                caches.card_store = Some(val);
+            }
+            if let Some(val) = self.sync_state {
+                caches.sync_state = Some(val);
+            }
+            if let Some(val) = self.post_state {
+                caches.post_state = Some(val);
+            }
+            if let Some(val) = self.app_notices {
+                caches.app_notices = Some(val);
+            }
+            if let Some(val) = self.outgoing_bundles {
+                caches.outgoing_bundles = Some(val);
+            }
+            if let Some(val) = self.history {
+                caches.history = Some(val);
+            }
+            if let Some(val) = self.recovery_owner {
+                caches.recovery_owner = Some(Some(val));
+            }
+            if let Some(val) = self.guardian_vault {
+                caches.guardian_vault = Some(val);
+            }
+            if let Some(val) = self.server_offenders {
+                caches.server_offenders = Some(val);
+            }
+        });
+        Ok(())
+    }
+}
+
 impl AppState {
     pub fn new(service: AppService) -> Self {
         let (initial_gen, initial_caches) =
@@ -1378,6 +1665,16 @@ impl AppState {
         Ok((session, resolved_secret))
     }
 
+    pub fn authorize_session(
+        &self,
+        required: RequiredAccess,
+        password: Option<&str>,
+    ) -> Result<AuthorizedSession, crate::models::FrontendError> {
+        let (token, resolved_secret) =
+            self.authorize_and_begin_session_secret(required, password)?;
+        Ok(AuthorizedSession::new(token, resolved_secret))
+    }
+
     /// Enforces `required` access at the Tauri boundary and returns the locked `AppService`.
     pub fn authorize_and_lock(
         &self,
@@ -1472,11 +1769,22 @@ impl AppState {
         field(caches).clone()
     }
 
-    pub(crate) fn write_cache_slot_for_service<T>(
+    fn read_cache_slot_current_gen<T: Clone>(
+        &self,
+        field: fn(&ActiveProfileCaches) -> &Option<T>,
+    ) -> Option<T> {
+        let current_gen = self.current_session_generation();
+        let guard = self.profile_caches.lock().unwrap();
+        guard
+            .as_ref()
+            .filter(|c| c.generation == current_gen)
+            .and_then(|c| field(c).clone())
+    }
+
+    pub(crate) fn write_caches_for_service(
         &self,
         service: &AppService,
-        field: fn(&mut ActiveProfileCaches) -> &mut Option<T>,
-        value: Option<T>,
+        update: impl FnOnce(&mut ActiveProfileCaches),
     ) {
         let current_gen = self.current_session_generation();
         let owner_did = service
@@ -1490,8 +1798,19 @@ impl AppState {
             *guard = Some(ActiveProfileCaches::new(current_gen, owner_did));
         }
         if let Some(ref mut caches) = *guard {
-            *field(caches) = value;
+            update(caches);
         }
+    }
+
+    pub(crate) fn write_cache_slot_for_service<T>(
+        &self,
+        service: &AppService,
+        field: fn(&mut ActiveProfileCaches) -> &mut Option<T>,
+        value: Option<T>,
+    ) {
+        self.write_caches_for_service(service, |caches| {
+            *field(caches) = value;
+        });
     }
 
     pub fn get_or_load_server_offender_list(
@@ -1528,11 +1847,7 @@ impl AppState {
     }
 
     pub fn cache_contacts(&self) -> Option<FrontendAddressBook> {
-        self.profile_caches
-            .lock()
-            .unwrap()
-            .as_ref()
-            .and_then(|c| c.contacts.clone())
+        self.read_cache_slot_current_gen(|c| &c.contacts)
     }
 
     pub fn set_cached_contacts(&self, value: Option<FrontendAddressBook>) {
@@ -1551,21 +1866,19 @@ impl AppState {
         &self,
         f: impl FnOnce(&mut Option<FrontendAddressBook>) -> R,
     ) -> R {
+        let current_gen = self.current_session_generation();
         let mut guard = self.profile_caches.lock().unwrap();
         if let Some(ref mut caches) = *guard {
-            f(&mut caches.contacts)
-        } else {
-            let mut none = None;
-            f(&mut none)
+            if caches.generation == current_gen {
+                return f(&mut caches.contacts);
+            }
         }
+        let mut none = None;
+        f(&mut none)
     }
 
     pub fn cache_events(&self) -> Option<Vec<human_money_core::models::wallet_event::WalletEvent>> {
-        self.profile_caches
-            .lock()
-            .unwrap()
-            .as_ref()
-            .and_then(|c| c.events.clone())
+        self.read_cache_slot_current_gen(|c| &c.events)
     }
 
     pub fn set_cached_events(
@@ -1576,19 +1889,11 @@ impl AppState {
     }
 
     pub fn cache_wot(&self) -> Option<humoco_wot::TrustRegister> {
-        self.profile_caches
-            .lock()
-            .unwrap()
-            .as_ref()
-            .and_then(|c| c.wot.clone())
+        self.read_cache_slot_current_gen(|c| &c.wot)
     }
 
     pub fn cache_ui_preferences(&self) -> Option<UiPreferences> {
-        self.profile_caches
-            .lock()
-            .unwrap()
-            .as_ref()
-            .and_then(|c| c.ui_preferences.clone())
+        self.read_cache_slot_current_gen(|c| &c.ui_preferences)
     }
 
     pub fn set_cached_ui_preferences(&self, value: Option<UiPreferences>) {
@@ -1612,11 +1917,7 @@ impl AppState {
     }
 
     pub fn cache_security_policy(&self) -> Option<SecurityPolicy> {
-        self.profile_caches
-            .lock()
-            .unwrap()
-            .as_ref()
-            .and_then(|c| c.security_policy.clone())
+        self.read_cache_slot_current_gen(|c| &c.security_policy)
     }
 
     pub fn set_cached_security_policy(&self, value: Option<SecurityPolicy>) {
@@ -1624,11 +1925,7 @@ impl AppState {
     }
 
     pub fn cache_internal_lifecycle(&self) -> Option<InternalLifecycleState> {
-        self.profile_caches
-            .lock()
-            .unwrap()
-            .as_ref()
-            .and_then(|c| c.internal_lifecycle.clone())
+        self.read_cache_slot_current_gen(|c| &c.internal_lifecycle)
     }
 
     pub fn set_cached_internal_lifecycle(&self, value: Option<InternalLifecycleState>) {
@@ -1636,11 +1933,7 @@ impl AppState {
     }
 
     pub fn cache_history(&self) -> Option<Vec<TransactionRecord>> {
-        self.profile_caches
-            .lock()
-            .unwrap()
-            .as_ref()
-            .and_then(|c| c.history.clone())
+        self.read_cache_slot_current_gen(|c| &c.history)
     }
 
     pub fn set_cached_history(&self, value: Option<Vec<TransactionRecord>>) {
@@ -1648,11 +1941,7 @@ impl AppState {
     }
 
     pub fn cache_own_market_profile(&self) -> Option<crate::models::StoredOwnMarketProfile> {
-        self.profile_caches
-            .lock()
-            .unwrap()
-            .as_ref()
-            .and_then(|c| c.own_market_profile.clone())
+        self.read_cache_slot_current_gen(|c| &c.own_market_profile)
     }
 
     pub fn set_cached_own_market_profile_for_service(
@@ -1666,11 +1955,7 @@ impl AppState {
     pub fn cache_recovery_owner(
         &self,
     ) -> Option<Option<crate::models::recovery::RecoveryOwnerState>> {
-        self.profile_caches
-            .lock()
-            .unwrap()
-            .as_ref()
-            .and_then(|c| c.recovery_owner.clone())
+        self.read_cache_slot_current_gen(|c| &c.recovery_owner)
     }
 
     pub fn set_cached_recovery_owner_for_service(
@@ -1682,11 +1967,7 @@ impl AppState {
     }
 
     pub fn cache_guardian_vault(&self) -> Option<humoco_market::GuardianVaultStore> {
-        self.profile_caches
-            .lock()
-            .unwrap()
-            .as_ref()
-            .and_then(|c| c.guardian_vault.clone())
+        self.read_cache_slot_current_gen(|c| &c.guardian_vault)
     }
 
     pub fn set_cached_guardian_vault_for_service(
@@ -1698,11 +1979,7 @@ impl AppState {
     }
 
     pub fn cache_app_notices(&self) -> Option<crate::models::StoredAppNotices> {
-        self.profile_caches
-            .lock()
-            .unwrap()
-            .as_ref()
-            .and_then(|c| c.app_notices.clone())
+        self.read_cache_slot_current_gen(|c| &c.app_notices)
     }
 
     pub fn set_cached_card_store_for_service(
@@ -1821,15 +2098,15 @@ impl AppState {
         field: fn(&mut ActiveProfileCaches) -> &mut Option<T>,
         value: Option<T>,
     ) {
+        let current_gen = self.current_session_generation();
         let mut guard = self.profile_caches.lock().unwrap();
         if value.is_some() && guard.is_none() {
-            *guard = Some(ActiveProfileCaches::new(
-                self.current_session_generation(),
-                String::new(),
-            ));
+            *guard = Some(ActiveProfileCaches::new(current_gen, String::new()));
         }
         if let Some(ref mut caches) = *guard {
-            *field(caches) = value;
+            if caches.generation == current_gen {
+                *field(caches) = value;
+            }
         }
     }
 
@@ -1859,9 +2136,8 @@ impl AppState {
                 } else {
                     save_encrypted_json(service, key, &default_value, password)
                 };
-                save_res.map_err(|e| {
-                    app_state_err(format!("Failed to save default {}: {}", key, e))
-                })?;
+                save_res
+                    .map_err(|e| app_state_err(format!("Failed to save default {}: {}", key, e)))?;
                 default_value
             }
         };
@@ -2297,9 +2573,11 @@ impl AppState {
     }
 
     pub fn get_cached_app_config(&self) -> Result<AppConfigDto, AppFacadeError> {
+        let current_gen = self.current_session_generation();
         let guard = self.profile_caches.lock().unwrap();
         let caches = guard
             .as_ref()
+            .filter(|c| c.generation == current_gen)
             .ok_or_else(|| app_state_err("AppConfig caches not loaded".to_string()))?;
         Ok(AppConfigDto {
             ui_preferences: caches.ui_preferences.clone().unwrap_or_default(),
@@ -2320,11 +2598,10 @@ impl AppState {
 
     // 3. Contacts Helpers
     pub fn get_cached_contacts(&self) -> Result<Vec<FrontendContact>, AppFacadeError> {
+        let current_gen = self.current_session_generation();
         let guard = self.profile_caches.lock().unwrap();
-        let Some(caches) = guard.as_ref() else {
-            return Err(app_state_err(
-                "Contacts cache not initialized".to_string(),
-            ));
+        let Some(caches) = guard.as_ref().filter(|c| c.generation == current_gen) else {
+            return Err(app_state_err("Contacts cache not initialized".to_string()));
         };
         if let Some(book) = caches.contacts.as_ref() {
             let mut contacts: Vec<FrontendContact> = book.contacts.values().cloned().collect();
@@ -2338,9 +2615,7 @@ impl AppState {
             });
             Ok(contacts)
         } else {
-            Err(app_state_err(
-                "Contacts cache not initialized".to_string(),
-            ))
+            Err(app_state_err("Contacts cache not initialized".to_string()))
         }
     }
 
@@ -2393,7 +2668,7 @@ impl AppState {
             contact,
             password,
             preserve_manual_card,
-            |_service, _reg| Ok(Vec::new()),
+            |_service, _reg, _batch| Ok(()),
         )
     }
 
@@ -2406,7 +2681,8 @@ impl AppState {
         before_commit: impl FnOnce(
             &mut AppService,
             &mut Option<humoco_wot::TrustRegister>,
-        ) -> Result<Vec<(&'static str, Vec<u8>)>, AppFacadeError>,
+            &mut EncryptedBatchCommit,
+        ) -> Result<(), AppFacadeError>,
     ) -> Result<(), AppFacadeError> {
         let validated_did = human_money_core::ValidatedUserId::parse(&contact.did)
             .map_err(|e| AppFacadeError::ValidationFailed(format!("Invalid contact DID: {}", e)))?;
@@ -2645,7 +2921,8 @@ impl AppState {
             }
         }
 
-        let companion_blobs = before_commit(service, &mut updated_wot_reg)?;
+        let mut batch = EncryptedBatchCommit::new();
+        before_commit(service, &mut updated_wot_reg, &mut batch)?;
         if let Some(ref mut reg) = updated_wot_reg {
             if reg.own_list_dirty || contact.trust_level.is_some() {
                 self.ensure_wot_list_signed(service, reg)?;
@@ -2677,31 +2954,12 @@ impl AppState {
 
         address_book.contacts.insert(contact.did.clone(), contact);
 
-        let ab_bytes = serde_json::to_vec(&address_book).map_err(|e| {
-            AppFacadeError::Json(format!("Failed to serialize address book: {}", e))
-        })?;
-        let mut owned_blobs: Vec<(&str, Vec<u8>)> = Vec::with_capacity(2 + companion_blobs.len());
-        owned_blobs.push((CONTACTS_DATA_NAME, ab_bytes));
-        if let Some(ref reg) = updated_wot_reg {
-            let reg_bytes = serde_json::to_vec(reg).map_err(|e| {
-                AppFacadeError::Json(format!("Failed to serialize TrustRegister: {}", e))
-            })?;
-            owned_blobs.push((WOT_DATA_NAME, reg_bytes));
-        }
-        owned_blobs.extend(companion_blobs);
-
-        let batch_refs: Vec<(&str, &[u8])> = owned_blobs
-            .iter()
-            .map(|(k, v)| (*k, v.as_slice()))
-            .collect();
-        service
-            .save_encrypted_batch(&batch_refs, password)
-            .map_err(|e| app_state_err(format!("Failed to save contact batch: {}", e)))?;
-
-        self.set_cached_contacts_for_service(service, Some(address_book.clone()));
+        batch.contacts(address_book.clone());
         if let Some(reg) = updated_wot_reg {
-            self.write_cache_slot_for_service(service, |c| &mut c.wot, Some(reg));
+            batch.wot(reg);
         }
+        batch.commit(self, service, password)?;
+
         self.prune_orphaned_market_selected_syncs(
             service,
             &address_book,
@@ -2793,9 +3051,8 @@ impl AppState {
         }
 
         if changed {
-            save_encrypted_json(service, CONTACTS_DATA_NAME, &address_book, password).map_err(
-                |e| app_state_err(format!("Failed to save address book: {}", e)),
-            )?;
+            save_encrypted_json(service, CONTACTS_DATA_NAME, &address_book, password)
+                .map_err(|e| app_state_err(format!("Failed to save address book: {}", e)))?;
 
             self.set_cached_contacts_for_service(service, Some(address_book.clone()));
             self.prune_orphaned_market_selected_syncs(
@@ -2817,6 +3074,7 @@ impl AppState {
     /// Returns cached transaction history with `"sent"` records hydrated from `outgoing_bundles`
     /// so UI retry/download paths receive exact bytes without storing large payloads inside `tx_history`.
     pub fn get_hydrated_history(&self) -> Result<Vec<TransactionRecord>, AppFacadeError> {
+        let current_gen = self.current_session_generation();
         let (mut history, cached_outgoing) = {
             let guard = self
                 .profile_caches
@@ -2824,6 +3082,7 @@ impl AppState {
                 .map_err(|_| app_state_err("History cache lock poisoned".into()))?;
             let caches = guard
                 .as_ref()
+                .filter(|c| c.generation == current_gen)
                 .ok_or_else(|| app_state_err("History cache not initialized".into()))?;
             let history = caches
                 .history
@@ -2838,8 +3097,7 @@ impl AppState {
                 let mut service = self.lock_service().map_err(|e| {
                     app_state_err(format!("Service lock unavailable: {}", e.message))
                 })?;
-                load_outgoing_bundles(&mut service, None)
-                    .map_err(|e| app_state_err(e.message))?
+                load_outgoing_bundles(&mut service, None).map_err(|e| app_state_err(e.message))?
             }
         };
 
@@ -2921,26 +3179,17 @@ impl AppState {
             return Ok(());
         }
         let baseline_history = self.load_history_from_disk(service, password)?;
-        let baseline_outgoing = load_outgoing_bundles(service, password)
-            .map_err(|e| app_state_err(e.message))?;
-        let batch = prepare_outgoing_history_and_bundle_companions(
+        let baseline_outgoing =
+            load_outgoing_bundles(service, password).map_err(|e| app_state_err(e.message))?;
+        let prep = prepare_outgoing_history_and_bundle_companions(
             &baseline_history,
             &baseline_outgoing,
             entries,
         )
         .map_err(|e| AppFacadeError::Json(e.message))?;
-        let refs: Vec<(&str, &[u8])> = batch
-            .blobs
-            .iter()
-            .map(|(k, v)| (k.as_str(), v.as_slice()))
-            .collect();
-        service.save_encrypted_batch(&refs, password)?;
-        self.write_cache_slot_for_service(service, |c| &mut c.history, Some(batch.history));
-        self.write_cache_slot_for_service(
-            service,
-            |c| &mut c.outgoing_bundles,
-            Some(batch.outgoing),
-        );
+        let mut batch = EncryptedBatchCommit::new();
+        batch.history(prep.history).outgoing_bundles(prep.outgoing);
+        batch.commit(self, service, password)?;
         Ok(())
     }
 
@@ -3059,8 +3308,7 @@ impl AppState {
         // 3. Load transaction history + canonical outgoing bundles and prune expired retained bundles (non-fatal)
         match (
             self.load_history_from_disk(service, Some(credential)),
-            load_outgoing_bundles(service, Some(credential))
-                .map_err(|e| app_state_err(e.message)),
+            load_outgoing_bundles(service, Some(credential)).map_err(|e| app_state_err(e.message)),
         ) {
             (Ok(mut history), Ok(mut outgoing)) => {
                 let retention_duration = Duration::days(BUNDLE_RETENTION_DAYS);
@@ -3085,29 +3333,16 @@ impl AppState {
 
                 if history_changed || outgoing_changed {
                     info!("Saving pruned outgoing bundles / transaction history back to disk...");
-                    let outgoing_bytes = serde_json::to_vec(&outgoing).map_err(|e| {
-                        AppFacadeError::Json(format!("Failed to serialize outgoing_bundles: {}", e))
-                    })?;
-                    let history_bytes = serde_json::to_vec(&history).map_err(|e| {
-                        AppFacadeError::Json(format!(
-                            "Failed to serialize transaction_history: {}",
-                            e
-                        ))
-                    })?;
-                    service.save_encrypted_batch(
-                        &[
-                            (OUTGOING_BUNDLES_KEY, &outgoing_bytes),
-                            (TRANSACTION_HISTORY_KEY, &history_bytes),
-                        ],
-                        Some(credential),
-                    )?;
-                    self.write_cache_slot_for_service(service, |c| &mut c.history, Some(history));
+                    let mut batch = EncryptedBatchCommit::new();
+                    batch.outgoing_bundles(outgoing).history(history);
+                    batch.commit(self, service, Some(credential))?;
+                } else {
+                    self.write_cache_slot_for_service(
+                        service,
+                        |c| &mut c.outgoing_bundles,
+                        Some(outgoing),
+                    );
                 }
-                self.write_cache_slot_for_service(
-                    service,
-                    |c| &mut c.outgoing_bundles,
-                    Some(outgoing),
-                );
             }
             (hist_res, out_res) => {
                 if let Err(e) = hist_res {
@@ -3353,9 +3588,8 @@ impl AppState {
         let now_secs = Utc::now().timestamp().max(0) as u64;
         service.with_wallet_and_identity(|_wallet, identity| {
             let signer = DidWotSigner::from_identity(identity);
-            reg.ensure_own_list_signed(&signer, now_secs).map_err(|e| {
-                app_state_err(format!("Failed to sign WoT trust list: {}", e))
-            })
+            reg.ensure_own_list_signed(&signer, now_secs)
+                .map_err(|e| app_state_err(format!("Failed to sign WoT trust list: {}", e)))
         })?
     }
 
@@ -3366,8 +3600,9 @@ impl AppState {
     ) -> Result<humoco_wot::TrustRegister, AppFacadeError> {
         info!("Loading WoT register from disk...");
         let own_user_id = service.with_wallet(|w| w.get_user_id().to_string())?;
-        let own_can_did = canonicalize_did(&own_user_id)
-            .map_err(|e| AppFacadeError::ValidationFailed(format!("Invalid own wallet DID: {}", e)))?;
+        let own_can_did = canonicalize_did(&own_user_id).map_err(|e| {
+            AppFacadeError::ValidationFailed(format!("Invalid own wallet DID: {}", e))
+        })?;
         let mut reg = match load_encrypted_json_opt::<humoco_wot::TrustRegister>(
             service,
             WOT_DATA_NAME,
@@ -3378,10 +3613,7 @@ impl AppState {
                 info!("No WoT register found, creating new one");
                 humoco_wot::TrustRegister::new(&own_can_did, humoco_wot::WotPolicy::default())
                     .map_err(|e| {
-                        app_state_err(format!(
-                            "Failed to initialize TrustRegister: {}",
-                            e
-                        ))
+                        app_state_err(format!("Failed to initialize TrustRegister: {}", e))
                     })?
             }
         };
@@ -3473,8 +3705,12 @@ impl AppState {
             .collect();
 
         let (eval, provider_filter_names, contacts_cache) = {
+            let current_gen = self.current_session_generation();
             let caches_guard = self.profile_caches.lock().unwrap();
-            let reg = match caches_guard.as_ref().and_then(|c| c.wot.as_ref()) {
+            let current_caches = caches_guard
+                .as_ref()
+                .filter(|c| c.generation == current_gen);
+            let reg = match current_caches.and_then(|c| c.wot.as_ref()) {
                 Some(r) => r,
                 None => return FrontendVoucherTrustDto::default(),
             };
@@ -3510,7 +3746,7 @@ impl AppState {
                     }
                 }
             }
-            let contacts_cache = caches_guard.as_ref().and_then(|c| c.contacts.clone());
+            let contacts_cache = current_caches.and_then(|c| c.contacts.clone());
             (eval, provider_filter_names, contacts_cache)
         };
 
@@ -3618,10 +3854,14 @@ impl AppState {
                 (true, true) => None,
             }
         } else {
+            let current_gen = self.current_session_generation();
             let caches_guard = self.profile_caches.lock().unwrap();
-            let contacts_ref = caches_guard.as_ref().and_then(|c| c.contacts.as_ref());
+            let current_caches = caches_guard
+                .as_ref()
+                .filter(|c| c.generation == current_gen);
+            let contacts_ref = current_caches.and_then(|c| c.contacts.as_ref());
             lookup_contact_name(contacts_ref, did).or_else(|| {
-                let reg = caches_guard.as_ref().and_then(|c| c.wot.as_ref())?;
+                let reg = current_caches.and_then(|c| c.wot.as_ref())?;
                 target_can
                     .as_ref()
                     .and_then(|can| reg.provider_filters.get(can))
@@ -3641,8 +3881,12 @@ impl AppState {
 
         let mut trusted = std::collections::HashSet::new();
         let now_secs = Utc::now().timestamp().max(0) as u64;
+        let current_gen = self.current_session_generation();
         let caches_guard = self.profile_caches.lock().unwrap();
-        let reg_opt = caches_guard.as_ref().and_then(|c| c.wot.as_ref());
+        let reg_opt = caches_guard
+            .as_ref()
+            .filter(|c| c.generation == current_gen)
+            .and_then(|c| c.wot.as_ref());
         let Some(reg) = reg_opt else {
             return trusted;
         };
@@ -6652,6 +6896,328 @@ mod tests {
             card_v_after > card_v_before,
             "Deleting a trusted contact must bump own card version (before={card_v_before}, after={card_v_after})"
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn s09_x4_stale_generation_caches_are_isolated_and_rejected() {
+        use std::sync::atomic::Ordering;
+
+        let dir = crate::test_support::temp_test_dir("s09_x4_stale_gen");
+        let pw = "StrongPw-S09-X4!";
+        let alice_svc = crate::test_support::setup_test_app(
+            &dir.join("alice"),
+            "Alice",
+            crate::test_support::ALICE_PHRASE,
+            pw,
+        );
+        let alice_did = alice_svc
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
+        let state = crate::test_support::create_test_state(alice_svc);
+        {
+            let mut svc = state.lock_service().unwrap();
+            state.initialize_profile_session(&mut svc, pw).unwrap();
+        }
+
+        let stale_gen = state.current_session_generation();
+        let mut book = crate::models::FrontendAddressBook::default();
+        book.contacts.insert(
+            "did:key:zBob".to_string(),
+            crate::models::FrontendContact {
+                did: "did:key:zBob".to_string(),
+                profile: crate::models::FrontendUserProfile {
+                    first_name: Some("Bob".to_string()),
+                    ..Default::default()
+                },
+                tags: vec![],
+                added_at: chrono::Utc::now().to_rfc3339(),
+                notes: None,
+                trust_level: None,
+                desired_hops: None,
+                has_peer_list: false,
+                peer_list_updated_at: None,
+                syncs: vec![],
+            },
+        );
+        let wot_reg = humoco_wot::TrustRegister::new(
+            &super::canonicalize_did(&alice_did).unwrap(),
+            humoco_wot::WotPolicy::default(),
+        )
+        .unwrap();
+
+        {
+            let mut guard = state.profile_caches.lock().unwrap();
+            let caches = guard.as_mut().unwrap();
+            assert_eq!(caches.generation, stale_gen);
+            caches.contacts = Some(book);
+            caches.events = Some(vec![]);
+            caches.wot = Some(wot_reg);
+            caches.ui_preferences = Some(crate::settings::UiPreferences {
+                ui_mode: "expert".to_string(),
+                ..Default::default()
+            });
+            caches.security_policy = Some(crate::settings::SecurityPolicy {
+                session_timeout_seconds: 777,
+                ..Default::default()
+            });
+            caches.internal_lifecycle = Some(crate::settings::InternalLifecycleState {
+                backup_dirty: true,
+                ..Default::default()
+            });
+            caches.history = Some(vec![]);
+            caches.own_market_profile = Some(crate::models::StoredOwnMarketProfile::default());
+            caches.recovery_owner = Some(None);
+            caches.guardian_vault = Some(humoco_market::GuardianVaultStore::default());
+            caches.app_notices = Some(crate::models::StoredAppNotices::default());
+        }
+
+        // Advance session_generation without updating ActiveProfileCaches.generation
+        // (simulates a stale-generation cache struct).
+        state.session_generation.fetch_add(1, Ordering::SeqCst);
+
+        assert!(state.cache_contacts().is_none());
+        assert!(state.cache_events().is_none());
+        assert!(state.cache_wot().is_none());
+        assert!(state.cache_ui_preferences().is_none());
+        assert!(state.cache_security_policy().is_none());
+        assert!(state.cache_internal_lifecycle().is_none());
+        assert!(state.cache_history().is_none());
+        assert!(state.cache_own_market_profile().is_none());
+        assert!(state.cache_recovery_owner().is_none());
+        assert!(state.cache_guardian_vault().is_none());
+        assert!(state.cache_app_notices().is_none());
+
+        assert!(state.get_cached_app_config().is_err());
+        assert!(state.get_cached_contacts().is_err());
+        assert!(state.get_hydrated_history().is_err());
+
+        let saw_stale = state.with_cached_contacts_mut(|opt| {
+            let saw = opt.is_some();
+            *opt = None;
+            saw
+        });
+        assert!(
+            !saw_stale,
+            "with_cached_contacts_mut must not read stale contacts"
+        );
+
+        state.set_cached_contacts(None);
+        state.set_cached_security_policy(None);
+        state.set_cached_security_policy(Some(crate::settings::SecurityPolicy {
+            session_timeout_seconds: 999,
+            ..Default::default()
+        }));
+        {
+            let guard = state.profile_caches.lock().unwrap();
+            let stale_caches = guard.as_ref().unwrap();
+            assert!(
+                stale_caches.contacts.is_some(),
+                "stale-generation ActiveProfileCaches.contacts must not be mutated"
+            );
+            assert_eq!(
+                stale_caches
+                    .security_policy
+                    .as_ref()
+                    .map(|p| p.session_timeout_seconds),
+                Some(777),
+                "stale-generation ActiveProfileCaches.security_policy must not be mutated"
+            );
+        }
+
+        state.clear_all_caches();
+        let saw_none = state.with_cached_contacts_mut(|opt| {
+            let saw = opt.is_some();
+            *opt = Some(crate::models::FrontendAddressBook::default());
+            saw
+        });
+        assert!(!saw_none);
+        assert!(state.profile_caches.lock().unwrap().is_none());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn s09_encrypted_batch_commit_atomicity_and_rollback() {
+        let dir = crate::test_support::temp_test_dir("s09_batch_commit_rollback");
+        let pw = "StrongPw-S09-Batch!";
+        let alice_svc = crate::test_support::setup_test_app(
+            &dir.join("alice"),
+            "Alice",
+            crate::test_support::ALICE_PHRASE,
+            pw,
+        );
+        let state = crate::test_support::create_test_state(alice_svc);
+        let mut svc = state.lock_service().unwrap();
+        state.initialize_profile_session(&mut svc, pw).unwrap();
+
+        let initial_policy = crate::settings::SecurityPolicy {
+            session_timeout_seconds: 300,
+            ..Default::default()
+        };
+        let initial_prefs = crate::settings::UiPreferences {
+            ui_mode: "simple".to_string(),
+            ..Default::default()
+        };
+        let initial_profile = crate::models::StoredOwnMarketProfile {
+            max_hops: 1,
+            published: false,
+            ..Default::default()
+        };
+        let initial_admin = super::StoredSyncAdmin {
+            descriptor: humoco_market::DropDescriptor {
+                write_url: "https://old.example.org/sync.php".to_string(),
+                read_url: "https://old.example.org/d".to_string(),
+                slot_id: None,
+                drop_pub: "aa".repeat(32),
+            },
+            sync_index: 0,
+            data_dir: "d".to_string(),
+            max_members: 100,
+            max_total_storage_mb: 100,
+            max_user_storage_mb: 10,
+            policies: Default::default(),
+            allow: vec![],
+            last_members_hash: Default::default(),
+            revocation: None,
+        };
+        let mut initial_book = crate::models::FrontendAddressBook::default();
+        initial_book.contacts.insert(
+            "did:key:zInitial".to_string(),
+            crate::models::FrontendContact {
+                did: "did:key:zInitial".to_string(),
+                profile: crate::models::FrontendUserProfile {
+                    first_name: Some("Initial".to_string()),
+                    ..Default::default()
+                },
+                tags: vec![],
+                added_at: chrono::Utc::now().to_rfc3339(),
+                notes: None,
+                trust_level: None,
+                desired_hops: None,
+                has_peer_list: false,
+                peer_list_updated_at: None,
+                syncs: vec![],
+            },
+        );
+
+        let mut init_batch = super::EncryptedBatchCommit::new();
+        init_batch
+            .security_policy(initial_policy)
+            .ui_preferences(initial_prefs)
+            .own_market_profile(initial_profile)
+            .sync_admin(initial_admin)
+            .contacts(initial_book);
+        init_batch.commit(&state, &mut svc, Some(pw)).unwrap();
+
+        assert_eq!(
+            state
+                .cache_security_policy()
+                .map(|p| p.session_timeout_seconds),
+            Some(300)
+        );
+        assert_eq!(
+            state.cache_ui_preferences().map(|p| p.ui_mode),
+            Some("simple".to_string())
+        );
+        assert_eq!(
+            state.cache_own_market_profile().map(|p| p.max_hops),
+            Some(1)
+        );
+        assert_eq!(
+            state
+                .read_cache_slot_for_service(&svc, |c| &c.own_sync_descriptor)
+                .flatten()
+                .map(|d| d.write_url),
+            Some("https://old.example.org/sync.php".to_string())
+        );
+        assert!(state
+            .cache_contacts()
+            .is_some_and(|ab| ab.contacts.contains_key("did:key:zInitial")));
+
+        // Attempt a batch commit that fails in save_encrypted_batch (wrong password):
+        // RAM caches and disk must remain completely unchanged.
+        let mut failing_batch = super::EncryptedBatchCommit::new();
+        failing_batch
+            .security_policy(crate::settings::SecurityPolicy {
+                session_timeout_seconds: 999,
+                ..Default::default()
+            })
+            .ui_preferences(crate::settings::UiPreferences {
+                ui_mode: "expert".to_string(),
+                ..Default::default()
+            })
+            .own_market_profile(crate::models::StoredOwnMarketProfile {
+                max_hops: 3,
+                published: true,
+                ..Default::default()
+            })
+            .clear_sync_admin()
+            .contacts(crate::models::FrontendAddressBook::default());
+        let err = failing_batch
+            .commit(&state, &mut svc, Some("wrong-password"))
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                super::AppFacadeError::Storage(
+                    human_money_core::StorageError::AuthenticationFailed
+                )
+            ),
+            "unexpected commit failure variant: {err:?}"
+        );
+
+        assert_eq!(
+            state
+                .cache_security_policy()
+                .map(|p| p.session_timeout_seconds),
+            Some(300),
+            "failed EncryptedBatchCommit must not update security_policy RAM cache"
+        );
+        assert_eq!(
+            state.cache_ui_preferences().map(|p| p.ui_mode),
+            Some("simple".to_string()),
+            "failed EncryptedBatchCommit must not update ui_preferences RAM cache"
+        );
+        assert_eq!(
+            state.cache_own_market_profile().map(|p| p.max_hops),
+            Some(1),
+            "failed EncryptedBatchCommit must not update own_market_profile RAM cache"
+        );
+        assert_eq!(
+            state
+                .read_cache_slot_for_service(&svc, |c| &c.own_sync_descriptor)
+                .flatten()
+                .map(|d| d.write_url),
+            Some("https://old.example.org/sync.php".to_string()),
+            "failed EncryptedBatchCommit must not clear own_sync_descriptor RAM cache"
+        );
+        assert!(
+            state
+                .cache_contacts()
+                .is_some_and(|ab| ab.contacts.contains_key("did:key:zInitial")),
+            "failed EncryptedBatchCommit must not update contacts RAM cache"
+        );
+
+        // Successful clear_sync_admin updates own_sync_descriptor to Some(None) atomically.
+        let mut clear_batch = super::EncryptedBatchCommit::new();
+        clear_batch.clear_sync_admin();
+        clear_batch.commit(&state, &mut svc, Some(pw)).unwrap();
+        assert_eq!(
+            state.read_cache_slot_for_service(&svc, |c| &c.own_sync_descriptor),
+            Some(None)
+        );
+
+        // AuthorizedSession accessors and Debug redaction.
+        drop(svc);
+        let auth = state
+            .authorize_session(super::RequiredAccess::Full, Some(pw))
+            .unwrap();
+        assert_eq!(auth.pw(), Some(pw));
+        assert_eq!(auth.generation(), state.current_session_generation());
+        assert!(!auth.owner_did().is_empty());
+        assert!(!format!("{auth:?}").contains(pw));
 
         let _ = std::fs::remove_dir_all(&dir);
     }

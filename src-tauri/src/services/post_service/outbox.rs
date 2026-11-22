@@ -1540,7 +1540,7 @@ pub async fn accept_wot_handshake_impl(
                         contact,
                         pw,
                         false,
-                        |svc, updated_wot_reg| {
+                        |svc, updated_wot_reg, batch| {
                             if let Some(ref pkg) = pkg_opt {
                                 let reg = match updated_wot_reg {
                                     Some(r) => r,
@@ -1569,22 +1569,12 @@ pub async fn accept_wot_handshake_impl(
                                         },
                                     )
                                 })?;
-                            let post_bytes = serde_json::to_vec(&post_state).map_err(|e| {
-                                human_money_core::app_service::AppFacadeError::Json(format!(
-                                    "Failed to serialize PoST state: {}",
-                                    e
-                                ))
-                            })?;
-                            Ok(vec![(crate::state::MARKET_POST_STATE_KEY, post_bytes)])
+                            batch.post_state(post_state);
+                            Ok(())
                         },
                     )
                     .map_err(FrontendError::from)?;
 
-                state.write_cache_slot_for_service(
-                    service,
-                    |c| &mut c.post_state,
-                    Some(post_state),
-                );
                 Ok(sender_did)
             },
         )?
