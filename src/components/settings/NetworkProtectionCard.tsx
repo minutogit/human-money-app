@@ -16,7 +16,7 @@ import { useSession } from '../../context/SessionContext';
 import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
 import { HelpIcon } from '../ui/HelpIcon';
-import { stringifyError } from '../../utils/errorHelper';
+import { stringifyError, translateError } from '../../utils/errorHelper';
 import { logger } from '../../utils/log';
 
 export interface NetworkProtectionCardProps {
@@ -90,7 +90,7 @@ export const NetworkProtectionCard: React.FC<NetworkProtectionCardProps> = ({
                 setIsRefreshing(false);
             }
         }
-    }, [onConfigUpdated]);
+    }, [onConfigUpdated, t]);
 
     const handleToggleTrust = useCallback(
         async (srv: LockServerItemDto) => {

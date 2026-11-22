@@ -326,8 +326,8 @@ export const AutoSyncSummaryCard: React.FC<AutoSyncSummaryCardProps> = ({
                 await loadDiscovered();
                 notifySyncStatusUpdated();
                 setFeedback({
-                    type: hasAuth ? 'success' : 'info',
-                    message: hasAuth ? t('settings.syncProbeSuccess') : t('settings.syncProbeUnauthorized'),
+                    type: res.hasAuth ? 'success' : 'info',
+                    message: res.hasAuth ? t('settings.syncProbeSuccess') : t('settings.syncProbeUnauthorized'),
                 });
             }
         } catch (err) {

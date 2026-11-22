@@ -107,8 +107,13 @@ const SUPPORTED_LAUNCH_FILE_EXTENSIONS: &[&str] = &[
     "hmcbackup",
 ];
 
+const MAX_LAUNCH_FILE_BYTES: u64 = 64 * 1024 * 1024;
+
 fn is_supported_launch_file(path: &std::path::Path) -> bool {
-    if !path.is_file() {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return false;
+    };
+    if !meta.is_file() || meta.len() > MAX_LAUNCH_FILE_BYTES {
         return false;
     }
     path.extension()

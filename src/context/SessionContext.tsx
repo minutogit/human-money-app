@@ -131,6 +131,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     const isModalSubmittingRef = useRef(false);
     const modalAttemptGenRef = useRef(0);
     const sessionGenRef = useRef(0);
+    const pendingSessionSyncRef = useRef<Promise<void> | null>(null);
     const [isModalSubmitting, setIsModalSubmitting] = useState(false);
 
     const setFolderName = useCallback((folder: string) => {
@@ -380,6 +381,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
             mode: 'session' | 'stepUp',
             credentialKind: 'password' | 'pin',
             action: (password: string | null) => Promise<T>,
+            retriedExpired = false,
         ): Promise<T> => {
             return new Promise<T>((resolve, reject) => {
                 const entry: PendingModalRequest = {
@@ -389,6 +391,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
                     resolve: resolve as (value: unknown) => void,
                     reject,
                     action: action as (password: string | null) => Promise<unknown>,
+                    retriedExpired,
                 };
                 pendingQueueRef.current.push(entry);
                 if (pendingQueueRef.current.length === 1) {
@@ -455,7 +458,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
             setFolderNameState(folder);
         }
 
-        authService
+        const syncPromise = authService
             .getSessionStatus()
             .then((status) => {
                 if (!isCurrent()) return;
@@ -470,6 +473,12 @@ export function SessionProvider({ children }: { children: ReactNode }) {
                 setHasCachedSession(false);
                 void checkIntegrity({ allowSilentRepair: false });
             });
+        pendingSessionSyncRef.current = syncPromise;
+        void syncPromise.finally(() => {
+            if (pendingSessionSyncRef.current === syncPromise) {
+                pendingSessionSyncRef.current = null;
+            }
+        });
 
         Promise.resolve(settingsService.getConfig())
             .then((cfg) => {
@@ -584,6 +593,12 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     ): Promise<T | void> => {
         try {
             const expectedGen = sessionGenRef.current;
+            if (pendingSessionSyncRef.current) {
+                await pendingSessionSyncRef.current;
+                if (sessionGenRef.current !== expectedGen) {
+                    throw new Error('Session changed');
+                }
+            }
             const config = await settingsService.getConfig();
             if (sessionGenRef.current !== expectedGen) {
                 throw new Error('Session changed');
@@ -661,6 +676,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
                     'session',
                     baseAccessModeRef.current === 'dailyPay' ? 'pin' : 'password',
                     entry.action,
+                    true,
                 ).then(entry.resolve, entry.reject);
                 return;
             }

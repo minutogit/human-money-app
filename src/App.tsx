@@ -221,6 +221,9 @@ function AppContent() {
         } else {
             try {
                 const rawBytes = await readFile(item);
+                if (rawBytes.byteLength > 64 * 1024 * 1024) {
+                    throw new Error('Launch file exceeds 64 MiB limit');
+                }
                 const bytes = Array.from(rawBytes);
                 const fileName = item.split(/[/\\]/).pop() || 'launch.humoco';
                 const classification = classifyHumocoFile({ fileName, bytes });

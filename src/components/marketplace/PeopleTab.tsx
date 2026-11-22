@@ -1,7 +1,7 @@
 // src/components/marketplace/PeopleTab.tsx
 import React, { useState, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Search, MapPin, Tag, Briefcase, RotateCcw } from 'lucide-react';
+import { Search, User, MapPin, Tag, Briefcase, RotateCcw } from 'lucide-react';
 import { FrontendMarketPerson } from '../../types';
 import { TrustBadge } from '../ui/TrustBadge';
 import { UserAvatar } from '../ui/UserAvatar';
