@@ -571,59 +571,27 @@ pub async fn refresh_wot_provider_url_impl(
         },
     )?;
 
-    if let Err(e) = crate::sync_client::validate_sync_url(&source_url) {
-        return Err(FrontendError::from(format!(
-            "Security violation: provider sourceUrl failed SSRF/HTTPS validation: {}",
-            e
-        )));
-    }
-
     let client = crate::sync_client::create_sync_http_client();
-
-    let response = client
-        .get(&source_url)
-        .send()
-        .await
-        .map_err(|e| FrontendError::from(format!("Failed to fetch provider filter: {}", e)))?;
-
-    if !response.status().is_success() {
-        return Err(FrontendError::from(format!(
-            "HTTP request failed with status: {}",
-            response.status()
-        )));
-    }
-
-    if let Some(content_len) = response.content_length() {
-        if content_len > humoco_wot::MAX_PROVIDER_FILTER_RAW_LEN as u64 {
-            return Err(FrontendError::from(format!(
-                "Provider filter response exceeds {} byte limit (Content-Length: {})",
-                humoco_wot::MAX_PROVIDER_FILTER_RAW_LEN,
-                content_len
-            )));
+    let raw_json = crate::sync_client::fetch_text_bounded(
+        &client,
+        &source_url,
+        humoco_wot::MAX_PROVIDER_FILTER_RAW_LEN,
+        "provider filter",
+    )
+    .await
+    .map_err(|e| {
+        if let crate::sync_client::SyncClientError::LocalValidation(msg) = e {
+            FrontendError::from(format!(
+                "Security violation: provider sourceUrl failed SSRF/HTTPS validation: {}",
+                msg
+            ))
+        } else {
+            FrontendError::from(e)
         }
-    }
-
-    let mut body_bytes = Vec::new();
-    let mut response = response;
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|e| FrontendError::from(format!("Failed to read response body: {}", e)))?
-    {
-        if body_bytes.len().saturating_add(chunk.len()) > humoco_wot::MAX_PROVIDER_FILTER_RAW_LEN {
-            return Err(FrontendError::from(format!(
-                "Provider filter response exceeds {} byte limit",
-                humoco_wot::MAX_PROVIDER_FILTER_RAW_LEN
-            )));
-        }
-        body_bytes.extend_from_slice(&chunk);
-    }
-
-    let raw_json = std::str::from_utf8(&body_bytes)
-        .map_err(|e| FrontendError::from(format!("Provider filter is not valid UTF-8: {}", e)))?;
+    })?;
 
     let now_secs = Utc::now().timestamp().max(0) as u64;
-    let parsed = humoco_wot::parse_and_verify_provider_filter(raw_json, now_secs)
+    let parsed = humoco_wot::parse_and_verify_provider_filter(&raw_json, now_secs)
         .map_err(|e| FrontendError::from(format!("Invalid provider filter fetched: {}", e)))?;
 
     if parsed.payload.iss != can_issuer {
@@ -649,7 +617,7 @@ pub async fn refresh_wot_provider_url_impl(
             }
 
             let iss = reg
-                .import_provider_filter(raw_json, now_secs)
+                .import_provider_filter(&raw_json, now_secs)
                 .map_err(|e| FrontendError::from(e.to_string()))?;
 
             state
@@ -1570,6 +1538,91 @@ mod tests {
         );
         assert!(get_wot_providers_impl(&alice_state).unwrap().is_empty());
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_refresh_wot_provider_rejects_oversized_response() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let dir = crate::test_support::temp_test_dir("wot_provider_oversized");
+        let pw = "pw-oversized";
+        let mut alice_svc =
+            crate::test_support::setup_test_app(&dir.join("alice"), "Alice", ALICE_PHRASE, pw);
+        alice_svc.unlock_session(pw, 3600).unwrap();
+        let alice_state = crate::test_support::create_test_state(alice_svc);
+
+        let prov_svc = crate::test_support::setup_test_app(
+            &dir.join("prov"),
+            "Provider",
+            crate::test_support::BOB_PHRASE,
+            pw,
+        );
+        let prov_did = prov_svc
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
+        let charlie_sk = ed25519_dalek::SigningKey::from_bytes(&[77u8; 32]);
+        let charlie_did =
+            human_money_core::crypto::create_user_id(&charlie_sk.verifying_key(), None).unwrap();
+        let can_charlie = humoco_wot::canonicalize_did(&charlie_did).unwrap();
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let source_url = format!("http://127.0.0.1:{}/filter.json", port);
+
+        let now_secs = Utc::now().timestamp().max(0) as u64;
+        let filter_v1 = prov_svc
+            .with_wallet_and_identity(|_w, id| {
+                let signer = crate::state::DidWotSigner::from_identity(id);
+                humoco_wot::create_and_sign_provider_filter(
+                    &signer,
+                    "Verband",
+                    1,
+                    now_secs,
+                    Some(source_url),
+                    &[(can_charlie, 3)],
+                )
+                .unwrap()
+            })
+            .unwrap();
+
+        import_wot_package_impl(
+            filter_v1.as_bytes().to_vec(),
+            None,
+            Some(pw.to_string()),
+            &alice_state,
+        )
+        .unwrap();
+
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut req_buf = [0u8; 1024];
+            let _ = stream.read(&mut req_buf).await;
+            let _ = stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n",
+                )
+                .await;
+            let chunk = vec![b'a'; 64 * 1024];
+            let hdr = format!("{:x}\r\n", chunk.len());
+            let chunks_needed = (humoco_wot::MAX_PROVIDER_FILTER_RAW_LEN / chunk.len()) + 2;
+            for _ in 0..chunks_needed {
+                if stream.write_all(hdr.as_bytes()).await.is_err()
+                    || stream.write_all(&chunk).await.is_err()
+                    || stream.write_all(b"\r\n").await.is_err()
+                {
+                    break;
+                }
+            }
+            let _ = stream.write_all(b"0\r\n\r\n").await;
+        });
+
+        let err = refresh_wot_provider_url_impl(prov_did, Some(pw.to_string()), &alice_state)
+            .await
+            .expect_err("oversized provider filter response must fail");
+        assert_eq!(err.code, "error.sync.responseTooLarge");
+
+        server.await.unwrap();
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

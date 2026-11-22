@@ -32,6 +32,39 @@ use crate::state::{
 };
 use crate::sync_client;
 
+#[derive(Debug, Default)]
+pub(crate) struct SyncErrorTracker {
+    pub errors: Vec<String>,
+    pub max_retry_after_secs: Option<u64>,
+}
+
+impl SyncErrorTracker {
+    pub(crate) fn push(&mut self, msg: String) {
+        self.errors.push(msg);
+    }
+
+    pub(crate) fn record_retry_after(&mut self, secs: Option<u64>) {
+        if let Some(secs) = secs {
+            self.max_retry_after_secs = Some(
+                self.max_retry_after_secs
+                    .map_or(secs, |prev| prev.max(secs)),
+            );
+        }
+    }
+
+    pub(crate) fn record_sync_error(
+        &mut self,
+        state: &AppState,
+        url: &str,
+        err: &sync_client::SyncClientError,
+        msg: String,
+    ) {
+        state.record_origin_cooldown_for_sync_error(url, err);
+        self.record_retry_after(err.retry_after_secs());
+        self.errors.push(msg);
+    }
+}
+
 pub async fn sync_market_channels_impl(
     is_wifi: Option<bool>,
     force_upload: Option<bool>,
@@ -84,7 +117,7 @@ pub async fn sync_market_channels_with_options(
     }
 
     let client = sync_client::create_sync_http_client();
-    let mut errors = Vec::new();
+    let mut err_tracker = SyncErrorTracker::default();
     let mut uploaded_to = 0;
     let mut polled_syncs = 0;
     let mut decrypted_slots = 0;
@@ -94,11 +127,7 @@ pub async fn sync_market_channels_with_options(
     let now_secs = sync_client::current_unix_timestamp();
 
     // 1. Ensure own DropAdmin channel members are up-to-date on server
-    if let Some(err_msg) =
-        admin::refresh_own_admin_members_locked(&client, state, session, pw).await
-    {
-        errors.push(err_msg);
-    }
+    admin::refresh_own_admin_members_locked(&client, state, session, pw, &mut err_tracker).await;
 
     // 2. Load identity context and sync state
     let Some((id_ctx, mut sync_state)) = state.with_session(session, |service| {
@@ -117,8 +146,8 @@ pub async fn sync_market_channels_with_options(
             imported_cards: 0,
             new_ads: 0,
             imported_wot_lists: 0,
-            errors,
-            retry_after_secs: None,
+            errors: err_tracker.errors,
+            retry_after_secs: err_tracker.max_retry_after_secs,
             revoked_own_syncs: Vec::new(),
         });
     };
@@ -139,7 +168,7 @@ pub async fn sync_market_channels_with_options(
         pw,
         &mut sync_state,
         &mut uploaded_to,
-        &mut errors,
+        &mut err_tracker,
     )
     .await
     {
@@ -153,7 +182,7 @@ pub async fn sync_market_channels_with_options(
                 &active_media_blob_ids,
                 now_secs,
                 &mut sync_state,
-                &mut errors,
+                &mut err_tracker,
             )
             .await;
         }
@@ -173,7 +202,7 @@ pub async fn sync_market_channels_with_options(
             pw,
             &mut sync_state,
             &mut uploaded_to,
-            &mut errors,
+            &mut err_tracker,
         )
         .await
     } else {
@@ -218,7 +247,7 @@ pub async fn sync_market_channels_with_options(
             now_secs,
             pw,
             &mut sync_state,
-            &mut errors,
+            &mut err_tracker,
         )
         .await;
         polled_syncs = poll.polled_syncs;
@@ -301,7 +330,7 @@ pub async fn sync_market_channels_with_options(
                     read_url,
                     now_secs,
                     &mut reg,
-                    &mut errors,
+                    &mut err_tracker.errors,
                 );
                 imported_wot_lists += imported;
                 if imported > 0 {
@@ -426,13 +455,6 @@ pub async fn sync_market_channels_with_options(
         });
     }
 
-    let mut retry_after_secs: Option<u64> = None;
-    for e in &errors {
-        if let Some(secs) = sync_client::extract_retry_after_from_error_str(e) {
-            retry_after_secs = Some(retry_after_secs.map_or(secs, |prev| prev.max(secs)));
-        }
-    }
-
     let status = if skip_poll && uploaded_to == 0 {
         MarketSyncStatus::SkippedCooldown
     } else {
@@ -447,8 +469,8 @@ pub async fn sync_market_channels_with_options(
         imported_cards,
         new_ads,
         imported_wot_lists,
-        errors,
-        retry_after_secs,
+        errors: err_tracker.errors,
+        retry_after_secs: err_tracker.max_retry_after_secs,
         revoked_own_syncs,
     })
 }
@@ -1307,6 +1329,90 @@ pub(crate) mod tests {
         assert_eq!(unreach.status, "unreachable");
         assert_eq!(unreach.fail_count, 1);
         assert!(unreach.last_probed_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_local_validation_error_does_not_penalize_contact_sync_health() {
+        let base_dir = temp_test_dir("local_val_no_health_penalty");
+        let password = "TestPassword123!";
+        let bob_service = setup_test_app(&base_dir.join("bob"), "Bob", BOB_PHRASE, password);
+        let bob_state = create_test_state(bob_service);
+        let charlie_service = setup_test_app(
+            &base_dir.join("charlie"),
+            "Charlie",
+            CHARLIE_PHRASE,
+            password,
+        );
+        let charlie_did = charlie_service
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
+
+        let placeholder_sync = FrontendSyncDescriptor {
+            write_url: "https://contact.example.org/sync.php".to_string(),
+            read_url: "https://contact.example.org/d-test".to_string(),
+            slot_id: None,
+            drop_pub: String::new(),
+            last_seen_at: Some(1_700_000_000),
+            last_error_at: None,
+            fail_count: 0,
+            status: "active".to_string(),
+            last_probed_at: None,
+            ..Default::default()
+        };
+        let charlie_contact = FrontendContact {
+            did: charlie_did.clone(),
+            profile: FrontendUserProfile::default(),
+            tags: vec![],
+            added_at: chrono::Utc::now().to_rfc3339(),
+            notes: None,
+            trust_level: Some(1),
+            desired_hops: Some(1),
+            has_peer_list: false,
+            peer_list_updated_at: None,
+            syncs: vec![placeholder_sync],
+        };
+        {
+            let mut s = bob_state.service.lock().unwrap();
+            bob_state
+                .save_contact(&mut s, charlie_contact, Some(password))
+                .unwrap();
+            let mut ab: crate::models::FrontendAddressBook =
+                crate::state::load_encrypted_json_or_default(
+                    &mut s,
+                    crate::state::CONTACTS_DATA_NAME,
+                    Some(password),
+                )
+                .unwrap();
+            let ep = &mut ab.contacts.get_mut(&charlie_did).unwrap().syncs[0];
+            ep.write_url = "http://10.255.255.1/sync.php".to_string();
+            ep.read_url = "http://10.255.255.1/d-test".to_string();
+            let mut batch = crate::state::EncryptedBatchCommit::new();
+            batch.contacts(ab);
+            batch.commit(&bob_state, &mut s, Some(password)).unwrap();
+        }
+
+        let _ = probe_contact_syncs_impl(true, Some(password.to_string()), &bob_state)
+            .await
+            .unwrap();
+
+        let ab: crate::models::FrontendAddressBook = {
+            let mut s = bob_state.service.lock().unwrap();
+            crate::state::load_encrypted_json_or_default(
+                &mut s,
+                crate::state::CONTACTS_DATA_NAME,
+                Some(password),
+            )
+            .unwrap()
+        };
+        let saved_ep = &ab.contacts[&charlie_did].syncs[0];
+        assert_eq!(
+            saved_ep.status, "active",
+            "Local SSRF/URL validation error must not mark server unreachable"
+        );
+        assert_eq!(saved_ep.fail_count, 0);
+        assert!(saved_ep.last_probed_at.is_none());
+
+        let _ = std::fs::remove_dir_all(&base_dir);
     }
 
     #[tokio::test]

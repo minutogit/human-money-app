@@ -666,11 +666,33 @@ mod tests {
         let state = crate::test_support::create_test_state(svc);
 
         let now = Instant::now();
-        let recorded = state.record_origin_cooldown_if_429(
+        let recorded = state.record_origin_cooldown_for_sync_error(
             "https://evil-peer.example.org/data/alice.bin",
-            "Failed with HTTP 429 Too Many Requests; Retry-After: 3600",
+            &crate::sync_client::SyncClientError::RateLimited {
+                status: 429,
+                retry_after_secs: 3600,
+                context: String::new(),
+                snippet: String::new(),
+            },
         );
         assert_eq!(recorded, Some(3600));
+        assert!(state
+            .record_origin_cooldown_for_sync_error(
+                "https://other.example.org/sync.php",
+                &crate::sync_client::SyncClientError::HttpStatus {
+                    status: 500,
+                    retry_after_secs: None,
+                    context: String::new(),
+                    snippet: String::new(),
+                },
+            )
+            .is_none());
+        assert!(state
+            .record_origin_cooldown_for_sync_error(
+                "https://other.example.org/sync.php",
+                &crate::sync_client::SyncClientError::LocalValidation("Invalid URL".to_string(),),
+            )
+            .is_none());
         assert!(state.is_origin_cooling_down("https://evil-peer.example.org/sync.php", now));
         assert!(
             !state.is_origin_cooling_down("https://own-backup.example.org/sync.php", now),

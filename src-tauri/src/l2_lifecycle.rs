@@ -2119,7 +2119,7 @@ async fn drive_active_rotation(
                     client, &write_url, &anchor_id, &manifest, &proposal, &exports, &qcs,
                 )
                 .await
-                .map_err(lifecycle_err)?;
+                .map_err(|e| lifecycle_err(e.to_string()))?;
                 verify_single_import_ack(
                     &ack,
                     &new_srv.lock_pub,

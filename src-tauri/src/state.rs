@@ -1254,8 +1254,12 @@ impl AppState {
         }
     }
 
-    pub fn record_origin_cooldown_if_429(&self, url: &str, err_msg: &str) -> Option<u64> {
-        let secs = crate::sync_client::extract_retry_after_from_error_str(err_msg)?;
+    pub fn record_origin_cooldown_for_sync_error(
+        &self,
+        url: &str,
+        err: &crate::sync_client::SyncClientError,
+    ) -> Option<u64> {
+        let secs = err.retry_after_secs()?;
         self.record_origin_cooldown(url, secs);
         Some(secs)
     }

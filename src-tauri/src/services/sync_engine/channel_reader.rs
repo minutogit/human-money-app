@@ -399,7 +399,7 @@ pub(crate) async fn check_revocations(
                 }
             }
             Err(e) => {
-                state.record_origin_cooldown_if_429(&norm_target, &e);
+                state.record_origin_cooldown_for_sync_error(&norm_target, &e);
             }
         }
     }
@@ -544,7 +544,7 @@ struct SlotDecodeContext<'a> {
     my_x25519_sk: &'a x25519_dalek::StaticSecret,
     sync_state: &'a mut StoredSyncState,
     outcome: &'a mut PollOutcome,
-    errors: &'a mut Vec<String>,
+    errors: &'a mut super::SyncErrorTracker,
 }
 
 pub(crate) fn index_etag_key(read_url: &str) -> String {
@@ -703,7 +703,7 @@ pub(crate) async fn poll_sync_channels(
     now_secs: u64,
     password: Option<&str>,
     sync_state: &mut StoredSyncState,
-    errors: &mut Vec<String>,
+    errors: &mut super::SyncErrorTracker,
 ) -> PollOutcome {
     let mut outcome = PollOutcome {
         polled_syncs: 0,
@@ -805,15 +805,21 @@ pub(crate) async fn poll_sync_channels(
                     decode_ctx.sync_state.slot_etags.remove(&base_etag_key);
                 }
                 Err(e) => {
-                    state.record_origin_cooldown_if_429(&read_url, &e);
-                    decode_ctx
-                        .outcome
-                        .sync_health_updates
-                        .push((read_url.clone(), false));
-                    decode_ctx.errors.push(format!(
-                        "Failed to get direct card slot {} from {}: {}",
-                        slot_id, read_url, e
-                    ));
+                    if !e.is_local_validation() {
+                        decode_ctx
+                            .outcome
+                            .sync_health_updates
+                            .push((read_url.clone(), false));
+                    }
+                    decode_ctx.errors.record_sync_error(
+                        state,
+                        &read_url,
+                        &e,
+                        format!(
+                            "Failed to get direct card slot {} from {}: {}",
+                            slot_id, read_url, e
+                        ),
+                    );
                 }
             }
 
@@ -845,11 +851,15 @@ pub(crate) async fn poll_sync_channels(
                     decode_ctx.sync_state.slot_etags.remove(&delta_etag_key);
                 }
                 Err(e) => {
-                    state.record_origin_cooldown_if_429(&read_url, &e);
-                    decode_ctx.errors.push(format!(
-                        "Failed to get direct delta card slot {} from {}: {}",
-                        slot_id, read_url, e
-                    ));
+                    decode_ctx.errors.record_sync_error(
+                        state,
+                        &read_url,
+                        &e,
+                        format!(
+                            "Failed to get direct delta card slot {} from {}: {}",
+                            slot_id, read_url, e
+                        ),
+                    );
                 }
             }
         }
@@ -895,15 +905,21 @@ pub(crate) async fn poll_sync_channels(
                 decode_ctx.sync_state.slot_etags.remove(&wot_etag_key);
             }
             Err(e) => {
-                state.record_origin_cooldown_if_429(&read_url, &e);
-                decode_ctx
-                    .outcome
-                    .sync_health_updates
-                    .push((read_url.clone(), false));
-                decode_ctx.errors.push(format!(
-                    "Failed to get direct wot slot {} from {}: {}",
-                    slot_id, read_url, e
-                ));
+                if !e.is_local_validation() {
+                    decode_ctx
+                        .outcome
+                        .sync_health_updates
+                        .push((read_url.clone(), false));
+                }
+                decode_ctx.errors.record_sync_error(
+                    state,
+                    &read_url,
+                    &e,
+                    format!(
+                        "Failed to get direct wot slot {} from {}: {}",
+                        slot_id, read_url, e
+                    ),
+                );
             }
         }
     }
@@ -1066,24 +1082,29 @@ pub(crate) async fn poll_sync_channels(
                             decode_ctx.sync_state.slot_etags.remove(&etag_key);
                         }
                         Err(e) => {
-                            state.record_origin_cooldown_if_429(&read_url, &e);
-                            decode_ctx.errors.push(format!(
-                                "Failed to get {} slot {}: {}",
-                                entry.channel, entry.id, e
-                            ));
+                            decode_ctx.errors.record_sync_error(
+                                state,
+                                &read_url,
+                                &e,
+                                format!("Failed to get {} slot {}: {}", entry.channel, entry.id, e),
+                            );
                         }
                     }
                 }
             }
             Err(e) => {
-                state.record_origin_cooldown_if_429(&read_url, &e);
-                decode_ctx
-                    .outcome
-                    .sync_health_updates
-                    .push((read_url.clone(), false));
-                decode_ctx
-                    .errors
-                    .push(format!("Failed to list index from {}: {}", read_url, e));
+                if !e.is_local_validation() {
+                    decode_ctx
+                        .outcome
+                        .sync_health_updates
+                        .push((read_url.clone(), false));
+                }
+                decode_ctx.errors.record_sync_error(
+                    state,
+                    &read_url,
+                    &e,
+                    format!("Failed to list index from {}: {}", read_url, e),
+                );
             }
         }
     }
@@ -1195,7 +1216,7 @@ async fn probe_public_sync_capabilities(
                 }
             }
             Err(e) => {
-                state.record_origin_cooldown_if_429(canonical_url, &e);
+                state.record_origin_cooldown_for_sync_error(canonical_url, &e);
             }
         }
     }
@@ -1497,7 +1518,7 @@ pub async fn remove_public_sync_impl(
                         err
                     ),
                 );
-                fe.details.insert("error".to_string(), err);
+                fe.details.insert("error".to_string(), err.to_string());
                 fe
             })?;
     }

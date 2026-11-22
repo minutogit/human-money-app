@@ -333,8 +333,9 @@ pub async fn dispatch_lock_committee_batches(
                     .push((server.lock_pub, status_code, error));
             }
             Ok(Err(err)) => {
-                out.http_statuses.push((server.lock_pub, None));
-                out.transport_errors.push((server.lock_pub, err));
+                out.http_statuses.push((server.lock_pub, err.http_status()));
+                out.transport_errors
+                    .push((server.lock_pub, err.to_string()));
                 out.pending_retries.push((server, req));
             }
             Err(_) => {

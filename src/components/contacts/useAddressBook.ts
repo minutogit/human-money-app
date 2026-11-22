@@ -10,6 +10,7 @@ import { wotService } from '../../services/wotService';
 import { useOptionalNavigation } from '../../context/NavigationContext';
 import { useSession } from '../../context/SessionContext';
 import { useRateLimitCooldown } from '../../hooks/useRateLimitCooldown';
+import { isRateLimitErrorMessage } from '../../sync/rateLimitManager';
 import { wakeSyncCoordinator } from '../../sync/syncBridge';
 import {
     Contact,
@@ -489,7 +490,10 @@ export function useAddressBook({
     ) => {
         const allErrors = [...(res?.errors ?? []), ...(postRes?.errors ?? [])];
         if (allErrors.length > 0) {
-            const has429 = allErrors.some((e) => e.includes('429') || e.toLowerCase().includes('rate limit'));
+            const has429 =
+                (res?.retryAfterSecs != null && res.retryAfterSecs > 0) ||
+                (postRes?.retryAfterSecs != null && postRes.retryAfterSecs > 0) ||
+                allErrors.some((e) => isRateLimitErrorMessage(e));
             const errorMsg = has429
                 ? `${t('contacts.syncServicesErrors', 'Fehler beim Synchronisieren:')} Rate-Limit erreicht (HTTP 429). Bitte später erneut versuchen.`
                 : `${t('contacts.syncServicesErrors', 'Fehler beim Synchronisieren:')} ${allErrors.join(', ')}`;

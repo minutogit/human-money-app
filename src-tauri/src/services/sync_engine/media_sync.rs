@@ -66,7 +66,7 @@ pub(crate) async fn upload_media_blobs_to_target(
     force_upload: bool,
     now_secs: u64,
     sync_state: &mut StoredSyncState,
-    errors: &mut Vec<String>,
+    errors: &mut super::SyncErrorTracker,
 ) {
     let norm_write_url = normalize_sync_url(&drop_desc.write_url);
     if norm_write_url.is_empty() {
@@ -127,10 +127,9 @@ pub(crate) async fn upload_media_blobs_to_target(
                     errors.push(msg);
                 }
                 Err(e) => {
-                    state.record_origin_cooldown_if_429(&drop_desc.write_url, &e);
                     let msg = format!("Media upload to {} error: {}", drop_desc.write_url, e);
                     log::warn!("{}", msg);
-                    errors.push(msg);
+                    errors.record_sync_error(state, &drop_desc.write_url, &e, msg);
                 }
             },
             Err(e) => {
@@ -156,7 +155,7 @@ pub(crate) async fn gc_orphaned_media_blobs(
     active_media_blob_ids: &HashSet<String>,
     now_secs: u64,
     sync_state: &mut StoredSyncState,
-    errors: &mut Vec<String>,
+    errors: &mut super::SyncErrorTracker,
 ) {
     if sync_state.uploaded_media_blobs.is_empty() || upload_targets.is_empty() {
         return;
@@ -227,11 +226,15 @@ pub(crate) async fn gc_orphaned_media_blobs(
                     sync_state.uploaded_media_blobs.remove(&key);
                 }
                 Err(e) => {
-                    state.record_origin_cooldown_if_429(&drop_desc.write_url, &e);
-                    errors.push(format!(
-                        "Orphaned media DELETE on {} failed: {}",
-                        drop_desc.write_url, e
-                    ));
+                    errors.record_sync_error(
+                        state,
+                        &drop_desc.write_url,
+                        &e,
+                        format!(
+                            "Orphaned media DELETE on {} failed: {}",
+                            drop_desc.write_url, e
+                        ),
+                    );
                 }
             },
             Err(e) => {

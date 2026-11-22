@@ -665,16 +665,37 @@ fn collect_authorized_post_senders(
     )
 }
 
+struct PostSlotDownloadOutcome {
+    fetched_slots: Vec<Vec<u8>>,
+    health_updates: Vec<(String, bool)>,
+    polled_syncs: usize,
+    errors: Vec<String>,
+    max_retry_after_secs: Option<u64>,
+}
+
+fn record_post_sync_error(
+    state: &AppState,
+    url: &str,
+    err: &sync_client::SyncClientError,
+    max_retry_after_secs: &mut Option<u64>,
+) {
+    state.record_origin_cooldown_for_sync_error(url, err);
+    if let Some(secs) = err.retry_after_secs() {
+        *max_retry_after_secs = Some(max_retry_after_secs.map_or(secs, |prev| prev.max(secs)));
+    }
+}
+
 async fn download_post_slots(
     state: &AppState,
     client: &reqwest::Client,
     direct_slot_fetches: Vec<(String, String, Option<String>)>,
     candidate_read_urls: Vec<String>,
-) -> (Vec<Vec<u8>>, Vec<(String, bool)>, usize, Vec<String>) {
+) -> PostSlotDownloadOutcome {
     let mut fetched_slots = Vec::new();
     let mut health_updates = Vec::new();
     let mut polled_syncs = 0;
     let mut errors = Vec::new();
+    let mut max_retry_after_secs: Option<u64> = None;
 
     for (read_url, slot_id, prefix_opt) in direct_slot_fetches {
         if fetched_slots.len() >= MAX_POST_SLOTS_TOTAL {
@@ -709,8 +730,10 @@ async fn download_post_slots(
                 health_updates.push((read_url.clone(), true));
             }
             Err(e) => {
-                state.record_origin_cooldown_if_429(&read_url, &e);
-                health_updates.push((read_url.clone(), false));
+                record_post_sync_error(state, &read_url, &e, &mut max_retry_after_secs);
+                if !e.is_local_validation() {
+                    health_updates.push((read_url.clone(), false));
+                }
                 errors.push(format!(
                     "Failed to fetch direct post slot from {}: {}",
                     read_url, e
@@ -763,7 +786,7 @@ async fn download_post_slots(
                             | sync_client::SlotFetchResult::NotModified,
                         ) => {}
                         Err(e) => {
-                            state.record_origin_cooldown_if_429(&read_url, &e);
+                            record_post_sync_error(state, &read_url, &e, &mut max_retry_after_secs);
                             errors.push(format!(
                                 "Failed to fetch post slot {} from {}: {}",
                                 entry.id, read_url, e
@@ -776,8 +799,10 @@ async fn download_post_slots(
                 health_updates.push((read_url.clone(), true));
             }
             Err(e) => {
-                state.record_origin_cooldown_if_429(&read_url, &e);
-                health_updates.push((read_url.clone(), false));
+                record_post_sync_error(state, &read_url, &e, &mut max_retry_after_secs);
+                if !e.is_local_validation() {
+                    health_updates.push((read_url.clone(), false));
+                }
                 errors.push(format!(
                     "Failed to fetch post slot index from {}: {}",
                     read_url, e
@@ -786,7 +811,13 @@ async fn download_post_slots(
         }
     }
 
-    (fetched_slots, health_updates, polled_syncs, errors)
+    PostSlotDownloadOutcome {
+        fetched_slots,
+        health_updates,
+        polled_syncs,
+        errors,
+        max_retry_after_secs,
+    }
 }
 
 fn open_verified_container(
@@ -1024,8 +1055,13 @@ pub async fn sync_post_channels_impl(
     let inquiry_only_senders = authorized_groups.inquiry;
 
     // 4. Download slots (no mutex held across `.await`)
-    let (fetched_slots, post_sync_health_updates, polled_syncs, download_errors) =
-        download_post_slots(state, &client, direct_slot_fetches, candidate_read_urls).await;
+    let PostSlotDownloadOutcome {
+        fetched_slots,
+        health_updates: post_sync_health_updates,
+        polled_syncs,
+        errors: download_errors,
+        max_retry_after_secs: download_retry_after,
+    } = download_post_slots(state, &client, direct_slot_fetches, candidate_read_urls).await;
     if !state.is_generation_current(session.generation) {
         return Ok(FrontendPostSyncResult::default());
     }
@@ -1345,6 +1381,10 @@ pub async fn sync_post_channels_impl(
     let flush_outcome =
         flush_post_slots_impl(state, &session, &mut post_state, None, &[], pw).await;
     let uploaded_to = flush_outcome.deposited_to;
+    let retry_after_secs = match (download_retry_after, flush_outcome.max_retry_after_secs) {
+        (Some(a), Some(b)) => Some(a.max(b)),
+        (a, b) => a.or(b),
+    };
     stats.errors.extend(flush_outcome.errors);
 
     if !state.is_generation_current(session.generation) {
@@ -1358,13 +1398,6 @@ pub async fn sync_post_channels_impl(
             state.append_app_notices_with_service(service, Some(now_secs), post_notices, pw);
             Ok(())
         });
-    }
-
-    let mut retry_after_secs: Option<u64> = None;
-    for e in &stats.errors {
-        if let Some(secs) = sync_client::extract_retry_after_from_error_str(e) {
-            retry_after_secs = Some(retry_after_secs.map_or(secs, |prev| prev.max(secs)));
-        }
     }
 
     if !stats.errors.is_empty() {

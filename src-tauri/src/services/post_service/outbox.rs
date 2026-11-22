@@ -63,6 +63,7 @@ pub(crate) struct FlushPostSlotsOutcome {
     pub deferred_tags: std::collections::HashSet<[u8; 16]>,
     pub deferred_count: usize,
     pub errors: Vec<String>,
+    pub max_retry_after_secs: Option<u64>,
 }
 
 fn verify_outgoing_post_container(
@@ -567,6 +568,30 @@ fn collect_remove_tags_for_flush(
 type UploadSlotResult = (Option<String>, Vec<[u8; 16]>, Vec<[u8; 16]>, Vec<[u8; 16]>);
 
 #[allow(clippy::too_many_arguments)]
+struct PostUploadTargetError {
+    message: String,
+    sync_error: Option<sync_client::SyncClientError>,
+}
+
+impl From<FrontendError> for PostUploadTargetError {
+    fn from(err: FrontendError) -> Self {
+        Self {
+            message: err.message,
+            sync_error: None,
+        }
+    }
+}
+
+impl From<String> for PostUploadTargetError {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            sync_error: None,
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn upload_single_post_target(
     client: &reqwest::Client,
     id_ctx: &SyncIdentityContext,
@@ -576,7 +601,7 @@ async fn upload_single_post_target(
     packed: humoco_market::PackedPostSlot,
     if_match: Option<&str>,
     now_secs: u64,
-) -> Result<UploadSlotResult, String> {
+) -> Result<UploadSlotResult, PostUploadTargetError> {
     let signer = DropChannelSigner {
         is_public: sync_desc.slot_id.is_some(),
         master_seed: &id_ctx.master_seed,
@@ -628,10 +653,13 @@ async fn upload_single_post_target(
                     | sync_client::SlotFetchResult::NotModified,
                 ) => (None, None),
                 Err(e) => {
-                    return Err(format!(
-                        "Failed to fetch remote slot for 412 merge from {}: {}",
-                        sync_desc.read_url, e
-                    ));
+                    return Err(PostUploadTargetError {
+                        message: format!(
+                            "Failed to fetch remote slot for 412 merge from {}: {}",
+                            sync_desc.read_url, e
+                        ),
+                        sync_error: Some(e),
+                    });
                 }
             };
 
@@ -642,7 +670,9 @@ async fn upload_single_post_target(
                 remove_tags,
                 DROP_POST_MAX_BYTES,
             )
-            .map_err(|e| format!("Failed to merge post slot on 412: {}", e))?;
+            .map_err(|e| {
+                PostUploadTargetError::from(format!("Failed to merge post slot on 412: {}", e))
+            })?;
 
             let retry_nonce = sync_client::generate_sync_nonce();
             let retry_signed = signer.sign_request(
@@ -671,17 +701,22 @@ async fn upload_single_post_target(
                     merged.deferred_tags,
                     merged.oversized_tags,
                 )),
-                Ok(PutSlotOutcome::PreconditionFailed { .. }) => Err(format!(
-                    "Upload to {} failed 412 Precondition Failed twice",
-                    sync_desc.write_url
-                )),
-                Err(e) => Err(format!(
-                    "Upload retry to {} failed: {}",
-                    sync_desc.write_url, e
-                )),
+                Ok(PutSlotOutcome::PreconditionFailed { .. }) => {
+                    Err(PostUploadTargetError::from(format!(
+                        "Upload to {} failed 412 Precondition Failed twice",
+                        sync_desc.write_url
+                    )))
+                }
+                Err(e) => Err(PostUploadTargetError {
+                    message: format!("Upload retry to {} failed: {}", sync_desc.write_url, e),
+                    sync_error: Some(e),
+                }),
             }
         }
-        Err(e) => Err(format!("Upload to {} failed: {}", sync_desc.write_url, e)),
+        Err(e) => Err(PostUploadTargetError {
+            message: format!("Upload to {} failed: {}", sync_desc.write_url, e),
+            sync_error: Some(e),
+        }),
     }
 }
 
@@ -759,6 +794,7 @@ async fn flush_post_slots_with_scope(
     let mut recipient_deposited_to = 0;
     let mut own_targets_succeeded = 0usize;
     let mut errors = Vec::new();
+    let mut max_retry_after_secs: Option<u64> = None;
     let mut health_updates: Vec<(String, bool)> = Vec::new();
     let mut recipient_uploaded_tags = std::collections::HashSet::new();
     let mut uploaded_counts_by_tag = std::collections::HashMap::new();
@@ -897,10 +933,22 @@ async fn flush_post_slots_with_scope(
                     post_state.slot_etags_by_write_url.insert(norm_url, et);
                 }
             }
-            Err(e) => {
-                state.record_origin_cooldown_if_429(&sync_desc.write_url, &e);
-                health_updates.push((sync_desc.write_url.clone(), false));
-                errors.push(e);
+            Err(err) => {
+                let is_local_validation = err
+                    .sync_error
+                    .as_ref()
+                    .is_some_and(|sync_err| sync_err.is_local_validation());
+                if let Some(ref sync_err) = err.sync_error {
+                    state.record_origin_cooldown_for_sync_error(&sync_desc.write_url, sync_err);
+                    if let Some(secs) = sync_err.retry_after_secs() {
+                        max_retry_after_secs =
+                            Some(max_retry_after_secs.map_or(secs, |prev| prev.max(secs)));
+                    }
+                }
+                if !is_local_validation {
+                    health_updates.push((sync_desc.write_url.clone(), false));
+                }
+                errors.push(err.message);
             }
         }
     }
@@ -942,6 +990,7 @@ async fn flush_post_slots_with_scope(
         deferred_tags,
         deferred_count,
         errors,
+        max_retry_after_secs,
     }
 }
 

@@ -2418,6 +2418,7 @@ pub(crate) async fn sync_backup_with_standards_impl(
     let mut uploaded_to = 0;
     let mut last_uploaded_bytes = 0usize;
     let mut base_uploaded_any = false;
+    let mut max_retry_after_secs: Option<u64> = None;
 
     for target in authorized_targets {
         if skip_urls.contains(&target.norm_write_url) {
@@ -2598,7 +2599,11 @@ pub(crate) async fn sync_backup_with_standards_impl(
                         ));
                     }
                     Err(e) => {
-                        state.record_origin_cooldown_if_429(&target.desc.write_url, &e);
+                        state.record_origin_cooldown_for_sync_error(&target.desc.write_url, &e);
+                        if let Some(secs) = e.retry_after_secs() {
+                            max_retry_after_secs =
+                                Some(max_retry_after_secs.map_or(secs, |prev| prev.max(secs)));
+                        }
                         errors.push(format!("Upload to {} failed: {}", target.desc.write_url, e));
                     }
                 }
@@ -2694,20 +2699,13 @@ pub(crate) async fn sync_backup_with_standards_impl(
         None
     };
 
-    let mut retry_after_secs: Option<u64> = None;
-    for e in &errors {
-        if let Some(secs) = crate::sync_client::extract_retry_after_from_error_str(e) {
-            retry_after_secs = Some(retry_after_secs.map_or(secs, |prev| prev.max(secs)));
-        }
-    }
-
     Ok(FrontendBackupSyncResult {
         uploaded_to,
         authorized_targets: authorized_count,
         padded_bytes: last_uploaded_bytes,
         timestamp: timestamp_str,
         errors,
-        retry_after_secs,
+        retry_after_secs: max_retry_after_secs,
         skipped_wifi_only: false,
     })
 }

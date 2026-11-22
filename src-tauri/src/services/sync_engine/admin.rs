@@ -323,6 +323,7 @@ pub(crate) async fn push_all_channel_members(
 
     let mut pushed_hashes: Vec<(String, String)> = Vec::new();
     let mut first_error: Option<FrontendError> = None;
+    let mut max_retry_after_secs: Option<u64> = None;
 
     for (ch, pks) in pks_by_channel {
         if !state.is_generation_current(session.generation) {
@@ -346,7 +347,11 @@ pub(crate) async fn push_all_channel_members(
                 pushed_hashes.push((key, hash));
             }
             Err(e) => {
-                state.record_origin_cooldown_if_429(&admin.descriptor.write_url, &e);
+                state.record_origin_cooldown_for_sync_error(&admin.descriptor.write_url, &e);
+                if let Some(secs) = e.retry_after_secs() {
+                    max_retry_after_secs =
+                        Some(max_retry_after_secs.map_or(secs, |prev| prev.max(secs)));
+                }
                 log::warn!("Failed to push members for channel {}: {}", ch, e);
                 if first_error.is_none() {
                     first_error = Some(FrontendError::from(e));
@@ -381,7 +386,11 @@ pub(crate) async fn push_all_channel_members(
         )?;
     }
 
-    if let Some(err) = first_error {
+    if let Some(mut err) = first_error {
+        if let Some(secs) = max_retry_after_secs {
+            err.details
+                .insert("retryAfterSecs".to_string(), secs.to_string());
+        }
         return Err(err);
     }
 
@@ -393,7 +402,7 @@ async fn refresh_own_admin_members_inner(
     state: &AppState,
     session: &SessionToken,
     password: Option<&str>,
-) -> Option<String> {
+) -> Option<(String, Option<u64>)> {
     let Ok(Some(admin_opt)) =
         state.with_session(session, |service| {
             match load_stored_sync_admin_opt(service, password) {
@@ -425,17 +434,27 @@ async fn refresh_own_admin_members_inner(
             return None;
         }
         if state.is_origin_cooling_down(&admin.descriptor.write_url, std::time::Instant::now()) {
-            return Some(format!(
-                "Member push to {} deferred: server origin cooling down after HTTP 429",
-                admin.descriptor.write_url
+            return Some((
+                format!(
+                    "Member push to {} deferred: server origin cooling down after HTTP 429",
+                    admin.descriptor.write_url
+                ),
+                None,
             ));
         }
         if let Err(err) =
             push_all_channel_members(client, state, session, &mut admin, &admin_sk, password).await
         {
-            return Some(format!(
-                "Failed to push channel members to {}: {}",
-                admin.descriptor.write_url, err.message
+            let retry_after = err
+                .details
+                .get("retryAfterSecs")
+                .and_then(|s| s.parse::<u64>().ok());
+            return Some((
+                format!(
+                    "Failed to push channel members to {}: {}",
+                    admin.descriptor.write_url, err.message
+                ),
+                retry_after,
             ));
         }
     }
@@ -449,7 +468,9 @@ pub(crate) async fn refresh_own_admin_members(
     password: Option<&str>,
 ) -> Option<String> {
     let _market_guard = state.market_op_lock.lock().await;
-    refresh_own_admin_members_inner(client, state, session, password).await
+    refresh_own_admin_members_inner(client, state, session, password)
+        .await
+        .map(|(msg, _)| msg)
 }
 
 pub(crate) async fn refresh_own_admin_members_locked(
@@ -457,8 +478,14 @@ pub(crate) async fn refresh_own_admin_members_locked(
     state: &AppState,
     session: &SessionToken,
     password: Option<&str>,
-) -> Option<String> {
-    refresh_own_admin_members_inner(client, state, session, password).await
+    err_tracker: &mut super::SyncErrorTracker,
+) {
+    if let Some((msg, retry_after)) =
+        refresh_own_admin_members_inner(client, state, session, password).await
+    {
+        err_tracker.record_retry_after(retry_after);
+        err_tracker.push(msg);
+    }
 }
 
 #[cfg(test)]
@@ -876,7 +903,7 @@ pub async fn test_sync_connection_impl(
         }
     };
     if let Err(e) = sync_client::validate_sync_url(&write_url) {
-        return Ok(fail_result(e, false));
+        return Ok(fail_result(e.to_string(), false));
     }
 
     let (admin, admin_sk, stats, member_pubkeys) = match state.with_session_required(
@@ -1016,7 +1043,7 @@ pub async fn get_sync_admin_status_impl(
         {
             Ok(st) => Some(st),
             Err(err) => {
-                state.record_origin_cooldown_if_429(&admin.descriptor.write_url, &err);
+                state.record_origin_cooldown_for_sync_error(&admin.descriptor.write_url, &err);
                 None
             }
         }

@@ -135,4 +135,66 @@ describe('useRateLimitCooldown & rateLimitManager', () => {
         expect(result.current.isCoolingDown).toBe(true);
         expect(result.current.cooldownSeconds).toBe(25);
     });
+
+    it('clamps cooldown durations to 1..=3600 and ignores invalid non-positive/non-finite inputs (S08-X5)', () => {
+        // setCooldown ignores 0, negative, NaN, Infinity
+        rateLimitManager.setCooldown(0);
+        expect(rateLimitManager.isCoolingDown()).toBe(false);
+        expect(rateLimitManager.getRemainingSeconds()).toBe(0);
+
+        rateLimitManager.setCooldown(-5);
+        expect(rateLimitManager.isCoolingDown()).toBe(false);
+
+        rateLimitManager.setCooldown(Number.NaN);
+        expect(rateLimitManager.isCoolingDown()).toBe(false);
+
+        rateLimitManager.setCooldown(Number.POSITIVE_INFINITY);
+        expect(rateLimitManager.isCoolingDown()).toBe(false);
+
+        // Positive fractional (< 1s) clamps up to 1s
+        rateLimitManager.setCooldown(0.4);
+        expect(rateLimitManager.isCoolingDown()).toBe(true);
+        expect(rateLimitManager.getRemainingSeconds()).toBe(1);
+        rateLimitManager.clearCooldown();
+
+        // Excessively large duration clamps down to 3600s
+        rateLimitManager.setCooldown(999_999);
+        expect(rateLimitManager.isCoolingDown()).toBe(true);
+        expect(rateLimitManager.getRemainingSeconds()).toBe(3600);
+        rateLimitManager.clearCooldown();
+
+        // DTO retryAfterSecs & Retry-After header parsing also clamp to [1, 3600]
+        expect(rateLimitManager.extractRetryAfter({ retryAfterSecs: 86_400 })).toBe(3600);
+        expect(rateLimitManager.extractRetryAfter({ retryAfterSecs: 0.2 })).toBe(1);
+        expect(rateLimitManager.extractRetryAfter({ retryAfterSecs: -5 })).toBeNull();
+        expect(rateLimitManager.extractRetryAfter({ retryAfterSecs: Number.NaN })).toBeNull();
+        expect(rateLimitManager.parseRetryAfterSeconds('Retry-After: 999999s')).toBe(3600);
+        expect(rateLimitManager.parseRetryAfterSeconds('Retry-After: 0s')).toBe(1);
+    });
+
+    it('rejects incidental "429" inside 64-hex slot IDs or URL ports while honoring real 429 markers (S08-X5)', () => {
+        const hexSlotWith429 = `${'ab'.repeat(15)}429${'cd'.repeat(16)}`;
+        expect(
+            rateLimitManager.extractRetryAfter(
+                `Failed to get slot ${hexSlotWith429} from https://sync.example.org:4290/d: Connection refused`
+            )
+        ).toBeNull();
+        expect(
+            rateLimitManager.extractRetryAfter(
+                'Network error fetching https://node-429.example.org:14290/sync.php: timeout'
+            )
+        ).toBeNull();
+        expect(
+            rateLimitManager.extractRetryAfter(
+                'Server returned HTTP 500 fetching index: Retry-After: 9999 HTTP 429'
+            )
+        ).toBeNull();
+
+        expect(rateLimitManager.extractRetryAfter('HTTP 429')).toBe(60);
+        expect(rateLimitManager.extractRetryAfter('status: 429')).toBe(60);
+        expect(rateLimitManager.extractRetryAfter('status code: 429')).toBe(60);
+        expect(rateLimitManager.extractRetryAfter('Retry-After: 120s')).toBe(120);
+        expect(rateLimitManager.extractRetryAfter('Too Many Requests')).toBe(60);
+        expect(rateLimitManager.extractRetryAfter('Rate limit exceeded')).toBe(60);
+    });
 });

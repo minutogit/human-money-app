@@ -17,9 +17,149 @@ const MAX_LOCK_BATCH_BODY_BYTES: usize = 2 * 1024 * 1024;
 const MAX_INDEX_JSON_BODY_BYTES: usize = 4 * 1024 * 1024;
 const MAX_FREEZE_JSON_BODY_BYTES: usize = 8 * 1024 * 1024;
 const MAX_SLOT_BLOB_BODY_BYTES: usize = 32 * 1024 * 1024;
+pub const MAX_MEDIA_BLOB_BODY_BYTES: usize = humoco_market::MAX_AD_MEDIA_BYTES + 1024;
 const MIN_RETRY_AFTER_SECS: u64 = 1;
 const MAX_RETRY_AFTER_SECS: u64 = 3600;
 const POW_START_NONCE_MASK: u64 = (1u64 << 52) - 1;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SyncClientError {
+    LocalValidation(String),
+    Transport(String),
+    RateLimited {
+        status: u16,
+        retry_after_secs: u64,
+        context: String,
+        snippet: String,
+    },
+    HttpStatus {
+        status: u16,
+        retry_after_secs: Option<u64>,
+        context: String,
+        snippet: String,
+    },
+    ResponseTooLarge {
+        max_bytes: usize,
+        context: String,
+    },
+    InvalidPayload(String),
+}
+
+impl SyncClientError {
+    pub fn retry_after_secs(&self) -> Option<u64> {
+        match self {
+            Self::RateLimited {
+                retry_after_secs, ..
+            } => Some((*retry_after_secs).clamp(MIN_RETRY_AFTER_SECS, MAX_RETRY_AFTER_SECS)),
+            Self::HttpStatus {
+                status,
+                retry_after_secs,
+                ..
+            } => retry_after_secs
+                .or((*status == 429).then_some(60))
+                .map(|s| s.clamp(MIN_RETRY_AFTER_SECS, MAX_RETRY_AFTER_SECS)),
+            _ => None,
+        }
+    }
+
+    pub fn http_status(&self) -> Option<u16> {
+        match self {
+            Self::RateLimited { status, .. } | Self::HttpStatus { status, .. } => Some(*status),
+            _ => None,
+        }
+    }
+
+    pub fn is_local_validation(&self) -> bool {
+        matches!(self, Self::LocalValidation(_))
+    }
+
+    pub fn is_rate_limited(&self) -> bool {
+        matches!(self, Self::RateLimited { .. })
+            || matches!(self, Self::HttpStatus { status: 429, .. })
+    }
+}
+
+impl std::fmt::Display for SyncClientError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::LocalValidation(msg) | Self::Transport(msg) | Self::InvalidPayload(msg) => {
+                f.write_str(msg)
+            }
+            Self::RateLimited {
+                status,
+                retry_after_secs,
+                context,
+                snippet,
+            } => {
+                let clamped = (*retry_after_secs).clamp(MIN_RETRY_AFTER_SECS, MAX_RETRY_AFTER_SECS);
+                if context.is_empty() {
+                    if *status == 429 {
+                        write!(f, "Rate limited (HTTP 429). Retry-After: {}s", clamped)?;
+                    } else {
+                        write!(
+                            f,
+                            "Rate limited (HTTP {}, HTTP 429). Retry-After: {}s",
+                            status, clamped
+                        )?;
+                    }
+                } else if *status == 429 {
+                    write!(
+                        f,
+                        "Rate limited {} (HTTP 429). Retry-After: {}s",
+                        context, clamped
+                    )?;
+                } else {
+                    write!(
+                        f,
+                        "Rate limited {} (HTTP {}, HTTP 429). Retry-After: {}s",
+                        context, status, clamped
+                    )?;
+                }
+                if !snippet.is_empty() {
+                    write!(f, ": {}", snippet)?;
+                }
+                Ok(())
+            }
+            Self::HttpStatus {
+                status,
+                context,
+                snippet,
+                ..
+            } => {
+                if *status == 413 && context.starts_with("Payload too large:") {
+                    write!(f, "{} (HTTP 413)", context)?;
+                } else if *status == 507 && context.starts_with("Insufficient storage:") {
+                    write!(f, "{} (HTTP 507)", context)?;
+                } else if context.is_empty() {
+                    write!(f, "Server returned HTTP {}", status)?;
+                } else {
+                    write!(f, "Server returned HTTP {} {}", status, context)?;
+                }
+                if !snippet.is_empty() {
+                    write!(f, ": {}", snippet)?;
+                }
+                Ok(())
+            }
+            Self::ResponseTooLarge { max_bytes, context } => {
+                if context.is_empty() {
+                    write!(
+                        f,
+                        "Response body exceeds maximum allowed size ({} bytes)",
+                        max_bytes
+                    )
+                } else {
+                    write!(
+                        f,
+                        "Response body {} exceeds maximum allowed size ({} bytes)",
+                        context, max_bytes
+                    )
+                }
+            }
+        }
+    }
+}
+
+impl std::error::Error for SyncClientError {}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct SyncIndexEntry {
@@ -294,13 +434,17 @@ fn has_outer_ws_or_control(s: &str) -> bool {
     s.trim() != s || s.chars().any(|c| c.is_control())
 }
 
-fn parse_ed25519_pubkey_strict(hex_str: &str) -> Result<VerifyingKey, String> {
+fn parse_ed25519_pubkey_strict(hex_str: &str) -> Result<VerifyingKey, SyncClientError> {
     if has_outer_ws_or_control(hex_str) {
-        return Err("Public key hex contains outer whitespace or control characters".to_string());
+        return Err(SyncClientError::LocalValidation(
+            "Public key hex contains outer whitespace or control characters".to_string(),
+        ));
     }
-    let pk_bytes = decode_hex_fixed::<32>(hex_str)
-        .map_err(|_| "Invalid Ed25519 public key hex".to_string())?;
-    VerifyingKey::from_bytes(&pk_bytes).map_err(|_| "Invalid Ed25519 public key".to_string())
+    let pk_bytes = decode_hex_fixed::<32>(hex_str).map_err(|_| {
+        SyncClientError::LocalValidation("Invalid Ed25519 public key hex".to_string())
+    })?;
+    VerifyingKey::from_bytes(&pk_bytes)
+        .map_err(|_| SyncClientError::LocalValidation("Invalid Ed25519 public key".to_string()))
 }
 
 pub fn sign_revocation_notice(
@@ -309,13 +453,17 @@ pub fn sign_revocation_notice(
     effective_at: u64,
     reason: Option<String>,
     replacement: Option<SyncReplacementTarget>,
-) -> Result<SyncRevocationNotice, String> {
+) -> Result<SyncRevocationNotice, SyncClientError> {
     if issued_at == 0 || effective_at == 0 {
-        return Err("Revocation notice requires non-zero issued_at and effective_at".to_string());
+        return Err(SyncClientError::LocalValidation(
+            "Revocation notice requires non-zero issued_at and effective_at".to_string(),
+        ));
     }
     if let Some(ref r_txt) = reason {
         if r_txt.len() > 200 || r_txt.chars().any(|c| c.is_control()) {
-            return Err("Invalid revocation reason (max 200 chars, single-line)".to_string());
+            return Err(SyncClientError::LocalValidation(
+                "Invalid revocation reason (max 200 chars, single-line)".to_string(),
+            ));
         }
     }
     if let Some(ref rep) = replacement {
@@ -353,22 +501,31 @@ pub fn sign_revocation_notice(
 pub fn verify_revocation_notice(
     notice: &SyncRevocationNotice,
     expected_drop_pub: &str,
-) -> Result<(), String> {
+) -> Result<(), SyncClientError> {
     if has_outer_ws_or_control(&notice.drop_pub) || has_outer_ws_or_control(&notice.signature) {
-        return Err("Revocation notice contains invalid whitespace or control chars".to_string());
+        return Err(SyncClientError::InvalidPayload(
+            "Revocation notice contains invalid whitespace or control chars".to_string(),
+        ));
     }
     let expected = expected_drop_pub.trim().to_ascii_lowercase();
-    let vk = parse_ed25519_pubkey_strict(&expected)
-        .map_err(|_| "Missing or invalid expected drop_pub".to_string())?;
+    let vk = parse_ed25519_pubkey_strict(&expected).map_err(|_| {
+        SyncClientError::LocalValidation("Missing or invalid expected drop_pub".to_string())
+    })?;
     if notice.drop_pub.to_ascii_lowercase() != expected {
-        return Err("Revocation notice drop_pub mismatch".to_string());
+        return Err(SyncClientError::InvalidPayload(
+            "Revocation notice drop_pub mismatch".to_string(),
+        ));
     }
     if notice.issued_at == 0 || notice.effective_at == 0 {
-        return Err("Revocation notice missing timestamps".to_string());
+        return Err(SyncClientError::InvalidPayload(
+            "Revocation notice missing timestamps".to_string(),
+        ));
     }
     if let Some(ref r_txt) = notice.reason {
         if r_txt.len() > 200 || r_txt.chars().any(|c| c.is_control()) {
-            return Err("Revocation notice contains invalid reason".to_string());
+            return Err(SyncClientError::InvalidPayload(
+                "Revocation notice contains invalid reason".to_string(),
+            ));
         }
     }
     if let Some(ref rep) = notice.replacement {
@@ -376,18 +533,24 @@ pub fn verify_revocation_notice(
             || has_outer_ws_or_control(&rep.read_url)
             || has_outer_ws_or_control(&rep.drop_pub)
         {
-            return Err(
+            return Err(SyncClientError::InvalidPayload(
                 "Revocation notice replacement contains invalid whitespace or control chars"
                     .to_string(),
-            );
+            ));
         }
-        validate_sync_url(&rep.write_url)?;
-        validate_sync_read_url(&rep.read_url)?;
-        parse_ed25519_pubkey_strict(&rep.drop_pub)
-            .map_err(|_| "Revocation notice contains invalid replacement drop_pub".to_string())?;
+        validate_sync_url(&rep.write_url)
+            .map_err(|e| SyncClientError::InvalidPayload(e.to_string()))?;
+        validate_sync_read_url(&rep.read_url)
+            .map_err(|e| SyncClientError::InvalidPayload(e.to_string()))?;
+        parse_ed25519_pubkey_strict(&rep.drop_pub).map_err(|_| {
+            SyncClientError::InvalidPayload(
+                "Revocation notice contains invalid replacement drop_pub".to_string(),
+            )
+        })?;
     }
-    let sig_bytes = decode_hex_fixed::<64>(&notice.signature)
-        .map_err(|_| "Invalid revocation notice signature hex".to_string())?;
+    let sig_bytes = decode_hex_fixed::<64>(&notice.signature).map_err(|_| {
+        SyncClientError::InvalidPayload("Invalid revocation notice signature hex".to_string())
+    })?;
     let sig = Signature::from_bytes(&sig_bytes);
 
     let canonical = canonical_revocation_message(
@@ -397,21 +560,22 @@ pub fn verify_revocation_notice(
         notice.replacement.as_ref(),
         notice.reason.as_deref(),
     );
-    vk.verify_strict(canonical.as_bytes(), &sig)
-        .map_err(|_| "Invalid revocation notice Ed25519 signature".to_string())
+    vk.verify_strict(canonical.as_bytes(), &sig).map_err(|_| {
+        SyncClientError::InvalidPayload("Invalid revocation notice Ed25519 signature".to_string())
+    })
 }
 
 pub async fn fetch_revocation_notice(
     client: &reqwest::Client,
     read_url: &str,
     expected_drop_pub: &str,
-) -> Result<Option<SyncRevocationNotice>, String> {
+) -> Result<Option<SyncRevocationNotice>, SyncClientError> {
     let url = append_sync_path(read_url, "revocation.json")?;
     let resp = client.get(&url).send().await.map_err(|e| {
-        format!(
+        SyncClientError::Transport(format!(
             "Network error fetching revocation.json from {}: {}",
             read_url, e
-        )
+        ))
     })?;
     if resp.status().as_u16() == 404 {
         return Ok(None);
@@ -434,16 +598,25 @@ pub async fn push_revocation_notice(
     admin_sk: &SigningKey,
     notice: Option<&SyncRevocationNotice>,
     issued_at: u64,
-) -> Result<(), String> {
+) -> Result<(), SyncClientError> {
     let url = append_sync_query(write_url, "revoke")?;
     let body_json = match notice {
-        Some(n) => serde_json::to_string(n)
-            .map_err(|e| format!("Failed to serialize revocation notice: {}", e))?,
+        Some(n) => serde_json::to_string(n).map_err(|e| {
+            SyncClientError::LocalValidation(format!(
+                "Failed to serialize revocation notice: {}",
+                e
+            ))
+        })?,
         None => serde_json::to_string(&serde_json::json!({
             "issued_at": issued_at,
             "effective_at": null
         }))
-        .map_err(|e| format!("Failed to serialize revocation clear payload: {}", e))?,
+        .map_err(|e| {
+            SyncClientError::LocalValidation(format!(
+                "Failed to serialize revocation clear payload: {}",
+                e
+            ))
+        })?,
     };
 
     let req = apply_admin_headers(
@@ -467,16 +640,19 @@ pub async fn push_lock_delegation(
     admin_sk: &SigningKey,
     lock_pub_hex: &str,
     issued_at: u64,
-) -> Result<SyncLockDelegationDto, String> {
+) -> Result<SyncLockDelegationDto, SyncClientError> {
     let url = append_sync_query(write_url, "lock_delegate")?;
     let clean_write = write_url.trim().to_string();
     let clean_read = read_url.trim().to_string();
     if validate_sync_url(&clean_write).is_err() || validate_sync_read_url(&clean_read).is_err() {
-        return Err("Invalid write_url or read_url for lock delegation".to_string());
+        return Err(SyncClientError::LocalValidation(
+            "Invalid write_url or read_url for lock delegation".to_string(),
+        ));
     }
     let lock_pub = lock_pub_hex.trim().to_ascii_lowercase();
-    parse_ed25519_pubkey_strict(&lock_pub)
-        .map_err(|_| "Invalid Ed25519 lock_pub for lock delegation".to_string())?;
+    parse_ed25519_pubkey_strict(&lock_pub).map_err(|_| {
+        SyncClientError::LocalValidation("Invalid Ed25519 lock_pub for lock delegation".to_string())
+    })?;
     let admin_pub = hex::encode(admin_sk.verifying_key().as_bytes());
     let msg = humoco_market::format_lock_delegate_signature_message(
         &admin_pub,
@@ -494,8 +670,12 @@ pub async fn push_lock_delegation(
         issued_at,
         sig,
     };
-    let body_json = serde_json::to_string(&payload)
-        .map_err(|e| format!("Failed to serialize lock delegation payload: {}", e))?;
+    let body_json = serde_json::to_string(&payload).map_err(|e| {
+        SyncClientError::LocalValidation(format!(
+            "Failed to serialize lock delegation payload: {}",
+            e
+        ))
+    })?;
 
     let req = apply_admin_headers(
         client.put(&url),
@@ -639,41 +819,49 @@ impl reqwest::dns::Resolve for SsrfSafeDnsResolver {
     }
 }
 
-pub fn validate_sync_url(url: &str) -> Result<(), String> {
+pub fn validate_sync_url(url: &str) -> Result<(), SyncClientError> {
     validate_sync_url_strict(url, loopback_sync_allowed())
 }
 
-pub fn validate_sync_read_url(url: &str) -> Result<(), String> {
+pub fn validate_sync_read_url(url: &str) -> Result<(), SyncClientError> {
     validate_sync_url(url)?;
-    let parsed = reqwest::Url::parse(url.trim())
-        .map_err(|e| format!("Invalid Sync read URL '{}': {}", url, e))?;
+    let parsed = reqwest::Url::parse(url.trim()).map_err(|e| {
+        SyncClientError::LocalValidation(format!("Invalid Sync read URL '{}': {}", url, e))
+    })?;
     if parsed.query().is_some() {
-        return Err(format!(
+        return Err(SyncClientError::LocalValidation(format!(
             "Sync read URL must not contain a query string: '{}'",
             url
-        ));
+        )));
     }
     Ok(())
 }
 
-pub fn validate_sync_url_strict(url: &str, allow_loopback: bool) -> Result<(), String> {
+pub fn validate_sync_url_strict(url: &str, allow_loopback: bool) -> Result<(), SyncClientError> {
     let trimmed = url.trim();
     if trimmed.is_empty()
         || trimmed.len() > 2048
         || trimmed.chars().any(|c| c.is_control() || c.is_whitespace())
     {
-        return Err(format!("Invalid Sync URL '{}'", url));
+        return Err(SyncClientError::LocalValidation(format!(
+            "Invalid Sync URL '{}'",
+            url
+        )));
     }
-    let parsed =
-        reqwest::Url::parse(trimmed).map_err(|e| format!("Invalid Sync URL '{}': {}", url, e))?;
+    let parsed = reqwest::Url::parse(trimmed).map_err(|e| {
+        SyncClientError::LocalValidation(format!("Invalid Sync URL '{}': {}", url, e))
+    })?;
     if !parsed.username().is_empty() || parsed.password().is_some() || parsed.fragment().is_some() {
-        return Err(format!(
+        return Err(SyncClientError::LocalValidation(format!(
             "Sync URL must not contain credentials or fragment: '{}'",
             url
-        ));
+        )));
     }
     let Some(host) = parsed.host_str() else {
-        return Err(format!("Sync URL missing host: '{}'", url));
+        return Err(SyncClientError::LocalValidation(format!(
+            "Sync URL missing host: '{}'",
+            url
+        )));
     };
     let host_lower = host
         .trim_matches(|c| c == '[' || c == ']')
@@ -686,27 +874,30 @@ pub fn validate_sync_url_strict(url: &str, allow_loopback: bool) -> Result<(), S
 
     if let Ok(ip) = host_lower.parse::<std::net::IpAddr>() {
         if is_blocked_ip(ip, allow_loopback) {
-            return Err(format!(
+            return Err(SyncClientError::LocalValidation(format!(
                 "Sync URL targets blocked internal/private address '{}'",
                 url
-            ));
+            )));
         }
     } else if host_lower.ends_with(".local") || host_lower.ends_with(".internal") {
-        return Err(format!("Sync URL targets internal hostname '{}'", url));
+        return Err(SyncClientError::LocalValidation(format!(
+            "Sync URL targets internal hostname '{}'",
+            url
+        )));
     } else if is_loopback_name && !allow_loopback {
-        return Err(format!(
+        return Err(SyncClientError::LocalValidation(format!(
             "Sync URL loopback is forbidden in production: '{}'",
             url
-        ));
+        )));
     }
 
     match parsed.scheme() {
         "https" => Ok(()),
         "http" if allow_loopback && is_loopback_name => Ok(()),
-        _ => Err(format!(
+        _ => Err(SyncClientError::LocalValidation(format!(
             "Sync URL must use HTTPS (or allowed dev loopback, got '{}')",
             url
-        )),
+        ))),
     }
 }
 
@@ -793,37 +984,14 @@ pub fn parse_retry_after(headers: &reqwest::header::HeaderMap) -> u64 {
     60
 }
 
-pub fn extract_retry_after_from_error_str(err: &str) -> Option<u64> {
-    if err.starts_with("Server returned HTTP ") && !err.starts_with("Server returned HTTP 429") {
-        return None;
-    }
-    if err.starts_with("Lock server ")
-        && err.contains(" returned HTTP ")
-        && !err.contains(" returned HTTP 429")
-    {
-        return None;
-    }
-    let http429_pos = err.find("HTTP 429")?;
-    let tail = &err[http429_pos..];
-    if let Some(pos) = tail.find("Retry-After:") {
-        let after = &tail[pos + "Retry-After:".len()..];
-        let trimmed = after.trim_start();
-        let num_str: String = trimmed.chars().take_while(|c| c.is_ascii_digit()).collect();
-        if let Ok(secs) = num_str.parse::<u64>() {
-            return Some(secs.clamp(MIN_RETRY_AFTER_SECS, MAX_RETRY_AFTER_SECS));
-        }
-    }
-    Some(60)
-}
-
 /// Validates `url` against SSRF rules and returns the trimmed slice.
-fn validated_sync_url(url: &str) -> Result<&str, String> {
+fn validated_sync_url(url: &str) -> Result<&str, SyncClientError> {
     validate_sync_url(url)?;
     Ok(url.trim())
 }
 
 /// Validates `base_url` against SSRF rules and appends `query` using `?` or `&`.
-fn append_sync_query(base_url: &str, query: &str) -> Result<String, String> {
+fn append_sync_query(base_url: &str, query: &str) -> Result<String, SyncClientError> {
     let clean = validated_sync_url(base_url)?;
     let sep = if clean.contains('?') { "&" } else { "?" };
     Ok(format!("{}{}{}", clean, sep, query))
@@ -841,7 +1009,7 @@ fn is_valid_sync_channel(channel: &str) -> bool {
             .all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'_'))
 }
 
-fn validate_static_lock_rel_path(rel_path: &str) -> Result<String, String> {
+fn validate_static_lock_rel_path(rel_path: &str) -> Result<String, SyncClientError> {
     let clean_rel = rel_path.trim().trim_start_matches('/');
     let clean_rel = clean_rel.strip_prefix("locks/").unwrap_or(clean_rel);
     if clean_rel.is_empty()
@@ -851,7 +1019,10 @@ fn validate_static_lock_rel_path(rel_path: &str) -> Result<String, String> {
             .chars()
             .any(|c| c.is_control() || c.is_whitespace() || matches!(c, '?' | '#' | '\\' | '%'))
     {
-        return Err(format!("Invalid static lock path '{}'", rel_path));
+        return Err(SyncClientError::LocalValidation(format!(
+            "Invalid static lock path '{}'",
+            rel_path
+        )));
     }
     for seg in clean_rel.split('/') {
         if seg.is_empty()
@@ -861,14 +1032,17 @@ fn validate_static_lock_rel_path(rel_path: &str) -> Result<String, String> {
                 .bytes()
                 .all(|b| matches!(b, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'.' | b'_' | b'-'))
         {
-            return Err(format!("Invalid static lock path '{}'", rel_path));
+            return Err(SyncClientError::LocalValidation(format!(
+                "Invalid static lock path '{}'",
+                rel_path
+            )));
         }
     }
     Ok(clean_rel.to_string())
 }
 
 /// Validates `base_url` as a read URL (no query string) and appends a relative path segment.
-fn append_sync_path(base_url: &str, path: &str) -> Result<String, String> {
+fn append_sync_path(base_url: &str, path: &str) -> Result<String, SyncClientError> {
     validate_sync_read_url(base_url)?;
     let clean = base_url.trim().trim_end_matches('/');
     let rel = path.trim_start_matches('/');
@@ -928,13 +1102,13 @@ async fn read_response_bytes_bounded(
     mut resp: reqwest::Response,
     max_bytes: usize,
     op: &str,
-) -> Result<Vec<u8>, String> {
+) -> Result<Vec<u8>, SyncClientError> {
     if let Some(len) = resp.content_length() {
         if len > max_bytes as u64 {
-            return Err(format!(
-                "Response body {} exceeds maximum allowed size ({} bytes)",
-                op, max_bytes
-            ));
+            return Err(SyncClientError::ResponseTooLarge {
+                max_bytes,
+                context: op.to_string(),
+            });
         }
     }
     let initial_cap = resp
@@ -945,13 +1119,13 @@ async fn read_response_bytes_bounded(
     while let Some(chunk) = resp
         .chunk()
         .await
-        .map_err(|e| format!("Failed reading response {}: {}", op, e))?
+        .map_err(|e| SyncClientError::Transport(format!("Failed reading response {}: {}", op, e)))?
     {
         if buf.len().saturating_add(chunk.len()) > max_bytes {
-            return Err(format!(
-                "Response body {} exceeds maximum allowed size ({} bytes)",
-                op, max_bytes
-            ));
+            return Err(SyncClientError::ResponseTooLarge {
+                max_bytes,
+                context: op.to_string(),
+            });
         }
         buf.extend_from_slice(&chunk);
     }
@@ -964,9 +1138,10 @@ async fn read_response_json_bounded<T: serde::de::DeserializeOwned>(
     max_bytes: usize,
     op: &str,
     parse_ctx: &str,
-) -> Result<T, String> {
+) -> Result<T, SyncClientError> {
     let bytes = read_response_bytes_bounded(resp, max_bytes, op).await?;
-    serde_json::from_slice(&bytes).map_err(|e| format!("{}: {}", parse_ctx, e))
+    serde_json::from_slice(&bytes)
+        .map_err(|e| SyncClientError::InvalidPayload(format!("{}: {}", parse_ctx, e)))
 }
 
 /// Sanitizes an untrusted error snippet by stripping control chars, collapsing whitespace, and
@@ -1000,31 +1175,37 @@ async fn read_error_snippet_bounded(mut resp: reqwest::Response, max_bytes: usiz
     sanitize_error_snippet(&buf)
 }
 
-/// Formats an HTTP 429 rate-limit error string including the `Retry-After` duration.
-fn rate_limit_error(op: &str, headers: &reqwest::header::HeaderMap) -> String {
+/// Constructs an HTTP 429 `SyncClientError::RateLimited` including the clamped `Retry-After` duration.
+fn rate_limit_error(op: &str, headers: &reqwest::header::HeaderMap) -> SyncClientError {
     let secs = parse_retry_after(headers);
-    format!("Rate limited {} (HTTP 429). Retry-After: {}s", op, secs)
+    SyncClientError::RateLimited {
+        status: 429,
+        retry_after_secs: secs,
+        context: op.to_string(),
+        snippet: String::new(),
+    }
 }
 
-/// Converts a non-success HTTP response into a rate-limit or contextual HTTP error string.
-async fn error_from_response(resp: reqwest::Response, op: &str) -> String {
-    let status = resp.status();
-    if status.as_u16() == 429 {
+/// Converts a non-success HTTP response into a typed `SyncClientError`.
+async fn error_from_response(resp: reqwest::Response, op: &str) -> SyncClientError {
+    let status = resp.status().as_u16();
+    if status == 429 {
         return rate_limit_error(op, resp.headers());
     }
     let detail = read_error_snippet_bounded(resp, MAX_ERROR_BODY_BYTES).await;
-    if detail.is_empty() {
-        format!("Server returned HTTP {} {}", status, op)
-    } else {
-        format!("Server returned HTTP {} {}: {}", status, op, detail)
+    SyncClientError::HttpStatus {
+        status,
+        retry_after_secs: None,
+        context: op.to_string(),
+        snippet: detail,
     }
 }
 
-/// Returns `Ok(resp)` for 2xx responses, or a standardized HTTP 429 / 4xx / 5xx error.
+/// Returns `Ok(resp)` for 2xx responses, or a typed `SyncClientError`.
 async fn map_unexpected_status(
     resp: reqwest::Response,
     op: &str,
-) -> Result<reqwest::Response, String> {
+) -> Result<reqwest::Response, SyncClientError> {
     if resp.status().is_success() {
         return Ok(resp);
     }
@@ -1035,20 +1216,23 @@ async fn map_unexpected_status(
 async fn send_sync_request(
     req: reqwest::RequestBuilder,
     op: &str,
-) -> Result<reqwest::Response, String> {
+) -> Result<reqwest::Response, SyncClientError> {
     let resp = req
         .send()
         .await
-        .map_err(|e| format!("Network error {}: {}", op, e))?;
+        .map_err(|e| SyncClientError::Transport(format!("Network error {}: {}", op, e)))?;
     map_unexpected_status(resp, op).await
 }
 
 /// Executes a `DELETE` request treating HTTP 200, 204, and 404 (idempotent delete) as success.
-async fn send_delete_request(req: reqwest::RequestBuilder, op: &str) -> Result<(), String> {
+async fn send_delete_request(
+    req: reqwest::RequestBuilder,
+    op: &str,
+) -> Result<(), SyncClientError> {
     let resp = req
         .send()
         .await
-        .map_err(|e| format!("Network error {}: {}", op, e))?;
+        .map_err(|e| SyncClientError::Transport(format!("Network error {}: {}", op, e)))?;
     match resp.status().as_u16() {
         200 | 204 | 404 => Ok(()),
         _ => Err(error_from_response(resp, op).await),
@@ -1060,7 +1244,7 @@ async fn handle_put_slot_response(
     resp: reqwest::Response,
     target: &str,
     op: &str,
-) -> Result<PutSlotOutcome, String> {
+) -> Result<PutSlotOutcome, SyncClientError> {
     match resp.status().as_u16() {
         200 | 201 | 204 => {
             let header_etag = extract_etag(resp.headers());
@@ -1084,11 +1268,18 @@ async fn handle_put_slot_response(
         412 => Ok(PutSlotOutcome::PreconditionFailed {
             current_etag: extract_etag(resp.headers()),
         }),
-        413 => Err(format!(
-            "Payload too large: sync server rejected {} size (HTTP 413)",
-            target
-        )),
-        507 => Err("Insufficient storage: sync server quota exceeded (HTTP 507)".to_string()),
+        413 => Err(SyncClientError::HttpStatus {
+            status: 413,
+            retry_after_secs: None,
+            context: format!("Payload too large: sync server rejected {} size", target),
+            snippet: String::new(),
+        }),
+        507 => Err(SyncClientError::HttpStatus {
+            status: 507,
+            retry_after_secs: None,
+            context: "Insufficient storage: sync server quota exceeded".to_string(),
+            snippet: String::new(),
+        }),
         _ => Err(error_from_response(resp, op).await),
     }
 }
@@ -1100,7 +1291,7 @@ async fn post_sync_json<T: Serialize + ?Sized>(
     query: &str,
     payload: &T,
     op: &str,
-) -> Result<reqwest::Response, String> {
+) -> Result<reqwest::Response, SyncClientError> {
     let url = append_sync_query(write_url, query)?;
     send_sync_request(client.post(&url).json(payload), op).await
 }
@@ -1108,7 +1299,7 @@ async fn post_sync_json<T: Serialize + ?Sized>(
 pub async fn fetch_sync_info(
     client: &reqwest::Client,
     write_url: &str,
-) -> Result<SyncServerInfo, String> {
+) -> Result<SyncServerInfo, SyncClientError> {
     let url = append_sync_query(write_url, "info")?;
     let resp = send_sync_request(
         client.get(&url),
@@ -1139,13 +1330,16 @@ pub async fn head_slot_capability(
     pubkey_hex64: &str,
     prefix: Option<&str>,
     channel: &str,
-) -> Result<SyncCapabilityResult, String> {
+) -> Result<SyncCapabilityResult, SyncClientError> {
     let clean_url = validated_sync_url(write_url)?;
     if !is_valid_sync_channel(channel) {
-        return Err(format!("Invalid sync channel '{}'", channel));
+        return Err(SyncClientError::LocalValidation(format!(
+            "Invalid sync channel '{}'",
+            channel
+        )));
     }
     let clean_prefix = humoco_market::validate_sync_prefix(prefix)
-        .map_err(|e| format!("Invalid slot prefix: {}", e))?;
+        .map_err(|e| SyncClientError::LocalValidation(format!("Invalid slot prefix: {}", e)))?;
 
     let mut req = client
         .head(clean_url)
@@ -1156,20 +1350,24 @@ pub async fn head_slot_capability(
         req = req.header("X-Drop-Prefix", p);
     }
 
-    let resp = req
-        .send()
-        .await
-        .map_err(|e| format!("Network error checking capability on {}: {}", write_url, e))?;
+    let resp = req.send().await.map_err(|e| {
+        SyncClientError::Transport(format!(
+            "Network error checking capability on {}: {}",
+            write_url, e
+        ))
+    })?;
 
-    let status = resp.status();
-    if status.as_u16() == 429 {
+    let status = resp.status().as_u16();
+    if status == 429 {
         return Err(rate_limit_error("by sync server", resp.headers()));
     }
-    if status.as_u16() != 200 {
-        return Err(format!(
-            "Server returned HTTP {} on slot capability check",
-            status
-        ));
+    if status != 200 {
+        return Err(SyncClientError::HttpStatus {
+            status,
+            retry_after_secs: None,
+            context: "on slot capability check".to_string(),
+            snippet: String::new(),
+        });
     }
 
     let headers = resp.headers();
@@ -1198,10 +1396,13 @@ pub async fn put_slot(
     channel: &str,
     blob_bytes: &[u8],
     if_match: Option<&str>,
-) -> Result<PutSlotOutcome, String> {
+) -> Result<PutSlotOutcome, SyncClientError> {
     let clean_url = validated_sync_url(write_url)?;
     if !is_valid_sync_channel(channel) {
-        return Err(format!("Invalid sync channel '{}'", channel));
+        return Err(SyncClientError::LocalValidation(format!(
+            "Invalid sync channel '{}'",
+            channel
+        )));
     }
     let mut req = apply_signed_headers(client.put(clean_url), signed_headers, true)
         .header("X-Channel", channel)
@@ -1211,17 +1412,17 @@ pub async fn put_slot(
         if im == "none" {
             req = req.header("If-Match", "none");
         } else {
-            let clean =
-                normalize_etag_token(im).ok_or_else(|| "Invalid If-Match ETag".to_string())?;
+            let clean = normalize_etag_token(im).ok_or_else(|| {
+                SyncClientError::LocalValidation("Invalid If-Match ETag".to_string())
+            })?;
             req = req.header("If-Match", format!("\"{}\"", clean));
         }
     }
 
-    let resp = req
-        .body(blob_bytes.to_vec())
-        .send()
-        .await
-        .map_err(|e| format!("Network error sending slot: {}", e))?;
+    let resp =
+        req.body(blob_bytes.to_vec()).send().await.map_err(|e| {
+            SyncClientError::Transport(format!("Network error sending slot: {}", e))
+        })?;
 
     handle_put_slot_response(resp, "slot", "on slot PUT").await
 }
@@ -1231,10 +1432,13 @@ pub async fn delete_slot(
     write_url: &str,
     signed_headers: &SignedDropHeaders,
     channel: &str,
-) -> Result<(), String> {
+) -> Result<(), SyncClientError> {
     let clean_url = validated_sync_url(write_url)?;
     if !is_valid_sync_channel(channel) {
-        return Err(format!("Invalid sync channel '{}'", channel));
+        return Err(SyncClientError::LocalValidation(format!(
+            "Invalid sync channel '{}'",
+            channel
+        )));
     }
     let req = apply_signed_headers(client.delete(clean_url), signed_headers, true)
         .header("X-Channel", channel);
@@ -1245,7 +1449,7 @@ pub async fn delete_account(
     client: &reqwest::Client,
     write_url: &str,
     signed_headers: &SignedDropHeaders,
-) -> Result<(), String> {
+) -> Result<(), SyncClientError> {
     let url = append_sync_query(write_url, "account")?;
     let req = apply_signed_headers(client.delete(&url), signed_headers, false);
     send_delete_request(req, "deleting account").await
@@ -1257,13 +1461,13 @@ pub async fn put_media_blob(
     signed_headers: &SignedDropHeaders,
     blob_id: &str,
     blob_bytes: &[u8],
-) -> Result<PutSlotOutcome, String> {
+) -> Result<PutSlotOutcome, SyncClientError> {
     let clean_url = validated_sync_url(write_url)?;
     if !is_lower_hex_exact(blob_id, 64) {
-        return Err(format!(
+        return Err(SyncClientError::LocalValidation(format!(
             "Invalid blob_id '{}': expected 64 lowercase hex chars",
             blob_id
-        ));
+        )));
     }
     let resp = apply_signed_headers(client.put(clean_url), signed_headers, false)
         .header("X-Channel", "media")
@@ -1272,7 +1476,9 @@ pub async fn put_media_blob(
         .body(blob_bytes.to_vec())
         .send()
         .await
-        .map_err(|e| format!("Network error sending media blob: {}", e))?;
+        .map_err(|e| {
+            SyncClientError::Transport(format!("Network error sending media blob: {}", e))
+        })?;
 
     handle_put_slot_response(resp, "media", "on media PUT").await
 }
@@ -1282,14 +1488,14 @@ pub async fn delete_media_blob(
     write_url: &str,
     signed_headers: &SignedDropHeaders,
     blob_id: Option<&str>,
-) -> Result<(), String> {
+) -> Result<(), SyncClientError> {
     let clean_url = validated_sync_url(write_url)?;
     if let Some(id) = blob_id {
         if !is_lower_hex_exact(id, 64) {
-            return Err(format!(
+            return Err(SyncClientError::LocalValidation(format!(
                 "Invalid blob_id '{}': expected 64 lowercase hex chars",
                 id
-            ));
+            )));
         }
     }
     let mut req = apply_signed_headers(client.delete(clean_url), signed_headers, false)
@@ -1306,13 +1512,18 @@ pub async fn push_members(
     admin_sk: &SigningKey,
     channel: &str,
     pubkeys: &[String],
-) -> Result<(), String> {
+) -> Result<(), SyncClientError> {
     if !is_valid_sync_channel(channel) {
-        return Err(format!("Invalid sync channel '{}'", channel));
+        return Err(SyncClientError::LocalValidation(format!(
+            "Invalid sync channel '{}'",
+            channel
+        )));
     }
     let url = append_sync_query(write_url, &format!("members&channel={}", channel))?;
-    let body_json = serde_json::to_string(&serde_json::json!({ "pubkeys": pubkeys }))
-        .map_err(|e| format!("Failed to serialize members payload: {}", e))?;
+    let body_json =
+        serde_json::to_string(&serde_json::json!({ "pubkeys": pubkeys })).map_err(|e| {
+            SyncClientError::LocalValidation(format!("Failed to serialize members payload: {}", e))
+        })?;
 
     let req = apply_admin_headers(
         client.put(&url),
@@ -1332,7 +1543,7 @@ pub async fn fetch_admin_status(
     client: &reqwest::Client,
     write_url: &str,
     admin_sk: &SigningKey,
-) -> Result<SyncServerAdminStatus, String> {
+) -> Result<SyncServerAdminStatus, SyncClientError> {
     let url = append_sync_query(write_url, "status")?;
     let req = apply_admin_headers(client.get(&url), admin_sk, "STATUS", "", b"");
     let resp = send_sync_request(req, "fetching admin status").await?;
@@ -1352,14 +1563,16 @@ pub async fn put_admin_config(
     max_total_storage_mb: usize,
     max_members: usize,
     max_user_storage_mb: usize,
-) -> Result<SyncServerAdminStatus, String> {
+) -> Result<SyncServerAdminStatus, SyncClientError> {
     let url = append_sync_query(write_url, "admin_config")?;
     let body_json = serde_json::to_string(&serde_json::json!({
         "max_total_storage_mb": max_total_storage_mb,
         "max_members": max_members,
         "max_user_storage_mb": max_user_storage_mb,
     }))
-    .map_err(|e| format!("Failed to serialize admin_config payload: {}", e))?;
+    .map_err(|e| {
+        SyncClientError::LocalValidation(format!("Failed to serialize admin_config payload: {}", e))
+    })?;
 
     let req = apply_admin_headers(
         client.put(&url),
@@ -1386,7 +1599,7 @@ pub async fn list_index(
     read_url: &str,
     cached_etag: Option<&str>,
     cached_last_modified: Option<&str>,
-) -> Result<IndexFetchResult, String> {
+) -> Result<IndexFetchResult, SyncClientError> {
     let url = append_sync_path(read_url, "index.json")?;
     let mut req = client.get(&url);
     if let Some(etag) = cached_etag.and_then(normalize_etag_token) {
@@ -1402,7 +1615,7 @@ pub async fn list_index(
     let resp = req
         .send()
         .await
-        .map_err(|e| format!("Network error fetching index: {}", e))?;
+        .map_err(|e| SyncClientError::Transport(format!("Network error fetching index: {}", e)))?;
 
     match resp.status().as_u16() {
         304 => return Ok(IndexFetchResult::NotModified),
@@ -1439,24 +1652,28 @@ pub async fn list_index(
     })
 }
 
-pub async fn get_slot(
+pub async fn get_slot_bounded(
     client: &reqwest::Client,
     read_url: &str,
     id: &str,
     prefix: Option<&str>,
     channel: &str,
     cached_etag: Option<&str>,
-) -> Result<SlotFetchResult, String> {
+    max_bytes: usize,
+) -> Result<SlotFetchResult, SyncClientError> {
     if !is_lower_hex_exact(id, 64) {
-        return Err(format!(
+        return Err(SyncClientError::LocalValidation(format!(
             "Invalid slot id '{}': expected 64 lowercase hex chars",
             id
-        ));
+        )));
     }
     let clean_prefix = humoco_market::validate_sync_prefix(prefix)
-        .map_err(|e| format!("Invalid slot prefix: {}", e))?;
+        .map_err(|e| SyncClientError::LocalValidation(format!("Invalid slot prefix: {}", e)))?;
     if !is_valid_sync_channel(channel) {
-        return Err(format!("Invalid sync channel '{}'", channel));
+        return Err(SyncClientError::LocalValidation(format!(
+            "Invalid sync channel '{}'",
+            channel
+        )));
     }
     let slot_key = match clean_prefix.as_deref() {
         Some(p) => format!("{}_{}", id, p),
@@ -1472,7 +1689,7 @@ pub async fn get_slot(
     let resp = req
         .send()
         .await
-        .map_err(|e| format!("Network error fetching slot: {}", e))?;
+        .map_err(|e| SyncClientError::Transport(format!("Network error fetching slot: {}", e)))?;
 
     match resp.status().as_u16() {
         304 => return Ok(SlotFetchResult::NotModified),
@@ -1482,28 +1699,74 @@ pub async fn get_slot(
 
     let resp = map_unexpected_status(resp, &format!("fetching slot {}", id)).await?;
     let etag = extract_etag(resp.headers());
-    let bytes = read_response_bytes_bounded(resp, MAX_SLOT_BLOB_BODY_BYTES, "reading slot bytes")
-        .await
-        .map_err(|e| format!("Failed to read slot bytes: {}", e))?;
+    let bytes = read_response_bytes_bounded(resp, max_bytes, "reading slot bytes").await?;
 
     Ok(SlotFetchResult::Modified { bytes, etag })
+}
+
+pub async fn get_slot(
+    client: &reqwest::Client,
+    read_url: &str,
+    id: &str,
+    prefix: Option<&str>,
+    channel: &str,
+    cached_etag: Option<&str>,
+) -> Result<SlotFetchResult, SyncClientError> {
+    get_slot_bounded(
+        client,
+        read_url,
+        id,
+        prefix,
+        channel,
+        cached_etag,
+        MAX_SLOT_BLOB_BODY_BYTES,
+    )
+    .await
 }
 
 pub async fn get_media_blob(
     client: &reqwest::Client,
     read_url: &str,
     blob_id: &str,
-) -> Result<Option<Vec<u8>>, String> {
-    if blob_id.len() != 64 || !blob_id.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')) {
-        return Err(format!(
+) -> Result<Option<Vec<u8>>, SyncClientError> {
+    if !is_lower_hex_exact(blob_id, 64) {
+        return Err(SyncClientError::LocalValidation(format!(
             "Invalid blob_id '{}': expected 64 lowercase hex chars",
             blob_id
-        ));
+        )));
     }
-    match get_slot(client, read_url, blob_id, None, "media", None).await? {
+    match get_slot_bounded(
+        client,
+        read_url,
+        blob_id,
+        None,
+        "media",
+        None,
+        MAX_MEDIA_BLOB_BODY_BYTES,
+    )
+    .await?
+    {
         SlotFetchResult::Modified { bytes, .. } => Ok(Some(bytes)),
         SlotFetchResult::NotFound | SlotFetchResult::NotModified => Ok(None),
     }
+}
+
+pub async fn fetch_text_bounded(
+    client: &reqwest::Client,
+    url: &str,
+    max_bytes: usize,
+    context: &str,
+) -> Result<String, SyncClientError> {
+    let clean_url = validated_sync_url(url)?;
+    let resp = client
+        .get(clean_url)
+        .send()
+        .await
+        .map_err(|e| SyncClientError::Transport(format!("Network error {}: {}", context, e)))?;
+    let resp = map_unexpected_status(resp, context).await?;
+    let bytes = read_response_bytes_bounded(resp, max_bytes, context).await?;
+    String::from_utf8(bytes)
+        .map_err(|e| SyncClientError::InvalidPayload(format!("Invalid UTF-8 {}: {}", context, e)))
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -1710,7 +1973,7 @@ pub async fn probe_lock_server(
     };
 
     if let Err(e) = validate_sync_url(&clean_write_url) {
-        failed.error = Some(e);
+        failed.error = Some(e.to_string());
         failed.latency_ms = start.elapsed().as_millis() as u64;
         return failed;
     }
@@ -1718,7 +1981,7 @@ pub async fn probe_lock_server(
     let info = match fetch_sync_info(client, &clean_write_url).await {
         Ok(i) => i,
         Err(e) => {
-            failed.error = Some(e);
+            failed.error = Some(e.to_string());
             failed.latency_ms = start.elapsed().as_millis() as u64;
             return failed;
         }
@@ -1910,14 +2173,17 @@ pub async fn request_genesis_ticket(
     anchor_id: &[u8; 32],
     retain_until_quarter: u16,
     auth: LockTicketAuth,
-) -> Result<GenesisTicket, String> {
+) -> Result<GenesisTicket, SyncClientError> {
     let url = append_sync_query(write_url, "lock_ticket")?;
     let now_secs = current_unix_timestamp();
 
     let (pow_ts, pow_nonce) = match &auth {
         LockTicketAuth::Pow { pow_bits } => {
             if *pow_bits > human_money_core::humoco_proto::crypto::MAX_LOCK_POW_BITS {
-                return Err(format!("Unsupported GenesisTicket PoW bits: {}", pow_bits));
+                return Err(SyncClientError::LocalValidation(format!(
+                    "Unsupported GenesisTicket PoW bits: {}",
+                    pow_bits
+                )));
             }
             let bits = *pow_bits;
             let aid = *anchor_id;
@@ -1952,8 +2218,13 @@ pub async fn request_genesis_ticket(
                 None
             })
             .await
-            .map_err(|e| format!("PoW solver join error: {}", e))?
-            .ok_or_else(|| format!("Failed to solve GenesisTicket PoW ({} bits)", bits))?;
+            .map_err(|e| SyncClientError::LocalValidation(format!("PoW solver join error: {}", e)))?
+            .ok_or_else(|| {
+                SyncClientError::LocalValidation(format!(
+                    "Failed to solve GenesisTicket PoW ({} bits)",
+                    bits
+                ))
+            })?;
             (Some(now_secs), Some(found))
         }
         LockTicketAuth::Direct(_) | LockTicketAuth::Stealth { .. } => (None, None),
@@ -1965,8 +2236,9 @@ pub async fn request_genesis_ticket(
         "pow_timestamp": pow_ts,
         "pow_nonce": pow_nonce,
     });
-    let raw_bytes = serde_json::to_vec(&req_body)
-        .map_err(|e| format!("Failed to encode lock_ticket request: {}", e))?;
+    let raw_bytes = serde_json::to_vec(&req_body).map_err(|e| {
+        SyncClientError::LocalValidation(format!("Failed to encode lock_ticket request: {}", e))
+    })?;
 
     let mut req = client
         .post(&url)
@@ -1984,7 +2256,12 @@ pub async fn request_genesis_ticket(
                 &nonce,
                 &raw_bytes,
             )
-            .map_err(|e| format!("Failed direct lock_ticket signing: {}", e))?;
+            .map_err(|e| {
+                SyncClientError::LocalValidation(format!(
+                    "Failed direct lock_ticket signing: {}",
+                    e
+                ))
+            })?;
             req = apply_signed_headers(req, &signed, false);
         }
         LockTicketAuth::Stealth {
@@ -2002,7 +2279,12 @@ pub async fn request_genesis_ticket(
                 &nonce,
                 &raw_bytes,
             )
-            .map_err(|e| format!("Failed stealth lock_ticket signing: {}", e))?;
+            .map_err(|e| {
+                SyncClientError::LocalValidation(format!(
+                    "Failed stealth lock_ticket signing: {}",
+                    e
+                ))
+            })?;
             req = apply_signed_headers(req, &signed, false);
         }
         LockTicketAuth::Pow { .. } => {}
@@ -2026,9 +2308,9 @@ pub async fn request_genesis_ticket(
         || parsed.ticket.anchor_id != *anchor_id
         || parsed.ticket.retain_until_quarter != retain_until_quarter
     {
-        return Err(
+        return Err(SyncClientError::InvalidPayload(
             "Returned GenesisTicket failed verification or lock_pub/anchor binding".to_string(),
-        );
+        ));
     }
     Ok(parsed.ticket)
 }
@@ -2037,15 +2319,15 @@ pub async fn post_lock_batch(
     client: &reqwest::Client,
     write_url: &str,
     request: &SyncLockBatchRequest,
-) -> Result<SyncLockBatchOutcome, String> {
+) -> Result<SyncLockBatchOutcome, SyncClientError> {
     let url = append_sync_query(write_url, "lock")?;
 
-    let resp = client
-        .post(&url)
-        .json(request)
-        .send()
-        .await
-        .map_err(|e| format!("Network error posting lock batch to {}: {}", write_url, e))?;
+    let resp = client.post(&url).json(request).send().await.map_err(|e| {
+        SyncClientError::Transport(format!(
+            "Network error posting lock batch to {}: {}",
+            write_url, e
+        ))
+    })?;
 
     let status_code = resp.status().as_u16();
     if status_code == 429 {
@@ -2080,14 +2362,18 @@ pub async fn post_lock_batch(
         )
         .await?;
         let val: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| {
-            format!(
+            SyncClientError::InvalidPayload(format!(
                 "Invalid JSON in lock batch response (HTTP {}): {}",
                 status_code, e
-            )
+            ))
         })?;
         if val.get("receipts").is_some() {
-            let body: SyncLockBatchResponse = serde_json::from_value(val)
-                .map_err(|e| format!("Invalid SyncLockBatchResponse JSON: {}", e))?;
+            let body: SyncLockBatchResponse = serde_json::from_value(val).map_err(|e| {
+                SyncClientError::InvalidPayload(format!(
+                    "Invalid SyncLockBatchResponse JSON: {}",
+                    e
+                ))
+            })?;
             return Ok(SyncLockBatchOutcome::Response {
                 status_code,
                 body: Box::new(body),
@@ -2116,36 +2402,40 @@ pub async fn post_lock_batch(
     }
 
     let detail = read_error_snippet_bounded(resp, MAX_ERROR_BODY_BYTES).await;
-    Err(format!(
-        "Lock server {} returned HTTP {}: {}",
-        write_url, status_code, detail
-    ))
+    Err(SyncClientError::HttpStatus {
+        status: status_code,
+        retry_after_secs: None,
+        context: format!("on lock server {}", write_url),
+        snippet: detail,
+    })
 }
 
 pub async fn get_lock_freeze_status(
     client: &reqwest::Client,
     write_url: &str,
     anchor_id_hex: &str,
-) -> Result<Option<LockFreezeStatusDto>, String> {
+) -> Result<Option<LockFreezeStatusDto>, SyncClientError> {
     let trimmed_anchor = anchor_id_hex.trim();
     if trimmed_anchor != anchor_id_hex
         || trimmed_anchor
             .chars()
             .any(|c| c.is_control() || c.is_whitespace())
     {
-        return Err("Invalid anchor_id hex".to_string());
+        return Err(SyncClientError::LocalValidation(
+            "Invalid anchor_id hex".to_string(),
+        ));
     }
     let aid = decode_hex_fixed::<32>(trimmed_anchor)
-        .map_err(|e| format!("Invalid anchor_id hex: {}", e))?;
+        .map_err(|e| SyncClientError::LocalValidation(format!("Invalid anchor_id hex: {}", e)))?;
     let url = append_sync_query(
         write_url,
         &format!("lock_freeze&anchor_id={}", hex::encode(aid)),
     )?;
     let resp = client.get(&url).send().await.map_err(|e| {
-        format!(
+        SyncClientError::Transport(format!(
             "Network error querying ?lock_freeze on {}: {}",
             write_url, e
-        )
+        ))
     })?;
     if resp.status().as_u16() == 404 {
         return Ok(None);
@@ -2166,7 +2456,7 @@ pub async fn post_lock_freeze_action(
     client: &reqwest::Client,
     write_url: &str,
     body: &serde_json::Value,
-) -> Result<serde_json::Value, String> {
+) -> Result<serde_json::Value, SyncClientError> {
     let resp = post_sync_json(
         client,
         write_url,
@@ -2197,7 +2487,7 @@ pub async fn post_lock_import(
     proposal: &MigrationProposal,
     snapshots: &[SnapshotExport],
     quorum_certificates: &[QuorumCertificate],
-) -> Result<ImportAck, String> {
+) -> Result<ImportAck, SyncClientError> {
     let payload = serde_json::json!({
         "anchor_id": hex::encode(anchor_id),
         "active_manifest": active_manifest,
@@ -2221,7 +2511,9 @@ pub async fn post_lock_import(
     )
     .await?;
     if parsed.import_ack.anchor_id != *anchor_id || !parsed.import_ack.verify() {
-        return Err("Returned ImportAck failed signature or anchor_id verification".to_string());
+        return Err(SyncClientError::InvalidPayload(
+            "Returned ImportAck failed signature or anchor_id verification".to_string(),
+        ));
     }
     Ok(parsed.import_ack)
 }
@@ -2238,7 +2530,7 @@ pub async fn post_lock_commit_sign(
     proposal: &MigrationProposal,
     imported_state_hash: &[u8; 32],
     import_acks: &[ImportAck],
-) -> Result<CommitteeSignature, String> {
+) -> Result<CommitteeSignature, SyncClientError> {
     let payload = serde_json::json!({
         "action": "sign_commit",
         "anchor_id": hex::encode(anchor_id),
@@ -2261,7 +2553,9 @@ pub async fn post_lock_commit_sign(
         "Invalid ?lock_commit response JSON",
     )
     .await?;
-    let prop_hash = proposal.core_digest()?;
+    let prop_hash = proposal.core_digest().map_err(|e| {
+        SyncClientError::LocalValidation(format!("Invalid migration proposal: {}", e))
+    })?;
     let digest =
         MigrationCert::commit_digest(anchor_id, &prop_hash, proposal.to_rev, imported_state_hash);
     if !verify_ed25519_strict(
@@ -2269,7 +2563,9 @@ pub async fn post_lock_commit_sign(
         &digest,
         &parsed.committee_signature.sig,
     ) {
-        return Err("Returned CommitteeSignature failed verification".to_string());
+        return Err(SyncClientError::InvalidPayload(
+            "Returned CommitteeSignature failed verification".to_string(),
+        ));
     }
     Ok(parsed.committee_signature)
 }
@@ -2279,7 +2575,7 @@ pub async fn post_lock_commit_finalize(
     write_url: &str,
     anchor_id: &[u8; 32],
     new_manifest: &AnchorManifest,
-) -> Result<(), String> {
+) -> Result<(), SyncClientError> {
     let payload = serde_json::json!({
         "action": "finalize",
         "anchor_id": hex::encode(anchor_id),
@@ -2299,18 +2595,22 @@ pub async fn post_lock_commit_finalize(
 pub fn anchor_manifest_candidate_urls(
     base_url: &str,
     anchor_hex: &str,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<String>, SyncClientError> {
     if !is_lower_hex_exact(anchor_hex, 64) {
-        return Err(format!(
+        return Err(SyncClientError::LocalValidation(format!(
             "Invalid anchor_hex '{}': expected 64 lowercase hex chars",
             anchor_hex
-        ));
+        )));
     }
     let trimmed = validated_sync_url(base_url)?.trim_end_matches('/');
-    let parsed = reqwest::Url::parse(trimmed)
-        .map_err(|e| format!("Invalid Sync URL '{}': {}", base_url, e))?;
+    let parsed = reqwest::Url::parse(trimmed).map_err(|e| {
+        SyncClientError::LocalValidation(format!("Invalid Sync URL '{}': {}", base_url, e))
+    })?;
     let Some(host) = parsed.host_str() else {
-        return Err(format!("Sync URL missing host: '{}'", base_url));
+        return Err(SyncClientError::LocalValidation(format!(
+            "Sync URL missing host: '{}'",
+            base_url
+        )));
     };
     let port_part = parsed.port().map(|p| format!(":{}", p)).unwrap_or_default();
     let origin = format!("{}://{}{}", parsed.scheme(), host, port_part);
@@ -2324,10 +2624,10 @@ pub fn anchor_manifest_candidate_urls(
         urls.push(format!("{}{}/anchors/{}.bin", origin, parent, anchor_hex));
     } else {
         if parsed.query().is_some() {
-            return Err(format!(
+            return Err(SyncClientError::LocalValidation(format!(
                 "Sync read URL must not contain a query string: '{}'",
                 base_url
-            ));
+            )));
         }
         let read_path = path_trimmed
             .strip_suffix("/locks")
@@ -2347,7 +2647,7 @@ pub async fn fetch_anchor_manifest_bin(
     client: &reqwest::Client,
     base_url: &str,
     anchor_id: &[u8; 32],
-) -> Result<Option<AnchorManifest>, String> {
+) -> Result<Option<AnchorManifest>, SyncClientError> {
     let anchor_hex = hex::encode(anchor_id);
     let urls = anchor_manifest_candidate_urls(base_url, &anchor_hex)?;
     for url in urls {
@@ -2387,17 +2687,18 @@ pub async fn fetch_static_lock_entry(
     client: &reqwest::Client,
     read_url: &str,
     rel_path: &str,
-) -> Result<Option<LockEntry>, String> {
+) -> Result<Option<LockEntry>, SyncClientError> {
     validate_sync_read_url(read_url)?;
     let base = normalize_lock_read_base(read_url);
     let clean_rel = validate_static_lock_rel_path(rel_path)?;
     let url = format!("{}/locks/{}", base, clean_rel);
 
-    let resp = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| format!("Network error fetching static lock '{}': {}", url, e))?;
+    let resp = client.get(&url).send().await.map_err(|e| {
+        SyncClientError::Transport(format!(
+            "Network error fetching static lock '{}': {}",
+            url, e
+        ))
+    })?;
 
     if resp.status().as_u16() == 404 {
         return Ok(None);
@@ -2407,14 +2708,15 @@ pub async fn fetch_static_lock_entry(
     let bytes =
         read_response_bytes_bounded(resp, LOCK_ENTRY_WIRE_LEN, "reading static lock bytes").await?;
     if bytes.len() != LOCK_ENTRY_WIRE_LEN {
-        return Err(format!(
+        return Err(SyncClientError::InvalidPayload(format!(
             "Invalid static lock entry size {} bytes (expected {} bytes)",
             bytes.len(),
             LOCK_ENTRY_WIRE_LEN
-        ));
+        )));
     }
-    let entry = LockEntry::from_wire_bytes(&bytes)
-        .map_err(|e| format!("Corrupt static lock entry bytes: {}", e))?;
+    let entry = LockEntry::from_wire_bytes(&bytes).map_err(|e| {
+        SyncClientError::InvalidPayload(format!("Corrupt static lock entry bytes: {}", e))
+    })?;
     Ok(Some(entry))
 }
 
@@ -2441,15 +2743,63 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_retry_after_from_error_str() {
-        let err1 = "Rate limited by sync server (HTTP 429). Retry-After: 45s";
-        assert_eq!(extract_retry_after_from_error_str(err1), Some(45));
+    fn test_sync_client_error_helpers_and_display() {
+        let rate_err = SyncClientError::RateLimited {
+            status: 429,
+            retry_after_secs: 45,
+            context: "by sync server".to_string(),
+            snippet: String::new(),
+        };
+        assert_eq!(rate_err.retry_after_secs(), Some(45));
+        assert_eq!(rate_err.http_status(), Some(429));
+        assert!(rate_err.is_rate_limited());
+        assert!(!rate_err.is_local_validation());
+        assert_eq!(
+            rate_err.to_string(),
+            "Rate limited by sync server (HTTP 429). Retry-After: 45s"
+        );
 
-        let err2 = "Server returned HTTP 429: Too Many Requests";
-        assert_eq!(extract_retry_after_from_error_str(err2), Some(60));
+        let clamped_zero = SyncClientError::RateLimited {
+            status: 429,
+            retry_after_secs: 0,
+            context: "fetching index".to_string(),
+            snippet: String::new(),
+        };
+        assert_eq!(clamped_zero.retry_after_secs(), Some(1));
+        assert_eq!(
+            clamped_zero.to_string(),
+            "Rate limited fetching index (HTTP 429). Retry-After: 1s"
+        );
 
-        let err3 = "Network timeout: connection refused";
-        assert_eq!(extract_retry_after_from_error_str(err3), None);
+        let clamped_max = SyncClientError::RateLimited {
+            status: 429,
+            retry_after_secs: 999_999,
+            context: "fetching index".to_string(),
+            snippet: String::new(),
+        };
+        assert_eq!(clamped_max.retry_after_secs(), Some(3600));
+
+        let http_500 = SyncClientError::HttpStatus {
+            status: 500,
+            retry_after_secs: None,
+            context: "fetching index".to_string(),
+            snippet: "Retry-After: 9999 HTTP 429".to_string(),
+        };
+        assert_eq!(http_500.retry_after_secs(), None);
+        assert_eq!(http_500.http_status(), Some(500));
+        assert!(!http_500.is_rate_limited());
+        assert!(!http_500.is_local_validation());
+
+        let local_err = SyncClientError::LocalValidation("bad input".to_string());
+        assert!(local_err.is_local_validation());
+        assert!(!local_err.is_rate_limited());
+        assert_eq!(local_err.http_status(), None);
+        assert_eq!(local_err.retry_after_secs(), None);
+
+        let transport_err = SyncClientError::Transport("connection refused".to_string());
+        assert!(!transport_err.is_local_validation());
+        assert_eq!(transport_err.retry_after_secs(), None);
+        assert_eq!(transport_err.http_status(), None);
     }
 
     #[tokio::test]
@@ -2459,13 +2809,15 @@ mod tests {
         let err_short = get_media_blob(&client, "https://example.com/sync", "abc")
             .await
             .unwrap_err();
-        assert!(err_short.contains("Invalid blob_id"));
+        assert!(err_short.is_local_validation());
+        assert!(err_short.to_string().contains("Invalid blob_id"));
 
         // Invalid characters (uppercase or non-hex)
         let err_chars = get_media_blob(&client, "https://example.com/sync", &"G".repeat(64))
             .await
             .unwrap_err();
-        assert!(err_chars.contains("Invalid blob_id"));
+        assert!(err_chars.is_local_validation());
+        assert!(err_chars.to_string().contains("Invalid blob_id"));
     }
 
     #[test]
@@ -2832,17 +3184,20 @@ mod tests {
     #[test]
     fn test_rate_limit_error_and_header_helpers() {
         let mut hdrs = reqwest::header::HeaderMap::new();
+        let default_err = rate_limit_error("fetching index", &hdrs);
+        assert_eq!(default_err.retry_after_secs(), Some(60));
         assert_eq!(
-            rate_limit_error("fetching index", &hdrs),
+            default_err.to_string(),
             "Rate limited fetching index (HTTP 429). Retry-After: 60s"
         );
         hdrs.insert(reqwest::header::RETRY_AFTER, "42".parse().unwrap());
-        let formatted = rate_limit_error("fetching index", &hdrs);
+        let parsed_err = rate_limit_error("fetching index", &hdrs);
+        assert_eq!(parsed_err.retry_after_secs(), Some(42));
+        assert!(parsed_err.is_rate_limited());
         assert_eq!(
-            formatted,
+            parsed_err.to_string(),
             "Rate limited fetching index (HTTP 429). Retry-After: 42s"
         );
-        assert_eq!(extract_retry_after_from_error_str(&formatted), Some(42));
 
         let client = create_sync_http_client();
         let signed = SignedDropHeaders {
@@ -2941,18 +3296,21 @@ mod tests {
         let r413 = put_slot(&client, &write_url, &signed, "card", b"abc", None)
             .await
             .unwrap_err();
-        assert!(r413.contains("HTTP 413"));
+        assert_eq!(r413.http_status(), Some(413));
+        assert!(r413.to_string().contains("HTTP 413"));
 
         let r429 = put_slot(&client, &write_url, &signed, "card", b"abc", None)
             .await
             .unwrap_err();
-        assert_eq!(extract_retry_after_from_error_str(&r429), Some(17));
-        assert!(r429.contains("(HTTP 429). Retry-After: 17s"));
+        assert!(r429.is_rate_limited());
+        assert_eq!(r429.retry_after_secs(), Some(17));
+        assert!(r429.to_string().contains("(HTTP 429). Retry-After: 17s"));
 
         let r507 = put_slot(&client, &write_url, &signed, "card", b"abc", None)
             .await
             .unwrap_err();
-        assert!(r507.contains("HTTP 507"));
+        assert_eq!(r507.http_status(), Some(507));
+        assert!(r507.to_string().contains("HTTP 507"));
 
         let r204 = put_slot(&client, &write_url, &signed, "card", b"abc", None)
             .await
@@ -3198,8 +3556,9 @@ mod tests {
         )
         .await
         .unwrap_err();
+        assert_eq!(err_pow.http_status(), Some(403));
         assert!(
-            err_pow.contains("403"),
+            err_pow.to_string().contains("403"),
             "expected HTTP 403, got: {}",
             err_pow
         );
@@ -3299,46 +3658,43 @@ mod tests {
         assert_eq!(parse_retry_after(&hdrs), 3600);
 
         // HTTP 500 embedding attacker-controlled Retry-After / HTTP 429 text must NOT trigger cooldown
-        assert_eq!(
-            extract_retry_after_from_error_str(
-                "Server returned HTTP 500 fetching index: Retry-After: 9999 HTTP 429"
-            ),
-            None
-        );
-        assert_eq!(
-            extract_retry_after_from_error_str(
-                "Lock server https://evil.example/sync.php returned HTTP 500: HTTP 429 Retry-After: 900"
-            ),
-            None
-        );
+        let spoofed_500 = SyncClientError::HttpStatus {
+            status: 500,
+            retry_after_secs: None,
+            context: "fetching index".to_string(),
+            snippet: "Retry-After: 9999 HTTP 429".to_string(),
+        };
+        assert_eq!(spoofed_500.retry_after_secs(), None);
+        assert!(!spoofed_500.is_rate_limited());
 
         // Network errors containing "429" in hex slot ID or port must NOT trigger false-positive cooldown
         let hex_with_429 = format!("{}429{}", "ab".repeat(15), "cd".repeat(16));
-        assert_eq!(
-            extract_retry_after_from_error_str(&format!(
-                "Network error fetching slot {} at https://sync.example.org:4290/d",
-                hex_with_429
-            )),
-            None
-        );
+        let net_err = SyncClientError::Transport(format!(
+            "Network error fetching slot {} at https://sync.example.org:4290/d",
+            hex_with_429
+        ));
+        assert_eq!(net_err.retry_after_secs(), None);
+        assert!(!net_err.is_rate_limited());
 
-        // Legitimate 429 strings remain parsed and clamped to 1..=3600
-        assert_eq!(
-            extract_retry_after_from_error_str(
-                "Rate limited fetching index (HTTP 429). Retry-After: 999999999s"
-            ),
-            Some(3600)
-        );
-        assert_eq!(
-            extract_retry_after_from_error_str(
-                "Rate limited fetching index (HTTP 429). Retry-After: 0s"
-            ),
-            Some(1)
-        );
-        assert_eq!(
-            extract_retry_after_from_error_str("Server returned HTTP 429 Too Many Requests"),
-            Some(60)
-        );
+        // Legitimate RateLimited variants clamp to 1..=3600 and preserve Display markers
+        let rl_high = SyncClientError::RateLimited {
+            status: 429,
+            retry_after_secs: 999_999_999,
+            context: "fetching index".to_string(),
+            snippet: String::new(),
+        };
+        assert_eq!(rl_high.retry_after_secs(), Some(3600));
+        assert!(rl_high.to_string().contains("HTTP 429"));
+        assert!(rl_high.to_string().contains("Retry-After: 3600s"));
+
+        let rl_zero = SyncClientError::RateLimited {
+            status: 429,
+            retry_after_secs: 0,
+            context: "fetching index".to_string(),
+            snippet: String::new(),
+        };
+        assert_eq!(rl_zero.retry_after_secs(), Some(1));
+        assert!(rl_zero.to_string().contains("Retry-After: 1s"));
     }
 
     fn headers_with(val: &str) -> reqwest::header::HeaderMap {
@@ -3411,8 +3767,15 @@ mod tests {
         let err1 = fetch_static_lock_entry(&client, &read_url, "2027-Q4/aa/oversized.lock")
             .await
             .unwrap_err();
+        assert!(matches!(
+            err1,
+            SyncClientError::ResponseTooLarge {
+                max_bytes: LOCK_ENTRY_WIRE_LEN,
+                ..
+            }
+        ));
         assert!(
-            err1.contains("exceeds maximum allowed size"),
+            err1.to_string().contains("exceeds maximum allowed size"),
             "unexpected error for Content-Length 606: {}",
             err1
         );
@@ -3421,33 +3784,53 @@ mod tests {
         let err2 = fetch_static_lock_entry(&client, &read_url, "2027-Q4/aa/chunked.lock")
             .await
             .unwrap_err();
+        assert!(matches!(
+            err2,
+            SyncClientError::ResponseTooLarge {
+                max_bytes: LOCK_ENTRY_WIRE_LEN,
+                ..
+            }
+        ));
         assert!(
-            err2.contains("exceeds maximum allowed size"),
+            err2.to_string().contains("exceeds maximum allowed size"),
             "unexpected error for chunked > 605: {}",
             err2
         );
 
         // 3. fetch_sync_info > 256 KiB rejected
         let err3 = fetch_sync_info(&client, &write_url).await.unwrap_err();
+        assert!(matches!(
+            err3,
+            SyncClientError::ResponseTooLarge {
+                max_bytes: MAX_JSON_META_BODY_BYTES,
+                ..
+            }
+        ));
         assert!(
-            err3.contains("exceeds maximum allowed size"),
+            err3.to_string().contains("exceeds maximum allowed size"),
             "unexpected error for oversized ?info: {}",
             err3
         );
 
         // 4. Error body truncated and sanitized of control chars
         let err4 = fetch_sync_info(&client, &write_url).await.unwrap_err();
-        assert!(err4.contains("HTTP 500"), "unexpected error: {}", err4);
+        assert_eq!(err4.http_status(), Some(500));
+        let err4_str = err4.to_string();
         assert!(
-            !err4.chars().any(|c| c.is_control()),
-            "error leaked control chars: {:?}",
-            err4
+            err4_str.contains("HTTP 500"),
+            "unexpected error: {}",
+            err4_str
         );
         assert!(
-            err4.len() <= 400,
+            !err4_str.chars().any(|c| c.is_control()),
+            "error leaked control chars: {:?}",
+            err4_str
+        );
+        assert!(
+            err4_str.len() <= 400,
             "error body was not truncated (len={}): {}",
-            err4.len(),
-            err4
+            err4_str.len(),
+            err4_str
         );
 
         server.await.unwrap();
@@ -3468,11 +3851,11 @@ mod tests {
             signature_hex: "cc".repeat(64),
         };
 
-        fn assert_validation_err<T: std::fmt::Debug>(res: Result<T, String>, ctx: &str) {
+        fn assert_validation_err<T: std::fmt::Debug>(res: Result<T, SyncClientError>, ctx: &str) {
             let err = res.expect_err(ctx);
             assert!(
-                !err.starts_with("Network error"),
-                "{}: expected input validation error, got network error '{}'",
+                err.is_local_validation(),
+                "{}: expected LocalValidation error, got '{}'",
                 ctx,
                 err
             );
@@ -3624,7 +4007,8 @@ mod tests {
         let r429 = list_index(&client, &read_url, None, None)
             .await
             .unwrap_err();
-        assert_eq!(extract_retry_after_from_error_str(&r429), Some(12));
+        assert!(r429.is_rate_limited());
+        assert_eq!(r429.retry_after_secs(), Some(12));
         server.await.unwrap();
 
         // 3. SlotAckReceipt rejects timestamp == 0, wrong expected_lock_pub, tampered etag, and accepts valid
@@ -3804,8 +4188,8 @@ mod tests {
         .await
         .unwrap_err();
         assert!(
-            !push_err.starts_with("Network error"),
-            "expected key validation error, got '{}'",
+            push_err.is_local_validation(),
+            "expected LocalValidation key error, got '{}'",
             push_err
         );
     }
@@ -3943,11 +4327,12 @@ mod tests {
         let err_429 = post_lock_batch(&client, &write_url, &batch_req)
             .await
             .unwrap_err();
-        assert_eq!(extract_retry_after_from_error_str(&err_429), Some(23));
+        assert_eq!(err_429.retry_after_secs(), Some(23));
+        assert!(err_429.is_rate_limited());
         let err_500 = post_lock_batch(&client, &write_url, &batch_req)
             .await
             .unwrap_err();
-        assert!(err_500.contains("HTTP 500"));
+        assert_eq!(err_500.http_status(), Some(500));
 
         assert!(fetch_revocation_notice(&client, &read_url, &admin_pub)
             .await
@@ -3974,10 +4359,13 @@ mod tests {
         };
         delete_account(&client, &write_url, &signed).await.unwrap();
         delete_account(&client, &write_url, &signed).await.unwrap();
-        assert!(delete_account(&client, &write_url, &signed)
-            .await
-            .unwrap_err()
-            .contains("HTTP 500"));
+        assert_eq!(
+            delete_account(&client, &write_url, &signed)
+                .await
+                .unwrap_err()
+                .http_status(),
+            Some(500)
+        );
 
         server.await.unwrap();
 
@@ -4091,8 +4479,11 @@ mod tests {
             let err_rfc1918 = fetch_sync_info(client, "http://10.255.255.1/sync.php")
                 .await
                 .unwrap_err();
+            assert!(err_rfc1918.is_local_validation());
             assert!(
-                err_rfc1918.contains("blocked internal/private address"),
+                err_rfc1918
+                    .to_string()
+                    .contains("blocked internal/private address"),
                 "Expected SSRF rejection for private IP, got: {}",
                 err_rfc1918
             );
@@ -4100,8 +4491,11 @@ mod tests {
             let err_metadata = fetch_sync_info(client, "https://169.254.169.254/latest/meta-data")
                 .await
                 .unwrap_err();
+            assert!(err_metadata.is_local_validation());
             assert!(
-                err_metadata.contains("blocked internal/private address"),
+                err_metadata
+                    .to_string()
+                    .contains("blocked internal/private address"),
                 "Expected SSRF rejection for link-local metadata IP, got: {}",
                 err_metadata
             );
@@ -4128,5 +4522,142 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err_private.kind(), std::io::ErrorKind::PermissionDenied);
+    }
+
+    #[tokio::test]
+    async fn s11_x4_get_media_blob_aborts_oversized_chunked_response() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut req_buf = [0u8; 2048];
+            let _ = stream.read(&mut req_buf).await;
+            let _ = stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nTransfer-Encoding: chunked\r\n\r\n",
+                )
+                .await;
+            // Stream 200 KiB in 16 KiB chunks without Content-Length
+            let chunk = vec![0x5Au8; 16 * 1024];
+            let chunk_hdr = format!("{:x}\r\n", chunk.len());
+            for _ in 0..13 {
+                if stream.write_all(chunk_hdr.as_bytes()).await.is_err()
+                    || stream.write_all(&chunk).await.is_err()
+                    || stream.write_all(b"\r\n").await.is_err()
+                {
+                    break;
+                }
+            }
+            let _ = stream.write_all(b"0\r\n\r\n").await;
+        });
+
+        let client = create_sync_http_client();
+        let read_url = format!("http://127.0.0.1:{}/d-test", addr.port());
+        let blob_id = "cc".repeat(32);
+        let err = get_media_blob(&client, &read_url, &blob_id)
+            .await
+            .expect_err(
+                "oversized chunked media response (> MAX_MEDIA_BLOB_BODY_BYTES) must abort",
+            );
+        assert!(
+            matches!(
+                err,
+                SyncClientError::ResponseTooLarge {
+                    max_bytes: MAX_MEDIA_BLOB_BODY_BYTES,
+                    ..
+                }
+            ),
+            "expected ResponseTooLarge with MAX_MEDIA_BLOB_BODY_BYTES, got: {:?}",
+            err
+        );
+        server.await.unwrap();
+    }
+
+    #[test]
+    fn s11_x4_worst_case_sealed_media_fits_within_media_slot_limit() {
+        let sk = SigningKey::from_bytes(&[91u8; 32]);
+        let owner_did =
+            human_money_core::crypto::create_user_id(&sk.verifying_key(), None).unwrap();
+        let mut max_png = vec![0u8; humoco_market::MAX_AD_MEDIA_BYTES];
+        // Minimal valid 1x1 PNG header + IHDR chunk (33 bytes) padded to MAX_AD_MEDIA_BYTES.
+        max_png[0..8].copy_from_slice(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]);
+        max_png[8..12].copy_from_slice(&13u32.to_be_bytes());
+        max_png[12..16].copy_from_slice(b"IHDR");
+        max_png[16..20].copy_from_slice(&1u32.to_be_bytes());
+        max_png[20..24].copy_from_slice(&1u32.to_be_bytes());
+        let (_token, _blob_id, sealed) =
+            humoco_market::seal_media_blob(&owner_did, &max_png).unwrap();
+        assert!(
+            sealed.len() <= MAX_MEDIA_BLOB_BODY_BYTES,
+            "sealed max-size media blob ({} B) exceeds MAX_MEDIA_BLOB_BODY_BYTES ({} B)",
+            sealed.len(),
+            MAX_MEDIA_BLOB_BODY_BYTES
+        );
+    }
+
+    #[tokio::test]
+    async fn test_fetch_text_bounded_handles_success_ssrf_http_size_and_utf8() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let client = create_sync_http_client();
+
+        // 1. SSRF / LocalValidation
+        let ssrf_err = fetch_text_bounded(
+            &client,
+            "http://10.0.0.1/provider.json",
+            1024,
+            "provider filter",
+        )
+        .await
+        .unwrap_err();
+        assert!(ssrf_err.is_local_validation());
+
+        // 2. Local server responses: 200 UTF-8, 429, chunked > max_bytes, invalid UTF-8
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let responses: Vec<Vec<u8>> = vec![
+                b"HTTP/1.1 200 OK\r\nContent-Length: 11\r\n\r\n{\"ok\":true}".to_vec(),
+                b"HTTP/1.1 429 Too Many Requests\r\nRetry-After: 45\r\nContent-Length: 4\r\n\r\nslow".to_vec(),
+                b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n10\r\n0123456789abcdef\r\n10\r\n0123456789abcdef\r\n0\r\n\r\n".to_vec(),
+                b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\n\xff\xfe\xfd".to_vec(),
+            ];
+            for body in responses {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut req_buf = [0u8; 1024];
+                let _ = stream.read(&mut req_buf).await;
+                let _ = stream.write_all(&body).await;
+            }
+        });
+
+        let url = format!("http://127.0.0.1:{}/provider.json", addr.port());
+
+        let ok_body = fetch_text_bounded(&client, &url, 20, "provider filter")
+            .await
+            .unwrap();
+        assert_eq!(ok_body, "{\"ok\":true}");
+
+        let err_429 = fetch_text_bounded(&client, &url, 20, "provider filter")
+            .await
+            .unwrap_err();
+        assert!(err_429.is_rate_limited());
+        assert_eq!(err_429.retry_after_secs(), Some(45));
+
+        let err_large = fetch_text_bounded(&client, &url, 20, "provider filter")
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err_large,
+            SyncClientError::ResponseTooLarge { max_bytes: 20, .. }
+        ));
+
+        let err_utf8 = fetch_text_bounded(&client, &url, 20, "provider filter")
+            .await
+            .unwrap_err();
+        assert!(matches!(err_utf8, SyncClientError::InvalidPayload(_)));
+
+        server.await.unwrap();
     }
 }

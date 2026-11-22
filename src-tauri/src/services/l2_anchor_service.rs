@@ -1207,12 +1207,15 @@ async fn mint_and_register_committee(
                         ),
                     )
                     .await
-                    .map_err(|_| "GenesisTicket request timeout".to_string())
+                    .map_err(|_| {
+                        sync_client::SyncClientError::Transport(
+                            "GenesisTicket request timeout".to_string(),
+                        )
+                    })
                     .and_then(|r| r);
 
-                    if let Err(ref err_msg) = res {
-                        let is_auth_reject =
-                            err_msg.contains("HTTP 401") || err_msg.contains("HTTP 403");
+                    if let Err(ref sync_err) = res {
+                        let is_auth_reject = matches!(sync_err.http_status(), Some(401 | 403));
                         if is_auth_reject
                             && allow_pow
                             && pow_bits <= MAX_AUTO_POW_TICKET_BITS
@@ -1231,7 +1234,11 @@ async fn mint_and_register_committee(
                                 ),
                             )
                             .await
-                            .map_err(|_| "GenesisTicket PoW fallback timeout".to_string())
+                            .map_err(|_| {
+                                sync_client::SyncClientError::Transport(
+                                    "GenesisTicket PoW fallback timeout".to_string(),
+                                )
+                            })
                             .and_then(|r| r);
                             if fallback_res.is_ok() {
                                 active_auth = fallback_auth;
@@ -1252,9 +1259,9 @@ async fn mint_and_register_committee(
                         succeeded_indexed.push((idx, ticket));
                         surviving_indexed.push((idx, (srv, auth, allow_pow, pow_bits)));
                     }
-                    Ok((_, srv, _, _, _, Err(err_msg))) => {
+                    Ok((_, srv, _, _, _, Err(sync_err))) => {
                         had_failure = true;
-                        failed_servers.push((hex::encode(srv.lock_pub), err_msg));
+                        failed_servers.push((hex::encode(srv.lock_pub), sync_err.to_string()));
                     }
                     Err(_) => {
                         had_failure = true;

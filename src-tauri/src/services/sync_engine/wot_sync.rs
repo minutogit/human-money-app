@@ -230,7 +230,7 @@ struct WotUploadState<'a> {
     force_upload: bool,
     sync_state: &'a mut StoredSyncState,
     uploaded_to: &'a mut usize,
-    errors: &'a mut Vec<String>,
+    errors: &'a mut super::SyncErrorTracker,
     committed_receipts: Vec<humoco_wot::DropSyncReceipt>,
     cleared_drop_urls: Vec<String>,
 }
@@ -403,11 +403,12 @@ async fn upload_wot_subpackages_to_target(
                                         ));
                                     }
                                     Err(e) => {
-                                        ctx.state.record_origin_cooldown_if_429(
+                                        ctx.state.record_origin_cooldown_for_sync_error(
                                             &drop_desc.write_url,
                                             &e,
                                         );
-                                        if e.contains("HTTP 413") {
+                                        ctx.errors.record_retry_after(e.retry_after_secs());
+                                        if e.http_status() == Some(413) {
                                             ctx.sync_state.channel_max_bytes_by_write_url.remove(
                                                 &channel_max_bytes_key(&drop_desc.write_url, "wot"),
                                             );
@@ -588,17 +589,20 @@ async fn upload_wot_tombstones_only(
                                 ));
                             }
                             Err(e) => {
-                                if e.contains("HTTP 413") {
+                                if e.http_status() == Some(413) {
                                     ctx.sync_state.channel_max_bytes_by_write_url.remove(
                                         &channel_max_bytes_key(&drop_desc.write_url, "wot"),
                                     );
                                 }
-                                ctx.state
-                                    .record_origin_cooldown_if_429(&drop_desc.write_url, &e);
-                                ctx.errors.push(format!(
-                                    "Upload wot tombstone to {}: {}",
-                                    drop_desc.write_url, e
-                                ));
+                                ctx.errors.record_sync_error(
+                                    ctx.state,
+                                    &drop_desc.write_url,
+                                    &e,
+                                    format!(
+                                        "Upload wot tombstone to {}: {}",
+                                        drop_desc.write_url, e
+                                    ),
+                                );
                             }
                         }
                     }
@@ -681,12 +685,15 @@ async fn delete_unshared_wot_slots(
                             .remove(&norm_write_url);
                     }
                     Err(e) => {
-                        ctx.state
-                            .record_origin_cooldown_if_429(&drop_desc.write_url, &e);
-                        ctx.errors.push(format!(
-                            "Failed to delete unshared WoT slot on {}: {}",
-                            drop_desc.write_url, e
-                        ));
+                        ctx.errors.record_sync_error(
+                            ctx.state,
+                            &drop_desc.write_url,
+                            &e,
+                            format!(
+                                "Failed to delete unshared WoT slot on {}: {}",
+                                drop_desc.write_url, e
+                            ),
+                        );
                     }
                 }
             }
@@ -716,7 +723,7 @@ pub(crate) async fn sync_wot_upload_channel(
     password: Option<&str>,
     sync_state: &mut StoredSyncState,
     uploaded_to: &mut usize,
-    errors: &mut Vec<String>,
+    errors: &mut super::SyncErrorTracker,
 ) -> WotSyncUploadOutcome {
     let wot_upload_targets = collect_upload_targets_for_channel(security_policy, "wot");
     let ctx_data =

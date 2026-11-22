@@ -321,6 +321,9 @@ async fn probe_single_contact_endpoint(
     match sync_client::fetch_sync_info(client, &canonical_write).await {
         Err(e) => {
             log::warn!("Sync probe ?info failed for {}: {}", canonical_write, e);
+            if e.is_local_validation() {
+                return false;
+            }
             if ep.status != "revoked" && ep.status != "deprecating" {
                 ep.status = "unreachable".to_string();
             }
@@ -1131,7 +1134,7 @@ async fn delete_stale_card_slots(
     upload_targets: &[humoco_market::DropDescriptor],
     now_secs: u64,
     sync_state: &mut StoredSyncState,
-    errors: &mut Vec<String>,
+    errors: &mut super::SyncErrorTracker,
 ) -> bool {
     let delta_prefix = humoco_market::derive_delta_prefix(id_ctx.my_prefix.as_deref());
     let mut all_targets_succeeded = true;
@@ -1173,13 +1176,17 @@ async fn delete_stale_card_slots(
                         sync_client::delete_slot(client, &drop_desc.write_url, &signed, "card")
                             .await
                     {
-                        state.record_origin_cooldown_if_429(&drop_desc.write_url, &e);
                         target_ok = false;
                         all_targets_succeeded = false;
-                        errors.push(format!(
-                            "Failed to delete stale card slot on {}: {}",
-                            drop_desc.write_url, e
-                        ));
+                        errors.record_sync_error(
+                            state,
+                            &drop_desc.write_url,
+                            &e,
+                            format!(
+                                "Failed to delete stale card slot on {}: {}",
+                                drop_desc.write_url, e
+                            ),
+                        );
                     }
                 }
                 Err(e) => {
@@ -1230,7 +1237,7 @@ pub(crate) async fn sync_card_upload_channel(
     password: Option<&str>,
     sync_state: &mut StoredSyncState,
     uploaded_to: &mut usize,
-    errors: &mut Vec<String>,
+    errors: &mut super::SyncErrorTracker,
 ) -> Option<HashSet<String>> {
     if !ui_prefs.market_sync_enabled {
         return None;
@@ -1600,7 +1607,7 @@ pub(crate) async fn sync_card_upload_channel(
                                             ));
                                         }
                                         Err(e) => {
-                                            if e.contains("HTTP 413") {
+                                            if e.http_status() == Some(413) {
                                                 sync_state.channel_max_bytes_by_write_url.remove(
                                                     &super::channel_reader::channel_max_bytes_key(
                                                         &drop_desc.write_url,
@@ -1608,15 +1615,16 @@ pub(crate) async fn sync_card_upload_channel(
                                                     ),
                                                 );
                                             }
-                                            state.record_origin_cooldown_if_429(
+                                            any_card_failed = true;
+                                            errors.record_sync_error(
+                                                state,
                                                 &drop_desc.write_url,
                                                 &e,
+                                                format!(
+                                                    "Upload delta to {}: {}",
+                                                    drop_desc.write_url, e
+                                                ),
                                             );
-                                            any_card_failed = true;
-                                            errors.push(format!(
-                                                "Upload delta to {}: {}",
-                                                drop_desc.write_url, e
-                                            ));
                                         }
                                     }
                                 }
@@ -1705,7 +1713,7 @@ pub(crate) async fn sync_card_upload_channel(
                                                     ));
                                                 }
                                                 Err(e) => {
-                                                    if e.contains("HTTP 413") {
+                                                    if e.http_status() == Some(413) {
                                                         sync_state
                                                             .channel_max_bytes_by_write_url
                                                             .remove(
@@ -1715,15 +1723,16 @@ pub(crate) async fn sync_card_upload_channel(
                                                                 ),
                                                             );
                                                     }
-                                                    state.record_origin_cooldown_if_429(
+                                                    any_card_failed = true;
+                                                    errors.record_sync_error(
+                                                        state,
                                                         &drop_desc.write_url,
                                                         &e,
+                                                        format!(
+                                                            "Upload to {}: {}",
+                                                            drop_desc.write_url, e
+                                                        ),
                                                     );
-                                                    any_card_failed = true;
-                                                    errors.push(format!(
-                                                        "Upload to {}: {}",
-                                                        drop_desc.write_url, e
-                                                    ));
                                                 }
                                             }
                                         }

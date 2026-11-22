@@ -79,6 +79,47 @@ impl From<humoco_wot::WotError> for FrontendError {
     }
 }
 
+impl From<crate::sync_client::SyncClientError> for FrontendError {
+    fn from(error: crate::sync_client::SyncClientError) -> Self {
+        let message = error.to_string();
+        let mut details = HashMap::new();
+        let code = match &error {
+            crate::sync_client::SyncClientError::LocalValidation(_) => "error.sync.localValidation",
+            crate::sync_client::SyncClientError::Transport(_) => "error.sync.transport",
+            crate::sync_client::SyncClientError::RateLimited {
+                status,
+                retry_after_secs,
+                ..
+            } => {
+                details.insert("status".to_string(), status.to_string());
+                details.insert("retryAfterSecs".to_string(), retry_after_secs.to_string());
+                "error.sync.rateLimited"
+            }
+            crate::sync_client::SyncClientError::HttpStatus {
+                status,
+                retry_after_secs,
+                ..
+            } => {
+                details.insert("status".to_string(), status.to_string());
+                if let Some(secs) = retry_after_secs {
+                    details.insert("retryAfterSecs".to_string(), secs.to_string());
+                }
+                "error.sync.httpStatus"
+            }
+            crate::sync_client::SyncClientError::ResponseTooLarge { max_bytes, .. } => {
+                details.insert("maxBytes".to_string(), max_bytes.to_string());
+                "error.sync.responseTooLarge"
+            }
+            crate::sync_client::SyncClientError::InvalidPayload(_) => "error.sync.invalidPayload",
+        };
+        FrontendError {
+            code: code.to_string(),
+            message,
+            details,
+        }
+    }
+}
+
 impl From<human_money_core::app_service::AppFacadeError> for FrontendError {
     fn from(error: human_money_core::app_service::AppFacadeError) -> Self {
         let message = error.to_string();
