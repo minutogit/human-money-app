@@ -156,14 +156,29 @@ export const TOUR_STEPS = [
                         localInstanceId: 'inst_sample_01',
                         voucherId: MOCK_VOUCHER_ID,
                         standardName: 'Minuto',
-                        amountTransferred: '60.00'
+                        amount: '60.00',
+                        unit: 'Minuto',
+                        allowPartialTransfers: true,
+                        isTestVoucher: false,
+                        displayCurrency: 'Minuto',
+                        displayStandardName: 'Minuto Standard'
                     }
                 ],
+                checkoutVerdict: {
+                    outcome: 'Confirmed',
+                    canReleaseGoodsAutomatically: true,
+                    requiresMerchantApproval: false,
+                    isGoodsReleaseAuthorized: true,
+                    reducedGuarantorProtection: false,
+                    manifestRevision: 1
+                },
                 l2Quorum: {
-                    status: 'quorum_reached',
-                    confirmedNodes: 16,
-                    totalNodes: 20
-                }
+                    status: 'final',
+                    signerCount: 2,
+                    activeNodesCount: 3
+                },
+                newlyCommitted: true,
+                isReplay: false
             }
         }
     },
@@ -414,35 +429,47 @@ export function getTauriMockInitScript(initialScenario = 'normal') {
         }
     };
 
-    const MOCK_SETTINGS = {
-        autoLockMinutes: 15,
-        sessionTimeoutSeconds: 300,
-        devModeUnlocked: true,
-        privacyDefault: "ask",
-        preferredLanguage: "de",
-        shareMinLevel: 1,
-        mediaAutoLoadMaxHops: 2,
-        marketPollWifiOnly: false,
-        marketSyncEnabled: true,
-        wotShareViaSync: true,
-        postAcceptFromContacts: true,
-        syncBackupEnabled: true,
-        autoBackupEnabled: true,
-        uiMode: "simple",
-        customServers: [
-            { url: "https://l2-node1.humoco.org", name: "Frankfurt Shard #1", isActive: true },
-            { url: "https://l2-node2.humoco.org", name: "Zürich Shard #2", isActive: true },
-            { url: "https://l2-node3.humoco.org", name: "Wien Shard #3", isActive: true }
-        ],
-        regionalMeshSources: [],
-        marketSelectedSyncs: [
-            {
-                writeUrl: "https://sync-freiburg.humoco.org/write",
-                readUrl: "https://sync-freiburg.humoco.org/read",
-                dropPub: "drop_pub_freiburg_01"
-            }
-        ],
-        publicSyncs: []
+    const MOCK_APP_CONFIG = {
+        uiPreferences: {
+            uiMode: "simple",
+            lastUsedDirectory: "/home/user/.local/share/humoco",
+            balanceViewMode: "spendable",
+            marketShowUnknown: true,
+            maxStoredCards: 2000,
+            marketSendCardOnPayment: false,
+            marketSyncEnabled: true,
+            shareMinLevel: 1,
+            marketPollWifiOnly: false,
+            wotShareViaSync: true,
+            postAcceptFromContacts: true,
+            mediaAutoLoadMaxHops: 2
+        },
+        securityPolicy: {
+            sessionTimeoutSeconds: 300,
+            privacyDefault: "ask",
+            devModeUnlocked: true,
+            autoBackupEnabled: true,
+            syncBackupEnabled: true,
+            backupSyncFolder: "/home/user/.local/share/humoco/backups",
+            backupProtectionMode: "password",
+            lockTrustByAdminPub: {},
+            marketSelectedSyncs: [
+                {
+                    writeUrl: "https://sync-freiburg.humoco.org/write",
+                    readUrl: "https://sync-freiburg.humoco.org/read",
+                    dropPub: "drop_pub_freiburg_01",
+                    status: "active"
+                }
+            ],
+            publicSyncs: []
+        },
+        lifecycle: {
+            pendingRestoreL2Reconciliation: false,
+            backupDirty: false,
+            lastBackupAt: "2026-11-10T07:00:00Z",
+            lastSyncBackupAt: "2026-11-10T07:15:00Z",
+            walletSyncAlert: null
+        }
     };
 
     const MOCK_WOT_SUMMARY = {
@@ -457,9 +484,9 @@ export function getTauriMockInitScript(initialScenario = 'normal') {
 
     function detectMockReachPreset() {
         const wot = MOCK_WOT_SUMMARY.ownListMaxHops;
-        const share = MOCK_SETTINGS.shareMinLevel;
+        const share = MOCK_APP_CONFIG.uiPreferences.shareMinLevel;
         const card = MOCK_MY_MARKET_PROFILE.maxHops;
-        const media = MOCK_SETTINGS.mediaAutoLoadMaxHops;
+        const media = MOCK_APP_CONFIG.uiPreferences.mediaAutoLoadMaxHops;
         let preset = 'custom';
         if (wot === 1 && share === 2 && card === 1 && media === 1) preset = 'near';
         else if (wot === 2 && share === 1 && card === 2 && media === 2) preset = 'medium';
@@ -507,6 +534,7 @@ export function getTauriMockInitScript(initialScenario = 'normal') {
             displayCurrency: "Minuto",
             displayStandardName: "Minuto Standard",
             allowPartialTransfers: true,
+            hasLayer2Anchor: true,
             trust: {
                 score: 0.85,
                 trustPercent: 85,
@@ -537,6 +565,7 @@ export function getTauriMockInitScript(initialScenario = 'normal') {
             displayCurrency: "FreeTaler",
             displayStandardName: "FreeTaler Standard",
             allowPartialTransfers: true,
+            hasLayer2Anchor: false,
             trust: {
                 score: 0.60,
                 trustPercent: 60,
@@ -554,9 +583,12 @@ export function getTauriMockInitScript(initialScenario = 'normal') {
     const MOCK_VOUCHER_DETAILS = {
         localInstanceId: "inst_sample_01",
         status: "active",
+        currentAmount: "60",
         displayCurrency: "Minuto",
         displayStandardName: "Minuto Standard",
         isTestVoucher: false,
+        reducedGuarantorProtection: false,
+        manifestRevision: 1,
         trust: {
             score: 0.85,
             trustPercent: 85,
@@ -636,7 +668,8 @@ export function getTauriMockInitScript(initialScenario = 'normal') {
             addedAt: "2026-02-01T14:00:00Z",
             trustLevel: 2,
             desiredHops: 2,
-            hasPeerList: true
+            hasPeerList: true,
+            syncs: []
         },
         {
             did: MOCK_CAROL_DID,
@@ -653,7 +686,8 @@ export function getTauriMockInitScript(initialScenario = 'normal') {
             addedAt: "2026-03-10T09:30:00Z",
             trustLevel: 3,
             desiredHops: 3,
-            hasPeerList: true
+            hasPeerList: true,
+            syncs: []
         }
     ];
 
@@ -859,11 +893,17 @@ export function getTauriMockInitScript(initialScenario = 'normal') {
                     folderName: "alice_wallet",
                     profileName: "Alice Musterfrau",
                     userId: MOCK_USER_DID,
-                    createdAt: "2026-01-15T10:00:00Z",
-                    isPasswordProtected: true
+                    lastUsed: "2026-11-10T08:15:00Z"
                 }
             ];
         },
+        "get_profile_pin_status": () => ({
+            enabled: false,
+            scope: null,
+            failedAttempts: 0,
+            maxAttempts: 5,
+            remainingAttempts: 5
+        }),
         "get_user_profile": () => {
             if (window.__HUMOCO_SCENARIO__ === 'empty') return null;
             if (window.__HUMOCO_TOUR__) {
@@ -892,6 +932,7 @@ export function getTauriMockInitScript(initialScenario = 'normal') {
                 hasCachedSession,
                 accessMode: isUnlocked ? 'full' : 'locked',
                 baseAccessMode: isUnlocked ? 'full' : 'locked',
+                oneShotGrant: null
             };
         },
         "login": () => null,
@@ -901,16 +942,17 @@ export function getTauriMockInitScript(initialScenario = 'normal') {
             hasCachedSession: true,
             accessMode: 'full',
             baseAccessMode: 'full',
+            oneShotGrant: null
         }),
         "unlock_session_with_pin": () => ({
             isUnlocked: true,
             hasCachedSession: true,
             accessMode: 'dailyPay',
             baseAccessMode: 'dailyPay',
+            oneShotGrant: null
         }),
         "lock_session": () => null,
         "refresh_session_activity": () => null,
-        "update_user_profile": () => null,
         "create_profile": () => null,
         "delete_profile": () => null,
         "generate_mnemonic": () => "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
@@ -920,58 +962,119 @@ export function getTauriMockInitScript(initialScenario = 'normal') {
         "check_reputation": () => "clean",
         "handover_to_this_device": () => null,
 
-        // --- Settings ---
-        "get_settings": () => MOCK_SETTINGS,
-        "get_app_settings": () => MOCK_SETTINGS,
-        "save_settings": (args) => {
-            if (args && args.settings) Object.assign(MOCK_SETTINGS, args.settings);
-            return null;
+        // --- Settings & Sync-Lock Overview ---
+        "get_app_config": () => MOCK_APP_CONFIG,
+        "patch_ui_preferences": (args) => {
+            if (args?.patch) Object.assign(MOCK_APP_CONFIG.uiPreferences, args.patch);
+            return MOCK_APP_CONFIG.uiPreferences;
         },
-        "save_app_settings": (args) => {
-            if (args && args.settings) Object.assign(MOCK_SETTINGS, args.settings);
-            return null;
+        "patch_security_policy": (args) => {
+            if (args?.patch) Object.assign(MOCK_APP_CONFIG.securityPolicy, args.patch);
+            return MOCK_APP_CONFIG.securityPolicy;
         },
         "get_reach_preset": () => detectMockReachPreset(),
         "apply_reach_preset": (args) => {
             const p = args && args.preset;
             if (p === 'near') {
                 MOCK_WOT_SUMMARY.ownListMaxHops = 1;
-                MOCK_SETTINGS.shareMinLevel = 2;
+                MOCK_APP_CONFIG.uiPreferences.shareMinLevel = 2;
                 MOCK_MY_MARKET_PROFILE.maxHops = 1;
-                MOCK_SETTINGS.mediaAutoLoadMaxHops = 1;
+                MOCK_APP_CONFIG.uiPreferences.mediaAutoLoadMaxHops = 1;
             } else if (p === 'medium') {
                 MOCK_WOT_SUMMARY.ownListMaxHops = 2;
-                MOCK_SETTINGS.shareMinLevel = 1;
+                MOCK_APP_CONFIG.uiPreferences.shareMinLevel = 1;
                 MOCK_MY_MARKET_PROFILE.maxHops = 2;
-                MOCK_SETTINGS.mediaAutoLoadMaxHops = 2;
+                MOCK_APP_CONFIG.uiPreferences.mediaAutoLoadMaxHops = 2;
             } else if (p === 'far') {
                 MOCK_WOT_SUMMARY.ownListMaxHops = 3;
-                MOCK_SETTINGS.shareMinLevel = 1;
+                MOCK_APP_CONFIG.uiPreferences.shareMinLevel = 1;
                 MOCK_MY_MARKET_PROFILE.maxHops = 3;
-                MOCK_SETTINGS.mediaAutoLoadMaxHops = 2;
+                MOCK_APP_CONFIG.uiPreferences.mediaAutoLoadMaxHops = 2;
             } else {
                 throw new Error('Invalid reach preset: ' + p);
             }
             return detectMockReachPreset();
         },
         "get_wot_summary": () => MOCK_WOT_SUMMARY,
+        "get_wot_providers": () => [],
         "set_wot_max_hops": (args) => {
             if (args && typeof args.maxHops === 'number') {
                 MOCK_WOT_SUMMARY.ownListMaxHops = Math.min(3, Math.max(1, args.maxHops));
             }
             return MOCK_WOT_SUMMARY;
         },
-        "benchmark_l2_servers": () => [
-            { url: "https://l2-node1.humoco.org", latencyMs: 14, reachable: true },
-            { url: "https://l2-node2.humoco.org", latencyMs: 22, reachable: true },
-            { url: "https://l2-node3.humoco.org", latencyMs: 28, reachable: true }
-        ],
-        "refresh_regional_mesh_views": () => true,
+        "get_lock_protection_overview": () => ({
+            status: "ready",
+            readyTrustedCount: 3,
+            servers: [
+                {
+                    writeUrl: "https://sync-freiburg.humoco.org/sync.php",
+                    readUrl: "https://sync-freiburg.humoco.org/data",
+                    adminPub: "11".repeat(32),
+                    lockPub: "22".repeat(32),
+                    source: "circle",
+                    status: "ok",
+                    trusted: true,
+                    allowPowTickets: true,
+                    maxRetentionQuarter: 20294,
+                    probedAtSecs: Math.floor(Date.now() / 1000) - 120,
+                    error: null
+                }
+            ],
+            hasOfflineCachedAnchor: true,
+            unresolvedIntentsCount: 0,
+            pendingRestoreReconciliation: false,
+            expectedLockPubs: ["22".repeat(32)],
+            expectedThreshold: 1,
+            expectedSource: "live"
+        }),
         "check_voucher_l2_status": () => ({ status: "unspent", archived: false }),
+        "update_network_status": () => null,
 
         // --- Vouchers & Standards ---
-        "get_vouchers": () => window.__HUMOCO_SCENARIO__ === 'empty' ? [] : MOCK_VOUCHERS,
-        "get_voucher_list": () => window.__HUMOCO_SCENARIO__ === 'empty' ? [] : MOCK_VOUCHERS,
+        "get_total_balance_by_currency": () => window.__HUMOCO_SCENARIO__ === 'empty' ? [] : [
+            {
+                standardName: "Minuto",
+                standardUuid: "std_minuto_de",
+                unit: "Minuto",
+                totalAmount: "60",
+                displayCurrency: "Minuto",
+                displayStandardName: "Minuto Standard",
+                isTestVoucher: false,
+                receivedAmount: "0",
+                ownAvailableAmount: "60",
+                ownCirculatingAmount: "0",
+                netBalance: "60"
+            },
+            {
+                standardName: "FreeTaler",
+                standardUuid: "std_freetaler_v1",
+                unit: "FreeTaler",
+                totalAmount: "120",
+                displayCurrency: "FreeTaler",
+                displayStandardName: "FreeTaler Standard",
+                isTestVoucher: false,
+                receivedAmount: "120",
+                ownAvailableAmount: "0",
+                ownCirculatingAmount: "0",
+                netBalance: "120"
+            }
+        ],
+        "get_voucher_summaries": () => window.__HUMOCO_SCENARIO__ === 'empty' ? [] : MOCK_VOUCHERS,
+        "get_active_asset_classes": () => window.__HUMOCO_SCENARIO__ === 'empty' ? [] : [
+            {
+                standardUuid: "std_minuto_de",
+                isTestVoucher: false,
+                displayStandardName: "Minuto Standard",
+                displayCurrency: "Minuto"
+            },
+            {
+                standardUuid: "std_freetaler_v1",
+                isTestVoucher: false,
+                displayStandardName: "FreeTaler Standard",
+                displayCurrency: "FreeTaler"
+            }
+        ],
         "get_voucher_details": () => MOCK_VOUCHER_DETAILS,
         "get_voucher_standards": () => window.__HUMOCO_SCENARIO__ === 'empty' ? [] : MOCK_STANDARDS,
         "parse_standard_toml": () => ({
@@ -994,31 +1097,52 @@ export function getTauriMockInitScript(initialScenario = 'normal') {
             resolvedRules: ["Standard rule verified"],
             gentleHints: ["Empfohlene Bürgenanzahl erreicht"]
         }),
+        "evaluate_guarantor_anchor_check": () => ({
+            required: false,
+            passed: true,
+            hasLayer2Anchor: false,
+            retentionOk: true,
+            sybilIndependentCount: 0,
+            threshold: 0,
+            serverCount: 0,
+            untrustedServersCount: 0,
+            unverifiedDelegationsCount: 0,
+            offenderCheckUnverified: false,
+            servers: [],
+            issues: []
+        }),
         "export_voucher_standard": () => [1, 2, 3, 4],
         "inspect_voucher_standard_file": () => ({}),
-        "install_voucher_standard": () => null,
 
         // --- Transactions & Activities ---
-        "get_transactions": () => window.__HUMOCO_SCENARIO__ === 'empty' ? [] : [
-            {
-                tId: "tx_transfer_001",
-                tType: "transferSent",
-                tTime: "2026-11-08T14:30:00Z",
-                senderId: MOCK_USER_DID,
-                recipientId: MOCK_RECIPIENT_DID,
-                amount: "60",
-                displayCurrency: "Minuto"
-            },
-            {
-                tId: "tx_transfer_002",
-                tType: "transferReceived",
-                tTime: "2026-11-07T11:15:00Z",
-                senderId: MOCK_CAROL_DID,
-                recipientId: MOCK_USER_DID,
-                amount: "10",
-                displayCurrency: "FreeTaler"
-            }
-        ],
+        "prepare_transfer_plan": (args) => {
+            const target = args?.targetAmount || "60";
+            return {
+                selected: window.__HUMOCO_SCENARIO__ === 'empty' ? [] : [
+                    {
+                        localInstanceId: "inst_sample_01",
+                        score: 95,
+                        breakdown: {
+                            sBoomerang: 10,
+                            sEigen: 20,
+                            sCorridor: 15,
+                            sAge: 10,
+                            sChain: 15,
+                            sFit: 25,
+                            sWot: 15
+                        },
+                        reason: "exactMatch",
+                        amount: target,
+                        standardUuid: args?.standardUuidFilter || "std_minuto_de"
+                    }
+                ],
+                totalSelected: window.__HUMOCO_SCENARIO__ === 'empty' ? "0" : target,
+                target,
+                needsSplit: false,
+                planReason: "exactMatch",
+                minRecipientTrustPercent: 60
+            };
+        },
         "get_transaction_history": () => window.__HUMOCO_SCENARIO__ === 'empty' ? [] : [
             {
                 id: "tx_transfer_001",
@@ -1045,7 +1169,7 @@ export function getTauriMockInitScript(initialScenario = 'normal') {
                 notes: "Bio-Äpfel Lieferung"
             }
         ],
-        "get_events": () => window.__HUMOCO_SCENARIO__ === 'empty' ? [] : [
+        "get_event_history": () => window.__HUMOCO_SCENARIO__ === 'empty' ? [] : [
             {
                 eventId: "ev_01",
                 localInstanceId: "inst_sample_01",
@@ -1056,7 +1180,22 @@ export function getTauriMockInitScript(initialScenario = 'normal') {
                     displayCurrency: "Minuto",
                     amount: "60",
                     isTestVoucher: false,
+                    counterpartyId: MOCK_RECIPIENT_DID,
                     counterpartyName: "Bob Baumeister"
+                }
+            },
+            {
+                eventId: "ev_02",
+                localInstanceId: "inst_sample_02",
+                voucherId: "v_sample_freetaler_02",
+                timestamp: "2026-11-07T11:15:00Z",
+                eventType: "transferReceived",
+                bffData: {
+                    displayCurrency: "FreeTaler",
+                    amount: "10",
+                    isTestVoucher: false,
+                    counterpartyId: MOCK_CAROL_DID,
+                    counterpartyName: "Carol Kranz"
                 }
             }
         ],
@@ -1121,16 +1260,35 @@ export function getTauriMockInitScript(initialScenario = 'normal') {
             MOCK_MY_MARKET_PROFILE.ads = MOCK_MY_MARKET_PROFILE.ads.filter(a => a.id !== args?.id);
             return MOCK_MY_MARKET_PROFILE;
         },
-        "export_forward_card": () => ({ exportPayload: "humoco://card/alice_payload", targetDid: MOCK_USER_DID }),
-        "import_contact_card": () => ({ did: MOCK_CAROL_DID, importedCount: 1 }),
-        "preview_contact_trust_change": () => ({ scoreDelta: 0.25, newLevel: 3, bottlenecks: [] }),
+        "get_ad_image": () => null,
+        "export_forward_card": () => ({
+            did: MOCK_USER_DID,
+            envelopeJson: "{}",
+            shareUri: "humoco://card/alice_payload",
+            qrSvg: null
+        }),
+        "import_contact_card": () => ({ status: "imported", did: MOCK_CAROL_DID, replaced: false }),
+        "preview_contact_trust_change": () => ({
+            canReadMyMarketBefore: true,
+            canReadMyMarketAfter: true,
+            canReadMyWotBefore: true,
+            canReadMyWotAfter: true,
+            canWriteMySyncBefore: true,
+            canWriteMySyncAfter: true,
+            canSendMePostBefore: true,
+            canSendMePostAfter: true
+        }),
 
         // --- Sync Services & Relays ---
         "get_sync_overview_status": () => ({
-            configuredCount: 2,
-            activeCount: 2,
-            pendingItemsCount: 0,
-            lastSyncTimestamp: "2026-11-10T08:15:00Z"
+            connectedCount: 2,
+            pendingCount: 0,
+            friendSyncs: 1,
+            publicSyncs: 1,
+            hasOwnSync: true,
+            lastSyncAt: Math.floor(Date.now() / 1000) - 300,
+            pendingAuthCount: 0,
+            failingCount: 0
         }),
         "get_sync_admin_status": () => ({
             descriptor: {
@@ -1140,25 +1298,43 @@ export function getTauriMockInitScript(initialScenario = 'normal') {
                 slotId: "slot_admin_01"
             },
             adminPubkey: "pubkey_admin_01",
-            generation: 1,
             dataDir: "/home/user/.local/share/humoco/sync",
             maxMembers: 10,
             maxTotalStorageMb: 250,
+            maxUserStorageMb: 25,
             usedBytes: 131072,
             maxBytes: 262144000,
             softWarning: false,
             cardPolicy: {
-                kind: "friendsAndContacts"
+                directMin: 2,
+                hop2Enabled: true,
+                bridgeMin: 2,
+                hop2Min: 2
             },
             allow: [],
-            totalMemberCount: 3
+            totalMemberCount: 3,
+            revocation: null
         }),
         "prepare_sync_setup": () => ({ token: "setup_token_demo" }),
         "finalize_sync_setup": () => handlers["get_sync_admin_status"](),
-        "test_sync_connection": () => ({ success: true, latencyMs: 18, message: "Sync Relay OK" }),
+        "test_sync_connection": () => ({ success: true, message: "Sync Relay OK", writeOk: true, readOk: true }),
         "update_sync_admin_config": () => handlers["get_sync_admin_status"](),
-        "probe_public_sync": () => ({ name: "Public HuMoCo Relay Frankfurt", url: "https://sync.humoco.org", latencyMs: 18 }),
-        "save_public_sync": () => ({ name: "Public HuMoCo Relay Frankfurt", url: "https://sync.humoco.org" }),
+        "probe_public_sync": () => ({
+            writeUrl: "https://sync.humoco.org/sync.php",
+            readUrl: "https://sync.humoco.org/data",
+            dropPub: "drop_pub_public_01",
+            registerUrl: null,
+            accessPubkey: "access_pub_01",
+            authorizedChannels: ["card", "wot", "backup", "post"]
+        }),
+        "save_public_sync": () => ({
+            writeUrl: "https://sync.humoco.org/sync.php",
+            readUrl: "https://sync.humoco.org/data",
+            dropPub: "drop_pub_public_01",
+            registerUrl: null,
+            accessPubkey: "access_pub_public_01",
+            authorizedChannels: ["card", "wot", "backup", "post"]
+        }),
         "remove_public_sync": () => null,
         "delete_sync_admin": () => null,
         "discover_available_syncs": () => [
@@ -1167,23 +1343,39 @@ export function getTauriMockInitScript(initialScenario = 'normal') {
                     writeUrl: "https://sync-freiburg.humoco.org/write",
                     readUrl: "https://sync-freiburg.humoco.org/read",
                     dropPub: "drop_pub_freiburg_01",
-                    slotId: "slot_01"
+                    slotId: "slot_01",
+                    status: "active"
                 },
                 isAuthorized: true,
                 isSelected: true,
-                sourceLabel: "Freiburg Mesh Relay"
+                sourceLabel: "Freiburg Sync",
+                status: "active"
             }
         ],
         "set_selected_upload_syncs": () => [],
-        "sync_market_channels": () => ({ syncedProfilesCount: 2, newOffersCount: 1 }),
+        "sync_market_channels": () => ({
+            status: "completed",
+            uploadedTo: 1,
+            polledSyncs: 2,
+            decryptedSlots: 3,
+            importedCards: 2,
+            newAds: 1,
+            importedWotLists: 1,
+            errors: [],
+            retryAfterSecs: null,
+            revokedOwnSyncs: []
+        }),
 
         // --- Backup & Integrity ---
         "get_backup_status": () => ({
-            lastBackupTimestamp: "2026-11-10T07:00:00Z",
-            autoBackupEnabled: true,
-            storagePath: "/home/user/.local/share/humoco/backups",
-            totalBlobs: 42,
-            backupSizeKb: 256
+            status: "ok",
+            lastBackupAt: "2026-11-10T07:00:00Z",
+            backupDirty: false,
+            syncFolder: "/home/user/.local/share/humoco/backups",
+            changedBlobs: 0,
+            syncBackupEnabled: true,
+            lastSyncBackupAt: "2026-11-10T07:15:00Z",
+            hasAuthorizedSyncBackupTarget: true
         }),
         "probe_wallet_backup": () => ({
             sourceKind: "file",
@@ -1282,17 +1474,31 @@ export function getTauriMockInitScript(initialScenario = 'normal') {
 
         // --- Postbox & Messaging ---
         "get_post_inbox_summary": () => ({
-            totalPending: 1,
-            signingRequests: 1,
-            signaturesToAttach: 0,
-            wotHandshakes: 0,
-            marketInquiries: 0,
             pendingSignRequests: [],
             pendingWotHandshakes: [],
             inquiries: [],
-            unacknowledgedPayments: []
+            unacknowledgedPayments: [],
+            unsupportedMessages: [],
+            pendingTolerancePayments: []
         }),
-        "sync_post_channels": () => ({ fetchedItems: 1, processedItems: 1, errors: [] }),
+        "sync_post_channels": () => ({
+            uploadedTo: 1,
+            polledSyncs: 2,
+            importedPayments: 0,
+            importedReceipts: 0,
+            importedSignatures: 0,
+            newSignRequests: 1,
+            newWotHandshakes: 0,
+            importedWotLists: 0,
+            newInquiries: 0,
+            newInquiryMessages: 0,
+            newTolerancePayments: 0,
+            prunedBoxes: 0,
+            deferredOutboxBoxes: 0,
+            skippedWifiOnly: false,
+            errors: [],
+            retryAfterSecs: null
+        }),
         "send_signing_request_via_post": () => ({ success: true }),
         "reply_detached_signature_via_post": () => ({ success: true }),
         "accept_wot_handshake": () => ({ success: true }),
@@ -1460,7 +1666,7 @@ export function getTauriMockInitScript(initialScenario = 'normal') {
         "get_latest_logs": () => [
             "[INFO] HuMoCo Core v${APP_VERSION} initialized with strict L1 autonomy",
             "[INFO] SST V4 Trap verification: deterministic double-spend protection armed",
-            "[INFO] Connected to 3/3 configured L2 Collision Lock nodes (14/20 mesh quorum ready)",
+            "[INFO] Connected to 3/3 configured Sync-Lock servers (2/3 committee quorum ready)",
             "[DEBUG] Background PostBox poll: 1 pending item retrieved (latency 22ms)",
             "[DEBUG] Web of Trust SD-JWT sync completed: 2 contacts verified (depth=2)"
         ].join("\\n"),
@@ -1483,7 +1689,7 @@ export function getTauriMockInitScript(initialScenario = 'normal') {
     window.__TAURI_INTERNALS__ = {
         invoke: async function(cmd, args, options) {
             if (window.__HUMOCO_SCENARIO__ === 'error') {
-                const errorCommands = ['get_vouchers', 'get_voucher_details', 'get_contacts', 'get_market_view', 'get_my_market_profile', 'save_settings'];
+                const errorCommands = ['get_voucher_summaries', 'get_voucher_details', 'get_contacts', 'get_market_view', 'get_my_market_profile', 'get_app_config', 'patch_ui_preferences'];
                 if (errorCommands.includes(cmd)) {
                     const err = new Error("Simulated Backend Error in Scenario 'error'");
                     err.code = "error.mock.simulated";

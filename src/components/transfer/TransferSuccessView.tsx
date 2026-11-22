@@ -119,7 +119,7 @@ export function TransferSuccessView({
                 }
             }
         } catch (e) {
-            setRedepositError(stringifyError(e));
+            setRedepositError(translateError(e, t));
         } finally {
             setIsRedepositing(false);
         }

@@ -1380,7 +1380,7 @@ pub async fn save_public_sync_impl(
     )
     .await;
 
-    {
+    let final_enabled = {
         // Serialize SecurityPolicy + OwnMarketProfile RMW under market_op_lock, and drop it before
         // enqueue_guardian_locator_updates_if_configured (which acquires recovery_op_lock -> post_op_lock).
         let _market_guard = state.market_op_lock.lock().await;
@@ -1388,6 +1388,7 @@ pub async fn save_public_sync_impl(
             &auth.token,
             "Active wallet changed before public sync could be saved",
             |service| {
+                let now_secs = sync_client::current_unix_timestamp();
                 let mut stored = StoredPublicSync {
                     write_url: canonical_url.clone(),
                     read_url: norm_read_url.clone(),
@@ -1407,13 +1408,12 @@ pub async fn save_public_sync_impl(
                 if let Some(ref info) = info_opt {
                     if let Some(ref notice) = info.revocation {
                         if sync_client::verify_revocation_notice(notice, &clean_drop_pub).is_ok() {
-                            apply_revocation_notice(
-                                &mut stored,
-                                notice,
-                                sync_client::current_unix_timestamp(),
-                            );
+                            apply_revocation_notice(&mut stored, notice, now_secs);
                         }
                     }
+                }
+                if is_endpoint_revoked(&stored.status) {
+                    stored.enabled = false;
                 }
 
                 let mut policy = state
@@ -1424,17 +1424,42 @@ pub async fn save_public_sync_impl(
                     .iter()
                     .position(|d| normalize_sync_url(&d.write_url) == canonical_url)
                 {
-                    let pinned = policy.public_syncs[pos].drop_pub.trim();
+                    let existing = &mut policy.public_syncs[pos];
+                    let pinned = existing.drop_pub.trim();
                     if !pinned.is_empty() && !drop_pub_matches(pinned, &clean_drop_pub) {
                         return Err(FrontendError::from(format!(
                             "Public sync key pin mismatch for {}: existing {}, got {}",
                             canonical_url, pinned, clean_drop_pub
                         )));
                     }
+                    if crate::state::is_revocation_effective(existing, now_secs) {
+                        if !stored.status.eq_ignore_ascii_case("revoked")
+                            || stored.sunset_at.is_none()
+                        {
+                            stored.sunset_at = existing.sunset_at;
+                            stored.revocation_reason = existing.revocation_reason.clone();
+                            stored.replacement = existing.replacement.clone();
+                        }
+                        stored.status = "revoked".to_string();
+                        stored.enabled = false;
+                    } else if existing.status.eq_ignore_ascii_case("deprecating")
+                        && info_opt.is_none()
+                    {
+                        stored.status = existing.status.clone();
+                        stored.sunset_at = existing.sunset_at;
+                        stored.revocation_reason = existing.revocation_reason.clone();
+                        stored.replacement = existing.replacement.clone();
+                    }
                     policy.public_syncs[pos] = stored;
                 } else {
                     policy.public_syncs.push(stored);
                 }
+
+                let stored_enabled = policy
+                    .public_syncs
+                    .iter()
+                    .find(|d| normalize_sync_url(&d.write_url) == canonical_url)
+                    .is_some_and(|d| d.enabled);
 
                 let updated_profile = super::admin::build_resigned_own_card_profile_for_policy(
                     state, service, &policy, pw,
@@ -1447,12 +1472,13 @@ pub async fn save_public_sync_impl(
                 }
                 batch
                     .commit(state, service, pw)
-                    .map_err(FrontendError::from)
+                    .map_err(FrontendError::from)?;
+                Ok(stored_enabled)
             },
-        )?;
-    }
+        )?
+    };
 
-    if enabled
+    if final_enabled
         && info_opt.as_ref().is_some_and(|i| i.lock.is_some())
         && state.is_generation_current(auth.generation())
     {
@@ -1886,5 +1912,350 @@ mod tests {
         assert_eq!(targets.len(), 2);
         assert_eq!(targets[0].write_url, target_write);
         assert_eq!(targets[1].write_url, other_write);
+    }
+
+    #[tokio::test]
+    async fn test_s09_1_save_public_sync_preserves_sticky_revocation() {
+        use ed25519_dalek::SigningKey;
+        use std::sync::{Arc, Mutex};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let dir = crate::test_support::temp_test_dir("s09_1_sticky_rev");
+        let pw = "StrongPassword123!";
+        let svc = crate::test_support::setup_test_app(
+            &dir,
+            "Alice",
+            crate::test_support::ALICE_PHRASE,
+            pw,
+        );
+        let state = crate::test_support::create_test_state(svc);
+
+        let admin_sk = SigningKey::from_bytes(&[0x31u8; 32]);
+        let drop_pub = hex::encode(admin_sk.verifying_key().as_bytes());
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let write_url = format!("http://127.0.0.1:{}/sync.php", port);
+        let read_url = format!("http://127.0.0.1:{}/d", port);
+
+        let mode = Arc::new(Mutex::new("omit_revocation"));
+        let mode_srv = Arc::clone(&mode);
+        let drop_pub_srv = drop_pub.clone();
+        let read_url_srv = read_url.clone();
+        let admin_sk_srv = admin_sk.clone();
+
+        let srv = tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    break;
+                };
+                let mode_req = Arc::clone(&mode_srv);
+                let dp = drop_pub_srv.clone();
+                let ru = read_url_srv.clone();
+                let sk = admin_sk_srv.clone();
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 4096];
+                    let _ = stream.read(&mut buf).await;
+                    let req = String::from_utf8_lossy(&buf);
+                    let first_line = req.lines().next().unwrap_or("");
+                    let cur_mode = *mode_req.lock().unwrap();
+
+                    if first_line.starts_with("GET ") && first_line.contains("?info") {
+                        if cur_mode == "fail_info" {
+                            let resp = "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 4\r\n\r\nfail";
+                            let _ = stream.write_all(resp.as_bytes()).await;
+                            return;
+                        }
+                        let revocation_json = if cur_mode == "postpone_future" {
+                            let now = sync_client::current_unix_timestamp();
+                            let notice = sync_client::sign_revocation_notice(
+                                &sk,
+                                now.max(1),
+                                now + 86_400 * 30,
+                                Some("Postponed".to_string()),
+                                None,
+                            )
+                            .unwrap();
+                            serde_json::to_value(notice).unwrap()
+                        } else {
+                            serde_json::Value::Null
+                        };
+                        let body = serde_json::json!({
+                            "drop_pub": dp,
+                            "read_url": ru,
+                            "channels": ["card", "wot", "backup", "post"],
+                            "revocation": revocation_json,
+                        })
+                        .to_string();
+                        let resp = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                            body.len(),
+                            body
+                        );
+                        let _ = stream.write_all(resp.as_bytes()).await;
+                    } else {
+                        let resp = "HTTP/1.1 200 OK\r\nX-Drop-Authorized: true\r\nContent-Length: 0\r\n\r\n";
+                        let _ = stream.write_all(resp.as_bytes()).await;
+                    }
+                });
+            }
+        });
+
+        let replacement = crate::models::FrontendSyncReplacementTarget {
+            write_url: "https://new-sync.example.org/sync.php".to_string(),
+            read_url: "https://new-sync.example.org/d".to_string(),
+            drop_pub: crate::test_support::test_ed25519_pub_hex(0x44),
+        };
+        {
+            let mut s = state.lock_service().unwrap();
+            state
+                .mutate_security_policy(&mut s, Some(pw), |p| {
+                    p.public_syncs.push(StoredPublicSync {
+                        write_url: write_url.clone(),
+                        read_url: read_url.clone(),
+                        drop_pub: drop_pub.clone(),
+                        register_url: None,
+                        access_pubkey: crate::test_support::test_ed25519_pub_hex(0x22),
+                        enabled: false,
+                        authorized_channels: vec!["card".into()],
+                        status: "revoked".into(),
+                        sunset_at: Some(1_000_000),
+                        revocation_reason: Some("Compromised".into()),
+                        replacement: Some(replacement.clone()),
+                    });
+                })
+                .unwrap();
+        }
+
+        // Case 1: Compromised server omits ?info.revocation while user toggles/saves public sync
+        save_public_sync_impl(
+            write_url.clone(),
+            read_url.clone(),
+            drop_pub.clone(),
+            None,
+            true,
+            Some(pw.into()),
+            &state,
+        )
+        .await
+        .unwrap();
+
+        {
+            let mut s = state.lock_service().unwrap();
+            let pol = state.get_or_load_security_policy(&mut s, Some(pw)).unwrap();
+            let ps = &pol.public_syncs[0];
+            assert_eq!(ps.status, "revoked");
+            assert!(!ps.enabled);
+            assert_eq!(ps.sunset_at, Some(1_000_000));
+            assert_eq!(ps.revocation_reason.as_deref(), Some("Compromised"));
+            assert_eq!(ps.replacement.as_ref(), Some(&replacement));
+        }
+
+        // Case 2: Compromised server tries to postpone effective_at into the future
+        *mode.lock().unwrap() = "postpone_future";
+        save_public_sync_impl(
+            write_url.clone(),
+            read_url.clone(),
+            drop_pub.clone(),
+            None,
+            true,
+            Some(pw.into()),
+            &state,
+        )
+        .await
+        .unwrap();
+
+        {
+            let mut s = state.lock_service().unwrap();
+            let pol = state.get_or_load_security_policy(&mut s, Some(pw)).unwrap();
+            let ps = &pol.public_syncs[0];
+            assert_eq!(ps.status, "revoked");
+            assert!(!ps.enabled);
+            assert_eq!(ps.sunset_at, Some(1_000_000));
+            assert_eq!(ps.revocation_reason.as_deref(), Some("Compromised"));
+        }
+
+        // Case 3: Existing entry was "deprecating" with already-elapsed sunset_at and ?info fails
+        *mode.lock().unwrap() = "fail_info";
+        {
+            let mut s = state.lock_service().unwrap();
+            state
+                .mutate_security_policy(&mut s, Some(pw), |p| {
+                    p.public_syncs[0].status = "deprecating".into();
+                    p.public_syncs[0].sunset_at = Some(1_000_000);
+                    p.public_syncs[0].enabled = true;
+                })
+                .unwrap();
+        }
+        save_public_sync_impl(
+            write_url,
+            read_url,
+            drop_pub,
+            None,
+            true,
+            Some(pw.into()),
+            &state,
+        )
+        .await
+        .unwrap();
+
+        {
+            let mut s = state.lock_service().unwrap();
+            let pol = state.get_or_load_security_policy(&mut s, Some(pw)).unwrap();
+            let ps = &pol.public_syncs[0];
+            assert_eq!(ps.status, "revoked");
+            assert!(!ps.enabled);
+            assert_eq!(ps.sunset_at, Some(1_000_000));
+        }
+
+        srv.abort();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_s09_1_save_public_sync_preserves_deprecating_on_transient_info_failure() {
+        use ed25519_dalek::SigningKey;
+        use std::sync::{Arc, Mutex};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let dir = crate::test_support::temp_test_dir("s09_1_deprecating");
+        let pw = "StrongPassword123!";
+        let svc = crate::test_support::setup_test_app(
+            &dir,
+            "Alice",
+            crate::test_support::ALICE_PHRASE,
+            pw,
+        );
+        let state = crate::test_support::create_test_state(svc);
+
+        let admin_sk = SigningKey::from_bytes(&[0x32u8; 32]);
+        let drop_pub = hex::encode(admin_sk.verifying_key().as_bytes());
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let write_url = format!("http://127.0.0.1:{}/sync.php", port);
+        let read_url = format!("http://127.0.0.1:{}/d", port);
+
+        let fail_info = Arc::new(Mutex::new(true));
+        let fail_info_srv = Arc::clone(&fail_info);
+        let drop_pub_srv = drop_pub.clone();
+        let read_url_srv = read_url.clone();
+
+        let srv = tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    break;
+                };
+                let fi = Arc::clone(&fail_info_srv);
+                let dp = drop_pub_srv.clone();
+                let ru = read_url_srv.clone();
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 4096];
+                    let _ = stream.read(&mut buf).await;
+                    let req = String::from_utf8_lossy(&buf);
+                    let first_line = req.lines().next().unwrap_or("");
+                    if first_line.starts_with("GET ") && first_line.contains("?info") {
+                        if *fi.lock().unwrap() {
+                            let resp = "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 4\r\n\r\nfail";
+                            let _ = stream.write_all(resp.as_bytes()).await;
+                        } else {
+                            let body = serde_json::json!({
+                                "drop_pub": dp,
+                                "read_url": ru,
+                                "channels": ["card", "wot", "backup", "post"],
+                                "revocation": null,
+                            })
+                            .to_string();
+                            let resp = format!(
+                                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                                body.len(),
+                                body
+                            );
+                            let _ = stream.write_all(resp.as_bytes()).await;
+                        }
+                    } else {
+                        let resp = "HTTP/1.1 200 OK\r\nX-Drop-Authorized: true\r\nContent-Length: 0\r\n\r\n";
+                        let _ = stream.write_all(resp.as_bytes()).await;
+                    }
+                });
+            }
+        });
+
+        let future_sunset = sync_client::current_unix_timestamp() + 86_400 * 14;
+        let replacement = crate::models::FrontendSyncReplacementTarget {
+            write_url: "https://next-sync.example.org/sync.php".to_string(),
+            read_url: "https://next-sync.example.org/d".to_string(),
+            drop_pub: crate::test_support::test_ed25519_pub_hex(0x45),
+        };
+        {
+            let mut s = state.lock_service().unwrap();
+            state
+                .mutate_security_policy(&mut s, Some(pw), |p| {
+                    p.public_syncs.push(StoredPublicSync {
+                        write_url: write_url.clone(),
+                        read_url: read_url.clone(),
+                        drop_pub: drop_pub.clone(),
+                        register_url: None,
+                        access_pubkey: crate::test_support::test_ed25519_pub_hex(0x23),
+                        enabled: true,
+                        authorized_channels: vec!["card".into()],
+                        status: "deprecating".into(),
+                        sunset_at: Some(future_sunset),
+                        revocation_reason: Some("Planned move".into()),
+                        replacement: Some(replacement.clone()),
+                    });
+                })
+                .unwrap();
+        }
+
+        // Transient ?info failure must preserve active deprecation state
+        save_public_sync_impl(
+            write_url.clone(),
+            read_url.clone(),
+            drop_pub.clone(),
+            None,
+            true,
+            Some(pw.into()),
+            &state,
+        )
+        .await
+        .unwrap();
+
+        {
+            let mut s = state.lock_service().unwrap();
+            let pol = state.get_or_load_security_policy(&mut s, Some(pw)).unwrap();
+            let ps = &pol.public_syncs[0];
+            assert_eq!(ps.status, "deprecating");
+            assert_eq!(ps.sunset_at, Some(future_sunset));
+            assert_eq!(ps.revocation_reason.as_deref(), Some("Planned move"));
+            assert_eq!(ps.replacement.as_ref(), Some(&replacement));
+        }
+
+        // Explicit ?info without revocation before sunset_at clears deprecation
+        *fail_info.lock().unwrap() = false;
+        save_public_sync_impl(
+            write_url,
+            read_url,
+            drop_pub,
+            None,
+            true,
+            Some(pw.into()),
+            &state,
+        )
+        .await
+        .unwrap();
+
+        {
+            let mut s = state.lock_service().unwrap();
+            let pol = state.get_or_load_security_policy(&mut s, Some(pw)).unwrap();
+            let ps = &pol.public_syncs[0];
+            assert_eq!(ps.status, "active");
+            assert_eq!(ps.sunset_at, None);
+            assert_eq!(ps.revocation_reason, None);
+            assert_eq!(ps.replacement, None);
+        }
+
+        srv.abort();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

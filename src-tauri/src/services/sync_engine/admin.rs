@@ -102,7 +102,7 @@ fn save_stored_sync_admin(
     state.write_cache_slot_for_service(
         service,
         |c| &mut c.own_sync_descriptor,
-        Some(Some(admin.descriptor.clone())),
+        Some(crate::state::active_own_sync_descriptor(Some(admin))),
     );
     Ok(())
 }

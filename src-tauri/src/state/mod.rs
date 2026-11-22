@@ -21,7 +21,7 @@ pub use contacts_repo::{
     merge_contact_syncs,
 };
 pub(crate) use contacts_repo::{apply_contact_sync_health_batch, apply_contact_update_from_card};
-pub(crate) use profile_cache::EncryptedBatchCommit;
+pub(crate) use profile_cache::{active_own_sync_descriptor, EncryptedBatchCommit};
 pub use session_auth::{PendingProfileLock, ProfileSessionLock, RequiredAccess};
 pub(crate) use storage::{apply_app_notices_update, merge_btree_map_3way, merge_sync_state_3way};
 pub use storage::{

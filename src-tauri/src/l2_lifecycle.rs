@@ -206,22 +206,64 @@ fn record_equivocation_proof_inner(
     now_secs: u64,
     password: Option<&str>,
 ) -> Result<(bool, ServerOffenderList), FrontendError> {
+    let now = now_secs.max(1);
+    let offending_lock = proof
+        .verify()
+        .map_err(|e| lifecycle_err(format!("Invalid equivocation proof: {}", e)))?;
     let wot_proof = WotEquivocationProof {
         receipt_a: to_wot_receipt(&proof.receipt_a),
         receipt_b: to_wot_receipt(&proof.receipt_b),
     };
-    let offending_lock = proof.receipt_a.lock_pub;
+    wot_proof
+        .receipt_a
+        .verify_signature()
+        .map_err(|e| lifecycle_err(format!("Invalid equivocation receipt A: {}", e)))?;
+    wot_proof
+        .receipt_b
+        .verify_signature()
+        .map_err(|e| lifecycle_err(format!("Invalid equivocation receipt B: {}", e)))?;
+    if let Some(ref del) = delegation_opt {
+        if del.lock_pub != offending_lock {
+            return Err(lifecycle_err(format!(
+                "Invalid lock delegation: lock_pub {} does not match equivocation lock_pub {}",
+                hex::encode(del.lock_pub),
+                hex::encode(offending_lock)
+            )));
+        }
+        del.verify()
+            .map_err(|e| lifecycle_err(format!("Invalid lock delegation: {}", e)))?;
+    }
+
     let mut list = load_server_offender_list(service, password)?;
-    let already = list.is_lock_pub_revoked(&offending_lock);
+    let lock_already = list.is_lock_pub_revoked(&offending_lock);
+    let admin_already = delegation_opt
+        .as_ref()
+        .is_none_or(|del| list.is_admin_pub_revoked(&del.admin_pub));
+    if lock_already && admin_already {
+        return Ok((false, list));
+    }
+
     let record = ServerOffenderRecord {
         proof: wot_proof,
         delegation: delegation_opt,
-        recorded_at: now_secs.max(1),
+        recorded_at: now,
     };
-    list.insert_verified(record, now_secs.max(1))
-        .map_err(|e| lifecycle_err(format!("Invalid equivocation proof: {}", e)))?;
+    if record.proof.receipt_a.child_lock != record.proof.receipt_b.child_lock {
+        list.insert_verified(record, now)
+            .map_err(|e| lifecycle_err(format!("Invalid equivocation proof: {}", e)))?;
+    } else {
+        // Note: upstream humoco-wot `WotEquivocationProof::verify` currently only permits distinct
+        // `child_lock` (follow-up alignment to also permit distinct `entry_hash`). Both
+        // `humoco_proto::EquivocationProof::verify()` and `WotLockReceipt::verify_signature()`
+        // plus `WotLockDelegation::verify()` have already been verified above.
+        list.revoked_lock_pubs.insert(offending_lock);
+        if let Some(ref del) = record.delegation {
+            list.revoked_admin_pubs.insert(del.admin_pub);
+        }
+        list.records.push(record);
+    }
     save_server_offender_list(service, &list, password)?;
-    Ok((!already, list))
+    Ok((true, list))
 }
 
 pub fn record_equivocation_proof(
@@ -6551,5 +6593,121 @@ mod tests {
             compute_quorum_creator_activity_secs(baseline, &[t_old], 0, now),
             t_old
         );
+    }
+
+    #[test]
+    fn test_s04_s05_same_child_lock_distinct_entry_hash_and_dedup() {
+        let dir = temp_dir("s04_s05_equiv_dedup");
+        let pw = "pw";
+        let (mut svc, _) = test_utils::setup_service_with_profile(&dir, &ACTORS.alice, "Alice", pw);
+        svc.unlock_session(pw, 600).unwrap();
+
+        let make_rcpt = |sk: &SigningKey, child: [u8; 32], eh: [u8; 32]| {
+            let mut r = LockReceipt {
+                kind: LockReceiptKind::FirstWrite,
+                lock_pub: sk.verifying_key().to_bytes(),
+                bucket: [1u8; 32],
+                slot: [2u8; 32],
+                child_lock: child,
+                entry_hash: eh,
+                retain_until_quarter: 8159,
+                write_seq: 1,
+                bucket_head: [3u8; 32],
+                recipient_nonce: [4u8; 32],
+                sig: [0u8; 64],
+            };
+            r.sig = sk.sign(&r.digest()).to_bytes();
+            r
+        };
+
+        let make_wot_del = |admin_sk: &SigningKey, lock_pub: &[u8; 32], url: &str| {
+            let probe = make_signed_probe_result(
+                admin_sk,
+                &SigningKey::from_bytes(lock_pub), // unused for verifying key here; let's build directly
+                url,
+                "https://equiv.example/d",
+                100,
+                8159,
+            );
+            let mut del = sync_delegation_to_wot(probe.delegation.as_ref().unwrap()).unwrap();
+            del.lock_pub = *lock_pub;
+            let msg = del.canonical_message();
+            del.sig = admin_sk.sign(msg.as_bytes()).to_bytes();
+            del
+        };
+
+        // 1. Same child_lock + distinct entry_hash must succeed and revoke lock_pub & admin_pub
+        let admin_sk1 = SigningKey::from_bytes(&[171u8; 32]);
+        let lock_sk1 = SigningKey::from_bytes(&[172u8; 32]);
+        let admin_pub1 = admin_sk1.verifying_key().to_bytes();
+        let lock_pub1 = lock_sk1.verifying_key().to_bytes();
+        let del1 = make_wot_del(&admin_sk1, &lock_pub1, "https://equiv1.example/sync.php");
+        let eq_same_child = EquivocationProof {
+            receipt_a: make_rcpt(&lock_sk1, [0xCCu8; 32], [0x11u8; 32]),
+            receipt_b: make_rcpt(&lock_sk1, [0xCCu8; 32], [0x22u8; 32]),
+        };
+
+        let newly1 = record_equivocation_proof(
+            &mut svc,
+            Some(del1.clone()),
+            &eq_same_child,
+            1_760_000_000,
+            Some(pw),
+        )
+        .expect("S04: same child_lock with distinct entry_hash must be accepted");
+        assert!(newly1);
+
+        let list1 = load_server_offender_list(&mut svc, Some(pw)).unwrap();
+        assert!(list1.is_lock_pub_revoked(&lock_pub1));
+        assert!(list1.is_admin_pub_revoked(&admin_pub1));
+        assert_eq!(list1.records.len(), 1);
+
+        // 2. Repeated recording with same lock_pub + admin_pub must deduplicate cleanly
+        let newly_dup = record_equivocation_proof(
+            &mut svc,
+            Some(del1),
+            &eq_same_child,
+            1_760_000_005,
+            Some(pw),
+        )
+        .unwrap();
+        assert!(
+            !newly_dup,
+            "S05-2: duplicate equivocation must return newly=false"
+        );
+        let list_after_dup = load_server_offender_list(&mut svc, Some(pw)).unwrap();
+        assert_eq!(
+            list_after_dup.records.len(),
+            1,
+            "S05-2: ServerOffenderList must not append duplicate records"
+        );
+
+        // 3. First recording without delegation, then a second call newly supplying verified delegation
+        let admin_sk2 = SigningKey::from_bytes(&[173u8; 32]);
+        let lock_sk2 = SigningKey::from_bytes(&[174u8; 32]);
+        let admin_pub2 = admin_sk2.verifying_key().to_bytes();
+        let lock_pub2 = lock_sk2.verifying_key().to_bytes();
+        let eq2 = EquivocationProof {
+            receipt_a: make_rcpt(&lock_sk2, [0xAAu8; 32], [0x31u8; 32]),
+            receipt_b: make_rcpt(&lock_sk2, [0xBBu8; 32], [0x32u8; 32]),
+        };
+        assert!(record_equivocation_proof(&mut svc, None, &eq2, 1_760_000_010, Some(pw)).unwrap());
+        assert!(!record_equivocation_proof(&mut svc, None, &eq2, 1_760_000_011, Some(pw)).unwrap());
+        let del2 = make_wot_del(&admin_sk2, &lock_pub2, "https://equiv2.example/sync.php");
+        assert!(
+            record_equivocation_proof(&mut svc, Some(del2.clone()), &eq2, 1_760_000_012, Some(pw))
+                .unwrap(),
+            "S05-2: newly supplied verified delegation must update revoked_admin_pubs"
+        );
+        assert!(
+            !record_equivocation_proof(&mut svc, Some(del2), &eq2, 1_760_000_013, Some(pw))
+                .unwrap()
+        );
+        let list_final = load_server_offender_list(&mut svc, Some(pw)).unwrap();
+        assert!(list_final.is_lock_pub_revoked(&lock_pub2));
+        assert!(list_final.is_admin_pub_revoked(&admin_pub2));
+        assert_eq!(list_final.records.len(), 3);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

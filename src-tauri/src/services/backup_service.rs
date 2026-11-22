@@ -1483,11 +1483,15 @@ pub fn compute_backup_status_dto(
     let sync_backup_enabled = security_policy.sync_backup_enabled;
     let last_sync_backup_at = lifecycle.last_sync_backup_at.clone();
 
-    let has_friend_syncs = !security_policy.market_selected_syncs.is_empty();
-    let has_public_syncs = security_policy
-        .public_syncs
-        .iter()
-        .any(|d| d.enabled && !d.write_url.is_empty());
+    let has_friend_syncs = security_policy.market_selected_syncs.iter().any(|d| {
+        !d.write_url.trim().is_empty()
+            && !crate::services::sync_endpoints::is_endpoint_revoked(&d.status)
+    });
+    let has_public_syncs = security_policy.public_syncs.iter().any(|d| {
+        d.enabled
+            && !d.write_url.trim().is_empty()
+            && !crate::services::sync_endpoints::is_endpoint_revoked(&d.status)
+    });
     let has_authorized_sync_backup_target =
         has_friend_syncs || has_public_syncs || has_own_sync || last_sync_backup_at.is_some();
 
@@ -3813,6 +3817,55 @@ mod tests {
         policy.sync_backup_enabled = false;
         let dto = super::compute_backup_status_dto(&policy, &lifecycle, false);
         assert_eq!(dto.status, "disconnected");
+    }
+
+    #[test]
+    fn test_s07_2_compute_backup_status_dto_excludes_revoked_sync_targets() {
+        let mut policy = crate::settings::SecurityPolicy {
+            backup_sync_folder: None,
+            sync_backup_enabled: true,
+            market_selected_syncs: vec![crate::models::FrontendSyncDescriptor {
+                write_url: "https://revoked-friend.example.org/sync.php".to_string(),
+                read_url: "https://revoked-friend.example.org/d".to_string(),
+                drop_pub: "11".repeat(32),
+                status: "revoked".to_string(),
+                ..Default::default()
+            }],
+            public_syncs: vec![crate::settings::StoredPublicSync {
+                write_url: "https://revoked-pub.example.org/sync.php".to_string(),
+                read_url: "https://revoked-pub.example.org/d".to_string(),
+                drop_pub: "22".repeat(32),
+                access_pubkey: "33".repeat(32),
+                enabled: true,
+                status: "revoked".to_string(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let lifecycle = crate::settings::InternalLifecycleState {
+            last_sync_backup_at: None,
+            ..Default::default()
+        };
+
+        let dto = super::compute_backup_status_dto(&policy, &lifecycle, false);
+        assert!(
+            !dto.has_authorized_sync_backup_target,
+            "S07-2: revoked friend/public syncs must not count as authorized backup targets"
+        );
+        assert_eq!(dto.status, "notConfigured");
+
+        // Adding a non-revoked active public sync makes target available
+        policy.public_syncs.push(crate::settings::StoredPublicSync {
+            write_url: "https://active-pub.example.org/sync.php".to_string(),
+            read_url: "https://active-pub.example.org/d".to_string(),
+            drop_pub: "44".repeat(32),
+            access_pubkey: "55".repeat(32),
+            enabled: true,
+            status: "active".to_string(),
+            ..Default::default()
+        });
+        let dto_active = super::compute_backup_status_dto(&policy, &lifecycle, false);
+        assert!(dto_active.has_authorized_sync_backup_target);
     }
 
     #[test]

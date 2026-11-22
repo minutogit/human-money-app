@@ -1148,14 +1148,16 @@ pub(crate) async fn checkout_bundle(
             .with_session(session, |service| {
                 let now_secs = sync_client::current_unix_timestamp().max(1);
                 for equiv_proof in &all_equiv_proofs {
-                    let _ = crate::l2_lifecycle::record_equivocation_and_refresh_cache(
+                    if let Err(e) = crate::l2_lifecycle::record_equivocation_and_refresh_cache(
                         state,
                         service,
                         &active_lifecycle.l2_probe_cache,
                         equiv_proof,
                         now_secs,
                         password,
-                    );
+                    ) {
+                        log::warn!("Failed to record server equivocation proof: {}", e.message);
+                    }
                 }
                 state.get_or_load_server_offender_list(service, password)
             })
@@ -1907,14 +1909,21 @@ pub(crate) async fn verify_bundle_l2_precommit(
                         if has_equivocation {
                             let now_secs = sync_client::current_unix_timestamp().max(1);
                             for eq in &all_equiv_proofs {
-                                let _ = crate::l2_lifecycle::record_equivocation_and_refresh_cache(
-                                    state,
-                                    service,
-                                    &active_lifecycle.l2_probe_cache,
-                                    eq,
-                                    now_secs,
-                                    password,
-                                );
+                                if let Err(e) =
+                                    crate::l2_lifecycle::record_equivocation_and_refresh_cache(
+                                        state,
+                                        service,
+                                        &active_lifecycle.l2_probe_cache,
+                                        eq,
+                                        now_secs,
+                                        password,
+                                    )
+                                {
+                                    log::warn!(
+                                        "Failed to record server equivocation proof: {}",
+                                        e.message
+                                    );
+                                }
                             }
                         }
                         crate::state::record_known_head_receipts(

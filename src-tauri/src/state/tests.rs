@@ -2600,3 +2600,178 @@ fn s11_x3_card_sync_update_sanitizes_bad_and_revoked_drops_without_aborting_vali
 
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
+
+#[test]
+fn test_s03_s07_1_revoked_own_sync_excluded_from_descriptor_and_backup_targets() {
+    let dir = crate::test_support::temp_test_dir("s03_s07_1_revoked_own");
+    let wallet_dir = dir.join("wallet");
+    let pw = "StrongPassword123!";
+    let svc = crate::test_support::setup_test_app(
+        &wallet_dir,
+        "Alice",
+        crate::test_support::ALICE_PHRASE,
+        pw,
+    );
+    let state = crate::test_support::create_test_state(svc);
+
+    let own_write = "https://own.example.org/sync.php".to_string();
+    let own_read = "https://own.example.org/d".to_string();
+    let own_drop_pub = crate::test_support::test_ed25519_pub_hex(0x31);
+    let active_admin = super::StoredSyncAdmin {
+        descriptor: humoco_market::DropDescriptor {
+            write_url: own_write.clone(),
+            read_url: own_read.clone(),
+            slot_id: None,
+            drop_pub: own_drop_pub.clone(),
+        },
+        sync_index: 0,
+        data_dir: "d".to_string(),
+        max_members: 50,
+        max_total_storage_mb: 100,
+        max_user_storage_mb: 10,
+        policies: Default::default(),
+        allow: vec![],
+        last_members_hash: Default::default(),
+        revocation: None,
+    };
+
+    {
+        let mut s = state.lock_service().unwrap();
+        state
+            .mutate_security_policy(&mut s, Some(pw), |p| {
+                p.session_timeout_seconds = 0;
+                p.market_selected_syncs.clear();
+                p.public_syncs.clear();
+            })
+            .unwrap();
+
+        let mut init_batch = super::EncryptedBatchCommit::new();
+        init_batch.sync_admin(active_admin.clone());
+        init_batch.commit(&state, &mut s, Some(pw)).unwrap();
+
+        assert!(state
+            .get_or_load_own_sync_descriptor(&mut s, Some(pw))
+            .unwrap()
+            .is_some());
+        let active_targets = crate::services::common::collect_backup_sync_targets_with_service(
+            &state,
+            &mut s,
+            Some(pw),
+            None,
+        )
+        .unwrap();
+        assert_eq!(active_targets.len(), 1);
+        assert_eq!(active_targets[0].write_url, own_write);
+    }
+
+    let overview_active =
+        crate::services::sync_engine::get_sync_overview_status_impl(Some(pw.to_string()), &state)
+            .unwrap();
+    assert!(overview_active.has_own_sync);
+
+    // Revoke own StoredSyncAdmin via EncryptedBatchCommit (live cache update)
+    let mut revoked_admin = active_admin;
+    revoked_admin.revocation = Some(crate::sync_client::SyncRevocationNotice {
+        drop_pub: own_drop_pub,
+        issued_at: 1_760_000_000,
+        effective_at: 1_760_000_000,
+        reason: Some("Server decommissioned".to_string()),
+        replacement: None,
+        signature: "00".repeat(64),
+    });
+    {
+        let mut s = state.lock_service().unwrap();
+        let mut rev_batch = super::EncryptedBatchCommit::new();
+        rev_batch.sync_admin(revoked_admin);
+        rev_batch.commit(&state, &mut s, Some(pw)).unwrap();
+
+        assert!(
+            state
+                .get_or_load_own_sync_descriptor(&mut s, Some(pw))
+                .unwrap()
+                .is_none(),
+            "S03/S07-1: live cache must omit revoked own sync descriptor"
+        );
+        let rev_targets = crate::services::common::collect_backup_sync_targets_with_service(
+            &state,
+            &mut s,
+            Some(pw),
+            None,
+        )
+        .unwrap();
+        assert!(
+            rev_targets.is_empty(),
+            "S07-1: backup targets must omit revoked own sync in live session"
+        );
+    }
+    let overview_live_rev =
+        crate::services::sync_engine::get_sync_overview_status_impl(Some(pw.to_string()), &state)
+            .unwrap();
+    assert!(
+        !overview_live_rev.has_own_sync,
+        "S03: sync overview must report has_own_sync == false once revoked"
+    );
+
+    // Fresh session initialization must also exclude revoked own sync from own_sync_descriptor
+    let mut reloaded_svc = human_money_core::app_service::AppService::new(&wallet_dir).unwrap();
+    let folder = reloaded_svc.list_profiles().unwrap()[0].folder_name.clone();
+    reloaded_svc
+        .login(&folder, pw, false, "device-drops-test".to_string())
+        .unwrap();
+    let reloaded_state = crate::test_support::create_test_state(
+        human_money_core::app_service::AppService::new(&wallet_dir).unwrap(),
+    );
+    {
+        reloaded_state
+            .initialize_profile_session(&mut reloaded_svc, pw)
+            .unwrap();
+        *reloaded_state.service.lock().unwrap() = reloaded_svc;
+    }
+
+    {
+        let mut s = reloaded_state.lock_service().unwrap();
+        assert!(
+            reloaded_state
+                .get_or_load_own_sync_descriptor(&mut s, None)
+                .unwrap()
+                .is_none(),
+            "S03/S07-1: fresh session init must omit revoked own sync descriptor"
+        );
+        let targets_after_reinit =
+            crate::services::common::collect_backup_sync_targets_with_service(
+                &reloaded_state,
+                &mut s,
+                None,
+                None,
+            )
+            .unwrap();
+        assert!(
+            targets_after_reinit.is_empty(),
+            "S07-1: collect_backup_sync_targets_with_service must omit revoked own sync after fresh session init"
+        );
+        // Full StoredSyncAdmin with revocation must still be readable for admin status/clearance UIs
+        let full_admin =
+            crate::services::sync_engine::admin::load_stored_sync_admin_opt(&mut s, Some(pw))
+                .unwrap()
+                .expect("StoredSyncAdmin should still exist");
+        assert!(full_admin.revocation.is_some());
+    }
+    let overview_reinit =
+        crate::services::sync_engine::get_sync_overview_status_impl(None, &reloaded_state).unwrap();
+    assert!(!overview_reinit.has_own_sync);
+
+    // Also verify timeout == 0 cache-only fallback when Core session is locked
+    {
+        let mut s = reloaded_state.lock_service().unwrap();
+        s.lock_session();
+        assert!(reloaded_state
+            .get_or_load_own_sync_descriptor(&mut s, None)
+            .unwrap()
+            .is_none());
+    }
+    let overview_locked =
+        crate::services::sync_engine::get_sync_overview_status_impl(None, &reloaded_state).unwrap();
+    assert!(!overview_locked.has_own_sync);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

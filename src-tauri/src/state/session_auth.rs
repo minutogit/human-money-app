@@ -857,7 +857,7 @@ impl AppState {
                 self.write_cache_slot_for_service(
                     service,
                     |c| &mut c.own_sync_descriptor,
-                    Some(admin_opt.map(|a| a.descriptor)),
+                    Some(super::active_own_sync_descriptor(admin_opt.as_ref())),
                 );
             }
             Err(e) => {

@@ -213,14 +213,16 @@ async fn reconcile_due_intent(
                 local_id,
                 hex::encode(proof.receipt_a.lock_pub)
             );
-            let _ = crate::l2_lifecycle::record_equivocation_and_refresh_cache(
+            if let Err(e) = crate::l2_lifecycle::record_equivocation_and_refresh_cache(
                 state,
                 &mut service,
                 &lifecycle.l2_probe_cache,
                 proof,
                 now_secs,
                 None,
-            );
+            ) {
+                log::warn!("Failed to record server equivocation proof: {}", e.message);
+            }
         }
     }
 
@@ -371,14 +373,16 @@ async fn reconcile_due_intent(
             hex::encode(proof.receipt_a.lock_pub)
         );
         let now_secs = sync_client::current_unix_timestamp().max(1);
-        let _ = crate::l2_lifecycle::record_equivocation_and_refresh_cache(
+        if let Err(e) = crate::l2_lifecycle::record_equivocation_and_refresh_cache(
             state,
             &mut service,
             &lifecycle.l2_probe_cache,
             &proof,
             now_secs,
             None,
-        );
+        ) {
+            log::warn!("Failed to record server equivocation proof: {}", e.message);
+        }
     }
     if let Some(res) = resolution_opt {
         log::info!(

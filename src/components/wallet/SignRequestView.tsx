@@ -749,7 +749,7 @@ export function SignRequestView({ voucherData, requestMsgId, senderDid, anchorMa
                                                             await handleSign();
                                                         }
                                                     } catch (e) {
-                                                        setFeedbackMsg(stringifyError(e));
+                                                        setFeedbackMsg(translateError(e, t));
                                                         setFeedbackType('error');
                                                     } finally {
                                                         if (succeededAdminPubs.size > 0) {

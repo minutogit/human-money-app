@@ -14,6 +14,15 @@ use crate::settings::{
 };
 use human_money_core::app_service::{AppFacadeError, AppService};
 
+/// Returns the active own-sync `DropDescriptor` when configured and not revoked.
+pub(crate) fn active_own_sync_descriptor(
+    admin: Option<&StoredSyncAdmin>,
+) -> Option<humoco_market::DropDescriptor> {
+    admin
+        .filter(|a| a.revocation.is_none())
+        .map(|a| a.descriptor.clone())
+}
+
 /// Typed atomic persistence builder for encrypted profile stores (`generic_<name>.enc`).
 ///
 /// Serializes all staged stores upfront, commits them in a single `AppService::save_encrypted_batch`
@@ -261,7 +270,7 @@ impl EncryptedBatchCommit {
                 caches.own_market_profile = Some(val);
             }
             if let Some(val) = self.sync_admin {
-                caches.own_sync_descriptor = Some(val.map(|a| a.descriptor));
+                caches.own_sync_descriptor = Some(active_own_sync_descriptor(val.as_ref()));
             }
             if let Some(val) = self.wot {
                 caches.wot = Some(val);
@@ -466,9 +475,9 @@ impl AppState {
         {
             return Ok(cached);
         }
-        let desc =
-            crate::services::sync_engine::admin::load_stored_sync_admin_opt(service, password)?
-                .map(|a| a.descriptor);
+        let admin =
+            crate::services::sync_engine::admin::load_stored_sync_admin_opt(service, password)?;
+        let desc = active_own_sync_descriptor(admin.as_ref());
         self.write_cache_slot_for_service(
             service,
             |c| &mut c.own_sync_descriptor,

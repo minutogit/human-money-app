@@ -231,7 +231,7 @@ export function useTransactionHistory() {
                 }
             }
         } catch (err) {
-            setRedepositFeedback((prev) => ({ ...prev, [bundleId]: stringifyError(err) }));
+            setRedepositFeedback((prev) => ({ ...prev, [bundleId]: translateError(err, t) }));
         } finally {
             setIsRedepositingId(null);
         }

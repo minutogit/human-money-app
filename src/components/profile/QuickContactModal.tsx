@@ -16,7 +16,7 @@ import { marketService } from '../../services/marketService';
 import { useOptionalSession } from '../../context/SessionContext';
 import { buildContactUri } from '../../utils/humocoUri';
 import { logger } from '../../utils/log';
-import { stringifyError } from '../../utils/errorHelper';
+import { stringifyError, translateError } from '../../utils/errorHelper';
 
 export interface QuickContactModalProps {
     isOpen: boolean;
@@ -87,7 +87,7 @@ export const QuickContactModal: React.FC<QuickContactModalProps> = ({
         } catch (err) {
             logger.error(`Failed to publish market card from share dialog: ${stringifyError(err)}`);
             setPublishError(
-                stringifyError(err) || t('contacts.publishCardFailed', 'Veröffentlichen der Visitenkarte fehlgeschlagen.')
+                translateError(err, t) || t('contacts.publishCardFailed', 'Veröffentlichen der Visitenkarte fehlgeschlagen.')
             );
         } finally {
             setIsPublishingCard(false);

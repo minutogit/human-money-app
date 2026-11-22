@@ -489,7 +489,7 @@ pub fn get_sync_overview_status_impl(
                 .get_or_load_security_policy(&mut service, pw)
                 .map_err(FrontendError::from)?;
             let admin_opt = admin::load_stored_sync_admin_opt(&mut service, pw)?;
-            let own_desc_opt = admin_opt.map(|a| a.descriptor);
+            let own_desc_opt = crate::state::active_own_sync_descriptor(admin_opt.as_ref());
             let contacts = state
                 .load_contacts(&mut service, pw)
                 .map_err(FrontendError::from)?;
