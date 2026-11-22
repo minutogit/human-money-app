@@ -5,6 +5,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+pub(crate) static WRITE_FAULT_TEST_LOCK: Mutex<()> = Mutex::new(());
+
 pub(crate) const ALICE_PHRASE: &str =
     "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 pub(crate) const BOB_PHRASE: &str = "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo wrong";
@@ -68,12 +70,67 @@ pub(crate) struct MockSyncServer {
     pub members: Arc<Mutex<Vec<String>>>,
     pub channel_members: Arc<Mutex<HashMap<String, Vec<String>>>>,
     pub slots: Arc<Mutex<HashMap<String, Vec<u8>>>>,
+    pub media_owners: Arc<Mutex<HashMap<String, String>>>,
     pub etags: Arc<Mutex<HashMap<String, String>>>,
     pub ttl_days: Arc<Mutex<u32>>,
     pub put_members_count: Arc<Mutex<usize>>,
     pub admin_config: Arc<Mutex<(u64, usize, u64)>>,
     pub pause_gate: Arc<Mutex<Option<Arc<HttpPauseGate>>>>,
     pub _shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
+}
+
+fn strip_etag_quotes(raw: &str) -> &str {
+    let trimmed = raw.trim();
+    let no_weak = trimmed
+        .strip_prefix("W/")
+        .or_else(|| trimmed.strip_prefix("w/"))
+        .unwrap_or(trimmed);
+    no_weak.trim_matches('"')
+}
+
+fn authorized_channels_for_pubkey(
+    channel_members: &HashMap<String, Vec<String>>,
+    members: &[String],
+    pubkey: &str,
+) -> Vec<&'static str> {
+    if channel_members.is_empty() {
+        if members.iter().any(|m| m == pubkey) {
+            vec!["card", "wot", "backup", "post"]
+        } else {
+            Vec::new()
+        }
+    } else {
+        ["card", "wot", "backup", "post"]
+            .into_iter()
+            .filter(|ch| {
+                channel_members
+                    .get(*ch)
+                    .is_some_and(|pks| pks.iter().any(|m| m == pubkey))
+            })
+            .collect()
+    }
+}
+
+fn is_pubkey_authorized_for_channel(
+    channel_members: &HashMap<String, Vec<String>>,
+    members: &[String],
+    pubkey: &str,
+    channel: &str,
+) -> bool {
+    if channel_members.is_empty() {
+        return members.iter().any(|m| m == pubkey);
+    }
+    if channel == "media" {
+        if let Some(pks) = channel_members.get("media") {
+            return pks.iter().any(|m| m == pubkey);
+        }
+        return channel_members
+            .get("card")
+            .is_some_and(|pks| pks.iter().any(|m| m == pubkey));
+    }
+    channel_members
+        .get(channel)
+        .is_some_and(|pks| pks.iter().any(|m| m == pubkey))
 }
 
 impl MockSyncServer {
@@ -109,6 +166,7 @@ impl MockSyncServer {
         let members = Arc::new(Mutex::new(Vec::<String>::new()));
         let channel_members = Arc::new(Mutex::new(HashMap::<String, Vec<String>>::new()));
         let slots = Arc::new(Mutex::new(HashMap::<String, Vec<u8>>::new()));
+        let media_owners = Arc::new(Mutex::new(HashMap::<String, String>::new()));
         let etags = Arc::new(Mutex::new(HashMap::<String, String>::new()));
         let ttl_days = Arc::new(Mutex::new(30u32));
         let put_members_count = Arc::new(Mutex::new(0));
@@ -124,6 +182,7 @@ impl MockSyncServer {
         let s_members = Arc::clone(&members);
         let s_channel_members = Arc::clone(&channel_members);
         let s_slots = Arc::clone(&slots);
+        let s_media_owners = Arc::clone(&media_owners);
         let s_etags = Arc::clone(&etags);
         let s_ttl_days = Arc::clone(&ttl_days);
         let s_put_members = Arc::clone(&put_members_count);
@@ -145,6 +204,7 @@ impl MockSyncServer {
                         let members = Arc::clone(&s_members);
                         let channel_members = Arc::clone(&s_channel_members);
                         let slots = Arc::clone(&s_slots);
+                        let media_owners = Arc::clone(&s_media_owners);
                         let etags = Arc::clone(&s_etags);
                         let ttl_days_arc = Arc::clone(&s_ttl_days);
                         let put_members = Arc::clone(&s_put_members);
@@ -263,7 +323,12 @@ impl MockSyncServer {
                                     Some(ref pfx) => format!("{}_{}.{}", req_pub, pfx, ch),
                                     None => format!("{}.{}", req_pub, ch),
                                 };
-                                let is_auth = members.lock().unwrap().contains(&req_pub);
+                                let auth_chs = {
+                                    let cm = channel_members.lock().unwrap();
+                                    let m = members.lock().unwrap();
+                                    authorized_channels_for_pubkey(&cm, &m, &req_pub)
+                                };
+                                let is_auth = !auth_chs.is_empty();
                                 let occupied = slots.lock().unwrap().contains_key(&key);
                                 let etag_hdr = if is_auth && occupied {
                                     etags
@@ -282,8 +347,9 @@ impl MockSyncServer {
                                     String::new()
                                 };
                                 format!(
-                                    "HTTP/1.1 200 OK\r\nCache-Control: no-store\r\nX-Drop-Authorized: {}\r\nX-Drop-Channels: card,wot,backup,post\r\nX-Channel-Max-Bytes: 524288\r\n{}X-Slot-Occupied: {}\r\n{}Content-Length: 0\r\n\r\n",
+                                    "HTTP/1.1 200 OK\r\nCache-Control: no-store\r\nX-Drop-Authorized: {}\r\nX-Drop-Channels: {}\r\nX-Channel-Max-Bytes: 524288\r\n{}X-Slot-Occupied: {}\r\n{}Content-Length: 0\r\n\r\n",
                                     if is_auth { "true" } else { "false" },
+                                    auth_chs.join(","),
                                     ttl_hdr,
                                     if occupied { "true" } else { "false" },
                                     etag_hdr
@@ -301,23 +367,44 @@ impl MockSyncServer {
                                         "card"
                                     };
                                     channel_members.lock().unwrap().insert(ch.to_string(), mj.pubkeys);
+                                    let cm_guard = channel_members.lock().unwrap();
                                     let mut m = members.lock().unwrap();
                                     let mut union_members = HashSet::new();
-                                    for pks in channel_members.lock().unwrap().values() {
+                                    for pks in cm_guard.values() {
                                         for pk in pks {
                                             union_members.insert(pk.clone());
                                         }
                                     }
                                     *m = union_members.into_iter().collect();
                                     let mut s = slots.lock().unwrap();
+                                    let mut mo = media_owners.lock().unwrap();
                                     s.retain(|k, _| {
-                                        if let Some((id_part, _)) = k.split_once('.') {
+                                        if k.ends_with(".media") {
+                                            if let Some(owner_pk) = mo.get(k) {
+                                                return cm_guard.get("media").or_else(|| cm_guard.get("card")).map_or_else(
+                                                    || m.iter().any(|id| id == owner_pk),
+                                                    |pks| pks.iter().any(|id| id == owner_pk),
+                                                );
+                                            }
+                                            if let Some(base_pk) = k.strip_suffix(".media") {
+                                                return cm_guard.get("media").or_else(|| cm_guard.get("card")).map_or_else(
+                                                    || m.iter().any(|id| id == base_pk),
+                                                    |pks| pks.iter().any(|id| id == base_pk),
+                                                );
+                                            }
+                                            return false;
+                                        }
+                                        if let Some((id_part, slot_ch)) = k.split_once('.') {
                                             let base_pk = id_part.split_once('_').map(|(pk, _)| pk).unwrap_or(id_part);
-                                            m.iter().any(|id| id == base_pk)
+                                            cm_guard.get(slot_ch).map_or_else(
+                                                || m.iter().any(|id| id == base_pk),
+                                                |pks| pks.iter().any(|id| id == base_pk),
+                                            )
                                         } else {
                                             false
                                         }
                                     });
+                                    mo.retain(|k, _| s.contains_key(k));
                                     b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n".to_vec()
                                 } else {
                                     b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n".to_vec()
@@ -388,11 +475,15 @@ impl MockSyncServer {
                                 let channel = headers.get("x-channel").cloned().unwrap_or_else(|| "card".to_string());
                                 let prefix_opt = headers.get("x-drop-prefix").map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
                                 let media_id_opt = headers.get("x-media-id").map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
-                                let is_member = members.lock().unwrap().contains(&pubkey);
+                                let is_member = {
+                                    let cm = channel_members.lock().unwrap();
+                                    let m = members.lock().unwrap();
+                                    is_pubkey_authorized_for_channel(&cm, &m, &pubkey, &channel)
+                                };
                                 if is_member {
                                     let key = if channel == "media" {
                                         match media_id_opt {
-                                            Some(ref mid) => format!("{}_{}.media", pubkey, mid),
+                                            Some(ref mid) => format!("{}.media", mid),
                                             None => format!("{}.media", pubkey),
                                         }
                                     } else {
@@ -405,12 +496,12 @@ impl MockSyncServer {
                                     let slot_exists = slots.lock().unwrap().contains_key(&key);
                                     let cur_etag_opt = etags.lock().unwrap().get(&key).cloned();
                                     let precondition_failed = if let Some(ref im) = if_match_hdr {
-                                        let im_trim = im.trim().trim_matches('"');
+                                        let im_trim = strip_etag_quotes(im);
                                         if im_trim == "none" || im_trim.is_empty() {
                                             slot_exists
                                         } else {
                                             match cur_etag_opt.as_deref() {
-                                                Some(cur) => cur.trim().trim_matches('"') != im_trim,
+                                                Some(cur) => strip_etag_quotes(cur) != im_trim,
                                                 None => true,
                                             }
                                         }
@@ -428,6 +519,9 @@ impl MockSyncServer {
                                         let etag_hex = hex::encode(sha2::Sha256::digest(&body));
                                         let new_etag = format!("\"{}\"", etag_hex);
                                         slots.lock().unwrap().insert(key.clone(), body);
+                                        if channel == "media" {
+                                            media_owners.lock().unwrap().insert(key.clone(), pubkey.clone());
+                                        }
                                         etags.lock().unwrap().insert(key, new_etag.clone());
                                         if channel == "media" {
                                             format!(
@@ -472,25 +566,60 @@ impl MockSyncServer {
                                 if path.contains("account") {
                                     let dot_prefix = format!("{}.", pubkey);
                                     let under_prefix = format!("{}_", pubkey);
-                                    slots.lock().unwrap().retain(|k, _| !k.starts_with(&dot_prefix) && !k.starts_with(&under_prefix));
-                                    etags.lock().unwrap().retain(|k, _| !k.starts_with(&dot_prefix) && !k.starts_with(&under_prefix));
+                                    let owned_media: HashSet<String> = {
+                                        let mut mo = media_owners.lock().unwrap();
+                                        let owned: HashSet<String> = mo
+                                            .iter()
+                                            .filter(|(_, owner)| owner.as_str() == pubkey.as_str())
+                                            .map(|(k, _)| k.clone())
+                                            .collect();
+                                        mo.retain(|k, _| !owned.contains(k));
+                                        owned
+                                    };
+                                    slots.lock().unwrap().retain(|k, _| {
+                                        !k.starts_with(&dot_prefix)
+                                            && !k.starts_with(&under_prefix)
+                                            && !owned_media.contains(k)
+                                    });
+                                    etags.lock().unwrap().retain(|k, _| {
+                                        !k.starts_with(&dot_prefix)
+                                            && !k.starts_with(&under_prefix)
+                                            && !owned_media.contains(k)
+                                    });
                                 } else {
                                     let channel = headers.get("x-channel").cloned().unwrap_or_else(|| "card".to_string());
                                     let prefix_opt = headers.get("x-drop-prefix").map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
                                     let media_id_opt = headers.get("x-media-id").map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
                                     if channel == "media" && media_id_opt.is_none() {
                                         let media_dot = format!("{}.media", pubkey);
-                                        let media_under = format!("{}_", pubkey);
-                                        slots.lock().unwrap().retain(|k, _| k != &media_dot && !(k.starts_with(&media_under) && k.ends_with(".media")));
-                                        etags.lock().unwrap().retain(|k, _| k != &media_dot && !(k.starts_with(&media_under) && k.ends_with(".media")));
+                                        let owned_media: HashSet<String> = {
+                                            let mut mo = media_owners.lock().unwrap();
+                                            let owned: HashSet<String> = mo
+                                                .iter()
+                                                .filter(|(_, owner)| owner.as_str() == pubkey.as_str())
+                                                .map(|(k, _)| k.clone())
+                                                .collect();
+                                            mo.retain(|k, _| !owned.contains(k));
+                                            owned
+                                        };
+                                        slots.lock().unwrap().retain(|k, _| k != &media_dot && !owned_media.contains(k));
+                                        etags.lock().unwrap().retain(|k, _| k != &media_dot && !owned_media.contains(k));
+                                    } else if channel == "media" {
+                                        let key = format!("{}.media", media_id_opt.unwrap());
+                                        let is_owner = media_owners
+                                            .lock()
+                                            .unwrap()
+                                            .get(&key)
+                                            .is_none_or(|o| o == &pubkey);
+                                        if is_owner {
+                                            media_owners.lock().unwrap().remove(&key);
+                                            slots.lock().unwrap().remove(&key);
+                                            etags.lock().unwrap().remove(&key);
+                                        }
                                     } else {
-                                        let key = if channel == "media" {
-                                            format!("{}_{}.media", pubkey, media_id_opt.unwrap())
-                                        } else {
-                                            match prefix_opt {
-                                                Some(ref pfx) => format!("{}_{}.{}", pubkey, pfx, channel),
-                                                None => format!("{}.{}", pubkey, channel),
-                                            }
+                                        let key = match prefix_opt {
+                                            Some(ref pfx) => format!("{}_{}.{}", pubkey, pfx, channel),
+                                            None => format!("{}.{}", pubkey, channel),
                                         };
                                         slots.lock().unwrap().remove(&key);
                                         etags.lock().unwrap().remove(&key);
@@ -532,7 +661,7 @@ impl MockSyncServer {
                                 let idx_etag = format!("\"{}\"", idx_hash);
                                 let not_modified = headers
                                     .get("if-none-match")
-                                    .is_some_and(|inm| inm.trim().trim_matches('"') == idx_hash || inm.trim() == "*");
+                                    .is_some_and(|inm| strip_etag_quotes(inm) == idx_hash || inm.trim() == "*");
                                 if not_modified {
                                     format!("HTTP/1.1 304 Not Modified\r\nETag: {}\r\nContent-Length: 0\r\n\r\n", idx_etag).into_bytes()
                                 } else {
@@ -552,10 +681,10 @@ impl MockSyncServer {
                                         .get(slot_key)
                                         .cloned()
                                         .unwrap_or_else(|| format!("\"{}\"", hex::encode(&sha2::Sha256::digest(data)[..16])));
-                                    let clean_etag = cur_etag.trim_matches('"');
+                                    let clean_etag = strip_etag_quotes(&cur_etag);
                                     let not_modified = headers
                                         .get("if-none-match")
-                                        .is_some_and(|inm| inm.trim().trim_matches('"') == clean_etag || inm.trim() == "*");
+                                        .is_some_and(|inm| strip_etag_quotes(inm) == clean_etag || inm.trim() == "*");
                                     if not_modified {
                                         format!("HTTP/1.1 304 Not Modified\r\nETag: {}\r\nContent-Length: 0\r\n\r\n", cur_etag).into_bytes()
                                     } else {
@@ -599,6 +728,7 @@ impl MockSyncServer {
             members,
             channel_members,
             slots,
+            media_owners,
             etags,
             ttl_days,
             put_members_count,
@@ -606,5 +736,111 @@ impl MockSyncServer {
             pause_gate,
             _shutdown_tx: Some(shutdown_tx),
         }
+    }
+}
+
+#[cfg(test)]
+mod s11_tests {
+    use super::MockSyncServer;
+
+    #[tokio::test]
+    async fn s11_f8_mock_sync_server_media_roundtrip_channel_auth_and_weak_etag() {
+        let admin_pub = "11".repeat(32);
+        let alice_pub = "22".repeat(32);
+        let server = MockSyncServer::start("data".to_string(), admin_pub).await;
+        server
+            .channel_members
+            .lock()
+            .unwrap()
+            .insert("card".to_string(), vec![alice_pub.clone()]);
+
+        let client = crate::sync_client::create_sync_http_client();
+        let write_url = format!("{}/sync.php", server.base_url);
+        let read_url = format!("{}/{}", server.base_url, server.data_dir);
+        let signed = humoco_market::SignedDropHeaders {
+            pubkey_hex: alice_pub.clone(),
+            prefix: None,
+            timestamp: 1_700_000_000,
+            nonce_hex: "aa".repeat(16),
+            signature_hex: "bb".repeat(64),
+        };
+
+        // 1. Media roundtrip works under <blob_id>.media
+        let blob_id = "cc".repeat(32);
+        let payload = vec![0x42u8; 128];
+        crate::sync_client::put_media_blob(&client, &write_url, &signed, &blob_id, &payload)
+            .await
+            .unwrap();
+        let fetched_media = crate::sync_client::get_media_blob(&client, &read_url, &blob_id)
+            .await
+            .unwrap();
+        assert_eq!(fetched_media, Some(payload));
+
+        // 2. Per-channel enforcement on HEAD and PUT
+        let head_resp = client
+            .head(&write_url)
+            .header("X-Drop-Pubkey", &alice_pub)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            head_resp
+                .headers()
+                .get("x-drop-channels")
+                .and_then(|v| v.to_str().ok()),
+            Some("card")
+        );
+
+        assert!(
+            crate::sync_client::put_slot(&client, &write_url, &signed, "post", b"no", None)
+                .await
+                .is_err(),
+            "Alice is not in channel_members['post'] -> must return 403"
+        );
+        crate::sync_client::put_slot(
+            &client,
+            &write_url,
+            &signed,
+            "card",
+            b"card-slot-bytes",
+            None,
+        )
+        .await
+        .unwrap();
+
+        // 3. Weak W/ ETags trigger 304 Not Modified on index.json and .bin
+        let idx_url = format!("{}/index.json", read_url);
+        let idx_resp = client.get(&idx_url).send().await.unwrap();
+        let idx_etag = idx_resp
+            .headers()
+            .get("etag")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        let idx_304 = client
+            .get(&idx_url)
+            .header("If-None-Match", format!("W/{}", idx_etag))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(idx_304.status().as_u16(), 304);
+
+        let slot_url = format!("{}/{}.card.bin", read_url, alice_pub);
+        let slot_resp = client.get(&slot_url).send().await.unwrap();
+        let slot_etag = slot_resp
+            .headers()
+            .get("etag")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        let slot_304 = client
+            .get(&slot_url)
+            .header("If-None-Match", format!("W/{}", slot_etag))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(slot_304.status().as_u16(), 304);
     }
 }

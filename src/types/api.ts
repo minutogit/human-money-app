@@ -40,6 +40,9 @@ export interface LockProtectionOverviewDto {
     hasOfflineCachedAnchor: boolean;
     unresolvedIntentsCount: number;
     pendingRestoreReconciliation: boolean;
+    expectedLockPubs?: string[];
+    expectedThreshold?: number;
+    expectedSource?: 'live' | 'cached' | 'none' | string;
 }
 
 export interface GuarantorServerTrustDto {

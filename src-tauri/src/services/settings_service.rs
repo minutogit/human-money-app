@@ -2,7 +2,7 @@ use log::info;
 
 use crate::{
     models::{FrontendError, ReachPresetDto},
-    services::market_service::{get_own_card_max_hops_inner, set_own_card_max_hops_inner},
+    services::market_service::{get_own_card_max_hops_inner, prepare_own_card_max_hops_for_write},
     settings::{
         AppConfigDto, SecurityPolicy, SecurityPolicyPatch, UiPreferences, UiPreferencesPatch,
     },
@@ -49,23 +49,21 @@ pub fn get_reach_preset_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<ReachPresetDto, FrontendError> {
-    let prefs = {
-        let _service = state.authorize_and_lock(RequiredAccess::Unlocked, None)?;
-        state
-            .get_cached_ui_preferences()
-            .map_err(FrontendError::from)?
-    };
+    let (mut service, resolved_pw) =
+        state.authorize_and_lock_secret(RequiredAccess::Unlocked, password.as_deref())?;
+    let pw = resolved_pw.as_deref().map(String::as_str);
+
+    let prefs = state
+        .get_or_load_ui_preferences(&mut service, pw)
+        .map_err(FrontendError::from)?;
     let media_auto_load_max_hops = prefs.media_auto_load_max_hops.min(3);
     let share_min_level = prefs.share_min_level.min(3);
 
-    let (own_list_max_hops, card_max_hops) = {
-        let mut service = state.authorize_and_lock(RequiredAccess::Unlocked, None)?;
-        let reg = state
-            .get_or_load_wot_register(&mut service, password.as_deref())
-            .map_err(FrontendError::from)?;
-        let card_hops = get_own_card_max_hops_inner(state, &mut service, password.as_deref());
-        (reg.policy.own_list_max_hops.clamp(1, 3), card_hops)
-    };
+    let reg = state
+        .get_or_load_wot_register(&mut service, pw)
+        .map_err(FrontendError::from)?;
+    let card_max_hops = get_own_card_max_hops_inner(state, &mut service, pw)?;
+    let own_list_max_hops = reg.policy.own_list_max_hops.clamp(1, 3);
 
     let preset = detect_reach_preset(
         own_list_max_hops,
@@ -94,20 +92,52 @@ pub fn apply_reach_preset_impl(
         state.authorize_and_lock_secret(RequiredAccess::DailyPay, password.as_deref())?;
     let pw = resolved_pw.as_deref().map(String::as_str);
 
-    crate::services::wot_service::set_wot_max_hops_with_service(
+    let reg = crate::services::wot_service::prepare_wot_max_hops(
         state,
         &mut service,
         own_list_max_hops,
         pw,
     )?;
-    set_own_card_max_hops_inner(state, &mut service, card_max_hops, pw)?;
 
-    state
-        .mutate_ui_preferences(&mut service, pw, |prefs| {
-            prefs.share_min_level = share_min_level.min(3);
-            prefs.media_auto_load_max_hops = media_auto_load_max_hops.min(3);
-        })
+    let mut prefs = state
+        .get_or_load_ui_preferences(&mut service, pw)
         .map_err(FrontendError::from)?;
+    let prev_share_min = prefs.share_min_level;
+    prefs.share_min_level = share_min_level.min(3);
+    prefs.media_auto_load_max_hops = media_auto_load_max_hops.min(3);
+    let bump_for_eviction = prefs.share_min_level > prev_share_min;
+
+    let stored = prepare_own_card_max_hops_for_write(
+        state,
+        &mut service,
+        card_max_hops,
+        bump_for_eviction,
+        pw,
+    )?;
+
+    let wot_bytes = serde_json::to_vec(&reg)
+        .map_err(|e| FrontendError::from(format!("Failed to serialize WoT register: {}", e)))?;
+    let own_bytes = serde_json::to_vec(&stored).map_err(|e| {
+        FrontendError::from(format!("Failed to serialize own market profile: {}", e))
+    })?;
+    let ui_bytes = serde_json::to_vec(&prefs)
+        .map_err(|e| FrontendError::from(format!("Failed to serialize UiPreferences: {}", e)))?;
+
+    service
+        .save_encrypted_batch(
+            &[
+                (crate::state::WOT_DATA_NAME, wot_bytes.as_slice()),
+                (crate::state::MARKET_OWN_PROFILE_KEY, own_bytes.as_slice()),
+                (crate::settings::UI_PREFERENCES_KEY, ui_bytes.as_slice()),
+            ],
+            pw,
+        )
+        .map_err(|e| FrontendError::from(format!("Failed to persist reach preset: {}", e)))?;
+
+    state.set_cached_wot_for_service(&service, Some(reg.clone()));
+    state.set_cached_own_market_profile_for_service(&service, Some(stored));
+    state.set_cached_ui_preferences_for_service(&service, Some(prefs));
+    crate::services::wot_service::apply_desired_hops_to_cached_contacts(state, &reg);
 
     Ok(ReachPresetDto {
         preset,
@@ -130,27 +160,32 @@ pub fn patch_ui_preferences_impl(
     state: &AppState,
 ) -> Result<UiPreferences, FrontendError> {
     info!("Patching UiPreferences...");
+    patch.validate().map_err(FrontendError::from)?;
     let (mut service, resolved_pw) =
         state.authorize_and_lock_secret(RequiredAccess::DailyPay, password.as_deref())?;
     let pw = resolved_pw.as_deref().map(String::as_str);
-    let mut should_wake_wifi = false;
+    let mut wake = crate::state::SyncWakeRequest::default();
     let updated = state
         .mutate_ui_preferences(&mut service, pw, |prefs| {
             let was_wifi_only = prefs.market_poll_wifi_only;
+            let was_market = prefs.market_sync_enabled;
+            let was_wot_sync = prefs.wot_share_via_sync;
+            let was_post_contacts = prefs.post_accept_from_contacts;
             patch.apply_to(prefs);
-            if was_wifi_only && !prefs.market_poll_wifi_only {
-                should_wake_wifi = true;
-            }
+            let wifi_unlocked = was_wifi_only && !prefs.market_poll_wifi_only;
+            wake = crate::state::SyncWakeRequest {
+                seal: wifi_unlocked,
+                sync_backup: wifi_unlocked,
+                market: wifi_unlocked
+                    || (!was_market && prefs.market_sync_enabled)
+                    || (!was_wot_sync && prefs.wot_share_via_sync),
+                post: wifi_unlocked || (!was_post_contacts && prefs.post_accept_from_contacts),
+                ..Default::default()
+            };
         })
         .map_err(FrontendError::from)?;
-    if should_wake_wifi {
-        state.wake_sync_coordinator(crate::state::SyncWakeRequest {
-            seal: true,
-            sync_backup: true,
-            post: true,
-            market: true,
-            ..Default::default()
-        });
+    if !wake.is_empty() {
+        state.wake_sync_coordinator(wake);
     }
     Ok(updated)
 }
@@ -163,14 +198,28 @@ pub fn patch_security_policy_impl(
     info!("Patching SecurityPolicy...");
     patch.validate().map_err(FrontendError::from)?;
     let mut service = state.authorize_and_lock(RequiredAccess::Full, password.as_deref())?;
+    let mut wake = crate::state::SyncWakeRequest::default();
     let updated = state
         .mutate_security_policy(&mut service, password.as_deref(), |policy| {
+            let was_sync_backup = policy.sync_backup_enabled;
+            let was_auto_backup = policy.auto_backup_enabled;
+            let prev_folder = policy.backup_sync_folder.clone();
             patch.apply_to(policy);
+            wake = crate::state::SyncWakeRequest {
+                sync_backup: !was_sync_backup && policy.sync_backup_enabled,
+                local_backup: (!was_auto_backup && policy.auto_backup_enabled)
+                    || (policy.auto_backup_enabled
+                        && policy.backup_sync_folder.is_some()
+                        && policy.backup_sync_folder != prev_folder),
+                ..Default::default()
+            };
         })
         .map_err(FrontendError::from)?;
     if updated.session_timeout_seconds == 0 {
         service.lock_session();
         state.clear_one_shot_pin_grant();
+    } else if !wake.is_empty() {
+        state.wake_sync_coordinator(wake);
     }
     Ok(updated)
 }
@@ -399,6 +448,179 @@ mod tests {
         assert!(!status_after.has_cached_session);
         assert_eq!(status_after.access_mode, "dailyPay");
         assert_eq!(status_after.base_access_mode, "dailyPay");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn s11_f3_atomic_reach_preset_rollback_wake_parity_and_one_shot_pin() {
+        let dir = crate::test_support::temp_test_dir("s11_f3_settings");
+        let pw = "MasterPass-S11-2026!";
+        let service = crate::test_support::setup_test_app(
+            &dir.join("wallet"),
+            "S11 Settings Tester",
+            crate::test_support::ALICE_PHRASE,
+            pw,
+        );
+        let state = crate::test_support::create_test_state(service);
+
+        {
+            let mut svc = state.service.lock().unwrap();
+            let ui_init = UiPreferences {
+                market_sync_enabled: false,
+                wot_share_via_sync: false,
+                post_accept_from_contacts: false,
+                ..Default::default()
+            };
+            let sec_init = SecurityPolicy {
+                session_timeout_seconds: 600,
+                sync_backup_enabled: false,
+                auto_backup_enabled: false,
+                backup_sync_folder: None,
+                ..Default::default()
+            };
+            state
+                .save_ui_preferences(&mut svc, ui_init, Some(pw))
+                .unwrap();
+            state
+                .save_security_policy(&mut svc, sec_init, Some(pw))
+                .unwrap();
+            let reg = state.load_wot_register(&mut svc, Some(pw)).unwrap();
+            state.save_wot_register(&mut svc, &reg, Some(pw)).unwrap();
+        }
+
+        // 1. Atomic rollback when seal.enc write fails during apply_reach_preset_impl
+        let before_preset = get_reach_preset_impl(Some(pw.to_string()), &state).unwrap();
+        assert_eq!(before_preset.preset, "medium");
+
+        {
+            let _fault_guard = crate::test_support::WRITE_FAULT_TEST_LOCK
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            human_money_core::storage::file_storage::inject_write_fault_once("seal.enc");
+            assert!(
+                apply_reach_preset_impl("near".to_string(), Some(pw.to_string()), &state).is_err(),
+                "fault must fail apply_reach_preset_impl"
+            );
+        }
+
+        let after_fault = get_reach_preset_impl(Some(pw.to_string()), &state).unwrap();
+        assert_eq!(after_fault, before_preset);
+        assert_eq!(
+            state.get_cached_ui_preferences().unwrap().share_min_level,
+            1
+        );
+        assert_eq!(state.cache_wot().unwrap().policy.own_list_max_hops, 2);
+
+        // 2. Clean apply updates all 3 stores + caches atomically
+        let applied =
+            apply_reach_preset_impl("near".to_string(), Some(pw.to_string()), &state).unwrap();
+        assert_eq!(applied.preset, "near");
+        assert_eq!(applied.own_list_max_hops, 1);
+        assert_eq!(applied.card_max_hops, 1);
+        assert_eq!(applied.share_min_level, 2);
+        assert_eq!(applied.media_auto_load_max_hops, 1);
+
+        // 3. OneShotPinGrant works on cold cache + locked session in get_reach_preset_impl
+        let grant = {
+            let mut svc = state.service.lock().unwrap();
+            svc.lock_session();
+            state
+                .issue_one_shot_pin_grant(&svc, zeroize::Zeroizing::new(pw.to_string()))
+                .unwrap()
+        };
+        state.set_cached_ui_preferences(None);
+        {
+            let svc = state.service.lock().unwrap();
+            state.set_cached_wot_for_service(&svc, None);
+            state.set_cached_own_market_profile_for_service(&svc, None);
+        }
+        let via_grant = get_reach_preset_impl(Some(grant), &state).unwrap();
+        assert_eq!(via_grant.preset, "near");
+
+        // Re-unlock session for coordinator wake parity checks
+        {
+            let mut svc = state.service.lock().unwrap();
+            svc.unlock_session(pw, 600).unwrap();
+        }
+        state.clear_one_shot_pin_grant();
+
+        let reset_wake = |st: &AppState| {
+            let mut guard = st.sync_control.lock().unwrap();
+            guard.pending_wake = Default::default();
+        };
+
+        reset_wake(&state);
+        patch_ui_preferences_impl(
+            UiPreferencesPatch {
+                market_sync_enabled: Some(true),
+                ..Default::default()
+            },
+            Some(pw.to_string()),
+            &state,
+        )
+        .unwrap();
+        assert!(state.sync_control_snapshot().pending_wake.market);
+
+        reset_wake(&state);
+        patch_ui_preferences_impl(
+            UiPreferencesPatch {
+                wot_share_via_sync: Some(true),
+                ..Default::default()
+            },
+            Some(pw.to_string()),
+            &state,
+        )
+        .unwrap();
+        assert!(state.sync_control_snapshot().pending_wake.market);
+
+        reset_wake(&state);
+        patch_ui_preferences_impl(
+            UiPreferencesPatch {
+                post_accept_from_contacts: Some(true),
+                ..Default::default()
+            },
+            Some(pw.to_string()),
+            &state,
+        )
+        .unwrap();
+        assert!(state.sync_control_snapshot().pending_wake.post);
+
+        reset_wake(&state);
+        patch_security_policy_impl(
+            SecurityPolicyPatch {
+                sync_backup_enabled: Some(true),
+                ..Default::default()
+            },
+            Some(pw.to_string()),
+            &state,
+        )
+        .unwrap();
+        assert!(state.sync_control_snapshot().pending_wake.sync_backup);
+
+        reset_wake(&state);
+        patch_security_policy_impl(
+            SecurityPolicyPatch {
+                auto_backup_enabled: Some(true),
+                ..Default::default()
+            },
+            Some(pw.to_string()),
+            &state,
+        )
+        .unwrap();
+        assert!(state.sync_control_snapshot().pending_wake.local_backup);
+
+        reset_wake(&state);
+        patch_security_policy_impl(
+            SecurityPolicyPatch {
+                backup_sync_folder: Some(Some("/tmp/s11-new-backup".to_string())),
+                ..Default::default()
+            },
+            Some(pw.to_string()),
+            &state,
+        )
+        .unwrap();
+        assert!(state.sync_control_snapshot().pending_wake.local_backup);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

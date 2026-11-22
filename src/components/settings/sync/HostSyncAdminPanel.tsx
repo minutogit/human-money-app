@@ -213,7 +213,7 @@ export const HostSyncAdminPanel: React.FC<HostSyncAdminPanelProps> = ({
                     <div className="font-semibold flex items-center justify-between gap-2">
                         <span>
                             {t('settings.syncHostRevokeActiveTitle', 'Abkündigung aktiv')} (
-                            {new Date(adminStatus.revocation.effective_at * 1000).toLocaleDateString()})
+                            {new Date(adminStatus.revocation.effectiveAt * 1000).toLocaleDateString()})
                         </span>
                         <Button
                             type="button"
@@ -229,9 +229,9 @@ export const HostSyncAdminPanel: React.FC<HostSyncAdminPanelProps> = ({
                     {adminStatus.revocation.reason && (
                         <p className="text-amber-800">{adminStatus.revocation.reason}</p>
                     )}
-                    {adminStatus.revocation.replacement?.write_url && (
+                    {adminStatus.revocation.replacement?.writeUrl && (
                         <p className="font-mono text-[11px] break-all text-amber-800">
-                            → {adminStatus.revocation.replacement.write_url}
+                            → {adminStatus.revocation.replacement.writeUrl}
                         </p>
                     )}
                 </div>

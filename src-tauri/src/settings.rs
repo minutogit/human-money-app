@@ -262,7 +262,7 @@ pub struct AppConfigDto {
 
 /// Partial update for `UiPreferences` (authorized with `RequiredAccess::DailyPay`).
 #[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
-#[serde(default, rename_all = "camelCase")]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct UiPreferencesPatch {
     pub ui_mode: Option<String>,
     #[serde(default, deserialize_with = "deserialize_double_option")]
@@ -280,6 +280,18 @@ pub struct UiPreferencesPatch {
 }
 
 impl UiPreferencesPatch {
+    pub fn validate(&self) -> Result<(), String> {
+        if let Some(Some(ref dir)) = self.last_used_directory {
+            let trimmed = dir.trim();
+            if !trimmed.is_empty() && trimmed.chars().any(char::is_control) {
+                return Err(
+                    "Invalid last_used_directory value: contains control characters".to_string(),
+                );
+            }
+        }
+        Ok(())
+    }
+
     pub fn apply_to(&self, target: &mut UiPreferences) {
         if let Some(ref mode) = self.ui_mode {
             target.ui_mode = if mode.trim().eq_ignore_ascii_case("expert") {
@@ -306,7 +318,7 @@ impl UiPreferencesPatch {
             target.market_show_unknown = v;
         }
         if let Some(v) = self.max_stored_cards {
-            target.max_stored_cards = v;
+            target.max_stored_cards = v.clamp(100, 10_000);
         }
         if let Some(v) = self.market_send_card_on_payment {
             target.market_send_card_on_payment = v;
@@ -335,7 +347,7 @@ impl UiPreferencesPatch {
 /// Partial update for `SecurityPolicy` scalar/backup policy fields (`RequiredAccess::Full`).
 /// Lock server nominations and sync endpoints use dedicated validated commands.
 #[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
-#[serde(default, rename_all = "camelCase")]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct SecurityPolicyPatch {
     pub session_timeout_seconds: Option<u64>,
     pub privacy_default: Option<String>,
@@ -354,6 +366,32 @@ impl SecurityPolicyPatch {
             let trimmed = v.trim();
             if !matches!(trimmed, "ask" | "stealth" | "public") {
                 return Err(format!("Invalid privacy_default value: {}", v));
+            }
+        }
+        if let Some(Some(ref v)) = self.backup_sync_folder {
+            let trimmed = v.trim();
+            if !trimmed.is_empty() {
+                if trimmed.chars().any(char::is_control) {
+                    return Err(
+                        "Invalid backup_sync_folder: contains control characters".to_string()
+                    );
+                }
+                let path = std::path::Path::new(trimmed);
+                if !path.is_absolute() {
+                    return Err(format!(
+                        "Invalid backup_sync_folder (must be absolute): {}",
+                        trimmed
+                    ));
+                }
+                if path
+                    .components()
+                    .any(|c| matches!(c, std::path::Component::ParentDir))
+                {
+                    return Err(format!(
+                        "Invalid backup_sync_folder (parent directory traversal forbidden): {}",
+                        trimmed
+                    ));
+                }
             }
         }
         if let Some(Some(ref v)) = self.backup_protection_mode {
@@ -503,5 +541,52 @@ mod tests {
         assert_eq!(prefs.share_min_level, 3);
         assert_eq!(prefs.media_auto_load_max_hops, 3);
         assert_eq!(prefs.last_used_directory.as_deref(), Some("/tmp/exports"));
+    }
+
+    #[test]
+    fn s11_f1_f3_patch_deny_unknown_fields_and_validation() {
+        assert!(
+            serde_json::from_str::<UiPreferencesPatch>(r#"{"autoBackupEnabled":true}"#).is_err()
+        );
+        assert!(serde_json::from_str::<SecurityPolicyPatch>(r#"{"uiMode":"expert"}"#).is_err());
+
+        let mut prefs = UiPreferences::default();
+        let clamp_low: UiPreferencesPatch =
+            serde_json::from_str(r#"{"maxStoredCards":0}"#).unwrap();
+        clamp_low.apply_to(&mut prefs);
+        assert_eq!(prefs.max_stored_cards, 100);
+        let clamp_high: UiPreferencesPatch =
+            serde_json::from_str(r#"{"maxStoredCards":999999}"#).unwrap();
+        clamp_high.apply_to(&mut prefs);
+        assert_eq!(prefs.max_stored_cards, 10_000);
+
+        let bad_dir_patch = UiPreferencesPatch {
+            last_used_directory: Some(Some("/tmp/bad\ndir".to_string())),
+            ..Default::default()
+        };
+        assert!(bad_dir_patch.validate().is_err());
+
+        for bad_folder in [
+            "relative/path",
+            "../escape",
+            "/tmp/../escape",
+            "/tmp/bad\0folder",
+        ] {
+            let p = SecurityPolicyPatch {
+                backup_sync_folder: Some(Some(bad_folder.to_string())),
+                ..Default::default()
+            };
+            assert!(
+                p.validate().is_err(),
+                "expected invalid backup_sync_folder: {}",
+                bad_folder
+            );
+        }
+
+        let valid_folder = SecurityPolicyPatch {
+            backup_sync_folder: Some(Some("/tmp/valid-backups".to_string())),
+            ..Default::default()
+        };
+        assert!(valid_folder.validate().is_ok());
     }
 }

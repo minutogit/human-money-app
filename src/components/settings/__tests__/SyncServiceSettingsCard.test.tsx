@@ -750,4 +750,56 @@ describe('SyncServiceSettingsCard Component', () => {
         expect(errBanner).toBeInTheDocument();
         expect(screen.getByRole('dialog')).toBeInTheDocument();
     });
+
+    it('S11-F1: renders camelCase SyncRevocationNotice fields on host admin panel', async () => {
+        const mockAdmin: FrontendSyncAdminStatus = {
+            descriptor: {
+                readUrl: 'https://my-space.org/sync.php',
+                writeUrl: 'https://my-space.org/sync.php',
+                dropPub: 'ed25519-public-key',
+            },
+            adminPubkey: 'admin-pubkey',
+            dataDir: 'data',
+            maxMembers: 300,
+            maxTotalStorageMb: 50,
+            maxUserStorageMb: 25,
+            usedBytes: 10 * 1024 * 1024,
+            softWarning: false,
+            cardPolicy: {
+                directMin: 2,
+                hop2Enabled: true,
+                bridgeMin: 2,
+                hop2Min: 2,
+            },
+            allow: [],
+            totalMemberCount: 15,
+            revocation: {
+                dropPub: 'ed25519-public-key',
+                issuedAt: 1700000000,
+                effectiveAt: 1700100000,
+                reason: 'Server migration to new host',
+                replacement: {
+                    writeUrl: 'https://replacement.example/sync.php',
+                    readUrl: 'https://replacement.example/data',
+                    dropPub: 'replacement-drop-pub',
+                },
+                signature: 'sig-hex',
+            },
+        };
+
+        vi.mocked(marketService.getSyncAdminStatus).mockResolvedValue(mockAdmin);
+
+        render(
+            <SyncServiceSettingsCard
+                config={createDefaultConfig()}
+                onConfigUpdated={vi.fn()}
+            />
+        );
+
+        const hostTabBtn = screen.getByRole('tab', { name: /Eigenen Dienst bereitstellen|Host Own Service/i });
+        fireEvent.click(hostTabBtn);
+
+        expect(await screen.findByText('Server migration to new host')).toBeInTheDocument();
+        expect(screen.getByText(/→ https:\/\/replacement\.example\/sync\.php/)).toBeInTheDocument();
+    });
 });

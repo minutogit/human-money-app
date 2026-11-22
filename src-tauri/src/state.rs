@@ -1586,6 +1586,22 @@ impl AppState {
         self.set_cache_slot_direct(|c| &mut c.ui_preferences, value);
     }
 
+    pub fn set_cached_ui_preferences_for_service(
+        &self,
+        service: &AppService,
+        value: Option<UiPreferences>,
+    ) {
+        self.write_cache_slot_for_service(service, |c| &mut c.ui_preferences, value);
+    }
+
+    pub fn set_cached_wot_for_service(
+        &self,
+        service: &AppService,
+        value: Option<humoco_wot::TrustRegister>,
+    ) {
+        self.write_cache_slot_for_service(service, |c| &mut c.wot, value);
+    }
+
     pub fn cache_security_policy(&self) -> Option<SecurityPolicy> {
         self.profile_caches
             .lock()

@@ -222,7 +222,7 @@ pub struct FrontendMyMarketProfile {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FrontendSaveMyMarketProfileRequest {
     pub profile: crate::models::FrontendUserProfile,
     pub visibility: CardFieldVisibility,
@@ -244,7 +244,7 @@ where
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FrontendAdInput {
     pub id: Option<String>,
     pub kind: humoco_market::AdKind,
@@ -354,7 +354,7 @@ impl From<humoco_market::StandardRef> for FrontendStandardRef {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FrontendSyncReplacementTarget {
     pub write_url: String,
     pub read_url: String,
@@ -382,7 +382,7 @@ impl From<FrontendSyncReplacementTarget> for crate::sync_client::SyncReplacement
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FrontendSyncDescriptor {
     pub write_url: String,
     pub read_url: String,
@@ -551,7 +551,7 @@ pub struct FrontendMarketSnapshot {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FrontendMemberPolicyDto {
     pub direct_min: u8,
     pub hop2_enabled: bool,
@@ -604,6 +604,32 @@ pub struct FrontendSyncSetupDraft {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct FrontendSyncRevocationNotice {
+    pub drop_pub: String,
+    pub issued_at: u64,
+    pub effective_at: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replacement: Option<FrontendSyncReplacementTarget>,
+    pub signature: String,
+}
+
+impl From<crate::sync_client::SyncRevocationNotice> for FrontendSyncRevocationNotice {
+    fn from(n: crate::sync_client::SyncRevocationNotice) -> Self {
+        Self {
+            drop_pub: n.drop_pub,
+            issued_at: n.issued_at,
+            effective_at: n.effective_at,
+            reason: n.reason,
+            replacement: n.replacement.map(Into::into),
+            signature: n.signature,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct FrontendSyncAdminStatus {
     pub descriptor: FrontendSyncDescriptor,
     pub admin_pubkey: String,
@@ -618,11 +644,11 @@ pub struct FrontendSyncAdminStatus {
     pub allow: Vec<String>,
     pub total_member_count: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub revocation: Option<crate::sync_client::SyncRevocationNotice>,
+    pub revocation: Option<FrontendSyncRevocationNotice>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FrontendSyncAdminUpdateRequest {
     pub card_policy: Option<FrontendMemberPolicyDto>,
     pub allow: Option<Vec<String>>,
@@ -753,4 +779,81 @@ pub struct FrontendResolvedCardRecipient {
     pub did: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
+}
+
+#[cfg(test)]
+mod s11_tests {
+    use super::*;
+
+    #[test]
+    fn s11_f1_market_dtos_deny_unknown_fields_and_revocation_camel_case() {
+        assert!(serde_json::from_str::<FrontendSyncReplacementTarget>(
+            r#"{"writeUrl":"https://a.example/sync.php","readUrl":"https://a.example/d","dropPub":"aa","extra":1}"#
+        )
+        .is_err());
+        assert!(serde_json::from_str::<FrontendSyncDescriptor>(
+            r#"{"writeUrl":"https://a.example/sync.php","readUrl":"https://a.example/d","dropPub":"aa","extra":1}"#
+        )
+        .is_err());
+        assert!(serde_json::from_str::<FrontendMemberPolicyDto>(
+            r#"{"directMin":2,"hop2Enabled":true,"bridgeMin":2,"hop2Min":2,"extra":1}"#
+        )
+        .is_err());
+        assert!(
+            serde_json::from_str::<FrontendSyncAdminUpdateRequest>(r#"{"unknown":1}"#).is_err()
+        );
+        assert!(serde_json::from_str::<FrontendAdInput>(
+            r#"{"id":null,"kind":"offer","title":"T","durationDays":30,"allowInquiries":true,"bogus":1}"#
+        )
+        .is_err());
+        assert!(serde_json::from_str::<FrontendSaveMyMarketProfileRequest>(
+            r#"{"profile":{},"visibility":{"name":"nobody","address":"nobody","street":"nobody","email":"nobody","phone":"nobody","coordinates":"nobody","url":"nobody","picture":"nobody","gender":"nobody"},"skills":[],"maxHops":2,"allowInquiries":true,"bogus":true}"#
+        )
+        .is_err());
+
+        let notice = crate::sync_client::SyncRevocationNotice {
+            drop_pub: "11".repeat(32),
+            issued_at: 1_700_000_000,
+            effective_at: 1_700_100_000,
+            reason: Some("Migrating host".to_string()),
+            replacement: Some(crate::sync_client::SyncReplacementTarget {
+                write_url: "https://new.example/sync.php".to_string(),
+                read_url: "https://new.example/data".to_string(),
+                drop_pub: "22".repeat(32),
+            }),
+            signature: "ab".repeat(64),
+        };
+        let status = FrontendSyncAdminStatus {
+            descriptor: FrontendSyncDescriptor::default(),
+            admin_pubkey: "11".repeat(32),
+            data_dir: "data".to_string(),
+            max_members: 100,
+            max_total_storage_mb: 100,
+            max_user_storage_mb: 25,
+            used_bytes: None,
+            max_bytes: None,
+            soft_warning: false,
+            card_policy: FrontendMemberPolicyDto::default(),
+            allow: vec![],
+            total_member_count: 0,
+            revocation: Some(notice.into()),
+        };
+        let v = serde_json::to_value(&status).unwrap();
+        let rev = v.get("revocation").expect("revocation serialized");
+        assert_eq!(
+            rev.get("effectiveAt").and_then(|x| x.as_u64()),
+            Some(1_700_100_000)
+        );
+        assert!(rev.get("effective_at").is_none());
+        assert_eq!(
+            rev.get("replacement")
+                .and_then(|r| r.get("writeUrl"))
+                .and_then(|x| x.as_str()),
+            Some("https://new.example/sync.php")
+        );
+        assert!(rev
+            .get("replacement")
+            .and_then(|r| r.get("write_url"))
+            .is_none());
+    }
 }

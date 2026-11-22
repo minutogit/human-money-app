@@ -127,15 +127,11 @@ export interface FrontendSyncReplacementTarget {
 }
 
 export interface SyncRevocationNotice {
-    drop_pub: string;
-    issued_at: number;
-    effective_at: number;
+    dropPub: string;
+    issuedAt: number;
+    effectiveAt: number;
     reason?: string | null;
-    replacement?: {
-        write_url: string;
-        read_url: string;
-        drop_pub: string;
-    } | null;
+    replacement?: FrontendSyncReplacementTarget | null;
     signature: string;
 }
 

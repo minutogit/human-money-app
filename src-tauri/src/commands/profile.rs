@@ -71,8 +71,12 @@ pub fn get_my_quick_contact_impl(state: &AppState) -> Result<FrontendQuickContac
         .map_err(FrontendError::from)?;
     let mut sync_urls = Vec::new();
     for s in policy.market_selected_syncs {
+        if s.status.trim().eq_ignore_ascii_case("revoked") {
+            continue;
+        }
+        let lower = s.write_url.trim().to_ascii_lowercase();
         if !s.write_url.is_empty()
-            && (s.write_url.starts_with("https://") || s.write_url.starts_with("http://"))
+            && (lower.starts_with("https://") || lower.starts_with("http://"))
         {
             let compact = compact_sync_url_for_contact_uri(&s.write_url);
             if !compact.is_empty() && !sync_urls.contains(&compact) {
@@ -85,9 +89,11 @@ pub fn get_my_quick_contact_impl(state: &AppState) -> Result<FrontendQuickContac
     }
     if sync_urls.len() < 2 {
         for ps in policy.public_syncs {
+            let lower = ps.write_url.trim().to_ascii_lowercase();
             if ps.enabled
+                && !ps.status.trim().eq_ignore_ascii_case("revoked")
                 && !ps.write_url.is_empty()
-                && (ps.write_url.starts_with("https://") || ps.write_url.starts_with("http://"))
+                && (lower.starts_with("https://") || lower.starts_with("http://"))
             {
                 let compact = compact_sync_url_for_contact_uri(&ps.write_url);
                 if !compact.is_empty() && !sync_urls.contains(&compact) {
@@ -298,5 +304,79 @@ mod tests {
             root_quick.did
         );
         let _ = std::fs::remove_dir_all(root_dir);
+    }
+
+    #[test]
+    fn s11_f2_quick_contact_excludes_revoked_and_accepts_uppercase_scheme() {
+        let dir =
+            std::env::temp_dir().join(format!("humoco_quick_revoked_{}", uuid::Uuid::new_v4()));
+        let pw = "pw123";
+        let mut service = human_money_core::app_service::AppService::new(&dir).unwrap();
+        service
+            .create_profile(
+                "Alice Quick",
+                crate::test_support::ALICE_PHRASE,
+                None,
+                None,
+                pw,
+                human_money_core::MnemonicLanguage::English,
+                "inst-q-1".to_string(),
+                true,
+            )
+            .unwrap();
+        service.unlock_session(pw, 3600).unwrap();
+        let state = crate::test_support::create_test_state(service);
+        {
+            let mut svc = state.service.lock().unwrap();
+            let pol = crate::settings::SecurityPolicy {
+                market_selected_syncs: vec![
+                    crate::models::FrontendSyncDescriptor {
+                        write_url: "https://revoked-selected.example/sync.php".to_string(),
+                        read_url: "https://revoked-selected.example/data".to_string(),
+                        drop_pub: "11".repeat(32),
+                        status: "revoked".to_string(),
+                        ..Default::default()
+                    },
+                    crate::models::FrontendSyncDescriptor {
+                        write_url: "HTTPS://UPPER.EXAMPLE/sync.php".to_string(),
+                        read_url: "https://upper.example/data".to_string(),
+                        drop_pub: "22".repeat(32),
+                        status: "active".to_string(),
+                        ..Default::default()
+                    },
+                ],
+                public_syncs: vec![
+                    crate::settings::StoredPublicSync {
+                        write_url: "https://revoked-public.example/sync.php".to_string(),
+                        read_url: "https://revoked-public.example/data".to_string(),
+                        drop_pub: "33".repeat(32),
+                        enabled: true,
+                        status: "revoked".to_string(),
+                        ..Default::default()
+                    },
+                    crate::settings::StoredPublicSync {
+                        write_url: "https://active-public.example/sync.php".to_string(),
+                        read_url: "https://active-public.example/data".to_string(),
+                        drop_pub: "44".repeat(32),
+                        enabled: true,
+                        status: "active".to_string(),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            };
+            state.save_security_policy(&mut svc, pol, Some(pw)).unwrap();
+        }
+
+        let quick = get_my_quick_contact_impl(&state).unwrap();
+        assert_eq!(
+            quick.sync_urls,
+            vec![
+                "UPPER.EXAMPLE".to_string(),
+                "active-public.example".to_string()
+            ]
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

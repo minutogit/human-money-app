@@ -8,7 +8,7 @@ use human_money_core::models::secure_container::{ContainerConfig, PrivacyMode};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct WotFileEnvelope {
     pub format_version: u8,
     pub sender_did: String,
@@ -17,6 +17,9 @@ struct WotFileEnvelope {
 }
 
 fn looks_like_provider_filter(bytes: &[u8]) -> Option<&str> {
+    if bytes.len() > humoco_wot::MAX_PROVIDER_FILTER_RAW_LEN {
+        return None;
+    }
     let s = std::str::from_utf8(bytes).ok()?.trim();
     let val: serde_json::Value = serde_json::from_str(s).ok()?;
     if val.get("typ").and_then(|v| v.as_str()) == Some(humoco_wot::PROVIDER_FILTER_TYP) {
@@ -24,6 +27,72 @@ fn looks_like_provider_filter(bytes: &[u8]) -> Option<&str> {
     } else {
         None
     }
+}
+
+fn summary_from_register(reg: &humoco_wot::TrustRegister) -> FrontendWotSummaryDto {
+    let rated_contacts_count = reg.own_contacts.values().filter(|e| e.level >= 1).count();
+    let verified_humans_count = reg.own_contacts.values().filter(|e| e.level == 0).count();
+    let close_confidants_count = reg.own_contacts.values().filter(|e| e.level == 3).count();
+    let imported_peer_lists_count = reg.raw_list_store.len();
+    let own_list_version = reg.own_signed_list.as_ref().map(|l| l.v);
+    let own_list_max_hops = reg.policy.own_list_max_hops;
+    let provider_filters_count = reg.provider_filters.len();
+
+    FrontendWotSummaryDto {
+        rated_contacts_count,
+        verified_humans_count,
+        close_confidants_count,
+        imported_peer_lists_count,
+        own_list_version,
+        own_list_max_hops,
+        provider_filters_count,
+    }
+}
+
+fn providers_from_register(
+    reg: &humoco_wot::TrustRegister,
+    now_secs: u64,
+) -> Vec<FrontendWotProviderDto> {
+    let mut list: Vec<FrontendWotProviderDto> = reg
+        .provider_filters
+        .values()
+        .map(|p| provider_filter_to_dto(p, reg, now_secs, reg.policy.freshness_grace_secs))
+        .collect();
+
+    list.sort_by(|a, b| {
+        a.name
+            .to_lowercase()
+            .cmp(&b.name.to_lowercase())
+            .then_with(|| a.issuer_did.cmp(&b.issuer_did))
+    });
+    list
+}
+
+fn is_known_contact_for_register(
+    state: &AppState,
+    service: &mut human_money_core::app_service::AppService,
+    password: Option<&str>,
+    target_raw: &str,
+    canonical_target: Option<&str>,
+) -> bool {
+    let book_opt = state.cache_contacts().or_else(|| {
+        crate::state::load_encrypted_json_or_default::<crate::models::FrontendAddressBook>(
+            service,
+            crate::state::CONTACTS_DATA_NAME,
+            password,
+        )
+        .ok()
+    });
+    book_opt
+        .as_ref()
+        .map(|book| {
+            book.contacts.keys().any(|k| {
+                k == target_raw
+                    || (canonical_target.is_some()
+                        && crate::state::canonicalize_did(k).ok().as_deref() == canonical_target)
+            })
+        })
+        .unwrap_or(false)
 }
 
 fn provider_filter_to_dto(
@@ -59,7 +128,7 @@ fn import_provider_filter_to_dto(
     raw_json: &str,
     password: Option<&str>,
 ) -> Result<FrontendWotImportResultDto, FrontendError> {
-    let now_secs = Utc::now().timestamp() as u64;
+    let now_secs = Utc::now().timestamp().max(0) as u64;
     let mut reg = state
         .get_or_load_wot_register(service, password)
         .map_err(FrontendError::from)?;
@@ -76,15 +145,8 @@ fn import_provider_filter_to_dto(
         FrontendError::from("Imported provider filter not found in register".to_string())
     })?;
 
-    let contacts_cache = state.cache_contacts();
-    let is_known_contact = contacts_cache
-        .as_ref()
-        .map(|book| {
-            book.contacts
-                .keys()
-                .any(|k| k == &iss || crate::state::canonicalize_did(k).ok().as_ref() == Some(&iss))
-        })
-        .unwrap_or(false);
+    let is_known_contact =
+        is_known_contact_for_register(state, service, password, &iss, Some(&iss));
 
     let existing_trust_level = Some(stored.local_trust_level);
 
@@ -109,52 +171,13 @@ pub fn get_wot_summary_impl(state: &AppState) -> Result<FrontendWotSummaryDto, F
     let reg = state
         .get_or_load_wot_register(&mut service, None)
         .map_err(FrontendError::from)?;
-
-    let rated_contacts_count = reg.own_contacts.values().filter(|e| e.level >= 1).count();
-    let verified_humans_count = reg.own_contacts.values().filter(|e| e.level == 0).count();
-    let close_confidants_count = reg.own_contacts.values().filter(|e| e.level == 3).count();
-    let imported_peer_lists_count = reg.raw_list_store.len();
-    let own_list_version = reg.own_signed_list.as_ref().map(|l| l.v);
-    let own_list_max_hops = reg.policy.own_list_max_hops;
-    let provider_filters_count = reg.provider_filters.len();
-
-    Ok(FrontendWotSummaryDto {
-        rated_contacts_count,
-        verified_humans_count,
-        close_confidants_count,
-        imported_peer_lists_count,
-        own_list_version,
-        own_list_max_hops,
-        provider_filters_count,
-    })
+    Ok(summary_from_register(&reg))
 }
 
-pub(crate) fn set_wot_max_hops_with_service(
+pub(crate) fn apply_desired_hops_to_cached_contacts(
     state: &AppState,
-    service: &mut human_money_core::app_service::AppService,
-    max_hops: u8,
-    pw: Option<&str>,
-) -> Result<(), FrontendError> {
-    if !(1..=3).contains(&max_hops) {
-        return Err(FrontendError::from(
-            "maxHops must be between 1 and 3".to_string(),
-        ));
-    }
-
-    let mut reg = state
-        .get_or_load_wot_register(service, pw)
-        .map_err(FrontendError::from)?;
-
-    let now_secs = Utc::now().timestamp() as u64;
-    reg.set_own_list_max_hops(max_hops, now_secs)
-        .map_err(|e| FrontendError::from(e.to_string()))?;
-    reg.clear_drop_sent_log(None);
-
-    let _ = state.ensure_wot_list_signed(service, &mut reg);
-    state
-        .save_wot_register(service, &reg, pw)
-        .map_err(FrontendError::from)?;
-
+    reg: &humoco_wot::TrustRegister,
+) {
     state.with_cached_contacts_mut(|opt| {
         if let Some(book) = opt {
             for c in book.contacts.values_mut() {
@@ -166,8 +189,47 @@ pub(crate) fn set_wot_max_hops_with_service(
             }
         }
     });
+}
 
-    Ok(())
+pub(crate) fn prepare_wot_max_hops(
+    state: &AppState,
+    service: &mut human_money_core::app_service::AppService,
+    max_hops: u8,
+    pw: Option<&str>,
+) -> Result<humoco_wot::TrustRegister, FrontendError> {
+    if !(1..=3).contains(&max_hops) {
+        return Err(FrontendError::from(
+            "maxHops must be between 1 and 3".to_string(),
+        ));
+    }
+
+    let mut reg = state
+        .get_or_load_wot_register(service, pw)
+        .map_err(FrontendError::from)?;
+
+    let now_secs = Utc::now().timestamp().max(0) as u64;
+    reg.set_own_list_max_hops(max_hops, now_secs)
+        .map_err(|e| FrontendError::from(e.to_string()))?;
+    reg.clear_drop_sent_log(None);
+
+    state
+        .ensure_wot_list_signed(service, &mut reg)
+        .map_err(FrontendError::from)?;
+    Ok(reg)
+}
+
+pub(crate) fn set_wot_max_hops_with_service(
+    state: &AppState,
+    service: &mut human_money_core::app_service::AppService,
+    max_hops: u8,
+    pw: Option<&str>,
+) -> Result<humoco_wot::TrustRegister, FrontendError> {
+    let reg = prepare_wot_max_hops(state, service, max_hops, pw)?;
+    state
+        .save_wot_register(service, &reg, pw)
+        .map_err(FrontendError::from)?;
+    apply_desired_hops_to_cached_contacts(state, &reg);
+    Ok(reg)
 }
 
 pub fn set_wot_max_hops_impl(
@@ -184,10 +246,8 @@ pub fn set_wot_max_hops_impl(
     let (mut service, resolved_pw) = state
         .authorize_and_lock_secret(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
     let pw = resolved_pw.as_deref().map(String::as_str);
-    set_wot_max_hops_with_service(state, &mut service, max_hops, pw)?;
-
-    drop(service);
-    get_wot_summary_impl(state)
+    let reg = set_wot_max_hops_with_service(state, &mut service, max_hops, pw)?;
+    Ok(summary_from_register(&reg))
 }
 
 pub fn export_wot_package_impl(
@@ -224,6 +284,7 @@ pub fn export_wot_package_impl(
 
     let share_all = share_with_all_contacts.unwrap_or(false);
 
+    let mut has_single_recipient = false;
     let (sync_package, receipt, config) = if share_all {
         let target_dids: Vec<String> = reg
             .own_contacts
@@ -251,9 +312,13 @@ pub fn export_wot_package_impl(
     } else {
         let rcpt_can = recipient_did
             .as_deref()
-            .map(|s| s.trim())
+            .map(str::trim)
             .filter(|s| !s.is_empty())
-            .map(|s| crate::state::canonicalize_did(s).unwrap_or_else(|_| s.to_string()));
+            .map(|s| {
+                crate::state::canonicalize_did(s).map_err(|e| FrontendError::from(e.to_string()))
+            })
+            .transpose()?;
+        has_single_recipient = rcpt_can.is_some();
 
         let (pkg, rcpt) = reg
             .prepare_sync_package(rcpt_can.as_deref(), Some(2_000_000), true)
@@ -286,17 +351,10 @@ pub fn export_wot_package_impl(
         .seal_trust_container(&envelope_bytes, config)
         .map_err(FrontendError::from)?;
 
-    if !share_all {
-        let rcpt_can = recipient_did
-            .as_deref()
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty())
-            .map(|s| crate::state::canonicalize_did(s).unwrap_or_else(|_| s.to_string()));
-        if rcpt_can.is_some() {
-            let now_secs = Utc::now().timestamp() as u64;
-            reg.commit_sync_receipt(receipt, now_secs);
-            let _ = state.save_wot_register(&mut service, &reg, pw);
-        }
+    if !share_all && has_single_recipient {
+        let now_secs = Utc::now().timestamp().max(0) as u64;
+        reg.commit_sync_receipt(receipt, now_secs);
+        let _ = state.save_wot_register(&mut service, &reg, pw);
     }
 
     Ok(container_bytes)
@@ -320,13 +378,29 @@ pub fn import_wot_package_impl(
     let plaintext = service
         .open_trust_container(&container_bytes, container_password.as_deref(), |bytes| {
             if let Some(raw_json) = looks_like_provider_filter(bytes) {
-                let now_secs = Utc::now().timestamp() as u64;
+                let now_secs = Utc::now().timestamp().max(0) as u64;
                 let parsed = humoco_wot::parse_and_verify_provider_filter(raw_json, now_secs)
                     .map_err(|e| human_money_core::Error::Generic(e.to_string()))?;
                 Ok(parsed.payload.iss)
             } else {
                 let env: WotFileEnvelope = serde_json::from_slice(bytes)
                     .map_err(|e| human_money_core::Error::Json(e.to_string()))?;
+                if env.format_version != 1 {
+                    return Err(human_money_core::Error::Validation(
+                        human_money_core::error::ValidationError::InvalidTransaction(format!(
+                            "Unsupported WoT file envelope version: {}",
+                            env.format_version
+                        )),
+                    ));
+                }
+                crate::state::canonicalize_did(&env.sender_did).map_err(|e| {
+                    human_money_core::Error::Validation(
+                        human_money_core::error::ValidationError::InvalidTransaction(format!(
+                            "Invalid senderDid in WoT envelope: {}",
+                            e
+                        )),
+                    )
+                })?;
                 Ok(env.sender_did)
             }
         })
@@ -338,38 +412,43 @@ pub fn import_wot_package_impl(
 
     let envelope: WotFileEnvelope = serde_json::from_slice(&plaintext)
         .map_err(|e| FrontendError::from(format!("Failed to parse envelope: {}", e)))?;
+    if envelope.format_version != 1 {
+        return Err(FrontendError::from(format!(
+            "Unsupported WoT file envelope version: {}",
+            envelope.format_version
+        )));
+    }
 
     let mut reg = state
         .get_or_load_wot_register(&mut service, pw)
         .map_err(FrontendError::from)?;
 
-    let can_sender = crate::state::canonicalize_did(&envelope.sender_did).ok();
-    let now_secs = Utc::now().timestamp() as u64;
+    let can_sender = crate::state::canonicalize_did(&envelope.sender_did)
+        .map_err(|e| FrontendError::from(e.to_string()))?;
+    let now_secs = Utc::now().timestamp().max(0) as u64;
     let stats = reg
-        .import_sync_package(&envelope.sync_package, can_sender.as_deref(), now_secs)
+        .import_sync_package(&envelope.sync_package, Some(can_sender.as_str()), now_secs)
         .map_err(|e| FrontendError::from(e.to_string()))?;
 
     if reg.own_list_dirty {
-        let _ = state.ensure_wot_list_signed(&mut service, &mut reg);
+        state
+            .ensure_wot_list_signed(&mut service, &mut reg)
+            .map_err(FrontendError::from)?;
     }
 
     state
         .save_wot_register(&mut service, &reg, pw)
         .map_err(FrontendError::from)?;
 
-    let contacts_cache = state.cache_contacts();
-    let is_known_contact = contacts_cache
-        .as_ref()
-        .map(|book| {
-            book.contacts.keys().any(|k| {
-                k == &envelope.sender_did
-                    || (can_sender.is_some()
-                        && crate::state::canonicalize_did(k).ok() == can_sender)
-            })
-        })
-        .unwrap_or(false);
+    let is_known_contact = is_known_contact_for_register(
+        state,
+        &mut service,
+        pw,
+        &envelope.sender_did,
+        Some(&can_sender),
+    );
 
-    let existing_trust_level = can_sender.and_then(|c| reg.own_contacts.get(&c).map(|e| e.level));
+    let existing_trust_level = reg.own_contacts.get(&can_sender).map(|e| e.level);
 
     Ok(FrontendWotImportResultDto {
         sender_did: envelope.sender_did,
@@ -394,22 +473,8 @@ pub fn get_wot_providers_impl(
     let reg = state
         .get_or_load_wot_register(&mut service, None)
         .map_err(FrontendError::from)?;
-    let now_secs = Utc::now().timestamp() as u64;
-
-    let mut list: Vec<FrontendWotProviderDto> = reg
-        .provider_filters
-        .values()
-        .map(|p| provider_filter_to_dto(p, &reg, now_secs, reg.policy.freshness_grace_secs))
-        .collect();
-
-    list.sort_by(|a, b| {
-        a.name
-            .to_lowercase()
-            .cmp(&b.name.to_lowercase())
-            .then_with(|| a.issuer_did.cmp(&b.issuer_did))
-    });
-
-    Ok(list)
+    let now_secs = Utc::now().timestamp().max(0) as u64;
+    Ok(providers_from_register(&reg, now_secs))
 }
 
 pub fn set_wot_provider_trust_impl(
@@ -418,6 +483,8 @@ pub fn set_wot_provider_trust_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<Vec<FrontendWotProviderDto>, FrontendError> {
+    let can_issuer = crate::state::canonicalize_did(&issuer_did)
+        .map_err(|e| FrontendError::from(e.to_string()))?;
     let (mut service, resolved_pw) = state
         .authorize_and_lock_secret(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
     let pw = resolved_pw.as_deref().map(String::as_str);
@@ -425,15 +492,15 @@ pub fn set_wot_provider_trust_impl(
         .get_or_load_wot_register(&mut service, pw)
         .map_err(FrontendError::from)?;
 
-    reg.set_provider_trust(&issuer_did, level)
+    reg.set_provider_trust(&can_issuer, level)
         .map_err(|e| FrontendError::from(e.to_string()))?;
 
     state
         .save_wot_register(&mut service, &reg, pw)
         .map_err(FrontendError::from)?;
 
-    drop(service);
-    get_wot_providers_impl(state)
+    let now_secs = Utc::now().timestamp().max(0) as u64;
+    Ok(providers_from_register(&reg, now_secs))
 }
 
 pub fn remove_wot_provider_impl(
@@ -441,6 +508,8 @@ pub fn remove_wot_provider_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<Vec<FrontendWotProviderDto>, FrontendError> {
+    let can_issuer = crate::state::canonicalize_did(&issuer_did)
+        .map_err(|e| FrontendError::from(e.to_string()))?;
     let (mut service, resolved_pw) = state
         .authorize_and_lock_secret(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
     let pw = resolved_pw.as_deref().map(String::as_str);
@@ -449,7 +518,7 @@ pub fn remove_wot_provider_impl(
         .map_err(FrontendError::from)?;
 
     let removed = reg
-        .remove_provider_filter(&issuer_did)
+        .remove_provider_filter(&can_issuer)
         .map_err(|e| FrontendError::from(e.to_string()))?;
     if !removed {
         return Err(FrontendError::from(format!(
@@ -462,8 +531,8 @@ pub fn remove_wot_provider_impl(
         .save_wot_register(&mut service, &reg, pw)
         .map_err(FrontendError::from)?;
 
-    drop(service);
-    get_wot_providers_impl(state)
+    let now_secs = Utc::now().timestamp().max(0) as u64;
+    Ok(providers_from_register(&reg, now_secs))
 }
 
 pub async fn refresh_wot_provider_url_impl(
@@ -479,7 +548,7 @@ pub async fn refresh_wot_provider_url_impl(
     let can_issuer = crate::state::canonicalize_did(&issuer_did)
         .map_err(|e| FrontendError::from(e.to_string()))?;
 
-    let (source_url, grace_secs) = state.with_session_required(
+    let source_url = state.with_session_required(
         &session,
         "Wallet session changed before loading WoT provider filter",
         |service| {
@@ -492,7 +561,7 @@ pub async fn refresh_wot_provider_url_impl(
             let url = prov.payload.source_url.clone().ok_or_else(|| {
                 FrontendError::from("Provider filter has no sourceUrl configured".to_string())
             })?;
-            Ok((url, reg.policy.freshness_grace_secs))
+            Ok(url)
         },
     )?;
 
@@ -547,7 +616,7 @@ pub async fn refresh_wot_provider_url_impl(
     let raw_json = std::str::from_utf8(&body_bytes)
         .map_err(|e| FrontendError::from(format!("Provider filter is not valid UTF-8: {}", e)))?;
 
-    let now_secs = Utc::now().timestamp() as u64;
+    let now_secs = Utc::now().timestamp().max(0) as u64;
     let parsed = humoco_wot::parse_and_verify_provider_filter(raw_json, now_secs)
         .map_err(|e| FrontendError::from(format!("Invalid provider filter fetched: {}", e)))?;
 
@@ -566,6 +635,13 @@ pub async fn refresh_wot_provider_url_impl(
                 .get_or_load_wot_register(service, pw)
                 .map_err(FrontendError::from)?;
 
+            if !reg.provider_filters.contains_key(&can_issuer) {
+                return Err(FrontendError::from(format!(
+                    "Provider filter {} was removed during refresh",
+                    can_issuer
+                )));
+            }
+
             let iss = reg
                 .import_provider_filter(raw_json, now_secs)
                 .map_err(|e| FrontendError::from(e.to_string()))?;
@@ -578,7 +654,12 @@ pub async fn refresh_wot_provider_url_impl(
                 FrontendError::from("Updated provider filter not found in register".to_string())
             })?;
 
-            Ok(provider_filter_to_dto(prov, &reg, now_secs, grace_secs))
+            Ok(provider_filter_to_dto(
+                prov,
+                &reg,
+                now_secs,
+                reg.policy.freshness_grace_secs,
+            ))
         },
     )
 }
@@ -588,7 +669,8 @@ pub fn evaluate_voucher_trust_preview_impl(
     guarantor_ids: Vec<String>,
     state: &AppState,
 ) -> Result<FrontendVoucherTrustDto, FrontendError> {
-    let service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
+    let mut service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
+    let _ = state.get_or_load_wot_register(&mut service, None);
     let trust = service
         .with_wallet(|w| state.evaluate_voucher_trust_preview(w, &creator_id, &guarantor_ids))
         .map_err(FrontendError::from)?;
@@ -1296,5 +1378,192 @@ mod tests {
             .unwrap_err()
             .message
             .contains("Security violation"));
+    }
+
+    #[tokio::test]
+    async fn s11_f6_bounds_envelope_strictness_did_fail_closed_and_refresh_guard() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let big_json = format!(
+            "{{\"typ\":\"{}\",\"pad\":\"{}\"}}",
+            humoco_wot::PROVIDER_FILTER_TYP,
+            "a".repeat(humoco_wot::MAX_PROVIDER_FILTER_RAW_LEN + 10)
+        );
+        assert!(super::looks_like_provider_filter(big_json.as_bytes()).is_none());
+
+        assert!(serde_json::from_str::<super::WotFileEnvelope>(
+            r#"{"formatVersion":1,"senderDid":"did:key:z1","syncPackage":{"sender":"did:key:z1","list":null,"hop_count":1,"sent_at":1,"sig":""},"bogus":1}"#
+        )
+        .is_err());
+
+        let dir = crate::test_support::temp_test_dir("s11_f6_wot");
+        let pw = "pw-s11-f6";
+        let mut alice_svc =
+            crate::test_support::setup_test_app(&dir.join("alice"), "Alice", ALICE_PHRASE, pw);
+        alice_svc.unlock_session(pw, 3600).unwrap();
+        let alice_state = crate::test_support::create_test_state(alice_svc);
+
+        let prov_svc = crate::test_support::setup_test_app(
+            &dir.join("prov"),
+            "Provider",
+            crate::test_support::BOB_PHRASE,
+            pw,
+        );
+        let prov_did = prov_svc
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
+
+        let charlie_svc = crate::test_support::setup_test_app(
+            &dir.join("charlie"),
+            "Charlie",
+            crate::test_support::CHARLIE_PHRASE,
+            pw,
+        );
+        let charlie_did = charlie_svc
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
+        let can_charlie = crate::state::canonicalize_did(&charlie_did).unwrap();
+
+        // 1. Sealed WotFileEnvelope with formatVersion: 2 must be rejected
+        let (bad_env_bytes, alice_did) = {
+            let mut s = alice_state.service.lock().unwrap();
+            let reg = alice_state
+                .get_or_load_wot_register(&mut s, Some(pw))
+                .unwrap();
+            let (pkg, _) = reg.prepare_sync_package(None, None, false).unwrap();
+            let bad_env = super::WotFileEnvelope {
+                format_version: 2,
+                sender_did: prov_did.clone(),
+                sender_profile: None,
+                sync_package: pkg,
+            };
+            let alice_did = s.with_wallet(|w| w.get_user_id().to_string()).unwrap();
+            (serde_json::to_vec(&bad_env).unwrap(), alice_did)
+        };
+        let sealed_v2 = prov_svc
+            .seal_trust_container(
+                &bad_env_bytes,
+                human_money_core::models::secure_container::ContainerConfig::TargetDid(
+                    alice_did,
+                    human_money_core::models::secure_container::PrivacyMode::TrialDecryption,
+                ),
+            )
+            .unwrap();
+        assert!(
+            import_wot_package_impl(sealed_v2, None, Some(pw.to_string()), &alice_state,).is_err()
+        );
+
+        // 2. Invalid DID/prefix fails closed across export, set_provider_trust, remove_provider
+        assert!(export_wot_package_impl(
+            Some("bad!prefix@did:key:z123".to_string()),
+            None,
+            Some(false),
+            Some(pw.to_string()),
+            &alice_state,
+        )
+        .is_err());
+        assert!(set_wot_provider_trust_impl(
+            "not-a-did".to_string(),
+            2,
+            Some(pw.to_string()),
+            &alice_state
+        )
+        .is_err());
+        assert!(remove_wot_provider_impl(
+            "not-a-did".to_string(),
+            Some(pw.to_string()),
+            &alice_state
+        )
+        .is_err());
+
+        // 3. Cold-cache evaluate_voucher_trust_preview_impl warms TrustRegister cleanly
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let source_url = format!("http://127.0.0.1:{}/filter.json", port);
+
+        let now_secs = Utc::now().timestamp().max(0) as u64;
+        let filter_v1 = prov_svc
+            .with_wallet_and_identity(|_w, id| {
+                let signer = crate::state::DidWotSigner::from_identity(id);
+                humoco_wot::create_and_sign_provider_filter(
+                    &signer,
+                    "Verband",
+                    1,
+                    now_secs,
+                    Some(source_url.clone()),
+                    &[(can_charlie.clone(), 3)],
+                )
+                .unwrap()
+            })
+            .unwrap();
+        let filter_v2 = prov_svc
+            .with_wallet_and_identity(|_w, id| {
+                let signer = crate::state::DidWotSigner::from_identity(id);
+                humoco_wot::create_and_sign_provider_filter(
+                    &signer,
+                    "Verband",
+                    2,
+                    now_secs + 1,
+                    Some(source_url),
+                    &[(can_charlie, 3)],
+                )
+                .unwrap()
+            })
+            .unwrap();
+
+        import_wot_package_impl(
+            filter_v1.as_bytes().to_vec(),
+            None,
+            Some(pw.to_string()),
+            &alice_state,
+        )
+        .unwrap();
+        set_wot_provider_trust_impl(prov_did.clone(), 3, Some(pw.to_string()), &alice_state)
+            .unwrap();
+        {
+            let svc = alice_state.service.lock().unwrap();
+            alice_state.set_cached_wot_for_service(&svc, None);
+        }
+        let preview =
+            evaluate_voucher_trust_preview_impl(charlie_did, vec![], &alice_state).unwrap();
+        assert!(preview.score > 0.0);
+
+        // 4. Concurrent remove_wot_provider during refresh HTTP wait must NOT resurrect provider
+        let (hit_tx, hit_rx) = tokio::sync::oneshot::channel::<()>();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+        tokio::spawn(async move {
+            if let Ok((mut stream, _)) = listener.accept().await {
+                let mut req_buf = [0u8; 1024];
+                let _ = stream.read(&mut req_buf).await;
+                let _ = hit_tx.send(());
+                let _ = release_rx.await;
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    filter_v2.len(),
+                    filter_v2
+                );
+                let _ = stream.write_all(resp.as_bytes()).await;
+                let _ = stream.shutdown().await;
+            }
+        });
+
+        let refresh_fut =
+            refresh_wot_provider_url_impl(prov_did.clone(), Some(pw.to_string()), &alice_state);
+        tokio::pin!(refresh_fut);
+        let refresh_res = tokio::select! {
+            res = &mut refresh_fut => res,
+            _ = hit_rx => {
+                remove_wot_provider_impl(prov_did.clone(), Some(pw.to_string()), &alice_state).unwrap();
+                let _ = release_tx.send(());
+                refresh_fut.await
+            }
+        };
+        assert!(
+            refresh_res.is_err(),
+            "Concurrent provider deletion must abort refresh without resurrection"
+        );
+        assert!(get_wot_providers_impl(&alice_state).unwrap().is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

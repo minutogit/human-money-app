@@ -187,7 +187,7 @@ fn build_admin_status_dto(
         card_policy: card_policy.into(),
         allow: admin.allow,
         total_member_count: stats.total_count,
-        revocation: admin.revocation,
+        revocation: admin.revocation.map(Into::into),
     }
 }
 

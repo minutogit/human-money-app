@@ -60,18 +60,38 @@ pub(crate) fn build_card_drops(
     public_syncs: &[StoredPublicSync],
     my_prefix: Option<&str>,
 ) -> Vec<humoco_market::DropDescriptor> {
-    let mut drops: Vec<humoco_market::DropDescriptor> =
-        selected_syncs.iter().cloned().map(Into::into).collect();
+    let mut seen_urls = std::collections::HashSet::new();
+    let mut drops: Vec<humoco_market::DropDescriptor> = Vec::new();
+
+    for d in selected_syncs {
+        if d.status.trim().eq_ignore_ascii_case("revoked")
+            || d.write_url.trim().is_empty()
+            || d.read_url.trim().is_empty()
+            || d.drop_pub.trim().is_empty()
+        {
+            continue;
+        }
+        let norm = crate::services::common::normalize_sync_url(&d.write_url);
+        if norm.is_empty() || !seen_urls.insert(norm) {
+            continue;
+        }
+        drops.push(d.clone().into());
+    }
 
     for pd in public_syncs {
         if pd.enabled
-            && !pd.write_url.is_empty()
-            && !pd.read_url.is_empty()
-            && !pd.drop_pub.is_empty()
-            && !drops.iter().any(|d| d.write_url == pd.write_url)
+            && !pd.status.trim().eq_ignore_ascii_case("revoked")
+            && !pd.write_url.trim().is_empty()
+            && !pd.read_url.trim().is_empty()
+            && !pd.drop_pub.trim().is_empty()
         {
-            let slot_id = humoco_market::format_slot_id(&pd.access_pubkey, my_prefix)
-                .unwrap_or_else(|_| pd.access_pubkey.clone());
+            let norm = crate::services::common::normalize_sync_url(&pd.write_url);
+            if norm.is_empty() || !seen_urls.insert(norm) {
+                continue;
+            }
+            let Ok(slot_id) = humoco_market::format_slot_id(&pd.access_pubkey, my_prefix) else {
+                continue;
+            };
             drops.push(humoco_market::DropDescriptor {
                 write_url: pd.write_url.clone(),
                 read_url: pd.read_url.clone(),
@@ -195,12 +215,12 @@ fn encode_media_data_uri(media_bytes: &[u8]) -> String {
     format!("{}{}", prefix, STANDARD.encode(media_bytes))
 }
 
-fn try_load_cached_media(
+fn try_load_cached_media_bytes(
     service: &mut AppService,
     storage_key: &str,
     is_local_sidecar: bool,
     password: Option<&str>,
-) -> Result<Option<String>, FrontendError> {
+) -> Result<Option<Vec<u8>>, FrontendError> {
     let media_bytes_opt = if is_local_sidecar {
         crate::state::load_local_sidecar_bytes_opt(service, storage_key, password)
     } else {
@@ -213,17 +233,15 @@ fn try_load_cached_media(
     if media_bytes.is_empty() || humoco_market::validate_ad_media(&media_bytes).is_err() {
         return Ok(None);
     }
-    Ok(Some(encode_media_data_uri(&media_bytes)))
+    Ok(Some(media_bytes))
 }
 
 pub(crate) fn get_own_card_max_hops_inner(
     state: &AppState,
     service: &mut AppService,
     password: Option<&str>,
-) -> u8 {
-    load_own_market_profile_state(state, service, password)
-        .map(|s| s.max_hops.clamp(1, 3))
-        .unwrap_or(1)
+) -> Result<u8, FrontendError> {
+    load_own_market_profile_state(state, service, password).map(|s| s.max_hops.clamp(1, 3))
 }
 
 pub(crate) fn update_shrink_window(
@@ -318,12 +336,13 @@ pub(crate) fn bump_own_card_version_for_eviction(
     }
 }
 
-pub(crate) fn set_own_card_max_hops_inner(
+pub(crate) fn prepare_own_card_max_hops_for_write(
     state: &AppState,
     service: &mut AppService,
     max_hops: u8,
+    bump_for_eviction: bool,
     password: Option<&str>,
-) -> Result<u8, FrontendError> {
+) -> Result<StoredOwnMarketProfile, FrontendError> {
     service
         .require_access_mode(human_money_core::AccessMode::DailyPay, password)
         .map_err(FrontendError::from)?;
@@ -336,11 +355,24 @@ pub(crate) fn set_own_card_max_hops_inner(
     if stored.published {
         let drops = load_drops_from_settings(state, service, None, password)?;
         rebuild_and_sign_own_card_with_drops(service, &mut stored, now, Some(drops))?;
+    } else if bump_for_eviction && stored.last_card.is_some() {
+        sign_unpublish_tombstone_card(service, &mut stored, now)?;
     }
 
-    save_own_market_profile_state(state, service, &stored, password)?;
+    Ok(stored)
+}
 
-    Ok(clamped)
+#[allow(dead_code)]
+pub(crate) fn set_own_card_max_hops_inner(
+    state: &AppState,
+    service: &mut AppService,
+    max_hops: u8,
+    password: Option<&str>,
+) -> Result<u8, FrontendError> {
+    let stored = prepare_own_card_max_hops_for_write(state, service, max_hops, false, password)?;
+    let max_hops_out = stored.max_hops;
+    save_own_market_profile_state(state, service, &stored, password)?;
+    Ok(max_hops_out)
 }
 
 pub fn sync_own_card_drops_on_settings_change(
@@ -625,20 +657,14 @@ pub(crate) fn rebuild_and_sign_own_card_with_drops_and_profile(
     Ok(())
 }
 
-pub fn get_my_market_profile_impl(
-    password: Option<String>,
-    state: &AppState,
+fn build_my_market_profile_dto(
+    service: &AppService,
+    stored: StoredOwnMarketProfile,
+    now: u64,
 ) -> Result<FrontendMyMarketProfile, FrontendError> {
-    let (mut service, resolved_pw) = state
-        .authorize_and_lock_secret(crate::state::RequiredAccess::Unlocked, password.as_deref())?;
-    let pw = resolved_pw.as_deref().map(String::as_str);
-    let stored = load_own_market_profile_state(state, &mut service, pw)?;
-
     let core_profile = service
         .with_wallet(|w| w.profile.to_public_profile())
         .map_err(FrontendError::from)?;
-
-    let now = chrono::Utc::now().timestamp().max(0) as u64;
 
     let media_used_count = stored
         .ads
@@ -691,6 +717,18 @@ pub fn get_my_market_profile_impl(
     })
 }
 
+pub fn get_my_market_profile_impl(
+    password: Option<String>,
+    state: &AppState,
+) -> Result<FrontendMyMarketProfile, FrontendError> {
+    let (mut service, resolved_pw) = state
+        .authorize_and_lock_secret(crate::state::RequiredAccess::Unlocked, password.as_deref())?;
+    let pw = resolved_pw.as_deref().map(String::as_str);
+    let stored = load_own_market_profile_state(state, &mut service, pw)?;
+    let now = chrono::Utc::now().timestamp().max(0) as u64;
+    build_my_market_profile_dto(&service, stored, now)
+}
+
 fn coarsen_public_coordinates(raw: &str) -> String {
     let parts: Vec<&str> = raw.split(',').collect();
     if parts.len() == 2 {
@@ -715,11 +753,77 @@ pub fn save_my_market_profile_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<FrontendMyMarketProfile, FrontendError> {
-    if let Some(ref pic) = request.profile.picture_url {
-        let pic_trimmed = pic.trim();
-        if !pic_trimmed.is_empty() && humoco_market::is_supported_media_data_uri(pic_trimmed) {
-            humoco_market::validate_avatar_data_uri(pic_trimmed)
-                .map_err(|e| FrontendError::from(e.to_string()))?;
+    let sanitized_picture_url = match request.profile.picture_url.as_deref().map(str::trim) {
+        None | Some("") => None,
+        Some(pic_trimmed) => {
+            if pic_trimmed.chars().any(char::is_control) {
+                return Err(FrontendError::from(
+                    "Profile picture URL must not contain control characters".to_string(),
+                ));
+            }
+            if pic_trimmed
+                .get(..5)
+                .is_some_and(|p| p.eq_ignore_ascii_case("data:"))
+            {
+                humoco_market::validate_avatar_data_uri(pic_trimmed)
+                    .map_err(|e| FrontendError::from(e.to_string()))?;
+            } else {
+                if pic_trimmed.len() > 200 || pic_trimmed.chars().any(char::is_whitespace) {
+                    return Err(FrontendError::from(
+                        "Profile picture URL must be <= 200 chars without whitespace".to_string(),
+                    ));
+                }
+                let parsed = reqwest::Url::parse(pic_trimmed).map_err(|e| {
+                    FrontendError::from(format!("Invalid profile picture URL: {}", e))
+                })?;
+                if parsed.scheme() != "https"
+                    || parsed.host_str().is_none()
+                    || !parsed.username().is_empty()
+                    || parsed.password().is_some()
+                {
+                    return Err(FrontendError::from(
+                        "Profile picture URL must use https:// without userinfo".to_string(),
+                    ));
+                }
+            }
+            Some(pic_trimmed.to_string())
+        }
+    };
+
+    if request.skills.len() > humoco_market::MAX_SKILLS_PER_CARD {
+        return Err(FrontendError::from(format!(
+            "Skill count {} exceeds maximum {}",
+            request.skills.len(),
+            humoco_market::MAX_SKILLS_PER_CARD
+        )));
+    }
+    for skill in &request.skills {
+        let title_count = skill.title.trim().chars().count();
+        if title_count == 0 || skill.title.chars().count() > humoco_market::MAX_SKILL_TITLE_CHARS {
+            return Err(FrontendError::from(format!(
+                "Skill title length must be between 1 and {}",
+                humoco_market::MAX_SKILL_TITLE_CHARS
+            )));
+        }
+        if let Some(ref text) = skill.text {
+            let text_count = text.chars().count();
+            if text_count > humoco_market::MAX_SKILL_TEXT_CHARS {
+                return Err(FrontendError::from(format!(
+                    "Skill text length {} exceeds maximum {}",
+                    text_count,
+                    humoco_market::MAX_SKILL_TEXT_CHARS
+                )));
+            }
+        }
+        if let Some(ref pricing) = skill.pricing {
+            let pricing_count = pricing.chars().count();
+            if pricing_count > humoco_market::MAX_PRICING_CHARS {
+                return Err(FrontendError::from(format!(
+                    "Skill pricing length {} exceeds maximum {}",
+                    pricing_count,
+                    humoco_market::MAX_PRICING_CHARS
+                )));
+            }
         }
     }
 
@@ -753,7 +857,7 @@ pub fn save_my_market_profile_impl(
         request.profile.coordinates
     };
     core_profile.url = request.profile.url;
-    core_profile.picture_url = request.profile.picture_url.clone();
+    core_profile.picture_url = sanitized_picture_url;
 
     // Maintainer Decision 7: service_offer is derived from joined skill titles; needs is preserved!
     let service_offer = request
@@ -820,10 +924,9 @@ pub fn save_my_market_profile_impl(
         .map_err(|e| {
             FrontendError::from(format!("Failed to update Core & market profile: {}", e))
         })?;
-    state.set_cached_own_market_profile_for_service(&service, Some(stored));
+    state.set_cached_own_market_profile_for_service(&service, Some(stored.clone()));
 
-    drop(service);
-    get_my_market_profile_impl(password, state)
+    build_my_market_profile_dto(&service, stored, now)
 }
 
 pub async fn set_card_published_impl(
@@ -832,28 +935,22 @@ pub async fn set_card_published_impl(
     state: &AppState,
 ) -> Result<FrontendMyMarketProfile, FrontendError> {
     let now = chrono::Utc::now().timestamp().max(0) as u64;
-    let resolved_pw_owned = {
-        let (mut service, resolved_pw) = state.authorize_and_lock_secret(
-            crate::state::RequiredAccess::DailyPay,
-            password.as_deref(),
-        )?;
-        let pw = resolved_pw.as_deref().map(String::as_str);
-        let mut stored = load_own_market_profile_for_write(&mut service, pw)?;
+    let (mut service, resolved_pw) = state
+        .authorize_and_lock_secret(crate::state::RequiredAccess::DailyPay, password.as_deref())?;
+    let pw = resolved_pw.as_deref().map(String::as_str);
+    let mut stored = load_own_market_profile_for_write(&mut service, pw)?;
 
-        if published {
-            stored.published = true;
-            let drops = load_drops_from_settings(state, &mut service, None, pw)?;
-            rebuild_and_sign_own_card_with_drops(&mut service, &mut stored, now, Some(drops))?;
-        } else {
-            stored.published = false;
-            sign_unpublish_tombstone_card(&mut service, &mut stored, now)?;
-        }
+    if published {
+        stored.published = true;
+        let drops = load_drops_from_settings(state, &mut service, None, pw)?;
+        rebuild_and_sign_own_card_with_drops(&mut service, &mut stored, now, Some(drops))?;
+    } else {
+        stored.published = false;
+        sign_unpublish_tombstone_card(&mut service, &mut stored, now)?;
+    }
 
-        save_own_market_profile_state(state, &mut service, &stored, pw)?;
-        resolved_pw
-    };
-
-    get_my_market_profile_impl(resolved_pw_owned.as_deref().cloned(), state)
+    save_own_market_profile_state(state, &mut service, &stored, pw)?;
+    build_my_market_profile_dto(&service, stored, now)
 }
 
 pub fn upsert_ad_impl(
@@ -915,6 +1012,12 @@ pub fn upsert_ad_impl(
         Some(Some(ref uri)) if uri.trim().is_empty() => None,
         Some(Some(ref uri)) => {
             let uri_trimmed = uri.trim();
+            if uri_trimmed.len() > 140_000 || uri_trimmed.chars().any(char::is_control) {
+                return Err(FrontendError::from(
+                    "Ad image data URI exceeds maximum length or contains control characters"
+                        .to_string(),
+                ));
+            }
             if !humoco_market::is_supported_media_data_uri(uri_trimmed) {
                 return Err(FrontendError::from(format!(
                     "Ad image data URI must start with '{}', '{}', or '{}'",
@@ -982,7 +1085,10 @@ pub fn upsert_ad_impl(
             ));
         }
 
-        let id = ad_input.id.unwrap_or_else(humoco_market::new_ad_id);
+        if ad_input.id.is_some() {
+            return Err(FrontendError::from("Ad not found".to_string()));
+        }
+        let id = humoco_market::new_ad_id();
         let published_at = now;
         let expires_at = now.saturating_add(ad_input.duration_days.saturating_mul(86_400));
         stored.ads.push(humoco_market::Ad {
@@ -1024,8 +1130,7 @@ pub fn upsert_ad_impl(
         cleanup_unused_own_media(&mut service, &stored.ads, old_t, pw);
     }
 
-    drop(service);
-    get_my_market_profile_impl(resolved_pw.as_deref().cloned(), state)
+    build_my_market_profile_dto(&service, stored, now)
 }
 
 pub fn renew_ad_impl(
@@ -1077,8 +1182,7 @@ pub fn renew_ad_impl(
 
     save_own_market_profile_state(state, &mut service, &stored, pw)?;
 
-    drop(service);
-    get_my_market_profile_impl(resolved_pw.as_deref().cloned(), state)
+    build_my_market_profile_dto(&service, stored, now)
 }
 
 pub fn delete_ad_impl(
@@ -1092,16 +1196,13 @@ pub fn delete_ad_impl(
     let pw = resolved_pw.as_deref().map(String::as_str);
     let mut stored = load_own_market_profile_for_write(&mut service, pw)?;
 
-    let old_token_opt = stored
+    let ad_idx = stored
         .ads
         .iter()
-        .find(|a| a.id == id)
-        .and_then(|a| a.image_token.clone());
-    stored.ads.retain(|a| a.id != id);
-
-    if let Some(ref old_t) = old_token_opt {
-        cleanup_unused_own_media(&mut service, &stored.ads, old_t, pw);
-    }
+        .position(|a| a.id == id)
+        .ok_or_else(|| FrontendError::from("Ad not found".to_string()))?;
+    let old_token_opt = stored.ads[ad_idx].image_token.clone();
+    stored.ads.remove(ad_idx);
 
     if stored.published {
         rebuild_and_sign_own_card(&mut service, &mut stored, now)?;
@@ -1109,8 +1210,11 @@ pub fn delete_ad_impl(
 
     save_own_market_profile_state(state, &mut service, &stored, pw)?;
 
-    drop(service);
-    get_my_market_profile_impl(resolved_pw.as_deref().cloned(), state)
+    if let Some(ref old_t) = old_token_opt {
+        cleanup_unused_own_media(&mut service, &stored.ads, old_t, pw);
+    }
+
+    build_my_market_profile_dto(&service, stored, now)
 }
 
 enum AdImageLookup {
@@ -1124,8 +1228,11 @@ pub async fn get_ad_image_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<Option<String>, FrontendError> {
-    let session =
-        state.authorize_and_begin_session(crate::state::RequiredAccess::Unlocked, None)?;
+    let (session, resolved_pw) = state.authorize_and_begin_session_secret(
+        crate::state::RequiredAccess::Unlocked,
+        password.as_deref(),
+    )?;
+    let pw = resolved_pw.as_deref().map(String::as_str);
     if !humoco_market::is_valid_image_token(&image_token) {
         return Ok(None);
     }
@@ -1135,32 +1242,43 @@ pub async fn get_ad_image_impl(
         Err(_) => return Ok(None),
     };
 
-    let lookup = match state.with_session(&session, |service| {
+    let own_hit = state.with_session(&session, |service| {
         let own_key = crate::state::own_media_storage_key(&image_token);
-        if let Some(uri) = try_load_cached_media(service, &own_key, false, password.as_deref())? {
-            return Ok(AdImageLookup::Cached(uri));
-        }
+        try_load_cached_media_bytes(service, &own_key, false, pw)
+            .map(|opt| opt.map(|bytes| encode_media_data_uri(&bytes)))
+    })?;
+    if let Some(Some(uri)) = own_hit {
+        return Ok(Some(uri));
+    }
 
+    let validated_owner = human_money_core::ValidatedUserId::parse(&owner_did)
+        .map_err(|e| FrontendError::from(format!("Invalid owner DID: {}", e)))?;
+    let canonical_owner = validated_owner.into_string();
+
+    let lookup = match state.with_session(&session, |service| {
         let cache_key = crate::state::cached_media_storage_key(&blob_id);
-        if let Some(uri) = try_load_cached_media(service, &cache_key, true, password.as_deref())? {
-            return Ok(AdImageLookup::Cached(uri));
+        if let Some(bytes) = try_load_cached_media_bytes(service, &cache_key, true, pw)? {
+            if humoco_market::compute_image_token(&canonical_owner, &bytes)
+                .ok()
+                .as_deref()
+                == Some(image_token.as_str())
+            {
+                return Ok(AdImageLookup::Cached(encode_media_data_uri(&bytes)));
+            }
         }
 
         let mut candidate_urls = Vec::new();
 
-        let card_store: humoco_market::CardStore = crate::state::load_encrypted_json_or_default(
-            service,
-            MARKET_CARD_STORE_KEY,
-            password.as_deref(),
-        )
-        .map_err(FrontendError::from)?;
-        if let Some(stored_card) = card_store.cards.get(owner_did.trim()) {
+        let card_store: humoco_market::CardStore =
+            crate::state::load_encrypted_json_or_default(service, MARKET_CARD_STORE_KEY, pw)
+                .map_err(FrontendError::from)?;
+        if let Some(stored_card) = card_store.cards.get(canonical_owner.as_str()) {
             for d in &stored_card.card.payload.drops {
                 if !d.read_url.trim().is_empty() {
                     candidate_urls.push(d.read_url.clone());
                 }
             }
-        } else if let Ok(pk) = human_money_core::crypto::get_pubkey_from_user_id(&owner_did) {
+        } else if let Ok(pk) = human_money_core::crypto::get_pubkey_from_user_id(&canonical_owner) {
             for stored_card in card_store.cards.values() {
                 if human_money_core::crypto::get_pubkey_from_user_id(&stored_card.card.payload.did)
                     .ok()
@@ -1177,7 +1295,7 @@ pub async fn get_ad_image_impl(
         }
 
         let security_policy = state
-            .get_or_load_security_policy(service, password.as_deref())
+            .get_or_load_security_policy(service, pw)
             .map_err(FrontendError::from)?;
 
         for s in &security_policy.market_selected_syncs {
@@ -1217,7 +1335,7 @@ pub async fn get_ad_image_impl(
         if let Ok(Some(ciphertext)) = sync_client::get_media_blob(&client, read_url, &blob_id).await
         {
             if let Ok(media_bytes) =
-                humoco_market::open_media_blob(&owner_did, &image_token, &ciphertext)
+                humoco_market::open_media_blob(&canonical_owner, &image_token, &ciphertext)
             {
                 let cache_key = crate::state::cached_media_storage_key(&blob_id);
                 let cached_for_session = state
@@ -1226,7 +1344,7 @@ pub async fn get_ad_image_impl(
                             service,
                             &cache_key,
                             &media_bytes,
-                            password.as_deref(),
+                            pw,
                         );
                         Ok(())
                     })?
@@ -1248,35 +1366,37 @@ pub fn get_market_view_impl(
     state: &AppState,
 ) -> Result<FrontendMarketSnapshot, FrontendError> {
     let now = chrono::Utc::now().timestamp().max(0) as u64;
-    let mut service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
+    let (mut service, resolved_pw) = state
+        .authorize_and_lock_secret(crate::state::RequiredAccess::Unlocked, password.as_deref())?;
+    let pw = resolved_pw.as_deref().map(String::as_str);
+    let can_persist = matches!(
+        service.get_access_mode(),
+        Ok(human_money_core::AccessMode::Full | human_money_core::AccessMode::DailyPay)
+    ) && (service.is_session_active() || pw.is_some());
 
     // Auto-renew own card if published and (validity < 30 days OR active ads count changed)
-    let mut stored_opt =
-        load_own_market_profile_state(state, &mut service, password.as_deref()).ok();
+    let mut stored_opt = load_own_market_profile_state(state, &mut service, pw).ok();
 
-    if let Some(ref mut stored) = stored_opt {
-        if stored.published {
-            let active_user_id = service
-                .with_wallet(|w| w.get_user_id().to_string())
-                .ok()
-                .unwrap_or_default();
-            if let Some(ref last_card) = stored.last_card {
-                let active_ads_count =
-                    stored.ads.iter().filter(|a| a.expires_at > now).count() as u8;
-                let time_left = last_card.payload.valid_until.saturating_sub(now);
-                let recipient_changed = !active_user_id.trim().is_empty()
-                    && last_card.payload.recipient_id() != active_user_id.trim();
-                if time_left < humoco_market::CARD_AUTO_RENEW_THRESHOLD_SECS
-                    || last_card.payload.ad_count != active_ads_count
-                    || recipient_changed
-                {
-                    if let Ok(()) = rebuild_and_sign_own_card(&mut service, stored, now) {
-                        let _ = save_own_market_profile_state(
-                            state,
-                            &mut service,
-                            stored,
-                            password.as_deref(),
-                        );
+    if can_persist {
+        if let Some(ref mut stored) = stored_opt {
+            if stored.published {
+                let active_user_id = service
+                    .with_wallet(|w| w.get_user_id().to_string())
+                    .ok()
+                    .unwrap_or_default();
+                if let Some(ref last_card) = stored.last_card {
+                    let active_ads_count =
+                        stored.ads.iter().filter(|a| a.expires_at > now).count() as u8;
+                    let time_left = last_card.payload.valid_until.saturating_sub(now);
+                    let recipient_changed = !active_user_id.trim().is_empty()
+                        && last_card.payload.recipient_id() != active_user_id.trim();
+                    if time_left < humoco_market::CARD_AUTO_RENEW_THRESHOLD_SECS
+                        || last_card.payload.ad_count != active_ads_count
+                        || recipient_changed
+                    {
+                        if let Ok(()) = rebuild_and_sign_own_card(&mut service, stored, now) {
+                            let _ = save_own_market_profile_state(state, &mut service, stored, pw);
+                        }
                     }
                 }
             }
@@ -1284,30 +1404,23 @@ pub fn get_market_view_impl(
     }
 
     let ui_prefs = state
-        .get_or_load_ui_preferences(&mut service, password.as_deref())
+        .get_or_load_ui_preferences(&mut service, pw)
         .map_err(FrontendError::from)?;
 
-    let reg = state
-        .get_or_load_wot_register(&mut service, password.as_deref())
-        .ok();
+    let reg = state.get_or_load_wot_register(&mut service, pw).ok();
 
-    let mut store: humoco_market::CardStore = crate::state::load_encrypted_json_or_default(
-        &mut service,
-        MARKET_CARD_STORE_KEY,
-        password.as_deref(),
-    )
-    .map_err(FrontendError::from)?;
+    let mut store: humoco_market::CardStore =
+        crate::state::load_encrypted_json_or_default(&mut service, MARKET_CARD_STORE_KEY, pw)
+            .map_err(FrontendError::from)?;
 
     let before_count = store.cards.len();
     store.cards.retain(|_, c| c.card.payload.valid_until > now);
-    if store.cards.len() != before_count {
-        crate::state::save_encrypted_json(
-            &mut service,
-            MARKET_CARD_STORE_KEY,
-            &store,
-            password.as_deref(),
-        )
-        .map_err(FrontendError::from)?;
+    if store.cards.len() != before_count && can_persist {
+        if let Err(e) =
+            crate::state::save_encrypted_json(&mut service, MARKET_CARD_STORE_KEY, &store, pw)
+        {
+            log::warn!("Failed to persist pruned expired market cards: {}", e);
+        }
     }
 
     let cards_vec: Vec<humoco_market::StoredCard> = store.cards.values().cloned().collect();
@@ -1315,7 +1428,7 @@ pub fn get_market_view_impl(
     let sync_state: crate::state::StoredSyncState = crate::state::load_encrypted_json_or_default(
         &mut service,
         crate::state::MARKET_SYNC_KEY,
-        password.as_deref(),
+        pw,
     )
     .map_err(FrontendError::from)?;
 
@@ -1325,7 +1438,7 @@ pub fn get_market_view_impl(
             Some(ab) => ab,
             None => crate::state::load_encrypted_json_or_default::<
                 crate::models::FrontendAddressBook,
-            >(&mut service, CONTACTS_DATA_NAME, password.as_deref())
+            >(&mut service, CONTACTS_DATA_NAME, pw)
             .map_err(FrontendError::from)?,
         };
         ab.contacts
@@ -1514,6 +1627,11 @@ pub fn export_forward_card_impl(
 fn parse_card_envelope_payload(
     payload: &str,
 ) -> Result<humoco_market::CardEnvelope, FrontendError> {
+    if payload.len() > 64 * 1024 {
+        return Err(FrontendError::from(
+            "Card envelope payload exceeds 64 KiB limit".to_string(),
+        ));
+    }
     const CARD_URI_PREFIX: &str = "humoco://card?";
     fn clean_wrappers(s: &str) -> &str {
         s.trim_matches(|c: char| {
@@ -1823,8 +1941,9 @@ pub fn get_app_notices_impl(
     password: Option<String>,
     state: &AppState,
 ) -> Result<StoredAppNotices, FrontendError> {
-    let mut service = state.authorize_and_lock(crate::state::RequiredAccess::Unlocked, None)?;
-    Ok(state.load_app_notices(&mut service, password.as_deref()))
+    let (mut service, resolved_pw) = state
+        .authorize_and_lock_secret(crate::state::RequiredAccess::Unlocked, password.as_deref())?;
+    Ok(state.load_app_notices(&mut service, resolved_pw.as_deref().map(String::as_str)))
 }
 
 pub fn mark_app_notices_read_impl(
@@ -3200,10 +3319,16 @@ mod tests {
         }
 
         // Inject write fault on batch save -> card + contact update must abort together AND cache stay untouched!
-        human_money_core::storage::file_storage::inject_write_fault_once("seal.enc");
-        assert!(
-            import_contact_card_impl(share_uri.clone(), Some(pw.to_string()), &bob_state).is_err()
-        );
+        {
+            let _fault_guard = crate::test_support::WRITE_FAULT_TEST_LOCK
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            human_money_core::storage::file_storage::inject_write_fault_once("seal.enc");
+            assert!(
+                import_contact_card_impl(share_uri.clone(), Some(pw.to_string()), &bob_state)
+                    .is_err()
+            );
+        }
         {
             let mut s = bob_state.service.lock().unwrap();
             assert_eq!(
@@ -3372,5 +3497,472 @@ mod tests {
         let parsed = parse_card_envelope_payload(&wrapped).expect("wrapped standard base64 URI");
         assert_eq!(parsed.card_wire, env.card_wire);
         assert!(parse_card_envelope_payload("humoco://card?other=1").is_err());
+    }
+
+    #[tokio::test]
+    async fn s11_f2_f4_validation_delete_atomicity_and_card_drops() {
+        use crate::models::{
+            CardFieldVisibility, FrontendSaveMyMarketProfileRequest, FrontendUserProfile,
+        };
+        use base64::{engine::general_purpose::STANDARD, Engine};
+
+        let revoked_selected = FrontendSyncDescriptor {
+            write_url: "https://revoked.example/sync.php".to_string(),
+            read_url: "https://revoked.example/data".to_string(),
+            drop_pub: "11".repeat(32),
+            status: "revoked".to_string(),
+            ..Default::default()
+        };
+        let active_selected = FrontendSyncDescriptor {
+            write_url: "https://s1.example/sync.php/".to_string(),
+            read_url: "https://s1.example/data".to_string(),
+            drop_pub: "22".repeat(32),
+            status: "active".to_string(),
+            ..Default::default()
+        };
+        let public_syncs = vec![
+            crate::settings::StoredPublicSync {
+                write_url: "https://s1.example/sync.php".to_string(),
+                read_url: "https://s1.example/data".to_string(),
+                drop_pub: "22".repeat(32),
+                access_pubkey: "33".repeat(32),
+                enabled: true,
+                status: "active".to_string(),
+                ..Default::default()
+            },
+            crate::settings::StoredPublicSync {
+                write_url: "https://badpk.example/sync.php".to_string(),
+                read_url: "https://badpk.example/data".to_string(),
+                drop_pub: "44".repeat(32),
+                access_pubkey: "invalid-pubkey".to_string(),
+                enabled: true,
+                status: "active".to_string(),
+                ..Default::default()
+            },
+            crate::settings::StoredPublicSync {
+                write_url: "https://goodpub.example/sync.php".to_string(),
+                read_url: "https://goodpub.example/data".to_string(),
+                drop_pub: "55".repeat(32),
+                access_pubkey: "66".repeat(32),
+                enabled: true,
+                status: "active".to_string(),
+                ..Default::default()
+            },
+        ];
+        let drops = build_card_drops(
+            &[revoked_selected, active_selected],
+            &public_syncs,
+            Some("laden"),
+        );
+        assert_eq!(drops.len(), 2);
+        assert_eq!(drops[0].write_url, "https://s1.example/sync.php/");
+        assert_eq!(drops[1].write_url, "https://goodpub.example/sync.php");
+        assert!(drops[1].slot_id.as_deref().unwrap().ends_with("_laden"));
+
+        let dir = crate::test_support::temp_test_dir("s11_f4_market");
+        let pw = "pw-s11-f4";
+        let service =
+            crate::test_support::setup_test_app(&dir.join("alice"), "Alice S11", ALICE_PHRASE, pw);
+        let state = crate::test_support::create_test_state(service);
+
+        for bad_pic in [
+            "data:image/svg+xml;base64,PHN2Zy8+",
+            "javascript:alert(1)",
+            "http://insecure.example/avatar.png",
+            "https://user:pass@example.com/avatar.png",
+        ] {
+            let req = FrontendSaveMyMarketProfileRequest {
+                profile: FrontendUserProfile {
+                    picture_url: Some(bad_pic.to_string()),
+                    ..Default::default()
+                },
+                visibility: CardFieldVisibility::default(),
+                skills: vec![],
+                max_hops: 2,
+                validity_years: 2,
+                allow_inquiries: true,
+                published: Some(false),
+            };
+            assert!(
+                save_my_market_profile_impl(req, Some(pw.to_string()), &state).is_err(),
+                "expected invalid picture_url rejection: {}",
+                bad_pic
+            );
+        }
+
+        let too_many_skills = (0..=humoco_market::MAX_SKILLS_PER_CARD)
+            .map(|i| humoco_market::Skill {
+                title: format!("Skill {}", i),
+                text: None,
+                pricing: None,
+                is_remote: false,
+            })
+            .collect();
+        let skills_err_req = FrontendSaveMyMarketProfileRequest {
+            profile: FrontendUserProfile::default(),
+            visibility: CardFieldVisibility::default(),
+            skills: too_many_skills,
+            max_hops: 2,
+            validity_years: 2,
+            allow_inquiries: true,
+            published: Some(false),
+        };
+        assert!(save_my_market_profile_impl(skills_err_req, Some(pw.to_string()), &state).is_err());
+
+        let valid_https_req = FrontendSaveMyMarketProfileRequest {
+            profile: FrontendUserProfile {
+                picture_url: Some("  https://example.com/avatar.png  ".to_string()),
+                ..Default::default()
+            },
+            visibility: CardFieldVisibility::default(),
+            skills: vec![humoco_market::Skill {
+                title: "Gardening".to_string(),
+                text: None,
+                pricing: None,
+                is_remote: false,
+            }],
+            max_hops: 2,
+            validity_years: 2,
+            allow_inquiries: true,
+            published: Some(false),
+        };
+        let saved =
+            save_my_market_profile_impl(valid_https_req, Some(pw.to_string()), &state).unwrap();
+        assert_eq!(
+            saved.profile.picture_url.as_deref(),
+            Some("https://example.com/avatar.png")
+        );
+
+        let oversized_uri = format!("data:image/webp;base64,{}", "A".repeat(140_005));
+        assert!(upsert_ad_impl(
+            FrontendAdInput {
+                id: None,
+                kind: humoco_market::AdKind::Offer,
+                title: "Too big".to_string(),
+                text: None,
+                pricing: None,
+                duration_days: 30,
+                allow_inquiries: true,
+                is_remote: false,
+                image_webp_data_uri: Some(Some(oversized_uri)),
+            },
+            Some(pw.to_string()),
+            &state,
+        )
+        .is_err());
+
+        assert!(upsert_ad_impl(
+            FrontendAdInput {
+                id: Some("0011223344556677".to_string()),
+                kind: humoco_market::AdKind::Offer,
+                title: "Unknown ID".to_string(),
+                text: None,
+                pricing: None,
+                duration_days: 30,
+                allow_inquiries: true,
+                is_remote: false,
+                image_webp_data_uri: None,
+            },
+            Some(pw.to_string()),
+            &state,
+        )
+        .is_err());
+
+        let valid_webp = format!(
+            "data:image/webp;base64,{}",
+            STANDARD.encode(make_test_vp8_webp(64, 64))
+        );
+        let after_ad = upsert_ad_impl(
+            FrontendAdInput {
+                id: None,
+                kind: humoco_market::AdKind::Offer,
+                title: "Bike".to_string(),
+                text: None,
+                pricing: None,
+                duration_days: 30,
+                allow_inquiries: true,
+                is_remote: false,
+                image_webp_data_uri: Some(Some(valid_webp.clone())),
+            },
+            Some(pw.to_string()),
+            &state,
+        )
+        .unwrap();
+        let ad_id = after_ad.ads[0].id.clone();
+        let ad_token = after_ad.ads[0].image_token.clone().unwrap();
+
+        assert!(delete_ad_impl("nonexistent".to_string(), Some(pw.to_string()), &state).is_err());
+
+        {
+            let _fault_guard = crate::test_support::WRITE_FAULT_TEST_LOCK
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            human_money_core::storage::file_storage::inject_write_fault_once("seal.enc");
+            assert!(delete_ad_impl(ad_id.clone(), Some(pw.to_string()), &state).is_err());
+        }
+        let media_survived =
+            get_ad_image_impl(String::new(), ad_token, Some(pw.to_string()), &state)
+                .await
+                .unwrap();
+        assert_eq!(media_survived, Some(valid_webp));
+
+        assert!(parse_card_envelope_payload(&"x".repeat(64 * 1024 + 1)).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn s11_f5_receive_only_isolation_one_shot_pin_and_media_binding() {
+        use crate::models::{
+            CardFieldVisibility, FrontendSaveMyMarketProfileRequest, FrontendUserProfile,
+        };
+        use base64::{engine::general_purpose::STANDARD, Engine};
+
+        let dir = crate::test_support::temp_test_dir("s11_f5_market");
+        let pw = "MasterPass-S11-F5!";
+        let cashier_pin = "112233";
+        let wallet_dir = dir.join("alice");
+        let mut svc =
+            crate::test_support::setup_test_app(&wallet_dir, "Alice F5", ALICE_PHRASE, pw);
+        let folder_name = svc.list_profiles().unwrap()[0].folder_name.clone();
+
+        svc.enable_secondary_auth(
+            pw,
+            cashier_pin,
+            human_money_core::SecondaryScope::ReceiveOnly,
+        )
+        .unwrap();
+        drop(svc);
+
+        // Open fresh handle via secondary login -> wrap in AppState? Wait: seed expiring card & foreign card first!
+        let svc2 = crate::test_support::setup_test_app(&dir.join("bob"), "Bob", BOB_PHRASE, pw);
+        let (bob_did, bob_sk) = svc2
+            .with_wallet_and_identity(|w, id| (w.get_user_id().to_string(), id.signing_key.clone()))
+            .unwrap();
+        drop(svc2);
+
+        let charlie_svc = crate::test_support::setup_test_app(
+            &dir.join("charlie"),
+            "Charlie",
+            crate::test_support::CHARLIE_PHRASE,
+            pw,
+        );
+        let charlie_did = charlie_svc
+            .with_wallet(|w| w.get_user_id().to_string())
+            .unwrap();
+        drop(charlie_svc);
+
+        let mut master_svc = human_money_core::app_service::AppService::new(&wallet_dir).unwrap();
+        master_svc
+            .login(&folder_name, pw, false, "device-drops-test".into())
+            .unwrap();
+        let master_state = crate::test_support::create_test_state(master_svc);
+
+        let valid_webp = make_test_vp8_webp(64, 64);
+        let own_res = upsert_ad_impl(
+            FrontendAdInput {
+                id: None,
+                kind: humoco_market::AdKind::Offer,
+                title: "Own".to_string(),
+                text: None,
+                pricing: None,
+                duration_days: 30,
+                allow_inquiries: true,
+                is_remote: false,
+                image_webp_data_uri: Some(Some(format!(
+                    "data:image/webp;base64,{}",
+                    STANDARD.encode(&valid_webp)
+                ))),
+            },
+            Some(pw.to_string()),
+            &master_state,
+        )
+        .unwrap();
+        let own_token = own_res.ads[0].image_token.clone().unwrap();
+
+        save_my_market_profile_impl(
+            FrontendSaveMyMarketProfileRequest {
+                profile: FrontendUserProfile::default(),
+                visibility: CardFieldVisibility::default(),
+                skills: vec![],
+                max_hops: 2,
+                validity_years: 2,
+                allow_inquiries: true,
+                published: Some(true),
+            },
+            Some(pw.to_string()),
+            &master_state,
+        )
+        .unwrap();
+
+        // Force own card close to expiry (< 30d) + add expired Bob card + cache Bob media sidecar
+        let (bob_token, bob_blob_id, _ct) =
+            humoco_market::seal_media_blob(&bob_did, &valid_webp).unwrap();
+        let now = chrono::Utc::now().timestamp().max(0) as u64;
+        {
+            let mut s = master_state.service.lock().unwrap();
+            let (own_did, own_sk) = s
+                .with_wallet_and_identity(|w, id| {
+                    (w.get_user_id().to_string(), id.signing_key.clone())
+                })
+                .unwrap();
+            let mut stored = load_own_market_profile_for_write(&mut s, Some(pw)).unwrap();
+            let near_exp = humoco_market::sign_sd_card(
+                humoco_market::CardPayloadInput {
+                    did: own_did,
+                    v: 1,
+                    valid_until: now + 60,
+                    max_hops: 2,
+                    ad_count: 1,
+                    allow_inquiries: true,
+                    drops: vec![humoco_market::DropDescriptor {
+                        write_url: "https://sync.example/sync.php".into(),
+                        read_url: "https://sync.example/d".into(),
+                        slot_id: None,
+                        drop_pub: "11".repeat(32),
+                    }],
+                },
+                vec![],
+                &own_sk,
+            )
+            .unwrap();
+            stored.last_card = Some(near_exp);
+            save_own_market_profile_state(&master_state, &mut s, &stored, Some(pw)).unwrap();
+
+            let expired_bob = humoco_market::sign_sd_card(
+                humoco_market::CardPayloadInput {
+                    did: bob_did.clone(),
+                    v: 1,
+                    valid_until: 100,
+                    max_hops: 2,
+                    ad_count: 0,
+                    allow_inquiries: true,
+                    drops: vec![humoco_market::DropDescriptor {
+                        write_url: "https://sync.example/sync.php".into(),
+                        read_url: "https://sync.example/d".into(),
+                        slot_id: None,
+                        drop_pub: "11".repeat(32),
+                    }],
+                },
+                vec![],
+                &bob_sk,
+            )
+            .unwrap();
+            let expired_wire =
+                humoco_market::render_wire(&expired_bob, 1, humoco_market::WireFilter::Full)
+                    .unwrap();
+            let mut card_store = humoco_market::CardStore::default();
+            card_store.cards.insert(
+                bob_did.clone(),
+                humoco_market::StoredCard {
+                    card: expired_bob,
+                    card_wire: expired_wire,
+                    hops: 1,
+                    received_at: 100,
+                },
+            );
+            crate::state::save_encrypted_json(&mut s, MARKET_CARD_STORE_KEY, &card_store, Some(pw))
+                .unwrap();
+            crate::state::save_local_sidecar_bytes(
+                &mut s,
+                &crate::state::cached_media_storage_key(&bob_blob_id),
+                &valid_webp,
+                Some(pw),
+            )
+            .unwrap();
+        }
+        drop(master_state);
+
+        // Log in as ReceiveOnly (Cashier)
+        let mut ro_svc = human_money_core::app_service::AppService::new(&wallet_dir).unwrap();
+        let granted = ro_svc
+            .login_with_secondary(&folder_name, cashier_pin, true, "device-drops-test".into())
+            .unwrap();
+        assert_eq!(granted, human_money_core::AccessMode::ReceiveOnly);
+        ro_svc.unlock_secondary_session(cashier_pin, 600).unwrap();
+        let ro_state = crate::test_support::create_test_state(ro_svc);
+
+        let snap = get_market_view_impl(None, &ro_state).unwrap();
+        assert_eq!(snap.stored_card_count, 0);
+
+        {
+            let mut s = ro_state.service.lock().unwrap();
+            let stored_after = load_own_market_profile_for_write(&mut s, None).unwrap();
+            assert_eq!(
+                stored_after.last_card.unwrap().payload.v,
+                1,
+                "ReceiveOnly must NOT auto-renew/re-sign own card"
+            );
+            let disk_store: humoco_market::CardStore =
+                crate::state::load_encrypted_json_or_default(&mut s, MARKET_CARD_STORE_KEY, None)
+                    .unwrap();
+            assert_eq!(
+                disk_store.cards.len(),
+                1,
+                "ReceiveOnly must NOT persist expired-card prune to disk"
+            );
+        }
+        drop(ro_state);
+
+        // Log back in with master password to verify OneShotPinGrant + foreign media token binding
+        let mut m_svc = human_money_core::app_service::AppService::new(&wallet_dir).unwrap();
+        m_svc
+            .login(&folder_name, pw, false, "device-drops-test".into())
+            .unwrap();
+        let m_state = crate::test_support::create_test_state(m_svc);
+        let issue_fresh_grant = |st: &AppState| -> String {
+            let s = st.service.lock().unwrap();
+            st.issue_one_shot_pin_grant(&s, zeroize::Zeroizing::new(pw.to_string()))
+                .unwrap()
+        };
+        {
+            let mut s = m_state.service.lock().unwrap();
+            s.lock_session();
+        }
+
+        assert!(get_app_notices_impl(Some(issue_fresh_grant(&m_state)), &m_state).is_ok());
+        assert!(get_market_view_impl(Some(issue_fresh_grant(&m_state)), &m_state).is_ok());
+        assert!(
+            get_ad_image_impl(
+                String::new(),
+                own_token.clone(),
+                Some(issue_fresh_grant(&m_state)),
+                &m_state
+            )
+            .await
+            .unwrap()
+            .is_some(),
+            "AdEditorModal empty ownerDid own-media preview must work via OneShotPinGrant"
+        );
+        assert!(get_ad_image_impl(
+            "bad-did".to_string(),
+            bob_token.clone(),
+            Some(issue_fresh_grant(&m_state)),
+            &m_state
+        )
+        .await
+        .is_err());
+        assert_eq!(
+            get_ad_image_impl(
+                charlie_did,
+                bob_token.clone(),
+                Some(issue_fresh_grant(&m_state)),
+                &m_state
+            )
+            .await
+            .unwrap(),
+            None,
+            "Foreign cached media must not be served under wrong owner_did"
+        );
+        assert!(get_ad_image_impl(
+            bob_did,
+            bob_token,
+            Some(issue_fresh_grant(&m_state)),
+            &m_state
+        )
+        .await
+        .unwrap()
+        .is_some());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
