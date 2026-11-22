@@ -87,7 +87,9 @@ export function ReceiveSuccessView({ payload, pendingCommit, launchItem, onFinis
     function formatAmount(amountStr: string): string {
         const num = parseFloat(amountStr);
         if (isNaN(num)) return amountStr;
-        return num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        const fracLen = amountStr.includes('.') ? (amountStr.split('.')[1]?.length ?? 2) : 2;
+        const decimals = Math.max(2, fracLen);
+        return num.toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
     }
 
     const summable = Object.entries(activePayload.transferSummary.summableAmounts)
@@ -223,9 +225,17 @@ export function ReceiveSuccessView({ payload, pendingCommit, launchItem, onFinis
     const isReplay = !isQuarantined && activePayload.isReplay === true;
     const isPendingCommit =
         !isQuarantined && !isReplay && activePayload.newlyCommitted === false && !manualApprovalGranted;
-    const isLiveConfirmed = checkoutVerdict?.canReleaseGoodsAutomatically === true && outcome === 'Confirmed';
+    const isLiveConfirmed =
+        checkoutVerdict?.isGoodsReleaseAuthorized === true &&
+        checkoutVerdict?.canReleaseGoodsAutomatically === true &&
+        outcome === 'Confirmed';
     const isConfirmed = isLiveConfirmed && !isReplay && !isQuarantined;
-    const isProvisional = outcome === 'Provisional' && checkoutVerdict?.canReleaseGoodsAutomatically === true && !isReplay && !isQuarantined;
+    const isProvisional =
+        outcome === 'Provisional' &&
+        checkoutVerdict?.isGoodsReleaseAuthorized === true &&
+        checkoutVerdict?.canReleaseGoodsAutomatically === true &&
+        !isReplay &&
+        !isQuarantined;
     const isOfflineOnly = outcome === 'OfflineOnly';
     const isYellow = Boolean(outcome && outcome.startsWith('Yellow'));
     const isMultiVoucherYellow = outcome === 'Yellow:MultiVoucherManualApproval';

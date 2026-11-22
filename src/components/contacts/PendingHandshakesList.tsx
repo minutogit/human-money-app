@@ -89,8 +89,9 @@ export const PendingHandshakesList: React.FC<PendingHandshakesListProps> = ({
                 <div className="space-y-4 pt-2 border-t border-sky-200/60 animate-in fade-in duration-200">
                     {pendingHandshakes.map((h) => {
                         const name = h.senderName || truncateUserId(h.senderDid);
-                        const currentLevel =
-                            acceptedLevels[h.msgId] ?? (h.proposedLevel <= 3 ? h.proposedLevel : 1);
+                        const clampedProposed =
+                            h.proposedLevel >= 0 && h.proposedLevel <= 3 ? h.proposedLevel : 1;
+                        const currentLevel = acceptedLevels[h.msgId] ?? clampedProposed;
                         const returnChecked = returnFlags[h.msgId] ?? h.replyRequested ?? true;
                         const isAccepting = isAcceptingHandshake === h.msgId;
 

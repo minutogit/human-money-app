@@ -40,7 +40,6 @@ export function useVoucherDetails(voucherId: string) {
     const [showRemoveSignatureModal, setShowRemoveSignatureModal] = useState<string | null>(null);
     const [isRemovingSignature, setIsRemovingSignature] = useState(false);
     const [proofId, setProofId] = useState<string | null>(null);
-    const [isFetchingProofId, setIsFetchingProofId] = useState(false);
     const [trustStatus, setTrustStatus] = useState<TrustStatus>('clean');
     const [userProfile, setUserProfile] = useState<PublicProfile | null>(null);
     const [parsedStandards, setParsedStandards] = useState<Record<string, VoucherStandardDefinition>>({});
@@ -153,26 +152,27 @@ export function useVoucherDetails(voucherId: string) {
 
     useEffect(() => {
         let active = true;
-        if (isQuarantined && !proofId && !isFetchingProofId) {
-            setIsFetchingProofId(true);
-            voucherService
-                .getProofId(voucherId)
-                .then((id) => {
-                    if (active) setProofId(id);
-                })
-                .catch((e) =>
-                    logger.error(
-                        `Failed to fetch proof ID for voucher ${voucherId}: ${stringifyError(e)}`,
-                    ),
-                )
-                .finally(() => {
-                    if (active) setIsFetchingProofId(false);
-                });
+        if (!isQuarantined) {
+            setProofId(null);
+            return () => {
+                active = false;
+            };
         }
+        setProofId(null);
+        voucherService
+            .getProofId(voucherId)
+            .then((id) => {
+                if (active) setProofId(id);
+            })
+            .catch((e) =>
+                logger.error(
+                    `Failed to fetch proof ID for voucher ${voucherId}: ${stringifyError(e)}`,
+                ),
+            );
         return () => {
             active = false;
         };
-    }, [isQuarantined, proofId, isFetchingProofId, voucherId]);
+    }, [isQuarantined, voucherId]);
 
     const refreshDetails = useCallback(async () => {
         try {

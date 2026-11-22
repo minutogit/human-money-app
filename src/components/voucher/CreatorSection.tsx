@@ -64,7 +64,20 @@ export function CreatorSection({
             <InfoRow label={t('voucher.contactChannelsLabel')} icon={ExternalLink}>
               {creator.email && <div className="text-theme-accent">{creator.email}</div>}
               {creator.phone && <div>{creator.phone}</div>}
-              {creator.url && <a href={creator.url} target="_blank" rel="noopener noreferrer" className="text-theme-primary hover:underline block">{creator.url}</a>}
+              {creator.url && (() => {
+                let isSafeHttpUrl = false;
+                try {
+                  const parsed = new URL(creator.url);
+                  isSafeHttpUrl = parsed.protocol === 'http:' || parsed.protocol === 'https:';
+                } catch {
+                  isSafeHttpUrl = false;
+                }
+                return isSafeHttpUrl ? (
+                  <a href={creator.url} target="_blank" rel="noopener noreferrer" className="text-theme-primary hover:underline block">{creator.url}</a>
+                ) : (
+                  <span className="block">{creator.url}</span>
+                );
+              })()}
             </InfoRow>
             {(creator.gender === "1" || creator.gender === "2") && (
               <InfoRow label={t('voucher.genderOrientationLabel')}>

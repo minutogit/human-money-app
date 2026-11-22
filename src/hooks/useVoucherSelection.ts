@@ -131,7 +131,9 @@ export function useVoucherSelection(vouchers: VoucherSummary[]) {
       });
 
     setSelectedMap(prev => {
-      let accumulated = 0;
+      const targetStr = targetAmount.toFixed(precision);
+      const targetScaled = parseDecimalToScaledBigInt(targetStr, precision);
+      let accumulatedScaled = 0n;
       const newSelection = new Map(prev);
 
       // Clear opposite test/real realm entries and existing entries for this currency/standard
@@ -145,20 +147,23 @@ export function useVoucherSelection(vouchers: VoucherSummary[]) {
         }
       }
 
+      if (targetScaled === null || targetScaled <= 0n) {
+        return newSelection;
+      }
+
       for (const v of relevantVouchers) {
-        if (accumulated >= targetAmount) break;
+        if (accumulatedScaled >= targetScaled) break;
 
-        const remainingNeeded = targetAmount - accumulated;
-        const voucherAmount = parseFloat(v.currentAmount);
+        const remainingScaled = targetScaled - accumulatedScaled;
+        const voucherScaled = parseDecimalToScaledBigInt(v.currentAmount, precision);
+        if (voucherScaled === null || voucherScaled <= 0n) continue;
 
-        if (v.allowPartialTransfers && voucherAmount > remainingNeeded) {
-          // Take only what's needed
-          newSelection.set(v.localInstanceId, remainingNeeded.toFixed(precision));
-          accumulated += remainingNeeded;
+        if (v.allowPartialTransfers && voucherScaled > remainingScaled) {
+          newSelection.set(v.localInstanceId, formatScaledBigInt(remainingScaled, precision));
+          accumulatedScaled += remainingScaled;
         } else {
-          // Take full voucher
           newSelection.set(v.localInstanceId, v.currentAmount);
-          accumulated += voucherAmount;
+          accumulatedScaled += voucherScaled;
         }
       }
 
@@ -245,7 +250,8 @@ export function useVoucherSelection(vouchers: VoucherSummary[]) {
           if (splitScale > precision && remStr.includes('.')) {
             const [intPart, fracPart] = remStr.split('.');
             const trimmedExtra = fracPart.slice(precision).replace(/0+$/, '');
-            remStr = `${intPart}.${fracPart.slice(0, precision)}${trimmedExtra}`;
+            const keptFrac = `${fracPart.slice(0, precision)}${trimmedExtra}`;
+            remStr = keptFrac.length > 0 ? `${intPart}.${keptFrac}` : intPart;
           }
           next.set(rv.localInstanceId, remStr);
         } else {

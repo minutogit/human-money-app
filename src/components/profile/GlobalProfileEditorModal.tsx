@@ -53,9 +53,10 @@ export const GlobalProfileEditorModal: React.FC = () => {
             },
             { requireFullAccess: true }
         );
-        if (updated) {
-            setMyProfile(updated);
+        if (!updated) {
+            throw new Error('Authentication cancelled');
         }
+        setMyProfile(updated);
         setIsOpen(false);
     };
 

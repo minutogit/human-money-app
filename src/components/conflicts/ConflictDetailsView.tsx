@@ -401,7 +401,7 @@ export function ConflictDetailsView({ proofId, onBack }: ConflictDetailsViewProp
                         </div>
                         <div className="ml-3">
                             <h3 className="text-sm font-bold text-red-800">{t('auth.actionRequired')}</h3>
-                            <div className="mt-1 text-sm text-red-700 leading-relaxed" dangerouslySetInnerHTML={{ __html: t('conflict.victimDescription') }} />
+                            <div className="mt-1 text-sm text-red-700 leading-relaxed">{t('conflict.victimDescription')}</div>
                         </div>
                     </div>
                 </div>
@@ -591,7 +591,7 @@ export function ConflictDetailsView({ proofId, onBack }: ConflictDetailsViewProp
                         
                         <div className="mt-6 p-3 bg-blue-50 border border-blue-100 rounded text-xs text-blue-800 leading-relaxed">
                             <p><strong>{t('conflict.protocolRulesTitle')}</strong></p>
-                            <p className="mt-1" dangerouslySetInnerHTML={{ __html: t('conflict.protocolRulesDescription') }} />
+                            <p className="mt-1">{t('conflict.protocolRulesDescription')}</p>
                         </div>
                     </div>
                 </Advanced>

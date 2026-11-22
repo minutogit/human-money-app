@@ -194,6 +194,10 @@ export function CreateVoucher({ onVoucherCreated, onCancel }: CreateVoucherProps
                     .filter(Boolean);
                 const actualThreshold = Math.max(1, parseInt(String(details.actualThreshold ?? '1'), 10) || 1);
                 const actualSource = String(details.actualSource ?? 'live');
+                if (actualPubs.length === 0 || actualSource === 'none') {
+                    setShowL2UnavailableModal(true);
+                    return;
+                }
                 setL2CommitteeChangedInfo({
                     expectedThreshold: String(details.expectedThreshold ?? '0'),
                     expectedCount: String(details.expectedCount ?? '0'),

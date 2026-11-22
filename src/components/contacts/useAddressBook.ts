@@ -271,6 +271,7 @@ export function useAddressBook({
             logger.info('Contact deleted');
         } catch (err) {
             logger.error('Failed to delete contact: ' + stringifyError(err));
+            setFeedbackMsg({ type: 'error', message: translateError(err, t) });
         } finally {
             setDeleteRequest(null);
         }
@@ -577,7 +578,11 @@ export function useAddressBook({
     };
 
     const handleAcceptHandshake = async (handshake: FrontendPendingWotHandshake) => {
-        const level = handshakeAcceptedLevels[handshake.msgId] ?? handshake.proposedLevel ?? 1;
+        const clampedProposed =
+            handshake.proposedLevel >= 0 && handshake.proposedLevel <= 3
+                ? handshake.proposedLevel
+                : 1;
+        const level = handshakeAcceptedLevels[handshake.msgId] ?? clampedProposed;
         const returnHandshake = handshakeReturnFlags[handshake.msgId] ?? handshake.replyRequested ?? true;
         setIsAcceptingHandshake(handshake.msgId);
         try {

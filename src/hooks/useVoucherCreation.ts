@@ -337,12 +337,23 @@ export function useVoucherCreation() {
             (s) => s.trusted && s.status === 'ok' && Boolean(s.lockPub?.trim())
         );
         const derivedExpectedCommittee: ExpectedL2Committee | null =
-            !nonRedeemable && !effectiveOfflineOnly && readyTrustedServers.length === 1
-                ? {
-                      lockPubs: [readyTrustedServers[0].lockPub],
-                      threshold: 1,
-                      source: 'live',
-                  }
+            !nonRedeemable && !effectiveOfflineOnly
+                ? lockOverview?.expectedLockPubs &&
+                  lockOverview.expectedLockPubs.length > 0 &&
+                  (lockOverview.expectedThreshold ?? 0) > 0 &&
+                  lockOverview.expectedSource !== 'none'
+                    ? {
+                          lockPubs: lockOverview.expectedLockPubs,
+                          threshold: lockOverview.expectedThreshold ?? 1,
+                          source: lockOverview.expectedSource ?? 'live',
+                      }
+                    : readyTrustedServers.length === 1
+                      ? {
+                            lockPubs: [readyTrustedServers[0].lockPub],
+                            threshold: 1,
+                            source: 'live',
+                        }
+                      : null
                 : null;
         const expectedCommittee =
             options?.expectedCommitteeOverride !== undefined
