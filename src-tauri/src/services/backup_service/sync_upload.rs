@@ -396,139 +396,125 @@ pub async fn sync_backup_impl(
     sync_backup_with_standards_impl(password, is_wifi, custom_standards, state).await
 }
 
-pub(crate) async fn sync_backup_with_standards_impl(
-    password: Option<String>,
-    is_wifi: Option<bool>,
-    custom_standards: HashMap<String, String>,
+struct BackupSyncReady {
+    security_policy: crate::settings::SecurityPolicy,
+    my_ed_sk: ed25519_dalek::SigningKey,
+    master_seed: zeroize::Zeroizing<[u8; 32]>,
+    my_prefix: Option<String>,
+    own_admin_opt: Option<crate::state::StoredSyncAdmin>,
+}
+
+enum BackupSyncPrep {
+    Disabled,
+    SkipWifi,
+    Ready(Box<BackupSyncReady>),
+}
+
+struct PreflightBackupContext {
+    backup_sync_state: crate::state::StoredBackupSyncState,
+    preflight_epoch: u32,
+    preflight_tx_nonce: u64,
+    probe_lock_pubs: HashMap<String, String>,
+}
+
+struct MirrorInspectionOutcome {
+    errors: Vec<String>,
+    skip_urls: std::collections::HashSet<String>,
+    force_base_urls: std::collections::HashSet<String>,
+    mirror_anomalies: HashMap<String, crate::settings::WalletSyncAlert>,
+    pending_sync_alert: Option<crate::settings::WalletSyncAlert>,
+    early_abort: Option<FrontendBackupSyncResult>,
+}
+
+struct PreparedBackupPayloads {
+    base_manifest_bytes: Option<Vec<u8>>,
+    base_manifest_sha256: Option<String>,
+    base_padded_bytes: Option<Vec<u8>>,
+    delta_padded_opt: Option<Vec<u8>>,
+    local_epoch: u32,
+    local_tx_nonce: u64,
+    local_seal_hash: String,
+    pending_seal_hash: Option<String>,
+}
+
+struct BackupUploadStats {
+    uploaded_to: usize,
+    last_uploaded_bytes: usize,
+    base_uploaded_any: bool,
+    state_dirty: bool,
+    max_retry_after_secs: Option<u64>,
+    errors: Vec<String>,
+}
+
+fn load_backup_sync_prep(
     state: &AppState,
-) -> Result<FrontendBackupSyncResult, FrontendError> {
-    let (session, resolved_pw) = state.authorize_and_begin_session_secret(
-        crate::state::RequiredAccess::DailyPay,
-        password.as_deref(),
-    )?;
-    let _backup_guard = state.backup_op_lock.lock().await;
-    let pw = resolved_pw.as_deref().map(String::as_str);
-
-    let (security_policy, my_ed_sk, master_seed, my_prefix, own_admin_opt) = {
-        struct BackupSyncReady {
-            security_policy: crate::settings::SecurityPolicy,
-            my_ed_sk: ed25519_dalek::SigningKey,
-            master_seed: zeroize::Zeroizing<[u8; 32]>,
-            my_prefix: Option<String>,
-            own_admin_opt: Option<crate::state::StoredSyncAdmin>,
-        }
-        enum BackupSyncPrep {
-            Disabled,
-            SkipWifi,
-            Ready(Box<BackupSyncReady>),
-        }
-        let prep = state.with_session_required(
-            &session,
-            "Active wallet session changed before starting backup sync",
-            |service| {
-                let security_policy = state
-                    .get_or_load_security_policy(service, pw)
-                    .map_err(FrontendError::from)?;
-                if !security_policy.sync_backup_enabled {
-                    return Ok(BackupSyncPrep::Disabled);
-                }
-                let ui_prefs = state
-                    .get_or_load_ui_preferences(service, pw)
-                    .map_err(FrontendError::from)?;
-                if ui_prefs.market_poll_wifi_only && is_wifi == Some(false) {
-                    return Ok(BackupSyncPrep::SkipWifi);
-                }
-                let (my_ed_sk, my_prefix) = service
-                    .with_wallet_and_identity(|_w, id| {
-                        let pfx = human_money_core::crypto::get_prefix_from_user_id(&id.user_id)
-                            .map(|s| s.to_string());
-                        (id.signing_key.clone(), pfx)
-                    })
-                    .map_err(FrontendError::from)?;
-                let master_seed = zeroize::Zeroizing::new(my_ed_sk.to_bytes());
-                let own_admin_opt =
-                    crate::services::sync_engine::admin::load_stored_sync_admin_opt(service, pw)?;
-                Ok(BackupSyncPrep::Ready(Box::new(BackupSyncReady {
-                    security_policy,
-                    my_ed_sk,
-                    master_seed,
-                    my_prefix,
-                    own_admin_opt,
-                })))
-            },
-        )?;
-        match prep {
-            BackupSyncPrep::Disabled => {
-                return Ok(FrontendBackupSyncResult {
-                    uploaded_to: 0,
-                    authorized_targets: 0,
-                    padded_bytes: 0,
-                    timestamp: None,
-                    errors: Vec::new(),
-                    retry_after_secs: None,
-                    skipped_wifi_only: false,
-                });
+    session: &crate::session::SessionToken,
+    pw: Option<&str>,
+    is_wifi: Option<bool>,
+) -> Result<BackupSyncPrep, FrontendError> {
+    state.with_session_required(
+        session,
+        "Active wallet session changed before starting backup sync",
+        |service| {
+            let security_policy = state
+                .get_or_load_security_policy(service, pw)
+                .map_err(FrontendError::from)?;
+            if !security_policy.sync_backup_enabled {
+                return Ok(BackupSyncPrep::Disabled);
             }
-            BackupSyncPrep::SkipWifi => {
-                return Ok(FrontendBackupSyncResult {
-                    uploaded_to: 0,
-                    authorized_targets: 0,
-                    padded_bytes: 0,
-                    timestamp: None,
-                    errors: Vec::new(),
-                    retry_after_secs: None,
-                    skipped_wifi_only: true,
-                });
+            let ui_prefs = state
+                .get_or_load_ui_preferences(service, pw)
+                .map_err(FrontendError::from)?;
+            if ui_prefs.market_poll_wifi_only && is_wifi == Some(false) {
+                return Ok(BackupSyncPrep::SkipWifi);
             }
-            BackupSyncPrep::Ready(boxed) => (
-                boxed.security_policy,
-                boxed.my_ed_sk,
-                boxed.master_seed,
-                boxed.my_prefix,
-                boxed.own_admin_opt,
-            ),
-        }
-    };
+            let (my_ed_sk, my_prefix) = service
+                .with_wallet_and_identity(|_w, id| {
+                    let pfx = human_money_core::crypto::get_prefix_from_user_id(&id.user_id)
+                        .map(|s| s.to_string());
+                    (id.signing_key.clone(), pfx)
+                })
+                .map_err(FrontendError::from)?;
+            let master_seed = zeroize::Zeroizing::new(my_ed_sk.to_bytes());
+            let own_admin_opt =
+                crate::services::sync_engine::admin::load_stored_sync_admin_opt(service, pw)?;
+            Ok(BackupSyncPrep::Ready(Box::new(BackupSyncReady {
+                security_policy,
+                my_ed_sk,
+                master_seed,
+                my_prefix,
+                own_admin_opt,
+            })))
+        },
+    )
+}
 
-    // Gather active non-revoked backup sync targets via canonical helper (own -> friend -> public).
-    let own_desc_opt = own_admin_opt
-        .as_ref()
-        .filter(|a| a.revocation.is_none())
-        .map(|a| &a.descriptor);
-    let candidate_targets =
-        collect_backup_sync_targets(&security_policy, own_desc_opt, my_prefix.as_deref(), None);
-
-    if candidate_targets.is_empty() {
-        return Ok(FrontendBackupSyncResult {
-            uploaded_to: 0,
-            authorized_targets: 0,
-            padded_bytes: 0,
-            timestamp: None,
-            errors: Vec::new(),
-            retry_after_secs: None,
-            skipped_wifi_only: false,
-        });
-    }
-
-    // Probe which candidate drops authorize channel "backup"
-    let probe_client = crate::sync_client::create_sync_probe_client();
+async fn discover_authorized_backup_targets(
+    probe_client: &reqwest::Client,
+    candidate_targets: Vec<humoco_market::DropDescriptor>,
+    my_ed_sk: &ed25519_dalek::SigningKey,
+    my_prefix: Option<&str>,
+) -> Vec<AuthorizedBackupTarget> {
     let mut authorized_targets = Vec::new();
-
     for sync_desc in candidate_targets {
         let (cap_pubkey, is_public, cap_prefix) = if let Some(ref slot_id) = sync_desc.slot_id {
             match humoco_market::parse_slot_id(slot_id) {
-                Ok((base_pk, sid_pfx)) => (base_pk, true, sid_pfx.or_else(|| my_prefix.clone())),
-                Err(_) => (slot_id.clone(), true, my_prefix.clone()),
+                Ok((base_pk, sid_pfx)) => (
+                    base_pk,
+                    true,
+                    sid_pfx.or_else(|| my_prefix.map(str::to_string)),
+                ),
+                Err(_) => (slot_id.clone(), true, my_prefix.map(str::to_string)),
             }
         } else {
-            match humoco_market::derive_member_stealth_pubkey(&my_ed_sk, &sync_desc.drop_pub) {
-                Ok(pk) => (pk, false, my_prefix.clone()),
+            match humoco_market::derive_member_stealth_pubkey(my_ed_sk, &sync_desc.drop_pub) {
+                Ok(pk) => (pk, false, my_prefix.map(str::to_string)),
                 Err(_) => continue,
             }
         };
 
         if let Ok(cap) = crate::sync_client::head_slot_capability(
-            &probe_client,
+            probe_client,
             &sync_desc.write_url,
             &cap_pubkey,
             cap_prefix.as_deref(),
@@ -539,7 +525,7 @@ pub(crate) async fn sync_backup_with_standards_impl(
             if cap.authorized {
                 let delta_pfx = humoco_market::derive_delta_prefix(cap_prefix.as_deref());
                 let remote_delta_etag = crate::sync_client::head_slot_capability(
-                    &probe_client,
+                    probe_client,
                     &sync_desc.write_url,
                     &cap_pubkey,
                     Some(delta_pfx.as_str()),
@@ -566,79 +552,80 @@ pub(crate) async fn sync_backup_with_standards_impl(
             }
         }
     }
+    authorized_targets
+}
 
-    let authorized_count = authorized_targets.len();
-    if authorized_targets.is_empty() {
-        return Ok(FrontendBackupSyncResult {
-            uploaded_to: 0,
-            authorized_targets: 0,
-            padded_bytes: 0,
-            timestamp: None,
-            errors: Vec::new(),
-            retry_after_secs: None,
-            skipped_wifi_only: false,
-        });
-    }
+fn load_preflight_backup_context(
+    state: &AppState,
+    session: &crate::session::SessionToken,
+    pw: Option<&str>,
+) -> Result<PreflightBackupContext, FrontendError> {
+    state.with_session_required(
+        session,
+        "Active wallet session changed before preparing backup upload",
+        |service| {
+            let current_seal = service.get_current_seal().map_err(FrontendError::from)?;
+            let (local_epoch, local_tx_nonce) = match current_seal {
+                Some(s) => (s.payload.epoch, s.payload.tx_nonce),
+                None => (0, 0),
+            };
+            let mut stored_state: crate::state::StoredBackupSyncState =
+                crate::state::load_local_sidecar_json_or_default(
+                    service,
+                    crate::state::BACKUP_SYNC_STATE_KEY,
+                    pw,
+                )
+                .map_err(FrontendError::from)?;
+            // Normalize mirror keys consistently to canonical normalized write_url.
+            let mut normalized_mirrors = std::collections::BTreeMap::new();
+            for (raw_url, mirror) in std::mem::take(&mut stored_state.mirrors_by_write_url) {
+                normalized_mirrors.insert(normalize_sync_url(&raw_url), mirror);
+            }
+            stored_state.mirrors_by_write_url = normalized_mirrors;
 
-    let max_target_bytes = authorized_targets
-        .iter()
-        .map(|t| t.effective_max_bytes)
-        .max()
-        .unwrap_or(humoco_market::DROP_BACKUP_MAX_BYTES);
-    let preflight_now_secs = crate::sync_client::current_unix_timestamp();
-
-    let (mut backup_sync_state, preflight_epoch, preflight_tx_nonce, probe_lock_pubs) = state
-        .with_session_required(
-            &session,
-            "Active wallet session changed before preparing backup upload",
-            |service| {
-                let current_seal = service.get_current_seal().map_err(FrontendError::from)?;
-                let (local_epoch, local_tx_nonce) = match current_seal {
-                    Some(s) => (s.payload.epoch, s.payload.tx_nonce),
-                    None => (0, 0),
-                };
-                let mut stored_state: crate::state::StoredBackupSyncState =
-                    crate::state::load_local_sidecar_json_or_default(
-                        service,
-                        crate::state::BACKUP_SYNC_STATE_KEY,
-                        pw,
-                    )
-                    .map_err(FrontendError::from)?;
-                // Normalize mirror keys consistently to canonical normalized write_url.
-                let mut normalized_mirrors = std::collections::BTreeMap::new();
-                for (raw_url, mirror) in std::mem::take(&mut stored_state.mirrors_by_write_url) {
-                    normalized_mirrors.insert(normalize_sync_url(&raw_url), mirror);
+            let lc = state
+                .get_or_load_internal_lifecycle(service, pw)
+                .map_err(FrontendError::from)?;
+            let mut lock_pubs = HashMap::new();
+            for probe in lc.l2_probe_cache.values() {
+                if !probe.delegation_valid {
+                    continue;
                 }
-                stored_state.mirrors_by_write_url = normalized_mirrors;
-
-                let lc = state
-                    .get_or_load_internal_lifecycle(service, pw)
-                    .map_err(FrontendError::from)?;
-                let mut lock_pubs = std::collections::HashMap::new();
-                for probe in lc.l2_probe_cache.values() {
-                    if !probe.delegation_valid {
-                        continue;
-                    }
-                    let norm_write = normalize_sync_url(&probe.write_url);
-                    let lp = probe.lock_pub.trim().to_ascii_lowercase();
-                    if !norm_write.is_empty() && !lp.is_empty() {
-                        lock_pubs.insert(norm_write, lp);
-                    }
+                let norm_write = normalize_sync_url(&probe.write_url);
+                let lp = probe.lock_pub.trim().to_ascii_lowercase();
+                if !norm_write.is_empty() && !lp.is_empty() {
+                    lock_pubs.insert(norm_write, lp);
                 }
-                Ok((stored_state, local_epoch, local_tx_nonce, lock_pubs))
-            },
-        )?;
+            }
+            Ok(PreflightBackupContext {
+                backup_sync_state: stored_state,
+                preflight_epoch: local_epoch,
+                preflight_tx_nonce: local_tx_nonce,
+                probe_lock_pubs: lock_pubs,
+            })
+        },
+    )
+}
 
-    // Pre-Upload Remote Seal Inspection & Rollback / Unexpected-Loss Detection
+#[allow(clippy::too_many_arguments)]
+async fn inspect_remote_mirrors_for_anomalies(
+    state: &AppState,
+    session: &crate::session::SessionToken,
+    pw: Option<&str>,
+    probe_client: &reqwest::Client,
+    authorized_targets: &[AuthorizedBackupTarget],
+    backup_sync_state: &crate::state::StoredBackupSyncState,
+    preflight_epoch: u32,
+    preflight_tx_nonce: u64,
+    preflight_now_secs: u64,
+) -> Result<MirrorInspectionOutcome, FrontendError> {
     let mut errors = Vec::new();
     let mut skip_urls = std::collections::HashSet::new();
     let mut force_base_urls = std::collections::HashSet::new();
-    let mut mirror_anomalies: std::collections::HashMap<String, crate::settings::WalletSyncAlert> =
-        std::collections::HashMap::new();
+    let mut mirror_anomalies: HashMap<String, crate::settings::WalletSyncAlert> = HashMap::new();
     let mut pending_sync_alert: Option<crate::settings::WalletSyncAlert> = None;
-    let mut state_dirty = false;
 
-    for target in &authorized_targets {
+    for target in authorized_targets {
         let mirror_opt = backup_sync_state
             .mirrors_by_write_url
             .get(&target.norm_write_url)
@@ -654,7 +641,7 @@ pub(crate) async fn sync_backup_with_standards_impl(
 
         if target.remote_base_etag.is_some() {
             let Some(merged_bytes) = fetch_and_merge_backup_slot(
-                &probe_client,
+                probe_client,
                 &target.desc.read_url,
                 &target.cap_pubkey,
                 target.base_prefix.as_deref(),
@@ -687,7 +674,7 @@ pub(crate) async fn sync_backup_with_standards_impl(
             };
 
             let inspect_res = state.with_session_required(
-                &session,
+                session,
                 "Active wallet session changed during backup inspection",
                 |service| {
                     Ok(service.inspect_mnemonic_backup_with_unlocked_identity(&manifest_bytes))
@@ -731,7 +718,7 @@ pub(crate) async fn sync_backup_with_standards_impl(
                     };
                     if is_fork {
                         state.with_session_required(
-                            &session,
+                            session,
                             "Active wallet session changed while persisting fork lock",
                             |service| {
                                 service
@@ -751,7 +738,7 @@ pub(crate) async fn sync_backup_with_standards_impl(
                     }
                     let alert_clone = alert.clone();
                     if let Err(err) =
-                        state.mutate_internal_lifecycle_for_session(&session, pw, |lc| {
+                        state.mutate_internal_lifecycle_for_session(session, pw, |lc| {
                             lc.pending_restore_l2_reconciliation = true;
                             lc.wallet_sync_alert = Some(alert_clone);
                             true
@@ -763,26 +750,33 @@ pub(crate) async fn sync_backup_with_standards_impl(
                         );
                         return Err(err);
                     }
-                    return Ok(FrontendBackupSyncResult {
-                        uploaded_to: 0,
-                        authorized_targets: authorized_count,
-                        padded_bytes: 0,
-                        timestamp: None,
-                        errors: vec![if is_fork {
-                            format!(
-                                "FORK_DETECTED: Conflicting wallet state detected on {}",
-                                target.desc.write_url
-                            )
-                        } else {
-                            format!(
-                                "STALE_LOCAL_BACKUP: Newer backup state (epoch {}, nonce {}) exists on {}",
-                                report.manifest.seal.payload.epoch,
-                                report.manifest.seal.payload.tx_nonce,
-                                target.desc.write_url
-                            )
-                        }],
-                        retry_after_secs: None,
-                        skipped_wifi_only: false,
+                    return Ok(MirrorInspectionOutcome {
+                        errors,
+                        skip_urls,
+                        force_base_urls,
+                        mirror_anomalies,
+                        pending_sync_alert,
+                        early_abort: Some(FrontendBackupSyncResult {
+                            uploaded_to: 0,
+                            authorized_targets: authorized_targets.len(),
+                            padded_bytes: 0,
+                            timestamp: None,
+                            errors: vec![if is_fork {
+                                format!(
+                                    "FORK_DETECTED: Conflicting wallet state detected on {}",
+                                    target.desc.write_url
+                                )
+                            } else {
+                                format!(
+                                    "STALE_LOCAL_BACKUP: Newer backup state (epoch {}, nonce {}) exists on {}",
+                                    report.manifest.seal.payload.epoch,
+                                    report.manifest.seal.payload.tx_nonce,
+                                    target.desc.write_url
+                                )
+                            }],
+                            retry_after_secs: None,
+                            skipped_wifi_only: false,
+                        }),
                     });
                 }
                 _ => {}
@@ -842,17 +836,30 @@ pub(crate) async fn sync_backup_with_standards_impl(
         }
     }
 
-    let (
-        base_manifest_bytes,
-        base_manifest_sha256,
-        base_padded_bytes,
-        delta_padded_opt,
-        local_epoch,
-        local_tx_nonce,
-        local_seal_hash,
-        pending_seal_hash,
-    ) = state.with_session_required(
-        &session,
+    Ok(MirrorInspectionOutcome {
+        errors,
+        skip_urls,
+        force_base_urls,
+        mirror_anomalies,
+        pending_sync_alert,
+        early_abort: None,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepare_backup_payloads(
+    state: &AppState,
+    session: &crate::session::SessionToken,
+    pw: Option<&str>,
+    custom_standards: HashMap<String, String>,
+    authorized_targets: &[AuthorizedBackupTarget],
+    backup_sync_state: &crate::state::StoredBackupSyncState,
+    inspection: &MirrorInspectionOutcome,
+    preflight_now_secs: u64,
+    max_target_bytes: usize,
+) -> Result<PreparedBackupPayloads, FrontendError> {
+    state.with_session_required(
+        session,
         "Active wallet session changed before creating backup payload",
         |service| {
             let current_seal = service.get_current_seal().map_err(FrontendError::from)?;
@@ -907,261 +914,287 @@ pub(crate) async fn sync_backup_with_standards_impl(
             // Determine if any mirror needs a fresh Base (or if Delta grew too large)
             let any_mirror_needs_base = authorized_targets
                 .iter()
-                .filter(|t| !skip_urls.contains(&t.norm_write_url))
+                .filter(|t| !inspection.skip_urls.contains(&t.norm_write_url))
                 .any(|target| {
                     !delta_attempt.as_ref().is_some_and(|d| {
                         target_can_use_delta(
                             target,
-                            &backup_sync_state,
+                            backup_sync_state,
                             d.len(),
                             preflight_now_secs,
-                            &force_base_urls,
+                            &inspection.force_base_urls,
                         )
                     })
                 });
 
-            let (base_m_bytes, base_m_sha, base_padded) = if any_mirror_needs_base {
-                let diff = service
-                    .create_differential_backup(None, BackupProtection::MnemonicOnly, pw)
-                    .map_err(FrontendError::from)?;
-                let blobs_hex = encode_blobs_hex(diff.put_blobs);
-                let container = PortableBackupContainer {
-                    container_format: BACKUP_CONTAINER_FORMAT_V1.to_string(),
-                    created_at: Utc::now().to_rfc3339(),
-                    manifest_hex: human_money_core::hex::encode(&diff.encrypted_manifest_bytes),
-                    blobs_hex,
-                    custom_standards,
+            let (base_manifest_bytes, base_manifest_sha256, base_padded_bytes) =
+                if any_mirror_needs_base {
+                    let diff = service
+                        .create_differential_backup(None, BackupProtection::MnemonicOnly, pw)
+                        .map_err(FrontendError::from)?;
+                    let blobs_hex = encode_blobs_hex(diff.put_blobs);
+                    let container = PortableBackupContainer {
+                        container_format: BACKUP_CONTAINER_FORMAT_V1.to_string(),
+                        created_at: Utc::now().to_rfc3339(),
+                        manifest_hex: human_money_core::hex::encode(&diff.encrypted_manifest_bytes),
+                        blobs_hex,
+                        custom_standards,
+                    };
+                    let container_bytes = serde_json::to_vec(&container).map_err(|e| {
+                        FrontendError::from(format!("Failed to serialize backup container: {}", e))
+                    })?;
+                    let padded =
+                        humoco_market::pad_backup_slot_bytes(&container_bytes, max_target_bytes)
+                            .map_err(|e| FrontendError::from(e.to_string()))?;
+                    let sha = sha256_hex(&diff.encrypted_manifest_bytes);
+                    (Some(diff.encrypted_manifest_bytes), Some(sha), Some(padded))
+                } else {
+                    (None, None, None)
                 };
-                let container_bytes = serde_json::to_vec(&container).map_err(|e| {
-                    FrontendError::from(format!("Failed to serialize backup container: {}", e))
-                })?;
-                let padded =
-                    humoco_market::pad_backup_slot_bytes(&container_bytes, max_target_bytes)
-                        .map_err(|e| FrontendError::from(e.to_string()))?;
-                let sha = sha256_hex(&diff.encrypted_manifest_bytes);
-                (Some(diff.encrypted_manifest_bytes), Some(sha), Some(padded))
-            } else {
-                (None, None, None)
-            };
 
-            Ok((
-                base_m_bytes,
-                base_m_sha,
-                base_padded,
-                delta_attempt,
+            Ok(PreparedBackupPayloads {
+                base_manifest_bytes,
+                base_manifest_sha256,
+                base_padded_bytes,
+                delta_padded_opt: delta_attempt,
                 local_epoch,
                 local_tx_nonce,
                 local_seal_hash,
                 pending_seal_hash,
-            ))
+            })
         },
-    )?;
+    )
+}
 
-    let client = crate::sync_client::create_sync_http_client();
-    let mut uploaded_to = 0;
-    let mut last_uploaded_bytes = 0usize;
-    let mut base_uploaded_any = false;
-    let mut max_retry_after_secs: Option<u64> = None;
-
-    for target in authorized_targets {
-        if skip_urls.contains(&target.norm_write_url) {
-            continue;
-        }
-        if state.is_origin_cooling_down(&target.desc.write_url, std::time::Instant::now()) {
-            errors.push(format!(
-                "Upload to {} deferred: server origin cooling down after HTTP 429",
-                target.desc.write_url
-            ));
-            continue;
-        }
-        let upload_now_secs = crate::sync_client::current_unix_timestamp();
-        let target_delta_prefix = humoco_market::derive_delta_prefix(target.base_prefix.as_deref());
-        let can_use_delta = delta_padded_opt.as_ref().is_some_and(|d| {
-            target_can_use_delta(
-                &target,
-                &backup_sync_state,
-                d.len(),
-                upload_now_secs,
-                &force_base_urls,
-            )
-        });
-
-        let (upload_prefix, upload_bytes, is_delta_upload, if_match_val) = if can_use_delta {
-            (
-                Some(target_delta_prefix.as_str()),
-                delta_padded_opt.as_ref().expect("checked above"),
-                true,
-                target.remote_delta_etag.as_deref().unwrap_or("none"),
-            )
-        } else if let Some(ref base_bytes) = base_padded_bytes {
-            (
-                target.base_prefix.as_deref(),
-                base_bytes,
-                false,
-                target.remote_base_etag.as_deref().unwrap_or("none"),
-            )
-        } else {
-            continue;
-        };
-
-        if upload_bytes.len() > target.effective_max_bytes {
-            errors.push(format!(
-                "Upload to {} skipped: backup size {} exceeds channel limit {}",
-                target.desc.write_url,
-                upload_bytes.len(),
-                target.effective_max_bytes
-            ));
-            continue;
-        }
-
-        let signer = DropChannelSigner {
-            is_public: target.is_public,
-            master_seed: &master_seed,
-            my_ed_sk: &my_ed_sk,
-            drop_desc: &target.desc,
-        };
-        let nonce = crate::sync_client::generate_sync_nonce();
-        let signed_res = signer.sign_request(
-            "PUT",
-            "backup",
-            upload_prefix,
+#[allow(clippy::too_many_arguments)]
+async fn upload_backup_to_target(
+    state: &AppState,
+    client: &reqwest::Client,
+    target: AuthorizedBackupTarget,
+    prep: &BackupSyncReady,
+    payloads: &PreparedBackupPayloads,
+    inspection: &MirrorInspectionOutcome,
+    probe_lock_pubs: &HashMap<String, String>,
+    backup_sync_state: &mut crate::state::StoredBackupSyncState,
+    stats: &mut BackupUploadStats,
+) {
+    if inspection.skip_urls.contains(&target.norm_write_url) {
+        return;
+    }
+    if state.is_origin_cooling_down(&target.desc.write_url, std::time::Instant::now()) {
+        stats.errors.push(format!(
+            "Upload to {} deferred: server origin cooling down after HTTP 429",
+            target.desc.write_url
+        ));
+        return;
+    }
+    let upload_now_secs = crate::sync_client::current_unix_timestamp();
+    let target_delta_prefix = humoco_market::derive_delta_prefix(target.base_prefix.as_deref());
+    let can_use_delta = payloads.delta_padded_opt.as_ref().is_some_and(|d| {
+        target_can_use_delta(
+            &target,
+            backup_sync_state,
+            d.len(),
             upload_now_secs,
-            &nonce,
-            upload_bytes,
-        );
+            &inspection.force_base_urls,
+        )
+    });
 
-        match signed_res {
-            Ok(signed) => {
-                match crate::sync_client::put_slot(
-                    &client,
-                    &target.desc.write_url,
-                    &signed,
-                    "backup",
-                    upload_bytes,
-                    Some(if_match_val),
-                )
-                .await
-                {
-                    Ok(crate::sync_client::PutSlotOutcome::Saved { etag, slot_ack }) => {
-                        uploaded_to += 1;
-                        last_uploaded_bytes = last_uploaded_bytes.max(upload_bytes.len());
-                        state_dirty = true;
-                        let normalized_etag = etag
-                            .map(|e| e.trim().trim_matches('"').to_string())
-                            .filter(|s| !s.is_empty());
-                        let verified_ack = slot_ack.filter(|ack| {
-                            let (Some(expected_lp), Some(e)) = (
-                                probe_lock_pubs.get(&target.norm_write_url),
-                                normalized_etag.as_deref(),
-                            ) else {
-                                return false;
-                            };
-                            ack.verify(expected_lp, &target.cap_pubkey, upload_prefix, "backup", e)
-                        });
-                        let anomaly = mirror_anomalies.get(&target.norm_write_url).cloned();
-                        if is_delta_upload {
-                            if let Some(m) = backup_sync_state
-                                .mirrors_by_write_url
-                                .get_mut(&target.norm_write_url)
-                            {
-                                m.delta_active = true;
-                                m.delta_slot_etag = normalized_etag;
-                                m.last_synced_epoch = local_epoch;
-                                m.last_synced_tx_nonce = local_tx_nonce;
-                                m.last_synced_seal_hash = local_seal_hash.clone();
-                                if let Some(ack) = verified_ack {
-                                    m.last_slot_ack = Some(ack);
-                                }
-                                m.last_known_ttl_days = target.ttl_days.map(u64::from);
-                                if anomaly.is_some() {
-                                    m.anomaly = anomaly;
-                                }
-                            }
-                        } else {
-                            base_uploaded_any = true;
-                            let prev_mirror = backup_sync_state
-                                .mirrors_by_write_url
-                                .get(&target.norm_write_url)
-                                .cloned();
-                            let had_delta = prev_mirror
-                                .as_ref()
-                                .map(|m| m.delta_active)
-                                .unwrap_or(false)
-                                || target.remote_delta_etag.is_some();
-                            let mut delta_cleared = !had_delta;
-                            if had_delta {
-                                let del_now_secs = crate::sync_client::current_unix_timestamp();
-                                let del_nonce = crate::sync_client::generate_sync_nonce();
-                                if let Ok(del_signed) = signer.sign_request(
-                                    "DELETE",
-                                    "backup",
-                                    Some(target_delta_prefix.as_str()),
-                                    del_now_secs,
-                                    &del_nonce,
-                                    b"",
-                                ) {
-                                    delta_cleared = crate::sync_client::delete_slot(
-                                        &client,
-                                        &target.desc.write_url,
-                                        &del_signed,
-                                        "backup",
-                                    )
-                                    .await
-                                    .is_ok();
-                                }
-                            }
-                            if let Some(ref new_sha) = base_manifest_sha256 {
-                                backup_sync_state.mirrors_by_write_url.insert(
-                                    target.norm_write_url.clone(),
-                                    crate::state::BackupMirrorState {
-                                        base_manifest_sha256: new_sha.clone(),
-                                        base_slot_etag: normalized_etag,
-                                        delta_slot_etag: if delta_cleared {
-                                            None
-                                        } else {
-                                            target.remote_delta_etag.clone()
-                                        },
-                                        base_uploaded_at: upload_now_secs,
-                                        base_padded_bytes: upload_bytes.len(),
-                                        delta_active: !delta_cleared,
-                                        last_synced_epoch: local_epoch,
-                                        last_synced_tx_nonce: local_tx_nonce,
-                                        last_synced_seal_hash: local_seal_hash.clone(),
-                                        last_slot_ack: verified_ack,
-                                        last_known_ttl_days: target.ttl_days.map(u64::from),
-                                        anomaly,
-                                    },
-                                );
-                            }
-                        }
-                    }
-                    Ok(crate::sync_client::PutSlotOutcome::PreconditionFailed { .. }) => {
-                        errors.push(format!(
-                            "Upload skipped for {}: remote backup changed concurrently (HTTP 412)",
-                            target.desc.write_url
-                        ));
-                    }
-                    Err(e) => {
-                        state.record_origin_cooldown_for_sync_error(&target.desc.write_url, &e);
-                        if let Some(secs) = e.retry_after_secs() {
-                            max_retry_after_secs =
-                                Some(max_retry_after_secs.map_or(secs, |prev| prev.max(secs)));
-                        }
-                        errors.push(format!("Upload to {} failed: {}", target.desc.write_url, e));
-                    }
-                }
-            }
-            Err(e) => {
-                errors.push(format!(
-                    "Signing failed for {}: {}",
-                    target.desc.write_url, e
-                ));
-            }
-        }
+    let (upload_prefix, upload_bytes, is_delta_upload, if_match_val) = if can_use_delta {
+        (
+            Some(target_delta_prefix.as_str()),
+            payloads.delta_padded_opt.as_ref().expect("checked above"),
+            true,
+            target.remote_delta_etag.as_deref().unwrap_or("none"),
+        )
+    } else if let Some(ref base_bytes) = payloads.base_padded_bytes {
+        (
+            target.base_prefix.as_deref(),
+            base_bytes,
+            false,
+            target.remote_base_etag.as_deref().unwrap_or("none"),
+        )
+    } else {
+        return;
+    };
+
+    if upload_bytes.len() > target.effective_max_bytes {
+        stats.errors.push(format!(
+            "Upload to {} skipped: backup size {} exceeds channel limit {}",
+            target.desc.write_url,
+            upload_bytes.len(),
+            target.effective_max_bytes
+        ));
+        return;
     }
 
-    if !mirror_anomalies.is_empty() {
-        for (url, anomaly) in &mirror_anomalies {
+    let signer = DropChannelSigner {
+        is_public: target.is_public,
+        master_seed: &prep.master_seed,
+        my_ed_sk: &prep.my_ed_sk,
+        drop_desc: &target.desc,
+    };
+    let nonce = crate::sync_client::generate_sync_nonce();
+    let signed_res = signer.sign_request(
+        "PUT",
+        "backup",
+        upload_prefix,
+        upload_now_secs,
+        &nonce,
+        upload_bytes,
+    );
+
+    match signed_res {
+        Ok(signed) => {
+            match crate::sync_client::put_slot(
+                client,
+                &target.desc.write_url,
+                &signed,
+                "backup",
+                upload_bytes,
+                Some(if_match_val),
+            )
+            .await
+            {
+                Ok(crate::sync_client::PutSlotOutcome::Saved { etag, slot_ack }) => {
+                    stats.uploaded_to += 1;
+                    stats.last_uploaded_bytes = stats.last_uploaded_bytes.max(upload_bytes.len());
+                    stats.state_dirty = true;
+                    let normalized_etag = etag
+                        .map(|e| e.trim().trim_matches('"').to_string())
+                        .filter(|s| !s.is_empty());
+                    let verified_ack = slot_ack.filter(|ack| {
+                        let (Some(expected_lp), Some(e)) = (
+                            probe_lock_pubs.get(&target.norm_write_url),
+                            normalized_etag.as_deref(),
+                        ) else {
+                            return false;
+                        };
+                        ack.verify(expected_lp, &target.cap_pubkey, upload_prefix, "backup", e)
+                    });
+                    let anomaly = inspection
+                        .mirror_anomalies
+                        .get(&target.norm_write_url)
+                        .cloned();
+                    if is_delta_upload {
+                        if let Some(m) = backup_sync_state
+                            .mirrors_by_write_url
+                            .get_mut(&target.norm_write_url)
+                        {
+                            m.delta_active = true;
+                            m.delta_slot_etag = normalized_etag;
+                            m.last_synced_epoch = payloads.local_epoch;
+                            m.last_synced_tx_nonce = payloads.local_tx_nonce;
+                            m.last_synced_seal_hash = payloads.local_seal_hash.clone();
+                            if let Some(ack) = verified_ack {
+                                m.last_slot_ack = Some(ack);
+                            }
+                            m.last_known_ttl_days = target.ttl_days.map(u64::from);
+                            if anomaly.is_some() {
+                                m.anomaly = anomaly;
+                            }
+                        }
+                    } else {
+                        stats.base_uploaded_any = true;
+                        let prev_mirror = backup_sync_state
+                            .mirrors_by_write_url
+                            .get(&target.norm_write_url)
+                            .cloned();
+                        let had_delta = prev_mirror
+                            .as_ref()
+                            .map(|m| m.delta_active)
+                            .unwrap_or(false)
+                            || target.remote_delta_etag.is_some();
+                        let mut delta_cleared = !had_delta;
+                        if had_delta {
+                            let del_now_secs = crate::sync_client::current_unix_timestamp();
+                            let del_nonce = crate::sync_client::generate_sync_nonce();
+                            if let Ok(del_signed) = signer.sign_request(
+                                "DELETE",
+                                "backup",
+                                Some(target_delta_prefix.as_str()),
+                                del_now_secs,
+                                &del_nonce,
+                                b"",
+                            ) {
+                                delta_cleared = crate::sync_client::delete_slot(
+                                    client,
+                                    &target.desc.write_url,
+                                    &del_signed,
+                                    "backup",
+                                )
+                                .await
+                                .is_ok();
+                            }
+                        }
+                        if let Some(ref new_sha) = payloads.base_manifest_sha256 {
+                            backup_sync_state.mirrors_by_write_url.insert(
+                                target.norm_write_url.clone(),
+                                crate::state::BackupMirrorState {
+                                    base_manifest_sha256: new_sha.clone(),
+                                    base_slot_etag: normalized_etag,
+                                    delta_slot_etag: if delta_cleared {
+                                        None
+                                    } else {
+                                        target.remote_delta_etag.clone()
+                                    },
+                                    base_uploaded_at: upload_now_secs,
+                                    base_padded_bytes: upload_bytes.len(),
+                                    delta_active: !delta_cleared,
+                                    last_synced_epoch: payloads.local_epoch,
+                                    last_synced_tx_nonce: payloads.local_tx_nonce,
+                                    last_synced_seal_hash: payloads.local_seal_hash.clone(),
+                                    last_slot_ack: verified_ack,
+                                    last_known_ttl_days: target.ttl_days.map(u64::from),
+                                    anomaly,
+                                },
+                            );
+                        }
+                    }
+                }
+                Ok(crate::sync_client::PutSlotOutcome::PreconditionFailed { .. }) => {
+                    stats.errors.push(format!(
+                        "Upload skipped for {}: remote backup changed concurrently (HTTP 412)",
+                        target.desc.write_url
+                    ));
+                }
+                Err(e) => {
+                    state.record_origin_cooldown_for_sync_error(&target.desc.write_url, &e);
+                    if let Some(secs) = e.retry_after_secs() {
+                        stats.max_retry_after_secs = Some(
+                            stats
+                                .max_retry_after_secs
+                                .map_or(secs, |prev| prev.max(secs)),
+                        );
+                    }
+                    stats
+                        .errors
+                        .push(format!("Upload to {} failed: {}", target.desc.write_url, e));
+                }
+            }
+        }
+        Err(e) => {
+            stats.errors.push(format!(
+                "Signing failed for {}: {}",
+                target.desc.write_url, e
+            ));
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn commit_post_upload_backup_state(
+    state: &AppState,
+    session: &crate::session::SessionToken,
+    pw: Option<&str>,
+    payloads: PreparedBackupPayloads,
+    inspection: &MirrorInspectionOutcome,
+    backup_sync_state: &mut crate::state::StoredBackupSyncState,
+    stats: &BackupUploadStats,
+) -> Result<Option<String>, FrontendError> {
+    let mut state_dirty = stats.state_dirty;
+    if !inspection.mirror_anomalies.is_empty() {
+        for (url, anomaly) in &inspection.mirror_anomalies {
             if let Some(m) = backup_sync_state.mirrors_by_write_url.get_mut(url) {
                 m.anomaly = Some(anomaly.clone());
                 state_dirty = true;
@@ -1170,20 +1203,22 @@ pub(crate) async fn sync_backup_with_standards_impl(
     }
 
     if state_dirty {
-        if base_uploaded_any {
-            if let (Some(new_bytes), Some(new_sha)) = (base_manifest_bytes, base_manifest_sha256) {
+        if stats.base_uploaded_any {
+            if let (Some(new_bytes), Some(new_sha)) =
+                (payloads.base_manifest_bytes, payloads.base_manifest_sha256)
+            {
                 backup_sync_state.base_manifest_bytes = Some(new_bytes);
                 backup_sync_state.base_manifest_sha256 = Some(new_sha);
             }
         }
         state.with_session_required(
-            &session,
+            session,
             "Active wallet session changed before backup sync state could be saved",
             |service| {
                 crate::state::save_local_sidecar_json(
                     service,
                     crate::state::BACKUP_SYNC_STATE_KEY,
-                    &backup_sync_state,
+                    backup_sync_state,
                     pw,
                 )
                 .map_err(FrontendError::from)
@@ -1191,8 +1226,8 @@ pub(crate) async fn sync_backup_with_standards_impl(
         )?;
     }
 
-    if let Some(alert) = pending_sync_alert.clone() {
-        let _ = state.mutate_internal_lifecycle_for_session(&session, pw, |lc| {
+    if let Some(alert) = inspection.pending_sync_alert.clone() {
+        let _ = state.mutate_internal_lifecycle_for_session(session, pw, |lc| {
             let keep_higher = lc
                 .wallet_sync_alert
                 .as_ref()
@@ -1205,50 +1240,209 @@ pub(crate) async fn sync_backup_with_standards_impl(
         });
     }
 
-    let timestamp_str = if uploaded_to > 0 {
-        let ts = Utc::now().to_rfc3339();
-        let ts_clone = ts.clone();
-        let all_mirrors_succeeded = errors.is_empty();
-        let _ = state.with_session(&session, |service| {
-            let current_seal_hash = service
-                .get_current_seal()
-                .ok()
-                .flatten()
-                .and_then(|seal| seal.compute_hash().ok());
-            let seal_unchanged =
-                pending_seal_hash.is_some() && current_seal_hash == pending_seal_hash;
-            let clear_dirty = all_mirrors_succeeded && seal_unchanged;
-            let mut lc = state
-                .get_or_load_internal_lifecycle(service, pw)
-                .map_err(FrontendError::from)?;
-            lc.last_sync_backup_at = Some(ts_clone);
-            if clear_dirty {
-                lc.backup_dirty = false;
-            }
-            state
-                .save_internal_lifecycle(service, lc, pw)
-                .map_err(FrontendError::from)?;
-            if clear_dirty {
-                if let Some(ref seal_hash) = pending_seal_hash {
-                    if let Err(err) = service.acknowledge_seal_sync(seal_hash, pw) {
-                        log::warn!("Post-sync seal acknowledgement deferred: {}", err);
-                    }
+    if stats.uploaded_to == 0 {
+        return Ok(None);
+    }
+
+    let ts = Utc::now().to_rfc3339();
+    let ts_clone = ts.clone();
+    let all_mirrors_succeeded = stats.errors.is_empty();
+    let _ = state.with_session(session, |service| {
+        let current_seal_hash = service
+            .get_current_seal()
+            .ok()
+            .flatten()
+            .and_then(|seal| seal.compute_hash().ok());
+        let seal_unchanged =
+            payloads.pending_seal_hash.is_some() && current_seal_hash == payloads.pending_seal_hash;
+        let clear_dirty = all_mirrors_succeeded && seal_unchanged;
+        let mut lc = state
+            .get_or_load_internal_lifecycle(service, pw)
+            .map_err(FrontendError::from)?;
+        lc.last_sync_backup_at = Some(ts_clone);
+        if clear_dirty {
+            lc.backup_dirty = false;
+        }
+        state
+            .save_internal_lifecycle(service, lc, pw)
+            .map_err(FrontendError::from)?;
+        if clear_dirty {
+            if let Some(ref seal_hash) = payloads.pending_seal_hash {
+                if let Err(err) = service.acknowledge_seal_sync(seal_hash, pw) {
+                    log::warn!("Post-sync seal acknowledgement deferred: {}", err);
                 }
             }
-            Ok(())
-        });
-        Some(ts)
-    } else {
-        None
+        }
+        Ok(())
+    });
+    Ok(Some(ts))
+}
+
+pub(crate) async fn sync_backup_with_standards_impl(
+    password: Option<String>,
+    is_wifi: Option<bool>,
+    custom_standards: HashMap<String, String>,
+    state: &AppState,
+) -> Result<FrontendBackupSyncResult, FrontendError> {
+    let (session, resolved_pw) = state.authorize_and_begin_session_secret(
+        crate::state::RequiredAccess::DailyPay,
+        password.as_deref(),
+    )?;
+    let _backup_guard = state.backup_op_lock.lock().await;
+    let pw = resolved_pw.as_deref().map(String::as_str);
+
+    let prep = match load_backup_sync_prep(state, &session, pw, is_wifi)? {
+        BackupSyncPrep::Disabled => {
+            return Ok(FrontendBackupSyncResult {
+                uploaded_to: 0,
+                authorized_targets: 0,
+                padded_bytes: 0,
+                timestamp: None,
+                errors: Vec::new(),
+                retry_after_secs: None,
+                skipped_wifi_only: false,
+            });
+        }
+        BackupSyncPrep::SkipWifi => {
+            return Ok(FrontendBackupSyncResult {
+                uploaded_to: 0,
+                authorized_targets: 0,
+                padded_bytes: 0,
+                timestamp: None,
+                errors: Vec::new(),
+                retry_after_secs: None,
+                skipped_wifi_only: true,
+            });
+        }
+        BackupSyncPrep::Ready(boxed) => *boxed,
     };
 
+    // Gather active non-revoked backup sync targets via canonical helper (own -> friend -> public).
+    let own_desc_opt = prep
+        .own_admin_opt
+        .as_ref()
+        .filter(|a| a.revocation.is_none())
+        .map(|a| &a.descriptor);
+    let candidate_targets = collect_backup_sync_targets(
+        &prep.security_policy,
+        own_desc_opt,
+        prep.my_prefix.as_deref(),
+        None,
+    );
+
+    if candidate_targets.is_empty() {
+        return Ok(FrontendBackupSyncResult {
+            uploaded_to: 0,
+            authorized_targets: 0,
+            padded_bytes: 0,
+            timestamp: None,
+            errors: Vec::new(),
+            retry_after_secs: None,
+            skipped_wifi_only: false,
+        });
+    }
+
+    // Probe which candidate drops authorize channel "backup"
+    let probe_client = crate::sync_client::create_sync_probe_client();
+    let authorized_targets = discover_authorized_backup_targets(
+        &probe_client,
+        candidate_targets,
+        &prep.my_ed_sk,
+        prep.my_prefix.as_deref(),
+    )
+    .await;
+
+    let authorized_count = authorized_targets.len();
+    if authorized_targets.is_empty() {
+        return Ok(FrontendBackupSyncResult {
+            uploaded_to: 0,
+            authorized_targets: 0,
+            padded_bytes: 0,
+            timestamp: None,
+            errors: Vec::new(),
+            retry_after_secs: None,
+            skipped_wifi_only: false,
+        });
+    }
+
+    let max_target_bytes = authorized_targets
+        .iter()
+        .map(|t| t.effective_max_bytes)
+        .max()
+        .unwrap_or(humoco_market::DROP_BACKUP_MAX_BYTES);
+    let preflight_now_secs = crate::sync_client::current_unix_timestamp();
+
+    let mut preflight = load_preflight_backup_context(state, &session, pw)?;
+    let mut inspection = inspect_remote_mirrors_for_anomalies(
+        state,
+        &session,
+        pw,
+        &probe_client,
+        &authorized_targets,
+        &preflight.backup_sync_state,
+        preflight.preflight_epoch,
+        preflight.preflight_tx_nonce,
+        preflight_now_secs,
+    )
+    .await?;
+    if let Some(early) = inspection.early_abort.take() {
+        return Ok(early);
+    }
+
+    let payloads = prepare_backup_payloads(
+        state,
+        &session,
+        pw,
+        custom_standards,
+        &authorized_targets,
+        &preflight.backup_sync_state,
+        &inspection,
+        preflight_now_secs,
+        max_target_bytes,
+    )?;
+
+    let client = crate::sync_client::create_sync_http_client();
+    let mut stats = BackupUploadStats {
+        uploaded_to: 0,
+        last_uploaded_bytes: 0,
+        base_uploaded_any: false,
+        state_dirty: false,
+        max_retry_after_secs: None,
+        errors: std::mem::take(&mut inspection.errors),
+    };
+
+    for target in authorized_targets {
+        upload_backup_to_target(
+            state,
+            &client,
+            target,
+            &prep,
+            &payloads,
+            &inspection,
+            &preflight.probe_lock_pubs,
+            &mut preflight.backup_sync_state,
+            &mut stats,
+        )
+        .await;
+    }
+
+    let timestamp_str = commit_post_upload_backup_state(
+        state,
+        &session,
+        pw,
+        payloads,
+        &inspection,
+        &mut preflight.backup_sync_state,
+        &stats,
+    )?;
+
     Ok(FrontendBackupSyncResult {
-        uploaded_to,
+        uploaded_to: stats.uploaded_to,
         authorized_targets: authorized_count,
-        padded_bytes: last_uploaded_bytes,
+        padded_bytes: stats.last_uploaded_bytes,
         timestamp: timestamp_str,
-        errors,
-        retry_after_secs: max_retry_after_secs,
+        errors: stats.errors,
+        retry_after_secs: stats.max_retry_after_secs,
         skipped_wifi_only: false,
     })
 }
