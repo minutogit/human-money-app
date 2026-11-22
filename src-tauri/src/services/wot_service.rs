@@ -348,7 +348,7 @@ pub fn export_wot_package_impl(
         .map_err(|e| FrontendError::from(format!("Failed to serialize envelope: {}", e)))?;
 
     let container_bytes = service
-        .seal_trust_container(&envelope_bytes, config)
+        .seal_trust_container(&envelope_bytes, config, pw)
         .map_err(FrontendError::from)?;
 
     if !share_all && has_single_recipient {
@@ -1421,6 +1421,7 @@ mod tests {
                     alice_did,
                     human_money_core::models::secure_container::PrivacyMode::TrialDecryption,
                 ),
+                Some(pw),
             )
             .unwrap();
         assert!(

@@ -40,10 +40,12 @@ pub fn evaluate_signature_suitability(
 pub(crate) fn export_voucher_standard_impl(
     standard_id: &str,
     config: ContainerConfig,
+    wallet_password: Option<&str>,
     standards_dir: &Path,
     state: &AppState,
 ) -> Result<Vec<u8>, FrontendError> {
-    let service = state.authorize_and_lock(RequiredAccess::Unlocked, None)?;
+    let (service, resolved_pw) =
+        state.authorize_and_lock_secret(RequiredAccess::DailyPay, wallet_password)?;
     if !is_safe_filename_component(standard_id) {
         return Err(FrontendError::from(format!(
             "Invalid standard ID '{}'",
@@ -62,7 +64,11 @@ pub(crate) fn export_voucher_standard_impl(
         .map_err(|e| FrontendError::from(format!("Standard file is not valid UTF-8: {}", e)))?;
 
     service
-        .export_voucher_standard(&toml_content, config)
+        .export_voucher_standard(
+            &toml_content,
+            config,
+            resolved_pw.as_deref().map(String::as_str),
+        )
         .map_err(FrontendError::from)
 }
 
@@ -70,6 +76,7 @@ pub(crate) fn export_voucher_standard_impl(
 pub fn export_voucher_standard(
     standard_id: String,
     config: ContainerConfig,
+    wallet_password: Option<String>,
     app: tauri::AppHandle,
     state: tauri::State<AppState>,
 ) -> Result<Vec<u8>, FrontendError> {
@@ -79,7 +86,13 @@ pub fn export_voucher_standard(
         .app_data_dir()
         .map_err(|e| FrontendError::from(e.to_string()))?;
     let standards_dir = app_data_dir.join("voucher_standards");
-    export_voucher_standard_impl(&standard_id, config, &standards_dir, &state)
+    export_voucher_standard_impl(
+        &standard_id,
+        config,
+        wallet_password.as_deref(),
+        &standards_dir,
+        &state,
+    )
 }
 
 #[tauri::command]
@@ -214,6 +227,7 @@ mod tests {
         let export_locked = export_voucher_standard_impl(
             "../secret",
             ContainerConfig::Cleartext,
+            None,
             &standards_dir,
             &state,
         )
@@ -234,6 +248,7 @@ mod tests {
             let exp_err = export_voucher_standard_impl(
                 bad_id,
                 ContainerConfig::Cleartext,
+                Some(pw),
                 &standards_dir,
                 &state,
             )

@@ -1307,7 +1307,14 @@ pub(crate) fn reset_local_password_via_backup_impl(
                     .map_err(|e| FrontendError::from(e.to_string()))?;
             }
 
-            Wallet::reset_password(&mut local_storage, &local_identity, new_password)
+            let reset_identity = if local_identity.mnemonic_entropy.is_none()
+                && backup_identity.mnemonic_entropy.is_some()
+            {
+                &backup_identity
+            } else {
+                &local_identity
+            };
+            Wallet::reset_password(&mut local_storage, reset_identity, new_password)
                 .map_err(|e| FrontendError::from(e.to_string()))?;
 
             let merkle_root = human_money_core::models::seal::calculate_voucher_merkle_root(

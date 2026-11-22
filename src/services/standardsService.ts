@@ -25,8 +25,16 @@ export const standardsService = {
         });
     },
 
-    exportStandard: async (standardId: string, config: ContainerConfig) => {
-        return await invoke<number[]>("export_voucher_standard", { standardId, config });
+    exportStandard: async (
+        standardId: string,
+        config: ContainerConfig,
+        walletPassword?: string | null,
+    ) => {
+        return await invoke<number[]>("export_voucher_standard", {
+            standardId,
+            config,
+            walletPassword: walletPassword ?? null,
+        });
     },
 
     inspectStandardFile: async (containerBytes: number[], password?: string | null) => {

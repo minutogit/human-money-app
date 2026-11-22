@@ -9,6 +9,8 @@ import { ConfirmationModal } from '../ui/ConfirmationModal';
 import { Lock, FileCode, Shield } from 'lucide-react';
 import { logger } from '../../utils/log';
 import { translateError } from '../../utils/errorHelper';
+import { useOptionalSession } from '../../context/SessionContext';
+import { protectCommandOptions } from '../../services/commandPolicy';
 
 interface ExportStandardModalProps {
     isOpen: boolean;
@@ -26,6 +28,7 @@ export function ExportStandardModal({
     onSuccess
 }: ExportStandardModalProps) {
     const { t } = useTranslation();
+    const session = useOptionalSession();
     const [mode, setMode] = useState<'Cleartext' | 'Password'>('Cleartext');
     const [password, setPassword] = useState('');
     const [confirmPassword, setConfirmPassword] = useState('');
@@ -57,11 +60,20 @@ export function ExportStandardModal({
 
         setIsExporting(true);
         try {
-            const config: ContainerConfig = mode === 'Password' 
+            const config: ContainerConfig = mode === 'Password'
                 ? { type: 'Password', value: password }
                 : { type: 'Cleartext' };
 
-            const containerBytes = await standardsService.exportStandard(standardId, config);
+            const containerBytes = session?.protectAction
+                ? await session.protectAction(
+                      async (walletPwd) =>
+                          await standardsService.exportStandard(standardId, config, walletPwd),
+                      protectCommandOptions('export_voucher_standard'),
+                  )
+                : await standardsService.exportStandard(standardId, config, null);
+            if (!containerBytes) {
+                return;
+            }
 
             const defaultFileName = `${standardName.toLowerCase().replace(/\s+/g, '-')}.standard`;
             const filePath = await save({
