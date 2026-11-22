@@ -41,34 +41,49 @@ const ALLOWED_QR_SVG_TAGS = new Set([
     'desc',
 ]);
 
-function isRenderableSvg(svg: string | null | undefined): svg is string {
-    if (typeof svg !== 'string') return false;
+/**
+ * Validates and returns sanitized QR SVG markup (strict tag/attribute allowlist), or `null` if unsafe.
+ */
+export function sanitizeQrSvg(svg: string | null | undefined): string | null {
+    if (typeof svg !== 'string') return null;
     const trimmed = svg.trim();
-    if (!trimmed.toLowerCase().includes('<svg')) return false;
+    if (!trimmed.toLowerCase().includes('<svg')) return null;
     if (typeof DOMParser === 'undefined') {
-        return /<svg[\s>]/i.test(trimmed) && !/<script/i.test(trimmed) && !/on\w+\s*=/i.test(trimmed);
+        const isSafeFallback =
+            /<svg[\s>]/i.test(trimmed) &&
+            !/<(?:script|foreignObject|iframe|object|embed|style|link|meta)\b/i.test(trimmed) &&
+            !/\son[a-z]+\s*=/i.test(trimmed) &&
+            !/(?:javascript|vbscript|data):/i.test(trimmed);
+        return isSafeFallback ? trimmed : null;
     }
     try {
         const doc = new DOMParser().parseFromString(trimmed, 'image/svg+xml');
-        if (doc.querySelector('parsererror')) return false;
+        if (doc.querySelector('parsererror')) return null;
         const root = doc.documentElement;
-        if (!root || root.tagName.toLowerCase() !== 'svg') return false;
+        if (!root || root.tagName.toLowerCase() !== 'svg') return null;
         const all = [root, ...Array.from(root.querySelectorAll('*'))];
         for (const el of all) {
-            if (!ALLOWED_QR_SVG_TAGS.has(el.tagName.toLowerCase())) return false;
+            if (!ALLOWED_QR_SVG_TAGS.has(el.tagName.toLowerCase())) return null;
             for (const attr of Array.from(el.attributes)) {
                 const name = attr.name.toLowerCase();
                 const val = attr.value.trim().toLowerCase();
-                if (name.startsWith('on')) return false;
-                if ((name === 'href' || name === 'xlink:href' || name === 'src') &&
-                    (val.startsWith('javascript:') || val.startsWith('data:'))) {
-                    return false;
+                if (name.startsWith('on')) return null;
+                if (
+                    (name === 'href' || name === 'xlink:href' || name === 'src') &&
+                    (val.startsWith('javascript:') || val.startsWith('vbscript:') || val.startsWith('data:'))
+                ) {
+                    return null;
+                }
+                if (name === 'style' && /(?:javascript:|expression\s*\(|url\s*\()/i.test(val)) {
+                    return null;
                 }
             }
         }
-        return true;
+        return typeof XMLSerializer !== 'undefined'
+            ? new XMLSerializer().serializeToString(root)
+            : (root.outerHTML || trimmed);
     } catch {
-        return false;
+        return null;
     }
 }
 
@@ -91,7 +106,8 @@ export const QrCodeDisplay: React.FC<QrCodeDisplayProps> = ({
     'data-testid': testId,
     qrTestId,
 }) => {
-    const hasSvg = isRenderableSvg(svg);
+    const safeSvg = sanitizeQrSvg(svg);
+    const hasSvg = Boolean(safeSvg);
     const accessibleLabel =
         ariaLabel ||
         (typeof caption === 'string' && caption.trim() ? caption : undefined) ||
@@ -114,10 +130,10 @@ export const QrCodeDisplay: React.FC<QrCodeDisplayProps> = ({
                     includeMargin ? 'p-3' : 'p-0'
                 }`}
             >
-                {hasSvg ? (
+                {hasSvg && safeSvg ? (
                     renderAs === 'img' ? (
                         <img
-                            src={`data:image/svg+xml;utf8,${encodeURIComponent(svg)}`}
+                            src={`data:image/svg+xml;utf8,${encodeURIComponent(safeSvg)}`}
                             alt={accessibleLabel}
                             className="w-full h-full object-contain"
                         />
@@ -126,7 +142,7 @@ export const QrCodeDisplay: React.FC<QrCodeDisplayProps> = ({
                             role="img"
                             aria-label={accessibleLabel}
                             className="w-full h-full flex items-center justify-center [&>svg]:w-full [&>svg]:h-full"
-                            dangerouslySetInnerHTML={{ __html: svg }}
+                            dangerouslySetInnerHTML={{ __html: safeSvg }}
                         />
                     )
                 ) : (

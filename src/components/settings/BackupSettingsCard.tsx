@@ -18,7 +18,7 @@ import { InfoHint } from '../ui/InfoHint';
 import { AdvancedDisclosure } from '../ui/AdvancedDisclosure';
 import { translateError, stringifyError } from '../../utils/errorHelper';
 import { logger } from '../../utils/log';
-import { dispatchBackupUpdated } from '../../sync/syncBridge';
+import { BACKUP_UPDATED_EVENT, dispatchBackupUpdated } from '../../sync/syncBridge';
 import { pickDirectoryPath, pickSaveFilePath } from '../../utils/fileIo';
 import { 
     Archive, 
@@ -67,14 +67,28 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({
 
     useEffect(() => {
         let active = true;
-        backupService.getBackupStatus?.()?.then((st) => {
-            if (active) setBackupStatus(st);
-        })?.catch(() => {});
+        const refreshBackupStatus = () => {
+            backupService.getBackupStatus?.()?.then((st) => {
+                if (active) setBackupStatus(st);
+            })?.catch(() => {});
+        };
+        refreshBackupStatus();
         recoveryService.getRecoveryProtectionStatus().then((prot) => {
             if (active) setRecoveryProtectionStatus(prot);
         })?.catch(() => {});
+
+        const handleBackupUpdated = (event: Event) => {
+            const detail = (event as CustomEvent<FrontendAutoBackupStatusDto | undefined>).detail;
+            if (detail) {
+                setBackupStatus(detail);
+            } else {
+                refreshBackupStatus();
+            }
+        };
+        window.addEventListener(BACKUP_UPDATED_EVENT, handleBackupUpdated);
         return () => {
             active = false;
+            window.removeEventListener(BACKUP_UPDATED_EVENT, handleBackupUpdated);
         };
     }, []);
 
@@ -85,7 +99,22 @@ export const BackupSettingsCard: React.FC<BackupSettingsCardProps> = ({
         if (config?.securityPolicy.syncBackupEnabled !== undefined) {
             setSyncBackupEnabled(config.securityPolicy.syncBackupEnabled);
         }
-    }, [config?.securityPolicy.autoBackupEnabled, config?.securityPolicy.syncBackupEnabled]);
+        if (config?.securityPolicy.backupSyncFolder !== undefined) {
+            setSyncFolder(config.securityPolicy.backupSyncFolder ?? '');
+        }
+        if (config?.securityPolicy.backupProtectionMode !== undefined) {
+            setProtectionMode(
+                config.securityPolicy.backupProtectionMode === 'custom_password'
+                    ? 'custom_password'
+                    : 'mnemonic_only',
+            );
+        }
+    }, [
+        config?.securityPolicy.autoBackupEnabled,
+        config?.securityPolicy.syncBackupEnabled,
+        config?.securityPolicy.backupSyncFolder,
+        config?.securityPolicy.backupProtectionMode,
+    ]);
 
     const [isExporting, setIsExporting] = useState(false);
     const [isSyncing, setIsSyncing] = useState(false);

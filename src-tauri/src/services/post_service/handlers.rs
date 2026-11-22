@@ -43,6 +43,7 @@ pub(crate) struct PostDispatchStats {
     pub imported_signatures: usize,
     pub new_sign_requests: usize,
     pub new_wot_handshakes: usize,
+    pub imported_wot_lists: usize,
     pub new_inquiries: usize,
     pub new_inquiry_messages: usize,
     pub new_tolerance_payments: usize,
@@ -795,7 +796,9 @@ fn handle_trust_assertion(
                         .map_err(crate::models::FrontendError::from)?;
                     Ok(None)
                 }) {
-                    Ok(Some(None)) => {}
+                    Ok(Some(None)) => {
+                        stats.imported_wot_lists += 1;
+                    }
                     Ok(Some(Some(pkg_err))) => {
                         stats.errors.push(pkg_err);
                     }
@@ -1057,7 +1060,8 @@ fn handle_market_inquiry(
     let sender_pk_hex = get_pubkey_from_user_id(ctx.sender_did)
         .map(|pk| hex::encode(pk.as_bytes()))
         .unwrap_or_default();
-    let target_key = super::inquiry_rate_limit_key(&canonical_target);
+    let frontend_target = crate::models::FrontendInquiryTarget::from(canonical_target);
+    let target_key = super::inquiry_rate_limit_key(&frontend_target);
     if let Err(e) = post_state
         .inquiry_rate_tracker
         .record_inquiry(&sender_pk_hex, &target_key)
@@ -1076,7 +1080,7 @@ fn handle_market_inquiry(
     post_state.inquiries.push(FrontendMarketInquiryItem {
         inquiry_id: inquiry.inquiry_id.clone(),
         role: "seller".to_string(),
-        target: canonical_target,
+        target: frontend_target,
         counterparty_did: ctx.sender_did.to_string(),
         counterparty_name: sender_name,
         counterparty_picture_url: sender_pic,

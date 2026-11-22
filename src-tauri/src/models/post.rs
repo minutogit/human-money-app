@@ -51,11 +51,48 @@ pub struct FrontendInquiryChatMessage {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+pub enum FrontendInquiryTarget {
+    Ad {
+        #[serde(rename = "adId")]
+        ad_id: String,
+        #[serde(rename = "adTitle")]
+        ad_title: String,
+    },
+    Person {
+        #[serde(
+            rename = "skillTitle",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
+        skill_title: Option<String>,
+    },
+}
+
+impl From<FrontendInquiryTarget> for humoco_market::InquiryTarget {
+    fn from(target: FrontendInquiryTarget) -> Self {
+        match target {
+            FrontendInquiryTarget::Ad { ad_id, ad_title } => Self::Ad { ad_id, ad_title },
+            FrontendInquiryTarget::Person { skill_title } => Self::Person { skill_title },
+        }
+    }
+}
+
+impl From<humoco_market::InquiryTarget> for FrontendInquiryTarget {
+    fn from(target: humoco_market::InquiryTarget) -> Self {
+        match target {
+            humoco_market::InquiryTarget::Ad { ad_id, ad_title } => Self::Ad { ad_id, ad_title },
+            humoco_market::InquiryTarget::Person { skill_title } => Self::Person { skill_title },
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct FrontendMarketInquiryItem {
     pub inquiry_id: String,
     pub role: String, // "seller" | "buyer"
-    pub target: humoco_market::InquiryTarget,
+    pub target: FrontendInquiryTarget,
     pub counterparty_did: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub counterparty_name: Option<String>,
@@ -121,6 +158,8 @@ pub struct FrontendPostSyncResult {
     pub imported_signatures: usize,
     pub new_sign_requests: usize,
     pub new_wot_handshakes: usize,
+    #[serde(default)]
+    pub imported_wot_lists: usize,
     pub new_inquiries: usize,
     pub new_inquiry_messages: usize,
     #[serde(default)]
@@ -132,4 +171,61 @@ pub struct FrontendPostSyncResult {
     pub skipped_wifi_only: bool,
     pub errors: Vec<String>,
     pub retry_after_secs: Option<u64>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FrontendInquiryTarget;
+
+    #[test]
+    fn s10_x1_frontend_inquiry_target_camel_case_wire_format_and_deny_unknown_fields() {
+        let ad = FrontendInquiryTarget::Ad {
+            ad_id: "0123456789abcdef".to_string(),
+            ad_title: "Forest Honey".to_string(),
+        };
+        let ad_json = serde_json::to_string(&ad).unwrap();
+        assert_eq!(
+            ad_json,
+            r#"{"kind":"ad","adId":"0123456789abcdef","adTitle":"Forest Honey"}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<FrontendInquiryTarget>(&ad_json).unwrap(),
+            ad
+        );
+
+        let person_skill = FrontendInquiryTarget::Person {
+            skill_title: Some("Carpentry".to_string()),
+        };
+        let person_skill_json = serde_json::to_string(&person_skill).unwrap();
+        assert_eq!(
+            person_skill_json,
+            r#"{"kind":"person","skillTitle":"Carpentry"}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<FrontendInquiryTarget>(&person_skill_json).unwrap(),
+            person_skill
+        );
+
+        let person_general = FrontendInquiryTarget::Person { skill_title: None };
+        let person_general_json = serde_json::to_string(&person_general).unwrap();
+        assert_eq!(person_general_json, r#"{"kind":"person"}"#);
+        assert_eq!(
+            serde_json::from_str::<FrontendInquiryTarget>(&person_general_json).unwrap(),
+            person_general
+        );
+
+        // Zero-Compat: snake_case fields and unknown fields must be rejected.
+        assert!(serde_json::from_str::<FrontendInquiryTarget>(
+            r#"{"kind":"ad","ad_id":"0123456789abcdef","ad_title":"Forest Honey"}"#
+        )
+        .is_err());
+        assert!(serde_json::from_str::<FrontendInquiryTarget>(
+            r#"{"kind":"person","skill_title":"Carpentry"}"#
+        )
+        .is_err());
+        assert!(serde_json::from_str::<FrontendInquiryTarget>(
+            r#"{"kind":"ad","adId":"0123456789abcdef","adTitle":"Forest Honey","extra":1}"#
+        )
+        .is_err());
+    }
 }

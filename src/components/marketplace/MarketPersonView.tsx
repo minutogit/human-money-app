@@ -215,14 +215,14 @@ export const MarketPersonView: React.FC<MarketPersonViewProps> = ({
 
     // Inquiry flow
     const openInquiryForPerson = (skillTitle?: string) => {
-        setInquiryTarget({ kind: 'person', skill_title: skillTitle });
+        setInquiryTarget({ kind: 'person', skillTitle });
         setInquiryMessage('');
         setInquiryFeedback(null);
         setInquiryModalOpen(true);
     };
 
     const openInquiryForAd = (ad: Ad) => {
-        setInquiryTarget({ kind: 'ad', ad_id: ad.id, ad_title: ad.title });
+        setInquiryTarget({ kind: 'ad', adId: ad.id, adTitle: ad.title });
         setInquiryMessage('');
         setInquiryFeedback(null);
         setInquiryModalOpen(true);
@@ -811,9 +811,9 @@ export const MarketPersonView: React.FC<MarketPersonViewProps> = ({
                         </span>
                         <p className="font-semibold">
                             {inquiryTarget.kind === 'ad'
-                                ? `Inserat: ${inquiryTarget.ad_title}`
-                                : inquiryTarget.skill_title
-                                ? `Fähigkeit: ${inquiryTarget.skill_title}`
+                                ? `Inserat: ${inquiryTarget.adTitle}`
+                                : inquiryTarget.skillTitle
+                                ? `Fähigkeit: ${inquiryTarget.skillTitle}`
                                 : t('marketplace.generalInquiry', 'Allgemeine Anfrage')}
                         </p>
                     </div>

@@ -157,4 +157,40 @@ describe('ImportCardModal Component', () => {
       expect(marketService.syncMarketChannels).toHaveBeenCalled();
     });
   });
+
+  it('ignores late importContactCard completion after modal closes', async () => {
+    let resolveImport!: (val: { status: string; did: string; replaced: boolean }) => void;
+    vi.mocked(marketService.importContactCard).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveImport = resolve;
+        })
+    );
+
+    const onImportSuccess = vi.fn();
+    const onClose = vi.fn();
+    const { rerender } = render(
+      <ImportCardModal isOpen={true} onClose={onClose} onImportSuccess={onImportSuccess} />
+    );
+
+    fireEvent.change(screen.getByPlaceholderText(/humoco:\/\/card/i), {
+      target: { value: 'humoco://card?env=slow' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /^Import$/i }));
+
+    await waitFor(() => {
+      expect(marketService.importContactCard).toHaveBeenCalledTimes(1);
+    });
+
+    // Close modal before async import completes
+    rerender(
+      <ImportCardModal isOpen={false} onClose={onClose} onImportSuccess={onImportSuccess} />
+    );
+
+    resolveImport({ status: 'accepted', did: 'did:key:z6MkuBob456', replaced: false });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(onImportSuccess).not.toHaveBeenCalled();
+  });
 });

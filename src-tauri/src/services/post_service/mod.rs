@@ -75,10 +75,10 @@ pub(crate) fn scoped_processed_msg_key(peer_did: &str, msg_id: &str) -> String {
 }
 
 /// Canonical rate-limit key per inquiry target (`"ad:<id>"` or `"person"`).
-pub(crate) fn inquiry_rate_limit_key(target: &humoco_market::InquiryTarget) -> String {
+pub(crate) fn inquiry_rate_limit_key(target: &crate::models::FrontendInquiryTarget) -> String {
     match target {
-        humoco_market::InquiryTarget::Ad { ad_id, .. } => format!("ad:{}", ad_id),
-        humoco_market::InquiryTarget::Person { .. } => "person".to_string(),
+        crate::models::FrontendInquiryTarget::Ad { ad_id, .. } => format!("ad:{}", ad_id),
+        crate::models::FrontendInquiryTarget::Person { .. } => "person".to_string(),
     }
 }
 

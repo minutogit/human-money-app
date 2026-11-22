@@ -9,10 +9,23 @@ import { truncateUserId } from '../../utils/userIdHelper';
 import { isMeteredOrCellularConnection } from '../../utils/networkStatus';
 import { marketService } from '../../services/marketService';
 
+const MAX_AD_IMAGE_CACHE_ENTRIES = 128;
 const adImageCache = new Map<string, string | null>();
 
 export function clearAdImageCache(): void {
     adImageCache.clear();
+}
+
+function setAdImageCacheEntry(key: string, value: string | null): void {
+    if (adImageCache.has(key)) {
+        adImageCache.delete(key);
+    } else if (adImageCache.size >= MAX_AD_IMAGE_CACHE_ENTRIES) {
+        const oldestKey = adImageCache.keys().next().value;
+        if (oldestKey !== undefined) {
+            adImageCache.delete(oldestKey);
+        }
+    }
+    adImageCache.set(key, value);
 }
 
 export function resolveAuthorHops(sources?: FrontendEntrySource[]): number {
@@ -108,7 +121,7 @@ export const AdCard: React.FC<AdCardProps> = ({
             .getAdImage(ownerDid, imageToken)
             .then((res) => {
                 if (res) {
-                    adImageCache.set(cacheKey, res);
+                    setAdImageCacheEntry(cacheKey, res);
                 }
                 if (!isMounted) return;
                 if (res) {

@@ -51,9 +51,9 @@ export const InquiryThreadCard: React.FC<InquiryThreadCardProps> = ({
     const isSeller = item.role === "seller";
     const targetLabel =
         item.target.kind === "ad"
-            ? `${t("marketplace.adPrefix", "Inserat")}: ${item.target.ad_title}`
-            : item.target.skill_title
-            ? `${t("marketplace.skillPrefix", "Fähigkeit")}: ${item.target.skill_title}`
+            ? `${t("marketplace.adPrefix", "Inserat")}: ${item.target.adTitle}`
+            : item.target.skillTitle
+            ? `${t("marketplace.skillPrefix", "Fähigkeit")}: ${item.target.skillTitle}`
             : t("marketplace.generalInquiry", "Allgemeine Anfrage");
 
     const hasReplyChannel = item.replySyncs.length > 0 || item.isContact;

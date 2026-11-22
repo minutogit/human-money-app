@@ -7,8 +7,8 @@ use humoco_market::{InquiryTarget, DROP_POST_MAX_BYTES};
 
 use super::*;
 use crate::models::{
-    FrontendAdInput, FrontendContact, FrontendSaveMyMarketProfileRequest, FrontendSyncDescriptor,
-    FrontendUserProfile, TransactionRecord,
+    FrontendAdInput, FrontendContact, FrontendInquiryTarget, FrontendSaveMyMarketProfileRequest,
+    FrontendSyncDescriptor, FrontendUserProfile, TransactionRecord,
 };
 use crate::services::market_service::{
     save_my_market_profile_impl, set_card_published_impl, upsert_ad_impl,
@@ -1132,6 +1132,10 @@ async fn test_async_wot_handshake_and_1_step_marketplace_inquiry_cycle() {
         bob_sync_1.new_wot_handshakes, 0,
         "Known trusted contacts must be silently auto-accepted without pending handshake banner"
     );
+    assert_eq!(
+        bob_sync_1.imported_wot_lists, 1,
+        "Silent auto-accept of a trusted contact's WoT sync package must increment imported_wot_lists"
+    );
 
     // Verify Bob's WoT register now contains Alice's list
     {
@@ -1153,6 +1157,7 @@ async fn test_async_wot_handshake_and_1_step_marketplace_inquiry_cycle() {
             .await
             .unwrap();
     assert_eq!(alice_sync_1.new_wot_handshakes, 0);
+    assert_eq!(alice_sync_1.imported_wot_lists, 1);
 
     // Verify Alice's WoT register now contains Bob's list
     {
@@ -1210,7 +1215,7 @@ async fn test_async_wot_handshake_and_1_step_marketplace_inquiry_cycle() {
     // Alice sends inquiry
     let inq_item = send_market_inquiry_via_post_impl(
         bob_did.clone(),
-        InquiryTarget::Ad {
+        FrontendInquiryTarget::Ad {
             ad_id,
             ad_title: "Forest Honey".to_string(),
         },
@@ -1828,7 +1833,7 @@ async fn test_unreachable_recipient_returns_error_and_locked_dispatch_defers_msg
 
     let inq_err = send_market_inquiry_via_post_impl(
         bob_did.clone(),
-        InquiryTarget::Person { skill_title: None },
+        FrontendInquiryTarget::Person { skill_title: None },
         "Hallo Bob".to_string(),
         vec![],
         Some(password.to_string()),
@@ -2579,7 +2584,7 @@ async fn test_post_prefix_routing_reply_drops_and_ack_isolation() {
     // 1. alice_privat sends a MarketInquiry to Bob (carries reply_drops = [Sync A2, Sync A3])
     let item = send_market_inquiry_via_post_impl(
         bob_did.clone(),
-        humoco_market::InquiryTarget::Person { skill_title: None },
+        FrontendInquiryTarget::Person { skill_title: None },
         "Hallo vom Privatkonto".to_string(),
         vec![b_desc.clone()],
         Some(password.to_string()),
@@ -3287,7 +3292,7 @@ async fn k2_h21_dispatch_rejects_spoofed_trust_assertion_and_mismatched_payment_
     ps.inquiries.push(crate::models::FrontendMarketInquiryItem {
         inquiry_id: "inq-1".into(),
         role: "buyer".into(),
-        target: InquiryTarget::Person { skill_title: None },
+        target: FrontendInquiryTarget::Person { skill_title: None },
         counterparty_did: bob_did.clone(),
         counterparty_name: Some("Bob".into()),
         counterparty_picture_url: None,
@@ -4219,7 +4224,7 @@ async fn s10_f3_canonical_inquiry_rate_limit_and_no_phantom_own_upload() {
     };
     let err = send_market_inquiry_via_post_impl(
         bob_did.clone(),
-        InquiryTarget::Person { skill_title: None },
+        FrontendInquiryTarget::Person { skill_title: None },
         "Hallo Bob".to_string(),
         vec![dead_rcpt_sync],
         Some(password.to_string()),
@@ -4337,7 +4342,7 @@ async fn s10_f3_canonical_inquiry_rate_limit_and_no_phantom_own_upload() {
     // Send 1 ad inquiry with spoofed ad_title + 2 Person inquiries with distinct skill_title values
     send_market_inquiry_via_post_impl(
         bob_did.clone(),
-        InquiryTarget::Ad {
+        FrontendInquiryTarget::Ad {
             ad_id,
             ad_title: "SPOOFED TITLE".to_string(),
         },
@@ -4351,7 +4356,7 @@ async fn s10_f3_canonical_inquiry_rate_limit_and_no_phantom_own_upload() {
 
     send_market_inquiry_via_post_impl(
         bob_did.clone(),
-        InquiryTarget::Person {
+        FrontendInquiryTarget::Person {
             skill_title: Some("Skill 0".to_string()),
         },
         "Person inquiry 0".to_string(),
@@ -4364,7 +4369,7 @@ async fn s10_f3_canonical_inquiry_rate_limit_and_no_phantom_own_upload() {
     // Second Person inquiry with a different skill_title must be rate-limited ("person" bucket)
     send_market_inquiry_via_post_impl(
         bob_did.clone(),
-        InquiryTarget::Person {
+        FrontendInquiryTarget::Person {
             skill_title: Some("Skill BypassAttempt".to_string()),
         },
         "Blocked bypass".to_string(),
@@ -4385,13 +4390,13 @@ async fn s10_f3_canonical_inquiry_rate_limit_and_no_phantom_own_upload() {
     let ad_inq = bob_ps
         .inquiries
         .iter()
-        .find(|i| matches!(&i.target, InquiryTarget::Ad { .. }))
+        .find(|i| matches!(&i.target, FrontendInquiryTarget::Ad { .. }))
         .unwrap();
     assert_eq!(
         ad_inq.target,
-        InquiryTarget::Ad {
+        FrontendInquiryTarget::Ad {
             ad_id: match &ad_inq.target {
-                InquiryTarget::Ad { ad_id, .. } => ad_id.clone(),
+                FrontendInquiryTarget::Ad { ad_id, .. } => ad_id.clone(),
                 _ => unreachable!(),
             },
             ad_title: "Genuine Honey".to_string()
@@ -4402,7 +4407,7 @@ async fn s10_f3_canonical_inquiry_rate_limit_and_no_phantom_own_upload() {
     let person_inq_id = bob_ps
         .inquiries
         .iter()
-        .find(|i| matches!(&i.target, InquiryTarget::Person { .. }))
+        .find(|i| matches!(&i.target, FrontendInquiryTarget::Person { .. }))
         .unwrap()
         .inquiry_id
         .clone();
@@ -4416,7 +4421,7 @@ async fn s10_f3_canonical_inquiry_rate_limit_and_no_phantom_own_upload() {
 
     send_market_inquiry_via_post_impl(
         bob_did,
-        InquiryTarget::Person {
+        FrontendInquiryTarget::Person {
             skill_title: Some("Skill AfterDismiss".to_string()),
         },
         "Now allowed".to_string(),
@@ -4454,7 +4459,7 @@ fn s10_f4_f5_timeout_zero_summary_and_3way_merge_safety() {
     ps.inquiries.push(crate::models::FrontendMarketInquiryItem {
         inquiry_id: "inq-zero".to_string(),
         role: "seller".to_string(),
-        target: InquiryTarget::Person { skill_title: None },
+        target: FrontendInquiryTarget::Person { skill_title: None },
         counterparty_did: bob_did.clone(),
         counterparty_name: None,
         counterparty_picture_url: None,

@@ -454,4 +454,87 @@ describe('ProfileCardEditor Component', () => {
       { coarseOnly: true },
     );
   });
+
+  it('S11-X1: blocks unsafe avatar URIs in ProfileCardMediaSection and ProfileCardPreview while rendering valid base64 image data URIs', () => {
+    const { unmount: unmountHttps } = render(
+      <ProfileCardEditor
+        isOpen={true}
+        onClose={vi.fn()}
+        myProfile={{
+          ...mockMyProfile,
+          profile: {
+            ...mockMyProfile.profile,
+            pictureUrl: 'https://tracker.evil/avatar.png',
+          },
+        }}
+        onSave={vi.fn()}
+      />
+    );
+    expect(screen.queryAllByAltText('Avatar')).toHaveLength(0);
+    unmountHttps();
+
+    const { unmount: unmountSvg } = render(
+      <ProfileCardEditor
+        isOpen={true}
+        onClose={vi.fn()}
+        myProfile={{
+          ...mockMyProfile,
+          profile: {
+            ...mockMyProfile.profile,
+            pictureUrl: 'data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=',
+          },
+        }}
+        onSave={vi.fn()}
+      />
+    );
+    expect(screen.queryAllByAltText('Avatar')).toHaveLength(0);
+    unmountSvg();
+
+    render(
+      <ProfileCardEditor
+        isOpen={true}
+        onClose={vi.fn()}
+        myProfile={{
+          ...mockMyProfile,
+          profile: {
+            ...mockMyProfile.profile,
+            pictureUrl: 'data:image/webp;base64,UklGRkAAAABXRUJQ',
+          },
+        }}
+        onSave={vi.fn()}
+      />
+    );
+    expect(screen.getAllByAltText('Avatar')).toHaveLength(2);
+  });
+
+  it('S11-X2: profileService.saveProfile preserves validityYears and published state', async () => {
+    const { marketService } = await import('../../../services/marketService');
+    const { profileService } = await import('../../../services/profileService');
+
+    const getSpy = vi.spyOn(marketService, 'getMyMarketProfile').mockResolvedValue({
+      ...mockMyProfile,
+      validityYears: 3,
+      published: true,
+    });
+    const saveSpy = vi.spyOn(marketService, 'saveMyMarketProfile').mockResolvedValue({
+      ...mockMyProfile,
+      validityYears: 3,
+      published: true,
+    });
+
+    try {
+      await profileService.saveProfile({ id: 'did:key:z6MkuSelf', firstName: 'Moritz' }, 'pw123');
+      expect(saveSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          validityYears: 3,
+          published: true,
+          profile: expect.objectContaining({ firstName: 'Moritz' }),
+        }),
+        'pw123',
+      );
+    } finally {
+      getSpy.mockRestore();
+      saveSpy.mockRestore();
+    }
+  });
 });

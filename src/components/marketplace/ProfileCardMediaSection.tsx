@@ -5,6 +5,7 @@ import { Upload, User } from 'lucide-react';
 import { CardFieldVisibility, FrontendUserProfile } from '../../types';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
+import { isSafeAvatarDataUri } from '../ui/UserAvatar';
 import { VisibilityCycleButton } from './ProfileCardVisibilitySection';
 
 export interface ProfileCardMediaSectionProps {
@@ -27,6 +28,7 @@ export const ProfileCardMediaSection: React.FC<ProfileCardMediaSectionProps> = (
 }) => {
     const { t } = useTranslation();
     const avatarInputRef = useRef<HTMLInputElement | null>(null);
+    const safeAvatarUri = isSafeAvatarDataUri(profile.pictureUrl) ? profile.pictureUrl.trim() : undefined;
 
     const handleAvatarFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
@@ -109,9 +111,9 @@ export const ProfileCardMediaSection: React.FC<ProfileCardMediaSectionProps> = (
                 </div>
                 <div className="flex items-center gap-4">
                     <div className="w-24 h-24 rounded-full overflow-hidden border border-theme-subtle bg-theme-primary/10 text-theme-primary flex items-center justify-center shrink-0 shadow-xs">
-                        {profile.pictureUrl ? (
+                        {safeAvatarUri ? (
                             <img
-                                src={profile.pictureUrl}
+                                src={safeAvatarUri}
                                 alt="Avatar"
                                 className="w-full h-full object-cover rounded-full"
                             />

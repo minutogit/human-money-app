@@ -26,6 +26,8 @@ export interface WalletMutationOptions {
     wotUpdated?: boolean;
 }
 
+export const BACKUP_UPDATED_EVENT = APP_EVENTS.BACKUP_UPDATED;
+
 export function dispatchBackupUpdated(status?: FrontendAutoBackupStatusDto): void {
     emitAppEvent(APP_EVENTS.BACKUP_UPDATED, status);
 }

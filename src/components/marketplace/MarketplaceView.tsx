@@ -500,6 +500,7 @@ export function MarketplaceView({
                 (postRes?.newInquiries ?? 0) > 0 ||
                 (postRes?.newInquiryMessages ?? 0) > 0 ||
                 (postRes?.newWotHandshakes ?? 0) > 0 ||
+                (postRes?.importedWotLists ?? 0) > 0 ||
                 (postRes?.newSignRequests ?? 0) > 0 ||
                 (postRes?.importedSignatures ?? 0) > 0;
 

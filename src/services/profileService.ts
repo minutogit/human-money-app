@@ -39,7 +39,9 @@ export const profileService = {
             visibility: current.visibility,
             skills: current.skills,
             maxHops: current.maxHops,
+            validityYears: current.validityYears,
             allowInquiries: current.allowInquiries,
+            published: current.published,
         }, password);
     },
 

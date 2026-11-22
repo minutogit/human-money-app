@@ -256,4 +256,46 @@ describe('AdCard Component', () => {
       }
     }
   });
+
+  it('bounds adImageCache at 128 entries by evicting the oldest entry on overflow', async () => {
+    const getAdImageSpy = vi
+      .spyOn(marketService, 'getAdImage')
+      .mockImplementation(async (_owner, token) => `data:image/webp;base64,${token}`);
+
+    for (let i = 0; i < 129; i += 1) {
+      const { unmount } = render(
+        <AdCard
+          ad={{ ...mockAdOffer, id: `ad-${i}`, imageToken: `tok-${i}` }}
+          ownerDid="did:key:z6MkuAlice"
+          ownerName="Alice"
+        />
+      );
+      await screen.findByTestId('ad-card-image');
+      unmount();
+    }
+
+    expect(getAdImageSpy).toHaveBeenCalledTimes(129);
+
+    // Entry 1 should still be cached (no refetch); entry 0 was evicted and must refetch.
+    const { unmount: u1 } = render(
+      <AdCard
+        ad={{ ...mockAdOffer, id: 'ad-1', imageToken: 'tok-1' }}
+        ownerDid="did:key:z6MkuAlice"
+        ownerName="Alice"
+      />
+    );
+    await screen.findByTestId('ad-card-image');
+    u1();
+    expect(getAdImageSpy).toHaveBeenCalledTimes(129);
+
+    render(
+      <AdCard
+        ad={{ ...mockAdOffer, id: 'ad-0', imageToken: 'tok-0' }}
+        ownerDid="did:key:z6MkuAlice"
+        ownerName="Alice"
+      />
+    );
+    await screen.findByTestId('ad-card-image');
+    expect(getAdImageSpy).toHaveBeenCalledTimes(130);
+  });
 });

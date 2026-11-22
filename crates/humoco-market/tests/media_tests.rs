@@ -594,3 +594,26 @@ fn test_fit_bytes_wire_filter_excludes_picture_and_ad() {
         .iter()
         .any(|(item, _)| matches!(item, CardItem::City { .. })));
 }
+
+#[test]
+fn s11_x5_extract_media_bytes_rejects_oversized_base64_before_decode() {
+    use humoco_market::MAX_AD_MEDIA_BYTES;
+
+    let max_b64_chars = (MAX_AD_MEDIA_BYTES * 4).div_ceil(3) + 64;
+    // Deliberately use invalid base64 characters ('!') beyond max_b64_chars so we prove
+    // the length guard rejects with PayloadTooLarge BEFORE invoking the Base64 decoder.
+    let oversized_invalid_b64 = "!".repeat(max_b64_chars + 1);
+    let oversized_uri = format!("{}{}", MEDIA_DATA_URI_PREFIX, oversized_invalid_b64);
+    assert!(matches!(
+        extract_media_bytes(&oversized_uri),
+        Err(MarketError::PayloadTooLarge(_))
+    ));
+
+    // Within limit (exact MAX_AD_MEDIA_BYTES encoded) still succeeds cleanly.
+    let exact_bytes = vec![0xABu8; MAX_AD_MEDIA_BYTES];
+    let exact_uri = format!("{}{}", MEDIA_DATA_URI_PREFIX, STANDARD.encode(&exact_bytes));
+    assert_eq!(
+        extract_media_bytes(&exact_uri).unwrap().len(),
+        MAX_AD_MEDIA_BYTES
+    );
+}

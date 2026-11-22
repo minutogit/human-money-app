@@ -191,6 +191,7 @@ export const postService = {
             res.importedSignatures > 0 ||
             res.newSignRequests > 0 ||
             res.newWotHandshakes > 0 ||
+            (res.importedWotLists ?? 0) > 0 ||
             res.newInquiries > 0 ||
             res.newInquiryMessages > 0 ||
             (res.newTolerancePayments ?? 0) > 0;
@@ -203,7 +204,7 @@ export const postService = {
             notifyPostInboxUpdated();
             emitAppEvent(APP_EVENTS.SYNC_COMPLETED, { source: 'post' });
         }
-        if (res.newWotHandshakes > 0) {
+        if (res.newWotHandshakes > 0 || (res.importedWotLists ?? 0) > 0) {
             emitAppEvent(APP_EVENTS.WOT_UPDATED);
         }
         if (hasInboxChanges || res.polledSyncs > 0) {

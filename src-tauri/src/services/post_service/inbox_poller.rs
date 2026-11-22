@@ -5,8 +5,9 @@ use human_money_core::crypto::get_pubkey_from_user_id;
 use human_money_core::models::profile::UserIdentity;
 use human_money_core::models::secure_container::{PayloadType, SecureContainer};
 use humoco_market::{
-    is_own_dummy_post_box, try_open_post_box_any_sender, PAYLOAD_MARKET_INQUIRY_MESSAGE_V1,
-    PAYLOAD_MARKET_INQUIRY_V1, PAYLOAD_POST_RECEIPT_V1, POST_SLOT_MAGIC, POST_TTL_SECS,
+    is_own_dummy_post_box, prepare_post_senders, try_open_post_box_prepared,
+    PAYLOAD_MARKET_INQUIRY_MESSAGE_V1, PAYLOAD_MARKET_INQUIRY_V1, PAYLOAD_POST_RECEIPT_V1,
+    POST_SLOT_MAGIC, POST_TTL_SECS,
 };
 use log::warn;
 
@@ -1098,6 +1099,16 @@ pub async fn sync_post_channels_impl(
     }
 
     let mut decrypted_items: Vec<DecryptedEnvelopeItem> = Vec::new();
+    let (prepared_authorized, prepared_card_signers, prepared_inquiry_only) =
+        if fetched_slots.is_empty() {
+            (Vec::new(), Vec::new(), Vec::new())
+        } else {
+            (
+                prepare_post_senders(&signing_ctx.sync_ctx.my_ed_sk, &authorized_senders),
+                prepare_post_senders(&signing_ctx.sync_ctx.my_ed_sk, &card_signer_senders),
+                prepare_post_senders(&signing_ctx.sync_ctx.my_ed_sk, &inquiry_only_senders),
+            )
+        };
     for slot_bytes in fetched_slots {
         if slot_bytes.len() > humoco_market::DROP_POST_MAX_BYTES {
             stats.errors.push(format!(
@@ -1134,40 +1145,28 @@ pub async fn sync_post_channels_impl(
                 continue;
             }
 
-            let open_attempt = try_open_post_box_any_sender(
-                &signing_ctx.sync_ctx.my_ed_sk,
-                &authorized_senders,
-                &box_entry,
-            );
+            let open_attempt = try_open_post_box_prepared(&prepared_authorized, &box_entry);
             let (matched_sender_did, envelope, privilege) = match open_attempt {
                 Ok(Some((did, env))) => (did, env, SenderPrivilege::Full),
                 Ok(None) => {
-                    let card_attempt = if !card_signer_senders.is_empty() {
-                        try_open_post_box_any_sender(
-                            &signing_ctx.sync_ctx.my_ed_sk,
-                            &card_signer_senders,
-                            &box_entry,
-                        )
-                        .ok()
-                        .flatten()
+                    let card_attempt = if !prepared_card_signers.is_empty() {
+                        try_open_post_box_prepared(&prepared_card_signers, &box_entry)
+                            .ok()
+                            .flatten()
                     } else {
                         None
                     };
                     if let Some((did, env)) = card_attempt {
-                        let also_inquiry = inquiry_only_senders
+                        let also_inquiry = prepared_inquiry_only
                             .iter()
-                            .any(|(d, _)| are_dids_equal(d, &did));
+                            .any(|s| are_dids_equal(&s.sender_did, &did));
                         (
                             did,
                             env,
                             SenderPrivilege::CardSignerAndMaybeInquiry(also_inquiry),
                         )
-                    } else if !inquiry_only_senders.is_empty() {
-                        match try_open_post_box_any_sender(
-                            &signing_ctx.sync_ctx.my_ed_sk,
-                            &inquiry_only_senders,
-                            &box_entry,
-                        ) {
+                    } else if !prepared_inquiry_only.is_empty() {
+                        match try_open_post_box_prepared(&prepared_inquiry_only, &box_entry) {
                             Ok(Some((did, env))) => (did, env, SenderPrivilege::InquiryOnly),
                             _ => continue,
                         }
@@ -1416,6 +1415,7 @@ pub async fn sync_post_channels_impl(
         imported_signatures: stats.imported_signatures,
         new_sign_requests: stats.new_sign_requests,
         new_wot_handshakes: stats.new_wot_handshakes,
+        imported_wot_lists: stats.imported_wot_lists,
         new_inquiries: stats.new_inquiries,
         new_inquiry_messages: stats.new_inquiry_messages,
         new_tolerance_payments: stats.new_tolerance_payments,

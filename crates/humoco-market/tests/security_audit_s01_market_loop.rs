@@ -11,17 +11,18 @@ use humoco_market::{
     derive_delta_prefix, derive_recovery_key, encode_post_slot, guardian_entry_signing_bytes,
     open_and_verify_guardian_release_reply, open_multi_class_slot_blob, open_slot_payload,
     pack_post_slot, parse_ed25519_pubkey_hex64, parse_emergency_kit_uri,
-    parse_recovery_request_uri, recover_master_payload_from_shares, seal_guardian_release_reply,
-    seal_multi_class_slot_blob, seal_post_box, seal_recovery_master_payload, seal_slot_payload,
-    sign_member_request_direct, split_secret_32, try_open_post_box_any_sender,
-    unseal_recovery_master_payload, validate_kdf_params, validate_market_inquiry,
-    validate_market_inquiry_message, validate_post_delivery_receipt, validate_sync_prefix,
-    validate_wot_handshake_assertion, verify_guardian_vault_entry, verify_rehearsal_answers,
-    DropDescriptor, GuardianLocatorUpdate, GuardianReleasePayload, GuardianRevoke,
-    GuardianVaultEntry, GuardianVaultStore, InquiryRateTracker, InquiryTarget, MarketError,
-    MarketInquiry, MarketInquiryMessage, MemberPolicy, PostBoxEntry, PostDeliveryReceipt,
-    PostEnvelope, RecoveryKdfParams, RecoveryMasterPayload, RecoveryRequestLink,
-    WotHandshakeAssertion, DROP_POST_MAX_BYTES, MAX_GUARDIAN_WARDS, SLOT_MAGIC, SLOT_MULTI_MAGIC,
+    parse_recovery_request_uri, prepare_post_senders, recover_master_payload_from_shares,
+    seal_guardian_release_reply, seal_multi_class_slot_blob, seal_post_box,
+    seal_recovery_master_payload, seal_slot_payload, sign_member_request_direct, split_secret_32,
+    try_open_post_box_prepared, unseal_recovery_master_payload, validate_kdf_params,
+    validate_market_inquiry, validate_market_inquiry_message, validate_post_delivery_receipt,
+    validate_sync_prefix, validate_wot_handshake_assertion, verify_guardian_vault_entry,
+    verify_rehearsal_answers, DropDescriptor, GuardianLocatorUpdate, GuardianReleasePayload,
+    GuardianRevoke, GuardianVaultEntry, GuardianVaultStore, InquiryRateTracker, InquiryTarget,
+    MarketError, MarketInquiry, MarketInquiryMessage, MemberPolicy, PostBoxEntry,
+    PostDeliveryReceipt, PostEnvelope, RecoveryKdfParams, RecoveryMasterPayload,
+    RecoveryRequestLink, WotHandshakeAssertion, DROP_POST_MAX_BYTES, MAX_GUARDIAN_WARDS,
+    SLOT_MAGIC, SLOT_MULTI_MAGIC,
 };
 
 fn make_key(seed: u8) -> SigningKey {
@@ -124,7 +125,7 @@ fn s01_f2_rejects_small_order_keys_and_reports_payload_tampering() {
 }
 
 #[test]
-fn s01_f2_try_open_post_box_any_sender_skips_non_contributory_sender() {
+fn s01_f2_prepare_post_senders_skips_non_contributory_sender() {
     let alice_sk = make_key(31);
     let alice_vk = alice_sk.verifying_key();
     let alice_did = create_user_id(&alice_vk, None).unwrap();
@@ -152,7 +153,10 @@ fn s01_f2_try_open_post_box_any_sender_skips_non_contributory_sender() {
         (alice_did.clone(), alice_vk),
     ];
 
-    let opened = try_open_post_box_any_sender(&bob_sk, &senders, &entry).unwrap();
+    let prepared = prepare_post_senders(&bob_sk, &senders);
+    assert_eq!(prepared.len(), 1);
+    assert_eq!(prepared[0].sender_did, alice_did);
+    let opened = try_open_post_box_prepared(&prepared, &entry).unwrap();
     assert_eq!(opened, Some((alice_did, env)));
 }
 

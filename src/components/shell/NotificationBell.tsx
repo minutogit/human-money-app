@@ -117,6 +117,7 @@ export const NotificationBell: React.FC = () => {
                 (post?.newInquiries ?? 0) > 0 ||
                 (post?.newInquiryMessages ?? 0) > 0 ||
                 (post?.newWotHandshakes ?? 0) > 0 ||
+                (post?.importedWotLists ?? 0) > 0 ||
                 (post?.newSignRequests ?? 0) > 0 ||
                 (post?.importedSignatures ?? 0) > 0;
             const allFailed = mktRes.status === "rejected" && postRes.status === "rejected";

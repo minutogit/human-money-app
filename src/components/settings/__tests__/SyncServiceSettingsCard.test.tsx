@@ -802,4 +802,37 @@ describe('SyncServiceSettingsCard Component', () => {
         expect(await screen.findByText('Server migration to new host')).toBeInTheDocument();
         expect(screen.getByText(/→ https:\/\/replacement\.example\/sync\.php/)).toBeInTheDocument();
     });
+
+    it('probes contact syncs at most once on mount even when discovered drops are unverified', async () => {
+        vi.mocked(marketService.discoverAvailableSyncs).mockResolvedValue([
+            {
+                descriptor: {
+                    readUrl: 'https://friend.example/data',
+                    writeUrl: 'https://friend.example/sync.php',
+                    dropPub: 'c'.repeat(64),
+                    status: 'unverified',
+                    failCount: 0,
+                },
+                status: 'unverified',
+                contactName: 'Bob',
+                contactDid: 'did:key:z6MkBob',
+                isSelected: false,
+                isAuthorized: false,
+            } as any,
+        ]);
+
+        render(
+            <SyncServiceSettingsCard
+                config={createDefaultConfig()}
+                onConfigUpdated={vi.fn()}
+            />
+        );
+
+        await waitFor(() => {
+            expect(marketService.probeContactSyncs).toHaveBeenCalledTimes(1);
+        });
+        // Give any secondary effects a tick to run and assert no duplicate call occurred.
+        await new Promise((r) => setTimeout(r, 20));
+        expect(marketService.probeContactSyncs).toHaveBeenCalledTimes(1);
+    });
 });

@@ -5,6 +5,7 @@ import { ModalShell } from '../ui/ModalShell';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
 import { AlertBanner } from '../ui/AlertBanner';
+import { QrCodeDisplay, sanitizeQrSvg } from '../ui/QrCodeDisplay';
 import { recoveryService } from '../../services/recoveryService';
 import { ExportedMnemonicKitDto } from '../../types';
 import { translateError } from '../../utils/errorHelper';
@@ -130,8 +131,9 @@ export const EmergencyKitModal: React.FC<EmergencyKitModalProps> = ({
             ? `<div class="warn"><b>${escapeHtml(t('backup.emergencyKitPassphraseActiveTitle'))}</b> ${escapeHtml(t('backup.emergencyKitPassphraseActiveNote'))}</div>`
             : `<p style="font-size:13px;color:#444;">${escapeHtml(t('backup.emergencyKitPassphraseNoneNote'))}</p>`;
 
-        const qrHtml = kitData.qrSvg
-            ? `<div class="section"><h3>${escapeHtml(t('backup.emergencyKitQrHeading'))}</h3><div style="width:200px;height:200px;padding:8px;border:1px solid #ccc;border-radius:8px;background:#fff;">${kitData.qrSvg}</div></div>`
+        const safeQrSvg = sanitizeQrSvg(kitData.qrSvg);
+        const qrHtml = safeQrSvg
+            ? `<div class="section"><h3>${escapeHtml(t('backup.emergencyKitQrHeading'))}</h3><div style="width:200px;height:200px;padding:8px;border:1px solid #ccc;border-radius:8px;background:#fff;">${safeQrSvg}</div></div>`
             : '';
 
         const htmlLang = escapeHtml((i18n.language || 'en').split('-')[0] || 'en');
@@ -339,9 +341,13 @@ ${qrHtml}
                                     </p>
                                 </div>
                                 {kitData.qrSvg && (
-                                    <div
-                                        className="w-24 h-24 shrink-0"
-                                        dangerouslySetInnerHTML={{ __html: kitData.qrSvg }}
+                                    <QrCodeDisplay
+                                        svg={kitData.qrSvg}
+                                        value={kitData.kitUri}
+                                        size={96}
+                                        includeMargin={false}
+                                        ariaLabel={t('backup.emergencyKitQrHeading')}
+                                        className="shrink-0"
                                     />
                                 )}
                             </div>

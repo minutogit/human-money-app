@@ -382,4 +382,65 @@ describe('BackupSettingsCard', () => {
             expect(screen.getByText(/Protection Mode/i)).toBeInTheDocument();
         });
     });
+
+    it('synchronizes syncFolder and protectionMode with updated config props and refreshes backupStatus on BACKUP_UPDATED_EVENT', async () => {
+        const { BACKUP_UPDATED_EVENT } = await import('../../../sync/syncBridge');
+        vi.mocked(backupService.getBackupStatus)
+            .mockResolvedValueOnce({
+                status: 'ok',
+                lastBackupAt: null,
+                backupDirty: false,
+                syncFolder: null,
+                changedBlobs: 0,
+                syncBackupEnabled: true,
+                lastSyncBackupAt: null,
+                hasAuthorizedSyncBackupTarget: false,
+            })
+            .mockResolvedValueOnce({
+                status: 'ok',
+                lastBackupAt: null,
+                backupDirty: false,
+                syncFolder: null,
+                changedBlobs: 0,
+                syncBackupEnabled: true,
+                lastSyncBackupAt: null,
+                hasAuthorizedSyncBackupTarget: true,
+            });
+
+        const cfg = createDefaultConfig();
+        const { rerender } = renderCard(cfg);
+
+        expect(screen.getByText('No sync folder configured.')).toBeInTheDocument();
+        expect((screen.getByDisplayValue('mnemonic_only') as HTMLInputElement).checked).toBe(true);
+        await waitFor(() => {
+            expect(screen.getByText(/No Sync Service authorized for backups/i)).toBeInTheDocument();
+        });
+
+        // Update config props externally -> syncFolder & protectionMode must sync
+        const updatedCfg: AppConfigDto = {
+            ...cfg,
+            securityPolicy: {
+                ...cfg.securityPolicy,
+                backupSyncFolder: '/srv/updated-backups',
+                backupProtectionMode: 'custom_password',
+            },
+        };
+        rerender(
+            <UiModeProvider initialMode="expert">
+                <BackupSettingsCard config={updatedCfg} onConfigUpdated={vi.fn()} />
+            </UiModeProvider>
+        );
+
+        await waitFor(() => {
+            expect(screen.getByText('/srv/updated-backups')).toBeInTheDocument();
+            expect((screen.getByDisplayValue('custom_password') as HTMLInputElement).checked).toBe(true);
+        });
+
+        // Dispatch BACKUP_UPDATED_EVENT -> backupStatus refreshes
+        window.dispatchEvent(new CustomEvent(BACKUP_UPDATED_EVENT));
+        await waitFor(() => {
+            expect(backupService.getBackupStatus).toHaveBeenCalledTimes(2);
+            expect(screen.getByText(/Active & ready/i)).toBeInTheDocument();
+        });
+    });
 });

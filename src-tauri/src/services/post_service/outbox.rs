@@ -1657,7 +1657,7 @@ pub async fn accept_wot_handshake_impl(
 /// Initiates a 1-step marketplace inquiry thread to a seller or person via Post.
 pub async fn send_market_inquiry_via_post_impl(
     recipient_did: String,
-    target: humoco_market::InquiryTarget,
+    target: crate::models::FrontendInquiryTarget,
     message: String,
     recipient_syncs: Vec<FrontendSyncDescriptor>,
     password: Option<String>,
@@ -1677,7 +1677,7 @@ pub async fn send_market_inquiry_via_post_impl(
 
     let inquiry = MarketInquiry {
         inquiry_id: inquiry_id.clone(),
-        target: target.clone(),
+        target: target.clone().into(),
         message: message.clone(),
         created_at: now_secs,
     };

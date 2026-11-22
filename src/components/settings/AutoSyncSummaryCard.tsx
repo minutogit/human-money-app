@@ -1,5 +1,5 @@
 // src/components/settings/AutoSyncSummaryCard.tsx
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Cloud, RefreshCw, CheckCircle2, AlertTriangle, Wifi, Image, ExternalLink, Copy } from 'lucide-react';
 import { openUrl } from '@tauri-apps/plugin-opener';
@@ -48,7 +48,17 @@ export const AutoSyncSummaryCard: React.FC<AutoSyncSummaryCardProps> = ({
     const session = useOptionalSession();
     const [discoveredSyncs, setDiscoveredSyncs] = useState<FrontendDiscoveredSync[]>([]);
     const [isConnecting, setIsConnecting] = useState(false);
+    const [isTogglingMaster, setIsTogglingMaster] = useState(false);
     const [feedback, setFeedback] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
+    const isMountedRef = useRef(true);
+    const isTogglingMasterRef = useRef(false);
+
+    useEffect(() => {
+        isMountedRef.current = true;
+        return () => {
+            isMountedRef.current = false;
+        };
+    }, []);
 
     const loadDiscovered = useCallback(async () => {
         if (typeof marketService?.discoverAvailableSyncs !== 'function') return;
@@ -129,6 +139,9 @@ export const AutoSyncSummaryCard: React.FC<AutoSyncSummaryCardProps> = ({
     };
 
     const handleMasterToggle = async (enabled: boolean) => {
+        if (isTogglingMasterRef.current) return;
+        isTogglingMasterRef.current = true;
+        setIsTogglingMaster(true);
         setFeedback(null);
         try {
             const runToggle = async (pwd?: string | null) => {
@@ -152,6 +165,7 @@ export const AutoSyncSummaryCard: React.FC<AutoSyncSummaryCardProps> = ({
                       protectCommandOptions('patch_security_policy'),
                   )
                 : await runToggle();
+            if (!isMountedRef.current) return;
             if (result && onConfigUpdated) {
                 if (config) {
                     onConfigUpdated({
@@ -161,15 +175,21 @@ export const AutoSyncSummaryCard: React.FC<AutoSyncSummaryCardProps> = ({
                     });
                 } else {
                     const fresh = await settingsService.getConfig().catch(() => null);
-                    if (fresh) onConfigUpdated(fresh);
+                    if (isMountedRef.current && fresh) onConfigUpdated(fresh);
                 }
             }
             notifySyncStatusUpdated();
         } catch (err) {
+            if (!isMountedRef.current) return;
             setFeedback({ type: 'error', message: translateError(err, t) });
             if (onConfigUpdated) {
                 const fresh = await settingsService.getConfig().catch(() => null);
-                if (fresh) onConfigUpdated(fresh);
+                if (isMountedRef.current && fresh) onConfigUpdated(fresh);
+            }
+        } finally {
+            isTogglingMasterRef.current = false;
+            if (isMountedRef.current) {
+                setIsTogglingMaster(false);
             }
         }
     };
@@ -514,13 +534,14 @@ export const AutoSyncSummaryCard: React.FC<AutoSyncSummaryCardProps> = ({
                 )}
 
                 {/* Master toggle for background sync */}
-                <label className="flex items-start gap-3 p-3.5 rounded-xl border border-theme-subtle bg-white dark:bg-slate-900 hover:border-theme-primary/40 transition-colors cursor-pointer">
+                <label className={`flex items-start gap-3 p-3.5 rounded-xl border border-theme-subtle bg-white dark:bg-slate-900 hover:border-theme-primary/40 transition-colors ${isTogglingMaster ? 'opacity-60 cursor-wait' : 'cursor-pointer'}`}>
                     <input
                         type="checkbox"
                         data-testid="auto-sync-master-toggle"
                         checked={allChannelsOn}
-                        onChange={(e) => handleMasterToggle(e.target.checked)}
-                        className="mt-0.5 rounded border-theme-subtle text-theme-primary focus:ring-theme-primary cursor-pointer"
+                        disabled={isTogglingMaster}
+                        onChange={(e) => void handleMasterToggle(e.target.checked)}
+                        className="mt-0.5 rounded border-theme-subtle text-theme-primary focus:ring-theme-primary cursor-pointer disabled:cursor-wait"
                     />
                     <div className="flex-1 space-y-1">
                         <div className="flex flex-wrap items-center gap-2">

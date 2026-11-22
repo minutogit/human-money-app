@@ -359,8 +359,8 @@ export interface FrontendPendingWotHandshake {
 }
 
 export type InquiryTarget =
-    | { kind: 'ad'; ad_id: string; ad_title: string }
-    | { kind: 'person'; skill_title?: string };
+    | { kind: 'ad'; adId: string; adTitle: string }
+    | { kind: 'person'; skillTitle?: string };
 
 export interface FrontendInquiryChatMessage {
     msgId: string;
@@ -430,6 +430,7 @@ export interface FrontendPostSyncResult {
     importedSignatures: number;
     newSignRequests: number;
     newWotHandshakes: number;
+    importedWotLists?: number;
     newInquiries: number;
     newInquiryMessages: number;
     newTolerancePayments?: number;

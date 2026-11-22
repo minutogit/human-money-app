@@ -200,4 +200,57 @@ describe('EmergencyKitModal Component', () => {
             clickSpy.mockRestore();
         }
     });
+
+    it('sanitizes/rejects unsafe SVG markup in both modal preview and downloaded HTML export', async () => {
+        vi.mocked(recoveryService.exportProfileMnemonic).mockResolvedValue({
+            ...mockKitData,
+            qrSvg: '<svg onload="alert(1)"><script>alert(1)</script><rect width="10" height="10"/></svg>',
+        });
+
+        const blobParts: string[] = [];
+        const OrigBlob = globalThis.Blob;
+        class CapturingBlob extends OrigBlob {
+            constructor(parts: BlobPart[], options?: BlobPropertyBag) {
+                super(parts, options);
+                blobParts.push(...parts.map(String));
+            }
+        }
+        vi.stubGlobal('Blob', CapturingBlob);
+        const origCreateObjectURL = URL.createObjectURL;
+        const origRevokeObjectURL = URL.revokeObjectURL;
+        URL.createObjectURL = vi.fn(() => 'blob:mock-url');
+        URL.revokeObjectURL = vi.fn();
+        const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+
+        try {
+            const { container } = render(
+                <EmergencyKitModal
+                    isOpen={true}
+                    onClose={mockOnClose}
+                    onSuccess={mockOnSuccess}
+                />
+            );
+            fireEvent.change(screen.getByPlaceholderText(/Password|Passwort/i), {
+                target: { value: 'CorrectPassword123' },
+            });
+            fireEvent.click(screen.getByTestId('unlock-emergency-kit-btn'));
+
+            await waitFor(() => {
+                expect(screen.getByText('apple')).toBeInTheDocument();
+            });
+
+            expect(container.querySelector('script')).toBeNull();
+            expect(container.innerHTML).not.toContain('onload=');
+
+            fireEvent.click(screen.getByRole('button', { name: /Save as offline HTML|Als Offline-HTML speichern/i }));
+            const html = blobParts.join('');
+            expect(html).not.toContain('<script');
+            expect(html).not.toContain('onload=');
+        } finally {
+            vi.unstubAllGlobals();
+            URL.createObjectURL = origCreateObjectURL;
+            URL.revokeObjectURL = origRevokeObjectURL;
+            clickSpy.mockRestore();
+        }
+    });
 });

@@ -1,5 +1,5 @@
 // src/components/marketplace/RenewAdModal.tsx
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Clock, RefreshCw } from 'lucide-react';
 import { FrontendMyAd } from '../../types';
@@ -25,27 +25,43 @@ export const RenewAdModal: React.FC<RenewAdModalProps> = ({
     const [durationDays, setDurationDays] = useState<number>(90);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const isMountedRef = useRef(true);
+    const modalGenRef = useRef(0);
 
     useEffect(() => {
-        if (!isOpen) {
-            setError(null);
-        }
-    }, [isOpen]);
+        isMountedRef.current = true;
+        return () => {
+            isMountedRef.current = false;
+        };
+    }, []);
+
+    useEffect(() => {
+        modalGenRef.current += 1;
+        setDurationDays(90);
+        setError(null);
+        setIsSubmitting(false);
+    }, [isOpen, ad?.id]);
 
     if (!ad) return null;
 
     const targetExpiryDate = new Date(Date.now() + durationDays * 86_400 * 1000).toLocaleDateString();
 
     const handleConfirm = async () => {
+        if (isSubmitting) return;
+        const gen = modalGenRef.current;
         setIsSubmitting(true);
         setError(null);
         try {
             await onRenew(ad.id, durationDays);
+            if (!isMountedRef.current || modalGenRef.current !== gen) return;
             onClose();
         } catch (err) {
+            if (!isMountedRef.current || modalGenRef.current !== gen) return;
             setError(translateError(err, t));
         } finally {
-            setIsSubmitting(false);
+            if (isMountedRef.current && modalGenRef.current === gen) {
+                setIsSubmitting(false);
+            }
         }
     };
 

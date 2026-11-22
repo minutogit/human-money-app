@@ -829,4 +829,75 @@ describe('AddressBook Component', () => {
       expect(screen.getByTestId('handshake-item-msg-123')).toBeInTheDocument();
     });
   });
+
+  it('S10-X4: surfaces silent WoT sync imports from PoST in sync feedback count and suppresses up-to-date toast', async () => {
+    (invoke as Mock).mockImplementation((cmd: string) => {
+      if (cmd === 'get_contacts') return Promise.resolve(mockContacts);
+      if (cmd === 'get_sync_overview_status') {
+        return Promise.resolve({
+          connectedCount: 1,
+          hosts: ['sync.example'],
+          isBackingUp: false,
+          lastBackupSuccessAt: null,
+          pendingActionsCount: 0,
+        });
+      }
+      if (cmd === 'sync_market_channels') {
+        return Promise.resolve({
+          uploadedTo: 0,
+          polledSyncs: 1,
+          importedCards: 0,
+          importedWotLists: 0,
+          errors: [],
+        });
+      }
+      if (cmd === 'sync_post_channels') {
+        return Promise.resolve({
+          uploadedTo: 0,
+          polledSyncs: 1,
+          importedPayments: 0,
+          importedReceipts: 0,
+          importedSignatures: 0,
+          newSignRequests: 0,
+          newWotHandshakes: 0,
+          importedWotLists: 1,
+          newInquiries: 0,
+          newInquiryMessages: 0,
+          prunedBoxes: 0,
+          errors: [],
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    const toasts: Array<{ message: string; variant?: string }> = [];
+    const onToast = (e: Event) => {
+      toasts.push((e as CustomEvent<{ message: string; variant?: string }>).detail);
+    };
+    window.addEventListener('humoco:transient-sync-toast', onToast);
+
+    try {
+      render(
+        <UiModeProvider initialMode="expert">
+          <AddressBook onBack={mockOnBack} />
+        </UiModeProvider>
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText(/John Doe/i)).toBeInTheDocument();
+      });
+
+      const syncBtn = screen.getByRole('button', {
+        name: /contacts\.syncServicesButton|Sync via drops|Über Sync-Dienste synchronisieren|Sync via sync services/i,
+      });
+      fireEvent.click(syncBtn);
+
+      await waitFor(() => {
+        expect(screen.getByText(/1 trust list\(s\)|1 Vertrauensliste\(n\)/i)).toBeInTheDocument();
+      });
+      expect(toasts).toHaveLength(0);
+    } finally {
+      window.removeEventListener('humoco:transient-sync-toast', onToast);
+    }
+  });
 });

@@ -5,6 +5,7 @@ import { Eye, Globe, Mail, MapPin, Phone, User } from 'lucide-react';
 import { CardFieldVisibility, FrontendUserProfile, Skill } from '../../types';
 import { Advanced } from '../ui/Advanced';
 import { SegmentedTabs } from '../ui/SegmentedTabs';
+import { isSafeAvatarDataUri } from '../ui/UserAvatar';
 
 export interface ProfileCardPreviewProps {
     profile: FrontendUserProfile;
@@ -40,6 +41,11 @@ export const ProfileCardPreview: React.FC<ProfileCardPreviewProps> = ({
         .filter(Boolean)
         .join(' ');
 
+    const safeAvatarUri =
+        isVisibleInPreview('picture') && isSafeAvatarDataUri(profile.pictureUrl)
+            ? profile.pictureUrl.trim()
+            : undefined;
+
     return (
         <div className="lg:col-span-5 sticky top-2 space-y-4">
             <div className="p-4 rounded-2xl bg-bg-app border border-theme-subtle space-y-3">
@@ -66,8 +72,8 @@ export const ProfileCardPreview: React.FC<ProfileCardPreviewProps> = ({
             <div className="p-5 rounded-2xl bg-white border border-theme-subtle shadow-sm space-y-4">
                 <div className="flex items-start gap-3">
                     <div className="w-12 h-12 rounded-2xl bg-theme-primary/10 text-theme-primary flex items-center justify-center font-bold text-base shrink-0 overflow-hidden">
-                        {isVisibleInPreview('picture') && profile.pictureUrl ? (
-                            <img src={profile.pictureUrl} alt="Avatar" className="w-full h-full object-cover" />
+                        {safeAvatarUri ? (
+                            <img src={safeAvatarUri} alt="Avatar" className="w-full h-full object-cover" />
                         ) : (
                             previewName.charAt(0) || <User size={20} />
                         )}

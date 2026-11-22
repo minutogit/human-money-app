@@ -83,6 +83,7 @@ export function useSyncServiceAdmin({ config, onConfigUpdated }: UseSyncServiceA
     const mountedRef = useRef(true);
     const loadSeqRef = useRef(0);
     const isHostDirtyRef = useRef(false);
+    const probeInFlightRef = useRef<Promise<unknown> | null>(null);
     const timersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
 
     useEffect(() => {
@@ -127,7 +128,30 @@ export function useSyncServiceAdmin({ config, onConfigUpdated }: UseSyncServiceA
         hasPublicSyncsRef.current = Boolean(config?.securityPolicy.publicSyncs?.length);
     }, [config]);
 
-    const loadData = useCallback(async () => {
+    const runCoordinatedContactProbe = useCallback((expectedSeq: number) => {
+        if (probeInFlightRef.current || typeof marketService.probeContactSyncs !== 'function') {
+            return;
+        }
+        const probePromise = marketService
+            .probeContactSyncs(false)
+            .then(() => {
+                if (!mountedRef.current || expectedSeq !== loadSeqRef.current) return;
+                return marketService.discoverAvailableSyncs().then((refreshed) => {
+                    if (mountedRef.current && expectedSeq === loadSeqRef.current && Array.isArray(refreshed)) {
+                        setDiscoveredDrops(refreshed);
+                    }
+                });
+            })
+            .catch(() => {})
+            .finally(() => {
+                if (probeInFlightRef.current === probePromise) {
+                    probeInFlightRef.current = null;
+                }
+            });
+        probeInFlightRef.current = probePromise;
+    }, []);
+
+    const loadData = useCallback(async (allowMountProbe = false) => {
         const seq = ++loadSeqRef.current;
         setIsLoading(true);
         try {
@@ -154,14 +178,8 @@ export function useSyncServiceAdmin({ config, onConfigUpdated }: UseSyncServiceA
                 setConfiguredPublicDrops([]);
             }
 
-            if (discList.some((d) => d.status === 'unverified') && typeof marketService.probeContactSyncs === 'function') {
-                marketService.probeContactSyncs(false).then(() => {
-                    marketService.discoverAvailableSyncs().then((refreshed) => {
-                        if (mountedRef.current && seq === loadSeqRef.current && Array.isArray(refreshed)) {
-                            setDiscoveredDrops(refreshed);
-                        }
-                    }).catch(() => {});
-                }).catch(() => {});
+            if (allowMountProbe || discList.some((d) => d.status === 'unverified')) {
+                runCoordinatedContactProbe(seq);
             }
         } catch {
             // Silently retain last known data
@@ -170,18 +188,12 @@ export function useSyncServiceAdmin({ config, onConfigUpdated }: UseSyncServiceA
                 setIsLoading(false);
             }
         }
-    }, []);
+    }, [runCoordinatedContactProbe]);
 
     useEffect(() => {
-        loadData();
-    }, [loadData]);
-
-    useEffect(() => {
-        if (typeof marketService.probeContactSyncs === 'function') {
-            marketService.probeContactSyncs(false).then(() => loadData()).catch(() => {});
-        }
+        void loadData(true);
         const handleSyncUpdated = () => {
-            loadData();
+            void loadData(false);
         };
         window.addEventListener(SYNC_STATUS_UPDATED_EVENT, handleSyncUpdated);
         return () => {

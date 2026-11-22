@@ -509,6 +509,7 @@ export function useAddressBook({
             totalPolled > 0 ||
             totalUploaded > 0 ||
             (res?.importedWotLists ?? 0) > 0 ||
+            (postRes?.importedWotLists ?? 0) > 0 ||
             (res?.importedCards ?? 0) > 0;
 
         if (!hasActivity) {
@@ -534,16 +535,17 @@ export function useAddressBook({
             return;
         }
 
+        const totalImportedWotLists = (res?.importedWotLists ?? 0) + (postRes?.importedWotLists ?? 0);
         setFeedbackMsg({
             type: 'success',
             message: t(
                 'contacts.syncServicesSuccess',
                 'Sync-Dienste synchronisiert: {{wot}} Vertrauensliste(n), {{cards}} Angebot(e).',
-                { wot: res?.importedWotLists ?? 0, cards: res?.importedCards ?? 0 },
+                { wot: totalImportedWotLists, cards: res?.importedCards ?? 0 },
             ),
         });
         const hasAnyNew =
-            (res?.importedWotLists ?? 0) > 0 ||
+            totalImportedWotLists > 0 ||
             (res?.importedCards ?? 0) > 0 ||
             (postRes?.importedPayments ?? 0) > 0 ||
             (postRes?.newWotHandshakes ?? 0) > 0;

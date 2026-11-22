@@ -54,9 +54,17 @@ pub fn extract_media_bytes(data_uri: &str) -> Result<Vec<u8>, MarketError> {
         ));
     };
 
-    let b64_part = &trimmed[prefix_len..];
+    const MAX_MEDIA_B64_CHARS: usize = (MAX_AD_MEDIA_BYTES * 4).div_ceil(3) + 64;
+    let b64_trimmed = trimmed[prefix_len..].trim();
+    if b64_trimmed.len() > MAX_MEDIA_B64_CHARS {
+        return Err(MarketError::PayloadTooLarge(format!(
+            "Media data URI base64 payload {} chars exceeds maximum {}",
+            b64_trimmed.len(),
+            MAX_MEDIA_B64_CHARS
+        )));
+    }
     STANDARD
-        .decode(b64_part.trim().as_bytes())
+        .decode(b64_trimmed.as_bytes())
         .map_err(|e| MarketError::Validation(format!("Invalid base64 in media data URI: {}", e)))
 }
 

@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
 import { RenewAdModal } from '../RenewAdModal';
 import { FrontendMyAd } from '../../../types';
@@ -31,8 +31,8 @@ describe('RenewAdModal Component', () => {
     daysLeft: 0,
   };
 
-  it('renders renew modal for active ad with duration options and confirms renewal', () => {
-    const onRenew = vi.fn();
+  it('renders renew modal for active ad with duration options and confirms renewal', async () => {
+    const onRenew = vi.fn().mockResolvedValue(undefined);
     const onClose = vi.fn();
 
     render(
@@ -55,7 +55,10 @@ describe('RenewAdModal Component', () => {
     const confirmBtn = screen.getByRole('button', { name: /Jetzt verlängern|Renew now/i });
     fireEvent.click(confirmBtn);
 
-    expect(onRenew).toHaveBeenCalledWith('ad-renew-1', 180);
+    await waitFor(() => {
+      expect(onRenew).toHaveBeenCalledWith('ad-renew-1', 180);
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('renders republish modal for expired ad', () => {
@@ -70,5 +73,57 @@ describe('RenewAdModal Component', () => {
 
     expect(screen.getByRole('heading', { level: 2, name: /Inserat reaktivieren|Reactivate ad/i })).toBeInTheDocument();
     expect(screen.getByText('Suche Anhänger')).toBeInTheDocument();
+  });
+
+  it('resets durationDays to 90 on ad switch and ignores late onRenew resolution after close', async () => {
+    let resolveRenew!: () => void;
+    const onRenew = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveRenew = resolve;
+        })
+    );
+    const onClose = vi.fn();
+
+    const { rerender } = render(
+      <RenewAdModal
+        isOpen={true}
+        onClose={onClose}
+        onRenew={onRenew}
+        ad={mockActiveAd}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('tab', { name: /180 Tage|180 days/i }));
+    expect(screen.getByRole('tab', { name: /180 Tage|180 days/i })).toHaveAttribute('aria-selected', 'true');
+
+    // Switch ad -> resets durationDays to 90
+    rerender(
+      <RenewAdModal
+        isOpen={true}
+        onClose={onClose}
+        onRenew={onRenew}
+        ad={mockExpiredAd}
+      />
+    );
+    expect(screen.getByRole('tab', { name: /90 Tage|90 days/i })).toHaveAttribute('aria-selected', 'true');
+
+    fireEvent.click(screen.getByRole('button', { name: /Jetzt verlängern|Renew now/i }));
+    expect(onRenew).toHaveBeenCalledWith('ad-renew-2', 90);
+
+    // Close modal before async renew resolves
+    rerender(
+      <RenewAdModal
+        isOpen={false}
+        onClose={onClose}
+        onRenew={onRenew}
+        ad={mockExpiredAd}
+      />
+    );
+    resolveRenew();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(onClose).not.toHaveBeenCalled();
   });
 });

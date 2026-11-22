@@ -1,8 +1,9 @@
 use tauri::State;
 
 use crate::models::{
-    FrontendError, FrontendMarketInquiryItem, FrontendPostDepositResult, FrontendPostInboxSummary,
-    FrontendPostSyncResult, FrontendSyncDescriptor, ReceiveSuccessPayload,
+    FrontendError, FrontendInquiryTarget, FrontendMarketInquiryItem, FrontendPostDepositResult,
+    FrontendPostInboxSummary, FrontendPostSyncResult, FrontendSyncDescriptor,
+    ReceiveSuccessPayload,
 };
 use crate::services::post_service::{
     accept_wot_handshake_impl, confirm_pending_post_payment_impl, deposit_transfer_to_post_impl,
@@ -63,7 +64,7 @@ pub async fn accept_wot_handshake(
 #[tauri::command]
 pub async fn send_market_inquiry_via_post(
     recipient_did: String,
-    target: humoco_market::InquiryTarget,
+    target: FrontendInquiryTarget,
     message: String,
     recipient_syncs: Vec<FrontendSyncDescriptor>,
     password: Option<String>,

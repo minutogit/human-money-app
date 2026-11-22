@@ -151,7 +151,7 @@ export function GlobalFileDropZone({ children }: GlobalFileDropZoneProps) {
     if (file.size > MAX_DROP_FILE_BYTES) {
       setDropFeedback({
         status: 'error',
-        message: t('common.error', { defaultValue: 'File exceeds maximum supported size (64 MiB).' }),
+        message: t('common.fileTooLarge'),
       });
       return;
     }

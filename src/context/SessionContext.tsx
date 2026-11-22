@@ -320,6 +320,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
                             res.importedSignatures > 0 ||
                             res.newSignRequests > 0 ||
                             res.newWotHandshakes > 0 ||
+                            (res.importedWotLists ?? 0) > 0 ||
                             res.newInquiries > 0 ||
                             res.newInquiryMessages > 0 ||
                             (res.newTolerancePayments ?? 0) > 0 ||
@@ -328,7 +329,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
                             emitAppEvent(APP_EVENTS.POST_INBOX_UPDATED);
                             emitAppEvent(APP_EVENTS.SYNC_COMPLETED, { source: 'post' });
                         }
-                        if (res.newWotHandshakes > 0) {
+                        if (res.newWotHandshakes > 0 || (res.importedWotLists ?? 0) > 0) {
                             emitAppEvent(APP_EVENTS.WOT_UPDATED);
                         }
                         if (hasInboxChanges || res.polledSyncs > 0) {
@@ -343,6 +344,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
                         if (!res) return;
                         const retrySecs = rateLimitManager.extractRetryAfter(res);
                         if (retrySecs) rateLimitManager.setCooldown(retrySecs);
+                        const hasRevokedOwnSyncs = (res.revokedOwnSyncs?.length ?? 0) > 0;
+                        if (hasRevokedOwnSyncs) {
+                            notifySyncStatusUpdated();
+                        }
                         if (res.importedCards > 0 || (res.newAds ?? 0) > 0) {
                             emitAppEvent(APP_EVENTS.MARKET_CARD_UPDATED);
                         }
@@ -356,7 +361,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
                             res.uploadedTo > 0 ||
                             res.polledSyncs > 0 ||
                             res.importedCards > 0 ||
-                            res.importedWotLists > 0
+                            res.importedWotLists > 0 ||
+                            hasRevokedOwnSyncs
                         ) {
                             emitAppEvent(APP_EVENTS.SYNC_COMPLETED, { source: 'market' });
                         }

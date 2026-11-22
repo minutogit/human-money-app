@@ -329,6 +329,7 @@
   "common.done": "Fatto",
   "common.edit": "Modifica",
   "common.error": "Errore",
+  "common.fileTooLarge": "Il file supera la dimensione massima supportata (64 MiB).",
   "common.guest": "Ospite",
   "common.hideQrCode": "Nascondi codice QR",
   "common.importing": "Importazione...",

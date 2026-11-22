@@ -24,7 +24,7 @@ import {
 } from "../types";
 import { APP_EVENTS, emitAppEvent } from "../utils/appEvents";
 import { detectIsWifiConnection } from "../utils/networkStatus";
-import { notifyAppNoticesUpdated, notifyMyProfileUpdated } from "../utils/syncEvents";
+import { notifyAppNoticesUpdated, notifyMyProfileUpdated, notifySyncStatusUpdated } from "../utils/syncEvents";
 
 export const marketService = {
     getMyMarketProfile: async (password?: string): Promise<FrontendMyMarketProfile> => {
@@ -261,6 +261,10 @@ export const marketService = {
         const res = await invoke<FrontendMarketSyncResult>("sync_market_channels", payload);
         notifyAppNoticesUpdated();
         if (res) {
+            const hasRevokedOwnSyncs = (res.revokedOwnSyncs?.length ?? 0) > 0;
+            if (hasRevokedOwnSyncs) {
+                notifySyncStatusUpdated();
+            }
             if (res.importedCards > 0 || (res.newAds ?? 0) > 0) {
                 emitAppEvent(APP_EVENTS.MARKET_CARD_UPDATED);
             }
@@ -270,7 +274,13 @@ export const marketService = {
             if (res.importedWotLists > 0) {
                 emitAppEvent(APP_EVENTS.WOT_UPDATED);
             }
-            if (res.uploadedTo > 0 || res.polledSyncs > 0 || res.importedCards > 0 || res.importedWotLists > 0) {
+            if (
+                res.uploadedTo > 0 ||
+                res.polledSyncs > 0 ||
+                res.importedCards > 0 ||
+                res.importedWotLists > 0 ||
+                hasRevokedOwnSyncs
+            ) {
                 emitAppEvent(APP_EVENTS.SYNC_COMPLETED, { source: 'market' });
             }
         }

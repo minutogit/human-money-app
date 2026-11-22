@@ -36,7 +36,7 @@ pub fn is_false(v: &bool) -> bool {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Skill {
     pub title: String, // 1..=MAX_SKILL_TITLE_CHARS
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -55,7 +55,7 @@ pub enum AdKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Ad {
     pub id: String, // 16 lowercase hex chars, CSPRNG, stable across edits & renewals
     pub kind: AdKind,
@@ -95,6 +95,7 @@ pub struct CardPayloadInput {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DropDescriptor {
     pub write_url: String,
     pub read_url: String,

@@ -3,12 +3,13 @@ use human_money_core::crypto::create_user_id;
 use humoco_market::{
     compute_dummy_tag16, compute_post_tag16, create_dummy_post_box, decode_post_slot,
     derive_dummy_key, derive_post_box_key, derive_post_shared_secret, encode_post_slot,
-    is_own_dummy_post_box, pack_post_slot, seal_post_box, try_open_post_box_any_sender,
-    try_open_post_box_from_sender, validate_market_inquiry, validate_market_inquiry_message,
-    validate_post_delivery_receipt, validate_wot_handshake_assertion, DropDescriptor,
-    InquiryRateTracker, InquiryTarget, MarketError, MarketInquiry, MarketInquiryDecision,
-    MarketInquiryMessage, PostDeliveryReceipt, PostEnvelope, WotHandshakeAssertion,
-    DROP_POST_MAX_BYTES, MAX_INQUIRY_CHARS, POST_BOX_TIERS, POST_SLOT_MAGIC,
+    is_own_dummy_post_box, pack_post_slot, prepare_post_senders, seal_post_box,
+    try_open_post_box_from_sender, try_open_post_box_prepared, validate_market_inquiry,
+    validate_market_inquiry_message, validate_post_delivery_receipt,
+    validate_wot_handshake_assertion, DropDescriptor, InquiryRateTracker, InquiryTarget,
+    MarketError, MarketInquiry, MarketInquiryDecision, MarketInquiryMessage, PostDeliveryReceipt,
+    PostEnvelope, WotHandshakeAssertion, DROP_POST_MAX_BYTES, MAX_INQUIRY_CHARS, POST_BOX_TIERS,
+    POST_SLOT_MAGIC,
 };
 use proptest::prelude::*;
 
@@ -90,17 +91,25 @@ fn test_post_tag16_and_box_sealing_unauthorized_isolation() {
     let bob_from_charlie = try_open_post_box_from_sender(&bob_sk, &charlie_vk, &entry).unwrap();
     assert_eq!(bob_from_charlie, None);
 
-    // Multi-sender lookup: list containing Alice returns (alice_did, envelope)
+    // Multi-sender lookup: prepared senders containing Alice returns (alice_did, envelope)
     let senders = vec![
         (charlie_did.clone(), charlie_vk),
         (alice_did.clone(), alice_vk),
     ];
-    let matched = try_open_post_box_any_sender(&bob_sk, &senders, &entry).unwrap();
-    assert_eq!(matched, Some((alice_did, envelope.clone())));
+    let prepared_with_alice = prepare_post_senders(&bob_sk, &senders);
+    let matched = try_open_post_box_prepared(&prepared_with_alice, &entry).unwrap();
+    assert_eq!(matched, Some((alice_did.clone(), envelope.clone())));
+
+    // Reuse same prepared_with_alice across a second box from Alice
+    let envelope_2 = sample_envelope("msg-002", 64);
+    let entry_2 = seal_post_box(&alice_sk, &bob_vk, &envelope_2).unwrap();
+    let matched_2 = try_open_post_box_prepared(&prepared_with_alice, &entry_2).unwrap();
+    assert_eq!(matched_2, Some((alice_did, envelope_2)));
 
     // Multi-sender lookup without Alice returns Ok(None)
     let senders_without_alice = vec![(charlie_did, charlie_vk)];
-    let unmatched = try_open_post_box_any_sender(&bob_sk, &senders_without_alice, &entry).unwrap();
+    let prepared_without_alice = prepare_post_senders(&bob_sk, &senders_without_alice);
+    let unmatched = try_open_post_box_prepared(&prepared_without_alice, &entry).unwrap();
     assert_eq!(unmatched, None);
 }
 
@@ -565,4 +574,46 @@ fn test_pack_post_slot_defers_overflow_and_isolates_oversized_entries() {
     assert!(merged.blob.len() <= DROP_POST_MAX_BYTES);
     assert_eq!(merged.included_tags, vec![e2.tag16, e3_small.tag16]);
     assert_eq!(merged.deferred_tags, vec![e1.tag16]);
+}
+
+#[test]
+fn s02_x3_deny_unknown_fields_on_market_and_post_wire_structs() {
+    use humoco_market::{Ad, Skill};
+
+    assert!(serde_json::from_str::<Skill>(r#"{"title":"Repair","unknownField":true}"#).is_err());
+
+    assert!(serde_json::from_str::<Ad>(
+        r#"{"id":"0123456789abcdef","kind":"offer","title":"Honey","publishedAt":100,"expiresAt":200,"extra":1}"#
+    )
+    .is_err());
+
+    assert!(serde_json::from_str::<DropDescriptor>(
+        r#"{"write_url":"https://a/w","read_url":"https://a/r","drop_pub":"aa","extra":true}"#
+    )
+    .is_err());
+
+    assert!(serde_json::from_str::<InquiryTarget>(
+        r#"{"kind":"ad","ad_id":"0123456789abcdef","ad_title":"Honey","extra":1}"#
+    )
+    .is_err());
+
+    assert!(serde_json::from_str::<InquiryTarget>(
+        r#"{"kind":"person","skill_title":"Baking","extra":1}"#
+    )
+    .is_err());
+
+    assert!(serde_json::from_str::<MarketInquiry>(
+        r#"{"inquiry_id":"i1","target":{"kind":"person"},"message":"Hi","created_at":100,"extra":1}"#
+    )
+    .is_err());
+
+    assert!(serde_json::from_str::<PostDeliveryReceipt>(
+        r#"{"acknowledged_msg_id":"m1","acknowledged_tag16_hex":"00000000000000000000000000000000","received_at":100,"extra":1}"#
+    )
+    .is_err());
+
+    assert!(serde_json::from_str::<WotHandshakeAssertion>(
+        r#"{"sender_did":"did:key:z6Mki","proposed_level":1,"wot_sync_json":"{}","reply_requested":true,"created_at":100,"extra":1}"#
+    )
+    .is_err());
 }

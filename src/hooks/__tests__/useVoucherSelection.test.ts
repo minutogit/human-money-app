@@ -58,7 +58,6 @@ describe('useVoucherSelection', () => {
     });
 
     expect(result.current.selectionStats.Minuto).toEqual({
-      total: 0.3,
       totalExact: '0.3',
       count: 2,
     });

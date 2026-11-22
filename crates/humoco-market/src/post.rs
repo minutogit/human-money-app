@@ -311,20 +311,49 @@ pub fn try_open_post_box_from_sender(
     try_open_post_box_with_shared_secret(&shared_secret, entry)
 }
 
-/// Checks `entry` against all precomputed/authorized senders and returns `(sender_did, envelope)` on match.
-pub fn try_open_post_box_any_sender(
+/// Precomputed X25519 shared secret for an authorized sender within a poll pass.
+#[derive(Clone)]
+pub struct PreparedPostSender {
+    pub sender_did: String,
+    shared_secret: Zeroizing<[u8; 32]>,
+}
+
+impl std::fmt::Debug for PreparedPostSender {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PreparedPostSender")
+            .field("sender_did", &self.sender_did)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Precomputes contributory X25519 shared secrets once per authorized sender.
+/// Senders whose keys fail contributory Diffie-Hellman checks are skipped.
+pub fn prepare_post_senders(
     recipient_ed_sk: &SigningKey,
     authorized_senders: &[(String, VerifyingKey)],
+) -> Vec<PreparedPostSender> {
+    authorized_senders
+        .iter()
+        .filter_map(|(sender_did, sender_pk)| {
+            derive_post_shared_secret(recipient_ed_sk, sender_pk)
+                .ok()
+                .map(|secret| PreparedPostSender {
+                    sender_did: sender_did.clone(),
+                    shared_secret: Zeroizing::new(secret),
+                })
+        })
+        .collect()
+}
+
+/// Checks `entry` against precomputed sender shared secrets and returns `(sender_did, envelope)` on match.
+pub fn try_open_post_box_prepared(
+    prepared_senders: &[PreparedPostSender],
     entry: &PostBoxEntry,
 ) -> Result<Option<(String, PostEnvelope)>, MarketError> {
-    for (sender_did, sender_pk) in authorized_senders {
-        let Ok(shared_secret) =
-            derive_post_shared_secret(recipient_ed_sk, sender_pk).map(Zeroizing::new)
-        else {
-            continue;
-        };
-        if let Some(envelope) = try_open_post_box_with_shared_secret(&shared_secret, entry)? {
-            return Ok(Some((sender_did.clone(), envelope)));
+    for sender in prepared_senders {
+        if let Some(envelope) = try_open_post_box_with_shared_secret(&sender.shared_secret, entry)?
+        {
+            return Ok(Some((sender.sender_did.clone(), envelope)));
         }
     }
     Ok(None)
@@ -594,6 +623,7 @@ pub fn merge_and_pack_post_slot(
 
 /// Delivery receipt payload (§6.2).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PostDeliveryReceipt {
     pub acknowledged_msg_id: String,
     pub acknowledged_tag16_hex: String,
@@ -634,6 +664,7 @@ pub fn validate_post_delivery_receipt(receipt: &PostDeliveryReceipt) -> Result<(
 
 /// Asynchronous Web-of-Trust Handshake Assertion (§6.4).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct WotHandshakeAssertion {
     pub sender_did: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -683,7 +714,7 @@ pub fn validate_wot_handshake_assertion(
 
 /// Target of a 1-step marketplace inquiry (§6.4).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum InquiryTarget {
     Ad {
         ad_id: String,
@@ -709,6 +740,7 @@ impl InquiryTarget {
 
 /// 1-Step Marketplace Inquiry payload (§6.4).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MarketInquiry {
     pub inquiry_id: String,
     pub target: InquiryTarget,

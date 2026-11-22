@@ -273,11 +273,10 @@ export function useVoucherSelection(vouchers: VoucherSummary[]) {
       }
     });
 
-    const stats: Record<string, { total: number; totalExact: string; count: number }> = {};
+    const stats: Record<string, { totalExact: string; count: number }> = {};
     for (const [key, entry] of Object.entries(grouped)) {
-      const { exact, number } = sumExactDecimalStrings(entry.amounts);
+      const { exact } = sumExactDecimalStrings(entry.amounts);
       stats[key] = {
-        total: number,
         totalExact: exact,
         count: entry.count,
       };

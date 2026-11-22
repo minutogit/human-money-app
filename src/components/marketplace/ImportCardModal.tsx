@@ -48,17 +48,26 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
     const hadExistingContactRef = useRef<boolean>(false);
     const hadSiblingContactRef = useRef<boolean>(false);
     const lastImportedPayloadRef = useRef<string | null>(null);
+    const isMountedRef = useRef<boolean>(true);
+    const modalGenRef = useRef<number>(0);
 
     useEffect(() => {
-        let active = true;
-        if (isOpen) {
-            marketService.getMyMarketProfile().then((profile) => {
-                if (active) setMyProfile(profile);
-            }).catch(() => {});
-        }
+        isMountedRef.current = true;
         return () => {
-            active = false;
+            isMountedRef.current = false;
         };
+    }, []);
+
+    useEffect(() => {
+        const gen = ++modalGenRef.current;
+        if (!isOpen) {
+            return;
+        }
+        marketService.getMyMarketProfile().then((profile) => {
+            if (isMountedRef.current && modalGenRef.current === gen) {
+                setMyProfile(profile);
+            }
+        }).catch(() => {});
     }, [isOpen]);
 
     const resetState = () => {
@@ -75,16 +84,20 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
     };
 
     const handleClose = () => {
+        modalGenRef.current += 1;
         resetState();
         onClose();
     };
 
     const handleSetTrustLevel = async (level: number) => {
         if (!resultFeedback?.did) return;
+        const gen = modalGenRef.current;
+        const isStale = () => !isMountedRef.current || modalGenRef.current !== gen;
         setIsSavingTrust(true);
         try {
             const did = resultFeedback.did;
             const existingContacts = (await contactService.getContacts().catch(() => [])) || [];
+            if (isStale()) return;
             const existing = existingContacts.find(c => isExactSameUserId(c.did, did));
 
             if (level > 0) {
@@ -92,6 +105,7 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
                 let syncs = existing?.syncs;
                 if (!profile) {
                     const snap = await marketService.getMarketView().catch(() => null);
+                    if (isStale()) return;
                     const people = snap?.people ?? [];
                     const p = people.find((x) => isExactSameUserId(x.recipientDid || x.did, did) || isExactSameUserId(x.did, did));
                     profile = p?.profile;
@@ -117,6 +131,7 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
                 await protectAction(async (pwd) => {
                     await contactService.saveContact(contactToSave, pwd || undefined);
                 });
+                if (isStale()) return;
 
                 marketService.syncMarketChannels().catch(() => {});
             } else if (existing) {
@@ -139,9 +154,11 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
                         });
                     });
                 }
+                if (isStale()) return;
             }
             setSelectedTrustLevel(level);
         } catch (err) {
+            if (isStale()) return;
             logger.error(`Failed to set contact trust level: ${stringifyError(err)}`);
             setResultFeedback({
                 type: 'error',
@@ -149,13 +166,17 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
                 message: translateError(err, t),
             });
         } finally {
-            setIsSavingTrust(false);
+            if (isMountedRef.current && modalGenRef.current === gen) {
+                setIsSavingTrust(false);
+            }
         }
     };
 
     const processImportPayload = async (rawPayload: string) => {
         const trimmed = rawPayload.trim();
         if (!trimmed) return;
+        const gen = modalGenRef.current;
+        const isStale = () => !isMountedRef.current || modalGenRef.current !== gen;
 
         setIsImporting(true);
         setResultFeedback(null);
@@ -170,6 +191,7 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
                     parsedInput.kind === 'contact' ? parsedInput.contact : { did: parsedInput.did };
                 if (parsedContact.did) {
                     const ownUid = (await Promise.resolve(profileService.getUserId?.()).catch(() => '')) || '';
+                    if (isStale()) return;
                     if (isExactSameUserId(parsedContact.did, ownUid)) {
                         setResultFeedback({
                             type: 'error',
@@ -179,6 +201,7 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
                         return;
                     }
                     const existingContacts = (await contactService.getContacts().catch(() => [])) || [];
+                    if (isStale()) return;
                     const existing = existingContacts.find(c => isExactSameUserId(c.did, parsedContact.did));
                     const sibling = !existing
                         ? existingContacts.find(c => isSameRootIdentity(c.did, parsedContact.did!))
@@ -231,6 +254,7 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
                     await protectAction(async (pwd) => {
                         await contactService.saveContact(contactToSave, pwd || undefined);
                     });
+                    if (isStale()) return;
                     marketService.probeContactSyncs?.(false)?.then(() => notifySyncStatusUpdated())?.catch(() => {});
                     setPartnerName([firstName, lastName].filter(Boolean).join(' ') || null);
                     setResultFeedback({
@@ -248,6 +272,7 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
             const res = await protectAction(async (pwd) => {
                 return await marketService.importContactCard(effectivePayload, pwd || undefined);
             });
+            if (isStale()) return;
 
             if (!res) {
                 return;
@@ -256,6 +281,7 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
             if (res.status === 'accepted') {
                 if (res.did) {
                     const existingContacts = (await contactService.getContacts().catch(() => [])) || [];
+                    if (isStale()) return;
                     const existing = existingContacts.find((c) => isExactSameUserId(c.did, res.did!));
                     const sibling = !existing
                         ? existingContacts.find((c) => isSameRootIdentity(c.did, res.did!))
@@ -289,6 +315,7 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
 
                 if (res.did) {
                     marketService.getMarketView().then(snap => {
+                        if (isStale()) return;
                         const people = snap?.people ?? [];
                         const p = people.find((x) => isExactSameUserId(x.recipientDid || x.did, res.did!) || isExactSameUserId(x.did, res.did!));
                         if (p) {
@@ -329,6 +356,7 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
                 });
             }
         } catch (err) {
+            if (isStale()) return;
             logger.error(`Error importing contact card: ${stringifyError(err)}`);
             setResultFeedback({
                 type: 'error',
@@ -336,11 +364,14 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
                 message: stringifyError(err),
             });
         } finally {
-            setIsImporting(false);
+            if (isMountedRef.current && modalGenRef.current === gen) {
+                setIsImporting(false);
+            }
         }
     };
 
     const handleFilePicker = async () => {
+        const gen = modalGenRef.current;
         try {
             const fileResult = await openFileAsBytes({
                 filters: [
@@ -348,6 +379,7 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
                     { name: t('common.allFiles', 'All Files'), extensions: ['*'] },
                 ],
             });
+            if (!isMountedRef.current || modalGenRef.current !== gen) return;
 
             if (fileResult) {
                 const text = new TextDecoder().decode(new Uint8Array(fileResult.bytes));
@@ -355,6 +387,7 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
                 await processImportPayload(text);
             }
         } catch (err) {
+            if (!isMountedRef.current || modalGenRef.current !== gen) return;
             logger.info(`Tauri file dialog not available, falling back to input: ${stringifyError(err)}`);
             fileInputRef.current?.click();
         }
@@ -363,11 +396,14 @@ export function ImportCardModal({ isOpen, onClose, onImportSuccess }: ImportCard
     const handleFileInputChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (!file) return;
+        const gen = modalGenRef.current;
         try {
             const text = await file.text();
+            if (!isMountedRef.current || modalGenRef.current !== gen) return;
             setPayloadText(text);
             await processImportPayload(text);
         } catch (err) {
+            if (!isMountedRef.current || modalGenRef.current !== gen) return;
             setResultFeedback({
                 type: 'error',
                 title: t('marketplace.importInvalidTitle'),
