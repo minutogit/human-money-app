@@ -162,4 +162,46 @@ describe('ForkLockOverlay Component', () => {
       expect(screen.getByTestId('forklock-help-button')).toBeInTheDocument();
     });
   });
+
+  it('offers profile selector when multiple local profiles match ambiguously and reclaims chosen profile', async () => {
+    mockLockdownKind = 'handover';
+    mockLockdownDetails = { targetEpoch: 5 };
+    (invoke as Mock).mockImplementation((cmd: string) => {
+      if (cmd === 'list_profiles') {
+        return Promise.resolve([
+          { profileName: 'Alice', folderName: 'alice_1' },
+          { profileName: 'Alice', folderName: 'alice_2' },
+        ]);
+      }
+      if (cmd === 'get_local_instance_id') {
+        return Promise.resolve('inst_123');
+      }
+      return Promise.resolve(undefined);
+    });
+
+    render(<ForkLockOverlay onStartRecovery={mockOnStartRecovery} />);
+
+    const selector = await screen.findByTestId('fork-lock-profile-select');
+    fireEvent.click(screen.getByText(/Reactivate (Profile|Wallet) on This Device/i));
+
+    const passwordInput = await screen.findByPlaceholderText(/Password/i);
+    fireEvent.change(passwordInput, { target: { value: 'secret' } });
+    fireEvent.click(screen.getByRole('button', { name: /Reclaim (Profile|Wallet) on This Device/i }));
+
+    // Shows explicit error when no profile has been chosen yet
+    await waitFor(() => {
+      expect(screen.getByText(/No profile selected|Kein Profil ausgewählt/i)).toBeInTheDocument();
+    });
+
+    fireEvent.change(selector, { target: { value: 'alice_2' } });
+    fireEvent.click(screen.getByRole('button', { name: /Reclaim (Profile|Wallet) on This Device/i }));
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('handover_to_this_device', {
+        folderName: 'alice_2',
+        password: 'secret',
+        localInstanceId: 'inst_123',
+      });
+    });
+  });
 });

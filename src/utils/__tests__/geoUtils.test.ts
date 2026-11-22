@@ -99,6 +99,52 @@ describe("geoUtils", () => {
             );
         });
 
+        it("should omit street and houseNumber in coarse mode (decimals <= 2)", async () => {
+            vi.mocked(fetch).mockResolvedValueOnce({
+                ok: true,
+                json: async () => [{ lat: "52.520008", lon: "13.404954" }],
+            } as Response);
+
+            const result = await geocodeAddress(
+                {
+                    street: "Geheimweg",
+                    houseNumber: "99",
+                    zipCode: "10117",
+                    city: "Berlin",
+                    country: "Germany",
+                },
+                2,
+            );
+            expect(result).toBe("52.52, 13.40");
+            const calledUrl = String(vi.mocked(fetch).mock.calls[0][0]);
+            expect(calledUrl).not.toContain("Geheimweg");
+            expect(calledUrl).not.toContain("99");
+            expect(calledUrl).toContain("Berlin");
+            expect(calledUrl).toContain("10117");
+        });
+
+        it("should include street and houseNumber in precise mode (decimals = 6)", async () => {
+            vi.mocked(fetch).mockResolvedValueOnce({
+                ok: true,
+                json: async () => [{ lat: "52.520008", lon: "13.404954" }],
+            } as Response);
+
+            const result = await geocodeAddress(
+                {
+                    street: "Unter den Linden",
+                    houseNumber: "1",
+                    zipCode: "10117",
+                    city: "Berlin",
+                    country: "Germany",
+                },
+                6,
+            );
+            expect(result).toBe("52.520008, 13.404954");
+            const calledUrl = String(vi.mocked(fetch).mock.calls[0][0]);
+            expect(calledUrl).toContain("Unter%20den%20Linden");
+            expect(calledUrl).toContain("10117");
+        });
+
         it("should throw if no coordinates found", async () => {
             vi.mocked(fetch).mockResolvedValueOnce({
                 ok: true,

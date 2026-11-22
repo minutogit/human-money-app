@@ -189,4 +189,53 @@ describe('walletEvents utilities', () => {
             'dashboard.voucherExpiredShort',
         );
     });
+
+    it('avoids floating-point drift on 0.1 + 0.2 and preserves net balance precision > 2 decimals', () => {
+        const events: WalletEvent[] = [
+            makeEvent({
+                eventId: 'd1',
+                eventType: 'transferReceived',
+                bffData: { displayCurrency: 'Minuto', amount: '0.1', isTestVoucher: false },
+            }),
+            makeEvent({
+                eventId: 'd2',
+                eventType: 'transferReceived',
+                bffData: { displayCurrency: 'Minuto', amount: '0.2', isTestVoucher: false },
+            }),
+            makeEvent({
+                eventId: 'd3',
+                eventType: 'transferSent',
+                bffData: { displayCurrency: 'Minuto', amount: '0.15', isTestVoucher: false },
+            }),
+        ];
+        const summary = summarizeWalletEventAmounts(events);
+        expect(summary.Minuto.inbound).toBe(0.3);
+        expect(summary.Minuto.outbound).toBe(0.15);
+        expect(summary.Minuto.net).toBe(0.15);
+
+        const txSummary = summarizeTransactionHistory([
+            {
+                id: 'r1',
+                direction: 'received',
+                senderId: 'did:key:a',
+                timestamp: '2026-06-01T00:00:00Z',
+                summableAmounts: { Minuto: '0.1' },
+                countableItems: {},
+                involvedVouchers: [],
+            },
+            {
+                id: 'r2',
+                direction: 'received',
+                senderId: 'did:key:b',
+                timestamp: '2026-06-01T00:01:00Z',
+                summableAmounts: { Minuto: '0.2' },
+                countableItems: {},
+                involvedVouchers: [],
+            },
+        ]);
+        expect(txSummary.inboundSums.Minuto).toBe(0.3);
+
+        expect(formatSignedNetBalance('1.2345')).toMatch(/^\+1[.,]2345$/);
+        expect(formatSignedNetBalance('-0.005')).toMatch(/^-0[.,]005$/);
+    });
 });

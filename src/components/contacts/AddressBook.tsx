@@ -323,10 +323,15 @@ const AddressBook: React.FC<AddressBookProps> = ({
                 onCloseWotPasswordModal={() => {
                     state.setIsWotPasswordModalOpen(false);
                     state.setWotContainerPassword('');
+                    state.setWotPasswordError(null);
                     state.setPendingWotImportBytes(null);
                 }}
                 wotContainerPassword={state.wotContainerPassword}
-                onWotContainerPasswordChange={state.setWotContainerPassword}
+                onWotContainerPasswordChange={(val) => {
+                    state.setWotContainerPassword(val);
+                    state.setWotPasswordError(null);
+                }}
+                wotPasswordError={state.wotPasswordError}
                 isImportingWot={state.isImportingWot}
                 onConfirmEncryptedImport={() => {
                     if (state.pendingWotImportBytes) {

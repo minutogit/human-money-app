@@ -99,8 +99,10 @@ pub(crate) async fn create_new_voucher_impl(
                         .first()
                         .and_then(|t| t.deletable_at.as_deref())
                         .ok_or_else(|| {
-                            human_money_core::Error::Generic(
-                                "Init transaction missing deletable_at".to_string(),
+                            human_money_core::Error::Validation(
+                                human_money_core::error::ValidationError::InvalidTransaction(
+                                    "Init transaction missing deletable_at".to_string(),
+                                ),
                             )
                         })?;
                     human_money_core::services::utils::parse_timestamp_ms(deletable_str)

@@ -99,6 +99,7 @@ export function useAddressBook({
     const [pendingWotImportBytes, setPendingWotImportBytes] = useState<number[] | null>(null);
     const [isWotPasswordModalOpen, setIsWotPasswordModalOpen] = useState(false);
     const [wotContainerPassword, setWotContainerPassword] = useState('');
+    const [wotPasswordError, setWotPasswordError] = useState<string | null>(null);
     const [isImportingWot, setIsImportingWot] = useState(false);
     const [isSyncingServices, setIsSyncingServices] = useState(false);
     const [feedbackMsg, setFeedbackMsg] = useState<AddressBookFeedback | null>(null);
@@ -234,9 +235,6 @@ export function useAddressBook({
             await protectAction(async (pwd) => {
                 await contactService.saveContact(contact, pwd || undefined);
             });
-            marketService.probeContactSyncs?.(false)
-                ?.then(() => notifySyncStatusUpdated())
-                ?.catch(() => {});
             void wakeSyncCoordinator({ syncMembers: true });
             await loadContacts();
             if (wasNew) {
@@ -358,6 +356,7 @@ export function useAddressBook({
 
     const executeImportWot = async (fileBytes: number[], password?: string) => {
         setIsImportingWot(true);
+        setWotPasswordError(null);
         try {
             const result = await protectAction(async (walletPassword) =>
                 wotService.importPackage({
@@ -369,6 +368,7 @@ export function useAddressBook({
             setIsWotPasswordModalOpen(false);
             setPendingWotImportBytes(null);
             setWotContainerPassword('');
+            setWotPasswordError(null);
             if (result) {
                 void wakeSyncCoordinator({ syncMembers: true });
                 if (result.isProviderFilter) {
@@ -402,6 +402,11 @@ export function useAddressBook({
             if (isPasswordRequired) {
                 setPendingWotImportBytes(fileBytes);
                 setIsWotPasswordModalOpen(true);
+                if (password !== undefined) {
+                    setWotPasswordError(
+                        t('contacts.wotWrongPasswordError', 'Falsches Passwort oder Datei konnte nicht entschlüsselt werden.'),
+                    );
+                }
                 return;
             }
             logger.error('Failed to import WoT package: ' + errorStr);
@@ -698,6 +703,8 @@ export function useAddressBook({
         setIsWotPasswordModalOpen,
         wotContainerPassword,
         setWotContainerPassword,
+        wotPasswordError,
+        setWotPasswordError,
         isImportingWot,
         isSyncingServices,
         feedbackMsg,

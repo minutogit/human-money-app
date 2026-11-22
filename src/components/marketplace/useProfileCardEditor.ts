@@ -230,8 +230,23 @@ export function useProfileCardEditor({
 
     const handleFetchGps = () => resolveCoordinatesWith(() => getCurrentLocation(6));
 
-    const handleGeocodeAddress = () =>
-        resolveCoordinatesWith(() => geocodeAddress(profile.address || {}, 6));
+    const handleGeocodeAddress = () => {
+        const effectivePrecision: CoordinatePrecision =
+            visibility.coordinates === 'contacts' ? coordPrecision : 2;
+        const addr = profile.address || {};
+        if (effectivePrecision <= 2) {
+            return resolveCoordinatesWith(() =>
+                geocodeAddress(
+                    { zipCode: addr.zipCode, city: addr.city, country: addr.country },
+                    2,
+                    { coarseOnly: true },
+                ),
+            );
+        }
+        return resolveCoordinatesWith(() => geocodeAddress(addr, 6, { coarseOnly: false }));
+    };
+
+    const handleHideCityAndZip = () => updateVisibility('city', 'nobody');
 
     const handleAvatarFile = async (file: File) => {
         try {
@@ -293,10 +308,19 @@ export function useProfileCardEditor({
             const finalVisibility = clampStreetVisibility(visibility);
 
             if (
+                finalVisibility.coordinates !== 'nobody' &&
                 !finalProfile.coordinates?.trim() &&
                 (finalProfile.address?.city?.trim() || finalProfile.address?.zipCode?.trim())
             ) {
-                const autoCoords = await geocodeAddress(finalProfile.address, 2).catch(() => null);
+                const autoCoords = await geocodeAddress(
+                    {
+                        zipCode: finalProfile.address?.zipCode,
+                        city: finalProfile.address?.city,
+                        country: finalProfile.address?.country,
+                    },
+                    2,
+                    { coarseOnly: true },
+                ).catch(() => null);
                 if (autoCoords) {
                     finalProfile = {
                         ...finalProfile,
@@ -350,6 +374,7 @@ export function useProfileCardEditor({
         handlePrecisionChange,
         handleFetchGps,
         handleGeocodeAddress,
+        handleHideCityAndZip,
         handleAvatarFile,
         handleAddSkill,
         handleRemoveSkill,

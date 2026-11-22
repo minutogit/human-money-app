@@ -1,6 +1,12 @@
 // src/utils/walletEvents.ts
 import type { TransactionRecord, WalletEvent } from '../types';
-import { formatAmount } from './format';
+import {
+    formatAmount,
+    formatScaledBigInt,
+    getDecimalFractionLength,
+    parseDecimalToScaledBigInt,
+    sumExactDecimalStrings,
+} from './format';
 import { truncateUserId } from './userIdHelper';
 
 export type WalletEventKind =
@@ -229,25 +235,45 @@ export function groupWalletEventsByDate(events: WalletEvent[]): WalletEventDateG
 export function summarizeWalletEventAmounts(
     events: WalletEvent[],
 ): Record<string, CurrencyFlowSummary> {
-    const totals: Record<string, CurrencyFlowSummary> = {};
+    const grouped: Record<string, { inbound: string[]; outbound: string[] }> = {};
 
     for (const ev of events) {
         const kind = normalizeWalletEventKind(ev.eventType);
         if (kind !== 'sent' && kind !== 'received') continue;
         const unit = ev.bffData.displayCurrency;
-        const val = parseFloat(ev.bffData.amount);
-        if (!unit || Number.isNaN(val)) continue;
+        const amt = String(ev.bffData.amount ?? '').trim();
+        if (!unit || parseDecimalToScaledBigInt(amt, getDecimalFractionLength(amt, false)) === null) {
+            continue;
+        }
 
-        if (!totals[unit]) {
-            totals[unit] = { inbound: 0, outbound: 0, net: 0 };
+        if (!grouped[unit]) {
+            grouped[unit] = { inbound: [], outbound: [] };
         }
         if (kind === 'received') {
-            totals[unit].inbound += val;
-            totals[unit].net += val;
+            grouped[unit].inbound.push(amt);
         } else {
-            totals[unit].outbound += val;
-            totals[unit].net -= val;
+            grouped[unit].outbound.push(amt);
         }
+    }
+
+    const totals: Record<string, CurrencyFlowSummary> = {};
+    for (const [unit, { inbound, outbound }] of Object.entries(grouped)) {
+        const all = [...inbound, ...outbound];
+        const scale = Math.max(0, ...all.map((a) => getDecimalFractionLength(a, false)));
+        let inboundScaled = 0n;
+        for (const a of inbound) {
+            inboundScaled += parseDecimalToScaledBigInt(a, scale) ?? 0n;
+        }
+        let outboundScaled = 0n;
+        for (const a of outbound) {
+            outboundScaled += parseDecimalToScaledBigInt(a, scale) ?? 0n;
+        }
+        const netScaled = inboundScaled - outboundScaled;
+        totals[unit] = {
+            inbound: Number(formatScaledBigInt(inboundScaled, scale)),
+            outbound: Number(formatScaledBigInt(outboundScaled, scale)),
+            net: Number(formatScaledBigInt(netScaled, scale)),
+        };
     }
 
     return totals;
@@ -285,19 +311,30 @@ export function matchEventsForTransactionRecord(
 export function summarizeTransactionHistory(
     records: TransactionRecord[],
 ): TransactionHistorySummary {
-    const inboundSums: Record<string, number> = {};
-    const outboundSums: Record<string, number> = {};
+    const inboundGrouped: Record<string, string[]> = {};
+    const outboundGrouped: Record<string, string[]> = {};
 
     for (const record of records) {
-        const targetMap = record.direction === 'sent' ? outboundSums : inboundSums;
+        const targetMap = record.direction === 'sent' ? outboundGrouped : inboundGrouped;
         if (record.summableAmounts) {
             for (const [unit, amountStr] of Object.entries(record.summableAmounts)) {
-                const val = parseFloat(amountStr);
-                if (!Number.isNaN(val)) {
-                    targetMap[unit] = (targetMap[unit] || 0) + val;
+                const raw = String(amountStr ?? '').trim();
+                if (parseDecimalToScaledBigInt(raw, getDecimalFractionLength(raw, false)) !== null) {
+                    if (!targetMap[unit]) targetMap[unit] = [];
+                    targetMap[unit].push(raw);
                 }
             }
         }
+    }
+
+    const inboundSums: Record<string, number> = {};
+    for (const [unit, amounts] of Object.entries(inboundGrouped)) {
+        inboundSums[unit] = sumExactDecimalStrings(amounts).number;
+    }
+
+    const outboundSums: Record<string, number> = {};
+    for (const [unit, amounts] of Object.entries(outboundGrouped)) {
+        outboundSums[unit] = sumExactDecimalStrings(amounts).number;
     }
 
     const summaryUnits = Array.from(
@@ -314,12 +351,13 @@ export function summarizeTransactionHistory(
 
 export function formatSignedNetBalance(amountStr?: string): string {
     if (!amountStr) return '0.00';
-    const num = parseFloat(amountStr);
+    const trimmed = amountStr.trim();
+    const num = parseFloat(trimmed);
     if (Number.isNaN(num)) return amountStr;
-    const formatted = formatAmount(Math.abs(num), 2);
-    if (num > 0) return `+${formatted}`;
-    if (num < 0) return `-${formatted}`;
-    return '0.00';
+    if (num === 0) return '0.00';
+    const decimals = Math.min(18, Math.max(2, getDecimalFractionLength(trimmed, true)));
+    const formatted = formatAmount(Math.abs(num), decimals);
+    return num > 0 ? `+${formatted}` : `-${formatted}`;
 }
 
 export function formatRelativeExpiry(

@@ -130,6 +130,7 @@ export interface WotTrustPackageModalsProps {
     onCloseWotPasswordModal: () => void;
     wotContainerPassword: string;
     onWotContainerPasswordChange: (password: string) => void;
+    wotPasswordError?: string | null;
     isImportingWot: boolean;
     onConfirmEncryptedImport: () => void;
 }
@@ -155,6 +156,7 @@ export const WotTrustPackageModals: React.FC<WotTrustPackageModalsProps> = ({
     onCloseWotPasswordModal,
     wotContainerPassword,
     onWotContainerPasswordChange,
+    wotPasswordError,
     isImportingWot,
     onConfirmEncryptedImport,
 }) => {
@@ -348,6 +350,14 @@ export const WotTrustPackageModals: React.FC<WotTrustPackageModalsProps> = ({
                         className="w-full bg-white border border-theme-subtle rounded-xl px-4 py-2.5 text-theme-secondary placeholder:text-theme-placeholder focus:outline-none focus:ring-2 focus:ring-theme-primary/20 text-sm shadow-sm"
                         autoFocus
                     />
+                    {wotPasswordError && (
+                        <p
+                            className="text-xs text-rose-600 bg-rose-50 px-3 py-2 rounded-xl border border-rose-200"
+                            data-testid="wot-password-error"
+                        >
+                            {wotPasswordError}
+                        </p>
+                    )}
                 </div>
             </ModalShell>
         </>

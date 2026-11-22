@@ -213,7 +213,7 @@ export interface ConfirmedTransferSnapshot {
     draftKey: string;
     recipientId: string;
     selectedMap: Map<string, string>;
-    selectionStats: Record<string, { total: number; count: number }>;
+    selectionStats: Record<string, { total: number; totalExact?: string; count: number }>;
     notes: string;
     sendProfileName: boolean;
     customSenderName: string;

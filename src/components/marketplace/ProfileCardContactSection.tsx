@@ -21,6 +21,7 @@ export interface ProfileCardContactSectionProps {
     onPrecisionChange: (precision: CoordinatePrecision) => void;
     onFetchGps: () => void;
     onGeocodeAddress: () => void;
+    onHideCityAndZip?: () => void;
     onAllowInquiriesChange: (allow: boolean) => void;
 }
 
@@ -39,6 +40,7 @@ export const ProfileCardContactSection: React.FC<ProfileCardContactSectionProps>
     onPrecisionChange,
     onFetchGps,
     onGeocodeAddress,
+    onHideCityAndZip,
     onAllowInquiriesChange,
 }) => {
     const { t } = useTranslation();
@@ -197,6 +199,54 @@ export const ProfileCardContactSection: React.FC<ProfileCardContactSectionProps>
                             <p className="text-xs text-rose-600 bg-rose-50 p-2 rounded-lg border border-rose-200">
                                 {geoError}
                             </p>
+                        )}
+
+                        {coordPrecision === 2 ? (
+                            <div className="space-y-1.5">
+                                <p
+                                    className="text-[11px] text-theme-light leading-relaxed"
+                                    data-testid="coord-coarse-osm-note"
+                                >
+                                    {t(
+                                        'marketplace.coordCoarseOsmNote',
+                                        'Bei „Aus Ort ermitteln“ im ~1-km-Modus werden nur PLZ, Ort und Land bei OpenStreetMap abgefragt (ohne Straße/Hausnummer).',
+                                    )}
+                                </p>
+                                <div
+                                    className="p-2.5 rounded-xl bg-sky-500/10 border border-sky-500/20 text-sky-950 text-xs leading-relaxed flex flex-col gap-2"
+                                    data-testid="coord-coarse-hint"
+                                >
+                                    <span>
+                                        {t(
+                                            'marketplace.coordCoarseInaccuracyHint',
+                                            'ℹ️ Hinweis (~1 km): Aus Ort/PLZ ermittelte oder gerundete Koordinaten können ungenau sein. Wenn Koordinaten eingetragen sind, kannst du PLZ und Ort ausblenden.',
+                                        )}
+                                    </span>
+                                    {profile.coordinates?.trim() && visibility.city !== 'nobody' && onHideCityAndZip && (
+                                        <div>
+                                            <Button
+                                                type="button"
+                                                size="xs"
+                                                variant="outline"
+                                                onClick={onHideCityAndZip}
+                                                data-testid="hide-city-zip-btn"
+                                            >
+                                                {t('marketplace.hideCityAndZipBtn', 'PLZ & Ort ausblenden')}
+                                            </Button>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        ) : (
+                            <div
+                                className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/25 text-amber-950 text-xs leading-relaxed"
+                                data-testid="coord-osm-precise-notice"
+                            >
+                                {t(
+                                    'marketplace.coordOsmPreciseNotice',
+                                    'ℹ️ Hinweis (OpenStreetMap): Wenn du bei diesem kleineren Radius „Aus Ort ermitteln“ wählst, werden auch Straße und Hausnummer zur genauen Koordinatensuche an OpenStreetMap (Nominatim) übertragen.',
+                                )}
+                            </div>
                         )}
 
                         {(!profile.coordinates?.trim() || visibility.coordinates === 'nobody') && (

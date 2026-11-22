@@ -1,5 +1,5 @@
 // src/components/AddContactModal.tsx
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { 
     QrCode, 
@@ -24,7 +24,7 @@ import { notifySyncStatusUpdated } from '../../utils/syncEvents';
 import { useSession } from '../../context/SessionContext';
 import { openFileAsBytes } from '../../utils/fileIo';
 import { logger } from '../../utils/log';
-import { stringifyError } from '../../utils/errorHelper';
+import { stringifyError, translateError } from '../../utils/errorHelper';
 import type { PublicProfile } from '../../types';
 
 export interface AddContactModalProps {
@@ -52,10 +52,14 @@ export const AddContactModal: React.FC<AddContactModalProps> = ({
     const [pasteText, setPasteText] = useState('');
     const [smartError, setSmartError] = useState<string | null>(null);
     const [isProcessing, setIsProcessing] = useState(false);
+    const isOpenRef = useRef(isOpen);
+    isOpenRef.current = isOpen;
+    const importGenRef = useRef(0);
 
     // Reset view whenever modal opens or closes
     useEffect(() => {
         if (!isOpen) {
+            importGenRef.current += 1;
             setView('tiles');
             setPasteText('');
             setSmartError(null);
@@ -63,13 +67,25 @@ export const AddContactModal: React.FC<AddContactModalProps> = ({
         }
     }, [isOpen]);
 
+    useEffect(() => {
+        return () => {
+            isOpenRef.current = false;
+            importGenRef.current += 1;
+        };
+    }, []);
+
     const handleImportPayload = useCallback(async (rawPayload: string) => {
+        const gen = ++importGenRef.current;
+        const isStillCurrent = () => isOpenRef.current && importGenRef.current === gen;
+
         setSmartError(null);
         const trimmed = rawPayload.trim();
         if (!trimmed) {
             const msg = t('contacts.emptyClipboard');
-            setSmartError(msg);
-            onError(msg);
+            if (isStillCurrent()) {
+                setSmartError(msg);
+                onError(msg);
+            }
             return;
         }
 
@@ -84,6 +100,7 @@ export const AddContactModal: React.FC<AddContactModalProps> = ({
                 parsedInput.kind === 'contact' ? parsedInput.contact.syncUrls : undefined;
 
             const ownUid = (await Promise.resolve(profileService.getUserId?.()).catch(() => '')) || '';
+            if (!isStillCurrent()) return;
             if (isExactSameUserId(parsedDid, ownUid)) {
                 const msg = t('contacts.selfActiveProfileHint');
                 setSmartError(msg);
@@ -128,9 +145,11 @@ export const AddContactModal: React.FC<AddContactModalProps> = ({
                 actionPassword = pwd;
                 return await marketService.importContactCard(cardPayload, pwd || undefined);
             });
+            if (!isStillCurrent()) return;
 
             if (res && res.status === 'accepted') {
                 await onContactAdded();
+                if (!isStillCurrent()) return;
                 // H1: never forward a consumed hmc_grant_* one-shot token to an unlocked background probe
                 const capturedPassword = actionPassword as string | null;
                 const probePassword =
@@ -169,11 +188,14 @@ export const AddContactModal: React.FC<AddContactModalProps> = ({
             }
         } catch (err) {
             logger.error(`Import card error: ${stringifyError(err)}`);
-            const msg = stringifyError(err);
+            if (!isStillCurrent()) return;
+            const msg = translateError(err, t);
             setSmartError(msg);
             onError(msg);
         } finally {
-            setIsProcessing(false);
+            if (isStillCurrent()) {
+                setIsProcessing(false);
+            }
         }
     }, [onError, t, onClose, onOpenManualAdd, protectAction, onContactAdded, onSuccess]);
 
@@ -217,7 +239,7 @@ export const AddContactModal: React.FC<AddContactModalProps> = ({
             }
         } catch (err) {
             logger.error(`Error opening file: ${stringifyError(err)}`);
-            onError(stringifyError(err));
+            onError(translateError(err, t));
         }
     };
 

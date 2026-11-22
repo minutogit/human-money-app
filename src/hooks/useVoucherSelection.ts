@@ -1,20 +1,16 @@
 import { useState, useCallback, useMemo, useRef } from 'react';
 import { VoucherSummary } from '../types';
 import { transferService, TransferPlan } from '../services/transferService';
+import {
+  formatScaledBigInt,
+  getDecimalFractionLength as getFracLength,
+  parseDecimalToScaledBigInt,
+  sumExactDecimalStrings,
+} from '../utils/format';
+
+export { parseDecimalToScaledBigInt };
 
 const STRICT_POSITIVE_DECIMAL_RE = /^\d+(?:[.,]\d+)?$/;
-
-export function parseDecimalToScaledBigInt(
-  raw: string,
-  scale: number,
-): bigint | null {
-  const trimmed = raw.trim();
-  if (!STRICT_POSITIVE_DECIMAL_RE.test(trimmed)) return null;
-  const normalized = trimmed.replace(',', '.');
-  const [intPart, fracPart = ''] = normalized.split('.');
-  if (fracPart.length > scale) return null;
-  return BigInt(`${intPart}${fracPart.padEnd(scale, '0')}`);
-}
 
 export function parseStrictPositiveDecimal(
   raw: string,
@@ -29,18 +25,6 @@ export function parseStrictPositiveDecimal(
   const parsed = Number(normalized);
   if (!Number.isFinite(parsed) || parsed <= 0) return null;
   return { normalized, value: parsed };
-}
-
-function formatScaledBigInt(value: bigint, scale: number): string {
-  if (scale <= 0) return value.toString();
-  const s = value.toString().padStart(scale + 1, '0');
-  return `${s.slice(0, -scale)}.${s.slice(-scale)}`;
-}
-
-function getFracLength(raw: string): number {
-  const normalized = String(raw).trim().replace(',', '.');
-  const m = normalized.match(/^\d+(?:\.(\d+))?$/);
-  return m?.[1] ? m[1].length : 0;
 }
 
 export function useVoucherSelection(vouchers: VoucherSummary[]) {
@@ -275,19 +259,29 @@ export function useVoucherSelection(vouchers: VoucherSummary[]) {
   }, []);
 
   const selectionStats = useMemo(() => {
-    const stats: Record<string, { total: number, count: number }> = {};
-    
+    const grouped: Record<string, { amounts: string[]; count: number }> = {};
+
     selectedMap.forEach((amount, id) => {
       const v = vouchers.find(v => v.localInstanceId === id);
       if (v) {
         const key = v.displayCurrency;
-        if (!stats[key]) {
-          stats[key] = { total: 0, count: 0 };
+        if (!grouped[key]) {
+          grouped[key] = { amounts: [], count: 0 };
         }
-        stats[key].total += parseFloat(String(amount).replace(',', '.')) || 0;
-        stats[key].count += 1;
+        grouped[key].amounts.push(String(amount));
+        grouped[key].count += 1;
       }
     });
+
+    const stats: Record<string, { total: number; totalExact: string; count: number }> = {};
+    for (const [key, entry] of Object.entries(grouped)) {
+      const { exact, number } = sumExactDecimalStrings(entry.amounts);
+      stats[key] = {
+        total: number,
+        totalExact: exact,
+        count: entry.count,
+      };
+    }
 
     return stats;
   }, [selectedMap, vouchers]);

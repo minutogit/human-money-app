@@ -28,6 +28,7 @@ export function ForkLockOverlay({ onStartRecovery }: ForkLockOverlayProps) {
 
     const [profiles, setProfiles] = useState<ProfileInfo[]>([]);
     const [ownUserId, setOwnUserId] = useState<string | null>(null);
+    const [selectedFolderName, setSelectedFolderName] = useState('');
     const [reclaimPassword, setReclaimPassword] = useState('');
     const [isReclaiming, setIsReclaiming] = useState(false);
     const [reclaimError, setReclaimError] = useState('');
@@ -56,11 +57,16 @@ export function ForkLockOverlay({ onStartRecovery }: ForkLockOverlayProps) {
         };
     }, []);
 
-    const activeProfile =
+    const uniqueNameMatches = profileName
+        ? profiles.filter((p) => p.profileName === profileName)
+        : [];
+    const autoResolvedProfile =
         (sessionFolderName ? profiles.find((p) => p.folderName === sessionFolderName) : undefined) ??
         (ownUserId ? profiles.find((p) => p.userId && p.userId === ownUserId) : undefined) ??
-        (profiles.length === 1 ? profiles.find((p) => p.profileName === profileName) : undefined);
-    const folderName = activeProfile?.folderName || '';
+        (uniqueNameMatches.length === 1 ? uniqueNameMatches[0] : undefined) ??
+        (profiles.length === 1 ? profiles[0] : undefined);
+    const folderName = autoResolvedProfile?.folderName || selectedFolderName || '';
+    const activeProfile = autoResolvedProfile ?? profiles.find((p) => p.folderName === folderName);
     const displayName = activeProfile?.profileName || profileName || t('profile.unknown');
 
     const handleLogout = async () => {
@@ -75,7 +81,11 @@ export function ForkLockOverlay({ onStartRecovery }: ForkLockOverlayProps) {
     };
 
     const handleReclaim = async () => {
-        if (!folderName || !reclaimPassword) return;
+        if (!folderName) {
+            setReclaimError(t('auth.forkLockProfileNotResolved'));
+            return;
+        }
+        if (!reclaimPassword) return;
 
         setIsReclaiming(true);
         setReclaimError('');
@@ -97,7 +107,11 @@ export function ForkLockOverlay({ onStartRecovery }: ForkLockOverlayProps) {
     };
 
     const handleDeleteProfile = async () => {
-        if (!folderName || !deletePassword) return;
+        if (!folderName) {
+            setDeleteError(t('auth.forkLockProfileNotResolved'));
+            return;
+        }
+        if (!deletePassword) return;
 
         setIsDeleting(true);
         setDeleteError('');
@@ -125,12 +139,43 @@ export function ForkLockOverlay({ onStartRecovery }: ForkLockOverlayProps) {
     const resolvedKind =
         lockdownKind === 'handover' ? 'handover' : lockdownKind === 'clone' ? 'clone' : 'fork';
 
+    const profileSelectorNode =
+        !autoResolvedProfile && profiles.length > 1 ? (
+            <div className="space-y-1.5 text-left">
+                <label
+                    htmlFor="fork-lock-profile-select"
+                    className="block text-xs font-semibold text-gray-600 dark:text-gray-300"
+                >
+                    {t('auth.forkLockSelectProfileLabel')}
+                </label>
+                <select
+                    id="fork-lock-profile-select"
+                    data-testid="fork-lock-profile-select"
+                    value={selectedFolderName}
+                    onChange={(e) => {
+                        setSelectedFolderName(e.target.value);
+                        setReclaimError('');
+                        setDeleteError('');
+                    }}
+                    className="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-3 py-2 text-xs text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-amber-500/40"
+                >
+                    <option value="">{t('auth.forkLockSelectProfilePlaceholder')}</option>
+                    {profiles.map((p) => (
+                        <option key={p.folderName} value={p.folderName}>
+                            {p.profileName} ({p.folderName})
+                        </option>
+                    ))}
+                </select>
+            </div>
+        ) : undefined;
+
     return (
         <>
             <DeviceLockoutModal
                 kind={resolvedKind}
                 isOpen={true}
                 targetEpoch={lockdownDetails?.targetEpoch}
+                profileSelector={profileSelectorNode}
                 reclaimPassword={reclaimPassword}
                 onReclaimPasswordChange={setReclaimPassword}
                 onReclaim={handleReclaim}

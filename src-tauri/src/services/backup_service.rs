@@ -4586,7 +4586,7 @@ mod tests {
             .expect("root profile must collide");
         assert_eq!(coll.profile_name, "Alice Root");
         assert_eq!(coll.local_epoch, Some(0));
-        assert_eq!(coll.local_tx_nonce, Some(1));
+        assert_eq!(coll.local_tx_nonce, Some(0));
         assert!(!coll.is_locked_or_conflicted);
 
         // Same mnemonic with new subaccount prefix -> distinct user_id, NO collision

@@ -31,7 +31,7 @@ export const EmergencyKitModal: React.FC<EmergencyKitModalProps> = ({
     onClose,
     onSuccess,
 }) => {
-    const { t } = useTranslation();
+    const { t, i18n } = useTranslation();
     const [step, setStep] = useState<ModalStep>('unlock');
     const [password, setPassword] = useState<string>('');
     const [kitData, setKitData] = useState<ExportedMnemonicKitDto | null>(null);
@@ -115,30 +115,31 @@ export const EmergencyKitModal: React.FC<EmergencyKitModalProps> = ({
         const syncsHtml =
             kitData.syncUrls && kitData.syncUrls.length > 0
                 ? kitData.syncUrls.map((s) => `<li>${escapeHtml(s)}</li>`).join('')
-                : '<li>(Keine externen Sync-Dienste)</li>';
+                : `<li>${escapeHtml(t('backup.emergencyKitNoSyncs'))}</li>`;
 
         const guardiansHtml =
             kitData.guardianNames && kitData.guardianNames.length > 0
                 ? kitData.guardianNames.map((g) => `<li>${escapeHtml(g)}</li>`).join('')
-                : '<li>(Keine Kontakte eingerichtet)</li>';
+                : `<li>${escapeHtml(t('backup.emergencyKitNoGuardians'))}</li>`;
 
         const prefixHtml = kitData.userPrefix
-            ? `<p><b>Profil-Kennung (Unterkonto-Präfix):</b> <code>${escapeHtml(kitData.userPrefix)}</code></p>`
+            ? `<p><b>${escapeHtml(t('backup.emergencyKitPrefixLabel'))}</b> <code>${escapeHtml(kitData.userPrefix)}</code></p>`
             : '';
 
         const passphraseNote = kitData.hasBip39Passphrase
-            ? `<div class="warn"><b>Wichtig – 25. Passwort-Wort (BIP-39 Passphrase):</b> Dieses Profil nutzt ein zusätzliches 25. Passwort-Wort. Es ist nicht das lokale Geräte-Passwort und wird hier aus Sicherheitsgründen <u>nicht</u> abgedruckt!</div>`
-            : `<p style="font-size:13px;color:#444;">Dieses Profil nutzt kein separates 25. Passwort-Wort. (Das lokale App-Passwort schützt nur dieses Gerät.)</p>`;
+            ? `<div class="warn"><b>${escapeHtml(t('backup.emergencyKitPassphraseActiveTitle'))}</b> ${escapeHtml(t('backup.emergencyKitPassphraseActiveNote'))}</div>`
+            : `<p style="font-size:13px;color:#444;">${escapeHtml(t('backup.emergencyKitPassphraseNoneNote'))}</p>`;
 
         const qrHtml = kitData.qrSvg
-            ? `<div class="section"><h3>Notfall-QR-Code zum direkten Scannen</h3><div style="width:200px;height:200px;padding:8px;border:1px solid #ccc;border-radius:8px;background:#fff;">${kitData.qrSvg}</div></div>`
+            ? `<div class="section"><h3>${escapeHtml(t('backup.emergencyKitQrHeading'))}</h3><div style="width:200px;height:200px;padding:8px;border:1px solid #ccc;border-radius:8px;background:#fff;">${kitData.qrSvg}</div></div>`
             : '';
 
+        const htmlLang = escapeHtml((i18n.language || 'en').split('-')[0] || 'en');
         const fullHtml = `<!DOCTYPE html>
-<html lang="de">
+<html lang="${htmlLang}">
 <head>
 <meta charset="utf-8">
-<title>HuMoCo Notfall-Blatt</title>
+<title>${escapeHtml(t('backup.emergencyKitDocTitle'))}</title>
 <style>
 body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 40px; color: #111; line-height: 1.5; }
 .alert { background: #fee2e2; border: 2px solid #ef4444; color: #991b1b; padding: 16px; border-radius: 8px; font-weight: bold; text-align: center; margin-bottom: 24px; }
@@ -152,31 +153,31 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
 <div class="alert">
   ${escapeHtml(t('backup.emergencyKitRedAlert'))}
 </div>
-<h2>HuMoCo Profil-Wiederherstellung (Notfall-Blatt)</h2>
+<h2>${escapeHtml(t('backup.emergencyKitHtmlHeading'))}</h2>
 ${prefixHtml}
 ${passphraseNote}
 <div class="section">
-  <h3>${words.length} Wiederherstellungswörter</h3>
+  <h3>${escapeHtml(t('backup.emergencyKitManualWordsTitle', { count: words.length }))}</h3>
   <div class="words-grid">${wordsHtml}</div>
 </div>
 ${qrHtml}
 <div class="section">
-  <h3>Zugehörige Sync-Dienste</h3>
+  <h3>${escapeHtml(t('backup.emergencyKitSyncUrls'))}</h3>
   <ul>${syncsHtml}</ul>
 </div>
 <div class="section">
-  <h3>Eingerichtete Vertrauenskontakte</h3>
+  <h3>${escapeHtml(t('backup.emergencyKitGuardianNames'))}</h3>
   <ul>${guardiansHtml}</ul>
 </div>
 <div class="section">
-  <h3>Anleitung für den Ernstfall</h3>
+  <h3>${escapeHtml(t('backup.emergencyKitInstructionsHeading'))}</h3>
   <ol>
     <li>${escapeHtml(t('backup.emergencyKitInstructions1').replace(/^\d+\.\s*/, ''))}</li>
     <li>${escapeHtml(t('backup.emergencyKitInstructions2').replace(/^\d+\.\s*/, ''))}</li>
     <li>${escapeHtml(t('backup.emergencyKitInstructions3').replace(/^\d+\.\s*/, ''))}</li>
   </ol>
 </div>
-<div class="footer">Erstellt mit HuMoCo Human Money &bull; URI: <code>${escapeHtml(kitData.kitUri)}</code> </div>
+<div class="footer">${escapeHtml(t('backup.emergencyKitFooterPrefix'))} &bull; URI: <code>${escapeHtml(kitData.kitUri)}</code> </div>
 </body>
 </html>`;
 
@@ -184,7 +185,7 @@ ${qrHtml}
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `humoco-notfallblatt-${Date.now()}.html`;
+        a.download = `humoco-emergency-kit-${Date.now()}.html`;
         a.click();
         URL.revokeObjectURL(url);
     };
@@ -202,6 +203,9 @@ ${qrHtml}
                 controlWordIndex,
                 controlWordInput.trim()
             );
+            setPassword('');
+            setKitData(null);
+            setControlWordInput('');
             setStep('success');
             onSuccess?.();
         } catch (err) {
@@ -328,7 +332,7 @@ ${qrHtml}
                             <div className="flex flex-col sm:flex-row items-center gap-4 justify-between border-b border-slate-100 pb-4">
                                 <div>
                                     <h3 className="font-black text-sm uppercase tracking-wider text-slate-900">
-                                        HuMoCo Notfall-Blatt
+                                        {t('backup.emergencyKitDocTitle')}
                                     </h3>
                                     <p className="text-xs text-slate-500 mt-0.5">
                                         {t('backup.emergencyKitScanQr')}

@@ -167,6 +167,10 @@ export const AutoSyncSummaryCard: React.FC<AutoSyncSummaryCardProps> = ({
             notifySyncStatusUpdated();
         } catch (err) {
             setFeedback({ type: 'error', message: translateError(err, t) });
+            if (onConfigUpdated) {
+                const fresh = await settingsService.getConfig().catch(() => null);
+                if (fresh) onConfigUpdated(fresh);
+            }
         }
     };
 

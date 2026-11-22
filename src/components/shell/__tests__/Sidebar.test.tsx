@@ -4,6 +4,7 @@ import { Sidebar } from '../Sidebar';
 import { UiModeProvider } from '../../../context/UiModeContext';
 import { integrityService } from '../../../services/integrityService';
 import { profileService } from '../../../services/profileService';
+import * as syncEvents from '../../../utils/syncEvents';
 
 vi.mock('../../../services/integrityService');
 vi.mock('../../../services/profileService');
@@ -26,16 +27,19 @@ vi.mock('../../../context/NavigationContext', () => ({
 
 const mockNotifyLogout = vi.fn();
 const mockLockSession = vi.fn();
+const mockProtectAction = vi.fn().mockResolvedValue(undefined);
+let mockSessionState = {
+    isAuthenticated: true,
+    hasCachedSession: true,
+    sessionTimeoutSeconds: 300 as number | null,
+    profileName: 'Alice',
+    notifyLogout: mockNotifyLogout,
+    protectAction: mockProtectAction,
+    lockSession: mockLockSession,
+};
 
 vi.mock('../../../context/SessionContext', () => ({
-    useSession: () => ({
-        isAuthenticated: true,
-        hasCachedSession: true,
-        profileName: 'Alice',
-        notifyLogout: mockNotifyLogout,
-        protectAction: vi.fn(),
-        lockSession: mockLockSession,
-    }),
+    useSession: () => mockSessionState,
     useOptionalSession: () => null,
 }));
 
@@ -52,6 +56,15 @@ describe('Sidebar Component', () => {
     beforeEach(() => {
         vi.clearAllMocks();
         localStorage.clear();
+        mockSessionState = {
+            isAuthenticated: true,
+            hasCachedSession: true,
+            sessionTimeoutSeconds: 300,
+            profileName: 'Alice',
+            notifyLogout: mockNotifyLogout,
+            protectAction: mockProtectAction,
+            lockSession: mockLockSession,
+        };
         vi.mocked(integrityService.getDoubleSpendConflicts).mockResolvedValue([]);
         vi.mocked(profileService.getUserId).mockResolvedValue('did:key:z6MkAlice');
     });
@@ -187,5 +200,34 @@ describe('Sidebar Component', () => {
         fireEvent.click(logoutBtn);
         expect(mockNotifyLogout).toHaveBeenCalled();
         expect(mockNavigate).toHaveBeenCalledWith({ view: 'needs_login' });
+    });
+
+    it('unlocks locked profile click when sessionTimeoutSeconds !== 0, and opens editor when timeout is 0', () => {
+        const openSpy = vi.spyOn(syncEvents, 'openOwnProfileEditor').mockImplementation(() => {});
+
+        mockSessionState = {
+            ...mockSessionState,
+            isAuthenticated: true,
+            hasCachedSession: false,
+            sessionTimeoutSeconds: 300,
+        };
+        const { rerender } = render(<Sidebar openClaimsCount={0} />);
+        fireEvent.click(screen.getByTestId('sidebar-profile-button'));
+        expect(mockProtectAction).toHaveBeenCalledTimes(1);
+        expect(openSpy).not.toHaveBeenCalled();
+
+        mockProtectAction.mockClear();
+        mockSessionState = {
+            ...mockSessionState,
+            isAuthenticated: true,
+            hasCachedSession: false,
+            sessionTimeoutSeconds: 0,
+        };
+        rerender(<Sidebar openClaimsCount={0} />);
+        fireEvent.click(screen.getByTestId('sidebar-profile-button'));
+        expect(openSpy).toHaveBeenCalledTimes(1);
+        expect(mockProtectAction).not.toHaveBeenCalled();
+
+        openSpy.mockRestore();
     });
 });

@@ -149,4 +149,55 @@ describe('EmergencyKitModal Component', () => {
         });
         randomSpy.mockRestore();
     });
+
+    it('exports localized HTML without hardcoded German strings when downloaded', async () => {
+        vi.mocked(recoveryService.exportProfileMnemonic).mockResolvedValue(mockKitData);
+        const blobParts: string[] = [];
+        const OrigBlob = globalThis.Blob;
+        class CapturingBlob extends OrigBlob {
+            constructor(parts: BlobPart[], options?: BlobPropertyBag) {
+                super(parts, options);
+                blobParts.push(...parts.map(String));
+            }
+        }
+        vi.stubGlobal('Blob', CapturingBlob);
+        const origCreateObjectURL = URL.createObjectURL;
+        const origRevokeObjectURL = URL.revokeObjectURL;
+        URL.createObjectURL = vi.fn(() => 'blob:mock-url');
+        URL.revokeObjectURL = vi.fn();
+        const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+
+        try {
+            render(
+                <EmergencyKitModal
+                    isOpen={true}
+                    onClose={mockOnClose}
+                    onSuccess={mockOnSuccess}
+                />
+            );
+            fireEvent.change(screen.getByPlaceholderText(/Password|Passwort/i), {
+                target: { value: 'CorrectPassword123' },
+            });
+            fireEvent.click(screen.getByTestId('unlock-emergency-kit-btn'));
+
+            await waitFor(() => {
+                expect(screen.getByText('apple')).toBeInTheDocument();
+            });
+
+            fireEvent.click(screen.getByRole('button', { name: /Save as offline HTML|Als Offline-HTML speichern/i }));
+
+            expect(blobParts.length).toBeGreaterThan(0);
+            const html = blobParts.join('');
+            expect(html).toContain('lang="en"');
+            expect(html).toContain('HuMoCo Profile Recovery (Emergency Kit)');
+            expect(html).not.toContain('Wiederherstellungswörter');
+            expect(html).not.toContain('Anleitung für den Ernstfall');
+            expect(clickSpy).toHaveBeenCalled();
+        } finally {
+            vi.unstubAllGlobals();
+            URL.createObjectURL = origCreateObjectURL;
+            URL.revokeObjectURL = origRevokeObjectURL;
+            clickSpy.mockRestore();
+        }
+    });
 });

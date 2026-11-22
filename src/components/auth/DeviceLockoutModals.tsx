@@ -40,6 +40,7 @@ export interface DeviceLockoutModalProps {
     onRequestDeleteLocal?: () => void;
     secondaryCancelLabel?: string;
     onSecondaryCancel?: () => void;
+    profileSelector?: React.ReactNode;
     zIndexClass?: string;
 }
 
@@ -63,6 +64,7 @@ export const DeviceLockoutModal: React.FC<DeviceLockoutModalProps> = ({
     onRequestDeleteLocal,
     secondaryCancelLabel,
     onSecondaryCancel,
+    profileSelector,
     zIndexClass = 'z-[100]',
 }) => {
     const { t } = useTranslation();
@@ -146,6 +148,8 @@ export const DeviceLockoutModal: React.FC<DeviceLockoutModalProps> = ({
                             {helpButton}
                         </div>
                         {helpModal}
+
+                        {profileSelector}
 
                         <div className="space-y-3">
                             <Button

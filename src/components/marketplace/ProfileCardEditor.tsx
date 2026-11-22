@@ -59,6 +59,7 @@ export const ProfileCardEditor: React.FC<ProfileCardEditorProps> = ({
         handlePrecisionChange,
         handleFetchGps,
         handleGeocodeAddress,
+        handleHideCityAndZip,
         handleAvatarFile,
         handleAddSkill,
         handleRemoveSkill,
@@ -128,6 +129,7 @@ export const ProfileCardEditor: React.FC<ProfileCardEditorProps> = ({
                             onPrecisionChange={handlePrecisionChange}
                             onFetchGps={handleFetchGps}
                             onGeocodeAddress={handleGeocodeAddress}
+                            onHideCityAndZip={handleHideCityAndZip}
                             onAllowInquiriesChange={setAllowInquiries}
                         />
 

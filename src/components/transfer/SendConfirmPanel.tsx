@@ -6,7 +6,7 @@ import { ConfirmationModal } from '../ui/ConfirmationModal';
 import { Advanced } from '../ui/Advanced';
 import { TechId } from '../ui/TechId';
 import { UserAvatar } from '../ui/UserAvatar';
-import { formatAmount } from '../../utils/format';
+import { formatAmount, getDecimalFractionLength } from '../../utils/format';
 import type { ConfirmedTransferSnapshot } from './sendTransferHelpers';
 import type { Contact, VoucherSummary } from '../../types';
 
@@ -14,7 +14,7 @@ interface SendConfirmPanelProps {
     recipientId: string;
     contacts: Contact[];
     selectedMap: Map<string, string>;
-    selectionStats: Record<string, { total: number; count: number }>;
+    selectionStats: Record<string, { total: number; totalExact?: string; count: number }>;
     availableVouchers: VoucherSummary[];
     uuidToPrecisionMap: Map<string, number>;
     privacyMode: 'public' | 'stealth' | null;
@@ -72,7 +72,7 @@ export function SendConfirmPanel({
                                     : 2;
                                 return (
                                     <span key={unit} className="inline-flex items-baseline gap-1">
-                                        {formatAmount(stat.total.toString(), precision)}
+                                        {formatAmount(stat.totalExact ?? stat.total.toString(), precision)}
                                         <span className="text-xs font-bold uppercase tracking-widest text-theme-light">
                                             {unit}
                                         </span>
@@ -131,10 +131,20 @@ export function SendConfirmPanel({
                             </p>
                             <div className="text-lg font-black tracking-tighter text-theme-primary">
                                 {Object.entries(modalStats)
-                                    .map(
-                                        ([displayCurrency, stat]) =>
-                                            `${formatAmount(stat.total.toString())} ${displayCurrency}`,
-                                    )
+                                    .map(([displayCurrency, stat]) => {
+                                        const valStr = stat.totalExact ?? stat.total.toString();
+                                        const voucher = availableVouchers.find(
+                                            (v) => v.displayCurrency === displayCurrency,
+                                        );
+                                        const stdPrecision = voucher
+                                            ? (uuidToPrecisionMap.get(voucher.voucherStandardUuid) ?? 2)
+                                            : 2;
+                                        const precision = Math.min(
+                                            18,
+                                            Math.max(stdPrecision, getDecimalFractionLength(valStr, true)),
+                                        );
+                                        return `${formatAmount(valStr, precision)} ${displayCurrency}`;
+                                    })
                                     .join(', ')}
                             </div>
                         </div>

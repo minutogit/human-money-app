@@ -12,7 +12,7 @@ import { usePrivacyDetection } from '../../hooks/usePrivacyDetection';
 import { useRateLimitCooldown } from '../../hooks/useRateLimitCooldown';
 import { logger } from '../../utils/log';
 import { translateError, stringifyError } from '../../utils/errorHelper';
-import { formatAmount } from '../../utils/format';
+import { formatAmount, getDecimalFractionLength } from '../../utils/format';
 import { readFromClipboard } from '../../utils/clipboard';
 import { parseHumocoInput } from '../../utils/humocoUri';
 import {
@@ -577,7 +577,7 @@ export function useSendTransfer({
             return;
         }
 
-        const clonedStats: Record<string, { total: number; count: number }> = {};
+        const clonedStats: Record<string, { total: number; totalExact?: string; count: number }> = {};
         for (const [k, stat] of Object.entries(selectionStats)) {
             clonedStats[k] = { ...stat };
         }
@@ -615,7 +615,11 @@ export function useSendTransfer({
             });
             if (!isMountedRef.current || !txOutcome) return;
             const summaryString = Object.entries(snapshot.selectionStats)
-                .map(([currency, stat]) => `${formatAmount(stat.total.toString())} ${currency}`)
+                .map(([currency, stat]) => {
+                    const valStr = stat.totalExact ?? stat.total.toString();
+                    const decimals = Math.min(18, Math.max(2, getDecimalFractionLength(valStr, true)));
+                    return `${formatAmount(valStr, decimals)} ${currency}`;
+                })
                 .join(', ');
             setConfirmedSnapshot(null);
             dispatch({ type: 'TOGGLE_CONFIRM', value: false });

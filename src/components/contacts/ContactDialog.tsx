@@ -63,6 +63,7 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
     const [hasManualTrustOverride, setHasManualTrustOverride] = useState<boolean>(false);
     const isMountedRef = useRef(true);
     const cardResolveGenRef = useRef(0);
+    const probeGenRef = useRef(0);
     const firstNameRef = useRef(firstName);
     firstNameRef.current = firstName;
     const lastNameRef = useRef(lastName);
@@ -75,6 +76,7 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
         return () => {
             isMountedRef.current = false;
             cardResolveGenRef.current += 1;
+            probeGenRef.current += 1;
         };
     }, []);
 
@@ -118,8 +120,6 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
                   (c) => !isExactSameUserId(c.did, did) && isSameRootIdentity(c.did, did),
               ) || null
             : null;
-
-    const probeGenRef = useRef(0);
 
     useEffect(() => {
         probeGenRef.current += 1;
@@ -327,7 +327,7 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
         setSyncError(null);
         try {
             const info = await marketService.probePublicSync(normalized);
-            if (probeGenRef.current !== gen) return;
+            if (!isMountedRef.current || probeGenRef.current !== gen) return;
             if (!info || !info.dropPub) {
                 setSyncError(t('contacts.syncProbeFailed'));
                 return;
@@ -344,11 +344,11 @@ const ContactDialog: React.FC<ContactDialogProps> = ({
             setSyncs(prev => [...prev, newSync].slice(0, 2));
             setSyncInputUrl('');
         } catch (err) {
-            if (probeGenRef.current !== gen) return;
+            if (!isMountedRef.current || probeGenRef.current !== gen) return;
             console.error("Failed to probe sync service:", err);
             setSyncError(t('contacts.syncProbeFailed'));
         } finally {
-            if (probeGenRef.current === gen) {
+            if (isMountedRef.current && probeGenRef.current === gen) {
                 setIsProbingSync(false);
             }
         }

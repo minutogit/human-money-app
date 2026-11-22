@@ -178,7 +178,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ openClaimsCount }) => {
         <div className="p-3 border-b border-theme-subtle bg-bg-app/30 flex items-center justify-between gap-2 shrink-0">
           <div
             onClick={() => {
-              if (!hasCachedSession && !isAuthenticated) {
+              if (!hasCachedSession && sessionTimeoutSeconds !== 0) {
                 protectAction(async () => {}).catch(() => {});
                 return;
               }
@@ -187,7 +187,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ openClaimsCount }) => {
             onKeyDown={(e) => {
               if (e.key === 'Enter' || e.key === ' ') {
                 e.preventDefault();
-                if (!hasCachedSession && !isAuthenticated) {
+                if (!hasCachedSession && sessionTimeoutSeconds !== 0) {
                   protectAction(async () => {}).catch(() => {});
                   return;
                 }
@@ -198,12 +198,12 @@ export const Sidebar: React.FC<SidebarProps> = ({ openClaimsCount }) => {
             tabIndex={0}
             data-testid="sidebar-profile-button"
             title={
-              !hasCachedSession
+              !hasCachedSession && sessionTimeoutSeconds !== 0
                 ? t('auth.sessionLocked')
                 : t('profile.editProfileAndCardTooltip', 'Profil & Visitenkarte bearbeiten')
             }
             className={`flex items-center gap-3 min-w-0 flex-1 transition-colors cursor-pointer rounded-xl p-1 -m-1 ${
-              !hasCachedSession
+              !hasCachedSession && sessionTimeoutSeconds !== 0
                 ? "hover:bg-theme-warning/10"
                 : "hover:bg-theme-primary/5"
             }`}

@@ -380,7 +380,13 @@ pub fn import_wot_package_impl(
             if let Some(raw_json) = looks_like_provider_filter(bytes) {
                 let now_secs = Utc::now().timestamp().max(0) as u64;
                 let parsed = humoco_wot::parse_and_verify_provider_filter(raw_json, now_secs)
-                    .map_err(|e| human_money_core::Error::Generic(e.to_string()))?;
+                    .map_err(|e| {
+                        human_money_core::Error::Validation(
+                            human_money_core::error::ValidationError::InvalidTransaction(
+                                e.to_string(),
+                            ),
+                        )
+                    })?;
                 Ok(parsed.payload.iss)
             } else {
                 let env: WotFileEnvelope = serde_json::from_slice(bytes)

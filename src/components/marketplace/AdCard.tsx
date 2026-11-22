@@ -11,7 +11,7 @@ import { marketService } from '../../services/marketService';
 
 const adImageCache = new Map<string, string | null>();
 
-export function clearAdImageCacheForTests(): void {
+export function clearAdImageCache(): void {
     adImageCache.clear();
 }
 

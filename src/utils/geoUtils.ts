@@ -151,18 +151,26 @@ export function isValidCoordinateString(input: string): boolean {
     return normalizeCoordinates(input) !== null;
 }
 
+export interface GeocodeAddressOptions {
+    coarseOnly?: boolean;
+}
+
 /**
  * Geocodes an Address object using OpenStreetMap Nominatim.
  * Returns coordinates as a "lat, lon" string or throws an error.
+ * When `coarseOnly` is true (default for `decimals <= 2`), street and house number
+ * are omitted so only city, zip code and country leave the device.
  */
-export async function geocodeAddress(address: Address, decimals: number = 6): Promise<string> {
-    const parts = [
-        address.street,
-        address.houseNumber,
-        address.city,
-        address.zipCode,
-        address.country
-    ].map(p => p?.trim()).filter(Boolean);
+export async function geocodeAddress(
+    address: Address,
+    decimals: number = 6,
+    options?: GeocodeAddressOptions,
+): Promise<string> {
+    const coarseOnly = options?.coarseOnly ?? decimals <= 2;
+    const parts = (coarseOnly
+        ? [address.city, address.zipCode, address.country]
+        : [address.street, address.houseNumber, address.city, address.zipCode, address.country]
+    ).map(p => p?.trim()).filter(Boolean);
 
     if (parts.length === 0) {
         throw new Error("Address is empty");

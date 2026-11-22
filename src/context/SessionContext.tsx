@@ -25,6 +25,7 @@ import { useIntegrityCheck, CheckIntegrityOptions } from '../hooks/useIntegrityC
 import { useSessionHeartbeat } from '../hooks/useSessionHeartbeat';
 import { isBackendError, stringifyError, translateError } from '../utils/errorHelper';
 import { tourBridge } from '../utils/tourBridge';
+import { clearAdImageCache } from '../components/marketplace/AdCard';
 
 export type SecurityLockdownKind = 'handover' | 'clone' | 'fork' | null;
 
@@ -452,6 +453,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         setAccessMode('full');
         setBaseAccessMode('full');
         setSessionTimeoutSeconds(null);
+        clearAdImageCache();
         if (name) setProfileName(name);
         if (folder) {
             folderNameRef.current = folder;
@@ -502,6 +504,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         setAccessMode('full');
         setBaseAccessMode('full');
         setSessionTimeoutSeconds(null);
+        clearAdImageCache();
         setProfileName("");
         setDisplayProfileName("");
         setUserAvatarUrl(null);

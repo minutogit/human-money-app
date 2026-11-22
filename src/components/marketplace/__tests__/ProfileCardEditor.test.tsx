@@ -353,4 +353,105 @@ describe('ProfileCardEditor Component', () => {
     expect(notice).toBeInTheDocument();
     expect(notice).toHaveTextContent('laden');
   });
+
+  it('distinguishes ~1 km coarse geocoding privacy, 1-click hide city/ZIP, and precise OSM notice', async () => {
+    const geoModule = await import('../../../utils/geoUtils');
+    const geocodeMock = vi.mocked(geoModule.geocodeAddress);
+    geocodeMock.mockClear();
+
+    const onSave = vi.fn();
+    render(
+      <UiModeProvider initialMode="expert">
+        <ProfileCardEditor
+          isOpen={true}
+          onClose={vi.fn()}
+          myProfile={mockMyProfile}
+          onSave={onSave}
+        />
+      </UiModeProvider>
+    );
+
+    // ~1 km mode shows coarse inaccuracy hint and coarse OSM note
+    expect(screen.getByTestId('coord-coarse-osm-note')).toBeInTheDocument();
+    expect(screen.getByTestId('coord-coarse-hint')).toBeInTheDocument();
+    expect(screen.queryByTestId('coord-osm-precise-notice')).not.toBeInTheDocument();
+
+    // Clicking geocode in ~1 km mode must NOT send street or houseNumber
+    fireEvent.click(screen.getByTestId('geocode-address-btn'));
+    await waitFor(() => {
+      expect(geocodeMock).toHaveBeenCalledWith(
+        { zipCode: '12345', city: 'Holzhausen', country: 'DE' },
+        2,
+        { coarseOnly: true },
+      );
+    });
+
+    // Once coordinates are set, 1-click button hides PLZ & Ort (visibility.city = 'nobody')
+    const hideBtn = await screen.findByTestId('hide-city-zip-btn');
+    fireEvent.click(hideBtn);
+
+    // Switching to ~100 m precision shows OpenStreetMap street transfer notice and passes full address
+    geocodeMock.mockClear();
+    fireEvent.change(screen.getByTestId('coord-precision-select'), { target: { value: '3' } });
+    expect(screen.getByTestId('coord-osm-precise-notice')).toBeInTheDocument();
+    expect(screen.queryByTestId('coord-coarse-hint')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('geocode-address-btn'));
+    await waitFor(() => {
+      expect(geocodeMock).toHaveBeenCalledWith(
+        mockMyProfile.profile.address,
+        6,
+        { coarseOnly: false },
+      );
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /^Speichern$|^Save$/i }));
+    await waitFor(() => {
+      expect(onSave).toHaveBeenCalledWith(
+        expect.objectContaining({
+          visibility: expect.objectContaining({ city: 'nobody' }),
+        }),
+      );
+    });
+  });
+
+  it('background auto-geocode on save never sends street and skips when coordinates visibility is nobody', async () => {
+    const geoModule = await import('../../../utils/geoUtils');
+    const geocodeMock = vi.mocked(geoModule.geocodeAddress);
+    geocodeMock.mockClear();
+
+    const onSave = vi.fn();
+    const { unmount } = render(
+      <ProfileCardEditor
+        isOpen={true}
+        onClose={vi.fn()}
+        myProfile={{
+          ...mockMyProfile,
+          visibility: { ...mockMyProfile.visibility, coordinates: 'nobody' },
+        }}
+        onSave={onSave}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /^Speichern$|^Save$/i }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect(geocodeMock).not.toHaveBeenCalled();
+
+    unmount();
+    render(
+      <ProfileCardEditor
+        isOpen={true}
+        onClose={vi.fn()}
+        myProfile={mockMyProfile}
+        onSave={onSave}
+      />
+    );
+    fireEvent.click(screen.getByRole('button', { name: /^Speichern$|^Save$/i }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(2));
+    expect(geocodeMock).toHaveBeenCalledWith(
+      { zipCode: '12345', city: 'Holzhausen', country: 'DE' },
+      2,
+      { coarseOnly: true },
+    );
+  });
 });

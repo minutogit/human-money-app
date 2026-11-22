@@ -213,18 +213,19 @@ export function useContactResolver() {
             setIsLoading(false);
         } else {
             setIsLoading(true);
+            const fetchEpoch = cacheEpoch;
             fetchContactsShared(false)
                 .then((snapshot) => {
-                    if (!active) return;
+                    if (!active || fetchEpoch !== cacheEpoch) return;
                     setContacts(snapshot.contacts);
                     setContactMap(snapshot.contactMap);
                 })
                 .catch((error) => {
-                    if (!active) return;
+                    if (!active || fetchEpoch !== cacheEpoch) return;
                     console.error('Failed to load contacts for resolver:', error);
                 })
                 .finally(() => {
-                    if (active) {
+                    if (active && fetchEpoch === cacheEpoch) {
                         setIsLoading(false);
                     }
                 });

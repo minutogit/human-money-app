@@ -1563,12 +1563,14 @@ pub async fn accept_wot_handshake_impl(
                             }
                             merge_post_state_with_service(svc, &baseline, &mut post_state, pw)
                                 .map_err(|e| {
-                                    human_money_core::app_service::AppFacadeError::Generic(
-                                        e.message,
+                                    human_money_core::app_service::AppFacadeError::App(
+                                        human_money_core::error::AppError::StateConflict {
+                                            message: e.message,
+                                        },
                                     )
                                 })?;
                             let post_bytes = serde_json::to_vec(&post_state).map_err(|e| {
-                                human_money_core::app_service::AppFacadeError::Generic(format!(
+                                human_money_core::app_service::AppFacadeError::Json(format!(
                                     "Failed to serialize PoST state: {}",
                                     e
                                 ))

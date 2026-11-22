@@ -601,6 +601,54 @@ describe('WoT Contacts & Trust Ratings', () => {
         });
       });
     });
+
+    it('displays inline wot-password-error when wrong password is submitted for encrypted .wot file', async () => {
+      const mockSummary: WotSummaryDto = {
+        ratedContactsCount: 2,
+        verifiedHumansCount: 1,
+        closeConfidantsCount: 1,
+        importedPeerListsCount: 0,
+      };
+      (invoke as unknown as Mock).mockImplementation((cmd: string) => {
+        if (cmd === 'get_contacts') return Promise.resolve([]);
+        if (cmd === 'get_wot_summary') return Promise.resolve(mockSummary);
+        if (cmd === 'get_wot_providers') return Promise.resolve([]);
+        if (cmd === 'get_app_config') {
+          return Promise.resolve({ uiPreferences: {}, securityPolicy: {}, lifecycle: {} });
+        }
+        if (cmd === 'import_wot_package') {
+          return Promise.reject(new Error('SymmetricEncryption: MacError'));
+        }
+        return Promise.resolve();
+      });
+      (open as unknown as Mock).mockResolvedValue('/tmp/locked.wot');
+      (readFile as unknown as Mock).mockResolvedValue(new Uint8Array([1, 2, 3]));
+
+      render(
+        <UiModeProvider initialMode="expert">
+          <AddressBook onBack={vi.fn()} />
+        </UiModeProvider>
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId('toggle-network-options-button')).toBeInTheDocument();
+      });
+      fireEvent.click(screen.getByTestId('toggle-network-options-button'));
+      fireEvent.click(screen.getByTestId('trust-list-menu-button'));
+
+      const importTile = await screen.findByRole('heading', { name: /Import Trust List|Vertrauensliste einlesen/i });
+      fireEvent.click(importTile);
+
+      const pwInput = await screen.findByPlaceholderText(/Enter access password|Dateipasswort eingeben/i);
+      expect(screen.queryByTestId('wot-password-error')).not.toBeInTheDocument();
+
+      fireEvent.change(pwInput, { target: { value: 'wrong-pass' } });
+      fireEvent.click(screen.getByRole('button', { name: /^Import$|^Importieren$|^Confirm$/i }));
+
+      await waitFor(() => {
+        expect(screen.getByTestId('wot-password-error')).toBeInTheDocument();
+      });
+    });
   });
 
 

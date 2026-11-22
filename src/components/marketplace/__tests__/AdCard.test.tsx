@@ -1,12 +1,12 @@
 import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { AdCard, clearAdImageCacheForTests } from '../AdCard';
+import { AdCard, clearAdImageCache } from '../AdCard';
 import { Ad } from '../../../types';
 import { marketService } from '../../../services/marketService';
 
 describe('AdCard Component', () => {
   beforeEach(() => {
-    clearAdImageCacheForTests();
+    clearAdImageCache();
     vi.restoreAllMocks();
   });
   const nowSecs = Math.floor(Date.now() / 1000);

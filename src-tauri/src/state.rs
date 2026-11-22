@@ -10,6 +10,10 @@ use human_money_core::app_service::{AppFacadeError, AppService};
 use log::{error, info};
 use std::sync::{Mutex, MutexGuard};
 
+fn app_state_err(message: String) -> AppFacadeError {
+    AppFacadeError::App(human_money_core::error::AppError::StateConflict { message })
+}
+
 pub const TRANSACTION_HISTORY_KEY: &str = "transaction_history";
 pub const OUTGOING_BUNDLES_KEY: &str = "outgoing_bundles";
 pub const CONTACTS_DATA_NAME: &str = "address_book";
@@ -1446,7 +1450,7 @@ impl AppState {
             .as_mut()
             .filter(|c| c.generation == current_gen)
             .and_then(|c| field(c).clone())
-            .ok_or_else(|| AppFacadeError::Generic(format!("{} not loaded", name)))
+            .ok_or_else(|| app_state_err(format!("{} not loaded", name)))
     }
 
     pub(crate) fn read_cache_slot_for_service<T: Clone>(
@@ -1856,7 +1860,7 @@ impl AppState {
                     save_encrypted_json(service, key, &default_value, password)
                 };
                 save_res.map_err(|e| {
-                    AppFacadeError::Generic(format!("Failed to save default {}: {}", key, e))
+                    app_state_err(format!("Failed to save default {}: {}", key, e))
                 })?;
                 default_value
             }
@@ -2296,13 +2300,13 @@ impl AppState {
         let guard = self.profile_caches.lock().unwrap();
         let caches = guard
             .as_ref()
-            .ok_or_else(|| AppFacadeError::Generic("AppConfig caches not loaded".to_string()))?;
+            .ok_or_else(|| app_state_err("AppConfig caches not loaded".to_string()))?;
         Ok(AppConfigDto {
             ui_preferences: caches.ui_preferences.clone().unwrap_or_default(),
             security_policy: caches
                 .security_policy
                 .clone()
-                .ok_or_else(|| AppFacadeError::Generic("SecurityPolicy not loaded".to_string()))?,
+                .ok_or_else(|| app_state_err("SecurityPolicy not loaded".to_string()))?,
             lifecycle: caches
                 .internal_lifecycle
                 .clone()
@@ -2318,7 +2322,7 @@ impl AppState {
     pub fn get_cached_contacts(&self) -> Result<Vec<FrontendContact>, AppFacadeError> {
         let guard = self.profile_caches.lock().unwrap();
         let Some(caches) = guard.as_ref() else {
-            return Err(AppFacadeError::Generic(
+            return Err(app_state_err(
                 "Contacts cache not initialized".to_string(),
             ));
         };
@@ -2334,7 +2338,7 @@ impl AppState {
             });
             Ok(contacts)
         } else {
-            Err(AppFacadeError::Generic(
+            Err(app_state_err(
                 "Contacts cache not initialized".to_string(),
             ))
         }
@@ -2405,13 +2409,13 @@ impl AppState {
         ) -> Result<Vec<(&'static str, Vec<u8>)>, AppFacadeError>,
     ) -> Result<(), AppFacadeError> {
         let validated_did = human_money_core::ValidatedUserId::parse(&contact.did)
-            .map_err(|e| AppFacadeError::Generic(format!("Invalid contact DID: {}", e)))?;
+            .map_err(|e| AppFacadeError::ValidationFailed(format!("Invalid contact DID: {}", e)))?;
         contact.did = validated_did.into_string();
         let mut address_book: FrontendAddressBook =
             load_encrypted_json_or_default(service, CONTACTS_DATA_NAME, password)?;
 
         let can_did = canonicalize_did(&contact.did)
-            .map_err(|e| AppFacadeError::Generic(format!("Invalid contact DID: {}", e)))?;
+            .map_err(|e| AppFacadeError::ValidationFailed(format!("Invalid contact DID: {}", e)))?;
 
         let own_ids: Option<(String, String)> = service
             .with_wallet(|w| {
@@ -2425,7 +2429,7 @@ impl AppState {
             .as_ref()
             .is_some_and(|(own_uid, _)| contact.did == *own_uid)
         {
-            return Err(AppFacadeError::Generic(
+            return Err(AppFacadeError::ValidationFailed(
                 "Cannot add your own active profile as a contact".to_string(),
             ));
         }
@@ -2435,7 +2439,7 @@ impl AppState {
             .is_some_and(|(_, own_can)| *own_can == can_did);
 
         if is_own_root && contact.trust_level.is_some() {
-            return Err(AppFacadeError::Generic(
+            return Err(AppFacadeError::ValidationFailed(
                 "Self trust forbidden: cannot assign a trust level to your own subaccount"
                     .to_string(),
             ));
@@ -2589,7 +2593,7 @@ impl AppState {
 
             if let Some(level) = contact.trust_level {
                 if level > 3 {
-                    return Err(AppFacadeError::Generic(format!(
+                    return Err(AppFacadeError::ValidationFailed(format!(
                         "Invalid trust level: {}",
                         level
                     )));
@@ -2600,7 +2604,7 @@ impl AppState {
                     reg.policy.own_list_max_hops
                 };
                 reg.set_contact_trust(&can_did, level, hops, now_secs)
-                    .map_err(|e| AppFacadeError::Generic(e.to_string()))?;
+                    .map_err(|e| AppFacadeError::ValidationFailed(e.to_string()))?;
                 if level == 0 {
                     self.prune_local_data_on_trust_withdrawal(
                         service,
@@ -2618,7 +2622,7 @@ impl AppState {
             } else {
                 let removed = reg
                     .remove_contact_trust(&can_did)
-                    .map_err(|e| AppFacadeError::Generic(e.to_string()))?;
+                    .map_err(|e| AppFacadeError::ValidationFailed(e.to_string()))?;
                 if removed {
                     self.prune_local_data_on_trust_withdrawal(
                         service,
@@ -2674,13 +2678,13 @@ impl AppState {
         address_book.contacts.insert(contact.did.clone(), contact);
 
         let ab_bytes = serde_json::to_vec(&address_book).map_err(|e| {
-            AppFacadeError::Generic(format!("Failed to serialize address book: {}", e))
+            AppFacadeError::Json(format!("Failed to serialize address book: {}", e))
         })?;
         let mut owned_blobs: Vec<(&str, Vec<u8>)> = Vec::with_capacity(2 + companion_blobs.len());
         owned_blobs.push((CONTACTS_DATA_NAME, ab_bytes));
         if let Some(ref reg) = updated_wot_reg {
             let reg_bytes = serde_json::to_vec(reg).map_err(|e| {
-                AppFacadeError::Generic(format!("Failed to serialize TrustRegister: {}", e))
+                AppFacadeError::Json(format!("Failed to serialize TrustRegister: {}", e))
             })?;
             owned_blobs.push((WOT_DATA_NAME, reg_bytes));
         }
@@ -2692,7 +2696,7 @@ impl AppState {
             .collect();
         service
             .save_encrypted_batch(&batch_refs, password)
-            .map_err(|e| AppFacadeError::Generic(format!("Failed to save contact batch: {}", e)))?;
+            .map_err(|e| app_state_err(format!("Failed to save contact batch: {}", e)))?;
 
         self.set_cached_contacts_for_service(service, Some(address_book.clone()));
         if let Some(reg) = updated_wot_reg {
@@ -2767,7 +2771,7 @@ impl AppState {
                 .unwrap_or(0);
             let removed = reg
                 .remove_contact_trust(target_key)
-                .map_err(|e| AppFacadeError::Generic(e.to_string()))?;
+                .map_err(|e| AppFacadeError::ValidationFailed(e.to_string()))?;
             if removed {
                 self.prune_local_data_on_trust_withdrawal(
                     service,
@@ -2790,7 +2794,7 @@ impl AppState {
 
         if changed {
             save_encrypted_json(service, CONTACTS_DATA_NAME, &address_book, password).map_err(
-                |e| AppFacadeError::Generic(format!("Failed to save address book: {}", e)),
+                |e| app_state_err(format!("Failed to save address book: {}", e)),
             )?;
 
             self.set_cached_contacts_for_service(service, Some(address_book.clone()));
@@ -2817,14 +2821,14 @@ impl AppState {
             let guard = self
                 .profile_caches
                 .lock()
-                .map_err(|_| AppFacadeError::Generic("History cache lock poisoned".into()))?;
+                .map_err(|_| app_state_err("History cache lock poisoned".into()))?;
             let caches = guard
                 .as_ref()
-                .ok_or_else(|| AppFacadeError::Generic("History cache not initialized".into()))?;
+                .ok_or_else(|| app_state_err("History cache not initialized".into()))?;
             let history = caches
                 .history
                 .clone()
-                .ok_or_else(|| AppFacadeError::Generic("History cache not initialized".into()))?;
+                .ok_or_else(|| app_state_err("History cache not initialized".into()))?;
             (history, caches.outgoing_bundles.clone())
         };
 
@@ -2832,10 +2836,10 @@ impl AppState {
             Some(o) => o,
             None => {
                 let mut service = self.lock_service().map_err(|e| {
-                    AppFacadeError::Generic(format!("Service lock unavailable: {}", e.message))
+                    app_state_err(format!("Service lock unavailable: {}", e.message))
                 })?;
                 load_outgoing_bundles(&mut service, None)
-                    .map_err(|e| AppFacadeError::Generic(e.message))?
+                    .map_err(|e| app_state_err(e.message))?
             }
         };
 
@@ -2918,7 +2922,7 @@ impl AppState {
         }
         let baseline_history = self.load_history_from_disk(service, password)?;
         let baseline_outgoing = load_outgoing_bundles(service, password)
-            .map_err(|e| AppFacadeError::Generic(e.message))?;
+            .map_err(|e| app_state_err(e.message))?;
         let batch = prepare_outgoing_history_and_bundle_companions(
             &baseline_history,
             &baseline_outgoing,
@@ -3056,7 +3060,7 @@ impl AppState {
         match (
             self.load_history_from_disk(service, Some(credential)),
             load_outgoing_bundles(service, Some(credential))
-                .map_err(|e| AppFacadeError::Generic(e.message)),
+                .map_err(|e| app_state_err(e.message)),
         ) {
             (Ok(mut history), Ok(mut outgoing)) => {
                 let retention_duration = Duration::days(BUNDLE_RETENTION_DAYS);
@@ -3350,7 +3354,7 @@ impl AppState {
         service.with_wallet_and_identity(|_wallet, identity| {
             let signer = DidWotSigner::from_identity(identity);
             reg.ensure_own_list_signed(&signer, now_secs).map_err(|e| {
-                AppFacadeError::Generic(format!("Failed to sign WoT trust list: {}", e))
+                app_state_err(format!("Failed to sign WoT trust list: {}", e))
             })
         })?
     }
@@ -3363,7 +3367,7 @@ impl AppState {
         info!("Loading WoT register from disk...");
         let own_user_id = service.with_wallet(|w| w.get_user_id().to_string())?;
         let own_can_did = canonicalize_did(&own_user_id)
-            .map_err(|e| AppFacadeError::Generic(format!("Invalid own wallet DID: {}", e)))?;
+            .map_err(|e| AppFacadeError::ValidationFailed(format!("Invalid own wallet DID: {}", e)))?;
         let mut reg = match load_encrypted_json_opt::<humoco_wot::TrustRegister>(
             service,
             WOT_DATA_NAME,
@@ -3374,7 +3378,7 @@ impl AppState {
                 info!("No WoT register found, creating new one");
                 humoco_wot::TrustRegister::new(&own_can_did, humoco_wot::WotPolicy::default())
                     .map_err(|e| {
-                        AppFacadeError::Generic(format!(
+                        app_state_err(format!(
                             "Failed to initialize TrustRegister: {}",
                             e
                         ))
@@ -3414,7 +3418,7 @@ impl AppState {
         password: Option<&str>,
     ) -> Result<(), AppFacadeError> {
         save_encrypted_json(service, WOT_DATA_NAME, reg, password)
-            .map_err(|e| AppFacadeError::Generic(format!("Failed to save TrustRegister: {}", e)))?;
+            .map_err(|e| app_state_err(format!("Failed to save TrustRegister: {}", e)))?;
         self.write_cache_slot_for_service(service, |c| &mut c.wot, Some(reg.clone()));
         Ok(())
     }
