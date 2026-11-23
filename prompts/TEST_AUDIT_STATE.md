@@ -1,14 +1,14 @@
 # Test Audit State
 
 - **Repository:** `/home/basti/Coding/humoco/human-money-app`
-- **Updated at HEAD:** `dbf62cf`
-- **Total Test Files:** 165 | **Total Test Functions:** 1212
+- **Updated at HEAD:** `a5f8e0c`
+- **Total Test Files:** 165 | **Total Test Functions:** 1227
 
 | Test File | Prio | Tests | Scan (C/H/M) | Status | Verified SHA | Proof / Notes |
 |---|---|---:|---|---|---|---|
-| `src-tauri/src/checkout/tests.rs` | P1 | 11 | 1/0/54 | ⚪ Pending | — | — |
-| `crates/humoco-market/tests/recovery_tests.rs` | P1 | 23 | 0/38/0 | ⚪ Pending | — | — |
-| `crates/humoco-market/tests/security_audit_s02_market_loop.rs` | P1 | 9 | 0/36/3 | ⚪ Pending | — | — |
+| `src-tauri/src/checkout/tests.rs` | P1 | 19 | 0/0/0 | 🟢 Verified | `a5f8e0c` | 19/19 pass; cargo-mutants precommit.rs collect_verified_precommit_conflicts 5/6 viable caught (2 unviable, 1 missed); Revert-Red trusted_keys.rs:176 S04-F8 confirmed |
+| `crates/humoco-market/tests/recovery_tests.rs` | P1 | 23 | 0/0/0 | 🟢 Verified | `a5f8e0c` | 23/23 pass; cargo-mutants recovery.rs pass1 42/46 viable caught (1 unviable) + pass2 validate_kdf_params 25/25 caught after inclusive KDF bounds |
+| `crates/humoco-market/tests/security_audit_s02_market_loop.rs` | P1 | 16 | 0/0/0 | 🟢 Verified | `a5f8e0c` | 16/16 pass; fixed wrong-gate VP8L chunk-size placebo; cargo-mutants media.rs 19/28 caught, sd_card.rs 19/27 caught |
 | `crates/humoco-market/tests/slot_tests.rs` | P1 | 18 | 0/23/3 | ⚪ Pending | — | — |
 | `src-tauri/src/services/market_service/tests.rs` | P1 | 24 | 0/22/16 | ⚪ Pending | — | — |
 | `crates/humoco-market/tests/post_tests.rs` | P1 | 12 | 0/18/1 | ⚪ Pending | — | — |
