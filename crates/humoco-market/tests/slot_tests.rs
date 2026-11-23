@@ -11,6 +11,79 @@ use humoco_market::{
 };
 use proptest::prelude::*;
 
+fn assert_err_variant<T: std::fmt::Debug>(
+    res: Result<T, MarketError>,
+    variant_name: &str,
+    expected_substr: &str,
+    extract: impl FnOnce(&MarketError) -> Option<&str>,
+) {
+    match res {
+        Err(ref err) => match extract(err) {
+            Some(msg) => assert!(
+                msg.contains(expected_substr),
+                "Expected MarketError::{} containing {:?}, got {:?}: {:?}",
+                variant_name,
+                expected_substr,
+                err,
+                msg
+            ),
+            None => panic!(
+                "Expected MarketError::{}({:?}), got different variant {:?}",
+                variant_name, expected_substr, err
+            ),
+        },
+        Ok(val) => panic!(
+            "Expected Err(MarketError::{}({:?})), got Ok({:?})",
+            variant_name, expected_substr, val
+        ),
+    }
+}
+
+fn assert_validation_err<T: std::fmt::Debug>(res: Result<T, MarketError>, expected_substr: &str) {
+    assert_err_variant(res, "Validation", expected_substr, |e| match e {
+        MarketError::Validation(msg) => Some(msg.as_str()),
+        _ => None,
+    });
+}
+
+fn assert_slot_err<T: std::fmt::Debug>(res: Result<T, MarketError>, expected_substr: &str) {
+    assert_err_variant(res, "Slot", expected_substr, |e| match e {
+        MarketError::Slot(msg) => Some(msg.as_str()),
+        _ => None,
+    });
+}
+
+fn assert_identity_err<T: std::fmt::Debug>(res: Result<T, MarketError>, expected_substr: &str) {
+    assert_err_variant(res, "Identity", expected_substr, |e| match e {
+        MarketError::Identity(msg) => Some(msg.as_str()),
+        _ => None,
+    });
+}
+
+fn assert_crypto_err<T: std::fmt::Debug>(res: Result<T, MarketError>, expected_substr: &str) {
+    assert_err_variant(res, "Crypto", expected_substr, |e| match e {
+        MarketError::Crypto(msg) => Some(msg.as_str()),
+        _ => None,
+    });
+}
+
+fn assert_serialization_err<T: std::fmt::Debug>(res: Result<T, MarketError>, expected_substr: &str) {
+    assert_err_variant(res, "Serialization", expected_substr, |e| match e {
+        MarketError::Serialization(msg) => Some(msg.as_str()),
+        _ => None,
+    });
+}
+
+fn assert_payload_too_large_err<T: std::fmt::Debug>(
+    res: Result<T, MarketError>,
+    expected_substr: &str,
+) {
+    assert_err_variant(res, "PayloadTooLarge", expected_substr, |e| match e {
+        MarketError::PayloadTooLarge(msg) => Some(msg.as_str()),
+        _ => None,
+    });
+}
+
 fn dummy_sd_card(did: &str, v: u64) -> SdCard {
     SdCard {
         jws: format!("header.{}.signature", did),
@@ -105,9 +178,12 @@ fn test_recipient_padding_bucket_sizes() {
     check_bucket(129, 256);
     check_bucket(256, 256);
 
-    // 257 readers -> Err
+    // 257 readers -> Err(Validation)
     let readers_257 = generate_readers(257);
-    assert!(seal_slot_blob(&bundle, &readers_257, 65536).is_err());
+    assert_validation_err(
+        seal_slot_blob(&bundle, &readers_257, 65536),
+        "Too many recipients: 257 > 256",
+    );
 }
 
 #[test]
@@ -245,7 +321,10 @@ fn test_slot_deflate_compression_and_zip_bomb_cap() {
     let oversized_zeros = vec![0u8; MAX_DECOMPRESSED_SLOT_BYTES + 1024 * 1024];
     let bomb_blob = seal_slot_payload(&oversized_zeros, &[reader_vk], 65_536).unwrap();
     let open_err = open_slot_payload(&bomb_blob, &reader_x_sk);
-    assert!(matches!(open_err, Err(MarketError::PayloadTooLarge(_))));
+    assert_payload_too_large_err(
+        open_err,
+        "Decompressed slot payload exceeds 8388608 bytes safety limit",
+    );
 }
 
 #[test]
@@ -449,7 +528,7 @@ fn test_multi_class_slot_blob_validation_and_errors() {
 
     // 0 classes -> Err(Validation)
     let err_empty = seal_multi_class_slot_blob(&[], 65536);
-    assert!(matches!(err_empty, Err(MarketError::Validation(_))));
+    assert_validation_err(err_empty, "Classes count must be between 1 and 4, got 0");
 
     // 5 classes -> Err(Validation) (1..=4 supported)
     let five_classes: Vec<(&[u8], &[VerifyingKey])> = vec![
@@ -460,48 +539,90 @@ fn test_multi_class_slot_blob_validation_and_errors() {
         (payload, std::slice::from_ref(&reader_vk)),
     ];
     let err_five = seal_multi_class_slot_blob(&five_classes, 131_072);
-    assert!(matches!(err_five, Err(MarketError::Validation(_))));
+    assert_validation_err(err_five, "Classes count must be between 1 and 4, got 5");
 
     // Class with empty readers -> Err(Validation)
     let empty_readers: Vec<(&[u8], &[VerifyingKey])> = vec![(payload, &[])];
     let err_readers = seal_multi_class_slot_blob(&empty_readers, 65536);
-    assert!(matches!(err_readers, Err(MarketError::Validation(_))));
+    assert_validation_err(err_readers, "Class 1 has empty reader list");
 
-    // Payload too large
+    // Payload too large (single sub-blob budget & combined multi-class budget)
     let valid_single: Vec<(&[u8], &[VerifyingKey])> =
         vec![(payload, std::slice::from_ref(&reader_vk))];
     let err_too_large = seal_multi_class_slot_blob(&valid_single, 100);
-    assert!(matches!(
-        err_too_large,
-        Err(MarketError::PayloadTooLarge(_))
-    ));
+    assert_payload_too_large_err(err_too_large, "exceeds max_bytes 100");
 
-    // Truncated buffers
+    let single_sub_blob =
+        seal_slot_payload(payload, std::slice::from_ref(&reader_vk), 65_536).unwrap();
+    let two_class_cap = single_sub_blob.len() + 50;
+    let two_classes: Vec<(&[u8], &[VerifyingKey])> = vec![
+        (payload, std::slice::from_ref(&reader_vk)),
+        (payload, std::slice::from_ref(&reader_vk)),
+    ];
+    let err_combined = seal_multi_class_slot_blob(&two_classes, two_class_cap);
+    assert_payload_too_large_err(
+        err_combined,
+        &format!("exceeds max_total_bytes {}", two_class_cap),
+    );
+
+    // Positive baseline on valid multi-class blob before negative header/truncation checks
     let valid_blob = seal_multi_class_slot_blob(&valid_single, 65536).unwrap();
+    assert_eq!(
+        open_multi_class_slot_blob(&valid_blob, &reader_x_sk).unwrap(),
+        Some(payload.to_vec())
+    );
 
     // Too short (< 9 bytes)
-    assert!(open_multi_class_slot_blob(&valid_blob[0..8], &reader_x_sk).is_err());
+    assert_slot_err(
+        open_multi_class_slot_blob(&valid_blob[0..8], &reader_x_sk),
+        "Multi-class SlotBlob too short",
+    );
 
     // Bad magic
     let mut bad_magic = valid_blob.clone();
     bad_magic[0] = b'X';
-    assert!(open_multi_class_slot_blob(&bad_magic, &reader_x_sk).is_err());
+    assert_slot_err(
+        open_multi_class_slot_blob(&bad_magic, &reader_x_sk),
+        "Invalid multi-class SlotBlob magic header",
+    );
 
     // Count is 0
     let mut bad_count = valid_blob.clone();
     bad_count[8] = 0;
-    assert!(open_multi_class_slot_blob(&bad_count, &reader_x_sk).is_err());
+    assert_slot_err(
+        open_multi_class_slot_blob(&bad_count, &reader_x_sk),
+        "Invalid multi-class count: 0",
+    );
 
     // Count is 5 (max is 4)
     let mut bad_count5 = valid_blob.clone();
     bad_count5[8] = 5;
-    assert!(open_multi_class_slot_blob(&bad_count5, &reader_x_sk).is_err());
+    assert_slot_err(
+        open_multi_class_slot_blob(&bad_count5, &reader_x_sk),
+        "Invalid multi-class count: 5",
+    );
 
-    // Truncated during length header or sub-blob
-    for len in 9..valid_blob.len() - 1 {
-        let truncated = &valid_blob[..len];
-        assert!(open_multi_class_slot_blob(truncated, &reader_x_sk).is_err());
+    // Truncated during length header (9..13) or sub-blob body (13..len)
+    for len in 9..13 {
+        assert_slot_err(
+            open_multi_class_slot_blob(&valid_blob[..len], &reader_x_sk),
+            "Truncated class length in multi-class SlotBlob",
+        );
     }
+    for len in 13..valid_blob.len() {
+        assert_slot_err(
+            open_multi_class_slot_blob(&valid_blob[..len], &reader_x_sk),
+            "Truncated sub-blob in multi-class SlotBlob",
+        );
+    }
+
+    // Trailing unexpected bytes rejected
+    let mut trailing_multi = valid_blob.clone();
+    trailing_multi.push(0xAA);
+    assert_slot_err(
+        open_multi_class_slot_blob(&trailing_multi, &reader_x_sk),
+        "Trailing unexpected bytes in multi-class SlotBlob",
+    );
 }
 
 proptest! {
@@ -511,8 +632,27 @@ proptest! {
     fn proptest_open_multi_class_arbitrary_bytes_no_panic(bytes in prop::collection::vec(any::<u8>(), 0..1024)) {
         let sk = SigningKey::from_bytes(&[42u8; 32]);
         let x_sk = ed25519_sk_to_x25519_sk(&sk);
-        // Must never panic on random input
-        let _ = open_multi_class_slot_blob(&bytes, &x_sk);
+        let res = open_multi_class_slot_blob(&bytes, &x_sk);
+        if bytes.len() < 9 {
+            prop_assert!(
+                matches!(&res, Err(MarketError::Slot(msg)) if msg.contains("Multi-class SlotBlob too short")),
+                "expected short error for len={}, got {:?}",
+                bytes.len(),
+                res
+            );
+        } else if &bytes[0..8] != SLOT_MULTI_MAGIC {
+            prop_assert!(
+                matches!(&res, Err(MarketError::Slot(msg)) if msg.contains("Invalid multi-class SlotBlob magic header")),
+                "expected bad magic error, got {:?}",
+                res
+            );
+        } else {
+            prop_assert!(
+                matches!(res, Err(MarketError::Slot(_)) | Err(MarketError::Crypto(_)) | Ok(None)),
+                "unexpected outcome on arbitrary multi-class bytes: {:?}",
+                res
+            );
+        }
     }
 
     #[test]
@@ -525,7 +665,13 @@ proptest! {
 
     #[test]
     fn proptest_unpad_backup_slot_arbitrary_bytes_no_panic(bytes in prop::collection::vec(any::<u8>(), 0..1024)) {
-        let _ = unpad_backup_slot_bytes(&bytes);
+        let res = unpad_backup_slot_bytes(&bytes);
+        prop_assert!(
+            matches!(&res, Err(MarketError::Slot(msg)) if msg.contains("Invalid backup slot size:")),
+            "expected Invalid backup slot size for len={}, got {:?}",
+            bytes.len(),
+            res
+        );
     }
 }
 
@@ -558,45 +704,67 @@ fn test_backup_slot_padding_rejections_and_limits() {
     use rand::{rngs::OsRng, RngCore};
 
     // Empty payload rejected
-    assert!(matches!(
+    assert_validation_err(
         pad_backup_slot_bytes(&[], DROP_BACKUP_MAX_BYTES),
-        Err(MarketError::Validation(_))
-    ));
+        "Backup payload cannot be empty",
+    );
 
     // Exceeds max_bytes (incompressible 70 KB cannot fit in 64 KB)
     let mut payload = vec![0u8; 70 * 1024];
     OsRng.fill_bytes(&mut payload);
-    let err_too_large = pad_backup_slot_bytes(&payload, 65_536);
-    assert!(matches!(
-        err_too_large,
-        Err(MarketError::PayloadTooLarge(_))
-    ));
+    assert_payload_too_large_err(
+        pad_backup_slot_bytes(&payload, 65_536),
+        "Padded backup slot size 131072 exceeds max allowed 65536",
+    );
 
-    // Valid padding
+    // Positive baseline: valid padding roundtrips cleanly
     let valid_padded = pad_backup_slot_bytes(&[0x77u8; 100], DROP_BACKUP_MAX_BYTES).unwrap();
+    assert_eq!(unpad_backup_slot_bytes(&valid_padded).unwrap(), vec![0x77u8; 100]);
 
     // Rejection: size too short (< 65536)
-    assert!(unpad_backup_slot_bytes(&valid_padded[0..100]).is_err());
+    assert_slot_err(
+        unpad_backup_slot_bytes(&valid_padded[0..100]),
+        "Invalid backup slot size: 100",
+    );
 
     // Rejection: size not a multiple of 65,536
     let mut bad_len = valid_padded.clone();
     bad_len.push(0);
-    assert!(unpad_backup_slot_bytes(&bad_len).is_err());
+    assert_slot_err(
+        unpad_backup_slot_bytes(&bad_len),
+        "Invalid backup slot size: 65537",
+    );
 
     // Rejection: bad magic
     let mut bad_magic = valid_padded.clone();
     bad_magic[0] = b'X';
-    assert!(unpad_backup_slot_bytes(&bad_magic).is_err());
+    assert_slot_err(
+        unpad_backup_slot_bytes(&bad_magic),
+        "Invalid backup slot magic header",
+    );
 
     // Rejection: inner_len == 0
     let mut bad_zero_len = valid_padded.clone();
     bad_zero_len[8..12].copy_from_slice(&0u32.to_be_bytes());
-    assert!(unpad_backup_slot_bytes(&bad_zero_len).is_err());
+    assert_slot_err(
+        unpad_backup_slot_bytes(&bad_zero_len),
+        "Invalid inner backup payload length: 0 in slot size 65536",
+    );
 
-    // Rejection: inner_len exceeds slot length
+    // Rejection: inner_len exceeds slot length (off-by-one boundary 65525 -> 12 + 65525 > 65536, plus huge)
+    let mut bad_boundary_len = valid_padded.clone();
+    bad_boundary_len[8..12].copy_from_slice(&65_525u32.to_be_bytes());
+    assert_slot_err(
+        unpad_backup_slot_bytes(&bad_boundary_len),
+        "Invalid inner backup payload length: 65525 in slot size 65536",
+    );
+
     let mut bad_huge_len = valid_padded.clone();
     bad_huge_len[8..12].copy_from_slice(&1_000_000u32.to_be_bytes());
-    assert!(unpad_backup_slot_bytes(&bad_huge_len).is_err());
+    assert_slot_err(
+        unpad_backup_slot_bytes(&bad_huge_len),
+        "Invalid inner backup payload length: 1000000 in slot size 65536",
+    );
 }
 
 #[test]
@@ -682,21 +850,30 @@ fn s02_x1_card_bundle_writer_attestation_rejects_tampered_and_mismatched_signers
     let reader_x_sk = ed25519_sk_to_x25519_sk(&reader_sk);
 
     // 1. Mismatched signing key vs writer_did rejected at sign & build time
-    assert!(sign_card_bundle(vec![], &writer_did, &other_sk).is_err());
-    assert!(build_card_bundle(
-        None,
-        &[],
-        None,
-        1_700_000_000,
-        &|_| 1,
-        16,
-        65_536,
-        &writer_did,
-        &other_sk
-    )
-    .is_err());
-    assert!(sign_card_bundle(vec![], &format!(" {}", writer_did), &writer_sk).is_err());
+    assert_identity_err(
+        sign_card_bundle(vec![], &writer_did, &other_sk),
+        "CardBundle signing_key does not match writer_did public key",
+    );
+    assert_identity_err(
+        build_card_bundle(
+            None,
+            &[],
+            None,
+            1_700_000_000,
+            &|_| 1,
+            16,
+            65_536,
+            &writer_did,
+            &other_sk,
+        ),
+        "CardBundle signing_key does not match writer_did public key",
+    );
+    assert_identity_err(
+        sign_card_bundle(vec![], &format!(" {}", writer_did), &writer_sk),
+        "CardBundle writer_did must be canonical without outer whitespace",
+    );
 
+    // Positive baseline: validly signed bundle seals and opens cleanly
     let valid_bundle = sign_card_bundle(
         vec![CardEnvelope {
             card_wire: "hdr.pay.sig~".to_string(),
@@ -706,18 +883,29 @@ fn s02_x1_card_bundle_writer_attestation_rejects_tampered_and_mismatched_signers
         &writer_sk,
     )
     .unwrap();
+    let valid_blob = seal_slot_blob(&valid_bundle, &[reader_vk], 65_536).unwrap();
+    assert_eq!(
+        open_slot_blob(&valid_blob, &reader_x_sk).unwrap(),
+        Some(valid_bundle.clone())
+    );
 
-    // 2. Tampered writer_did (after signing) fails seal & open
+    // 2. Tampered writer_did (after signing) fails seal & open signature verification
     let mut tampered_did = valid_bundle.clone();
     tampered_did.writer_did = other_did.clone();
-    assert!(seal_slot_blob(&tampered_did, &[reader_vk], 65_536).is_err());
+    assert_crypto_err(
+        seal_slot_blob(&tampered_did, &[reader_vk], 65_536),
+        "CardBundle writer signature verification failed",
+    );
     let tampered_did_blob = seal_slot_payload(
         &serde_json::to_vec(&tampered_did).unwrap(),
         &[reader_vk],
         65_536,
     )
     .unwrap();
-    assert!(open_slot_blob(&tampered_did_blob, &reader_x_sk).is_err());
+    assert_crypto_err(
+        open_slot_blob(&tampered_did_blob, &reader_x_sk),
+        "CardBundle writer signature verification failed",
+    );
 
     // 3. Tampered writer_sig (flipped nibble & uppercase hex) fails open
     let mut tampered_sig = valid_bundle.clone();
@@ -733,7 +921,10 @@ fn s02_x1_card_bundle_writer_attestation_rejects_tampered_and_mismatched_signers
         65_536,
     )
     .unwrap();
-    assert!(open_slot_blob(&tampered_sig_blob, &reader_x_sk).is_err());
+    assert_crypto_err(
+        open_slot_blob(&tampered_sig_blob, &reader_x_sk),
+        "CardBundle writer signature verification failed",
+    );
 
     let mut upper_sig = valid_bundle.clone();
     upper_sig.writer_sig = upper_sig.writer_sig.to_ascii_uppercase();
@@ -743,9 +934,12 @@ fn s02_x1_card_bundle_writer_attestation_rejects_tampered_and_mismatched_signers
         65_536,
     )
     .unwrap();
-    assert!(open_slot_blob(&upper_sig_blob, &reader_x_sk).is_err());
+    assert_crypto_err(
+        open_slot_blob(&upper_sig_blob, &reader_x_sk),
+        "CardBundle writer_sig must be a 128-character lowercase hex string",
+    );
 
-    // 4. Tampered envelope hops or card_wire fails open
+    // 4. Tampered envelope hops fails open signature verification
     let mut tampered_hops = valid_bundle.clone();
     tampered_hops.envelopes[0].hops = 2;
     let tampered_hops_blob = seal_slot_payload(
@@ -754,12 +948,18 @@ fn s02_x1_card_bundle_writer_attestation_rejects_tampered_and_mismatched_signers
         65_536,
     )
     .unwrap();
-    assert!(open_slot_blob(&tampered_hops_blob, &reader_x_sk).is_err());
+    assert_crypto_err(
+        open_slot_blob(&tampered_hops_blob, &reader_x_sk),
+        "CardBundle writer signature verification failed",
+    );
 
     // 5. Legacy unsigned JSON & unknown JSON fields rejected by #[serde(deny_unknown_fields)]
     let legacy_json = br#"{"envelopes":[{"card_wire":"hdr.pay.sig~","hops":1}]}"#;
     let legacy_blob = seal_slot_payload(legacy_json, &[reader_vk], 65_536).unwrap();
-    assert!(open_slot_blob(&legacy_blob, &reader_x_sk).is_err());
+    assert_serialization_err(
+        open_slot_blob(&legacy_blob, &reader_x_sk),
+        "missing field `writer_did`",
+    );
 
     let unknown_field_json = format!(
         r#"{{"writer_did":"{}","writer_sig":"{}","envelopes":[],"extra":1}}"#,
@@ -767,7 +967,34 @@ fn s02_x1_card_bundle_writer_attestation_rejects_tampered_and_mismatched_signers
     );
     let unknown_blob =
         seal_slot_payload(unknown_field_json.as_bytes(), &[reader_vk], 65_536).unwrap();
-    assert!(open_slot_blob(&unknown_blob, &reader_x_sk).is_err());
+    assert_serialization_err(
+        open_slot_blob(&unknown_blob, &reader_x_sk),
+        "unknown field `extra`",
+    );
+}
+
+fn sign_rendered_card(
+    did: &str,
+    sk: &SigningKey,
+    valid_until: u64,
+    max_hops: u8,
+    items: Vec<(CardItem, u8)>,
+) -> String {
+    let card = sign_sd_card(
+        CardPayloadInput {
+            did: did.to_string(),
+            v: 10,
+            valid_until,
+            max_hops,
+            ad_count: 0,
+            allow_inquiries: false,
+            drops: vec![],
+        },
+        items,
+        sk,
+    )
+    .unwrap();
+    humoco_market::render_wire(&card, 1, humoco_market::WireFilter::Full).unwrap()
 }
 
 #[test]
@@ -788,17 +1015,11 @@ fn s02_x1_forwarded_card_claiming_hops_1_clamped_by_writer_did() {
     let alice_vk = alice_sk.verifying_key();
     let alice_x_sk = ed25519_sk_to_x25519_sk(&alice_sk);
 
-    // Carol allows max_hops = 2, with a hop-1-only phone and hop-2 name
-    let carol_card = sign_sd_card(
-        CardPayloadInput {
-            did: carol_did.clone(),
-            v: 10,
-            valid_until,
-            max_hops: 2,
-            ad_count: 0,
-            allow_inquiries: false,
-            drops: vec![],
-        },
+    let carol_wire = sign_rendered_card(
+        &carol_did,
+        &carol_sk,
+        valid_until,
+        2,
         vec![
             (
                 CardItem::Name {
@@ -809,23 +1030,12 @@ fn s02_x1_forwarded_card_claiming_hops_1_clamped_by_writer_did() {
             ),
             (CardItem::Phone("+49-123".to_string()), 1),
         ],
-        &carol_sk,
-    )
-    .unwrap();
-    let carol_wire =
-        humoco_market::render_wire(&carol_card, 1, humoco_market::WireFilter::Full).unwrap();
-
-    // Dave sets max_hops = 1 (must NEVER propagate via forwarder)
-    let dave_card = sign_sd_card(
-        CardPayloadInput {
-            did: dave_did.clone(),
-            v: 10,
-            valid_until,
-            max_hops: 1,
-            ad_count: 0,
-            allow_inquiries: false,
-            drops: vec![],
-        },
+    );
+    let dave_wire = sign_rendered_card(
+        &dave_did,
+        &dave_sk,
+        valid_until,
+        1,
         vec![(
             CardItem::Name {
                 first_name: Some("Dave".to_string()),
@@ -833,24 +1043,13 @@ fn s02_x1_forwarded_card_claiming_hops_1_clamped_by_writer_did() {
             },
             1,
         )],
-        &dave_sk,
-    )
-    .unwrap();
-    let dave_wire =
-        humoco_market::render_wire(&dave_card, 1, humoco_market::WireFilter::Full).unwrap();
-
-    // Bob's own card (with different subaccount prefix than writer_did, same root key!)
+    );
     let bob_card_did = create_user_id(&bob_sk.verifying_key(), Some("shop")).unwrap();
-    let bob_card = sign_sd_card(
-        CardPayloadInput {
-            did: bob_card_did.clone(),
-            v: 10,
-            valid_until,
-            max_hops: 2,
-            ad_count: 0,
-            allow_inquiries: false,
-            drops: vec![],
-        },
+    let bob_wire = sign_rendered_card(
+        &bob_card_did,
+        &bob_sk,
+        valid_until,
+        2,
         vec![(
             CardItem::Name {
                 first_name: Some("Bob".to_string()),
@@ -858,11 +1057,7 @@ fn s02_x1_forwarded_card_claiming_hops_1_clamped_by_writer_did() {
             },
             1,
         )],
-        &bob_sk,
-    )
-    .unwrap();
-    let bob_wire =
-        humoco_market::render_wire(&bob_card, 1, humoco_market::WireFilter::Full).unwrap();
+    );
 
     // Malicious Bob wraps all three cards in HIS signed CardBundle claiming hops: 1 for everyone
     let bundle = sign_card_bundle(
@@ -901,7 +1096,13 @@ fn s02_x1_forwarded_card_claiming_hops_1_clamped_by_writer_did() {
         None,
         &|_| false,
     );
-    assert!(matches!(res_bob, AcceptOutcome::Accepted { .. }));
+    assert_eq!(
+        res_bob,
+        AcceptOutcome::Accepted {
+            did: bob_card_did.clone(),
+            replaced: false,
+        }
+    );
     assert_eq!(store.cards.get(&bob_card_did).unwrap().hops, 1);
 
     // 2. Carol's card claiming hops: 1 is clamped to effective_hops = 2, and hop-1 phone is stripped!
@@ -914,7 +1115,13 @@ fn s02_x1_forwarded_card_claiming_hops_1_clamped_by_writer_did() {
         None,
         &|_| false,
     );
-    assert!(matches!(res_carol, AcceptOutcome::Accepted { .. }));
+    assert_eq!(
+        res_carol,
+        AcceptOutcome::Accepted {
+            did: carol_did.clone(),
+            replaced: false,
+        }
+    );
     let stored_carol = store.cards.get(&carol_did).unwrap();
     assert_eq!(stored_carol.hops, 2);
     let carol_items = humoco_market::decoded_items(&stored_carol.card);

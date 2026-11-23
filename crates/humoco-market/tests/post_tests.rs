@@ -13,6 +13,80 @@ use humoco_market::{
 };
 use proptest::prelude::*;
 
+fn assert_err_variant<T: std::fmt::Debug>(
+    res: Result<T, MarketError>,
+    variant_name: &str,
+    expected_substr: &str,
+    extract: impl FnOnce(&MarketError) -> Option<&str>,
+) {
+    match res {
+        Err(ref err) => match extract(err) {
+            Some(msg) => assert!(
+                msg.contains(expected_substr),
+                "Expected MarketError::{} containing {:?}, got {:?}: {:?}",
+                variant_name,
+                expected_substr,
+                err,
+                msg
+            ),
+            None => panic!(
+                "Expected MarketError::{}({:?}), got different variant {:?}",
+                variant_name, expected_substr, err
+            ),
+        },
+        Ok(val) => panic!(
+            "Expected Err(MarketError::{}({:?})), got Ok({:?})",
+            variant_name, expected_substr, val
+        ),
+    }
+}
+
+fn assert_validation_err<T: std::fmt::Debug>(res: Result<T, MarketError>, expected_substr: &str) {
+    assert_err_variant(res, "Validation", expected_substr, |e| match e {
+        MarketError::Validation(msg) => Some(msg.as_str()),
+        _ => None,
+    });
+}
+
+fn assert_slot_err<T: std::fmt::Debug>(res: Result<T, MarketError>, expected_substr: &str) {
+    assert_err_variant(res, "Slot", expected_substr, |e| match e {
+        MarketError::Slot(msg) => Some(msg.as_str()),
+        _ => None,
+    });
+}
+
+fn assert_crypto_err<T: std::fmt::Debug>(res: Result<T, MarketError>, expected_substr: &str) {
+    assert_err_variant(res, "Crypto", expected_substr, |e| match e {
+        MarketError::Crypto(msg) => Some(msg.as_str()),
+        _ => None,
+    });
+}
+
+fn assert_payload_too_large_err<T: std::fmt::Debug>(
+    res: Result<T, MarketError>,
+    expected_substr: &str,
+) {
+    assert_err_variant(res, "PayloadTooLarge", expected_substr, |e| match e {
+        MarketError::PayloadTooLarge(msg) => Some(msg.as_str()),
+        _ => None,
+    });
+}
+
+fn assert_unknown_field_err<T: std::fmt::Debug>(
+    res: Result<T, serde_json::Error>,
+    field_name: &str,
+) {
+    let err = res.expect_err("expected serde_json::from_str to reject unknown field");
+    let msg = err.to_string();
+    let expected = format!("unknown field `{}`", field_name);
+    assert!(
+        msg.contains(&expected),
+        "Expected serde_json unknown field error for {:?}, got {:?}",
+        field_name,
+        msg
+    );
+}
+
 fn make_key(seed_byte: u8) -> SigningKey {
     SigningKey::from_bytes(&[seed_byte; 32])
 }
@@ -142,14 +216,14 @@ fn test_fixed_tier_padding_and_aad_tamper_detection() {
     // 5. Payload too large (> 262,144 bytes in JSON)
     let env_too_large = sample_envelope("too_large", 100_000);
     let err = seal_post_box(&alice_sk, &bob_vk, &env_too_large);
-    assert!(matches!(err, Err(MarketError::PayloadTooLarge(_))));
+    assert_payload_too_large_err(err, "exceeds maximum post box tier 262144");
 
     // 6. Ciphertext tampering: mutating 1 byte causes AEAD decryption failure
     let mut tampered_entry = entry_small.clone();
     tampered_entry.ciphertext[100] ^= 0xFF;
     let tamper_res =
         try_open_post_box_from_sender(&bob_sk, &alice_sk.verifying_key(), &tampered_entry);
-    assert!(matches!(tamper_res, Err(MarketError::Crypto(_))));
+    assert_crypto_err(tamper_res, "AEAD authentication failed:");
 
     // 7. Nonce tampering: mutating nonce causes tag mismatch (returns Ok(None))
     let mut nonce_tampered = entry_small.clone();
@@ -295,34 +369,47 @@ fn test_decode_post_slot_corruptions() {
         DROP_POST_MAX_BYTES,
     )
     .unwrap();
+    // Positive baseline: valid encoded slot decodes cleanly
+    assert_eq!(decode_post_slot(&valid_slot).unwrap().len(), 2);
 
     // Too short (< 10 bytes)
-    assert!(matches!(
+    assert_slot_err(
         decode_post_slot(&valid_slot[0..8]),
-        Err(MarketError::Slot(_))
-    ));
+        "Post slot too short: 8 bytes",
+    );
 
     // Wrong magic
     let mut bad_magic = valid_slot.clone();
     bad_magic[0] = b'X';
-    assert!(matches!(
-        decode_post_slot(&bad_magic),
-        Err(MarketError::Slot(_))
-    ));
+    assert_slot_err(decode_post_slot(&bad_magic), "Invalid post slot magic header");
 
     // Truncated entry header
-    assert!(matches!(
+    assert_slot_err(
         decode_post_slot(&valid_slot[0..20]),
-        Err(MarketError::Slot(_))
-    ));
+        "Truncated post box header at entry 0",
+    );
+
+    // Invalid tier length on entry 0 (bytes 50..54 hold u32_be ct_len)
+    let mut bad_tier = valid_slot.clone();
+    bad_tier[50..54].copy_from_slice(&1234u32.to_be_bytes());
+    assert_slot_err(
+        decode_post_slot(&bad_tier),
+        "Invalid post box tier length 1234 at entry 0",
+    );
+
+    // Truncated ciphertext on entry 1
+    assert_slot_err(
+        decode_post_slot(&valid_slot[..valid_slot.len() - 1]),
+        "Truncated ciphertext for entry 1:",
+    );
 
     // Trailing junk
     let mut trailing = valid_slot.clone();
     trailing.push(0xAA);
-    assert!(matches!(
+    assert_slot_err(
         decode_post_slot(&trailing),
-        Err(MarketError::Slot(_))
-    ));
+        "Trailing unexpected bytes in post slot:",
+    );
 }
 
 #[test]
@@ -337,7 +424,7 @@ fn test_market_inquiry_models_and_rate_limiting() {
         message: "Hello! Is this still available for pickup this weekend?".to_string(),
         created_at: 1700000000,
     };
-    assert!(validate_market_inquiry(&inquiry).is_ok());
+    assert_eq!(validate_market_inquiry(&inquiry), Ok(()));
 
     // Person inquiry variant
     let person_inquiry = MarketInquiry {
@@ -348,21 +435,27 @@ fn test_market_inquiry_models_and_rate_limiting() {
         message: "Hi, can you make custom honey?".to_string(),
         created_at: 1700000000,
     };
-    assert!(validate_market_inquiry(&person_inquiry).is_ok());
+    assert_eq!(validate_market_inquiry(&person_inquiry), Ok(()));
 
     // Empty message
     let mut empty_msg = inquiry.clone();
     empty_msg.message = "   ".to_string();
-    assert!(validate_market_inquiry(&empty_msg).is_err());
+    assert_validation_err(
+        validate_market_inquiry(&empty_msg),
+        "message cannot be empty",
+    );
 
     // Message exceeding 280 chars
     let mut long_msg = inquiry.clone();
     long_msg.message = "A".repeat(MAX_INQUIRY_CHARS + 1);
-    assert!(validate_market_inquiry(&long_msg).is_err());
+    assert_validation_err(
+        validate_market_inquiry(&long_msg),
+        "message length 281 exceeds MAX_INQUIRY_CHARS (280)",
+    );
 
     // Exact 280 chars is accepted
     long_msg.message = "A".repeat(MAX_INQUIRY_CHARS);
-    assert!(validate_market_inquiry(&long_msg).is_ok());
+    assert_eq!(validate_market_inquiry(&long_msg), Ok(()));
 
     // Thread message & decision testing
     let msg_confirm = MarketInquiryMessage {
@@ -375,7 +468,7 @@ fn test_market_inquiry_models_and_rate_limiting() {
         standard_uuid: None,
         created_at: 1700001000,
     };
-    assert!(validate_market_inquiry_message(&msg_confirm).is_ok());
+    assert_eq!(validate_market_inquiry_message(&msg_confirm), Ok(()));
 
     let msg_text_only = MarketInquiryMessage {
         inquiry_id: "inq-123".to_string(),
@@ -387,19 +480,39 @@ fn test_market_inquiry_models_and_rate_limiting() {
         standard_uuid: None,
         created_at: 1700002000,
     };
-    assert!(validate_market_inquiry_message(&msg_text_only).is_ok());
+    assert_eq!(validate_market_inquiry_message(&msg_text_only), Ok(()));
 
     let mut empty_both = msg_text_only.clone();
     empty_both.text = None;
-    assert!(validate_market_inquiry_message(&empty_both).is_err());
+    assert_validation_err(
+        validate_market_inquiry_message(&empty_both),
+        "message must include either text or a decision",
+    );
 
     let mut blank_text = msg_text_only.clone();
     blank_text.text = Some("   ".to_string());
-    assert!(validate_market_inquiry_message(&blank_text).is_err());
+    assert_validation_err(
+        validate_market_inquiry_message(&blank_text),
+        "message text cannot be blank",
+    );
 
     let mut long_note = msg_confirm.clone();
     long_note.text = Some("B".repeat(MAX_INQUIRY_CHARS + 1));
-    assert!(validate_market_inquiry_message(&long_note).is_err());
+    assert_validation_err(
+        validate_market_inquiry_message(&long_note),
+        "message text length 281 exceeds MAX_INQUIRY_CHARS (280)",
+    );
+
+    // Exact 280 chars thread message accepted; non-humoco payment_uri rejected
+    long_note.text = Some("B".repeat(MAX_INQUIRY_CHARS));
+    assert_eq!(validate_market_inquiry_message(&long_note), Ok(()));
+
+    let mut bad_pay_uri = msg_confirm.clone();
+    bad_pay_uri.payment_uri = Some("https://evil.example/pay".to_string());
+    assert_validation_err(
+        validate_market_inquiry_message(&bad_pay_uri),
+        "payment_uri must start with 'humoco://pay?'",
+    );
 
     // Rate tracker testing (max 3 for testing)
     let mut tracker = InquiryRateTracker::new(3);
@@ -411,22 +524,28 @@ fn test_market_inquiry_models_and_rate_limiting() {
     let buyer_4 = "dddd".repeat(16);
 
     // Record buyer 1
-    assert!(tracker.record_inquiry(&buyer_1, target_key).is_ok());
+    assert_eq!(tracker.record_inquiry(&buyer_1, target_key), Ok(()));
     assert_eq!(tracker.open_count(target_key), 1);
     assert!(tracker.has_open_inquiry(&buyer_1, target_key));
 
     // Duplicate inquiry from buyer 1 rejected
     let dup_err = tracker.record_inquiry(&buyer_1, target_key);
-    assert!(dup_err.is_err());
+    assert_validation_err(
+        dup_err,
+        "already has an open inquiry for target ad:0123456789abcdef",
+    );
 
     // Record buyer 2 and 3
-    assert!(tracker.record_inquiry(&buyer_2, target_key).is_ok());
-    assert!(tracker.record_inquiry(&buyer_3, target_key).is_ok());
+    assert_eq!(tracker.record_inquiry(&buyer_2, target_key), Ok(()));
+    assert_eq!(tracker.record_inquiry(&buyer_3, target_key), Ok(()));
     assert_eq!(tracker.open_count(target_key), 3);
 
     // Buyer 4 exceeds limit (max 3)
     let cap_err = tracker.record_inquiry(&buyer_4, target_key);
-    assert!(cap_err.is_err());
+    assert_validation_err(
+        cap_err,
+        "Target ad:0123456789abcdef reached maximum open inquiries (3)",
+    );
 
     // Resolve buyer 1
     assert!(tracker.resolve_inquiry(&buyer_1, target_key));
@@ -434,7 +553,7 @@ fn test_market_inquiry_models_and_rate_limiting() {
     assert!(!tracker.has_open_inquiry(&buyer_1, target_key));
 
     // Now buyer 4 can record
-    assert!(tracker.record_inquiry(&buyer_4, target_key).is_ok());
+    assert_eq!(tracker.record_inquiry(&buyer_4, target_key), Ok(()));
     assert_eq!(tracker.open_count(target_key), 3);
 }
 
@@ -446,11 +565,14 @@ fn test_auxiliary_payload_validations() {
         bundle_id: Some("bundle-xyz".to_string()),
         received_at: 1700000000,
     };
-    assert!(validate_post_delivery_receipt(&receipt).is_ok());
+    assert_eq!(validate_post_delivery_receipt(&receipt), Ok(()));
 
     let mut bad_receipt = receipt.clone();
     bad_receipt.acknowledged_tag16_hex = "short".to_string();
-    assert!(validate_post_delivery_receipt(&bad_receipt).is_err());
+    assert_validation_err(
+        validate_post_delivery_receipt(&bad_receipt),
+        "acknowledged_tag16_hex must be a valid 32-lowercase-hex string",
+    );
 
     let alice_sk = make_key(1);
     let alice_did = create_user_id(&alice_sk.verifying_key(), None).unwrap();
@@ -463,11 +585,18 @@ fn test_auxiliary_payload_validations() {
         reply_requested: true,
         created_at: 1700000000,
     };
-    assert!(validate_wot_handshake_assertion(&handshake).is_ok());
+    assert_eq!(validate_wot_handshake_assertion(&handshake), Ok(()));
+
+    let mut level0_handshake = handshake.clone();
+    level0_handshake.proposed_level = 0;
+    assert_eq!(validate_wot_handshake_assertion(&level0_handshake), Ok(()));
 
     let mut bad_level = handshake.clone();
     bad_level.proposed_level = 2; // only 0 or 1 allowed
-    assert!(validate_wot_handshake_assertion(&bad_level).is_err());
+    assert_validation_err(
+        validate_wot_handshake_assertion(&bad_level),
+        "proposed_level must be 0 or 1, got 2",
+    );
 
     // InquiryTarget target_key tests
     let ad_t = InquiryTarget::Ad {
@@ -494,7 +623,29 @@ proptest! {
 
     #[test]
     fn proptest_decode_post_slot_arbitrary_bytes_no_panic(bytes in prop::collection::vec(any::<u8>(), 0..1024)) {
-        let _ = decode_post_slot(&bytes);
+        let res = decode_post_slot(&bytes);
+        if bytes.len() < 10 {
+            prop_assert!(
+                matches!(&res, Err(MarketError::Slot(msg)) if msg.contains("Post slot too short:")),
+                "expected short slot error for len={}, got {:?}",
+                bytes.len(),
+                res
+            );
+        } else if &bytes[0..8] != POST_SLOT_MAGIC {
+            prop_assert!(
+                matches!(&res, Err(MarketError::Slot(msg)) if msg.contains("Invalid post slot magic header")),
+                "expected bad magic error, got {:?}",
+                res
+            );
+        } else {
+            match res {
+                Ok(entries) => {
+                    prop_assert!(entries.iter().all(|e| POST_BOX_TIERS.contains(&e.ciphertext.len())));
+                }
+                Err(MarketError::Slot(_)) => {}
+                other => prop_assert!(false, "unexpected error variant on arbitrary post slot: {:?}", other),
+            }
+        }
     }
 
     #[test]
@@ -580,40 +731,92 @@ fn test_pack_post_slot_defers_overflow_and_isolates_oversized_entries() {
 fn s02_x3_deny_unknown_fields_on_market_and_post_wire_structs() {
     use humoco_market::{Ad, Skill};
 
-    assert!(serde_json::from_str::<Skill>(r#"{"title":"Repair","unknownField":true}"#).is_err());
+    let ok_skill: Skill = serde_json::from_str(r#"{"title":"Repair"}"#).unwrap();
+    assert_eq!(ok_skill.title, "Repair");
+    assert_unknown_field_err(
+        serde_json::from_str::<Skill>(r#"{"title":"Repair","unknownField":true}"#),
+        "unknownField",
+    );
 
-    assert!(serde_json::from_str::<Ad>(
-        r#"{"id":"0123456789abcdef","kind":"offer","title":"Honey","publishedAt":100,"expiresAt":200,"extra":1}"#
+    let ok_ad: Ad = serde_json::from_str(
+        r#"{"id":"0123456789abcdef","kind":"offer","title":"Honey","publishedAt":100,"expiresAt":200}"#,
     )
-    .is_err());
+    .unwrap();
+    assert_eq!(ok_ad.id, "0123456789abcdef");
+    assert_unknown_field_err(
+        serde_json::from_str::<Ad>(
+            r#"{"id":"0123456789abcdef","kind":"offer","title":"Honey","publishedAt":100,"expiresAt":200,"extra":1}"#,
+        ),
+        "extra",
+    );
 
-    assert!(serde_json::from_str::<DropDescriptor>(
-        r#"{"write_url":"https://a/w","read_url":"https://a/r","drop_pub":"aa","extra":true}"#
+    let ok_drop: DropDescriptor = serde_json::from_str(
+        r#"{"write_url":"https://a/w","read_url":"https://a/r","drop_pub":"aa"}"#,
     )
-    .is_err());
+    .unwrap();
+    assert_eq!(ok_drop.drop_pub, "aa");
+    assert_unknown_field_err(
+        serde_json::from_str::<DropDescriptor>(
+            r#"{"write_url":"https://a/w","read_url":"https://a/r","drop_pub":"aa","extra":true}"#,
+        ),
+        "extra",
+    );
 
-    assert!(serde_json::from_str::<InquiryTarget>(
-        r#"{"kind":"ad","ad_id":"0123456789abcdef","ad_title":"Honey","extra":1}"#
+    let ok_ad_target: InquiryTarget = serde_json::from_str(
+        r#"{"kind":"ad","ad_id":"0123456789abcdef","ad_title":"Honey"}"#,
     )
-    .is_err());
+    .unwrap();
+    assert_eq!(ok_ad_target.target_key(), "ad:0123456789abcdef");
+    assert_unknown_field_err(
+        serde_json::from_str::<InquiryTarget>(
+            r#"{"kind":"ad","ad_id":"0123456789abcdef","ad_title":"Honey","extra":1}"#,
+        ),
+        "extra",
+    );
 
-    assert!(serde_json::from_str::<InquiryTarget>(
-        r#"{"kind":"person","skill_title":"Baking","extra":1}"#
-    )
-    .is_err());
+    let ok_person_target: InquiryTarget =
+        serde_json::from_str(r#"{"kind":"person","skill_title":"Baking"}"#).unwrap();
+    assert_eq!(ok_person_target.target_key(), "person:baking");
+    assert_unknown_field_err(
+        serde_json::from_str::<InquiryTarget>(
+            r#"{"kind":"person","skill_title":"Baking","extra":1}"#,
+        ),
+        "extra",
+    );
 
-    assert!(serde_json::from_str::<MarketInquiry>(
-        r#"{"inquiry_id":"i1","target":{"kind":"person"},"message":"Hi","created_at":100,"extra":1}"#
+    let ok_inq: MarketInquiry = serde_json::from_str(
+        r#"{"inquiry_id":"i1","target":{"kind":"person"},"message":"Hi","created_at":100}"#,
     )
-    .is_err());
+    .unwrap();
+    assert_eq!(ok_inq.inquiry_id, "i1");
+    assert_unknown_field_err(
+        serde_json::from_str::<MarketInquiry>(
+            r#"{"inquiry_id":"i1","target":{"kind":"person"},"message":"Hi","created_at":100,"extra":1}"#,
+        ),
+        "extra",
+    );
 
-    assert!(serde_json::from_str::<PostDeliveryReceipt>(
-        r#"{"acknowledged_msg_id":"m1","acknowledged_tag16_hex":"00000000000000000000000000000000","received_at":100,"extra":1}"#
+    let ok_receipt: PostDeliveryReceipt = serde_json::from_str(
+        r#"{"acknowledged_msg_id":"m1","acknowledged_tag16_hex":"00000000000000000000000000000000","received_at":100}"#,
     )
-    .is_err());
+    .unwrap();
+    assert_eq!(ok_receipt.acknowledged_msg_id, "m1");
+    assert_unknown_field_err(
+        serde_json::from_str::<PostDeliveryReceipt>(
+            r#"{"acknowledged_msg_id":"m1","acknowledged_tag16_hex":"00000000000000000000000000000000","received_at":100,"extra":1}"#,
+        ),
+        "extra",
+    );
 
-    assert!(serde_json::from_str::<WotHandshakeAssertion>(
-        r#"{"sender_did":"did:key:z6Mki","proposed_level":1,"wot_sync_json":"{}","reply_requested":true,"created_at":100,"extra":1}"#
+    let ok_handshake: WotHandshakeAssertion = serde_json::from_str(
+        r#"{"sender_did":"did:key:z6Mki","proposed_level":1,"wot_sync_json":"{}","reply_requested":true,"created_at":100}"#,
     )
-    .is_err());
+    .unwrap();
+    assert_eq!(ok_handshake.proposed_level, 1);
+    assert_unknown_field_err(
+        serde_json::from_str::<WotHandshakeAssertion>(
+            r#"{"sender_did":"did:key:z6Mki","proposed_level":1,"wot_sync_json":"{}","reply_requested":true,"created_at":100,"extra":1}"#,
+        ),
+        "extra",
+    );
 }

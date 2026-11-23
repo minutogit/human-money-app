@@ -6,8 +6,9 @@ use super::profile::*;
 use super::storage::*;
 use super::view_and_import::*;
 use crate::models::{
-    CardFieldVisibility, FieldAudience, FrontendAdInput, FrontendSaveMyMarketProfileRequest,
-    FrontendSyncDescriptor, FrontendUserProfile, StoredOwnMarketProfile,
+    CardFieldVisibility, FieldAudience, FrontendAdInput, FrontendError,
+    FrontendSaveMyMarketProfileRequest, FrontendSyncDescriptor, FrontendUserProfile,
+    StoredOwnMarketProfile,
 };
 use crate::state::{AppState, MARKET_CARD_STORE_KEY, MARKET_OWN_PROFILE_KEY};
 use ed25519_dalek::SigningKey;
@@ -20,14 +21,71 @@ const BOB_PHRASE: &str = "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo wrong";
 const CHARLIE_PHRASE: &str =
     "legal winner thank year wave sausage worth useful legal winner thank yellow";
 
-fn temp_test_dir(name: &str) -> PathBuf {
+struct TempDirGuard(PathBuf);
+
+impl TempDirGuard {
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for TempDirGuard {
+    fn drop(&mut self) {
+        drop(std::fs::remove_dir_all(&self.0));
+    }
+}
+
+fn temp_test_dir(name: &str) -> TempDirGuard {
     let p = std::env::temp_dir().join(format!(
         "humoco_market_test_{}_{}",
         name,
         uuid::Uuid::new_v4()
     ));
     std::fs::create_dir_all(&p).unwrap();
-    p
+    TempDirGuard(p)
+}
+
+fn assert_frontend_err_msg<T: std::fmt::Debug>(
+    res: Result<T, FrontendError>,
+    expected_substr: &str,
+) {
+    let err = res.expect_err("expected FrontendError");
+    assert!(
+        err.message.contains(expected_substr),
+        "Expected FrontendError message containing {:?}, got code={:?} msg={:?}",
+        expected_substr,
+        err.code,
+        err.message
+    );
+}
+
+fn assert_frontend_err_code<T: std::fmt::Debug>(
+    res: Result<T, FrontendError>,
+    expected_code: &str,
+) {
+    let err = res.expect_err("expected FrontendError");
+    assert_eq!(
+        err.code, expected_code,
+        "Expected FrontendError code {:?}, got code={:?} msg={:?}",
+        expected_code, err.code, err.message
+    );
+}
+
+fn offer_ad_input(title: &str, duration_days: u64, published: Option<bool>) -> FrontendAdInput {
+    FrontendAdInput {
+        id: None,
+        kind: humoco_market::AdKind::Offer,
+        title: title.to_string(),
+        text: None,
+        pricing: None,
+        duration_days,
+        allow_inquiries: true,
+        is_remote: false,
+        image_webp_data_uri: None,
+        event_at: None,
+        event_all_day: false,
+        published,
+    }
 }
 
 fn setup_test_app(dir: &Path, profile_name: &str, phrase: &str, password: &str) -> AppService {
@@ -55,41 +113,19 @@ fn create_test_state(service: AppService) -> AppState {
 fn test_ad_duration_validation_and_renewals() {
     let base_dir = temp_test_dir("ad_duration_and_renewals");
     let password = "TestPassword123!";
-    let alice_service = setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
+    let alice_service =
+        setup_test_app(&base_dir.path().join("alice"), "Alice", ALICE_PHRASE, password);
     let alice_state = create_test_state(alice_service);
 
     // Invalid duration 365 rejected
-    let bad_ad = FrontendAdInput {
-        id: None,
-        kind: humoco_market::AdKind::Offer,
-        title: "Guitar lessons".to_string(),
-        text: None,
-        pricing: None,
-        duration_days: 365,
-        allow_inquiries: true,
-        is_remote: false,
-        image_webp_data_uri: None,
-        event_at: None,
-        event_all_day: false,
-        published: Some(true),
-    };
-    assert!(upsert_ad_impl(bad_ad, Some(password.to_string()), &alice_state).is_err());
+    let bad_ad = offer_ad_input("Guitar lessons", 365, Some(true));
+    assert_frontend_err_msg(
+        upsert_ad_impl(bad_ad, Some(password.to_string()), &alice_state),
+        "duration_days must be 30, 90, or 180",
+    );
 
     // Valid duration 30 accepted
-    let ad_30 = FrontendAdInput {
-        id: None,
-        kind: humoco_market::AdKind::Offer,
-        title: "Guitar lessons".to_string(),
-        text: None,
-        pricing: None,
-        duration_days: 30,
-        allow_inquiries: true,
-        is_remote: false,
-        image_webp_data_uri: None,
-        event_at: None,
-        event_all_day: false,
-        published: Some(true),
-    };
+    let ad_30 = offer_ad_input("Guitar lessons", 30, Some(true));
     let p1 = upsert_ad_impl(ad_30, Some(password.to_string()), &alice_state).unwrap();
     assert_eq!(p1.ads.len(), 1);
     let ad_id = p1.ads[0].id.clone();
@@ -103,11 +139,14 @@ fn test_ad_duration_validation_and_renewals() {
         p2.ads[0].published_at, pub_at,
         "published_at must stay unchanged"
     );
-    assert!(p2.ads[0].renewed_at.is_some());
+    assert!(p2.ads[0].renewed_at.expect("renewed_at must be set") >= pub_at);
     assert!(p2.ads[0].expires_at > p1.ads[0].expires_at);
 
     // Renew ad with invalid 45 days rejected
-    assert!(renew_ad_impl(ad_id.clone(), 45, Some(password.to_string()), &alice_state).is_err());
+    assert_frontend_err_msg(
+        renew_ad_impl(ad_id.clone(), 45, Some(password.to_string()), &alice_state),
+        "duration_days must be 30, 90, or 180",
+    );
 
     // Renew ad with 180 days succeeds
     let p3 = renew_ad_impl(ad_id, 180, Some(password.to_string()), &alice_state).unwrap();
@@ -119,46 +158,29 @@ fn test_ad_duration_validation_and_renewals() {
 fn test_ad_limit_enforced_and_edit_preserves_timestamps() {
     let base_dir = temp_test_dir("ad_limits_and_edit");
     let password = "TestPassword123!";
-    let alice_service = setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
+    let alice_service =
+        setup_test_app(&base_dir.path().join("alice"), "Alice", ALICE_PHRASE, password);
     let alice_state = create_test_state(alice_service);
 
     // Create 10 active ads
     let mut ad_ids = Vec::new();
     for i in 1..=10 {
-        let ad_input = FrontendAdInput {
-            id: None,
-            kind: humoco_market::AdKind::Offer,
-            title: format!("Service {}", i),
-            text: None,
-            pricing: None,
-            duration_days: 90,
-            allow_inquiries: true,
-            is_remote: false,
-            image_webp_data_uri: None,
-            event_at: None,
-            event_all_day: false,
-            published: Some(true),
-        };
-        let p = upsert_ad_impl(ad_input, Some(password.to_string()), &alice_state).unwrap();
+        let p = upsert_ad_impl(
+            offer_ad_input(&format!("Service {}", i), 90, Some(true)),
+            Some(password.to_string()),
+            &alice_state,
+        )
+        .unwrap();
         ad_ids.push(p.ads.last().unwrap().id.clone());
     }
 
     // 11th active ad fails with market.adLimitReached
-    let ad_11 = FrontendAdInput {
-        id: None,
-        kind: humoco_market::AdKind::Offer,
-        title: "Service 11".to_string(),
-        text: None,
-        pricing: None,
-        duration_days: 90,
-        allow_inquiries: true,
-        is_remote: false,
-        image_webp_data_uri: None,
-        event_at: None,
-        event_all_day: false,
-        published: Some(true),
-    };
-    let err = upsert_ad_impl(ad_11, Some(password.to_string()), &alice_state).unwrap_err();
+    let err = upsert_ad_impl(
+        offer_ad_input("Service 11", 90, Some(true)),
+        Some(password.to_string()),
+        &alice_state,
+    )
+    .unwrap_err();
     assert_eq!(err.code, "error.market.adLimitReached");
 
     // Editing an existing ad succeeds even when 10 ads are active
@@ -203,21 +225,12 @@ fn test_ad_limit_enforced_and_edit_preserves_timestamps() {
     let p_del = delete_ad_impl(target_id, Some(password.to_string()), &alice_state).unwrap();
     assert_eq!(p_del.ads.len(), 9);
 
-    let ad_new = FrontendAdInput {
-        id: None,
-        kind: humoco_market::AdKind::Offer,
-        title: "New Service".to_string(),
-        text: None,
-        pricing: None,
-        duration_days: 30,
-        allow_inquiries: true,
-        is_remote: false,
-        image_webp_data_uri: None,
-        event_at: None,
-        event_all_day: false,
-        published: Some(true),
-    };
-    let p_new = upsert_ad_impl(ad_new, Some(password.to_string()), &alice_state).unwrap();
+    let p_new = upsert_ad_impl(
+        offer_ad_input("New Service", 30, Some(true)),
+        Some(password.to_string()),
+        &alice_state,
+    )
+    .unwrap();
     assert_eq!(p_new.ads.len(), 10);
 }
 
@@ -225,7 +238,8 @@ fn test_ad_limit_enforced_and_edit_preserves_timestamps() {
 fn test_event_ad_lifecycle_and_validation() {
     let base_dir = temp_test_dir("event_ad_lifecycle");
     let password = "TestPassword123!";
-    let alice_service = setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
+    let alice_service =
+        setup_test_app(&base_dir.path().join("alice"), "Alice", ALICE_PHRASE, password);
     let alice_state = create_test_state(alice_service);
     let now = chrono::Utc::now().timestamp().max(0) as u64;
 
@@ -244,7 +258,10 @@ fn test_event_ad_lifecycle_and_validation() {
         event_all_day: false,
         published: Some(true),
     };
-    assert!(upsert_ad_impl(missing_date, Some(password.to_string()), &alice_state).is_err());
+    assert_frontend_err_msg(
+        upsert_ad_impl(missing_date, Some(password.to_string()), &alice_state),
+        "Event ads require an event date",
+    );
 
     // 2. Offer with event_at rejected
     let offer_with_date = FrontendAdInput {
@@ -261,7 +278,10 @@ fn test_event_ad_lifecycle_and_validation() {
         event_all_day: false,
         published: Some(true),
     };
-    assert!(upsert_ad_impl(offer_with_date, Some(password.to_string()), &alice_state).is_err());
+    assert_frontend_err_msg(
+        upsert_ad_impl(offer_with_date, Some(password.to_string()), &alice_state),
+        "Offer/Request ads must not specify an event date",
+    );
 
     // 3. Timed event > 180 days in future rejected
     let too_far = FrontendAdInput {
@@ -278,7 +298,10 @@ fn test_event_ad_lifecycle_and_validation() {
         event_all_day: false,
         published: Some(true),
     };
-    assert!(upsert_ad_impl(too_far, Some(password.to_string()), &alice_state).is_err());
+    assert_frontend_err_msg(
+        upsert_ad_impl(too_far, Some(password.to_string()), &alice_state),
+        "Event date cannot be more than 180 days in the future",
+    );
 
     // 4. Valid timed event with 500 chars text succeeds and sets expires_at = event_at + 6h
     let ev_ts = now + 7 * 86_400;
@@ -305,7 +328,10 @@ fn test_event_ad_lifecycle_and_validation() {
 
     // 5. Renewing an Event ad by duration is rejected
     let ev_id = p1.ads[0].id.clone();
-    assert!(renew_ad_impl(ev_id.clone(), 90, Some(password.to_string()), &alice_state).is_err());
+    assert_frontend_err_msg(
+        renew_ad_impl(ev_id.clone(), 90, Some(password.to_string()), &alice_state),
+        "Event ads cannot be renewed by duration; edit the event date instead.",
+    );
 
     // 6. Editing the event date updates event_at & expires_at
     let new_ev_ts = now + 14 * 86_400;
@@ -333,25 +359,17 @@ fn test_event_ad_lifecycle_and_validation() {
 async fn test_ad_draft_lifecycle_no_card_sign_publish_pause_and_delete() {
     let base_dir = temp_test_dir("ad_draft_lifecycle");
     let password = "TestPassword123!";
-    let alice_service = setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
+    let alice_service =
+        setup_test_app(&base_dir.path().join("alice"), "Alice", ALICE_PHRASE, password);
     let alice_state = create_test_state(alice_service);
 
     // 1. Create a draft ad while card is unpublished -> saved locally as draft
-    let draft_input = FrontendAdInput {
-        id: None,
-        kind: humoco_market::AdKind::Offer,
-        title: "Draft Bread".to_string(),
-        text: Some("Testing draft".to_string()),
-        pricing: None,
-        duration_days: 90,
-        allow_inquiries: true,
-        is_remote: false,
-        image_webp_data_uri: None,
-        event_at: None,
-        event_all_day: false,
-        published: None,
-    };
-    let p1 = upsert_ad_impl(draft_input, Some(password.to_string()), &alice_state).unwrap();
+    let p1 = upsert_ad_impl(
+        offer_ad_input("Draft Bread", 90, None),
+        Some(password.to_string()),
+        &alice_state,
+    )
+    .unwrap();
     assert!(!p1.published);
     assert_eq!(p1.ads.len(), 1);
     assert!(!p1.ads[0].published);
@@ -373,31 +391,27 @@ async fn test_ad_draft_lifecycle_no_card_sign_publish_pause_and_delete() {
             .ad_count,
         0
     );
-
-    // Board must NOT contain the draft
-    let snap1 = get_market_view_impl(Some(password.to_string()), &alice_state).unwrap();
-    assert!(snap1.board.is_empty());
+    assert!(
+        get_market_view_impl(Some(password.to_string()), &alice_state)
+            .unwrap()
+            .board
+            .is_empty()
+    );
 
     // 2. Editing a draft must NOT bump card version v
-    let edit_draft = FrontendAdInput {
-        id: Some(draft_id.clone()),
-        kind: humoco_market::AdKind::Offer,
-        title: "Draft Bread Updated".to_string(),
-        text: None,
-        pricing: None,
-        duration_days: 90,
-        allow_inquiries: true,
-        is_remote: false,
-        image_webp_data_uri: None,
-        event_at: None,
-        event_all_day: false,
-        published: None,
-    };
+    let mut edit_draft = offer_ad_input("Draft Bread Updated", 90, None);
+    edit_draft.id = Some(draft_id.clone());
     let p_edit = upsert_ad_impl(edit_draft, Some(password.to_string()), &alice_state).unwrap();
     assert!(!p_edit.ads[0].published);
-    let stored_after_edit = alice_state.cache_own_market_profile().unwrap();
     assert_eq!(
-        stored_after_edit.last_card.as_ref().unwrap().payload.v,
+        alice_state
+            .cache_own_market_profile()
+            .unwrap()
+            .last_card
+            .as_ref()
+            .unwrap()
+            .payload
+            .v,
         v_before_draft_edit
     );
 
@@ -449,87 +463,75 @@ async fn test_ad_draft_lifecycle_no_card_sign_publish_pause_and_delete() {
             .ad_count,
         0
     );
-    let snap3 = get_market_view_impl(Some(password.to_string()), &alice_state).unwrap();
-    assert!(snap3.board.is_empty());
+    assert!(
+        get_market_view_impl(Some(password.to_string()), &alice_state)
+            .unwrap()
+            .board
+            .is_empty()
+    );
 
     // 5. Deleting a draft does NOT bump card version v
     let p_del = delete_ad_impl(draft_id, Some(password.to_string()), &alice_state).unwrap();
     assert!(p_del.ads.is_empty());
-    let stored_after_del = alice_state.cache_own_market_profile().unwrap();
     assert_eq!(
-        stored_after_del.last_card.as_ref().unwrap().payload.v,
+        alice_state
+            .cache_own_market_profile()
+            .unwrap()
+            .last_card
+            .as_ref()
+            .unwrap()
+            .payload
+            .v,
         v_after_pause
     );
+}
 
-    // 6. Publishing 10 active ads succeeds, 11th published fails with adLimitReached,
-    //    yet saving an 11th ad as a draft succeeds!
+#[test]
+fn test_ad_draft_allowed_at_active_limit_but_publish_fails_with_ad_limit_reached() {
+    let base_dir = temp_test_dir("ad_draft_limit");
+    let password = "TestPassword123!";
+    let alice_service =
+        setup_test_app(&base_dir.path().join("alice"), "Alice", ALICE_PHRASE, password);
+    let alice_state = create_test_state(alice_service);
+
     for i in 1..=10 {
-        let input = FrontendAdInput {
-            id: None,
-            kind: humoco_market::AdKind::Offer,
-            title: format!("Pub {}", i),
-            text: None,
-            pricing: None,
-            duration_days: 90,
-            allow_inquiries: true,
-            is_remote: false,
-            image_webp_data_uri: None,
-            event_at: None,
-            event_all_day: false,
-            published: Some(true),
-        };
-        upsert_ad_impl(input, Some(password.to_string()), &alice_state).unwrap();
+        upsert_ad_impl(
+            offer_ad_input(&format!("Pub {}", i), 90, Some(true)),
+            Some(password.to_string()),
+            &alice_state,
+        )
+        .unwrap();
     }
-    let extra_draft = FrontendAdInput {
-        id: None,
-        kind: humoco_market::AdKind::Offer,
-        title: "Extra Draft 11".to_string(),
-        text: None,
-        pricing: None,
-        duration_days: 90,
-        allow_inquiries: true,
-        is_remote: false,
-        image_webp_data_uri: None,
-        event_at: None,
-        event_all_day: false,
-        published: Some(false),
-    };
-    let p_extra = upsert_ad_impl(extra_draft, Some(password.to_string()), &alice_state).unwrap();
-    assert_eq!(p_extra.ads.len(), 11);
-    let extra_id = p_extra.ads.last().unwrap().id.clone();
-    let err = set_ad_published_impl(
-        extra_id,
-        true,
-        None,
+    let p_extra = upsert_ad_impl(
+        offer_ad_input("Extra Draft 11", 90, Some(false)),
         Some(password.to_string()),
         &alice_state,
     )
-    .unwrap_err();
-    assert_eq!(err.code, "error.market.adLimitReached");
+    .unwrap();
+    assert_eq!(p_extra.ads.len(), 11);
+    let extra_id = p_extra.ads.last().unwrap().id.clone();
+    assert_frontend_err_code(
+        set_ad_published_impl(
+            extra_id,
+            true,
+            None,
+            Some(password.to_string()),
+            &alice_state,
+        ),
+        "error.market.adLimitReached",
+    );
 }
 
 #[test]
 fn test_atomic_also_publish_card_publishes_card_and_draft_together() {
     let base_dir = temp_test_dir("atomic_also_publish_card");
     let password = "TestPassword123!";
-    let alice_service = setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
+    let alice_service =
+        setup_test_app(&base_dir.path().join("alice"), "Alice", ALICE_PHRASE, password);
     let alice_state = create_test_state(alice_service);
 
     let draft = upsert_ad_impl(
-        FrontendAdInput {
-            id: None,
-            kind: humoco_market::AdKind::Offer,
-            title: "Atomic Draft".to_string(),
-            text: None,
-            pricing: None,
-            duration_days: 90,
-            allow_inquiries: true,
-            is_remote: false,
-            image_webp_data_uri: None,
-            event_at: None,
-            event_all_day: false,
-            published: Some(false),
-        },
+        offer_ad_input("Atomic Draft", 90, Some(false)),
         Some(password.to_string()),
         &alice_state,
     )
@@ -555,7 +557,8 @@ fn test_atomic_also_publish_card_publishes_card_and_draft_together() {
 async fn test_unpublish_tombstone_only_signed_on_true_to_false_transition() {
     let base_dir = temp_test_dir("unpublish_tombstone_guard");
     let password = "TestPassword123!";
-    let alice_service = setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
+    let alice_service =
+        setup_test_app(&base_dir.path().join("alice"), "Alice", ALICE_PHRASE, password);
     let alice_state = create_test_state(alice_service);
 
     // Never published -> unpublishing leaves last_card == None
@@ -641,7 +644,8 @@ async fn test_unpublish_tombstone_only_signed_on_true_to_false_transition() {
 async fn test_visibility_rules_and_sd_card_disclosures() {
     let base_dir = temp_test_dir("visibility_rules");
     let password = "TestPassword123!";
-    let alice_service = setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
+    let alice_service =
+        setup_test_app(&base_dir.path().join("alice"), "Alice", ALICE_PHRASE, password);
     let alice_state = create_test_state(alice_service);
 
     let save_req = FrontendSaveMyMarketProfileRequest {
@@ -725,7 +729,7 @@ fn test_service_offer_derivation_and_needs_preservation() {
     let base_dir = temp_test_dir("service_offer_and_needs");
     let password = "TestPassword123!";
     let mut alice_service =
-        setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
+        setup_test_app(&base_dir.path().join("alice"), "Alice", ALICE_PHRASE, password);
 
     // Precondition: Set Core needs on wallet profile
     let mut p = alice_service
@@ -783,10 +787,11 @@ async fn test_full_marketplace_flow_import_forward_and_board() {
     let base_dir = temp_test_dir("full_marketplace_flow");
     let password = "TestPassword123!";
 
-    let alice_service = setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
-    let bob_service = setup_test_app(&base_dir.join("bob"), "Bob", BOB_PHRASE, password);
+    let alice_service =
+        setup_test_app(&base_dir.path().join("alice"), "Alice", ALICE_PHRASE, password);
+    let bob_service = setup_test_app(&base_dir.path().join("bob"), "Bob", BOB_PHRASE, password);
     let charlie_service = setup_test_app(
-        &base_dir.join("charlie"),
+        &base_dir.path().join("charlie"),
         "Charlie",
         CHARLIE_PHRASE,
         password,
@@ -843,8 +848,11 @@ async fn test_full_marketplace_flow_import_forward_and_board() {
         .unwrap();
 
     assert!(alice_profile.published);
-    assert!(alice_profile.share_uri.is_some());
-    let _share_uri = alice_profile.share_uri.unwrap();
+    let share_uri = alice_profile
+        .share_uri
+        .as_deref()
+        .expect("published card must expose share_uri");
+    assert!(share_uri.starts_with("humoco://card?env="));
 
     // Alice's own active ad must appear on her own board with is_own = true
     let alice_view = get_market_view_impl(Some(password.to_string()), &alice_state).unwrap();
@@ -897,12 +905,14 @@ async fn test_full_marketplace_flow_import_forward_and_board() {
     );
     // Since max_hops = 2, Charlie cannot forward further
     assert!(!charlie_view.people[0].can_forward);
-    assert!(export_forward_card_impl(
-        alice_recipient_did.clone(),
-        Some(password.to_string()),
-        &charlie_state
-    )
-    .is_err());
+    assert_frontend_err_msg(
+        export_forward_card_impl(
+            alice_recipient_did.clone(),
+            Some(password.to_string()),
+            &charlie_state,
+        ),
+        "Card reached its maximum hop count",
+    );
 
     // 4. Bob deletes Alice's card from his store
     delete_foreign_contact_card_impl(alice_did.clone(), Some(password.to_string()), &bob_state)
@@ -940,17 +950,17 @@ fn make_test_jpeg(width: u16, height: u16) -> Vec<u8> {
     bytes
 }
 
-#[tokio::test]
-async fn test_market_media_workflow() {
+#[test]
+fn test_market_profile_avatar_validation_webp_and_jpeg() {
     use base64::engine::general_purpose::STANDARD;
     use base64::Engine;
 
-    let base_dir = temp_test_dir("market_media_workflow");
+    let base_dir = temp_test_dir("market_avatar_validation");
     let password = "TestPassword123!";
-    let alice_service = setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
+    let alice_service =
+        setup_test_app(&base_dir.path().join("alice"), "Alice", ALICE_PHRASE, password);
     let alice_state = create_test_state(alice_service);
 
-    // 1. Initial profile check
     let initial_profile =
         get_my_market_profile_impl(Some(password.to_string()), &alice_state).unwrap();
     assert_eq!(
@@ -963,7 +973,6 @@ async fn test_market_media_workflow() {
     );
     assert_eq!(initial_profile.media_used_count, 0);
 
-    // 2. Avatar validation in save_my_market_profile_impl
     let bad_avatar_req = FrontendSaveMyMarketProfileRequest {
         profile: FrontendUserProfile {
             picture_url: Some(format!(
@@ -979,17 +988,18 @@ async fn test_market_media_workflow() {
         allow_inquiries: true,
         published: None,
     };
-    assert!(
-        save_my_market_profile_impl(bad_avatar_req, Some(password.to_string()), &alice_state)
-            .is_err()
+    assert_frontend_err_msg(
+        save_my_market_profile_impl(bad_avatar_req, Some(password.to_string()), &alice_state),
+        "Avatar image dimensions must be 96x96, got 120x120",
     );
 
+    let good_webp_uri = format!(
+        "data:image/webp;base64,{}",
+        STANDARD.encode(make_test_vp8_webp(96, 96))
+    );
     let good_avatar_req = FrontendSaveMyMarketProfileRequest {
         profile: FrontendUserProfile {
-            picture_url: Some(format!(
-                "data:image/webp;base64,{}",
-                STANDARD.encode(make_test_vp8_webp(96, 96))
-            )),
+            picture_url: Some(good_webp_uri.clone()),
             ..Default::default()
         },
         visibility: CardFieldVisibility::default(),
@@ -1002,15 +1012,18 @@ async fn test_market_media_workflow() {
     let saved_profile =
         save_my_market_profile_impl(good_avatar_req, Some(password.to_string()), &alice_state)
             .unwrap();
-    assert!(saved_profile.profile.picture_url.is_some());
+    assert_eq!(
+        saved_profile.profile.picture_url.as_deref(),
+        Some(good_webp_uri.as_str())
+    );
 
-    // Also test JPEG avatar (WebKitGTK fallback)
+    let good_jpeg_uri = format!(
+        "data:image/jpeg;base64,{}",
+        STANDARD.encode(make_test_jpeg(96, 96))
+    );
     let good_jpeg_avatar_req = FrontendSaveMyMarketProfileRequest {
         profile: FrontendUserProfile {
-            picture_url: Some(format!(
-                "data:image/jpeg;base64,{}",
-                STANDARD.encode(make_test_jpeg(96, 96))
-            )),
+            picture_url: Some(good_jpeg_uri.clone()),
             ..Default::default()
         },
         visibility: CardFieldVisibility::default(),
@@ -1026,31 +1039,37 @@ async fn test_market_media_workflow() {
         &alice_state,
     )
     .unwrap();
-    assert!(saved_jpeg_profile
-        .profile
-        .picture_url
-        .as_ref()
-        .unwrap()
-        .starts_with("data:image/jpeg;base64,"));
+    assert_eq!(
+        saved_jpeg_profile.profile.picture_url.as_deref(),
+        Some(good_jpeg_uri.as_str())
+    );
+}
 
-    // 3. Create ad with WebP image
-    let webp_ad = make_test_vp8_webp(400, 300);
-    let ad_data_uri = format!("data:image/webp;base64,{}", STANDARD.encode(&webp_ad));
+#[tokio::test]
+async fn test_market_ad_media_crud_webp_and_jpeg() {
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine;
 
-    let ad_with_img = FrontendAdInput {
-        id: None,
-        kind: humoco_market::AdKind::Offer,
-        title: "Handmade Pottery".to_string(),
-        text: Some("High quality clay".to_string()),
-        pricing: Some("15 M".to_string()),
-        duration_days: 90,
-        allow_inquiries: true,
-        is_remote: false,
-        image_webp_data_uri: Some(Some(ad_data_uri.clone())),
-        event_at: None,
-        event_all_day: false,
-        published: Some(true),
+    let base_dir = temp_test_dir("market_ad_media_crud");
+    let password = "TestPassword123!";
+    let alice_service =
+        setup_test_app(&base_dir.path().join("alice"), "Alice", ALICE_PHRASE, password);
+    let alice_state = create_test_state(alice_service);
+    let alice_did = {
+        let s = alice_state.service.lock().unwrap();
+        s.with_wallet(|w| w.get_user_id().to_string()).unwrap()
     };
+
+    // 1. Create ad with WebP image
+    let ad_data_uri = format!(
+        "data:image/webp;base64,{}",
+        STANDARD.encode(make_test_vp8_webp(400, 300))
+    );
+    let mut ad_with_img = offer_ad_input("Handmade Pottery", 90, Some(true));
+    ad_with_img.text = Some("High quality clay".to_string());
+    ad_with_img.pricing = Some("15 M".to_string());
+    ad_with_img.image_webp_data_uri = Some(Some(ad_data_uri.clone()));
+
     let p_after_ad = upsert_ad_impl(ad_with_img, Some(password.to_string()), &alice_state).unwrap();
     assert_eq!(p_after_ad.media_used_count, 1);
     let ad_id = p_after_ad.ads[0].id.clone();
@@ -1059,45 +1078,31 @@ async fn test_market_media_workflow() {
         .clone()
         .expect("Must have image_token");
     assert!(humoco_market::is_valid_image_token(&token));
+    assert_eq!(
+        get_ad_image_impl(
+            alice_did.clone(),
+            token.clone(),
+            Some(password.to_string()),
+            &alice_state
+        )
+        .await
+        .unwrap(),
+        Some(ad_data_uri)
+    );
 
-    // Verify own image retrieval via get_ad_image_impl
-    let alice_did = {
-        let s = alice_state.service.lock().unwrap();
-        s.with_wallet(|w| w.get_user_id().to_string()).unwrap()
-    };
-    let retrieved_img = get_ad_image_impl(
-        alice_did.clone(),
-        token.clone(),
-        Some(password.to_string()),
-        &alice_state,
-    )
-    .await
-    .unwrap();
-    assert_eq!(retrieved_img, Some(ad_data_uri.clone()));
-
-    // 4. Edit ad without changing image (image_webp_data_uri: None) -> image_token preserved
-    let edit_no_img_change = FrontendAdInput {
-        id: Some(ad_id.clone()),
-        kind: humoco_market::AdKind::Offer,
-        title: "Handmade Pottery (Refined)".to_string(),
-        text: Some("High quality clay".to_string()),
-        pricing: Some("15 M".to_string()),
-        duration_days: 90,
-        allow_inquiries: true,
-        is_remote: false,
-        image_webp_data_uri: None,
-        event_at: None,
-        event_all_day: false,
-        published: Some(true),
-    };
+    // 2. Edit ad without changing image (image_webp_data_uri: None) -> image_token preserved
+    let mut edit_no_img_change = offer_ad_input("Handmade Pottery (Refined)", 90, Some(true));
+    edit_no_img_change.id = Some(ad_id.clone());
+    edit_no_img_change.text = Some("High quality clay".to_string());
+    edit_no_img_change.pricing = Some("15 M".to_string());
     let p_edit =
         upsert_ad_impl(edit_no_img_change, Some(password.to_string()), &alice_state).unwrap();
-    assert_eq!(p_edit.ads[0].image_token, Some(token.clone()));
+    assert_eq!(p_edit.ads[0].image_token, Some(token));
     assert_eq!(p_edit.media_used_count, 1);
 
-    // 5. Edit ad removing image (JSON null -> Some(None)) -> image_token becomes None
+    // 3. Edit ad removing image (JSON null -> Some(None)) -> image_token becomes None
     let edit_remove_img: FrontendAdInput = serde_json::from_value(serde_json::json!({
-        "id": ad_id.clone(),
+        "id": ad_id,
         "kind": "offer",
         "title": "Handmade Pottery (No Photo)",
         "text": "High quality clay",
@@ -1113,52 +1118,60 @@ async fn test_market_media_workflow() {
     assert_eq!(p_removed.ads[0].image_token, None);
     assert_eq!(p_removed.media_used_count, 0);
 
-    // Also test ad with JPEG image (WebKitGTK fallback)
-    let jpeg_ad = make_test_jpeg(400, 300);
-    let jpeg_ad_data_uri = format!("data:image/jpeg;base64,{}", STANDARD.encode(&jpeg_ad));
-    let ad_with_jpeg = FrontendAdInput {
-        id: None,
-        kind: humoco_market::AdKind::Offer,
-        title: "Vintage Camera".to_string(),
-        text: Some("Fully functional".to_string()),
-        pricing: Some("50 M".to_string()),
-        duration_days: 30,
-        allow_inquiries: true,
-        is_remote: true,
-        image_webp_data_uri: Some(Some(jpeg_ad_data_uri.clone())),
-        event_at: None,
-        event_all_day: false,
-        published: Some(true),
-    };
+    // 4. Create ad with JPEG image (WebKitGTK fallback)
+    let jpeg_ad_data_uri = format!(
+        "data:image/jpeg;base64,{}",
+        STANDARD.encode(make_test_jpeg(400, 300))
+    );
+    let mut ad_with_jpeg = offer_ad_input("Vintage Camera", 30, Some(true));
+    ad_with_jpeg.text = Some("Fully functional".to_string());
+    ad_with_jpeg.pricing = Some("50 M".to_string());
+    ad_with_jpeg.is_remote = true;
+    ad_with_jpeg.image_webp_data_uri = Some(Some(jpeg_ad_data_uri.clone()));
+
     let p_after_jpeg_ad =
         upsert_ad_impl(ad_with_jpeg, Some(password.to_string()), &alice_state).unwrap();
     let jpeg_token = p_after_jpeg_ad.ads[1]
         .image_token
         .clone()
         .expect("Must have jpeg image_token");
-    let retrieved_jpeg_img = get_ad_image_impl(
-        alice_did.clone(),
-        jpeg_token,
-        Some(password.to_string()),
-        &alice_state,
-    )
-    .await
-    .unwrap();
-    assert_eq!(retrieved_jpeg_img, Some(jpeg_ad_data_uri));
+    assert_eq!(
+        get_ad_image_impl(
+            alice_did,
+            jpeg_token,
+            Some(password.to_string()),
+            &alice_state
+        )
+        .await
+        .unwrap(),
+        Some(jpeg_ad_data_uri)
+    );
+}
 
-    // 6. Test negative caching and unknown image tokens in get_ad_image_impl
-    // Invalid token
-    let invalid_token_res = get_ad_image_impl(
-        alice_did.clone(),
-        "invalid_token".to_string(),
-        Some(password.to_string()),
-        &alice_state,
-    )
-    .await
-    .unwrap();
-    assert_eq!(invalid_token_res, None);
+#[tokio::test]
+async fn test_market_ad_image_invalid_token_and_negative_cache() {
+    let base_dir = temp_test_dir("market_ad_neg_cache");
+    let password = "TestPassword123!";
+    let alice_service =
+        setup_test_app(&base_dir.path().join("alice"), "Alice", ALICE_PHRASE, password);
+    let alice_state = create_test_state(alice_service);
+    let alice_did = {
+        let s = alice_state.service.lock().unwrap();
+        s.with_wallet(|w| w.get_user_id().to_string()).unwrap()
+    };
 
-    // Valid syntax token but unknown and drops configured -> tries network, fails, inserts into negative cache
+    assert_eq!(
+        get_ad_image_impl(
+            alice_did.clone(),
+            "invalid_token".to_string(),
+            Some(password.to_string()),
+            &alice_state,
+        )
+        .await
+        .unwrap(),
+        None
+    );
+
     alice_state.set_cached_security_policy(Some(crate::settings::SecurityPolicy {
         market_selected_syncs: vec![FrontendSyncDescriptor {
             write_url: "http://127.0.0.1:9999".to_string(),
@@ -1176,17 +1189,18 @@ async fn test_market_media_workflow() {
     }));
 
     let unknown_token = "0123456789abcdef0123456789abcdef".to_string();
-    let unknown_res = get_ad_image_impl(
-        alice_did.clone(),
-        unknown_token.clone(),
-        Some(password.to_string()),
-        &alice_state,
-    )
-    .await
-    .unwrap();
-    assert_eq!(unknown_res, None);
+    assert_eq!(
+        get_ad_image_impl(
+            alice_did.clone(),
+            unknown_token.clone(),
+            Some(password.to_string()),
+            &alice_state,
+        )
+        .await
+        .unwrap(),
+        None
+    );
 
-    // Negative cache must contain (blob_id, mirror_url) inside session-scoped ActiveProfileCaches
     let blob_id = humoco_market::derive_media_blob_id(&unknown_token).unwrap();
     assert!(alice_state
         .profile_caches
@@ -1197,25 +1211,25 @@ async fn test_market_media_workflow() {
         .media_negative_cache
         .contains_key(&(blob_id, "http://127.0.0.1:9999".to_string())));
 
-    // Subsequent call hits negative cache immediately
-    let hit_neg_cache = get_ad_image_impl(
-        alice_did.clone(),
-        unknown_token.clone(),
-        Some(password.to_string()),
-        &alice_state,
-    )
-    .await
-    .unwrap();
-    assert_eq!(hit_neg_cache, None);
+    assert_eq!(
+        get_ad_image_impl(
+            alice_did,
+            unknown_token,
+            Some(password.to_string()),
+            &alice_state,
+        )
+        .await
+        .unwrap(),
+        None
+    );
 }
 
 #[tokio::test]
 async fn test_rebuild_and_sign_own_card_with_empty_or_none_name() {
-    let temp_dir =
-        std::env::temp_dir().join(format!("humoco_empty_name_test_{}", uuid::Uuid::new_v4()));
+    let temp_dir = temp_test_dir("empty_name_test");
     let password = "test-password-123";
     let mut alice_service = crate::test_support::setup_test_app(
-        &temp_dir,
+        temp_dir.path(),
         "Initial Name",
         crate::test_support::ALICE_PHRASE,
         password,
@@ -1246,7 +1260,8 @@ async fn test_rebuild_and_sign_own_card_with_empty_or_none_name() {
 fn test_save_profile_p8_privacy_guardrails_and_inquiry_sync() {
     let base_dir = temp_test_dir("p8_guardrails");
     let password = "TestPassword123!";
-    let alice_service = setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
+    let alice_service =
+        setup_test_app(&base_dir.path().join("alice"), "Alice", ALICE_PHRASE, password);
     let alice_state = create_test_state(alice_service);
 
     // Create an ad first with allow_inquiries = true
@@ -1341,7 +1356,8 @@ fn test_save_profile_p8_privacy_guardrails_and_inquiry_sync() {
 fn test_import_contact_card_uri_with_surrounding_chat_text() {
     let base_dir = temp_test_dir("card_uri_chat_text");
     let password = "TestPassword123!";
-    let alice_service = setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
+    let alice_service =
+        setup_test_app(&base_dir.path().join("alice"), "Alice", ALICE_PHRASE, password);
     let alice_state = create_test_state(alice_service);
 
     let env_json = serde_json::to_string(&humoco_market::CardEnvelope {
@@ -1370,7 +1386,7 @@ async fn test_k1_k2_market_cache_error_propagation_and_access_mode_guards() {
     let password = "MasterPassword123!";
     let daily_pin = "445566";
     let mut alice_service =
-        setup_test_app(&base_dir.join("alice"), "Alice", ALICE_PHRASE, password);
+        setup_test_app(&base_dir.path().join("alice"), "Alice", ALICE_PHRASE, password);
     alice_service
         .enable_secondary_auth(
             password,
@@ -1426,11 +1442,11 @@ async fn test_k1_k2_market_cache_error_propagation_and_access_mode_guards() {
     )
     .unwrap();
 
-    // K1: Without login pre-cache and with timeout=0 (password: None), read MUST return Err instead of empty default
+    // K1: Without login pre-cache and with timeout=0 (password: None), read MUST return SessionNotActive instead of empty default
     alice_state.clear_all_caches();
-    assert!(
-        get_my_market_profile_impl(None, &alice_state).is_err(),
-        "K1: Unauthenticated read without cache must fail instead of returning empty default"
+    assert_frontend_err_code(
+        get_my_market_profile_impl(None, &alice_state),
+        "error.auth.sessionNotActive",
     );
 
     // K1: Re-login with timeout = 0 populates the own_market_profile cache so read succeeds
@@ -1499,10 +1515,10 @@ async fn test_k1_k2_market_cache_error_propagation_and_access_mode_guards() {
 
 #[test]
 fn h6_save_my_market_profile_rejects_oversized_card_field_without_mutating_core_profile() {
-    let dir = crate::test_support::temp_test_dir("h6_atomic_profile_save");
+    let dir = temp_test_dir("h6_atomic_profile_save");
     let pw = "pw-h6-test";
     let state = crate::test_support::create_test_state(crate::test_support::setup_test_app(
-        &dir.join("alice"),
+        &dir.path().join("alice"),
         "Alice Initial",
         crate::test_support::ALICE_PHRASE,
         pw,
@@ -1535,25 +1551,26 @@ fn h6_save_my_market_profile_rejects_oversized_card_field_without_mutating_core_
     // Attempt an update whose first_name exceeds sd_card's 80-char limit while published = true.
     // Validation/signing MUST fail BEFORE mutating Core's UserProfile on disk or in RAM.
     let too_long_name = "X".repeat(120);
-    let err = save_my_market_profile_impl(
-        FrontendSaveMyMarketProfileRequest {
-            profile: FrontendUserProfile {
-                first_name: Some(too_long_name),
-                organization: Some("Partially Mutated Org".to_string()),
-                ..Default::default()
+    assert_frontend_err_msg(
+        save_my_market_profile_impl(
+            FrontendSaveMyMarketProfileRequest {
+                profile: FrontendUserProfile {
+                    first_name: Some(too_long_name),
+                    organization: Some("Partially Mutated Org".to_string()),
+                    ..Default::default()
+                },
+                visibility: CardFieldVisibility::default(),
+                skills: vec![],
+                max_hops: 2,
+                validity_years: 2,
+                allow_inquiries: true,
+                published: Some(true),
             },
-            visibility: CardFieldVisibility::default(),
-            skills: vec![],
-            max_hops: 2,
-            validity_years: 2,
-            allow_inquiries: true,
-            published: Some(true),
-        },
-        Some(pw.to_string()),
-        &state,
-    )
-    .unwrap_err();
-    assert!(!err.message.is_empty());
+            Some(pw.to_string()),
+            &state,
+        ),
+        "first_name exceeds 80 characters",
+    );
 
     let after = get_my_market_profile_impl(Some(pw.to_string()), &state).unwrap();
     assert_eq!(
@@ -1566,16 +1583,14 @@ fn h6_save_my_market_profile_rejects_oversized_card_field_without_mutating_core_
         Some("Clean Org"),
         "Core profile organization must stay untouched when card signing fails"
     );
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn h3_h4_negative_cache_clears_on_logout_and_foreign_media_skips_wallet_seal() {
-    let dir = crate::test_support::temp_test_dir("h3_h4_cache_and_seal");
+    let dir = temp_test_dir("h3_h4_cache_and_seal");
     let pw = "pw-h3h4-test";
     let state = crate::test_support::create_test_state(crate::test_support::setup_test_app(
-        &dir.join("alice"),
+        &dir.path().join("alice"),
         "Alice",
         crate::test_support::ALICE_PHRASE,
         pw,
@@ -1611,8 +1626,6 @@ fn h3_h4_negative_cache_clears_on_logout_and_foreign_media_skips_wallet_seal() {
     }
     let seal_after = state.service.lock().unwrap().get_current_seal().unwrap();
     assert_eq!(seal_before, seal_after);
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -1620,9 +1633,9 @@ fn h5_resolve_card_recipient_preserves_subaccount_and_rejects_tamper() {
     use human_money_core::app_service::AppService;
     use human_money_core::services::mnemonic::MnemonicLanguage;
 
-    let dir = crate::test_support::temp_test_dir("h5_resolve_subaccount");
+    let dir = temp_test_dir("h5_resolve_subaccount");
     let pw = "pw-h5-test";
-    let mut service = AppService::new(&dir).unwrap();
+    let mut service = AppService::new(dir.path()).unwrap();
     let mnemonic = AppService::generate_mnemonic(12, MnemonicLanguage::English).unwrap();
     service
         .create_profile(
@@ -1636,8 +1649,13 @@ fn h5_resolve_card_recipient_preserves_subaccount_and_rejects_tamper() {
             true,
         )
         .unwrap();
-    let expected_uid = service
-        .with_wallet(|w| w.get_user_id().to_string())
+    let (expected_uid, alice_pk) = service
+        .with_wallet_and_identity(|w, id| {
+            (
+                w.get_user_id().to_string(),
+                id.signing_key.verifying_key(),
+            )
+        })
         .unwrap();
     assert!(expected_uid.starts_with("shop:"));
 
@@ -1668,33 +1686,50 @@ fn h5_resolve_card_recipient_preserves_subaccount_and_rejects_tamper() {
     assert_eq!(resolved.recipient_id, expected_uid);
     assert_eq!(resolved.display_name.as_deref(), Some("Alice Shop"));
 
-    // Tampering the JWT payload inside card_wire MUST fail signature verification
+    // Tampering payload.did fails Identity check early
     let b64_part = share_uri.split("env=").nth(1).unwrap();
     let env_bytes = human_money_core::crypto::decode_base64(b64_part).unwrap();
-    let mut env: humoco_market::CardEnvelope = serde_json::from_slice(&env_bytes).unwrap();
-    let mut parts: Vec<String> = env.card_wire.split('.').map(str::to_string).collect();
+    let env: humoco_market::CardEnvelope = serde_json::from_slice(&env_bytes).unwrap();
+    let parts: Vec<String> = env.card_wire.split('.').map(str::to_string).collect();
     let payload_bytes = human_money_core::crypto::decode_base64(&parts[1]).unwrap();
-    let mut payload_val: serde_json::Value = serde_json::from_slice(&payload_bytes).unwrap();
-    payload_val["did"] = serde_json::json!(format!("evil:999@{}", resolved.did));
-    parts[1] = human_money_core::crypto::encode_base64(&serde_json::to_vec(&payload_val).unwrap());
-    env.card_wire = parts.join(".");
-    let tampered_json = serde_json::to_string(&env).unwrap();
-    assert!(resolve_card_recipient_impl(tampered_json, &state).is_err());
+    let payload_val: serde_json::Value = serde_json::from_slice(&payload_bytes).unwrap();
 
-    let _ = std::fs::remove_dir_all(&dir);
+    let mut did_tampered = payload_val.clone();
+    did_tampered["did"] = serde_json::json!(format!("evil:999@{}", resolved.did));
+    let mut did_parts = parts.clone();
+    did_parts[1] = human_money_core::crypto::encode_base64(&serde_json::to_vec(&did_tampered).unwrap());
+    let mut env_bad_did = env.clone();
+    env_bad_did.card_wire = did_parts.join(".");
+    assert_frontend_err_msg(
+        resolve_card_recipient_impl(serde_json::to_string(&env_bad_did).unwrap(), &state),
+        "Invalid contact card: Identity error:",
+    );
+
+    // Tampering payload.recipient_did with another valid canonical subaccount for the same key passes
+    // DID checks and MUST fail at JWS signature verification!
+    let evil_recipient_did = human_money_core::crypto::create_user_id(&alice_pk, Some("evil")).unwrap();
+    let mut sig_tampered = payload_val;
+    sig_tampered["recipient_did"] = serde_json::json!(evil_recipient_did);
+    let mut sig_parts = parts;
+    sig_parts[1] = human_money_core::crypto::encode_base64(&serde_json::to_vec(&sig_tampered).unwrap());
+    let mut env_bad_sig = env;
+    env_bad_sig.card_wire = sig_parts.join(".");
+    assert_frontend_err_msg(
+        resolve_card_recipient_impl(serde_json::to_string(&env_bad_sig).unwrap(), &state),
+        "Invalid contact card: Cryptographic error: Invalid JWS signature",
+    );
 }
 
 #[test]
 fn h10_import_contact_card_updates_contacts_atomically_and_rolls_back_cache_on_write_fault() {
     use human_money_core::app_service::AppService;
-    use human_money_core::services::mnemonic::MnemonicLanguage;
 
-    let dir_alice = crate::test_support::temp_test_dir("h10_alice");
-    let dir_bob = crate::test_support::temp_test_dir("h10_bob");
+    let dir_alice = temp_test_dir("h10_alice");
+    let dir_bob = temp_test_dir("h10_bob");
     let pw = "StrongPw-H10-2026!";
 
     let alice_svc = crate::test_support::setup_test_app(
-        &dir_alice,
+        dir_alice.path(),
         "Alice",
         crate::test_support::ALICE_PHRASE,
         pw,
@@ -1725,9 +1760,9 @@ fn h10_import_contact_card_updates_contacts_atomically_and_rolls_back_cache_on_w
     .unwrap();
     let share_uri = alice_prof.share_uri.unwrap();
 
-    let bob_svc = AppService::new(&dir_bob).unwrap();
+    let bob_svc = AppService::new(dir_bob.path()).unwrap();
     let bob_state = crate::test_support::create_test_state(crate::test_support::setup_test_app(
-        &dir_bob.join("w"),
+        &dir_bob.path().join("w"),
         "Bob",
         crate::test_support::BOB_PHRASE,
         pw,
@@ -1768,8 +1803,9 @@ fn h10_import_contact_card_updates_contacts_atomically_and_rolls_back_cache_on_w
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         human_money_core::storage::file_storage::inject_write_fault_once("seal.enc");
-        assert!(
-            import_contact_card_impl(share_uri.clone(), Some(pw.to_string()), &bob_state).is_err()
+        assert_frontend_err_msg(
+            import_contact_card_impl(share_uri.clone(), Some(pw.to_string()), &bob_state),
+            "Injected write fault for seal.enc (test-utils)",
         );
     }
     {
@@ -1805,29 +1841,22 @@ fn h10_import_contact_card_updates_contacts_atomically_and_rolls_back_cache_on_w
                 .as_deref(),
             Some("Alice Updated")
         );
-        assert!(
-            crate::state::load_encrypted_json_opt::<humoco_market::CardStore>(
-                &mut s,
-                crate::state::MARKET_CARD_STORE_KEY,
-                Some(pw),
-            )
-            .unwrap()
-            .is_some()
-        );
+        let persisted = crate::state::load_encrypted_json_opt::<humoco_market::CardStore>(
+            &mut s,
+            crate::state::MARKET_CARD_STORE_KEY,
+            Some(pw),
+        )
+        .unwrap()
+        .expect("CardStore must be persisted after clean retry");
+        assert!(persisted.cards.contains_key(&alice_did));
     }
-
-    let _ = (
-        MnemonicLanguage::English,
-        std::fs::remove_dir_all(&dir_alice),
-    );
-    let _ = std::fs::remove_dir_all(&dir_bob);
 }
 
 #[test]
 fn test_f2_f3_strict_card_envelope_and_no_subaccount_sibling_fallback() {
     let dir = temp_test_dir("f2_f3_strict_adapters");
     let pw = "StrongPassword123!";
-    let alice_svc = setup_test_app(&dir.join("alice"), "Alice", ALICE_PHRASE, pw);
+    let alice_svc = setup_test_app(&dir.path().join("alice"), "Alice", ALICE_PHRASE, pw);
     let state = create_test_state(alice_svc);
 
     let sample_env = serde_json::json!({
@@ -1839,14 +1868,21 @@ fn test_f2_f3_strict_card_envelope_and_no_subaccount_sibling_fallback() {
     assert!(parse_card_envelope_payload(&format!("HUMOCO://CARD?foo=bar&env={}", b64)).is_ok());
 
     // F2: arbitrary URL prefixes must NOT be accepted just for containing ?env=
-    assert!(
-        parse_card_envelope_payload(&format!("https://evil.example/path?env={}", b64)).is_err()
+    assert_frontend_err_msg(
+        parse_card_envelope_payload(&format!("https://evil.example/path?env={}", b64)),
+        "Payload is not a valid CardEnvelope JSON",
     );
-    assert!(parse_card_envelope_payload(&format!("humoco://pay?env={}", b64)).is_err());
+    assert_frontend_err_msg(
+        parse_card_envelope_payload(&format!("humoco://pay?env={}", b64)),
+        "Payload is not a valid CardEnvelope JSON",
+    );
 
     // F2: unknown JSON fields on CardEnvelope must be rejected (#[serde(deny_unknown_fields)])
     let unknown_json = r#"{"card_wire":"hdr.payload.sig","hops":1,"extra":true}"#;
-    assert!(parse_card_envelope_payload(unknown_json).is_err());
+    assert_frontend_err_msg(
+        parse_card_envelope_payload(unknown_json),
+        "unknown field `extra`",
+    );
 
     // F3: export_forward_card_impl for missing subaccount does not fall back to sibling card
     let sib_sk = SigningKey::from_bytes(&[77u8; 32]);
@@ -1888,12 +1924,10 @@ fn test_f2_f3_strict_card_envelope_and_no_subaccount_sibling_fallback() {
         crate::state::save_encrypted_json(&mut s, MARKET_CARD_STORE_KEY, &store, Some(pw)).unwrap();
     }
     assert!(export_forward_card_impl(sib_a, Some(pw.into()), &state).is_ok());
-    assert!(
-        export_forward_card_impl(sib_missing, Some(pw.into()), &state).is_err(),
-        "F3: missing subaccount must not fall back to sibling card under same root DID"
+    assert_frontend_err_msg(
+        export_forward_card_impl(sib_missing, Some(pw.into()), &state),
+        "Card not found in store",
     );
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -1937,16 +1971,15 @@ fn f8_parse_card_envelope_payload_accepts_quotes_linebreaks_and_standard_base64(
     );
     let parsed = parse_card_envelope_payload(&wrapped).expect("wrapped standard base64 URI");
     assert_eq!(parsed.card_wire, env.card_wire);
-    assert!(parse_card_envelope_payload("humoco://card?other=1").is_err());
+    assert_frontend_err_msg(
+        parse_card_envelope_payload("humoco://card?other=1"),
+        "Card share URI is missing env query parameter",
+    );
 }
 
-#[tokio::test]
-async fn s11_f2_f4_validation_delete_atomicity_and_card_drops() {
-    use crate::models::{
-        CardFieldVisibility, FrontendSaveMyMarketProfileRequest, FrontendUserProfile,
-    };
+#[test]
+fn s11_f2_build_card_drops_filters_revoked_and_invalid_keys() {
     use crate::test_support::test_ed25519_pub_hex;
-    use base64::{engine::general_purpose::STANDARD, Engine};
 
     let pub1 = test_ed25519_pub_hex(0x11);
     let pub2 = test_ed25519_pub_hex(0x22);
@@ -2014,18 +2047,37 @@ async fn s11_f2_f4_validation_delete_atomicity_and_card_drops() {
     assert_eq!(drops[0].write_url, "https://s1.example/sync.php/");
     assert_eq!(drops[1].write_url, "https://goodpub.example/sync.php");
     assert!(drops[1].slot_id.as_deref().unwrap().ends_with("_laden"));
+}
 
-    let dir = crate::test_support::temp_test_dir("s11_f4_market");
+#[test]
+fn s11_f4_profile_and_ad_input_validation_rejects_bad_urls_skills_and_oversized_media() {
+    let dir = temp_test_dir("s11_f4_input_validation");
     let pw = "pw-s11-f4";
-    let service =
-        crate::test_support::setup_test_app(&dir.join("alice"), "Alice S11", ALICE_PHRASE, pw);
+    let service = crate::test_support::setup_test_app(
+        &dir.path().join("alice"),
+        "Alice S11",
+        ALICE_PHRASE,
+        pw,
+    );
     let state = crate::test_support::create_test_state(service);
 
-    for bad_pic in [
-        "data:image/svg+xml;base64,PHN2Zy8+",
-        "javascript:alert(1)",
-        "http://insecure.example/avatar.png",
-        "https://user:pass@example.com/avatar.png",
+    for (bad_pic, expected_err) in [
+        (
+            "data:image/svg+xml;base64,PHN2Zy8+",
+            "Avatar data URI must start with 'data:image/webp;base64,', 'data:image/jpeg;base64,', or 'data:image/png;base64,'",
+        ),
+        (
+            "javascript:alert(1)",
+            "Profile picture URL must use https:// without userinfo",
+        ),
+        (
+            "http://insecure.example/avatar.png",
+            "Profile picture URL must use https:// without userinfo",
+        ),
+        (
+            "https://user:pass@example.com/avatar.png",
+            "Profile picture URL must use https:// without userinfo",
+        ),
     ] {
         let req = FrontendSaveMyMarketProfileRequest {
             profile: FrontendUserProfile {
@@ -2039,10 +2091,9 @@ async fn s11_f2_f4_validation_delete_atomicity_and_card_drops() {
             allow_inquiries: true,
             published: Some(false),
         };
-        assert!(
-            save_my_market_profile_impl(req, Some(pw.to_string()), &state).is_err(),
-            "expected invalid picture_url rejection: {}",
-            bad_pic
+        assert_frontend_err_msg(
+            save_my_market_profile_impl(req, Some(pw.to_string()), &state),
+            expected_err,
         );
     }
 
@@ -2063,7 +2114,10 @@ async fn s11_f2_f4_validation_delete_atomicity_and_card_drops() {
         allow_inquiries: true,
         published: Some(false),
     };
-    assert!(save_my_market_profile_impl(skills_err_req, Some(pw.to_string()), &state).is_err());
+    assert_frontend_err_msg(
+        save_my_market_profile_impl(skills_err_req, Some(pw.to_string()), &state),
+        "Skill count 9 exceeds maximum 8",
+    );
 
     let valid_https_req = FrontendSaveMyMarketProfileRequest {
         profile: FrontendUserProfile {
@@ -2088,105 +2142,92 @@ async fn s11_f2_f4_validation_delete_atomicity_and_card_drops() {
         Some("https://example.com/avatar.png")
     );
 
-    let oversized_uri = format!("data:image/webp;base64,{}", "A".repeat(140_005));
-    assert!(upsert_ad_impl(
-        FrontendAdInput {
-            id: None,
-            kind: humoco_market::AdKind::Offer,
-            title: "Too big".to_string(),
-            text: None,
-            pricing: None,
-            duration_days: 30,
-            allow_inquiries: true,
-            is_remote: false,
-            image_webp_data_uri: Some(Some(oversized_uri)),
-            event_at: None,
-            event_all_day: false,
-            published: Some(true),
-        },
-        Some(pw.to_string()),
-        &state,
-    )
-    .is_err());
+    let mut oversized_ad = offer_ad_input("Too big", 30, Some(true));
+    oversized_ad.image_webp_data_uri = Some(Some(format!(
+        "data:image/webp;base64,{}",
+        "A".repeat(140_005)
+    )));
+    assert_frontend_err_msg(
+        upsert_ad_impl(oversized_ad, Some(pw.to_string()), &state),
+        "Ad image data URI exceeds maximum length or contains control characters",
+    );
 
-    assert!(upsert_ad_impl(
-        FrontendAdInput {
-            id: Some("0011223344556677".to_string()),
-            kind: humoco_market::AdKind::Offer,
-            title: "Unknown ID".to_string(),
-            text: None,
-            pricing: None,
-            duration_days: 30,
-            allow_inquiries: true,
-            is_remote: false,
-            image_webp_data_uri: None,
-            event_at: None,
-            event_all_day: false,
-            published: Some(true),
-        },
-        Some(pw.to_string()),
-        &state,
-    )
-    .is_err());
+    let mut unknown_id_ad = offer_ad_input("Unknown ID", 30, Some(true));
+    unknown_id_ad.id = Some("0011223344556677".to_string());
+    assert_frontend_err_msg(
+        upsert_ad_impl(unknown_id_ad, Some(pw.to_string()), &state),
+        "Ad not found",
+    );
+
+    assert_frontend_err_msg(
+        parse_card_envelope_payload(&"x".repeat(64 * 1024 + 1)),
+        "Card envelope payload exceeds 64 KiB limit",
+    );
+}
+
+#[tokio::test]
+async fn s11_f4_delete_ad_missing_and_write_fault_preserves_media() {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+
+    let dir = temp_test_dir("s11_f4_delete_fault");
+    let pw = "pw-s11-f4";
+    let service = crate::test_support::setup_test_app(
+        &dir.path().join("alice"),
+        "Alice S11",
+        ALICE_PHRASE,
+        pw,
+    );
+    let state = crate::test_support::create_test_state(service);
 
     let valid_webp = format!(
         "data:image/webp;base64,{}",
         STANDARD.encode(make_test_vp8_webp(64, 64))
     );
-    let after_ad = upsert_ad_impl(
-        FrontendAdInput {
-            id: None,
-            kind: humoco_market::AdKind::Offer,
-            title: "Bike".to_string(),
-            text: None,
-            pricing: None,
-            duration_days: 30,
-            allow_inquiries: true,
-            is_remote: false,
-            image_webp_data_uri: Some(Some(valid_webp.clone())),
-            event_at: None,
-            event_all_day: false,
-            published: Some(true),
-        },
-        Some(pw.to_string()),
-        &state,
-    )
-    .unwrap();
+    let mut ad_input = offer_ad_input("Bike", 30, Some(true));
+    ad_input.image_webp_data_uri = Some(Some(valid_webp.clone()));
+    let after_ad = upsert_ad_impl(ad_input, Some(pw.to_string()), &state).unwrap();
     let ad_id = after_ad.ads[0].id.clone();
     let ad_token = after_ad.ads[0].image_token.clone().unwrap();
 
-    assert!(delete_ad_impl("nonexistent".to_string(), Some(pw.to_string()), &state).is_err());
+    assert_frontend_err_msg(
+        delete_ad_impl("nonexistent".to_string(), Some(pw.to_string()), &state),
+        "Ad not found",
+    );
 
     {
         let _fault_guard = crate::test_support::WRITE_FAULT_TEST_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         human_money_core::storage::file_storage::inject_write_fault_once("seal.enc");
-        assert!(delete_ad_impl(ad_id.clone(), Some(pw.to_string()), &state).is_err());
+        assert_frontend_err_msg(
+            delete_ad_impl(ad_id, Some(pw.to_string()), &state),
+            "Injected write fault for seal.enc (test-utils)",
+        );
     }
     let media_survived = get_ad_image_impl(String::new(), ad_token, Some(pw.to_string()), &state)
         .await
         .unwrap();
     assert_eq!(media_survived, Some(valid_webp));
-
-    assert!(parse_card_envelope_payload(&"x".repeat(64 * 1024 + 1)).is_err());
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[tokio::test]
-async fn s11_f5_receive_only_isolation_one_shot_pin_and_media_binding() {
-    use crate::models::{
-        CardFieldVisibility, FrontendSaveMyMarketProfileRequest, FrontendUserProfile,
-    };
+struct SeededS11F5Env {
+    _dir: TempDirGuard,
+    wallet_dir: PathBuf,
+    folder_name: String,
+    bob_did: String,
+    charlie_did: String,
+    own_token: String,
+    bob_token: String,
+    valid_webp: Vec<u8>,
+}
+
+fn seed_s11_f5_wallet(name: &str, pw: &str, cashier_pin: &str) -> SeededS11F5Env {
     use base64::{engine::general_purpose::STANDARD, Engine};
 
-    let dir = crate::test_support::temp_test_dir("s11_f5_market");
-    let pw = "MasterPass-S11-F5!";
-    let cashier_pin = "112233";
-    let wallet_dir = dir.join("alice");
+    let dir = temp_test_dir(name);
+    let wallet_dir = dir.path().join("alice");
     let mut svc = crate::test_support::setup_test_app(&wallet_dir, "Alice F5", ALICE_PHRASE, pw);
     let folder_name = svc.list_profiles().unwrap()[0].folder_name.clone();
-
     svc.enable_secondary_auth(
         pw,
         cashier_pin,
@@ -2195,15 +2236,14 @@ async fn s11_f5_receive_only_isolation_one_shot_pin_and_media_binding() {
     .unwrap();
     drop(svc);
 
-    // Open fresh handle via secondary login -> wrap in AppState? Wait: seed expiring card & foreign card first!
-    let svc2 = crate::test_support::setup_test_app(&dir.join("bob"), "Bob", BOB_PHRASE, pw);
+    let svc2 = crate::test_support::setup_test_app(&dir.path().join("bob"), "Bob", BOB_PHRASE, pw);
     let (bob_did, bob_sk) = svc2
         .with_wallet_and_identity(|w, id| (w.get_user_id().to_string(), id.signing_key.clone()))
         .unwrap();
     drop(svc2);
 
     let charlie_svc = crate::test_support::setup_test_app(
-        &dir.join("charlie"),
+        &dir.path().join("charlie"),
         "Charlie",
         crate::test_support::CHARLIE_PHRASE,
         pw,
@@ -2220,28 +2260,12 @@ async fn s11_f5_receive_only_isolation_one_shot_pin_and_media_binding() {
     let master_state = crate::test_support::create_test_state(master_svc);
 
     let valid_webp = make_test_vp8_webp(64, 64);
-    let own_res = upsert_ad_impl(
-        FrontendAdInput {
-            id: None,
-            kind: humoco_market::AdKind::Offer,
-            title: "Own".to_string(),
-            text: None,
-            pricing: None,
-            duration_days: 30,
-            allow_inquiries: true,
-            is_remote: false,
-            image_webp_data_uri: Some(Some(format!(
-                "data:image/webp;base64,{}",
-                STANDARD.encode(&valid_webp)
-            ))),
-            event_at: None,
-            event_all_day: false,
-            published: Some(true),
-        },
-        Some(pw.to_string()),
-        &master_state,
-    )
-    .unwrap();
+    let mut own_ad = offer_ad_input("Own", 30, Some(true));
+    own_ad.image_webp_data_uri = Some(Some(format!(
+        "data:image/webp;base64,{}",
+        STANDARD.encode(&valid_webp)
+    )));
+    let own_res = upsert_ad_impl(own_ad, Some(pw.to_string()), &master_state).unwrap();
     let own_token = own_res.ads[0].image_token.clone().unwrap();
 
     save_my_market_profile_impl(
@@ -2259,36 +2283,37 @@ async fn s11_f5_receive_only_isolation_one_shot_pin_and_media_binding() {
     )
     .unwrap();
 
-    // Force own card close to expiry (< 30d) + add expired Bob card + cache Bob media sidecar
     let (bob_token, bob_blob_id, _ct) =
         humoco_market::seal_media_blob(&bob_did, &valid_webp).unwrap();
     let now = chrono::Utc::now().timestamp().max(0) as u64;
+    let drop_desc = humoco_market::DropDescriptor {
+        write_url: "https://sync.example/sync.php".into(),
+        read_url: "https://sync.example/d".into(),
+        slot_id: None,
+        drop_pub: "11".repeat(32),
+    };
     {
         let mut s = master_state.service.lock().unwrap();
         let (own_did, own_sk) = s
             .with_wallet_and_identity(|w, id| (w.get_user_id().to_string(), id.signing_key.clone()))
             .unwrap();
         let mut stored = load_own_market_profile_for_write(&mut s, Some(pw)).unwrap();
-        let near_exp = humoco_market::sign_sd_card(
-            humoco_market::CardPayloadInput {
-                did: own_did,
-                v: 1,
-                valid_until: now + 60,
-                max_hops: 2,
-                ad_count: 1,
-                allow_inquiries: true,
-                drops: vec![humoco_market::DropDescriptor {
-                    write_url: "https://sync.example/sync.php".into(),
-                    read_url: "https://sync.example/d".into(),
-                    slot_id: None,
-                    drop_pub: "11".repeat(32),
-                }],
-            },
-            vec![],
-            &own_sk,
-        )
-        .unwrap();
-        stored.last_card = Some(near_exp);
+        stored.last_card = Some(
+            humoco_market::sign_sd_card(
+                humoco_market::CardPayloadInput {
+                    did: own_did,
+                    v: 1,
+                    valid_until: now + 60,
+                    max_hops: 2,
+                    ad_count: 1,
+                    allow_inquiries: true,
+                    drops: vec![drop_desc.clone()],
+                },
+                vec![],
+                &own_sk,
+            )
+            .unwrap(),
+        );
         save_own_market_profile_state(&master_state, &mut s, &stored, Some(pw)).unwrap();
 
         let expired_bob = humoco_market::sign_sd_card(
@@ -2299,12 +2324,7 @@ async fn s11_f5_receive_only_isolation_one_shot_pin_and_media_binding() {
                 max_hops: 2,
                 ad_count: 0,
                 allow_inquiries: true,
-                drops: vec![humoco_market::DropDescriptor {
-                    write_url: "https://sync.example/sync.php".into(),
-                    read_url: "https://sync.example/d".into(),
-                    slot_id: None,
-                    drop_pub: "11".repeat(32),
-                }],
+                drops: vec![drop_desc],
             },
             vec![],
             &bob_sk,
@@ -2332,12 +2352,33 @@ async fn s11_f5_receive_only_isolation_one_shot_pin_and_media_binding() {
         )
         .unwrap();
     }
-    drop(master_state);
 
-    // Log in as ReceiveOnly (Cashier)
-    let mut ro_svc = human_money_core::app_service::AppService::new(&wallet_dir).unwrap();
+    SeededS11F5Env {
+        _dir: dir,
+        wallet_dir,
+        folder_name,
+        bob_did,
+        charlie_did,
+        own_token,
+        bob_token,
+        valid_webp,
+    }
+}
+
+#[test]
+fn s11_f5_receive_only_cannot_auto_renew_own_card_or_persist_pruned_store() {
+    let pw = "MasterPass-S11-F5!";
+    let cashier_pin = "112233";
+    let env = seed_s11_f5_wallet("s11_f5_receive_only", pw, cashier_pin);
+
+    let mut ro_svc = human_money_core::app_service::AppService::new(&env.wallet_dir).unwrap();
     let granted = ro_svc
-        .login_with_secondary(&folder_name, cashier_pin, true, "device-drops-test".into())
+        .login_with_secondary(
+            &env.folder_name,
+            cashier_pin,
+            true,
+            "device-drops-test".into(),
+        )
         .unwrap();
     assert_eq!(granted, human_money_core::AccessMode::ReceiveOnly);
     ro_svc.unlock_secondary_session(cashier_pin, 600).unwrap();
@@ -2346,29 +2387,33 @@ async fn s11_f5_receive_only_isolation_one_shot_pin_and_media_binding() {
     let snap = get_market_view_impl(None, &ro_state).unwrap();
     assert_eq!(snap.stored_card_count, 0);
 
-    {
-        let mut s = ro_state.service.lock().unwrap();
-        let stored_after = load_own_market_profile_for_write(&mut s, None).unwrap();
-        assert_eq!(
-            stored_after.last_card.unwrap().payload.v,
-            1,
-            "ReceiveOnly must NOT auto-renew/re-sign own card"
-        );
-        let disk_store: humoco_market::CardStore =
-            crate::state::load_encrypted_json_or_default(&mut s, MARKET_CARD_STORE_KEY, None)
-                .unwrap();
-        assert_eq!(
-            disk_store.cards.len(),
-            1,
-            "ReceiveOnly must NOT persist expired-card prune to disk"
-        );
-    }
-    drop(ro_state);
+    let mut s = ro_state.service.lock().unwrap();
+    let stored_after = load_own_market_profile_for_write(&mut s, None).unwrap();
+    assert_eq!(
+        stored_after.last_card.unwrap().payload.v,
+        1,
+        "ReceiveOnly must NOT auto-renew/re-sign own card"
+    );
+    let disk_store: humoco_market::CardStore =
+        crate::state::load_encrypted_json_or_default(&mut s, MARKET_CARD_STORE_KEY, None).unwrap();
+    assert_eq!(
+        disk_store.cards.len(),
+        1,
+        "ReceiveOnly must NOT persist expired-card prune to disk"
+    );
+}
 
-    // Log back in with master password to verify OneShotPinGrant + foreign media token binding
-    let mut m_svc = human_money_core::app_service::AppService::new(&wallet_dir).unwrap();
+#[tokio::test]
+async fn s11_f5_one_shot_pin_grant_and_foreign_media_owner_binding() {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+
+    let pw = "MasterPass-S11-F5!";
+    let env = seed_s11_f5_wallet("s11_f5_one_shot", pw, "112233");
+    let expected_webp_uri = format!("data:image/webp;base64,{}", STANDARD.encode(&env.valid_webp));
+
+    let mut m_svc = human_money_core::app_service::AppService::new(&env.wallet_dir).unwrap();
     m_svc
-        .login(&folder_name, pw, false, "device-drops-test".into())
+        .login(&env.folder_name, pw, false, "device-drops-test".into())
         .unwrap();
     let m_state = crate::test_support::create_test_state(m_svc);
     let issue_fresh_grant = |st: &AppState| -> String {
@@ -2383,30 +2428,32 @@ async fn s11_f5_receive_only_isolation_one_shot_pin_and_media_binding() {
 
     assert!(get_app_notices_impl(Some(issue_fresh_grant(&m_state)), &m_state).is_ok());
     assert!(get_market_view_impl(Some(issue_fresh_grant(&m_state)), &m_state).is_ok());
-    assert!(
+    assert_eq!(
         get_ad_image_impl(
             String::new(),
-            own_token.clone(),
+            env.own_token.clone(),
             Some(issue_fresh_grant(&m_state)),
             &m_state
         )
         .await
-        .unwrap()
-        .is_some(),
-        "AdEditorModal empty ownerDid own-media preview must work via OneShotPinGrant"
+        .unwrap(),
+        Some(expected_webp_uri.clone()),
+        "AdEditorModal empty ownerDid own-media preview must return expected URI via OneShotPinGrant"
     );
-    assert!(get_ad_image_impl(
-        "bad-did".to_string(),
-        bob_token.clone(),
-        Some(issue_fresh_grant(&m_state)),
-        &m_state
-    )
-    .await
-    .is_err());
+    assert_frontend_err_msg(
+        get_ad_image_impl(
+            "bad-did".to_string(),
+            env.bob_token.clone(),
+            Some(issue_fresh_grant(&m_state)),
+            &m_state,
+        )
+        .await,
+        "Invalid owner DID:",
+    );
     assert_eq!(
         get_ad_image_impl(
-            charlie_did,
-            bob_token.clone(),
+            env.charlie_did,
+            env.bob_token.clone(),
             Some(issue_fresh_grant(&m_state)),
             &m_state
         )
@@ -2415,24 +2462,24 @@ async fn s11_f5_receive_only_isolation_one_shot_pin_and_media_binding() {
         None,
         "Foreign cached media must not be served under wrong owner_did"
     );
-    assert!(get_ad_image_impl(
-        bob_did,
-        bob_token,
-        Some(issue_fresh_grant(&m_state)),
-        &m_state
-    )
-    .await
-    .unwrap()
-    .is_some());
-
-    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(
+        get_ad_image_impl(
+            env.bob_did,
+            env.bob_token,
+            Some(issue_fresh_grant(&m_state)),
+            &m_state
+        )
+        .await
+        .unwrap(),
+        Some(expected_webp_uri)
+    );
 }
 
 #[tokio::test]
 async fn s11_q1_media_negative_cache_differentiated_ttls() {
-    let dir = crate::test_support::temp_test_dir("s11_q1_neg_cache");
+    let dir = temp_test_dir("s11_q1_neg_cache");
     let pw = "MasterPass-S11-Q1!";
-    let alice_svc = crate::test_support::setup_test_app(&dir, "Alice Q1", ALICE_PHRASE, pw);
+    let alice_svc = crate::test_support::setup_test_app(dir.path(), "Alice Q1", ALICE_PHRASE, pw);
     let state = crate::test_support::create_test_state(alice_svc);
     let alice_did = state
         .service
@@ -2545,17 +2592,15 @@ async fn s11_q1_media_negative_cache_differentiated_ttls() {
         &read_url_corrupt,
         before_corrupt + 3600
     ));
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[tokio::test]
 async fn s11_q2_timeout_zero_marketplace_view_and_ad_image_from_caches() {
     use base64::{engine::general_purpose::STANDARD, Engine};
 
-    let dir = crate::test_support::temp_test_dir("s11_q2_timeout_zero");
+    let dir = temp_test_dir("s11_q2_timeout_zero");
     let pw = "MasterPass-S11-Q2!";
-    let wallet_dir = dir.join("alice");
+    let wallet_dir = dir.path().join("alice");
 
     let server =
         crate::test_support::MockSyncServer::start("d-q2".to_string(), "a1".repeat(32)).await;
@@ -2565,7 +2610,8 @@ async fn s11_q2_timeout_zero_marketplace_view_and_ad_image_from_caches() {
     let folder_name = alice_svc.list_profiles().unwrap()[0].folder_name.clone();
     let alice_state = crate::test_support::create_test_state(alice_svc);
 
-    let bob_svc = crate::test_support::setup_test_app(&dir.join("bob"), "Bob Q2", BOB_PHRASE, pw);
+    let bob_svc =
+        crate::test_support::setup_test_app(&dir.path().join("bob"), "Bob Q2", BOB_PHRASE, pw);
     let (bob_did, bob_sk) = bob_svc
         .with_wallet_and_identity(|w, id| (w.get_user_id().to_string(), id.signing_key.clone()))
         .unwrap();
@@ -2688,6 +2734,4 @@ async fn s11_q2_timeout_zero_marketplace_view_and_ad_image_from_caches() {
         .await
         .expect("get_ad_image_impl must succeed under timeout == 0");
     assert_eq!(loaded_img, Some(ad_data_uri));
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
